@@ -22,7 +22,7 @@ use claude_session::session_memory::{
 use crate::engine::create_compact_boundary_message;
 use crate::estimate_message_tokens;
 use crate::estimate_single_message_tokens;
-use crate::prompt::{build_compact_user_summary_message, rough_token_count};
+use crate::prompt::build_compact_user_summary_message;
 use crate::strategy::{
     CompactOptions, CompactProgressEvent, CompactStrategy, CompactStrategyType, CompactionResult,
     PreservedSegment, ProgressCallback, SummaryProvider,
@@ -236,7 +236,9 @@ fn create_compaction_result_from_session_memory(
     });
 
     let post_compact_token_count =
-        rough_token_count(&summary_text) + estimate_message_tokens(&messages_to_keep);
+        estimate_single_message_tokens(&boundary_marker)
+        + estimate_single_message_tokens(&summary_message)
+        + estimate_message_tokens(&messages_to_keep);
     let tokens_saved = pre_compact_token_count.saturating_sub(post_compact_token_count);
     let messages_removed = messages.len().saturating_sub(messages_to_keep.len());
 

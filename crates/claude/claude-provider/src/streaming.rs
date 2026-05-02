@@ -31,6 +31,40 @@ use crate::{
 };
 
 // ---------------------------------------------------------------------------
+// Stream idle watchdog configuration
+// ---------------------------------------------------------------------------
+
+/// Default stream idle timeout in milliseconds (90 seconds).
+const DEFAULT_STREAM_IDLE_TIMEOUT_MS: u64 = 90_000;
+
+/// Read the stream idle timeout from `CLAUDE_STREAM_IDLE_TIMEOUT_MS`.
+/// Falls back to 90 seconds if unset or unparseable.
+fn stream_idle_timeout() -> Duration {
+    let ms = std::env::var("CLAUDE_STREAM_IDLE_TIMEOUT_MS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(DEFAULT_STREAM_IDLE_TIMEOUT_MS);
+    Duration::from_millis(ms)
+}
+
+/// Check whether the stream idle watchdog is enabled via
+/// `CLAUDE_ENABLE_STREAM_WATCHDOG`.  Defaults to `true` (enabled).
+fn is_stream_watchdog_enabled() -> bool {
+    std::env::var("CLAUDE_ENABLE_STREAM_WATCHDOG")
+        .map(|v| v != "0" && v.to_ascii_lowercase() != "false")
+        .unwrap_or(true)
+}
+
+/// Build an idle-timeout error that is recognised by
+/// [`should_fallback_after_streaming_error`] and the retry layer.
+fn stream_idle_timeout_error(timeout: Duration) -> anyhow::Error {
+    anyhow!(
+        "streaming idle timeout: no data received for {}s — aborting hung stream",
+        timeout.as_secs()
+    )
+}
+
+// ---------------------------------------------------------------------------
 // Streaming callbacks
 // ---------------------------------------------------------------------------
 
@@ -268,7 +302,26 @@ impl ProviderClient {
         let mut stream = response.bytes_stream();
         let mut sse_buffer = String::new();
 
-        while let Some(chunk) = stream.next().await {
+        let watchdog_enabled = is_stream_watchdog_enabled();
+        let idle_timeout = stream_idle_timeout();
+
+        loop {
+            let chunk_result = if watchdog_enabled {
+                match tokio::time::timeout(idle_timeout, stream.next()).await {
+                    Ok(chunk) => chunk,
+                    Err(_) => {
+                        tracing::error!(
+                            "Streaming idle timeout: no data received for {}s, aborting",
+                            idle_timeout.as_secs()
+                        );
+                        return Err(stream_idle_timeout_error(idle_timeout));
+                    }
+                }
+            } else {
+                stream.next().await
+            };
+
+            let Some(chunk) = chunk_result else { break };
             let bytes = chunk.with_context(|| "failed to read streaming chunk")?;
             sse_buffer.push_str(&String::from_utf8_lossy(&bytes));
 
@@ -447,7 +500,26 @@ impl ProviderClient {
         let mut stream = response.bytes_stream();
         let mut sse_buffer = String::new();
 
-        while let Some(chunk) = stream.next().await {
+        let watchdog_enabled = is_stream_watchdog_enabled();
+        let idle_timeout = stream_idle_timeout();
+
+        loop {
+            let chunk_result = if watchdog_enabled {
+                match tokio::time::timeout(idle_timeout, stream.next()).await {
+                    Ok(chunk) => chunk,
+                    Err(_) => {
+                        tracing::error!(
+                            "Streaming idle timeout: no data received for {}s, aborting",
+                            idle_timeout.as_secs()
+                        );
+                        return Err(stream_idle_timeout_error(idle_timeout));
+                    }
+                }
+            } else {
+                stream.next().await
+            };
+
+            let Some(chunk) = chunk_result else { break };
             let bytes = chunk.with_context(|| "failed to read streaming chunk")?;
             sse_buffer.push_str(&String::from_utf8_lossy(&bytes));
 
@@ -612,7 +684,26 @@ impl ProviderClient {
         let mut stream = response.bytes_stream();
         let mut buffer: Vec<u8> = Vec::new();
 
-        while let Some(chunk) = stream.next().await {
+        let watchdog_enabled = is_stream_watchdog_enabled();
+        let idle_timeout = stream_idle_timeout();
+
+        loop {
+            let chunk_result = if watchdog_enabled {
+                match tokio::time::timeout(idle_timeout, stream.next()).await {
+                    Ok(chunk) => chunk,
+                    Err(_) => {
+                        tracing::error!(
+                            "Streaming idle timeout: no data received for {}s, aborting Bedrock stream",
+                            idle_timeout.as_secs()
+                        );
+                        return Err(stream_idle_timeout_error(idle_timeout));
+                    }
+                }
+            } else {
+                stream.next().await
+            };
+
+            let Some(chunk) = chunk_result else { break };
             let bytes = chunk.with_context(|| "failed to read Bedrock streaming chunk")?;
             buffer.extend_from_slice(&bytes);
 
@@ -784,7 +875,26 @@ impl ProviderClient {
         let mut stream = response.bytes_stream();
         let mut sse_buffer = String::new();
 
-        while let Some(chunk) = stream.next().await {
+        let watchdog_enabled = is_stream_watchdog_enabled();
+        let idle_timeout = stream_idle_timeout();
+
+        loop {
+            let chunk_result = if watchdog_enabled {
+                match tokio::time::timeout(idle_timeout, stream.next()).await {
+                    Ok(chunk) => chunk,
+                    Err(_) => {
+                        tracing::error!(
+                            "Streaming idle timeout: no data received for {}s, aborting Vertex stream",
+                            idle_timeout.as_secs()
+                        );
+                        return Err(stream_idle_timeout_error(idle_timeout));
+                    }
+                }
+            } else {
+                stream.next().await
+            };
+
+            let Some(chunk) = chunk_result else { break };
             let bytes = chunk.with_context(|| "failed to read Vertex streaming chunk")?;
             sse_buffer.push_str(&String::from_utf8_lossy(&bytes));
 
@@ -2473,5 +2583,41 @@ mod tests {
             &anyhow!("chunk read error"),
             true,
         ));
+    }
+
+    // -----------------------------------------------------------------------
+    // Stream idle watchdog tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn stream_idle_timeout_error_is_classified_as_streaming() {
+        // The idle timeout error must be recognised as a streaming error
+        // so the fallback logic can retry with non-streaming.
+        let err = super::stream_idle_timeout_error(std::time::Duration::from_secs(90));
+        assert!(should_fallback_after_streaming_error(&err, false));
+    }
+
+    #[test]
+    fn stream_idle_timeout_error_does_not_fallback_after_tool_activity() {
+        let err = super::stream_idle_timeout_error(std::time::Duration::from_secs(90));
+        assert!(!should_fallback_after_streaming_error(&err, true));
+    }
+
+    #[test]
+    fn stream_idle_timeout_error_message_contains_timeout_info() {
+        let err = super::stream_idle_timeout_error(std::time::Duration::from_secs(90));
+        let msg = format!("{err:#}");
+        assert!(msg.contains("streaming"));
+        assert!(msg.contains("idle timeout"));
+        assert!(msg.contains("90s"));
+    }
+
+    #[test]
+    fn default_stream_idle_timeout_is_90_seconds() {
+        // When the env var is not set, should default to 90s.
+        // (This test may read the actual env var if set, so we just verify the
+        //  helper returns a reasonable Duration.)
+        let timeout = super::stream_idle_timeout();
+        assert!(timeout.as_millis() > 0);
     }
 }

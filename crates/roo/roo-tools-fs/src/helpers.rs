@@ -2,6 +2,7 @@
 
 use crate::types::FsToolError;
 use roo_ignore::RooIgnoreController;
+use roo_protect::RooProtectedController;
 
 /// Strip leading line numbers from content that may have been formatted as
 /// `  1 | content` or `1→content` or similar patterns.
@@ -283,6 +284,32 @@ pub fn check_roo_ignore(
                  If you believe this is an error, check the .rooignore file \
                  at the project root.",
                 path
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Check if a file path is write-protected (e.g. `.rooignore`, `.roo/config.json`).
+///
+/// Returns `Ok(())` if the path is writable (or no controller is provided).
+/// Returns `Err(FsToolError::WriteProtected)` if the path is protected.
+///
+/// This function should be called by write operation tools (write_to_file,
+/// edit_file, apply_diff, search_replace, apply_patch) before performing
+/// any file writes, matching the TS behavior where `rooProtectedController`
+/// is checked before allowing modifications to Roo configuration files.
+pub fn check_roo_protect(
+    path: &str,
+    controller: Option<&RooProtectedController>,
+) -> Result<(), FsToolError> {
+    if let Some(ctrl) = controller {
+        if ctrl.is_write_protected(path) {
+            return Err(FsToolError::WriteProtected(format!(
+                "Access to '{}' is protected. {}. \
+                 If you believe this is an error, ask the user to approve this change.",
+                path,
+                ctrl.get_protection_message()
             )));
         }
     }
@@ -642,5 +669,37 @@ mod tests {
         let ctrl = roo_ignore::RooIgnoreController::new("/tmp");
         // No patterns loaded → all files accessible
         assert!(check_roo_ignore("anything.txt", Some(&ctrl)).is_ok());
+    }
+
+    // ---- check_roo_protect tests ----
+
+    #[test]
+    fn test_check_roo_protect_no_controller() {
+        // No controller → always allow
+        assert!(check_roo_protect(".rooignore", None).is_ok());
+        assert!(check_roo_protect("src/main.rs", None).is_ok());
+    }
+
+    #[test]
+    fn test_check_roo_protect_allows_normal_file() {
+        let ctrl = roo_protect::RooProtectedController::new("/workspace");
+        assert!(check_roo_protect("src/main.rs", Some(&ctrl)).is_ok());
+        assert!(check_roo_protect("README.md", Some(&ctrl)).is_ok());
+    }
+
+    #[test]
+    fn test_check_roo_protect_blocks_protected_file() {
+        let ctrl = roo_protect::RooProtectedController::new("/workspace");
+        assert!(check_roo_protect(".rooignore", Some(&ctrl)).is_err());
+        assert!(check_roo_protect(".roo/config.json", Some(&ctrl)).is_err());
+    }
+
+    #[test]
+    fn test_check_roo_protect_error_message_contains_path() {
+        let ctrl = roo_protect::RooProtectedController::new("/workspace");
+        let err = check_roo_protect(".rooignore", Some(&ctrl)).unwrap_err();
+        let msg = format!("{}", err);
+        assert!(msg.contains(".rooignore"));
+        assert!(msg.contains("protected"));
     }
 }

@@ -62,6 +62,121 @@ struct OpenAiReasoningDetail {
     index: Option<u64>,
 }
 
+// ---------------------------------------------------------------------------
+// ThinkTagMatcher — extracts <think_open>...<think_close> from content
+// Source: `.research/Roo-Code/src/utils/tag-matcher.ts` + usage in
+//         `base-openai-compatible-provider.ts` line 120
+// ---------------------------------------------------------------------------
+
+/// Lightweight streaming matcher for `<think_open>...<think_close>` regions.
+///
+/// Some providers (e.g. DeepSeek R1 via certain OpenAI-compatible endpoints)
+/// embed reasoning content inside `<think_open>` tags in the regular `content`
+/// field rather than using `reasoning_content`. This matcher splits content
+/// into reasoning chunks (inside tags) and text chunks (outside tags).
+#[derive(Debug, Clone)]
+struct ThinkTagMatcher {
+    /// Current state machine position.
+    state: ThinkTagState,
+    /// Current nesting depth (how many open tags we've seen).
+    depth: usize,
+    /// Index into the tag name being matched.
+    index: usize,
+    /// Buffer for the current chunk being built.
+    buffer: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ThinkTagState {
+    /// Outside any tag — content is regular text.
+    Text,
+    /// Possibly inside `<think_open` opening tag.
+    TagOpen,
+    /// Possibly inside `</think_open>` closing tag — skipped the `/`.
+    TagClose,
+}
+
+impl ThinkTagMatcher {
+    fn new() -> Self {
+        Self {
+            state: ThinkTagState::Text,
+            depth: 0,
+            index: 0,
+            buffer: String::new(),
+        }
+    }
+
+    /// Process a content chunk and return extracted reasoning/text segments.
+    ///
+    /// Returns a list of `(is_reasoning, text)` tuples.
+    fn update(&mut self, chunk: &str) -> Vec<(bool, String)> {
+        let mut results = Vec::new();
+        // Tag name without angle brackets — matches both "think_open" and "think_close".
+        // We match on "think_open" for opening and the same for closing after seeing `</`.
+        const OPEN_TAG: &str = "think_open";
+        const CLOSE_TAG: &str = "think_close";
+
+        for ch in chunk.chars() {
+            self.buffer.push(ch);
+
+            match self.state {
+                ThinkTagState::Text => {
+                    if ch == '<' {
+                        self.state = ThinkTagState::TagOpen;
+                        self.index = 0;
+                    } else {
+                        // Flush buffer as a text or reasoning chunk
+                        self.flush(&mut results);
+                    }
+                }
+                ThinkTagState::TagOpen => {
+                    if ch == '/' && self.index == 0 {
+                        // This is a closing tag: `</...`
+                        self.state = ThinkTagState::TagClose;
+                    } else if self.index < OPEN_TAG.len() && OPEN_TAG.as_bytes()[self.index] == (ch as u8) {
+                        self.index += 1;
+                    } else if ch == '>' && self.index == OPEN_TAG.len() {
+                        // Matched `<think_open>`
+                        self.state = ThinkTagState::Text;
+                        self.depth += 1;
+                        self.buffer.clear(); // Discard the tag itself
+                    } else {
+                        // Not a matching tag — flush as text and go back to Text state
+                        self.state = ThinkTagState::Text;
+                        self.flush(&mut results);
+                    }
+                }
+                ThinkTagState::TagClose => {
+                    if self.index < CLOSE_TAG.len() && CLOSE_TAG.as_bytes()[self.index] == (ch as u8) {
+                        self.index += 1;
+                    } else if ch == '>' && self.index == CLOSE_TAG.len() {
+                        // Matched `</think_close>`
+                        self.state = ThinkTagState::Text;
+                        if self.depth > 0 {
+                            self.depth -= 1;
+                        }
+                        self.buffer.clear(); // Discard the tag itself
+                    } else {
+                        // Not a matching tag — flush and go back
+                        self.state = ThinkTagState::Text;
+                        self.flush(&mut results);
+                    }
+                }
+            }
+        }
+
+        results
+    }
+
+    /// Flush the current buffer as a chunk.
+    fn flush(&mut self, results: &mut Vec<(bool, String)>) {
+        if !self.buffer.is_empty() {
+            let is_reasoning = self.depth > 0;
+            results.push((is_reasoning, std::mem::take(&mut self.buffer)));
+        }
+    }
+}
+
 #[derive(Debug, Deserialize)]
 struct OpenAiToolCallDelta {
     index: u64,
@@ -422,6 +537,7 @@ impl OpenAiCompatibleProvider {
         // Process the stream into ApiStreamChunks
         let mut active_tool_call_ids: HashSet<String> = HashSet::new();
         let model_info = model_info.clone();
+        let tag_matcher = std::sync::Arc::new(std::sync::Mutex::new(ThinkTagMatcher::new()));
 
         let processed = stream.flat_map(move |chunk_result| {
             let results: Vec<Result<ApiStreamChunk>> = match chunk_result {
@@ -436,12 +552,32 @@ impl OpenAiCompatibleProvider {
 
                     let mut results: Vec<Result<ApiStreamChunk>> = Vec::new();
 
-                    // Handle content
+                    // Handle content — run through ThinkTagMatcher to extract
+                    // <think_open>...<think_close> regions as reasoning.
+                    // Source: `.research/Roo-Code/src/api/providers/base-openai-compatible-provider.ts` line 120
                     if let Some(delta) = delta {
                         if let Some(ref content) = delta.content {
-                            results.push(Ok(ApiStreamChunk::Text {
-                                text: content.clone(),
-                            }));
+                            if let Ok(mut matcher) = tag_matcher.lock() {
+                                for (is_reasoning, text) in matcher.update(content) {
+                                    if text.is_empty() {
+                                        continue;
+                                    }
+                                    if is_reasoning {
+                                        results.push(Ok(ApiStreamChunk::Reasoning {
+                                            text,
+                                            signature: None,
+                                        }));
+                                    } else {
+                                        results.push(Ok(ApiStreamChunk::Text {
+                                            text,
+                                        }));
+                                    }
+                                }
+                            } else {
+                                results.push(Ok(ApiStreamChunk::Text {
+                                    text: content.clone(),
+                                }));
+                            }
                         }
 
                         // Handle reasoning_details (OpenRouter format for Gemini 3, Claude, etc.)
@@ -551,6 +687,7 @@ impl Provider for OpenAiCompatibleProvider {
         // Process the stream into ApiStreamChunks
         let mut active_tool_call_ids: HashSet<String> = HashSet::new();
         let model_info = model_info.clone();
+        let tag_matcher = std::sync::Arc::new(std::sync::Mutex::new(ThinkTagMatcher::new()));
 
         let processed = stream.flat_map(move |chunk_result| {
             let results: Vec<Result<ApiStreamChunk>> = match chunk_result {
@@ -565,12 +702,32 @@ impl Provider for OpenAiCompatibleProvider {
 
                     let mut results: Vec<Result<ApiStreamChunk>> = Vec::new();
 
-                    // Handle content
+                    // Handle content — run through ThinkTagMatcher to extract
+                    // <think_open>...<think_close> regions as reasoning.
+                    // Source: `.research/Roo-Code/src/api/providers/base-openai-compatible-provider.ts` line 120
                     if let Some(delta) = delta {
                         if let Some(ref content) = delta.content {
-                            results.push(Ok(ApiStreamChunk::Text {
-                                text: content.clone(),
-                            }));
+                            if let Ok(mut matcher) = tag_matcher.lock() {
+                                for (is_reasoning, text) in matcher.update(content) {
+                                    if text.is_empty() {
+                                        continue;
+                                    }
+                                    if is_reasoning {
+                                        results.push(Ok(ApiStreamChunk::Reasoning {
+                                            text,
+                                            signature: None,
+                                        }));
+                                    } else {
+                                        results.push(Ok(ApiStreamChunk::Text {
+                                            text,
+                                        }));
+                                    }
+                                }
+                            } else {
+                                results.push(Ok(ApiStreamChunk::Text {
+                                    text: content.clone(),
+                                }));
+                            }
                         }
 
                         // Handle reasoning_details (OpenRouter format for Gemini 3, Claude, etc.)

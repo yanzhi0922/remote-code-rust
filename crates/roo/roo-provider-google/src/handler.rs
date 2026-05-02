@@ -135,12 +135,29 @@ impl GoogleHandler {
             }
         }
 
+        let mut generation_config = json!({
+            "temperature": self.temperature,
+            "maxOutputTokens": self.model_info.max_tokens.unwrap_or(8192),
+        });
+
+        // Add thinkingConfig for reasoning models.
+        // Source: `.research/Roo-Code/src/api/providers/gemini.ts` — `thinkingConfig`
+        // from `getModel().reasoning`. The Gemini REST API expects this under
+        // generationConfig.thinkingConfig with thinkingBudget and includeThoughts.
+        if self.model_info.supports_reasoning_budget == Some(true)
+            || self.model_info.required_reasoning_budget == Some(true)
+        {
+            generation_config["thinkingConfig"] = json!({
+                "thinkingBudget": self.model_info.max_tokens
+                    .map(|t| (t as f64 * 0.8) as u64)
+                    .unwrap_or(8192),
+                "includeThoughts": true,
+            });
+        }
+
         let mut body = json!({
             "contents": gemini_contents,
-            "generationConfig": {
-                "temperature": self.temperature,
-                "maxOutputTokens": self.model_info.max_tokens.unwrap_or(8192),
-            },
+            "generationConfig": generation_config,
         });
 
         // Add system instruction

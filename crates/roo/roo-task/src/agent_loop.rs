@@ -3782,14 +3782,33 @@ impl AgentLoop {
     }
 
     /// Dispatch a single tool call.
+    ///
+    /// Builds a fully-wired [`ToolContext`] carrying every controller
+    /// (RooIgnore, RooProtected, DiffView, FileContextTracker, terminal)
+    /// that the AgentLoop owns, so that tool handlers can perform the
+    /// same pre-flight checks the TS version does.
     async fn dispatch_tool(
         &self,
         tool_call: &crate::stream_parser::ParsedToolCall,
     ) -> ToolExecutionResult {
-        let context = ToolContext::new(
+        let mut context = ToolContext::new(
             &self.engine.config().cwd,
             &self.engine.config().task_id,
         );
+
+        // Wire up model ID for model-dependent behavior in tool handlers.
+        if let Some(ref model_info) = self.cached_streaming_model {
+            context = context.with_model_id(&model_info.0);
+        }
+
+        // Wire up controllers — matching TS `this.*` access in tool handlers.
+        // These are Clone-able controllers that can be passed directly.
+        if let Some(ref controller) = self.roo_ignore_controller {
+            context = context.with_roo_ignore_controller(controller.clone());
+        }
+        if let Some(ref controller) = self.roo_protected_controller {
+            context = context.with_roo_protected_controller(controller.clone());
+        }
 
         let params = tool_call.parse_arguments();
 

@@ -164,6 +164,12 @@ impl AnthropicHandler {
         if model_id.ends_with(":thinking") {
             betas.push("output-128k-2025-02-19".to_string());
         }
+        // Add extended-context beta for models with >200K context window.
+        // Source: `.research/Roo-Code/src/api/providers/anthropic.ts` —
+        // `anthropic-beta: prompt-caching-2024-07-31,extended-context-2025-06-01`
+        if model_info.context_window > 200_000 {
+            betas.push("extended-context-2025-06-01".to_string());
+        }
 
         Ok(Self {
             http_client,

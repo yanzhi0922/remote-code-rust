@@ -87,13 +87,16 @@ use claude_core::Message;
 /// Estimate total tokens across all messages.
 ///
 /// Each message is estimated via [`estimate_single_message_tokens`] which
-/// delegates to [`rough_token_count`] (conservative 4/3 padding factor).
+/// delegates to [`rough_token_count`]. The final sum is padded by 4/3 to be
+/// conservative — matching the TS `estimateMessageTokens()` implementation
+/// which applies `Math.ceil(totalTokens * (4 / 3))`.
 pub(crate) fn estimate_message_tokens(messages: &[Message]) -> u64 {
     let mut total: u64 = 0;
     for msg in messages {
         total += estimate_single_message_tokens(msg);
     }
-    total
+    // Pad by 4/3 to be conservative (mirrors TS estimateMessageTokens)
+    total.saturating_mul(4).div_ceil(3)
 }
 
 /// Estimate tokens for a single message.

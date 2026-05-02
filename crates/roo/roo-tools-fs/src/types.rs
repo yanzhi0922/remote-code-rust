@@ -98,6 +98,9 @@ pub enum FsToolError {
 
     #[error("Access denied by .rooignore: {0}")]
     AccessDenied(String),
+
+    #[error("Write protected: {0}")]
+    WriteProtected(String),
 }
 
 /// Maximum default line length for read operations.

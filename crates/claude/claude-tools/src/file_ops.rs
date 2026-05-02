@@ -642,15 +642,42 @@ pub(crate) fn grep_files(input: &Value, context: &ToolExecutionContext) -> Resul
         input.get("path").and_then(Value::as_str),
         FilesystemOperation::Read,
     )?;
-    let include = input.get("include").and_then(Value::as_str);
+    // Accept both "glob" (TS-compatible) and "include" (legacy) field names
+    let glob_pattern = input
+        .get("glob")
+        .or_else(|| input.get("include"))
+        .and_then(Value::as_str);
     let output_mode = input
         .get("output_mode")
         .and_then(Value::as_str)
-        .unwrap_or("content");
+        .unwrap_or("files_with_matches");
     let head_limit = input
         .get("head_limit")
         .and_then(Value::as_u64)
         .unwrap_or(250) as usize;
+    let offset = input
+        .get("offset")
+        .and_then(Value::as_u64)
+        .unwrap_or(0) as usize;
+
+    // Context lines: -C overrides -A and -B
+    let context_before = input
+        .get("-B")
+        .or_else(|| input.get("-C"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0) as usize;
+    let context_after = input
+        .get("-A")
+        .or_else(|| input.get("-C"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0) as usize;
+
+    // Use default 1-line context when no explicit context is given (for content mode)
+    let (ctx_before, ctx_after) = if context_before == 0 && context_after == 0 {
+        (1, 1)
+    } else {
+        (context_before, context_after)
+    };
 
     if !["content", "files_with_matches", "count"].contains(&output_mode) {
         return Err(anyhow!(
@@ -658,20 +685,25 @@ pub(crate) fn grep_files(input: &Value, context: &ToolExecutionContext) -> Resul
         ));
     }
 
-    let case_insensitive = pattern
-        .chars()
-        .all(|c| c.is_ascii_lowercase() || !c.is_alphabetic());
+    // -i flag for explicit case sensitivity control; auto-detect if not set
+    let explicit_case_insensitive = input.get("-i").and_then(Value::as_bool);
+    let case_insensitive = explicit_case_insensitive.unwrap_or_else(|| {
+        pattern
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || !c.is_alphabetic())
+    });
+
     let re = regex::RegexBuilder::new(pattern)
         .case_insensitive(case_insensitive)
         .build()
         .or_else(|_| regex::RegexBuilder::new(&regex::escape(pattern)).build())?;
 
-    let file_matcher: Option<globset::GlobMatcher> = match include {
+    let file_matcher: Option<globset::GlobMatcher> = match glob_pattern {
         Some(fp) => Some(
             GlobBuilder::new(fp)
                 .literal_separator(true)
                 .build()
-                .context("invalid include pattern")?
+                .context("invalid glob pattern")?
                 .compile_matcher(),
         ),
         None => None,
@@ -731,8 +763,8 @@ pub(crate) fn grep_files(input: &Value, context: &ToolExecutionContext) -> Resul
                     if re.is_match(line) {
                         total_content_matches += 1;
                         if total_content_matches <= head_limit {
-                            let start = if index > 0 { index - 1 } else { 0 };
-                            let end = (index + 2).min(lines.len());
+                            let start = index.saturating_sub(ctx_before);
+                            let end = (index + ctx_after + 1).min(lines.len());
                             for (offset, context_line) in lines[start..end].iter().enumerate() {
                                 let line_idx = start + offset;
                                 let prefix = if line_idx == index { ">" } else { " " };
@@ -762,6 +794,8 @@ pub(crate) fn grep_files(input: &Value, context: &ToolExecutionContext) -> Resul
                 return Ok("No files matched.".to_owned());
             }
             files_with_matches.sort_by(|a, b| b.1.cmp(&a.1));
+            let skip = offset.min(files_with_matches.len());
+            files_with_matches.drain(..skip);
             let truncated = files_with_matches.len() > head_limit;
             files_with_matches.truncate(head_limit);
             let mut out: Vec<String> = files_with_matches

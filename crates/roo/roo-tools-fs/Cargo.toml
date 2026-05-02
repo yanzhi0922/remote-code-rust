@@ -10,6 +10,8 @@ description = "File system tool implementations for Roo Code Rust"
 roo-types = { path = "../roo-types" }
 roo-diff = { path = "../roo-diff" }
 roo-ignore = { path = "../roo-ignore" }
+roo-protect = { path = "../roo-protect" }
+roo-prompt = { path = "../roo-prompt" }
 thiserror = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

@@ -434,7 +434,7 @@ impl ToolHandler for ReadFileHandler {
             indentation,
         };
 
-        match roo_tools_fs::process_read_file(&read_params, &context.cwd, None) {
+        match roo_tools_fs::process_read_file(&read_params, &context.cwd, context.roo_ignore_controller.as_ref()) {
             Ok(result) => ToolExecutionResult::success(result.content),
             Err(e) => ToolExecutionResult::error(format!("read_file error: {}", e)),
         }
@@ -460,9 +460,19 @@ impl ToolHandler for WriteToFileHandler {
             None => return ToolExecutionResult::error("Missing required parameter: content"),
         };
 
+        // Check .rooignore before any file I/O
+        if let Err(e) = roo_tools_fs::check_roo_ignore(&path, context.roo_ignore_controller.as_ref()) {
+            return ToolExecutionResult::error(format!("read_file error: {}", e));
+        }
+
+        // Check write protection before any file I/O
+        if let Err(e) = roo_tools_fs::check_roo_protect(&path, context.roo_protected_controller.as_ref()) {
+            return ToolExecutionResult::error(format!("write_to_file error: {}", e));
+        }
+
         let write_params = roo_types::tool::WriteToFileParams { path, content };
 
-        match roo_tools_fs::process_write_to_file(&write_params, &context.cwd, None, context.model_id.as_deref()) {
+        match roo_tools_fs::process_write_to_file(&write_params, &context.cwd, context.roo_ignore_controller.as_ref(), context.model_id.as_deref()) {
             Ok(result) => {
                 let msg = if result.is_new_file {
                     format!(
@@ -512,6 +522,16 @@ impl ToolHandler for ApplyDiffHandler {
         // Validate
         if let Err(e) = roo_tools_fs::validate_apply_diff_params(&diff_params) {
             return ToolExecutionResult::error(format!("apply_diff validation error: {}", e));
+        }
+
+        // Check .rooignore before any file I/O
+        if let Err(e) = roo_tools_fs::check_roo_ignore(&path, context.roo_ignore_controller.as_ref()) {
+            return ToolExecutionResult::error(format!("apply_diff error: {}", e));
+        }
+
+        // Check write protection before any file I/O
+        if let Err(e) = roo_tools_fs::check_roo_protect(&path, context.roo_protected_controller.as_ref()) {
+            return ToolExecutionResult::error(format!("apply_diff error: {}", e));
         }
 
         // Resolve path
@@ -595,7 +615,7 @@ impl ToolHandler for EditFileHandler {
         };
 
         let edit_params = roo_types::tool::EditFileParams {
-            file_path,
+            file_path: file_path.clone(),
             old_string,
             new_string,
             expected_replacements: params
@@ -605,7 +625,17 @@ impl ToolHandler for EditFileHandler {
                 .map(|v| v as u32),
         };
 
-        match roo_tools_fs::process_edit_file(&edit_params, &context.cwd, None) {
+        // Check .rooignore before any file I/O
+        if let Err(e) = roo_tools_fs::check_roo_ignore(&file_path, context.roo_ignore_controller.as_ref()) {
+            return ToolExecutionResult::error(format!("edit_file error: {}", e));
+        }
+
+        // Check write protection before any file I/O
+        if let Err(e) = roo_tools_fs::check_roo_protect(&file_path, context.roo_protected_controller.as_ref()) {
+            return ToolExecutionResult::error(format!("edit_file error: {}", e));
+        }
+
+        match roo_tools_fs::process_edit_file(&edit_params, &context.cwd, context.roo_ignore_controller.as_ref()) {
             Ok(result) => {
                 let msg = result
                     .message
@@ -660,7 +690,7 @@ impl ToolHandler for SearchReplaceHandler {
         };
 
         let sr_params = roo_tools_fs::search_and_replace::SearchReplaceParams {
-            file_path,
+            file_path: file_path.clone(),
             old_string,
             new_string,
         };
@@ -669,6 +699,16 @@ impl ToolHandler for SearchReplaceHandler {
         if let Err(e) = roo_tools_fs::search_and_replace::validate_search_replace_params(&sr_params)
         {
             return ToolExecutionResult::error(format!("search_replace validation error: {}", e));
+        }
+
+        // Check .rooignore before any file I/O
+        if let Err(e) = roo_tools_fs::check_roo_ignore(&file_path, context.roo_ignore_controller.as_ref()) {
+            return ToolExecutionResult::error(format!("search_replace error: {}", e));
+        }
+
+        // Check write protection before any file I/O
+        if let Err(e) = roo_tools_fs::check_roo_protect(&file_path, context.roo_protected_controller.as_ref()) {
+            return ToolExecutionResult::error(format!("search_replace error: {}", e));
         }
 
         // Resolve path
@@ -746,7 +786,7 @@ impl ToolHandler for EditHandler {
         };
 
         let edit_params = roo_types::tool::EditFileParams {
-            file_path,
+            file_path: file_path.clone(),
             old_string,
             new_string,
             expected_replacements: params
@@ -756,7 +796,17 @@ impl ToolHandler for EditHandler {
                 .map(|v| v as u32),
         };
 
-        match roo_tools_fs::process_edit_file(&edit_params, &context.cwd, None) {
+        // Check .rooignore before any file I/O
+        if let Err(e) = roo_tools_fs::check_roo_ignore(&file_path, context.roo_ignore_controller.as_ref()) {
+            return ToolExecutionResult::error(format!("edit error: {}", e));
+        }
+
+        // Check write protection before any file I/O
+        if let Err(e) = roo_tools_fs::check_roo_protect(&file_path, context.roo_protected_controller.as_ref()) {
+            return ToolExecutionResult::error(format!("edit error: {}", e));
+        }
+
+        match roo_tools_fs::process_edit_file(&edit_params, &context.cwd, context.roo_ignore_controller.as_ref()) {
             Ok(result) => {
                 let msg = result
                     .message
@@ -820,9 +870,18 @@ impl ToolHandler for ApplyPatchHandler {
             Err(e) => return ToolExecutionResult::error(format!("apply_patch error: {}", e)),
         };
 
-        // Apply changes to disk
+        // Apply changes to disk — check ignore/protect for each file
         let mut results = Vec::new();
         for change in &changes {
+            // Check .rooignore for each file path
+            if let Err(e) = roo_tools_fs::check_roo_ignore(&change.path, context.roo_ignore_controller.as_ref()) {
+                return ToolExecutionResult::error(format!("apply_patch error: {}", e));
+            }
+            // Check write protection for each file path
+            if let Err(e) = roo_tools_fs::check_roo_protect(&change.path, context.roo_protected_controller.as_ref()) {
+                return ToolExecutionResult::error(format!("apply_patch error: {}", e));
+            }
+
             let full_path = if std::path::Path::new(&change.path).is_absolute() {
                 std::path::PathBuf::from(&change.path)
             } else {
@@ -929,6 +988,11 @@ impl ToolHandler for ListFilesHandler {
             return ToolExecutionResult::error(format!("list_files error: {}", e));
         }
 
+        // Check .rooignore for the directory path
+        if let Err(e) = roo_tools_fs::check_roo_ignore(&path, context.roo_ignore_controller.as_ref()) {
+            return ToolExecutionResult::error(format!("list_files error: {}", e));
+        }
+
         // Resolve path
         let dir_path = context.cwd.join(&path);
         if !dir_path.exists() {
@@ -1031,13 +1095,18 @@ impl ToolHandler for SearchFilesHandler {
             .map(|s| s.to_string());
 
         let search_params = roo_types::tool::SearchFilesParams {
-            path,
+            path: path.clone(),
             regex,
             file_pattern,
         };
 
         // Validate
         if let Err(e) = roo_tools_search::validate_search_files_params(&search_params) {
+            return ToolExecutionResult::error(format!("search_files error: {}", e));
+        }
+
+        // Check .rooignore for the search directory
+        if let Err(e) = roo_tools_fs::check_roo_ignore(&path, context.roo_ignore_controller.as_ref()) {
             return ToolExecutionResult::error(format!("search_files error: {}", e));
         }
 
@@ -1204,6 +1273,16 @@ impl ToolHandler for ExecuteCommandHandler {
             Some(c) => c.to_string(),
             None => return ToolExecutionResult::error("Missing required parameter: command"),
         };
+
+        // Check .rooignore — validate command doesn't try to read blocked files
+        if let Some(ref ctrl) = context.roo_ignore_controller {
+            let unescaped = roo_tools_command::execute_command::unescape_command(&command);
+            if let Some(blocked_path) = ctrl.validate_command(&unescaped) {
+                return ToolExecutionResult::error(
+                    roo_prompt::responses::roo_ignore_error(&blocked_path),
+                );
+            }
+        }
 
         let cwd = params
             .get("cwd")

@@ -713,6 +713,9 @@ pub async fn partial_compact_conversation(
         attachments.extend(att_provider().await);
     }
 
+    let messages_kept_count = messages_to_keep.len();
+    let messages_summarized_count = messages_to_summarize.len();
+
     let result = CompactionResult {
         summary: formatted_summary,
         messages_removed: messages_to_summarize.len(),
@@ -759,6 +762,13 @@ pub async fn partial_compact_conversation(
         serde_json::json!({
             "preCompactTokenCount": result.pre_compact_token_count,
             "postCompactTokenCount": result.post_compact_token_count,
+            "messagesKept": messages_kept_count,
+            "messagesSummarized": messages_summarized_count,
+            "direction": match direction {
+                PartialCompactDirection::UpTo => "up_to",
+                PartialCompactDirection::From => "from",
+            },
+            "hasUserFeedback": user_feedback.is_some(),
             "isAutoCompact": options.is_auto_compact,
             "messagesRemoved": result.messages_removed,
             "tokensSaved": result.tokens_saved,
