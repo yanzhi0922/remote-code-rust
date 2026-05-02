@@ -5,6 +5,9 @@
 //! ([`CompactProgressEvent`]), and the result type ([`CompactionResult`]).
 
 use std::fmt;
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::Arc;
 
 use claude_core::Message;
 
@@ -95,8 +98,89 @@ pub struct CompactionResult {
 // Compact options
 // ---------------------------------------------------------------------------
 
+/// Callback that provides SessionStart hook result messages after compaction.
+///
+/// Mirrors `processSessionStartHooks('compact', ...)` from the TS reference.
+/// The callback receives the source (`"compact"`) and returns a list of
+/// hook result messages to include in the [`CompactionResult`].
+pub type SessionStartHookProvider = dyn Fn() -> Pin<Box<dyn Future<Output = Vec<Message>> + Send>>
+    + Send
+    + Sync;
+
+/// Callback that provides post-compact attachment messages (deferred tools
+/// delta, agent listing delta, MCP instructions delta).
+///
+/// Mirrors the TS pattern of calling `getDeferredToolsDeltaAttachment`,
+/// `getAgentListingDeltaAttachment`, and `getMcpInstructionsDeltaAttachment`
+/// with an empty message history (full compaction) or kept messages (partial
+/// compaction) to produce re-injection attachments.
+pub type PostCompactAttachmentProvider = dyn Fn() -> Pin<Box<dyn Future<Output = Vec<Message>> + Send>>
+    + Send
+    + Sync;
+
+/// Result of executing PreCompact hooks.
+///
+/// Mirrors `executePreCompactHooks()` from the TS reference. Hooks can
+/// inject additional custom instructions into the compact prompt and/or
+/// produce a user-facing display message.
+#[derive(Debug, Clone, Default)]
+pub struct PreCompactHookResult {
+    /// Merged custom instructions from hook outputs (joined by `\n\n`).
+    pub new_custom_instructions: Option<String>,
+    /// User-facing display message from hook execution.
+    pub user_display_message: Option<String>,
+}
+
+/// Callback that executes PreCompact hooks before compaction.
+///
+/// Mirrors `executePreCompactHooks()` from the TS reference. The callback
+/// receives the trigger (`"manual"` or `"auto"`) and any existing custom
+/// instructions, and returns a [`PreCompactHookResult`].
+pub type PreCompactHookProvider = dyn Fn(String, Option<String>) -> Pin<Box<dyn Future<Output = PreCompactHookResult> + Send>>
+    + Send
+    + Sync;
+
+/// Result of executing PostCompact hooks after compaction.
+#[derive(Debug, Clone, Default)]
+pub struct PostCompactHookResult {
+    /// User-facing display message from hook execution.
+    pub user_display_message: Option<String>,
+}
+
+/// Callback that executes PostCompact hooks after compaction.
+///
+/// Mirrors `executePostCompactHooks()` from the TS reference. The callback
+/// receives the trigger and the compact summary text.
+pub type PostCompactHookProvider = dyn Fn(String, String) -> Pin<Box<dyn Future<Output = PostCompactHookResult> + Send>>
+    + Send
+    + Sync;
+
+/// Callback that performs post-compact cache resets.
+///
+/// Mirrors `runPostCompactCleanup()` from the TS reference. Called after
+/// compaction completes (both auto and manual) to reset caches:
+/// system prompt sections, classifier approvals, speculative checks,
+/// file state, session messages cache, etc.
+pub type PostCompactCleanupProvider = dyn Fn() -> Pin<Box<dyn Future<Output = ()> + Send>>
+    + Send
+    + Sync;
+
+/// Callback for compact telemetry / analytics events.
+///
+/// Mirrors `logEvent('tengu_compact', ...)` from the TS reference. Called at
+/// key points during compaction with an event name and structured metadata:
+///
+/// - `"tengu_compact"` — successful compaction
+/// - `"tengu_compact_failed"` — compaction failed (`reason` in metadata)
+/// - `"tengu_compact_ptl_retry"` — PTL retry attempted
+/// - `"tengu_partial_compact"` — successful partial compaction
+/// - `"tengu_partial_compact_failed"` — partial compaction failed
+///
+/// The callback is `Option`al; when `None`, no telemetry is emitted.
+pub type CompactTelemetryProvider = dyn Fn(&str, serde_json::Value) + Send + Sync;
+
 /// Configuration controlling compaction behaviour.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct CompactOptions {
     /// Maximum context-window size in tokens.
     pub max_tokens: u64,
@@ -112,6 +196,43 @@ pub struct CompactOptions {
     pub custom_instructions: Option<String>,
     /// Whether this is an auto-compact (vs manual /compact).
     pub is_auto_compact: bool,
+    /// Optional provider for SessionStart hook messages re-fired after compact.
+    ///
+    /// When `Some`, the compact engine calls this after the summary is generated
+    /// and includes the results in [`CompactionResult::hook_results`].
+    /// Mirrors `processSessionStartHooks('compact', ...)` from the TS reference.
+    pub session_start_hook_provider: Option<Arc<SessionStartHookProvider>>,
+    /// Optional provider for post-compact attachment messages.
+    ///
+    /// When `Some`, the compact engine calls this after the summary is generated
+    /// and includes the results in [`CompactionResult::attachments`].
+    /// Mirrors the TS pattern of re-injecting deferred tools delta, agent listing
+    /// delta, and MCP instructions delta after compaction.
+    pub post_compact_attachment_provider: Option<Arc<PostCompactAttachmentProvider>>,
+    /// Optional provider for PreCompact hook execution.
+    ///
+    /// When `Some`, fires BEFORE the compact LLM call. Hooks can inject
+    /// additional custom instructions into the compact prompt.
+    /// Mirrors `executePreCompactHooks()` from the TS reference.
+    pub pre_compact_hook_provider: Option<Arc<PreCompactHookProvider>>,
+    /// Optional provider for PostCompact hook execution.
+    ///
+    /// When `Some`, fires AFTER the compact summary is generated. Hooks
+    /// receive the summary and can return a user-facing display message.
+    /// Mirrors `executePostCompactHooks()` from the TS reference.
+    pub post_compact_hook_provider: Option<Arc<PostCompactHookProvider>>,
+    /// Optional provider for post-compact cache cleanup.
+    ///
+    /// When `Some`, called after compaction to reset caches (system prompt
+    /// sections, classifier approvals, file state, etc.).
+    /// Mirrors `runPostCompactCleanup()` from the TS reference.
+    pub post_compact_cleanup_provider: Option<Arc<PostCompactCleanupProvider>>,
+    /// Optional telemetry callback for analytics events.
+    ///
+    /// When `Some`, called at key points during compaction (success, failure,
+    /// PTL retry) with an event name and structured metadata.
+    /// Mirrors `logEvent('tengu_compact', ...)` from the TS reference.
+    pub telemetry_provider: Option<Arc<CompactTelemetryProvider>>,
 }
 
 impl Default for CompactOptions {
@@ -124,6 +245,12 @@ impl Default for CompactOptions {
             preserve_attachments: true,
             custom_instructions: None,
             is_auto_compact: false,
+            session_start_hook_provider: None,
+            post_compact_attachment_provider: None,
+            pre_compact_hook_provider: None,
+            post_compact_hook_provider: None,
+            post_compact_cleanup_provider: None,
+            telemetry_provider: None,
         }
     }
 }

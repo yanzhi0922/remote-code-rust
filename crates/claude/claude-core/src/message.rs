@@ -31,6 +31,8 @@ pub struct MessageBase {
     pub is_virtual: bool,
     #[serde(default)]
     pub is_compact_summary: bool,
+    #[serde(default)]
+    pub is_visible_in_transcript_only: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin: Option<MessageOrigin>,
 }
@@ -44,6 +46,7 @@ impl Default for MessageBase {
             is_meta: false,
             is_virtual: false,
             is_compact_summary: false,
+            is_visible_in_transcript_only: false,
             origin: None,
         }
     }

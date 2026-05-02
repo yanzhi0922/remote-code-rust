@@ -36,6 +36,95 @@ pub const MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES: u32 = 3;
 const MAX_OUTPUT_TOKENS_FOR_SUMMARY: u64 = 20_000;
 
 // ---------------------------------------------------------------------------
+// Query source guards
+// ---------------------------------------------------------------------------
+
+/// Query sources that should **not** trigger auto-compact (would deadlock
+/// because they run inside forked agents spawned by compaction itself).
+const BLOCKED_QUERY_SOURCES: &[&str] = &["session_memory", "compact"];
+
+/// Check whether a query source is allowed to trigger auto-compact.
+///
+/// Mirrors the recursion guards in `shouldAutoCompact()` from the TS
+/// reference: `session_memory` and `compact` are forked agents that would
+/// deadlock if they tried to auto-compact.
+pub fn is_auto_compact_allowed_for_query_source(query_source: Option<&str>) -> bool {
+    match query_source {
+        Some(qs) => !BLOCKED_QUERY_SOURCES.contains(&qs),
+        None => true,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Environment variable overrides
+// ---------------------------------------------------------------------------
+
+/// Check whether auto-compact is globally disabled via environment variables.
+///
+/// Mirrors `isAutoCompactEnabled()` from the TS reference.
+pub fn is_auto_compact_env_enabled() -> bool {
+    if std::env::var("DISABLE_COMPACT")
+        .ok()
+        .as_deref()
+        .map_or(false, is_env_truthy)
+    {
+        return false;
+    }
+    if std::env::var("DISABLE_AUTO_COMPACT")
+        .ok()
+        .as_deref()
+        .map_or(false, is_env_truthy)
+    {
+        return false;
+    }
+    true
+}
+
+/// Return the effective context window size, respecting the
+/// `CLAUDE_CODE_AUTO_COMPACT_WINDOW` environment variable override.
+///
+/// Mirrors `getEffectiveContextWindowSize()` from the TS reference.
+pub fn get_effective_context_window(base_context_window: u64) -> u64 {
+    let reserved = MAX_OUTPUT_TOKENS_FOR_SUMMARY;
+    let mut context_window = base_context_window;
+
+    if let Ok(val) = std::env::var("CLAUDE_CODE_AUTO_COMPACT_WINDOW") {
+        if let Ok(parsed) = val.parse::<u64>() {
+            if parsed > 0 {
+                context_window = context_window.min(parsed);
+            }
+        }
+    }
+
+    context_window.saturating_sub(reserved)
+}
+
+/// Return the auto-compact threshold, respecting the
+/// `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` environment variable.
+///
+/// Mirrors `getAutoCompactThreshold()` from the TS reference.
+pub fn get_auto_compact_threshold(base_context_window: u64) -> u64 {
+    let effective = get_effective_context_window(base_context_window);
+    let default_threshold = effective.saturating_sub(AUTOCOMPACT_BUFFER_TOKENS);
+
+    if let Ok(val) = std::env::var("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE") {
+        if let Ok(pct) = val.parse::<f64>() {
+            if pct > 0.0 && pct <= 100.0 {
+                let pct_threshold = (effective as f64 * (pct / 100.0)) as u64;
+                return pct_threshold.min(default_threshold);
+            }
+        }
+    }
+
+    default_threshold
+}
+
+/// Check whether a string value is truthy (mirrors TS `isEnvTruthy`).
+fn is_env_truthy(val: &str) -> bool {
+    matches!(val.to_lowercase().as_str(), "1" | "true" | "yes")
+}
+
+// ---------------------------------------------------------------------------
 // Auto-compact tracking state
 // ---------------------------------------------------------------------------
 
@@ -88,7 +177,7 @@ pub struct TokenWarningState {
 
 /// Auto-compact strategy that triggers when token usage exceeds a threshold.
 pub struct AutoCompactStrategy {
-    /// Effective context window size for the model.
+    /// Base context window size for the model (before effective computation).
     pub context_window_size: u64,
 }
 
@@ -100,16 +189,15 @@ impl AutoCompactStrategy {
         }
     }
 
-    /// Return the effective context window size (minus reserved output tokens).
+    /// Return the effective context window size (minus reserved output tokens
+    /// and respecting `CLAUDE_CODE_AUTO_COMPACT_WINDOW` env var).
     pub fn effective_context_window(&self) -> u64 {
-        self.context_window_size
-            .saturating_sub(MAX_OUTPUT_TOKENS_FOR_SUMMARY)
+        get_effective_context_window(self.context_window_size)
     }
 
-    /// Return the auto-compact threshold.
+    /// Return the auto-compact threshold (respecting env var overrides).
     pub fn auto_compact_threshold(&self) -> u64 {
-        self.effective_context_window()
-            .saturating_sub(AUTOCOMPACT_BUFFER_TOKENS)
+        get_auto_compact_threshold(self.context_window_size)
     }
 
     /// Check if auto-compact should be triggered based on current token usage.
@@ -117,13 +205,41 @@ impl AutoCompactStrategy {
         &self,
         token_usage: u64,
         tracking: &AutoCompactTrackingState,
+        query_source: Option<&str>,
+    ) -> bool {
+        self.should_auto_compact_with_snip(token_usage, 0, tracking, query_source)
+    }
+
+    /// Check if auto-compact should be triggered, accounting for tokens already
+    /// freed by snip compaction.
+    ///
+    /// Mirrors `shouldAutoCompact()` from the TS reference, which subtracts
+    /// `snipTokensFreed` from the token count before comparing against the
+    /// threshold.
+    pub fn should_auto_compact_with_snip(
+        &self,
+        token_usage: u64,
+        snip_tokens_freed: u64,
+        tracking: &AutoCompactTrackingState,
+        query_source: Option<&str>,
     ) -> bool {
         // Circuit breaker: stop trying after too many consecutive failures
         if tracking.consecutive_failures >= MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES {
             return false;
         }
 
-        token_usage >= self.auto_compact_threshold()
+        // Environment variable kill switches
+        if !is_auto_compact_env_enabled() {
+            return false;
+        }
+
+        // Recursion guard: session_memory and compact are forked agents
+        if !is_auto_compact_allowed_for_query_source(query_source) {
+            return false;
+        }
+
+        let effective_usage = token_usage.saturating_sub(snip_tokens_freed);
+        effective_usage >= self.auto_compact_threshold()
     }
 
     /// Calculate the token warning state for the given usage.
@@ -140,9 +256,18 @@ impl AutoCompactStrategy {
 
         let warning_threshold = threshold.saturating_sub(WARNING_THRESHOLD_BUFFER_TOKENS);
         let error_threshold = threshold.saturating_sub(ERROR_THRESHOLD_BUFFER_TOKENS);
-        let blocking_limit = self
+
+        let default_blocking_limit = self
             .effective_context_window()
             .saturating_sub(MANUAL_COMPACT_BUFFER_TOKENS);
+
+        // Allow override for testing (CLAUDE_CODE_BLOCKING_LIMIT_OVERRIDE)
+        let blocking_limit = match std::env::var("CLAUDE_CODE_BLOCKING_LIMIT_OVERRIDE") {
+            Ok(val) if val.parse::<u64>().is_ok_and(|v| v > 0) => {
+                val.parse::<u64>().unwrap_or(default_blocking_limit)
+            }
+            _ => default_blocking_limit,
+        };
 
         TokenWarningState {
             percent_left,
@@ -191,39 +316,144 @@ pub fn should_auto_compact(
     messages: &[Message],
     context_window_size: u64,
     tracking: &AutoCompactTrackingState,
+    query_source: Option<&str>,
+) -> bool {
+    should_auto_compact_with_snip(messages, context_window_size, 0, tracking, query_source)
+}
+
+/// Like [`should_auto_compact`] but accounts for tokens already freed by snip.
+pub fn should_auto_compact_with_snip(
+    messages: &[Message],
+    context_window_size: u64,
+    snip_tokens_freed: u64,
+    tracking: &AutoCompactTrackingState,
+    query_source: Option<&str>,
 ) -> bool {
     let strategy = AutoCompactStrategy::new(context_window_size);
     let token_usage = estimate_message_tokens(messages);
-    strategy.should_auto_compact(token_usage, tracking)
+    strategy.should_auto_compact_with_snip(token_usage, snip_tokens_freed, tracking, query_source)
 }
 
 /// Execute auto-compact on the given messages.
 ///
-/// Returns `None` if auto-compact is not needed or fails gracefully.
+/// Tries session-memory compaction first (no LLM call needed), falling back
+/// to full LLM-based compaction if SM is unavailable or insufficient.
+///
+/// Mirrors `autoCompactIfNeeded()` from the TS reference. Returns `Ok(None)`
+/// if auto-compact is not needed. Errors are absorbed silently (incrementing
+/// the circuit breaker) rather than propagated — matching the TS behavior of
+/// returning `{ wasCompacted: false }` on failure.
 pub async fn auto_compact(
     messages: &[Message],
     context_window_size: u64,
     options: &CompactOptions,
     provider: &dyn SummaryProvider,
     tracking: &mut AutoCompactTrackingState,
+    query_source: Option<&str>,
 ) -> Result<Option<CompactionResult>, anyhow::Error> {
-    let strategy = AutoCompactStrategy::new(context_window_size);
-    let token_usage = estimate_message_tokens(messages);
-
-    if !strategy.should_auto_compact(token_usage, tracking) {
+    if !is_auto_compact_env_enabled() {
         return Ok(None);
     }
 
+    let strategy = AutoCompactStrategy::new(context_window_size);
+    let token_usage = estimate_message_tokens(messages);
+
+    if !strategy.should_auto_compact(token_usage, tracking, query_source) {
+        return Ok(None);
+    }
+
+    // Fire post-compact cleanup regardless of which path succeeds.
+    let cleanup = options.post_compact_cleanup_provider.clone();
+
+    // Try session-memory compaction first (mirrors TS: trySessionMemoryCompaction)
+    let sm_strategy = crate::session_memory::SessionMemoryCompactStrategy::default();
+    let sm_options = CompactOptions {
+        max_tokens: strategy.auto_compact_threshold(),
+        is_auto_compact: true,
+        ..options.clone()
+    };
+    if let Ok(sm_result) = sm_strategy
+        .compact(messages, &sm_options, provider, None)
+        .await
+    {
+        // Verify SM compact actually reduced below threshold
+        if let Some(post) = sm_result.post_compact_token_count {
+            if post <= strategy.auto_compact_threshold() {
+                tracking.compacted = true;
+                tracking.consecutive_failures = 0;
+                if let Some(cleanup_fn) = cleanup {
+                    cleanup_fn().await;
+                }
+                return Ok(Some(sm_result));
+            }
+        } else {
+            tracking.compacted = true;
+            tracking.consecutive_failures = 0;
+            if let Some(cleanup_fn) = cleanup {
+                cleanup_fn().await;
+            }
+            return Ok(Some(sm_result));
+        }
+    }
+
+    // Fallback: full LLM-based compaction
     match strategy.compact(messages, options, provider, None).await {
         Ok(result) => {
             tracking.compacted = true;
             tracking.consecutive_failures = 0;
             Ok(Some(result))
         }
-        Err(e) => {
+        Err(_) => {
+            // TS absorbs errors silently, only incrementing circuit breaker.
+            // Do NOT propagate — return Ok(None) so the caller continues.
             tracking.consecutive_failures += 1;
-            Err(e)
+            Ok(None)
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Session-memory fallback for auto-compact
+// ---------------------------------------------------------------------------
+
+/// Attempt session-memory compaction before falling back to full LLM-based
+/// compaction.
+///
+/// Mirrors the `trySessionMemoryCompaction` call in `autoCompactIfNeeded()`
+/// from the TS reference. Returns `None` if session-memory compaction is not
+/// available or not applicable.
+pub async fn try_session_memory_auto_compact(
+    messages: &[Message],
+    context_window_size: u64,
+    session_memory_strategy: &crate::session_memory::SessionMemoryCompactStrategy,
+) -> Option<CompactionResult> {
+    let effective = get_effective_context_window(context_window_size);
+    let threshold = effective.saturating_sub(AUTOCOMPACT_BUFFER_TOKENS);
+
+    let options = CompactOptions {
+        max_tokens: threshold,
+        is_auto_compact: true,
+        ..CompactOptions::default()
+    };
+
+    match session_memory_strategy
+        .compact(messages, &options, &crate::strategy::FnSummaryProvider::new(
+            |_, _, _| Box::pin(async { Ok(String::new()) }),
+        ), None)
+        .await
+    {
+        Ok(result) => {
+            // SM compact should reduce below the threshold
+            if let Some(post) = result.post_compact_token_count {
+                if post <= threshold {
+                    return Some(result);
+                }
+            } else {
+                return Some(result);
+            }
+            None
+        }
+        Err(_) => None,
     }
 }
 
@@ -244,7 +474,7 @@ mod tests {
     fn should_auto_compact_below_threshold() {
         let strategy = AutoCompactStrategy::new(200_000);
         let tracking = AutoCompactTrackingState::default();
-        assert!(!strategy.should_auto_compact(100_000, &tracking));
+        assert!(!strategy.should_auto_compact(100_000, &tracking, None));
     }
 
     #[test]
@@ -252,7 +482,7 @@ mod tests {
         let strategy = AutoCompactStrategy::new(200_000);
         let tracking = AutoCompactTrackingState::default();
         let threshold = strategy.auto_compact_threshold();
-        assert!(strategy.should_auto_compact(threshold, &tracking));
+        assert!(strategy.should_auto_compact(threshold, &tracking, None));
     }
 
     #[test]
@@ -262,7 +492,16 @@ mod tests {
             consecutive_failures: MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES,
             ..AutoCompactTrackingState::default()
         };
-        assert!(!strategy.should_auto_compact(u64::MAX, &tracking));
+        assert!(!strategy.should_auto_compact(u64::MAX, &tracking, None));
+    }
+
+    #[test]
+    fn query_source_guard_blocks_compact() {
+        let strategy = AutoCompactStrategy::new(200_000);
+        let tracking = AutoCompactTrackingState::default();
+        assert!(!strategy.should_auto_compact(u64::MAX, &tracking, Some("compact")));
+        assert!(!strategy.should_auto_compact(u64::MAX, &tracking, Some("session_memory")));
+        assert!(strategy.should_auto_compact(u64::MAX, &tracking, Some("repl_main_thread")));
     }
 
     #[test]
