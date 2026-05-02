@@ -48,12 +48,17 @@ jobs:
             target: aarch64-apple-darwin
             artifact: remote-code-rust-aarch64-apple-darwin
             ext: .tar.gz
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            artifact: remote-code-rust-x86_64-apple-darwin
+            ext: .tar.gz
 
     steps:
       - uses: actions/checkout@v4
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: 1.93.1
           targets: ${{ matrix.target }}
 
       - name: Install cross-compilation tools (aarch64-linux-gnu)

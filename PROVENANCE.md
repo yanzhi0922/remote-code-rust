@@ -8,7 +8,7 @@ The rule is simple: behavior can be studied broadly, but implementation must com
 
 The following sources are approved as implementation inputs:
 
-- the local read-only workspace at `C:\Users\Yanzh\Desktop\remote-code`
+- the local read-only reference workspace (the original TypeScript `remote-code` project)
 - official Claude Code documentation and other official vendor documentation
 - public open-source repositories with clear provenance and acceptable licensing
 - original code written directly in this repository
@@ -50,7 +50,7 @@ This project may mention such sources when explaining why they are excluded, but
 
 ## Reference Workspace Policy
 
-`C:\Users\Yanzh\Desktop\remote-code` is treated as a read-only reference workspace.
+The original TypeScript `remote-code` workspace is treated as a read-only reference.
 
 Allowed actions:
 

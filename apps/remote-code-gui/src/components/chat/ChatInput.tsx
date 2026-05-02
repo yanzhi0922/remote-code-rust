@@ -2,6 +2,7 @@ import { ChevronDown, Cpu, MessageSquareText, Mic, Send, Shield, Sparkles } from
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import { AgentSelector } from '../agent/AgentSelector';
 import { useAppStore } from '../../stores/useAppStore';
+import { useAgentStore } from '../../stores/useAgentStore';
 
 const PERMISSION_MODES = [
   { value: 'default', label: '默认', desc: '读取自动执行，写入和命令需确认' },
@@ -80,12 +81,12 @@ export function ChatInput() {
   const settings = useAppStore((state) => state.settings);
   const provider = useAppStore((state) => state.provider);
   const providerConfigs = useAppStore((state) => state.providerConfigs);
-  const availableAgents = useAppStore((state) => state.availableAgents);
-  const activeAgentType = useAppStore((state) => state.activeAgentType);
+  const availableAgents = useAgentStore((state) => state.availableAgents);
+  const activeAgentType = useAgentStore((state) => state.activeAgentType);
   const sendMessage = useAppStore((state) => state.sendMessage);
   const updateSettings = useAppStore((state) => state.updateSettings);
   const setActiveProvider = useAppStore((state) => state.setActiveProvider);
-  const selectAgent = useAppStore((state) => state.selectAgent);
+  const selectAgent = useAgentStore((state) => state.selectAgent);
 
   useEffect(() => {
     const element = textAreaRef.current;

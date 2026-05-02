@@ -44,9 +44,12 @@ The codex and roo-code directories are excluded from the main repo via `.gitigno
 - `claude-telemetry`: tracing setup, structured logging, JSON output, cost telemetry
 - `claude-agent-protocol`: multi-agent protocol abstraction layer — `AgentAdapter` trait, `UnifiedAgentEvent` enum, `AgentRouter` for routing messages to different agent backends, `AgentType` enum
 - `claude-query-engine`: unified query loop, state machine, streaming executor, token budget — execution path for Claude agent
-- `rc-codex-adapter`: Codex in-process adapter — wraps `InProcessAppServerClient` with background event pump and `event_mapper` (754 lines, 50+ notification types)
-- `rc-roo-adapter`: Roo in-process adapter — wraps Roo's `Provider` + `ToolDispatcher` with custom agent loop (12 provider backends)
-- `rc-claude-adapter`: Claude in-process adapter — type alias for `QueryEngine`, re-exports all QueryEngine types
+- `rc-codex-adapter`: Codex in-process adapter — wraps `InProcessAppServerClient` with background event pump and `event_mapper` (753 lines, 50+ notification types)
+- `rc-roo-adapter`: Roo in-process adapter — wraps Roo's native `AgentLoop` with `Provider` + `ToolDispatcher`, supporting 26 provider backends
+- `rc-claude-adapter`: Claude in-process adapter — `ClaudeInProcessAdapter` wrapping `QueryEngine` with permission broker, tool runner, and query observer
+- `claude-checkpoint`: conversation-level version control — snapshot scanner (SHA256), SQLite storage, unified diff (`similar` crate), restore engine (undo/rollback/preview), workspace exclusion patterns
+- `claude-specialized-agents`: specialized agent system — Markdown+YAML frontmatter agent definitions, 3-layer discovery (built-in/user/project), `@agent-name` mention parsing, 5 built-in agents (code-reviewer, bug-analyzer, dev-planner, architect, test-writer)
+- `claude-git`: Git operations facade — `gix` for branch resolution, CLI-based status/staging/commit/diff/log/branch switching, structured types for `GitStatus`/`GitDiff`/`CommitInfo`
 
 ## Process Model
 
@@ -166,9 +169,9 @@ The compatibility serializer is the only place where loosely structured legacy s
 
 Three independent in-process adapters, each tailored to its agent's native architecture:
 
-- **Claude Code**: `QueryEngine` (via `rc-claude-adapter`) — full turn-based conversation loop with `GuiToolRunner`, `GuiQueryObserver`, `GuiRuntimePermissionBroker`, `ContextWindowManager`
-- **Codex**: `CodexInProcessAdapter` (`rc-codex-adapter`) — wraps `InProcessAppServerClient` with background event pump and `event_mapper` (754 lines, 50+ notification types, 60+ RPC methods)
-- **Roo Code**: `RooInProcessAdapter` (`rc-roo-adapter`) — wraps Roo's `Provider` + `ToolDispatcher` with custom agent loop (12 provider backends: Anthropic, OpenAI, DeepSeek, Google, Ollama, LMStudio, Mistral, Fireworks, BaseTen, LiteLLM, Moonshot, MiniMax)
+- **Claude Code**: `QueryEngine` (via `rc-claude-adapter`) — `ClaudeInProcessAdapter` wrapping full turn-based conversation loop with `GuiToolRunner`, `GuiQueryObserver`, `GuiRuntimePermissionBroker`, `ContextWindowManager`
+- **Codex**: `CodexInProcessAdapter` (`rc-codex-adapter`) — wraps `InProcessAppServerClient` with background event pump and `event_mapper` (753 lines, 50+ notification types, 60+ RPC methods)
+- **Roo Code**: `RooInProcessAdapter` (`rc-roo-adapter`) — wraps Roo's native `AgentLoop` with `Provider` + `ToolDispatcher`, supporting 26 provider backends (Anthropic, OpenAI, OpenAI-Native, OpenRouter, DeepSeek, Google/Gemini, Ollama, LMStudio, xAI, Mistral, Fireworks, LiteLLM, Qwen, MiniMax, Moonshot, ZAI, SambaNova, BaseTen, Poe, Requesty, Unbound, Vercel, Roo, AWS/Bedrock)
 - All adapters implement the `AgentAdapter` trait and emit `UnifiedAgentEvent` through `mpsc::Receiver`
 - No external process spawning, no IPC overhead, no bridge binaries
 
@@ -378,14 +381,14 @@ graph TB
         subgraph crates/adapters/
             CA[rc-claude-adapter<br/>ClaudeInProcessAdapter<br/>= QueryEngine]
             CXA[rc-codex-adapter<br/>CodexInProcessAdapter<br/>AppServerClient + event_pump]
-            RA[rc-roo-adapter<br/>RooInProcessAdapter<br/>Provider + ToolDispatcher]
+            RA[rc-roo-adapter<br/>RooInProcessAdapter<br/>AgentLoop + 26 Providers]
         end
     end
 
     subgraph Agent Runtimes
         QE[QueryEngine<br/>GuiToolRunner + Observer]
         CX_RT[Codex AppServer<br/>60+ RPC methods]
-        RO_RT[Roo Agent Loop<br/>12 Provider backends]
+        RO_RT[Roo AgentLoop<br/>26 Provider backends]
     end
 
     UI --> CMD
@@ -403,9 +406,9 @@ graph TB
 
 | Agent | Crate | Transport | Implementation |
 |-------|-------|-----------|----------------|
-| Claude Code | `rc-claude-adapter` | In-process QueryEngine | `QueryEngine` + `GuiToolRunner` + `GuiQueryObserver` + `GuiRuntimePermissionBroker` |
-| OpenAI Codex | `rc-codex-adapter` | In-process AppServer | `CodexInProcessAdapter` + `InProcessAppServerClient` + `event_mapper` (754 lines) |
-| Roo Code | `rc-roo-adapter` | In-process Provider | `RooInProcessAdapter` + `Provider` + `ToolDispatcher` + custom agent loop |
+| Claude Code | `rc-claude-adapter` | In-process QueryEngine | `ClaudeInProcessAdapter` + `QueryEngine` + `GuiToolRunner` + `GuiQueryObserver` + `GuiRuntimePermissionBroker` |
+| OpenAI Codex | `rc-codex-adapter` | In-process AppServer | `CodexInProcessAdapter` + `InProcessAppServerClient` + `event_mapper` (753 lines) |
+| Roo Code | `rc-roo-adapter` | In-process Provider | `RooInProcessAdapter` + native `AgentLoop` + `Provider` + `ToolDispatcher` (26 backends) |
 
 **Core Abstractions:**
 
@@ -413,9 +416,9 @@ graph TB
 - `AgentRouter` — routes sessions to the correct adapter based on `agent_type`
 - `UnifiedAgentEvent` — normalized event model for all agent protocols
 - `claude-agent-protocol` — shared trait, event definitions, types (no adapter implementations)
-- `rc-claude-adapter` — Claude adapter: `ClaudeInProcessAdapter` = type alias for `QueryEngine`
+- `rc-claude-adapter` — Claude adapter: `ClaudeInProcessAdapter` wrapping `QueryEngine` with full permission broker, tool runner, and query observer
 - `rc-codex-adapter` — Codex adapter: `CodexInProcessAdapter` with `event_mapper` (AppServerEvent → UnifiedAgentEvent)
-- `rc-roo-adapter` — Roo adapter: `RooInProcessAdapter` with `Provider` + `ToolDispatcher`
+- `rc-roo-adapter` — Roo adapter: `RooInProcessAdapter` with native `AgentLoop` + `Provider` + `ToolDispatcher` (26 backends)
 
 **Key Design Decisions:**
 
@@ -436,7 +439,7 @@ graph TB
 |-------|--------------|-----------|-----------|
 | Claude Code | `crates/adapters/rc-claude-adapter` | `ClaudeInProcessAdapter` (= `QueryEngine`) | `claude-query-engine`, `claude-core`, `claude-provider`, `claude-tools`, `claude-session` |
 | Codex | `crates/adapters/rc-codex-adapter` | `CodexInProcessAdapter` | `codex-app-server-client`, `codex-core`, `codex-protocol` |
-| Roo Code | `crates/adapters/rc-roo-adapter` | `RooInProcessAdapter` | `roo-provider`, `roo-task`, `roo-tools`, `roo-types` |
+| Roo Code | `crates/adapters/rc-roo-adapter` | `RooInProcessAdapter` (native AgentLoop) | `roo-provider` (×26), `roo-task`, `roo-tools`, `roo-types` |
 
 ### Adapter Integration Status
 
@@ -444,7 +447,7 @@ graph TB
 |-------|-----------|---------------|-------------|-------------|-----------|-----|
 | Claude | ✅ QueryEngine | ✅ All native tools | ✅ Full GUI broker | ✅ Auto compaction | ✅ | ✅ |
 | Codex | ✅ AppServer | ✅ AppServer tools | ✅ Mapped to GUI | ✅ AppServer managed | ✅ | ✅ |
-| Roo | ✅ Provider+Dispatcher | ✅ ToolDispatcher | ⚠️ No-op stub | ⚠️ Rough estimate | ✅ | ❌ Not yet |
+| Roo | ✅ Provider+Dispatcher | ✅ ToolDispatcher | ⚠️ Partial GUI | ⚠️ Rough estimate | ✅ | ❌ Not yet |
 
 ### CodexInProcessAdapter Architecture
 
@@ -480,7 +483,8 @@ graph TB
 │  RooInProcessAdapter                         │
 │  ┌──────────────┐  ┌───────────────────────┐ │
 │  │ build_handler │  │ run_agent_loop (task) │ │
-│  │ 12 providers  │  │ Provider.create_msg   │ │
+│  │ 26 providers  │  │ AgentLoop (native)   │ │
+│  │               │  │ Provider.create_msg   │ │
 │  │               │  │ collect_stream+fwd    │ │
 │  │               │  │ ToolDispatcher.dispatch│ │
 │  └──────────────┘  └───────────┬───────────┘ │
@@ -617,7 +621,7 @@ Release builds are triggered by tags and produce binaries for 5 platforms.
 | Limitation | Description |
 |------------|-------------|
 | TTS Mock | `claude-voice::tts` returns placeholder responses, not connected to a real TTS service |
-| Roo Permission Stub | `RooInProcessAdapter::resolve_permission()` is a no-op — Roo's tool approval flow is not yet wired to the GUI interactive permission dialog |
+| Roo Permission Partial | `RooInProcessAdapter::resolve_permission()` works but Roo's tool approval flow is not fully wired to the GUI interactive permission dialog |
 | Roo Token Estimation | Roo adapter uses `text.len() / 4` for approximate token counting instead of Roo's native tiktoken |
 | Roo MCP Not Wired | Roo adapter declares `McpSupport` capability but does not integrate `McpServerConnection` in `send_message()` |
 | Alpha Dependencies | `rama-*` crates pinned to `0.3.0-alpha.4` — pre-release quality, will need migration when stable releases |

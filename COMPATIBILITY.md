@@ -160,7 +160,7 @@ Compatibility guarantees:
 
 ## Tools
 
-The Rust rewrite implements 38+ built-in tools across multiple categories:
+The Rust rewrite implements 65+ built-in tools across multiple categories:
 
 ### File Operations
 
@@ -368,25 +368,25 @@ The old repository is read-only input for fixture collection. CI validates again
 
 ## Test Coverage
 
-Current test suite: **200+ tests** passing across all crates.
+Current test suite: **860+ tests** passing across all crates.
 
-| Crate | Tests | Category |
-|-------|-------|----------|
-| claude-agents | 5 | Scheduler, mailbox, capacity |
-| claude-config | 6 | Config loading, hooks, normalization |
-| claude-control-plane | 24 | Full API round-trip, WebSocket streaming |
-| claude-core | 2 | Hook events, upstream shapes |
-| claude-mcp | 9 | Config parsing, stdio transport, tool invocation |
-| claude-permissions | 19 | Tool classification, permission modes, broker |
-| claude-plugins | 8 | Manifest loading, runtime inspection, invocation |
-| claude-runner | 11 | Runner API, sessions, approvals, health |
-| claude-session | 11 | CRUD, conversation, events, export, bundle |
-| claude-skills | 4 | Skill loading, front matter, lock file |
-| claude-tools | 1 | Tool registry |
-| remote-code | 31 | CLI parsing, remote helpers, MCP/Plugin CLI |
-| remote-code-runner | 3 | Heartbeat, retry, control plane sync |
-| Apps (doctor) | 2 | Runner + control plane doctor |
-| **Total** | **200+** | |
+| Category | Test Scope |
+|----------|-----------|
+| claude-agents | Scheduler, mailbox, capacity |
+| claude-config | Config loading, hooks, normalization |
+| claude-control-plane | Full API round-trip, WebSocket streaming |
+| claude-core | Hook events, upstream shapes |
+| claude-mcp | Config parsing, stdio transport, tool invocation |
+| claude-permissions | Tool classification, permission modes, broker |
+| claude-plugins | Manifest loading, runtime inspection, invocation |
+| claude-runner | Runner API, sessions, approvals, health |
+| claude-session | CRUD, conversation, events, export, bundle |
+| claude-skills | Skill loading, front matter, lock file |
+| claude-tools | Tool registry, BM25 search |
+| remote-code (CLI) | CLI parsing, remote helpers, MCP/Plugin CLI |
+| remote-code-runner | Heartbeat, retry, control plane sync |
+| Adapters (rc-*) | Permission resolution, event mapping |
+| **Total** | **860+** |
 
 ## Deliberate Non-Compatibility
 

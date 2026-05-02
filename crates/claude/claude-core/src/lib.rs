@@ -21,10 +21,10 @@ pub mod task_stack;
 pub mod usage;
 
 use chrono::{DateTime, Utc};
-use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::PathBuf;
+use std::str::FromStr;
 use uuid::Uuid;
 
 pub use app_state::{
@@ -80,7 +80,7 @@ pub const DEFAULT_PROFILE_DIR_NAME: &str = ".remote-code-rust";
 pub const LEGACY_PROFILE_DIR_NAME: &str = ".remote-code";
 
 /// Permission mode controlling how tool executions are authorised.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ValueEnum)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum PermissionMode {
     /// Ask for every non-read operation.
@@ -110,8 +110,31 @@ impl PermissionMode {
     }
 }
 
+impl FromStr for PermissionMode {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "default" | "Default" => Ok(Self::Default),
+            "acceptEdits" | "accept-edits" | "accept_edits" => Ok(Self::AcceptEdits),
+            "bypassPermissions" | "bypass-permissions" | "bypass_permissions" => {
+                Ok(Self::BypassPermissions)
+            }
+            "dontAsk" | "dont-ask" | "dont_ask" => Ok(Self::DontAsk),
+            "plan" | "Plan" => Ok(Self::Plan),
+            _ => Err(format!("unknown permission mode: {s}")),
+        }
+    }
+}
+
+impl std::fmt::Display for PermissionMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_legacy_str())
+    }
+}
+
 /// LLM provider wire protocol.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ValueEnum)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ProviderProtocol {
     /// OpenAI-compatible chat completions API.
@@ -138,8 +161,28 @@ impl ProviderProtocol {
     }
 }
 
+impl FromStr for ProviderProtocol {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_ascii_lowercase().as_str() {
+            "openai" => Ok(Self::OpenAi),
+            "anthropic" => Ok(Self::Anthropic),
+            "bedrock" => Ok(Self::Bedrock),
+            "vertex" => Ok(Self::Vertex),
+            _ => Err(format!("unknown provider protocol: {s}")),
+        }
+    }
+}
+
+impl std::fmt::Display for ProviderProtocol {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// Input format for the CLI.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ValueEnum)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum InputFormat {
     /// Human-readable text input.
@@ -149,8 +192,29 @@ pub enum InputFormat {
     StreamJson,
 }
 
+impl FromStr for InputFormat {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "text" => Ok(Self::Text),
+            "stream-json" | "stream_json" | "streamJson" => Ok(Self::StreamJson),
+            _ => Err(format!("unknown input format: {s}")),
+        }
+    }
+}
+
+impl std::fmt::Display for InputFormat {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Text => f.write_str("text"),
+            Self::StreamJson => f.write_str("stream-json"),
+        }
+    }
+}
+
 /// Output format for the CLI.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ValueEnum)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum OutputFormat {
     /// Human-readable text output.
@@ -162,9 +226,31 @@ pub enum OutputFormat {
     StreamJson,
 }
 
+impl FromStr for OutputFormat {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "text" => Ok(Self::Text),
+            "json" => Ok(Self::Json),
+            "stream-json" | "stream_json" | "streamJson" => Ok(Self::StreamJson),
+            _ => Err(format!("unknown output format: {s}")),
+        }
+    }
+}
+
+impl std::fmt::Display for OutputFormat {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Text => f.write_str("text"),
+            Self::Json => f.write_str("json"),
+            Self::StreamJson => f.write_str("stream-json"),
+        }
+    }
+}
+
 /// Hook lifecycle events that can trigger command hooks.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, ValueEnum)]
-#[clap(rename_all = "kebab-case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum HookEvent {
     /// Fired when a new session starts.
     SessionStart,
@@ -189,10 +275,25 @@ impl HookEvent {
     }
 }
 
+impl FromStr for HookEvent {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "session-start" | "SessionStart" | "session_start" => Ok(Self::SessionStart),
+            "pre-tool-use" | "PreToolUse" | "pre_tool_use" => Ok(Self::PreToolUse),
+            "post-tool-use" | "PostToolUse" | "post_tool_use" => Ok(Self::PostToolUse),
+            "post-tool-use-failure" | "PostToolUseFailure" | "post_tool_use_failure" => {
+                Ok(Self::PostToolUseFailure)
+            }
+            _ => Err(format!("unknown hook event: {s}")),
+        }
+    }
+}
+
 /// Shell interpreter used to execute hook commands.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ValueEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
-#[clap(rename_all = "lowercase")]
 pub enum HookShell {
     /// POSIX bash shell.
     Bash,
@@ -207,6 +308,18 @@ impl HookShell {
         match self {
             Self::Bash => "bash",
             Self::PowerShell => "powershell",
+        }
+    }
+}
+
+impl FromStr for HookShell {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_ascii_lowercase().as_str() {
+            "bash" => Ok(Self::Bash),
+            "powershell" | "pwsh" => Ok(Self::PowerShell),
+            _ => Err(format!("unknown hook shell: {s}")),
         }
     }
 }

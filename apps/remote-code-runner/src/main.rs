@@ -16,6 +16,7 @@ use claude_runner::{
     RunnerApi, RunnerApiEvent, RunnerConfig, RunnerConfigOverrides, RunnerSessionCommandRequest,
     RunnerSessionRecord, RunnerSessionStateUpdateRequest, SessionState as RunnerSessionState,
     describe_status, load_runner_config, register_with_control_plane, send_heartbeat,
+    validate_runner_config,
 };
 use claude_telemetry::install_tracing;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -38,6 +39,9 @@ struct Cli {
 
     #[arg(long, env = "REMOTE_CODE_RUNNER_PUBLIC_BASE_URL")]
     public_base_url: Option<String>,
+
+    #[arg(long, env = "REMOTE_CODE_RUNNER_AUTH_TOKEN")]
+    auth_token: Option<String>,
 
     #[arg(long, env = "REMOTE_CODE_RUNNER_HEARTBEAT_SECS")]
     heartbeat_interval_secs: Option<u64>,
@@ -100,6 +104,7 @@ struct HostedSessionHandle {
     input_tx: mpsc::UnboundedSender<String>,
     request_to_approval: Arc<Mutex<HashMap<String, Uuid>>>,
     approval_to_request: Arc<Mutex<HashMap<Uuid, String>>>,
+    task_handles: Arc<Mutex<Vec<tokio::task::JoinHandle<()>>>>,
 }
 
 impl HostedSessionManager {
@@ -212,6 +217,7 @@ impl HostedSessionManager {
             input_tx,
             request_to_approval: Arc::new(Mutex::new(HashMap::new())),
             approval_to_request: Arc::new(Mutex::new(HashMap::new())),
+            task_handles: Arc::new(Mutex::new(Vec::new())),
         };
         self.sessions
             .lock()
@@ -226,17 +232,18 @@ impl HostedSessionManager {
         )
         .await?;
 
-        tokio::spawn(write_session_input(
+        let input_join = tokio::spawn(write_session_input(
             session.session_id,
             child_stdin,
             input_rx,
         ));
+        handle.task_handles.lock().await.push(input_join);
 
         let manager = self.clone();
-        let stdout_handle = handle.clone();
-        tokio::spawn(async move {
+        let stdout_handle_for_spawn = handle.clone();
+        let stdout_join: tokio::task::JoinHandle<()> = tokio::spawn(async move {
             if let Err(error) = manager
-                .read_hosted_session_stdout(session.session_id, child_stdout, stdout_handle)
+                .read_hosted_session_stdout(session.session_id, child_stdout, stdout_handle_for_spawn)
                 .await
             {
                 warn!(
@@ -245,18 +252,20 @@ impl HostedSessionManager {
                 );
             }
         });
+        handle.task_handles.lock().await.push(stdout_join);
 
         let manager = self.clone();
-        tokio::spawn(async move {
+        let stderr_join: tokio::task::JoinHandle<()> = tokio::spawn(async move {
             let mut lines = BufReader::new(child_stderr).lines();
             while let Ok(Some(line)) = lines.next_line().await {
                 warn!("hosted session `{}` stderr: {line}", session.session_id);
             }
             let _ = manager;
         });
+        handle.task_handles.lock().await.push(stderr_join);
 
         let manager = self.clone();
-        tokio::spawn(async move {
+        let exit_join: tokio::task::JoinHandle<()> = tokio::spawn(async move {
             let exit = child.wait().await;
             if let Err(error) = manager
                 .handle_hosted_session_exit(session.session_id, exit)
@@ -268,6 +277,7 @@ impl HostedSessionManager {
                 );
             }
         });
+        handle.task_handles.lock().await.push(exit_join);
 
         info!(
             "spawned hosted session `{}` for workspace `{}`",
@@ -482,7 +492,9 @@ impl HostedSessionManager {
 
         let behavior = match approval.state {
             claude_runner::ApprovalState::Approved => "allow",
-            claude_runner::ApprovalState::Denied | claude_runner::ApprovalState::Cancelled => "deny",
+            claude_runner::ApprovalState::Denied | claude_runner::ApprovalState::Cancelled => {
+                "deny"
+            }
             claude_runner::ApprovalState::Pending => return Ok(()),
         };
         let note = approval
@@ -548,7 +560,12 @@ impl HostedSessionManager {
         session_id: Uuid,
         exit: std::io::Result<std::process::ExitStatus>,
     ) -> Result<()> {
-        self.sessions.lock().await.remove(&session_id);
+        if let Some(handle) = self.sessions.lock().await.remove(&session_id) {
+            let handles = handle.task_handles.lock().await;
+            for task in handles.iter() {
+                task.abort();
+            }
+        }
         self.post_runtime_event(
             session_id,
             RuntimeEventDetail::DaemonPresenceChanged {
@@ -907,6 +924,7 @@ async fn main() -> Result<()> {
             control_plane_url: cli.control_plane_url,
             bind: cli.bind,
             public_base_url: cli.public_base_url,
+            auth_token: cli.auth_token,
             heartbeat_interval_secs: cli.heartbeat_interval_secs,
             max_parallel_sessions: cli.max_parallel_sessions,
             ..RunnerConfigOverrides::default()
@@ -920,6 +938,10 @@ async fn main() -> Result<()> {
         ),
         Command::PrintConfig => println!("{}", serde_json::to_string_pretty(&config)?),
         Command::Serve => {
+            let blocking_issues = validate_runner_config(&config);
+            if !blocking_issues.is_empty() {
+                anyhow::bail!(blocking_issues.join("; "));
+            }
             let bind = config.bind;
             let (event_tx, event_rx) = mpsc::unbounded_channel();
             let api = RunnerApi::new(

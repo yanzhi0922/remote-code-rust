@@ -1,10 +1,10 @@
 # Remote Code Rust — 项目状态与路线图
 
-> 更新日期: 2026-05-01
-> 当前阶段: Phase 15 已完成 — 三 Agent 独立适配器架构
-> 代码规模: ~85,000 行 (Rust + TypeScript)，41 个 crates（含 3 个 adapter crate）
-> 当前验证基线: `cargo test --workspace` 全绿（860+ 测试），`cargo clippy` 零警告，三 Agent 适配器编译通过。
-> 基准提交: `7798a5f`
+> 更新日期: 2026-05-02
+> 当前阶段: Phase 17 已完成 — ZCode 启发功能（Checkpoint + Specialized Agents + Git Panel）
+> 代码规模: ~95,000 行 (Rust + TypeScript)，177 个 workspace crates（Claude 43 + Codex 80 + Adapters 3 + Apps 5 + GUI Tauri）
+> 当前验证基线: `cargo test --workspace` 全绿（860+ 测试），`cargo clippy` 零警告，三 Agent 适配器 + ZCode 启发 crate 编译通过。
+> 基准提交: `c0df82e`
 
 ---
 
@@ -20,14 +20,14 @@
 | Clippy | ✅ 零警告 | `cargo clippy --workspace -- -D warnings` 通过 |
 | CLI | ✅ 可发布 | clap 命令树、doctor 与核心子命令可构建并通过回归 |
 | TUI | ✅ 可发布 | 交互式终端 + 65+ slash commands + Vim 模式回归通过 |
-| GUI (Tauri) | ✅ 可构建 | Rust/Tauri crate 纳入工作区回归 |
+| GUI (Tauri) | ✅ 可构建 | Rust/Tauri crate 纳入工作区回归，Phase 2-5 GUI Redesign 完成 |
 | GUI (Web/PWA) | ✅ 可发布 | 远程控制面、中英双语、错误边界、PWA 缓存更新链路通过 |
 | GUI (Mobile/Capacitor) | ✅ 可构建 | 跨包 React 类型冲突已清除，补齐 smoke tests |
 | Provider | ✅ 完整 | OpenAI/Anthropic 协议，流式，多 key 轮换，故障转移 |
 | 工具系统 | ✅ 丰富 | 65+ 内置工具 + MCP + 插件扩展 |
 | Control Plane | ✅ 完整 | Runner/Session/Approval/Artifact/Event 全链路 |
 | Runner | ✅ 完整 | Daemon 模式，心跳，命令拉取，审批中继 |
-| 多 Agent | ✅ 三引擎独立适配器 | Claude (QueryEngine) + Codex (AppServer) + Roo (Provider+Dispatcher) 三条独立 in-process 路径 |
+| 多 Agent | ✅ 三引擎独立适配器 | Claude (QueryEngine) + Codex (AppServer) + Roo (AgentLoop, 26 Provider backends) 三条独立 in-process 路径 |
 | 国际化 | ✅ 完整 | Web GUI / mobile shell 支持中文界面 |
 
 ### 1.2 架构概览
@@ -65,51 +65,15 @@
 └─────────────────────────────────────────────────────────────┘
 ```
 
-### 1.3 Crate 结构 (38 个)
+### 1.3 Crate 结构 (177 workspace crates)
 
-| Crate | 职责 | 关键文件 |
-|-------|------|---------|
-| `claude-core` | 核心类型、hook、状态、消息 | lib.rs, hooks.rs, state.rs, message.rs |
-| `claude-protocol` | Stream-JSON 协议、消息类型 | lib.rs |
-| `claude-config` | 配置加载、Provider 发现 | lib.rs, settings_layers.rs |
-| `claude-provider` | LLM 调用、流式、故障转移 | lib.rs, streaming.rs, circuit_breaker.rs |
-| `claude-tools` | 65+ 内置工具、运行时策略 | specs.rs, streaming_executor.rs |
-| `claude-session` | 会话存储、记忆、恢复 | lib.rs, transcript.rs, resume_state.rs |
-| `claude-permissions` | 权限规则引擎、审计 | lib.rs, classifier.rs, denial_tracking.rs |
-| `claude-agents` | 多代理调度器、Fork、Built-in | lib.rs, fork.rs, builtins.rs |
-| `claude-mcp` | MCP 客户端 (stdio/HTTP/WS) | lib.rs, lifecycle.rs, oauth.rs |
-| `claude-plugins` | 插件发现与加载 | lib.rs, loader.rs, marketplace/ |
-| `claude-skills` | Skill 发现与加载 | lib.rs |
-| `claude-compact` | 上下文压缩 (5 策略) | engine.rs, auto.rs, micro.rs, snip.rs |
-| `claude-system-prompt` | 动态系统提示词 | lib.rs + 22 sections |
-| `claude-query-engine` | 统一查询引擎 | query_loop.rs, state_machine.rs, observer.rs |
-| `claude-engine-events` | 统一事件层 | lib.rs, types.rs, stream.rs |
-| `claude-auth` | 认证 (API key + OAuth PKCE) | lib.rs, oauth/ |
-| `claude-model` | 模型管理、别名、能力 | lib.rs, model.rs, providers.rs |
-| `claude-context` | 上下文管理 (effort/fast mode) | lib.rs, effort.rs, fast_mode.rs |
-| `claude-settings` | 设置类型 (hooks/MCP/sandbox) | lib.rs, hooks.rs, mcp.rs |
-| `claude-managed-settings` | MDM/安全策略 | lib.rs, mdm.rs, sync_engine.rs |
-| `claude-skill-search` | BM25 技能搜索 | lib.rs, local_search.rs |
-| `claude-ide` | IDE 集成 (bridge/connection) | lib.rs, bridge.rs |
-| `claude-teleport` | 会话迁移 | lib.rs, api.rs |
-| `claude-file-history` | 文件历史/备份 | lib.rs, backup.rs, snapshot.rs |
-| `claude-voice` | 语音输入/输出 (TTS Mock) | lib.rs, stt.rs, tts.rs |
-| `claude-lsp` | LSP 客户端 | lib.rs, client.rs |
-| `claude-analytics` | 分析/遥测 | lib.rs |
-| `claude-event-bus` | 发布/订阅事件总线 | lib.rs |
-| `claude-ui-bridge` | UI 事件桥接 | lib.rs, bridge.rs |
-| `claude-control-plane` | 远程控制面服务 | lib.rs, handlers.rs |
-| `claude-runner` | Runner daemon | lib.rs |
-| `claude-tui` | 终端用户界面 | app.rs, 20 components, 32 commands |
-| `claude-utils` | 工具函数 (diff/git/markdown) | diff.rs, git_fs.rs, markdown.rs |
-| `claude-agent-protocol` | 多 Agent 协议抽象层 | adapter.rs, events.rs, router.rs, types.rs |
-| `rc-claude-adapter` | Claude 适配器 (QueryEngine) | src/lib.rs (ClaudeInProcessAdapter = QueryEngine) |
-| `rc-codex-adapter` | Codex 适配器 (AppServer) | lib.rs (CodexInProcessAdapter + event_mapper) |
-| `rc-roo-adapter` | Roo 适配器 (Provider+Dispatcher) | lib.rs (RooInProcessAdapter + agent loop) |
-| `claude-swarm` | 多代理类型系统 | lib.rs, backends/in_process.rs |
-| `claude-telemetry` | 追踪设置、结构化日志 | lib.rs, analytics.rs |
-| `claude-runtime-prompt` | 运行时提示词 | lib.rs, auto_memory.rs |
-| `claude-integration-tests` | 集成测试 | tests/ |
+| 分类 | 数量 | 说明 |
+|------|------|------|
+| Claude 核心 | 43 | claude-core, claude-provider, claude-session, claude-checkpoint, claude-specialized-agents, claude-git, ... |
+| Codex 核心 | 80 | protocol, core, exec, app-server, ... |
+| Adapters | 3 | rc-claude-adapter, rc-codex-adapter, rc-roo-adapter |
+| Apps | 5 | CLI (claudecode), GUI (Tauri), Control Plane, Runner, Migrate |
+| GUI Tauri | 1 | apps/remote-code-gui/src-tauri |
 
 ---
 
@@ -209,6 +173,24 @@
 - ✅ 三个适配器编译验证通过
 - ✅ 代码已推送 (commit `7798a5f`)
 
+### Phase 16: GUI Redesign — ✅ 完成
+- ✅ Phase 1: Design System Foundation — CSS tokens, Tailwind config, ThemeProvider
+- ✅ Phase 2: Layout Overhaul — ActivityBar, SplitPane, StatusBar, tab sidebar
+- ✅ Phase 3: Chat Experience — streaming animation, inline diff, slash commands
+- ✅ Phase 4: Integrated Tool Panes — Terminal (xterm.js), Diff, Preview, PaneHost
+- ✅ Phase 5: Command Palette — keyboard shortcuts overlay
+
+### Phase 17: ZCode 启发功能 — ✅ 完成
+- ✅ `claude-checkpoint` crate — 对话级版本控制（SHA256 快照扫描、SQLite 存储、unified diff、恢复引擎）
+- ✅ `claude-specialized-agents` crate — 专业化 Agent 系统（Markdown+YAML frontmatter 定义、3 层发现、5 个内置 Agent）
+- ✅ `claude-git` crate — Git 操作封装（gix 分支解析 + CLI status/stage/commit/diff/log）
+- ✅ `PermissionModeSwitch` GUI 组件 — 4 模式快捷切换（Shift+Tab 循环）
+- ✅ `GitPanel` GUI 组件 — 3 标签（Changes/History/Branches），文件状态着色，Cmd+Enter 提交
+- ✅ `CheckpointTimeline` GUI 组件 — 时间轴展示、展开详情、Review/Restore/Undo 操作
+- ✅ `AgentPicker` GUI 组件 — @ 引用下拉选择、键盘导航、过滤搜索
+- ✅ 灵感分析文档 [zcode-inspiration-plan.md](zcode-inspiration-plan.md)
+- ✅ 三个新 crate 编译验证通过
+
 ---
 
 ## 三、已知限制
@@ -216,36 +198,34 @@
 | 限制 | 说明 | 优先级 |
 |------|------|--------|
 | TTS 为 Mock 实现 | `claude-voice::tts` 返回占位响应，未接入真实 TTS 服务 | P2 |
-| Roo 权限系统未接线 | `RooInProcessAdapter::resolve_permission()` 为 no-op | P1 |
+| Roo 权限系统部分接线 | `RooInProcessAdapter::resolve_permission()` 可用但未完全接入 GUI 交互弹窗 | P1 |
 | Roo Token 估算粗糙 | 使用 `text.len() / 4` 而非 Roo 原生 tiktoken | P2 |
 | Roo MCP 未接入 | 声明了 McpSupport 但未集成 McpServerConnection | P2 |
-| Headless 浏览器截图 | `web_browser` 工具的截图功能未完成 | P2 |
+| `rama-*` 依赖为预发布 | 锁定 `0.3.0-alpha.4`，待迁移至稳定版 | P3 |
 
 ---
 
 ## 四、下一阶段路线图
 
-### Phase 16: Roo Agent 深化集成
-- [ ] Roo 权限系统 — 将 `resolve_permission()` 接入 GUI 交互式权限弹窗
-- [ ] Roo Token 精确计算 — 使用 `roo_context::tiktoken` 替代粗略估算
-- [ ] Roo 系统提示 — 使用 `roo_prompt::build_system_prompt()` 替代硬编码
-- [ ] Roo 原生 AgentLoop — 复用 `roo_task::agent_loop::AgentLoop` 的完整功能
+### Phase 18: Roo Agent 深化集成
+- [ ] Roo 权限系统 — 将 `resolve_permission()` 完全接入 GUI 交互式权限弹窗
+- [ ] Roo Token 精确计算 — 使用 Roo 原生 tiktoken 替代粗略估算
 - [ ] Roo MCP 集成 — 在 `send_message()` 中集成 `McpServerConnection`
 - [ ] 端到端多 Agent 集成测试
 
-### Phase 17: 增强远程交互
+### Phase 19: 增强远程交互
 - [ ] 终端流 (Terminal Stream) — 实时终端输出远程查看
 - [ ] 文件预览 — 远程文件内容浏览
 - [ ] Diff 浏览 — 代码变更可视化
 - [ ] 推送通知 — 移动端审批提醒
 
-### Phase 18: 竞品超越
+### Phase 20: 竞品超越
 - [ ] 子任务深度委派 — 多级子代理 + 并行执行 + 凭证轮换
-- [ ] 会话回退 — 回退到任意历史点继续
-- [ ] Shadow Git 检查点 — 自动 git checkpoint
+- [ ] 会话回退 — 回退到任意历史点继续（基于 claude-checkpoint）
+- [ ] Shadow Git 检查点 — 自动 git checkpoint（基于 claude-git）
 - [ ] Task Flow 可视化 — 任务依赖图 + 进度追踪
 
-### Phase 19: 可选扩展
+### Phase 21: 可选扩展
 - [ ] 云端 Runner — 腾讯云执行代码
 - [ ] 多工作站调度 — 多台机器协同
 - [ ] 团队协作 — 多用户共享会话
@@ -255,22 +235,26 @@
 
 ## 五、竞品对比
 
-| 特性 | remote-code-rust | Claude Code | Roo-Code | opencode | openclaw |
-|------|-----------------|-------------|----------|----------|----------|
-| 语言 | Rust | TypeScript | TypeScript | Go | TypeScript |
-| 性能 | ~50ms 启动 | ~2s | ~2s | ~100ms | ~2s |
-| 内存 | ~20MB | ~200MB | ~200MB | ~50MB | ~200MB |
-| 远程执行 | ✅ 完整 | ❌ | ❌ | ❌ | ❌ |
-| GUI | ✅ Tauri+Web | ❌ CLI only | ✅ VSCode | ✅ TUI | ✅ VSCode |
-| Circuit Breaker | ✅ | ❌ | ❌ | ❌ | ❌ |
-| 多 Provider Failover | ✅ | ❌ | 部分 | ❌ | ❌ |
-| 工具数量 | 65+ | 55+ | 40+ | 20+ | 30+ |
-| PWA 移动端 | ✅ | ❌ | ❌ | ❌ | ❌ |
-| 国际化 | ✅ 中/英 | ❌ | ❌ | ❌ | ❌ |
-| 多 Agent 统一架构 | ✅ 三引擎独立适配器 | ❌ | ❌ | ❌ | ❌ |
-| QueryEngine 执行路径 | ✅ Claude Agent | ❌ | ❌ | ❌ | ❌ |
+| 特性 | remote-code-rust | Claude Code | Roo-Code | ZCode (Z.AI) | opencode | openclaw |
+|------|-----------------|-------------|----------|---------------|----------|----------|
+| 语言 | Rust | TypeScript | TypeScript | TypeScript | Go | TypeScript |
+| 性能 | ~50ms 启动 | ~2s | ~2s | ~2s | ~100ms | ~2s |
+| 内存 | ~20MB | ~200MB | ~200MB | ~200MB | ~50MB | ~200MB |
+| 远程执行 | ✅ 完整 | ❌ | ❌ | ❌ | ❌ | ❌ |
+| GUI | ✅ Tauri+Web | ❌ CLI only | ✅ VSCode | ✅ Web ADE | ✅ TUI | ✅ VSCode |
+| Circuit Breaker | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| 多 Provider Failover | ✅ | ❌ | 部分 | ❌ | ❌ | ❌ |
+| 工具数量 | 65+ | 55+ | 40+ | 30+ | 20+ | 30+ |
+| PWA 移动端 | ✅ | ❌ | ❌ | ✅ QR 扫码 | ❌ | ❌ |
+| 国际化 | ✅ 中/英 | ❌ | ❌ | ✅ 中文优先 | ❌ | ❌ |
+| 多 Agent 统一架构 | ✅ 三引擎独立适配器 (26 Provider) | ❌ | ❌ | ✅ @agent 提及 | ❌ | ❌ |
+| QueryEngine 执行路径 | ✅ Claude Agent | ❌ | ❌ | ❌ | ❌ | ❌ |
+| 对话级 Checkpoint | ✅ claude-checkpoint | ❌ | ❌ | ✅ Review/Undo/Restore | ❌ | ❌ |
+| 专业化 Agent | ✅ claude-specialized-agents | ❌ | ❌ | ✅ Markdown+YAML 定义 | ❌ | ❌ |
+| 内置 Git 面板 | ✅ claude-git + GitPanel | ❌ | ❌ | ✅ 完整 Git 管理 | ❌ | ❌ |
+| 权限模式快捷切换 | ✅ PermissionModeSwitch | ❌ | ❌ | ✅ Shift+Tab 4 模式 | ❌ | ❌ |
 
-**独有优势**: Rust 原生性能 + 三引擎独立 in-process 适配器架构 (Claude/Codex/Roo) + 分布式远程执行 + Circuit Breaker + PWA 移动端 + 多 Provider 故障转移 + 65+ 内置工具
+**独有优势**: Rust 原生性能 + 三引擎独立 in-process 适配器架构 (Claude/Codex/Roo 26 Provider) + 分布式远程执行 + Circuit Breaker + PWA 移动端 + 多 Provider 故障转移 + 65+ 内置工具 + IDE 级 GUI (ActivityBar/Terminal/Diff/Preview/Command Palette) + ZCode 启发功能 (Checkpoint/专业化 Agent/Git 面板)
 
 ---
 
@@ -279,8 +263,8 @@
 | 机制 | 实现 |
 |------|------|
 | `unsafe_code = "forbid"` | 全局禁止 unsafe 代码 |
-| `unwrap_used = "deny"` | 生产代码禁止 unwrap |
-| `todo!` / `dbg!` 禁止 | 防止调试代码进入生产 |
+| `unwrap_used = "warn"` | 生产代码不建议 unwrap |
+| `todo!` / `dbg!` / `unimplemented!` 禁止 | 防止调试/未实现代码进入生产 |
 | OS Keychain | Tauri 桌面端 API key 存储在系统钥匙串 |
 | SHA-256 哈希 | Bootstrap secret 不明文存储 |
 | Bearer Token | 所有 `/v1/*` API 受认证保护 |
@@ -323,11 +307,13 @@
 
 | 文档 | 说明 |
 |------|------|
-| [ARCHITECTURE.md](../ARCHITECTURE.md) | 完整架构设计文档 |
-| [COMPATIBILITY.md](../COMPATIBILITY.md) | 兼容性说明 |
-| [PROVENANCE.md](../PROVENANCE.md) | 来源证明 |
-| [ROADMAP.md](../ROADMAP.md) | 路线图 |
-| [multi-agent-architecture.md](multi-agent-architecture.md) | 多 Agent 架构设计（InProcessAdapter 统一架构） |
+| [ARCHITECTURE.md](../ARCHITECTURE.md) | 完整架构设计文档（英文） |
+| [COMPATIBILITY.md](../COMPATIBILITY.md) | 兼容性说明（英文） |
+| [PROVENANCE.md](../PROVENANCE.md) | 来源证明（英文） |
+| [ROADMAP.md](../ROADMAP.md) | 路线图（英文） |
+| [multi-agent-architecture.md](multi-agent-architecture.md) | 多 Agent 架构设计（已过时，仅供参考） |
 | [coding-plan-support.md](coding-plan-support.md) | 国内 Coding Plan 供应商参考 |
+| [gui-redesign-plan.md](gui-redesign-plan.md) | GUI 重设计计划（已完成） |
+| [zcode-inspiration-plan.md](zcode-inspiration-plan.md) | ZCode 启发分析与实施计划（已完成） |
 | [archive/](archive/) | 归档文档 |
 | 本文档 | 项目状态、路线图、竞品对比 |

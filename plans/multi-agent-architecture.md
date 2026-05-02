@@ -1,17 +1,17 @@
 # Multi-Agent Architecture Design
 
-> ⚠️ **本文档部分过时** — 保留作为设计参考。当前架构已从"共享 InProcessAdapter + 回调注入"演变为"三个独立适配器 crate"。
+> ⚠️ **本文档已过时，保留作为设计参考。** 当前架构已从"共享 InProcessAdapter + 回调注入"演变为"三个独立适配器 crate"。
 >
 > 当前实际架构:
-> - `crates/adapters/rc-claude-adapter` — `ClaudeInProcessAdapter` (= `QueryEngine`)
-> - `crates/adapters/rc-codex-adapter` — `CodexInProcessAdapter` (AppServer + event_mapper)
-> - `crates/adapters/rc-roo-adapter` — `RooInProcessAdapter` (Provider + ToolDispatcher)
+> - `crates/adapters/rc-claude-adapter` — `ClaudeInProcessAdapter` (QueryEngine + PermissionBroker + ToolRunner + QueryObserver)
+> - `crates/adapters/rc-codex-adapter` — `CodexInProcessAdapter` (AppServer + event_mapper, 60+ RPC methods)
+> - `crates/adapters/rc-roo-adapter` — `RooInProcessAdapter` (native AgentLoop + Provider + ToolDispatcher, 26 provider backends)
 >
 > 详见 [ARCHITECTURE.md](../ARCHITECTURE.md) 和 [PROJECT_STATUS.md](PROJECT_STATUS.md)。
 >
 > ---
 >
-> 原始设计: 将 remote-code-gui 从单一 Agent（remote-code）扩展为支持多 Agent（remote-code、Roo Code、OpenAI Codex）的统一平台。
+> 原始设计: 将 remote-code-gui 从单一 Agent（remote-code）扩展为支持多 Agent（remote-code、Roo Code、OpenAI Codex）的统一平台。该设计已被 Phase 15 的独立适配器架构取代。
 
 ---
 

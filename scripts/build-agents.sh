@@ -47,15 +47,15 @@ declare -a RESULTS
 
 build_agent() {
     local name="$1"
-    local build_cmd="$2"
-    local binary_name="$3"
-    local source_path="$4"
+    local binary_name="$2"
+    local source_path="$3"
+    shift 3
 
     echo -e "\n${CYAN}=== Building $name ===${NC}"
     local start_time
     start_time=$(date +%s)
 
-    if eval "$build_cmd"; then
+    if "$@"; then
         local end_time
         end_time=$(date +%s)
         local duration=$((end_time - start_time))
@@ -80,21 +80,21 @@ build_agent() {
 
 # ── 1. Claude Code Agent ──
 build_agent "Claude Code Agent" \
-    "cd $ROOT_DIR && cargo build --package remote-code $PROFILE_FLAG" \
     "remote-code" \
-    "$ROOT_DIR/target/$PROFILE/remote-code"
+    "$ROOT_DIR/target/$PROFILE/remote-code" \
+    cargo build --package remote-code $PROFILE_FLAG
 
 # ── 2. Codex Agent ──
 build_agent "Codex Agent" \
-    "cd $ROOT_DIR/agents/codex/codex-rs && cargo build --package codex-cli $PROFILE_FLAG" \
     "codex" \
-    "$ROOT_DIR/agents/codex/codex-rs/target/$PROFILE/codex"
+    "$ROOT_DIR/agents/codex/codex-rs/target/$PROFILE/codex" \
+    cargo build --package codex-cli --manifest-path "$ROOT_DIR/agents/codex/codex-rs/Cargo.toml" $PROFILE_FLAG
 
 # ── 3. Roo-code Agent ──
 build_agent "Roo-code Agent" \
-    "cd $ROOT_DIR/agents/roo-code && cargo build --package roo-cli $PROFILE_FLAG" \
     "roo" \
-    "$ROOT_DIR/agents/roo-code/target/$PROFILE/roo"
+    "$ROOT_DIR/agents/roo-code/target/$PROFILE/roo" \
+    cargo build --package roo-cli --manifest-path "$ROOT_DIR/agents/roo-code/Cargo.toml" $PROFILE_FLAG
 
 # ── Summary ──
 echo -e "\n========================================"

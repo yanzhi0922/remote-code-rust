@@ -36,6 +36,7 @@ import type {
   CodexMcpToolCallRequest,
   CodexAppServerNotificationInfo,
   CodexMemoryModeRequest,
+  CodexRecoverableErrorInfo,
   CodexAccountLoginRequest,
   CodexPluginInstallRequest,
   CodexPluginListRequest,
@@ -624,7 +625,7 @@ export function codexFsReadFile(request: CodexFsPathRequest): Promise<CodexJsonV
 }
 
 export function codexFsWriteFile(request: CodexFsWriteFileRequest): Promise<CodexJsonValue> {
-  const dataBase64 = btoa(unescape(encodeURIComponent(request.contents)));
+  const dataBase64 = btoa(Array.from(new TextEncoder().encode(request.contents), b => String.fromCodePoint(b)).join(''));
   return invoke<CodexJsonValue>('codex_fs_write_file', {
     request: { params: { ...(request.params ?? {}), path: request.path, dataBase64 } },
   });

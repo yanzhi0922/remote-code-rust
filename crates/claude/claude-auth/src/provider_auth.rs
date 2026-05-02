@@ -259,6 +259,9 @@ fn resolve_openai_compatible_auth(
 
 /// Execute an AWS credential export command and parse JSON output.
 async fn execute_aws_credential_export(command: &str) -> Result<AwsCredentials, ProviderAuthError> {
+    tracing::warn!(
+        "Executing aws_credential_export command from config — ensure this is trusted: {command}"
+    );
     let output = if cfg!(windows) {
         tokio::process::Command::new("cmd")
             .args(["/C", command])

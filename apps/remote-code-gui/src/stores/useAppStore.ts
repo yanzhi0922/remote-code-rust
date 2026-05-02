@@ -1,10 +1,6 @@
 import { create } from 'zustand';
 import type {
-  AgentTypeInfo,
-  AgentType,
   BatchProgressInfo,
-  CodexAppServerNotificationInfo,
-  CodexRecoverableErrorInfo,
   ConversationEntry,
   ContextCompactedInfo,
   ContextOverflowInfo,
@@ -27,6 +23,8 @@ import type {
 } from '../lib/types';
 import * as tauri from '../lib/tauri';
 import { normalizePathKey } from '../lib/utils';
+import { useCodexStore } from './useCodexStore';
+import { useAgentStore } from './useAgentStore';
 
 function getProjectPathForSession(
   sessionId: string | null,
@@ -106,14 +104,6 @@ function applySubtaskCompleted(tasks: SessionSubtask[], payload: SubtaskComplete
   );
 }
 
-function sortTasks(tasks: SessionSubtask[]): SessionSubtask[] {
-  return [...tasks].sort((left, right) => {
-    const leftUpdated = left.updated_at ?? '';
-    const rightUpdated = right.updated_at ?? '';
-    return rightUpdated.localeCompare(leftUpdated);
-  });
-}
-
 interface AppState {
   initialised: boolean;
   initError: string | null;
@@ -138,7 +128,6 @@ interface AppState {
   lastPromptResult: PromptResult | null;
   liveToolProgress: ToolProgressInfo[];
   liveToolResults: ToolResultInfo[];
-  sessionTasks: Record<string, SessionSubtask[]>;
   batchProgressBySession: Record<string, BatchProgressInfo>;
   contextUsageBySession: Record<string, ContextUsageInfo>;
   contextOverflowBySession: Record<string, ContextOverflowInfo>;
@@ -152,18 +141,6 @@ interface AppState {
   providerConfigs: ProviderConfigList | null;
 
   pendingPermission: PermissionRequestInfo | null;
-
-  codexNotifications: CodexAppServerNotificationInfo[];
-  codexGuardianEvents: Array<{ session_id: string; method: string; outcome: string; risk_level?: string }>;
-  codexAccountInfo: Record<string, unknown> | null;
-  codexRateLimits: Record<string, unknown> | null;
-  codexMcpStatus: Array<Record<string, unknown>>;
-  codexRecoverableErrors: Array<{ session_id: string; message: string; timestamp: number }>;
-
-  availableAgents: AgentTypeInfo[];
-  activeAgentType: AgentType | null;
-  /** Fix #4: tracks per-agent status from AgentStatusChanged events */
-  agentStatuses: Record<string, string>;
 
   init: () => Promise<void>;
   refreshSessions: () => Promise<void>;
@@ -189,8 +166,6 @@ interface AppState {
   setActiveProvider: (name: string) => Promise<void>;
   switchProfile: (providerName: string, profileName: string | null) => Promise<void>;
   resolvePermission: (resolution: boolean | tauri.PermissionResolutionRequest) => Promise<void>;
-  loadAgents: () => Promise<void>;
-  selectAgent: (agentType: AgentType | null) => void;
 }
 
 /**
@@ -237,18 +212,18 @@ async function registerEventListeners(): Promise<(() => void)[]> {
     }),
     tauri.onToolStart((event) => {
       useAppStore.setState((state) => ({
-        liveToolProgress: [...state.liveToolProgress, event.payload],
+        liveToolProgress: [...state.liveToolProgress.slice(-99), event.payload],
       }));
       refreshActiveConversation();
     }),
     tauri.onToolProgress((event) => {
       useAppStore.setState((state) => ({
-        liveToolProgress: [...state.liveToolProgress, event.payload],
+        liveToolProgress: [...state.liveToolProgress.slice(-99), event.payload],
       }));
     }),
     tauri.onToolResult((event) => {
       useAppStore.setState((state) => ({
-        liveToolResults: [...state.liveToolResults, event.payload],
+        liveToolResults: [...state.liveToolResults.slice(-49), event.payload],
       }));
       refreshActiveConversation();
     }),
@@ -312,10 +287,12 @@ async function registerEventListeners(): Promise<(() => void)[]> {
       void tauri
         .getSessionTasks(session_id)
         .then((tasks) => {
-          useAppStore.setState((state) => ({
+          useAgentStore.setState((state) => ({
             sessionTasks: {
               ...state.sessionTasks,
-              [session_id]: sortTasks(tasks),
+              [session_id]: [...tasks].sort((a, b) =>
+                (b.updated_at ?? '').localeCompare(a.updated_at ?? ''),
+              ),
             },
           }));
         })
@@ -328,21 +305,21 @@ async function registerEventListeners(): Promise<(() => void)[]> {
       void useAppStore.getState().refreshProviderInfo();
     }),
     tauri.onSubtaskStarted((event) => {
-      useAppStore.setState((state) => ({
+      useAgentStore.setState((state) => ({
         sessionTasks: upsertSubtask(state.sessionTasks, event.payload.session_id, (tasks) =>
           applySubtaskStarted(tasks, event.payload),
         ),
       }));
     }),
     tauri.onSubtaskProgress((event) => {
-      useAppStore.setState((state) => ({
+      useAgentStore.setState((state) => ({
         sessionTasks: upsertSubtask(state.sessionTasks, event.payload.session_id, (tasks) =>
           applySubtaskProgress(tasks, event.payload),
         ),
       }));
     }),
     tauri.onSubtaskCompleted((event) => {
-      useAppStore.setState((state) => ({
+      useAgentStore.setState((state) => ({
         sessionTasks: upsertSubtask(state.sessionTasks, event.payload.session_id, (tasks) =>
           applySubtaskCompleted(tasks, event.payload),
         ),
@@ -357,10 +334,12 @@ async function registerEventListeners(): Promise<(() => void)[]> {
       }));
     }),
     tauri.onTaskSnapshot((event) => {
-      useAppStore.setState((state) => ({
+      useAgentStore.setState((state) => ({
         sessionTasks: {
           ...state.sessionTasks,
-          [event.payload.session_id]: sortTasks(event.payload.tasks),
+          [event.payload.session_id]: [...event.payload.tasks].sort((a, b) =>
+            (b.updated_at ?? '').localeCompare(a.updated_at ?? ''),
+          ),
         },
       }));
     }),
@@ -392,9 +371,8 @@ async function registerEventListeners(): Promise<(() => void)[]> {
       useAppStore.setState({ runtimeStatus: event.payload });
     }),
     tauri.onAgentStatusChanged((event) => {
-      // Fix #4: Rust sends { sessionId, agentType, status }, not { oldStatus, newStatus }.
       const { agentType, status } = event.payload;
-      useAppStore.setState((state) => ({
+      useAgentStore.setState((state) => ({
         agentStatuses: {
           ...state.agentStatuses,
           [agentType]: status,
@@ -408,12 +386,12 @@ async function registerEventListeners(): Promise<(() => void)[]> {
           ? (params as Record<string, unknown>)
           : null;
 
-      useAppStore.setState((state) => ({
+      useCodexStore.setState((state) => ({
         codexNotifications: [...state.codexNotifications.slice(-199), event.payload],
       }));
 
       if (method === 'item/autoApprovalReview/completed' && paramsRecord) {
-        useAppStore.setState((state) => ({
+        useCodexStore.setState((state) => ({
           codexGuardianEvents: [
             ...state.codexGuardianEvents.slice(-99),
             {
@@ -427,25 +405,25 @@ async function registerEventListeners(): Promise<(() => void)[]> {
       }
 
       if (method === 'account/login/completed' && paramsRecord) {
-        useAppStore.setState({ codexAccountInfo: paramsRecord });
+        useCodexStore.setState({ codexAccountInfo: paramsRecord });
       }
 
       if (method === 'account/rateLimits/updated' && paramsRecord) {
-        useAppStore.setState({ codexRateLimits: paramsRecord });
+        useCodexStore.setState({ codexRateLimits: paramsRecord });
       }
 
       if (
         (method === 'mcpServer/statusUpdated' || method === 'mcpServer/oauthLoginCompleted') &&
         paramsRecord
       ) {
-        useAppStore.setState((state) => ({
+        useCodexStore.setState((state) => ({
           codexMcpStatus: [...state.codexMcpStatus.slice(-49), paramsRecord],
         }));
       }
     }),
     tauri.onCodexRecoverableError((event) => {
       const { session_id, message, timestamp } = event.payload;
-      useAppStore.setState((state) => ({
+      useCodexStore.setState((state) => ({
         codexRecoverableErrors: [
           ...state.codexRecoverableErrors.slice(-49),
           { session_id, message, timestamp },
@@ -476,7 +454,6 @@ export const useAppStore = create<AppState>((set, get) => ({
   lastPromptResult: null,
   liveToolProgress: [],
   liveToolResults: [],
-  sessionTasks: {},
   batchProgressBySession: {},
   contextUsageBySession: {},
   contextOverflowBySession: {},
@@ -487,15 +464,6 @@ export const useAppStore = create<AppState>((set, get) => ({
   settingsLoading: false,
   providerConfigs: null,
   pendingPermission: null,
-  codexNotifications: [],
-  codexGuardianEvents: [],
-  codexAccountInfo: null,
-  codexRateLimits: null,
-  codexMcpStatus: [],
-  codexRecoverableErrors: [],
-  availableAgents: [],
-  activeAgentType: null,
-  agentStatuses: {},
 
   init: async () => {
     try {
@@ -520,7 +488,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         get().loadSettings(),
         get().loadProviderConfigs(),
         get().refreshRuntimeStatus(),
-        get().loadAgents(),
+        useAgentStore.getState().loadAgents(),
       ]);
 
       if (get().activeSessionId) {
@@ -577,12 +545,13 @@ export const useAppStore = create<AppState>((set, get) => ({
         tauri.getSessionConversation(sessionId),
         tauri.getSessionTasks(sessionId).catch(() => [] as SessionSubtask[]),
       ]);
-      set((state) => ({
-        conversation,
-        conversationLoading: false,
+      set({ conversation, conversationLoading: false });
+      useAgentStore.setState((state) => ({
         sessionTasks: {
           ...state.sessionTasks,
-          [sessionId]: sortTasks(tasks),
+          [sessionId]: [...tasks].sort((a, b) =>
+            (b.updated_at ?? '').localeCompare(a.updated_at ?? ''),
+          ),
         },
       }));
     } catch {
@@ -595,7 +564,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (!effectiveProjectPath) {
       throw new Error('请先选择项目文件夹，再新建会话。');
     }
-    const { activeAgentType } = get();
+    const { activeAgentType } = useAgentStore.getState();
     const sessionId = await tauri.createSession(title, effectiveProjectPath, activeAgentType ?? undefined);
     set({
       activeSessionId: sessionId,
@@ -604,10 +573,12 @@ export const useAppStore = create<AppState>((set, get) => ({
     });
     try {
       const tasks = await tauri.getSessionTasks(sessionId);
-      set((state) => ({
+      useAgentStore.setState((state) => ({
         sessionTasks: {
           ...state.sessionTasks,
-          [sessionId]: sortTasks(tasks),
+          [sessionId]: [...tasks].sort((a, b) =>
+            (b.updated_at ?? '').localeCompare(a.updated_at ?? ''),
+          ),
         },
       }));
     } catch {
@@ -836,18 +807,5 @@ export const useAppStore = create<AppState>((set, get) => ({
       typeof resolution === 'boolean' ? { allowed: resolution } : resolution,
     );
     set({ pendingPermission: null });
-  },
-
-  loadAgents: async () => {
-    try {
-      const availableAgents = await tauri.listAvailableAgents();
-      set({ availableAgents });
-    } catch {
-      // Ignore non-fatal agent list refresh failures.
-    }
-  },
-
-  selectAgent: (agentType: AgentType | null) => {
-    set({ activeAgentType: agentType });
   },
 }));

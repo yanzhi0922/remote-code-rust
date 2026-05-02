@@ -228,53 +228,59 @@ Deliverables:
 - ✅ `InProcessAdapter` extracted as independent module
 - ✅ Code pushed (commit `05b05ec`)
 
-## Ongoing Tracks
+## Phase 15: Three-Agent Independent Adapter Architecture — ✅ COMPLETE
 
-### Compatibility Track
-
-- keep committed fixtures current
-- add regression coverage for every externally meaningful behavior change
-- avoid accidental CLI or protocol breakage
-
-### Migration Track
-
-- improve import tooling from `~/.remote-code/`
-- document one-way and reversible migration boundaries
-- keep exported session formats stable
-
-### Quality Track
-
-- keep clippy warning-free
-- avoid cyclic crate dependencies
-- constrain third-party dependencies
-- maintain Windows and Linux parity
-- maintain test coverage for all core modules
-
-### Performance Track
-
-- benchmark token estimation accuracy
-- profile context compaction overhead
-- measure tool search latency
-- track memory usage across long sessions
-
-## Phase 15: External Agent Real Integration — 📋 PLANNED
-
-Objective: connect Roo Code and Codex adapters to real agent logic instead of stub callbacks.
+Objective: split each agent into its own dedicated adapter crate.
 
 Deliverables:
 
-- [ ] Roo Code callback implementation — connect to roo-server logic
-- [ ] Codex callback implementation — connect to codex-app-server logic
-- [ ] Agent-specific tool mapping
-- [ ] E2E multi-agent integration tests
+- ✅ Deleted bridge residue (subprocess.rs 730 lines + bridge_proto.rs)
+- ✅ `rc-codex-adapter` moved from `crates/claude/` to `crates/adapters/`
+- ✅ `rc-roo-adapter` moved from `crates/claude/` to `crates/adapters/`
+- ✅ New `rc-claude-adapter` (ClaudeInProcessAdapter = QueryEngine)
+- ✅ Roo adapter upgraded to native `AgentLoop` with 26 provider backends
+- ✅ All three adapters compile and pass tests
+- ✅ 860+ tests passing
 
-Exit criteria:
+## Phase 16: GUI Redesign — ✅ COMPLETE
 
-- All three agents produce real responses through the unified QueryEngine path
-- Multi-agent switching works without restart
-- Permission flow works consistently across all agent types
+Objective: modernize the desktop GUI with professional IDE-like layout.
 
-## Phase 16: Enhanced Remote Interaction — 📋 PLANNED
+Deliverables:
+
+- ✅ Phase 1: Design System Foundation — CSS tokens, Tailwind config, ThemeProvider
+- ✅ Phase 2: Layout Overhaul — ActivityBar, SplitPane, StatusBar, tab sidebar
+- ✅ Phase 3: Chat Experience — streaming animation, inline diff, slash commands, message actions
+- ✅ Phase 4: Integrated Tool Panes — Terminal (xterm.js), Diff, Preview, PaneHost
+- ✅ Phase 5: Command Palette — keyboard shortcuts overlay
+
+## Phase 17: ZCode-Inspired Features — ✅ COMPLETE
+
+Objective: implement features inspired by ZCode (Z.AI) analysis — conversation-level version control, specialized agents, built-in Git panel, and permission mode switching.
+
+Deliverables:
+
+- ✅ `claude-checkpoint` crate — snapshot scanner (SHA256 hashes), SQLite storage (3 tables), unified diff via `similar` crate, restore engine (undo/rollback/preview), workspace exclusion patterns
+- ✅ `claude-specialized-agents` crate — Markdown+YAML frontmatter agent definitions, 3-layer discovery (built-in/user/project), `@agent-name` mention parsing, 5 built-in agents (code-reviewer, bug-analyzer, dev-planner, architect, test-writer)
+- ✅ `claude-git` crate — `gix` for branch resolution, CLI-based status/staging/commit/diff/log/branch switching, structured types for `GitStatus`/`GitDiff`/`CommitInfo`
+- ✅ `PermissionModeSwitch` GUI component — 4 permission modes with Shift+Tab cycling, icon+color indicators
+- ✅ `GitPanel` GUI component — 3 tabs (Changes/History/Branches), file status coloring, Cmd+Enter commit
+- ✅ `CheckpointTimeline` GUI component — timeline dots, expandable details, Review/Restore/Undo actions, diff stats
+- ✅ `AgentPicker` GUI component — dropdown with filter, keyboard navigation (↑↓ Enter Esc), `useAgentMention` hook
+- ✅ All three new crates compile and pass unit tests
+
+## Phase 18: Roo Agent Deepening — 📋 PLANNED
+
+Objective: deepen Roo adapter integration with full native capabilities.
+
+Deliverables:
+
+- [ ] Roo 权限系统 — 将 `resolve_permission()` 完全接入 GUI 交互式权限弹窗
+- [ ] Roo Token 精确计算 — 使用 Roo 原生 tiktoken 替代粗略估算
+- [ ] Roo MCP 集成 — 在 `send_message()` 中集成 `McpServerConnection`
+- [ ] 端到端多 Agent 集成测试
+
+## Phase 19: Enhanced Remote Interaction — 📋 PLANNED
 
 Objective: improve remote user experience with real-time features.
 
@@ -285,15 +291,15 @@ Deliverables:
 - [ ] Diff Viewer — code change visualization
 - [ ] Push Notifications — mobile approval reminders
 
-## Phase 17: Competitive Advantage — 📋 PLANNED
+## Phase 20: Competitive Advantage — 📋 PLANNED
 
 Objective: exceed all competitors with unique capabilities.
 
 Deliverables:
 
 - [ ] Deep subtask delegation — multi-level sub-agents + parallel execution
-- [ ] Session rollback — revert to any historical point
-- [ ] Shadow Git checkpoints — automatic git checkpoint
+- [ ] Session rollback — revert to any historical point (powered by `claude-checkpoint`)
+- [ ] Shadow Git checkpoints — automatic git checkpoint (powered by `claude-git`)
 - [ ] Task Flow visualization — task dependency graph + progress tracking
 - [ ] TTS real implementation — connect to speech synthesis service
 

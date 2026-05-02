@@ -24,10 +24,12 @@ export async function shareFile(
   return invoke('mobile_share_file', { filePath, title: title ?? null });
 }
 
-export async function isFileDownloaded(fileName: string): Promise<boolean> {
+// TODO: implement native file download status tracking pending mobile platform support
+export async function isFileDownloaded(_fileName: string): Promise<boolean> {
   return false;
 }
 
-export async function readDownloadedTextFile(fileName: string): Promise<string | null> {
+// TODO: implement native downloaded file content reading pending mobile platform support
+export async function readDownloadedTextFile(_fileName: string): Promise<string | null> {
   return null;
 }

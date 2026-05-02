@@ -28,7 +28,7 @@ describe('ChatArea', () => {
     expect(screen.getByText('选择一个项目或会话')).toBeInTheDocument();
     expect(
       screen.getByText(
-        '左侧现在按项目、会话、子任务三层组织。选中后，右侧会渲染完整对话、公式、工具调用和折叠详情。',
+        '左侧按项目、会话、子任务三层组织。选中后，右侧会渲染完整对话、公式、工具调用和折叠详情。',
       ),
     ).toBeInTheDocument();
   });

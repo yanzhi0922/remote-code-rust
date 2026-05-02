@@ -27,6 +27,9 @@ const mockSettings: FullSettings = {
   codex_memories_enabled: true,
   codex_thread_store_endpoint: null,
   codex_config_overrides: {},
+  codex_permission_profile: null,
+  codex_service_tier: null,
+  codex_ephemeral: null,
 };
 
 describe('layout SettingsPanel', () => {

@@ -4,8 +4,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 vi.mock('./Sidebar', () => ({
   Sidebar: () => <nav data-testid="sidebar">Sidebar</nav>,
 }));
-vi.mock('./Header', () => ({
-  Header: () => <header data-testid="header">Header</header>,
+vi.mock('./StatusBar', () => ({
+  StatusBar: () => <footer data-testid="status-bar">Status</footer>,
 }));
 
 import { Layout } from './Layout';
@@ -13,14 +13,14 @@ import { Layout } from './Layout';
 afterEach(() => { cleanup(); });
 
 describe('Layout', () => {
-  it('renders sidebar, header, and children', () => {
+  it('renders sidebar, status bar, and children', () => {
     render(
       <Layout>
         <div data-testid="content">Main content</div>
       </Layout>,
     );
     expect(screen.getByTestId('sidebar')).toBeInTheDocument();
-    expect(screen.getByTestId('header')).toBeInTheDocument();
+    expect(screen.getByTestId('status-bar')).toBeInTheDocument();
     expect(screen.getByTestId('content')).toBeInTheDocument();
   });
 

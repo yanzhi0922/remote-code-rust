@@ -19,13 +19,13 @@ pub struct Cli {
     #[arg(short = 'p', long = "print")]
     pub print_mode: bool,
 
-    #[arg(long, value_enum, default_value_t = InputFormat::Text)]
+    #[arg(long, default_value_t = InputFormat::Text)]
     pub input_format: InputFormat,
 
-    #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
+    #[arg(long, default_value_t = OutputFormat::Text)]
     pub output_format: OutputFormat,
 
-    #[arg(long, value_enum, env = "REMOTE_CODE_PERMISSION_MODE", default_value_t = PermissionMode::Default)]
+    #[arg(long, env = "REMOTE_CODE_PERMISSION_MODE", default_value_t = PermissionMode::Default)]
     pub permission_mode: PermissionMode,
 
     #[arg(long)]
@@ -148,7 +148,7 @@ pub struct Cli {
     #[arg(long)]
     pub model: Option<String>,
 
-    #[arg(long, value_enum)]
+    #[arg(long)]
     pub protocol: Option<ProviderProtocol>,
 
     #[arg(long, default_value_t = 12)]

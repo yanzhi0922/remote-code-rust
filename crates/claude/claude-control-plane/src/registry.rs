@@ -217,6 +217,14 @@ fn sha256_hex(raw: &str) -> String {
     encoded
 }
 
+fn constant_time_hash_eq(actual: &str, expected: &str) -> bool {
+    use sha2::{Digest, Sha256};
+
+    let actual_digest: [u8; 32] = Sha256::digest(actual.as_bytes()).into();
+    let expected_digest: [u8; 32] = Sha256::digest(expected.as_bytes()).into();
+    constant_time_eq::constant_time_eq_32(&actual_digest, &expected_digest)
+}
+
 fn mint_secret(prefix: &str) -> String {
     format!(
         "{prefix}_{}{}",
@@ -269,7 +277,7 @@ impl Registry {
         let device_id = self
             .trusted_devices
             .values()
-            .find(|device| device.token_hash == token_hash)
+            .find(|device| constant_time_hash_eq(&token_hash, &device.token_hash))
             .map(|device| device.device_id)?;
         let now = Utc::now();
         let device = self.trusted_devices.get_mut(&device_id)?;
@@ -293,7 +301,10 @@ impl Registry {
                     .to_owned(),
             ));
         };
-        if sha256_hex(request.bootstrap_secret.trim()) != expected_secret_hash {
+        if !constant_time_hash_eq(
+            &sha256_hex(request.bootstrap_secret.trim()),
+            expected_secret_hash,
+        ) {
             return Err(ApiError::unauthorized(
                 "bootstrap secret is missing or invalid".to_owned(),
             ));
@@ -369,7 +380,10 @@ impl Registry {
                 request.offer_id
             )));
         }
-        if sha256_hex(request.pairing_secret.trim()) != offer.pairing_secret_hash {
+        if !constant_time_hash_eq(
+            &sha256_hex(request.pairing_secret.trim()),
+            &offer.pairing_secret_hash,
+        ) {
             return Err(ApiError::unauthorized(
                 "pairing secret is missing or invalid".to_owned(),
             ));
