@@ -11,6 +11,7 @@ pub mod management;
 pub mod tiktoken;
 pub mod token;
 pub mod truncation;
+pub mod error_handling;
 
 pub use management::{
     cleanup_after_truncation, get_effective_api_history, manage_context, will_manage_context,
@@ -18,6 +19,7 @@ pub use management::{
 };
 pub use token::estimate_token_count;
 pub use truncation::{truncate_conversation, TruncationResult};
+pub use error_handling::check_context_window_exceeded_error;
 
 /// Default percentage of the context window to use as a buffer when deciding
 /// when to truncate.

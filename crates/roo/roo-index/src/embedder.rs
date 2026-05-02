@@ -64,6 +64,10 @@ pub enum EmbedderConfig {
         model_id: Option<String>,
         specific_provider: Option<String>,
     },
+    VercelAiGateway {
+        api_key: String,
+        model_id: Option<String>,
+    },
 }
 
 /// A simple embedder that returns zero vectors.
@@ -147,6 +151,14 @@ pub fn create_embedder(config: &EmbedderConfig) -> Result<Box<dyn Embedder>, Ind
             }
             Ok(Box::new(NoopEmbedder::new(1536)))
         }
+        EmbedderConfig::VercelAiGateway { api_key, model_id: _ } => {
+            if api_key.is_empty() {
+                return Err(IndexError::GeneralError(
+                    "Vercel AI Gateway API key is required".to_string(),
+                ));
+            }
+            Ok(Box::new(NoopEmbedder::new(1536)))
+        }
     }
 }
 
@@ -206,5 +218,24 @@ mod tests {
     fn test_noop_embedder_validate() {
         let embedder = NoopEmbedder::new(128);
         assert!(embedder.validate_configuration().unwrap());
+    }
+
+    #[test]
+    fn test_create_embedder_vercel_ai_gateway() {
+        let config = EmbedderConfig::VercelAiGateway {
+            api_key: "test-key".to_string(),
+            model_id: None,
+        };
+        let embedder = create_embedder(&config).unwrap();
+        assert_eq!(embedder.dimension(), 1536);
+    }
+
+    #[test]
+    fn test_create_embedder_vercel_ai_gateway_no_key() {
+        let config = EmbedderConfig::VercelAiGateway {
+            api_key: String::new(),
+            model_id: None,
+        };
+        assert!(create_embedder(&config).is_err());
     }
 }

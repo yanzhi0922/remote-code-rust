@@ -272,21 +272,55 @@ impl CodeIndexManager {
         Ok(false)
     }
 
+    /// Handle batch file changes from the file watcher.
+    ///
+    /// Takes a list of `(relative_path, event_type)` tuples and updates
+    /// the index accordingly:
+    /// - **Deleted** files are removed from the index.
+    /// - **Created** or **changed** files are re-indexed (content read and cached).
+    ///
+    /// Corresponds to TS: `FileWatcher.triggerBatchProcessing()`
+    pub fn on_files_changed(&mut self, changes: &[(String, crate::watcher::FileEventType)]) {
+        if self.state == IndexingState::NotInitialized {
+            return;
+        }
+
+        for (path, event_type) in changes {
+            match event_type {
+                crate::watcher::FileEventType::Delete => {
+                    if let Ok(true) = self.remove_file(path) {
+                        // File was in the index and has been removed.
+                    }
+                }
+                crate::watcher::FileEventType::Create | crate::watcher::FileEventType::Change => {
+                    // Re-index: remove old entry first, then add the new one.
+                    let _ = self.remove_file(path);
+                    if let Err(e) = self.add_file(path) {
+                        // Log but don't propagate — individual file failures
+                        // shouldn't stop batch processing.
+                        eprintln!("[FileWatcher] Failed to index {path}: {e}");
+                    }
+                }
+            }
+        }
+    }
+
     /// Start the file watcher for incremental updates.
     /// Corresponds to TS: `CodeIndexOrchestrator.startWatcher()`
     pub fn start_watcher(&mut self) -> Result<(), IndexError> {
         if self.state == IndexingState::NotInitialized {
             return Err(IndexError::NotInitialized);
         }
-        // In this simplified implementation, watcher is a no-op
-        // A full implementation would use notify crate for file watching
+        // The actual FileWatcher is managed externally (see watcher.rs).
+        // This method is retained for API compatibility with the TS version.
         Ok(())
     }
 
     /// Stop the file watcher.
     /// Corresponds to TS: `CodeIndexOrchestrator.stopWatcher()`
     pub fn stop_watcher(&mut self) {
-        // In this simplified implementation, watcher is a no-op
+        // The actual FileWatcher is managed externally (see watcher.rs).
+        // This method is retained for API compatibility with the TS version.
     }
 
     /// Handle settings changes that may require re-indexing.

@@ -28,6 +28,7 @@ pub mod search_service;
 pub mod service_factory;
 pub mod state_manager;
 pub mod types;
+pub mod watcher;
 
 pub use cache_manager::CacheManager;
 pub use config_manager::CodeIndexConfigManager;
@@ -39,3 +40,4 @@ pub use search_service::{CodeIndexSearchService, InMemoryVectorStore, VectorStor
 pub use service_factory::CodeIndexServiceFactory;
 pub use state_manager::{CodeIndexStateManager, IndexingState, IndexingStatus};
 pub use types::{CodeIndexConfig, IndexError, IndexStats, VectorStoreSearchResult};
+pub use watcher::{FileEventType, FileWatcher};

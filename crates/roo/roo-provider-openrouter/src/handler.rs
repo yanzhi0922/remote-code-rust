@@ -96,6 +96,41 @@ fn is_gemini_model(model_id: &str) -> bool {
 }
 
 // ---------------------------------------------------------------------------
+// Router tool preferences
+// ---------------------------------------------------------------------------
+
+/// Apply tool preferences for models accessed through dynamic routers.
+///
+/// Different model families perform better with specific tools:
+/// - OpenAI models: Better results with `apply_patch` instead of
+///   `apply_diff`/`write_to_file`.
+///
+/// Source: `src/api/providers/utils/router-tool-preferences.ts` —
+///   `applyRouterToolPreferences()`
+fn apply_router_tool_preferences(model_id: &str, model_info: &mut ModelInfo) {
+    if model_id.contains("openai") {
+        // Add "apply_diff" and "write_to_file" to excluded_tools (deduplicated)
+        let excluded = model_info
+            .excluded_tools
+            .get_or_insert_with(Vec::new);
+        for tool in &["apply_diff", "write_to_file"] {
+            if !excluded.contains(&tool.to_string()) {
+                excluded.push(tool.to_string());
+            }
+        }
+
+        // Add "apply_patch" to included_tools (deduplicated)
+        let included = model_info
+            .included_tools
+            .get_or_insert_with(Vec::new);
+        let patch = "apply_patch".to_string();
+        if !included.contains(&patch) {
+            included.push(patch);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // OpenRouter handler
 // ---------------------------------------------------------------------------
 
@@ -281,7 +316,11 @@ impl OpenRouterHandler {
         tools: Option<&Vec<serde_json::Value>>,
         metadata: &CreateMessageMetadata,
     ) -> Result<serde_json::Value> {
-        let (model_id, model_info) = self.resolve_model_info();
+        let (model_id, mut model_info) = self.resolve_model_info();
+
+        // Apply router-specific tool preferences for OpenAI models
+        apply_router_tool_preferences(&model_id, &mut model_info);
+
         let max_tokens = model_info.max_tokens;
 
         // -------------------------------------------------------------------
