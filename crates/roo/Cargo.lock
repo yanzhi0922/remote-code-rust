@@ -1794,6 +1794,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "futures",
+ "regex",
  "roo-condense",
  "roo-provider",
  "roo-telemetry",
@@ -1883,12 +1884,15 @@ dependencies = [
 name = "roo-index"
 version = "0.1.0"
 dependencies = [
+ "notify",
  "regex",
  "serde",
  "serde_json",
  "sha2",
  "tempfile",
  "thiserror",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

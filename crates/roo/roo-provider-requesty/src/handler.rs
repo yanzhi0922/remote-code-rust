@@ -17,6 +17,41 @@ use roo_types::model::{ModelInfo, ModelRecord};
 use crate::models;
 use crate::types::RequestyConfig;
 
+// ---------------------------------------------------------------------------
+// Router tool preferences
+// ---------------------------------------------------------------------------
+
+/// Apply tool preferences for models accessed through dynamic routers.
+///
+/// Different model families perform better with specific tools:
+/// - OpenAI models: Better results with `apply_patch` instead of
+///   `apply_diff`/`write_to_file`.
+///
+/// Source: `src/api/providers/utils/router-tool-preferences.ts` —
+///   `applyRouterToolPreferences()`
+fn apply_router_tool_preferences(model_id: &str, model_info: &mut ModelInfo) {
+    if model_id.contains("openai") {
+        // Add "apply_diff" and "write_to_file" to excluded_tools (deduplicated)
+        let excluded = model_info
+            .excluded_tools
+            .get_or_insert_with(Vec::new);
+        for tool in &["apply_diff", "write_to_file"] {
+            if !excluded.contains(&tool.to_string()) {
+                excluded.push(tool.to_string());
+            }
+        }
+
+        // Add "apply_patch" to included_tools (deduplicated)
+        let included = model_info
+            .included_tools
+            .get_or_insert_with(Vec::new);
+        let patch = "apply_patch".to_string();
+        if !included.contains(&patch) {
+            included.push(patch);
+        }
+    }
+}
+
 /// Requesty API provider handler.
 ///
 /// Requesty is an LLM router that provides observability features
@@ -150,23 +185,32 @@ impl RequestyHandler {
     }
 
     /// Resolves model info for the configured model ID.
+    ///
+    /// Applies router-specific tool preferences (e.g., excluding `apply_diff`
+    /// and `write_to_file` for OpenAI models, including `apply_patch`).
     fn resolve_model_info(&self) -> (String, ModelInfo) {
         // Try static models first
         if let Some(info) = models::models().get(&self.model_id) {
-            return (self.model_id.clone(), info.clone());
+            let mut info = info.clone();
+            apply_router_tool_preferences(&self.model_id, &mut info);
+            return (self.model_id.clone(), info);
         }
 
         // Try dynamic cache
         if let Ok(cache) = self.dynamic_models.read() {
             if let Some(ref dynamic) = *cache {
                 if let Some(info) = dynamic.get(&self.model_id) {
-                    return (self.model_id.clone(), info.clone());
+                    let mut info = info.clone();
+                    apply_router_tool_preferences(&self.model_id, &mut info);
+                    return (self.model_id.clone(), info);
                 }
             }
         }
 
         // Fallback to inner provider
-        self.inner.get_model()
+        let (id, mut info) = self.inner.get_model();
+        apply_router_tool_preferences(&id, &mut info);
+        (id, info)
     }
 }
 
