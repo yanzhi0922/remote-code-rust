@@ -7,9 +7,9 @@
 | 指标 | 数值 |
 |------|------|
 | 应用程序 | 5 个（CLI、GUI、Control Plane、Runner、Migrate） |
-| Workspace Crates | 174 个（Claude 40 + Codex 80 + Adapters 3 + Apps 5） |
+| Workspace Crates | 154 个（Claude 40 + Codex 80 + Adapters 3 + Apps 5 + Roo 26） |
 | 内置工具 | 65+ |
-| 单元测试 | 860+ |
+| 单元测试 | 880+ |
 | Clippy 警告 | 0 |
 | `unsafe` 代码 | 禁止（`forbid`） |
 | Rust 版本 | 1.93 (Edition 2024) |
@@ -20,8 +20,10 @@
 - 🦀 **Rust 核心引擎** — 内存安全、零成本抽象、高性能异步运行时（Tokio），GUI 前端使用 TypeScript + React 19
 - 🤖 **多 Provider 支持** — OpenAI、Anthropic、GLM/ZhipuAI、AWS Bedrock、Google Vertex AI
 - 🔄 **自动故障转移** — 多 Provider 健康追踪 + 熔断器 + 指数退避重试
-- 🔧 **65+ 内置工具** — 文件操作、代码搜索、Web 搜索、LSP、后台任务、代理系统
+- 🔧 **65+ 内置工具** — 文件操作、代码搜索（Grep 14+ 参数）、Web 搜索、LSP、后台任务、代理系统
 - 🧠 **智能上下文管理** — 自动 Token 估算、5 种压缩策略、Anthropic Prompt Cache 优化
+- 🛡️ **消息规范化管道** — 6 步 API 契约保证（角色交替、工具配对、思维块清理）
+- ⏱️ **流式看门狗** — 90s 可配置空闲超时，防止 SSE 连接挂起
 - 🔒 **细粒度权限系统** — 5 种模式 + 规则引擎 + 通配符匹配 + 审计日志
 - 🏗️ **分布式架构** — Control Plane + Runner + WebSocket 实时流
 - 🔌 **MCP 协议** — stdio / HTTP / WebSocket 三种传输层
@@ -101,7 +103,7 @@ remote-code-rust/
 |-------|------|
 | `claude-core` | 共享运行时类型、错误、会话模型、Hook 类型 |
 | `claude-config` | CLI 解析、环境变量、配置优先级、Provider 配置、遗留导入 |
-| `claude-provider` | Provider 标准化、请求构建、传输、重试、SSE 流、故障转移、成本追踪 |
+| `claude-provider` | Provider 标准化、请求构建、传输、重试、SSE 流、故障转移、成本追踪、消息规范化、流式看门狗、思维预算限制 |
 | `claude-tools` | 65+ 内置工具、工具注册、权限检查、BM25 搜索、延迟加载 |
 | `claude-permissions` | 5 种权限模式、审批请求、规则引擎、审计记录 |
 | `claude-session` | 会话持久化（SQLite + NDJSON）、索引、导出、恢复、重放 |
@@ -276,7 +278,7 @@ npm run tauri dev
 # 编译检查
 cargo check --workspace
 
-# 运行全部测试（860+）
+# 运行全部测试（880+）
 cargo test --workspace
 
 # Clippy 静态分析（0 警告）

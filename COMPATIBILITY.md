@@ -132,6 +132,9 @@ Additional features implemented:
 - Anthropic API cache optimization with `cache_control` ✅
 - Cost tracking per model ✅
 - Streaming tool execution with callbacks ✅
+- Message normalization pipeline ✅ (`claude-provider/src/normalize.rs`) — 6-pass pipeline: role alternation, tool_use/tool_result pairing, orphaned thinking removal, trailing thinking strip, whitespace filter, non-empty content guarantee
+- Stream idle watchdog ✅ — 90s configurable timeout for hung SSE connections (`CLAUDE_STREAM_IDLE_TIMEOUT_MS`, `CLAUDE_STREAM_WATCHDOG_DISABLED`)
+- Thinking budget clamping ✅ — `min(budget, maxTokens - 1)` prevents API errors when extended thinking budget exceeds output token space
 
 Gateway-specific integrations such as GLM, MiniMax, ZAI, and private proxies are configuration variants on top of these protocol families. They must not fork the architecture.
 
@@ -178,7 +181,7 @@ The Rust rewrite implements 65+ built-in tools across multiple categories:
 |------|-----------|-------------|
 | `search_text` | Read | Regex search across files |
 | `glob` | Read | Glob pattern file matching |
-| `grep` | Read | Fast content search |
+| `grep` | Read | Fast content search with 14+ parameters (glob, context lines, case-insensitive, type filtering, multiline, pagination) |
 | `lsp` | Read | Simplified LSP operations |
 
 ### Execution
@@ -368,7 +371,7 @@ The old repository is read-only input for fixture collection. CI validates again
 
 ## Test Coverage
 
-Current test suite: **860+ tests** passing across all crates.
+Current test suite: **880+ tests** passing across all crates.
 
 | Category | Test Scope |
 |----------|-----------|
@@ -379,14 +382,15 @@ Current test suite: **860+ tests** passing across all crates.
 | claude-mcp | Config parsing, stdio transport, tool invocation |
 | claude-permissions | Tool classification, permission modes, broker |
 | claude-plugins | Manifest loading, runtime inspection, invocation |
+| claude-provider | Message normalization (11 tests), stream watchdog (4 tests), thinking budget (4 tests), streaming, failover |
 | claude-runner | Runner API, sessions, approvals, health |
 | claude-session | CRUD, conversation, events, export, bundle |
 | claude-skills | Skill loading, front matter, lock file |
-| claude-tools | Tool registry, BM25 search |
+| claude-tools | Tool registry, BM25 search, Grep schema (14+ params) |
 | remote-code (CLI) | CLI parsing, remote helpers, MCP/Plugin CLI |
 | remote-code-runner | Heartbeat, retry, control plane sync |
 | Adapters (rc-*) | Permission resolution, event mapping |
-| **Total** | **860+** |
+| **Total** | **880+** |
 
 ## Deliberate Non-Compatibility
 
