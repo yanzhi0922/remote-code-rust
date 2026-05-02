@@ -16,9 +16,9 @@ const PROTOCOLS = [
 
 const PREDEFINED_MODELS: Record<string, string[]> = {
   openai: ['gpt-4', 'gpt-4o', 'gpt-4o-mini', 'gpt-3.5-turbo', 'o1', 'o1-mini', 'o3-mini'],
-  anthropic: ['claude-sonnet-4-20250514', 'claude-3-5-sonnet-20241022', 'claude-3-5-haiku-20241022', 'claude-3-opus-20240229'],
-  bedrock: ['anthropic.claude-3-5-sonnet', 'anthropic.claude-3-opus', 'anthropic.claude-3-haiku'],
-  vertex: ['claude-3-5-sonnet', 'claude-3-opus', 'claude-3-haiku'],
+  anthropic: ['claude-sonnet-4-20250514', 'claude-opus-4-7', 'claude-sonnet-4-6', 'claude-haiku-4-5', 'claude-3-5-sonnet-20241022', 'claude-3-5-haiku-20241022', 'claude-3-opus-20240229'],
+  bedrock: ['anthropic.claude-sonnet-4-20250514-v1:0', 'anthropic.claude-3-5-sonnet', 'anthropic.claude-3-opus', 'anthropic.claude-3-haiku'],
+  vertex: ['claude-sonnet-4@20250514', 'claude-3-5-sonnet', 'claude-3-opus', 'claude-3-haiku'],
 };
 
 function isValidUrl(url: string): boolean {

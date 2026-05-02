@@ -152,6 +152,15 @@ impl<S: MetadataStore> FileContextTracker<S> {
         self.checkpoint_possible_files.drain().collect()
     }
 
+    /// Returns a reference to the set of checkpoint-possible files without clearing.
+    ///
+    /// This allows checking which files may need a checkpoint without consuming the set,
+    /// matching the TS pattern where `checkpointPossibleFiles` is maintained as a
+    /// persistent set.
+    pub fn checkpoint_possible_files(&self) -> &HashSet<String> {
+        &self.checkpoint_possible_files
+    }
+
     /// Mark a file as edited by Roo to prevent false positives.
     pub fn mark_file_as_edited_by_roo(&mut self, file_path: &str) {
         self.recently_edited_by_roo.insert(file_path.to_string());

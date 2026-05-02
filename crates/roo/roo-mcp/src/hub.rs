@@ -258,6 +258,12 @@ pub struct McpHub {
     /// Debounce task handles for config file changes.
     /// Corresponds to TS: `configChangeDebounceTimers: Map<string, NodeJS.Timeout>`
     config_debounce_handles: Arc<RwLock<HashMap<String, tokio::task::JoinHandle<()>>>>,
+    /// Ordered server names from the global config file, used for sorting.
+    /// Corresponds to TS: `globalServerOrder` in `notifyWebviewOfServerChanges()`.
+    global_config_order: Arc<RwLock<Vec<String>>>,
+    /// Ordered server names from the project config file, used for sorting.
+    /// Corresponds to TS: `projectServerOrder` in `notifyWebviewOfServerChanges()`.
+    project_config_order: Arc<RwLock<Vec<String>>>,
     /// Workspace folder path for variable injection.
     workspace_path: Option<String>,
     /// Global MCP settings file path.
@@ -283,6 +289,8 @@ impl McpHub {
             project_mcp_watcher: Arc::new(tokio::sync::Mutex::new(None)),
             is_programmatic_update: Arc::new(RwLock::new(false)),
             config_debounce_handles: Arc::new(RwLock::new(HashMap::new())),
+            global_config_order: Arc::new(RwLock::new(Vec::new())),
+            project_config_order: Arc::new(RwLock::new(Vec::new())),
             workspace_path: None,
             settings_path: None,
         }
@@ -553,6 +561,25 @@ impl McpHub {
     ///
     /// Corresponds to TS: `updateServerConnections(newServers, source, manageConnectingState)`
     pub async fn update_server_connections(
+        &self,
+        new_servers: &HashMap<String, serde_json::Value>,
+        source: McpSource,
+        manage_connecting_state: bool,
+    ) -> McpResult<()> {
+        // Store config key order for sorting (HashMap doesn't preserve order).
+        // The order is derived from the server names in the HashMap keys.
+        let server_names: Vec<String> = new_servers.keys().cloned().collect();
+        let order_lock = match source {
+            McpSource::Global => &self.global_config_order,
+            McpSource::Project => &self.project_config_order,
+        };
+        *order_lock.write().await = server_names;
+
+        self.update_server_connections_inner(new_servers, source, manage_connecting_state).await
+    }
+
+    /// Inner implementation of `update_server_connections`.
+    async fn update_server_connections_inner(
         &self,
         new_servers: &HashMap<String, serde_json::Value>,
         source: McpSource,
@@ -1475,6 +1502,90 @@ impl McpHub {
         }
     }
 
+    /// Get enabled servers sorted by config file order.
+    ///
+    /// Corresponds to TS: the sorting logic in `notifyWebviewOfServerChanges()`.
+    /// Project servers come first in their config-defined order,
+    /// then global servers in their config-defined order.
+    pub async fn get_servers_sorted(&self) -> Vec<McpServerConnection> {
+        let connections = self.connections.read().await;
+        let global_order = self.global_config_order.read().await;
+        let project_order = self.project_config_order.read().await;
+
+        let enabled: Vec<_> = connections
+            .iter()
+            .filter(|c| !c.server().disabled)
+            .collect();
+
+        // Deduplicate: project servers override global servers with same name
+        let mut seen = std::collections::HashMap::new();
+        for conn in &enabled {
+            let name = conn.name().to_string();
+            match seen.get(&name) {
+                Some(existing_source) => {
+                    if conn.source() == McpSource::Project
+                        && *existing_source != McpSource::Project
+                    {
+                        seen.insert(name, conn.source());
+                    }
+                }
+                None => {
+                    seen.insert(name, conn.source());
+                }
+            }
+        }
+
+        // Build result from deduplicated connections
+        let mut servers: Vec<McpServerConnection> = enabled
+            .into_iter()
+            .filter(|conn| {
+                seen.get(conn.name())
+                    .map_or(false, |s| *s == conn.source())
+            })
+            .map(|conn| McpServerConnection {
+                name: conn.name().to_string(),
+                status: conn.server().status,
+                tools: conn.server().tools.clone(),
+                resources: conn.server().resources.clone(),
+                resource_templates: conn.server().resource_templates.clone(),
+                disabled_tools: conn
+                    .server()
+                    .tools
+                    .iter()
+                    .filter(|t| !t.enabled_for_prompt)
+                    .map(|t| t.name.clone())
+                    .collect(),
+                errors: conn.server().error_history.clone(),
+            })
+            .collect();
+
+        // Sort by config file order: project servers first in their order,
+        // then global servers in their order.
+        // Corresponds to TS: `notifyWebviewOfServerChanges()` sorting logic.
+        servers.sort_by(|a, b| {
+            let a_source = seen.get(&a.name).copied().unwrap_or(McpSource::Global);
+            let b_source = seen.get(&b.name).copied().unwrap_or(McpSource::Global);
+
+            let a_is_global = a_source == McpSource::Global;
+            let b_is_global = b_source == McpSource::Global;
+
+            if a_is_global && b_is_global {
+                let index_a = global_order.iter().position(|n| n == &a.name).unwrap_or(usize::MAX);
+                let index_b = global_order.iter().position(|n| n == &b.name).unwrap_or(usize::MAX);
+                index_a.cmp(&index_b)
+            } else if !a_is_global && !b_is_global {
+                let index_a = project_order.iter().position(|n| n == &a.name).unwrap_or(usize::MAX);
+                let index_b = project_order.iter().position(|n| n == &b.name).unwrap_or(usize::MAX);
+                index_a.cmp(&index_b)
+            } else {
+                // Project servers come before global servers
+                if a_is_global { std::cmp::Ordering::Greater } else { std::cmp::Ordering::Less }
+            }
+        });
+
+        servers
+    }
+
     /// Get all servers asynchronously (including disabled ones).
     ///
     /// Corresponds to TS: `getAllServers(): McpServer[]`
@@ -1805,6 +1916,45 @@ impl McpHub {
         fw.remove(server_name);
     }
 
+    /// Handle workspace folders change.
+    ///
+    /// Corresponds to TS: `setupWorkspaceFoldersWatcher()` which listens for
+    /// `vscode.workspace.onDidChangeWorkspaceFolders` and calls
+    /// `updateProjectMcpServers()` and `watchProjectMcpFile()`.
+    ///
+    /// In the Rust port this is not automatically wired to a VSCode event.
+    /// The host application should call this method whenever the set of
+    /// workspace folders changes, passing the new workspace root path.
+    ///
+    /// Note: the caller should update the hub's workspace path via
+    /// `new_with_paths()` before calling this if the workspace root has changed.
+    pub async fn handle_workspace_folders_changed(self: &Arc<Self>) {
+        // Reload project MCP servers from the (possibly changed) workspace
+        let project_path = self.get_project_mcp_path();
+        if let Some(ref path) = project_path {
+            if let Err(e) = self.reload_config(path, McpSource::Project).await {
+                tracing::error!(
+                    "Failed to reload project MCP config after workspace change: {}",
+                    e
+                );
+            }
+        } else {
+            // No project MCP file — clean up any existing project servers
+            if let Err(e) = self
+                .update_server_connections(&HashMap::new(), McpSource::Project, false)
+                .await
+            {
+                tracing::error!(
+                    "Failed to clean up project MCP servers after workspace change: {}",
+                    e
+                );
+            }
+        }
+
+        // Re-establish the project MCP file watcher for the (possibly new) workspace
+        self.watch_project_mcp_file().await;
+    }
+
     // -----------------------------------------------------------------------
     // Config hot-reload
     // -----------------------------------------------------------------------
@@ -2003,16 +2153,25 @@ impl McpHub {
             }
         };
 
-        // Extract the mcpServers object
-        let mcp_servers = config
+        // Extract the mcpServers object, preserving config file key order for sorting.
+        // Corresponds to TS: `Object.keys(config.mcpServers || {})` for server order.
+        let (mcp_servers, server_order): (HashMap<String, serde_json::Value>, Vec<String>) = config
             .get("mcpServers")
             .and_then(|v| v.as_object())
             .map(|obj| {
-                obj.iter()
-                    .map(|(k, v)| (k.clone(), v.clone()))
-                    .collect::<HashMap<String, serde_json::Value>>()
+                let order: Vec<String> = obj.keys().cloned().collect();
+                let map: HashMap<String, serde_json::Value> =
+                    obj.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+                (map, order)
             })
             .unwrap_or_default();
+
+        // Store config key order for sorting.
+        let order_lock = match source {
+            McpSource::Global => &self.global_config_order,
+            McpSource::Project => &self.project_config_order,
+        };
+        *order_lock.write().await = server_order;
 
         // Update connections: this will diff with current state, removing deleted
         // servers, adding new ones, and restarting changed ones.

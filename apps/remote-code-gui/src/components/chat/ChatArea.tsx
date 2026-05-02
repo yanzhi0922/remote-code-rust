@@ -265,7 +265,7 @@ function StatusCards({
                 >
                   <span className="font-medium text-rc-text-primary">{progress.tool_name || 'tool'}</span>
                   <span className="mx-2 text-rc-text-tertiary">·</span>
-                  <span>{truncateMiddle(progress.message, 120)}</span>
+                  <span>{truncateMiddle(progress.active_form ?? progress.message, 120)}</span>
                 </div>
               ))}
             </div>

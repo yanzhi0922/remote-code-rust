@@ -58,6 +58,7 @@ impl DeepSeekHandler {
             provider_name_enum: ProviderName::DeepSeek,
             request_timeout: config.request_timeout,
             reasoning_effort: None,
+            streaming_enabled: Some(true),
         };
 
         let inner = OpenAiCompatibleProvider::new(compatible_config)?;

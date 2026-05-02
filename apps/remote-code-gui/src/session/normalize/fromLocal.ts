@@ -83,7 +83,7 @@ export function normalizeLocalToolProgress(
     stage: 'progress',
     toolCallId: progress.tool_call_id,
     toolName: progress.tool_name,
-    summary: progress.message,
+    summary: progress.active_form ?? progress.message,
     elapsedTimeSeconds: null,
     isError: false,
   };

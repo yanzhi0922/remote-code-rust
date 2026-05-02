@@ -2462,6 +2462,7 @@ async fn run_codex_in_process_prompt(
                         tool_call_id,
                         tool_name,
                         message: "started".to_owned(),
+                        active_form: None,
                     },
                 );
             }
@@ -2483,6 +2484,7 @@ async fn run_codex_in_process_prompt(
                         tool_call_id: String::new(),
                         tool_name,
                         message: progress,
+                        active_form: None,
                     },
                 );
             }
@@ -2505,6 +2507,7 @@ async fn run_codex_in_process_prompt(
                             "params": params,
                         })
                         .to_string(),
+                        active_form: None,
                     },
                 );
             }
@@ -2799,6 +2802,7 @@ async fn run_roo_in_process_prompt(
                         tool_call_id,
                         tool_name,
                         message: "started".to_owned(),
+                        active_form: None,
                     },
                 );
             }
@@ -2813,6 +2817,7 @@ async fn run_roo_in_process_prompt(
                         tool_call_id: String::new(),
                         tool_name,
                         message: progress,
+                        active_form: None,
                     },
                 );
             }
@@ -3097,6 +3102,7 @@ async fn run_claude_in_process_prompt(
                         tool_call_id,
                         tool_name,
                         message: "started".to_owned(),
+                        active_form: None,
                     },
                 );
             }
@@ -3111,6 +3117,7 @@ async fn run_claude_in_process_prompt(
                         tool_call_id: String::new(),
                         tool_name,
                         message: progress,
+                        active_form: None,
                     },
                 );
             }

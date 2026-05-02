@@ -59,6 +59,7 @@ impl UnboundHandler {
             provider_name_enum: ProviderName::Unbound,
             request_timeout: config.request_timeout,
         reasoning_effort: None,
+            streaming_enabled: None,
         };
 
         let inner = OpenAiCompatibleProvider::new(compatible_config)?;

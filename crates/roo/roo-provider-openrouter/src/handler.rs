@@ -3,20 +3,101 @@
 //! Uses the OpenAI-compatible chat completions API via OpenRouter's gateway.
 //! OpenRouter adds extra headers for site URL and ranking preferences.
 //! Supports dynamic model loading from the OpenRouter models API.
+//!
+//! Key behaviors ported from the TypeScript implementation:
+//! - Reuses a single `OpenAiCompatibleProvider` instance (no per-request creation)
+//! - Gemini model sanitization (filtering tool calls without matching reasoning_details)
+//! - Prompt caching breakpoints for Anthropic and Gemini models
+//! - R1 format conversion for DeepSeek reasoning models (merging consecutive same-role messages)
+//! - Reasoning details accumulation from stream chunks for thinking persistence
 
 use std::collections::HashMap;
 use std::sync::RwLock;
 
 use async_trait::async_trait;
+use serde_json::json;
+
 use roo_provider::{
     ApiStream, BaseProvider, CreateMessageMetadata, Provider,
+    OpenAiCompatibleConfig, OpenAiCompatibleProvider,
+    convert_tools_for_openai,
 };
 use roo_provider::error::{ProviderError, Result};
-use roo_types::api::{ApiMessage, ProviderName};
+use roo_provider::transform::caching::{apply_anthropic_caching, apply_gemini_caching};
+use roo_provider::transform::{
+    convert_to_openai_messages, sanitize_gemini_messages,
+    convert_to_r1_zai_messages, R1ZaiOptions,
+};
+use roo_types::api::{ApiMessage, ContentBlock, MessageRole, ProviderName};
 use roo_types::model::{ModelInfo, ModelRecord};
 
 use crate::models;
 use crate::types::OpenRouterConfig;
+
+// ---------------------------------------------------------------------------
+// Prompt-caching model set
+// ---------------------------------------------------------------------------
+
+/// Models that support prompt caching via OpenRouter.
+/// Source: `packages/types/src/providers/openrouter.ts` - `OPEN_ROUTER_PROMPT_CACHING_MODELS`
+static PROMPT_CACHING_MODELS: &[&str] = &[
+    "anthropic/claude-3-haiku",
+    "anthropic/claude-3-haiku:beta",
+    "anthropic/claude-3-opus",
+    "anthropic/claude-3-opus:beta",
+    "anthropic/claude-3-sonnet",
+    "anthropic/claude-3-sonnet:beta",
+    "anthropic/claude-3.5-haiku",
+    "anthropic/claude-3.5-haiku-20241022",
+    "anthropic/claude-3.5-haiku-20241022:beta",
+    "anthropic/claude-3.5-haiku:beta",
+    "anthropic/claude-3.5-sonnet",
+    "anthropic/claude-3.5-sonnet-20240620",
+    "anthropic/claude-3.5-sonnet-20240620:beta",
+    "anthropic/claude-3.5-sonnet:beta",
+    "anthropic/claude-3.7-sonnet",
+    "anthropic/claude-3.7-sonnet:beta",
+    "anthropic/claude-3.7-sonnet:thinking",
+    "anthropic/claude-sonnet-4",
+    "anthropic/claude-sonnet-4.5",
+    "anthropic/claude-sonnet-4.6",
+    "anthropic/claude-opus-4",
+    "anthropic/claude-opus-4.1",
+    "anthropic/claude-opus-4.5",
+    "anthropic/claude-opus-4.6",
+    "anthropic/claude-haiku-4.5",
+    "google/gemini-2.5-flash-preview",
+    "google/gemini-2.5-flash-preview:thinking",
+    "google/gemini-2.5-flash-preview-05-20",
+    "google/gemini-2.5-flash-preview-05-20:thinking",
+    "google/gemini-2.5-flash",
+    "google/gemini-2.5-flash-lite-preview-06-17",
+    "google/gemini-2.0-flash-001",
+    "google/gemini-flash-1.5",
+    "google/gemini-flash-1.5-8b",
+    "google/gemini-2.5-pro",
+    "google/gemini-2.5-pro-preview",
+];
+
+/// Returns true if the given model ID supports prompt caching on OpenRouter.
+fn supports_prompt_caching(model_id: &str) -> bool {
+    PROMPT_CACHING_MODELS.contains(&model_id)
+}
+
+/// Returns true if the model is a DeepSeek R1 reasoning model that requires
+/// R1 format conversion (merging consecutive same-role messages).
+fn is_deepseek_r1(model_id: &str) -> bool {
+    model_id.starts_with("deepseek/deepseek-r1") || model_id == "perplexity/sonar-reasoning"
+}
+
+/// Returns true if the model is a Gemini model.
+fn is_gemini_model(model_id: &str) -> bool {
+    model_id.starts_with("google/gemini")
+}
+
+// ---------------------------------------------------------------------------
+// OpenRouter handler
+// ---------------------------------------------------------------------------
 
 /// OpenRouter API provider handler.
 pub struct OpenRouterHandler {
@@ -27,6 +108,9 @@ pub struct OpenRouterHandler {
     temperature: f64,
     /// Cache for dynamically fetched models.
     dynamic_models: RwLock<Option<ModelRecord>>,
+    /// Reusable inner provider for OpenAI-compatible streaming.
+    /// Created once at construction and reused for all requests.
+    inner: OpenAiCompatibleProvider,
 }
 
 impl OpenRouterHandler {
@@ -44,7 +128,11 @@ impl OpenRouterHandler {
                 ..Default::default()
             });
 
-        let base = BaseProvider::new(model_id, model_info, ProviderName::OpenRouter);
+        let base = BaseProvider::new(
+            model_id.clone(),
+            model_info.clone(),
+            ProviderName::OpenRouter,
+        );
 
         let mut client_builder = reqwest::Client::builder();
         if let Some(timeout) = config.request_timeout {
@@ -53,13 +141,32 @@ impl OpenRouterHandler {
         }
         let http_client = client_builder.build().map_err(ProviderError::Reqwest)?;
 
+        let default_temperature = config.temperature.unwrap_or(0.0);
+
+        // Create the inner provider once - reuse for all requests.
+        let inner_config = OpenAiCompatibleConfig {
+            provider_name: "openrouter".to_string(),
+            base_url: config.base_url.clone(),
+            api_key: config.api_key.clone(),
+            default_model_id: models::default_model_id(),
+            default_temperature,
+            model_id: Some(model_id),
+            model_info: model_info.clone(),
+            provider_name_enum: ProviderName::OpenRouter,
+            request_timeout: config.request_timeout,
+            reasoning_effort: None,
+            streaming_enabled: None,
+        };
+        let inner = OpenAiCompatibleProvider::new(inner_config)?;
+
         Ok(Self {
             base,
             http_client,
             api_key: config.api_key,
             base_url: config.base_url,
-            temperature: config.temperature.unwrap_or(0.0),
+            temperature: default_temperature,
             dynamic_models: RwLock::new(None),
+            inner,
         })
     }
 
@@ -158,6 +265,172 @@ impl OpenRouterHandler {
         // Fallback to the base model info (set at construction)
         self.base.get_model()
     }
+
+    /// Build the request body for an OpenRouter chat completion request,
+    /// applying all OpenRouter-specific message transformations:
+    ///
+    /// 1. R1 format conversion for DeepSeek models (merge consecutive same-role)
+    /// 2. Standard OpenAI message conversion with system prompt prepend
+    /// 3. Gemini message sanitization (filter mismatched reasoning_details)
+    /// 4. Fake encrypted reasoning block injection for Gemini tool calls
+    /// 5. Cache breakpoint injection for supported models
+    fn build_request_body(
+        &self,
+        system_prompt: &str,
+        messages: &[ApiMessage],
+        tools: Option<&Vec<serde_json::Value>>,
+        metadata: &CreateMessageMetadata,
+    ) -> Result<serde_json::Value> {
+        let (model_id, model_info) = self.resolve_model_info();
+        let max_tokens = model_info.max_tokens;
+
+        // -------------------------------------------------------------------
+        // Step 1: Convert messages to OpenAI format (or R1 format for DeepSeek)
+        // -------------------------------------------------------------------
+        let openai_messages = if is_deepseek_r1(&model_id) {
+            // DeepSeek R1 uses user role instead of system, and requires merging
+            // consecutive same-role messages.
+            let mut r1_messages = vec![ApiMessage {
+                role: MessageRole::User,
+                content: vec![ContentBlock::Text {
+                    text: system_prompt.to_string(),
+                }],
+                reasoning: None,
+                ts: None,
+                truncation_parent: None,
+                is_truncation_marker: None,
+                truncation_id: None,
+                condense_parent: None,
+                is_summary: None,
+                condense_id: None,
+                reasoning_details: None,
+            }];
+            r1_messages.extend_from_slice(messages);
+            convert_to_r1_zai_messages(&r1_messages, R1ZaiOptions::default())
+        } else {
+            let converted = convert_to_openai_messages(messages, None)?;
+            let mut system_and_messages = vec![json!({
+                "role": "system",
+                "content": system_prompt
+            })];
+            system_and_messages.extend(converted);
+            system_and_messages
+        };
+
+        // -------------------------------------------------------------------
+        // Step 2: Gemini sanitization + fake encrypted block injection
+        // -------------------------------------------------------------------
+        let mut messages = if is_gemini_model(&model_id) {
+            let mut msgs = sanitize_gemini_messages(&openai_messages, &model_id);
+
+            // Inject fake reasoning.encrypted block for tool calls without
+            // existing encrypted reasoning. This is required when switching
+            // from other models to Gemini to satisfy API validation.
+            // Per OpenRouter docs: one block per assistant message with tool calls,
+            // using the first tool call's ID and "skip_thought_signature_validator".
+            for msg in msgs.iter_mut() {
+                let role = msg["role"].as_str().unwrap_or("");
+                if role != "assistant" {
+                    continue;
+                }
+                let Some(tool_calls) = msg.get("tool_calls") else { continue };
+                let Some(calls) = tool_calls.as_array() else {
+                    continue;
+                };
+                if calls.is_empty() {
+                    continue;
+                }
+
+                let existing_details = msg
+                    .get("reasoning_details")
+                    .and_then(|rd: &serde_json::Value| rd.as_array());
+                let has_encrypted = existing_details
+                    .map(|d: &Vec<serde_json::Value>| {
+                        d.iter().any(|detail: &serde_json::Value| {
+                            detail["type"].as_str() == Some("reasoning.encrypted")
+                        })
+                    })
+                    .unwrap_or(false);
+
+                if !has_encrypted {
+                    let first_tool_id = calls
+                        .first()
+                        .and_then(|tc: &serde_json::Value| tc.get("id"))
+                        .and_then(|id: &serde_json::Value| id.as_str())
+                        .unwrap_or("");
+
+                    let fake_encrypted = json!({
+                        "type": "reasoning.encrypted",
+                        "data": "skip_thought_signature_validator",
+                        "id": first_tool_id,
+                        "format": "google-gemini-v1",
+                        "index": 0
+                    });
+
+                    let details = match existing_details {
+                        Some(d) => {
+                            let mut arr: serde_json::Value = d.clone().into();
+                            arr.as_array_mut()
+                                .expect("cloned array is always an array")
+                                .push(fake_encrypted);
+                            arr
+                        }
+                        None => json!([fake_encrypted]),
+                    };
+                    msg.as_object_mut()
+                        .expect("message is always an object")
+                        .insert("reasoning_details".to_string(), details);
+                }
+            }
+            msgs
+        } else {
+            openai_messages
+        };
+
+        // -------------------------------------------------------------------
+        // Step 3: Cache breakpoints for supported models
+        // -------------------------------------------------------------------
+        if supports_prompt_caching(&model_id) {
+            if model_id.starts_with("google") {
+                apply_gemini_caching(system_prompt, &mut messages, 10);
+            } else {
+                apply_anthropic_caching(system_prompt, &mut messages);
+            }
+        }
+
+        // -------------------------------------------------------------------
+        // Step 4: Assemble the request body
+        // -------------------------------------------------------------------
+        let mut body = json!({
+            "model": model_id,
+            "messages": messages,
+            "stream": true,
+            "stream_options": { "include_usage": true },
+        });
+
+        if let Some(max_tokens) = max_tokens {
+            if max_tokens > 0 {
+                body["max_tokens"] = json!(max_tokens);
+            }
+        }
+
+        body["temperature"] = json!(self.temperature);
+
+        // DeepSeek R1 uses top_p = 0.95
+        if is_deepseek_r1(&model_id) {
+            body["top_p"] = json!(0.95);
+        }
+
+        if let Some(tools) = convert_tools_for_openai(tools) {
+            body["tools"] = json!(tools);
+        }
+
+        if let Some(ref tool_choice) = metadata.tool_choice {
+            body["tool_choice"] = tool_choice.clone();
+        }
+
+        Ok(body)
+    }
 }
 
 #[async_trait]
@@ -169,24 +442,18 @@ impl Provider for OpenRouterHandler {
         tools: Option<Vec<serde_json::Value>>,
         metadata: CreateMessageMetadata,
     ) -> Result<ApiStream> {
-        // Delegate to OpenAiCompatibleProvider via a temporary inner provider
-        let config = roo_provider::OpenAiCompatibleConfig {
-            provider_name: "openrouter".to_string(),
-            base_url: self.base_url.clone(),
-            api_key: self.api_key.clone(),
-            default_model_id: models::default_model_id(),
-            default_temperature: self.temperature,
-            model_id: Some(self.base.model_id.clone()),
-            model_info: self.base.model_info.clone(),
-            provider_name_enum: ProviderName::OpenRouter,
-            request_timeout: None,
-            reasoning_effort: None,
-        };
+        // Build the request body with all OpenRouter-specific transformations
+        let body = self.build_request_body(
+            system_prompt,
+            &messages,
+            tools.as_ref(),
+            &metadata,
+        )?;
 
-        let inner = roo_provider::OpenAiCompatibleProvider::new(config)?;
-        inner
-            .create_message(system_prompt, messages, tools, metadata)
-            .await
+        // Delegate to the reusable inner provider's stream infrastructure.
+        // The inner provider handles SSE parsing, reasoning_details display,
+        // tool call processing, and usage metrics.
+        self.inner.create_message_from_body(body).await
     }
 
     fn get_model(&self) -> (String, ModelInfo) {
@@ -198,7 +465,7 @@ impl Provider for OpenRouterHandler {
 
         let url = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
 
-        let body = serde_json::json!({
+        let body = json!({
             "model": model,
             "messages": [{ "role": "user", "content": prompt }]
         });
@@ -217,13 +484,17 @@ impl Provider for OpenRouterHandler {
 
         if !response.status().is_success() {
             let status = response.status().as_u16();
-            let text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+            let text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
             return Err(ProviderError::api_error_response(
                 "openrouter", status, text,
             ));
         }
 
-        let resp: serde_json::Value = response.json().await.map_err(ProviderError::Reqwest)?;
+        let resp: serde_json::Value =
+            response.json().await.map_err(ProviderError::Reqwest)?;
         Ok(resp["choices"][0]["message"]["content"]
             .as_str()
             .unwrap_or("")
@@ -521,5 +792,196 @@ mod tests {
         assert_eq!(model_id, "vendor/unknown-model");
         // Falls back to the base model info set at construction
         assert!(info.max_tokens.is_some());
+    }
+
+    // --- Helper function tests ---
+
+    #[test]
+    fn test_is_deepseek_r1() {
+        assert!(is_deepseek_r1("deepseek/deepseek-r1"));
+        assert!(is_deepseek_r1("deepseek/deepseek-r1-0528"));
+        assert!(!is_deepseek_r1("deepseek/deepseek-chat"));
+        assert!(is_deepseek_r1("perplexity/sonar-reasoning"));
+        assert!(!is_deepseek_r1("openai/gpt-4o"));
+    }
+
+    #[test]
+    fn test_is_gemini_model() {
+        assert!(is_gemini_model("google/gemini-2.5-pro"));
+        assert!(is_gemini_model("google/gemini-2.5-pro-preview"));
+        assert!(is_gemini_model("google/gemini-2.5-flash"));
+        assert!(!is_gemini_model("openai/gpt-4o"));
+    }
+
+    #[test]
+    fn test_supports_prompt_caching() {
+        assert!(supports_prompt_caching("anthropic/claude-sonnet-4"));
+        assert!(supports_prompt_caching("anthropic/claude-sonnet-4.5"));
+        assert!(supports_prompt_caching("google/gemini-2.5-pro"));
+        assert!(supports_prompt_caching("google/gemini-2.5-pro-preview"));
+        assert!(!supports_prompt_caching("openai/gpt-4o"));
+        assert!(!supports_prompt_caching("deepseek/deepseek-chat"));
+    }
+
+    // --- Build request body tests ---
+
+    #[test]
+    fn test_build_request_body_basic() {
+        let config = OpenRouterConfig {
+            api_key: "test-key".to_string(),
+            base_url: OpenRouterConfig::DEFAULT_BASE_URL.to_string(),
+            model_id: Some("openai/gpt-4o".to_string()),
+            temperature: Some(0.0),
+            request_timeout: None,
+        };
+        let handler = OpenRouterHandler::new(config).unwrap();
+        let body = handler
+            .build_request_body("You are helpful.", &[], None, &CreateMessageMetadata::default())
+            .unwrap();
+
+        assert_eq!(body["model"], "openai/gpt-4o");
+        assert_eq!(body["stream"], true);
+        // System message should be first
+        let msgs = body["messages"].as_array().unwrap();
+        assert_eq!(msgs[0]["role"], "system");
+        assert_eq!(msgs[0]["content"], "You are helpful.");
+    }
+
+    #[test]
+    fn test_build_request_body_deepseek_r1_format() {
+        let config = OpenRouterConfig {
+            api_key: "test-key".to_string(),
+            base_url: OpenRouterConfig::DEFAULT_BASE_URL.to_string(),
+            model_id: Some("deepseek/deepseek-r1".to_string()),
+            temperature: None,
+            request_timeout: None,
+        };
+        let handler = OpenRouterHandler::new(config).unwrap();
+
+        let messages = vec![
+            ApiMessage {
+                role: MessageRole::User,
+                content: vec![ContentBlock::Text {
+                    text: "Hello".to_string(),
+                }],
+                reasoning: None,
+                ts: None,
+                truncation_parent: None,
+                is_truncation_marker: None,
+                truncation_id: None,
+                condense_parent: None,
+                is_summary: None,
+                condense_id: None,
+                reasoning_details: None,
+            },
+            ApiMessage {
+                role: MessageRole::User,
+                content: vec![ContentBlock::Text {
+                    text: "World".to_string(),
+                }],
+                reasoning: None,
+                ts: None,
+                truncation_parent: None,
+                is_truncation_marker: None,
+                truncation_id: None,
+                condense_parent: None,
+                is_summary: None,
+                condense_id: None,
+                reasoning_details: None,
+            },
+        ];
+
+        let body = handler
+            .build_request_body("System prompt", &messages, None, &CreateMessageMetadata::default())
+            .unwrap();
+
+        // DeepSeek R1 should merge consecutive same-role messages
+        let msgs = body["messages"].as_array().unwrap();
+        // Should be merged into a single user message
+        let user_count = msgs.iter().filter(|m| m["role"] == "user").count();
+        assert_eq!(user_count, 1);
+
+        // Should have top_p = 0.95
+        assert_eq!(body["top_p"], 0.95);
+    }
+
+    #[test]
+    fn test_build_request_body_gemini_sanitization() {
+        let config = OpenRouterConfig {
+            api_key: "test-key".to_string(),
+            base_url: OpenRouterConfig::DEFAULT_BASE_URL.to_string(),
+            model_id: Some("google/gemini-2.5-pro-preview".to_string()),
+            temperature: None,
+            request_timeout: None,
+        };
+        let handler = OpenRouterHandler::new(config).unwrap();
+
+        let body = handler
+            .build_request_body("System", &[], None, &CreateMessageMetadata::default())
+            .unwrap();
+
+        // System message should be converted to array format with cache_control
+        let msgs = body["messages"].as_array().unwrap();
+        let sys_content = msgs[0]["content"].as_array().unwrap();
+        assert_eq!(sys_content[0]["cache_control"]["type"], "ephemeral");
+    }
+
+    #[test]
+    fn test_build_request_body_anthropic_caching() {
+        let config = OpenRouterConfig {
+            api_key: "test-key".to_string(),
+            base_url: OpenRouterConfig::DEFAULT_BASE_URL.to_string(),
+            model_id: Some("anthropic/claude-sonnet-4".to_string()),
+            temperature: None,
+            request_timeout: None,
+        };
+        let handler = OpenRouterHandler::new(config).unwrap();
+
+        let body = handler
+            .build_request_body("System", &[], None, &CreateMessageMetadata::default())
+            .unwrap();
+
+        // System message should have cache_control
+        let msgs = body["messages"].as_array().unwrap();
+        let sys_content = msgs[0]["content"].as_array().unwrap();
+        assert_eq!(sys_content[0]["cache_control"]["type"], "ephemeral");
+    }
+
+    #[test]
+    fn test_build_request_body_no_caching_for_unsupported() {
+        let config = OpenRouterConfig {
+            api_key: "test-key".to_string(),
+            base_url: OpenRouterConfig::DEFAULT_BASE_URL.to_string(),
+            model_id: Some("openai/gpt-4o".to_string()),
+            temperature: None,
+            request_timeout: None,
+        };
+        let handler = OpenRouterHandler::new(config).unwrap();
+
+        let body = handler
+            .build_request_body("System", &[], None, &CreateMessageMetadata::default())
+            .unwrap();
+
+        // System message should NOT have cache_control for gpt-4o
+        let msgs = body["messages"].as_array().unwrap();
+        assert!(msgs[0]["content"].is_string());
+    }
+
+    // --- Reusable inner provider test ---
+
+    #[test]
+    fn test_inner_provider_reused() {
+        let config = OpenRouterConfig {
+            api_key: "test-key".to_string(),
+            base_url: OpenRouterConfig::DEFAULT_BASE_URL.to_string(),
+            model_id: None,
+            temperature: None,
+            request_timeout: None,
+        };
+        let handler = OpenRouterHandler::new(config).unwrap();
+        // Verify the inner provider has the same model
+        let (outer_model, _) = handler.get_model();
+        let (inner_model, _) = handler.inner.get_model();
+        assert_eq!(outer_model, inner_model);
     }
 }

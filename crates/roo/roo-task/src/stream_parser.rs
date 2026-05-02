@@ -464,16 +464,25 @@ impl StreamParser {
     /// Parse a complete tool call into an AssistantMessageContent.
     ///
     /// Handles both built-in tools and dynamic MCP tools.
+    /// Resolves tool aliases (e.g. `write_file` -> `write_to_file`,
+    /// `search_and_replace` -> `edit`).
     ///
     /// Source: `NativeToolCallParser.ts` — `parseToolCall()`
+    /// Source: `src/shared/tools.ts` — `TOOL_ALIASES` (lines 337–340)
+    /// Source: `src/core/tools/validateToolUse.ts` — line 130: `TOOL_ALIASES[tool] ?? tool`
     pub fn parse_tool_call(
         &self,
         id: &str,
         name: &str,
         arguments: &str,
     ) -> Option<AssistantMessageContent> {
-        // Normalize the name (handle mcp__server__tool → mcp--server--tool)
-        let normalized_name = normalize_mcp_tool_name(name);
+        // Resolve tool aliases before normalization.
+        // Source: `src/shared/tools.ts` lines 337–340 — TOOL_ALIASES map
+        // Source: `src/core/tools/validateToolUse.ts` line 130 — alias resolution
+        let alias_resolved = crate::ask_say::resolve_tool_alias(name);
+
+        // Normalize the name (handle mcp__server__tool -> mcp--server--tool)
+        let normalized_name = normalize_mcp_tool_name(alias_resolved);
 
         // Check if this is a dynamic MCP tool
         if is_mcp_tool_name(&normalized_name) {

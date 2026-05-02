@@ -7,6 +7,7 @@ import { cn } from '../../lib/utils';
 export interface TaskItemData {
   name: string;
   status: 'pending' | 'running' | 'completed' | 'failed';
+  activeForm?: string;
 }
 
 export interface TaskTreeProps {
@@ -37,6 +38,7 @@ export function TaskTree({ toolCalls = [] }: TaskTreeProps) {
             key={idx}
             number={idx + 1}
             title={task.name}
+            activeForm={task.activeForm}
             active={task.status === 'running'}
             disabled={task.status === 'pending'}
             completed={task.status === 'completed'}
@@ -55,6 +57,7 @@ export function TaskTree({ toolCalls = [] }: TaskTreeProps) {
 function TaskItem({
   number,
   title,
+  activeForm,
   active,
   disabled,
   completed,
@@ -62,6 +65,7 @@ function TaskItem({
 }: {
   number: number;
   title: string;
+  activeForm?: string;
   active?: boolean;
   disabled?: boolean;
   completed?: boolean;
@@ -90,7 +94,7 @@ function TaskItem({
         <span className="text-slate-400 font-bold ml-1">{number}.</span>
       </div>
       <div className="flex gap-2 w-full">
-        <span className="leading-5">{title}</span>
+        <span className="leading-5">{active && activeForm ? activeForm : title}</span>
         {completed && (
           <span className="text-[10px] text-emerald-500 font-semibold self-center">✓</span>
         )}

@@ -384,15 +384,35 @@ impl McpClient {
     /// Read a response from the transport, matching the expected request ID.
     ///
     /// Skips any notifications or responses with different IDs.
+    /// Uses a configurable timeout (default: 60 seconds) matching the TS SDK
+    /// which uses `timeout` from the server config (default 60s).
     async fn read_response(
         transport: &mut dyn McpTransport,
         expected_id: u64,
     ) -> McpResult<JsonRpcMessage> {
-        // Try to read messages until we find the one with our expected ID
-        let mut attempts = 0;
+        // Default timeout of 60 seconds, matching TS: `(parsedConfig.timeout ?? 60) * 1000`.
+        Self::read_response_with_timeout(transport, expected_id, std::time::Duration::from_secs(60)).await
+    }
+
+    /// Read a response with a custom timeout.
+    async fn read_response_with_timeout(
+        transport: &mut dyn McpTransport,
+        expected_id: u64,
+        timeout: std::time::Duration,
+    ) -> McpResult<JsonRpcMessage> {
+        let start = std::time::Instant::now();
+
         loop {
-            match transport.receive().await? {
-                Some(msg) => {
+            let remaining = timeout.saturating_sub(start.elapsed());
+            if remaining.is_zero() {
+                return Err(McpError::Timeout(timeout.as_millis() as u64));
+            }
+
+            // Wait for the next message with the remaining timeout
+            let receive_result = tokio::time::timeout(remaining, transport.receive()).await;
+
+            match receive_result {
+                Ok(Ok(Some(msg))) => {
                     // Check if this is a response to our request
                     if let Some(msg_id) = msg.id_as_u64() {
                         if msg_id == expected_id {
@@ -409,17 +429,17 @@ impl McpClient {
                     // Not our response, skip it (could be a notification)
                     tracing::trace!("Skipping message with unexpected ID");
                 }
-                None => {
+                Ok(Ok(None)) => {
                     return Err(McpError::ConnectionFailed(
                         "Transport closed while waiting for response".to_string(),
                     ));
                 }
-            }
-            attempts += 1;
-            if attempts > 1000 {
-                return Err(McpError::ConnectionFailed(
-                    "Too many messages without matching response".to_string(),
-                ));
+                Ok(Err(e)) => {
+                    return Err(e);
+                }
+                Err(_) => {
+                    return Err(McpError::Timeout(timeout.as_millis() as u64));
+                }
             }
         }
     }

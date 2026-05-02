@@ -92,7 +92,7 @@ export const AssistantToolUseMessage = memo(function AssistantToolUseMessage({
       </div>
       {progress && isRunning && (
         <div className="mt-1 text-xs text-blue-600 dark:text-blue-400">
-          {progress.message}
+          {progress.active_form ?? progress.message}
         </div>
       )}
       {verbose && expanded && (
