@@ -361,15 +361,35 @@ const SSE_DEFAULT_INITIAL_RECONNECT_DELAY_MS: u64 = 1000;
 ///
 /// Uses HTTP POST for sending and SSE for receiving.
 /// Supports automatic reconnection with exponential backoff.
+///
+/// ## Endpoint Discovery Protocol
+///
+/// The MCP SSE protocol works as follows:
+/// 1. Connect to the SSE endpoint via GET
+/// 2. Listen for an `endpoint` event from the server containing the POST target URL
+/// 3. POST JSON-RPC messages to the discovered endpoint URL
+///
+/// The `endpoint` event format is:
+/// ```text
+/// event: endpoint
+/// data: /mcp?sessionId=xxx
+/// ```
+/// or with an absolute URL:
+/// ```text
+/// event: endpoint
+/// data: http://server.com/mcp?sessionId=xxx
+/// ```
 pub struct SseTransport {
+    /// The SSE URL to connect to (GET endpoint for receiving events).
     url: String,
     headers: HashMap<String, String>,
     http_client: reqwest::Client,
     connected: bool,
     // Channel for received messages (populated by SSE listener)
     message_rx: Option<mpsc::Receiver<JsonRpcMessage>>,
-    // SSE endpoint URL (discovered from the initial connection)
-    sse_endpoint: Option<String>,
+    // The POST endpoint URL discovered from the `endpoint` SSE event.
+    // Messages are sent here instead of to `url`.
+    post_endpoint: Option<String>,
     // Join handle for the SSE listener task
     listener_handle: Option<tokio::task::JoinHandle<()>>,
     /// Maximum number of reconnection attempts before giving up.
@@ -387,7 +407,7 @@ impl SseTransport {
             http_client: reqwest::Client::new(),
             connected: false,
             message_rx: None,
-            sse_endpoint: None,
+            post_endpoint: None,
             listener_handle: None,
             max_reconnect_attempts: SSE_DEFAULT_MAX_RECONNECT_ATTEMPTS,
             initial_reconnect_delay_ms: SSE_DEFAULT_INITIAL_RECONNECT_DELAY_MS,
@@ -407,10 +427,45 @@ impl SseTransport {
             http_client: reqwest::Client::new(),
             connected: false,
             message_rx: None,
-            sse_endpoint: None,
+            post_endpoint: None,
             listener_handle: None,
             max_reconnect_attempts,
             initial_reconnect_delay_ms,
+        }
+    }
+
+    /// Resolve a potentially relative endpoint URL against the base SSE URL.
+    fn resolve_endpoint_url(base_url: &str, endpoint_data: &str) -> String {
+        let endpoint_data = endpoint_data.trim();
+
+        // If it's already an absolute URL, use it directly
+        if endpoint_data.starts_with("http://") || endpoint_data.starts_with("https://") {
+            return endpoint_data.to_string();
+        }
+
+        // Parse the base URL and join the relative path
+        match url::Url::parse(base_url) {
+            Ok(base) => {
+                match base.join(endpoint_data) {
+                    Ok(resolved) => resolved.to_string(),
+                    Err(e) => {
+                        tracing::warn!(
+                            "Failed to resolve relative endpoint '{}': {}. Using as-is.",
+                            endpoint_data,
+                            e
+                        );
+                        endpoint_data.to_string()
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "Failed to parse base URL '{}': {}. Using endpoint as-is.",
+                    base_url,
+                    e
+                );
+                endpoint_data.to_string()
+            }
         }
     }
 }
@@ -418,25 +473,24 @@ impl SseTransport {
 #[async_trait]
 impl McpTransport for SseTransport {
     async fn connect(&mut self) -> McpResult<()> {
-        let (tx, rx) = mpsc::channel(100);
-        self.message_rx = Some(rx);
+        let (msg_tx, msg_rx) = mpsc::channel(100);
+        let (endpoint_tx, mut endpoint_rx) = mpsc::channel::<String>(1);
+        self.message_rx = Some(msg_rx);
 
-        // The SSE endpoint is the URL itself
         let sse_url = self.url.clone();
-        self.sse_endpoint = Some(sse_url.clone());
-
         let client = self.http_client.clone();
         let headers = self.headers.clone();
         let max_reconnect = self.max_reconnect_attempts;
         let initial_delay = self.initial_reconnect_delay_ms;
 
-        // Start SSE listener in background
+        // Start SSE listener in background; it will signal the discovered endpoint
         let handle = tokio::spawn(async move {
             if let Err(e) = Self::listen_sse_with_reconnect(
                 client,
                 &sse_url,
                 &headers,
-                tx,
+                msg_tx,
+                Some(endpoint_tx),
                 max_reconnect,
                 initial_delay,
             )
@@ -447,8 +501,46 @@ impl McpTransport for SseTransport {
         });
 
         self.listener_handle = Some(handle);
-        self.connected = true;
 
+        // Wait for the endpoint discovery event from the server.
+        // The MCP SSE protocol requires waiting for an `endpoint` event before
+        // the client can POST messages.
+        let timeout = std::time::Duration::from_secs(30);
+        match tokio::time::timeout(timeout, endpoint_rx.recv()).await {
+            Ok(Some(discovered_endpoint)) => {
+                // Resolve relative URLs against the base SSE URL
+                let resolved = Self::resolve_endpoint_url(&self.url, &discovered_endpoint);
+                tracing::info!(
+                    "SSE transport discovered POST endpoint: {} (raw: {})",
+                    resolved,
+                    discovered_endpoint
+                );
+                self.post_endpoint = Some(resolved);
+            }
+            Ok(None) => {
+                // Channel closed without receiving an endpoint — the listener
+                // task ended before sending one. Fall back to posting to the
+                // SSE URL itself so the transport still functions for servers
+                // that don't follow the discovery protocol.
+                tracing::warn!(
+                    "SSE transport did not receive an 'endpoint' event. \
+                     Falling back to POST to SSE URL: {}",
+                    self.url
+                );
+                self.post_endpoint = Some(self.url.clone());
+            }
+            Err(_) => {
+                // Timed out waiting for endpoint discovery
+                tracing::warn!(
+                    "SSE transport timed out waiting for endpoint discovery (30s). \
+                     Falling back to POST to SSE URL: {}",
+                    self.url
+                );
+                self.post_endpoint = Some(self.url.clone());
+            }
+        }
+
+        self.connected = true;
         tracing::info!("SSE transport connected to {}", self.url);
         Ok(())
     }
@@ -458,15 +550,24 @@ impl McpTransport for SseTransport {
             handle.abort();
         }
         self.message_rx = None;
+        self.post_endpoint = None;
         self.connected = false;
         tracing::info!("SSE transport closed");
         Ok(())
     }
 
     async fn send(&mut self, message: &JsonRpcMessage) -> McpResult<()> {
-        // For SSE transport, we POST the message to the server
-        // The endpoint for sending is typically the same URL
-        let mut request = self.http_client.post(&self.url);
+        // POST the message to the discovered endpoint (not the SSE URL)
+        let post_url = self
+            .post_endpoint
+            .as_ref()
+            .ok_or_else(|| {
+                McpError::TransportError(
+                    "SSE transport not connected: no POST endpoint discovered yet".to_string(),
+                )
+            })?;
+
+        let mut request = self.http_client.post(post_url);
         for (key, value) in &self.headers {
             request = request.header(key.as_str(), value.as_str());
         }
@@ -486,7 +587,7 @@ impl McpTransport for SseTransport {
             )));
         }
 
-        tracing::trace!("SSE sent message: {:?}", message);
+        tracing::trace!("SSE sent message to {}: {:?}", post_url, message);
         Ok(())
     }
 
@@ -516,18 +617,37 @@ impl SseTransport {
     /// When the SSE stream ends or encounters an error, this method will
     /// attempt to reconnect with exponential backoff up to `max_reconnect_attempts`
     /// times before giving up.
+    ///
+    /// The `endpoint_tx` channel is used to signal the discovered POST endpoint
+    /// back to the caller. It is only sent to once (on the first successful
+    /// endpoint discovery).
     async fn listen_sse_with_reconnect(
         client: reqwest::Client,
         url: &str,
         headers: &HashMap<String, String>,
         tx: mpsc::Sender<JsonRpcMessage>,
+        endpoint_tx: Option<mpsc::Sender<String>>,
         max_reconnect_attempts: u32,
         initial_delay_ms: u64,
     ) -> McpResult<()> {
         let mut attempt = 0u32;
+        // Track whether we have already signaled the endpoint so we only do it once.
+        let mut endpoint_signaled = false;
+        // Keep the endpoint_tx around; if it was already consumed (sent), that is fine.
+        let mut endpoint_tx = endpoint_tx;
 
         loop {
-            match Self::listen_sse_once(client.clone(), url, headers, &tx).await {
+            let result = Self::listen_sse_once(
+                client.clone(),
+                url,
+                headers,
+                &tx,
+                &mut endpoint_tx,
+                &mut endpoint_signaled,
+            )
+            .await;
+
+            match result {
                 Ok(()) => {
                     // Stream ended normally (EOF) — try to reconnect
                     attempt += 1;
@@ -577,11 +697,17 @@ impl SseTransport {
     ///
     /// Returns `Ok(())` when the stream ends normally (EOF),
     /// or `Err` on a fatal error.
+    ///
+    /// When an `endpoint` SSE event is received, the discovered URL is sent
+    /// through `endpoint_tx` and `endpoint_signaled` is set to `true` so that
+    /// subsequent reconnections don't resend it.
     async fn listen_sse_once(
         client: reqwest::Client,
         url: &str,
         headers: &HashMap<String, String>,
         tx: &mpsc::Sender<JsonRpcMessage>,
+        endpoint_tx: &mut Option<mpsc::Sender<String>>,
+        endpoint_signaled: &mut bool,
     ) -> McpResult<()> {
         let mut request = client.get(url);
         request = request.header("Accept", "text/event-stream");
@@ -604,7 +730,24 @@ impl SseTransport {
         while let Some(event) = event_stream.next().await {
             match event {
                 Ok(sse_event) => {
-                    // SSE events with "message" event type contain JSON-RPC messages
+                    // Handle the `endpoint` discovery event from the MCP SSE protocol.
+                    // This event tells us where to POST JSON-RPC messages.
+                    if sse_event.event == "endpoint" {
+                        let endpoint_data = sse_event.data.trim().to_string();
+                        if !endpoint_data.is_empty() && !*endpoint_signaled {
+                            tracing::info!(
+                                "SSE received endpoint event: {}",
+                                endpoint_data
+                            );
+                            if let Some(sender) = endpoint_tx.take() {
+                                let _ = sender.send(endpoint_data).await;
+                                *endpoint_signaled = true;
+                            }
+                        }
+                        continue;
+                    }
+
+                    // SSE events with "message" event type (or default) contain JSON-RPC messages
                     if sse_event.event == "message" || sse_event.event.is_empty() {
                         if let Ok(msg) = serde_json::from_str::<JsonRpcMessage>(&sse_event.data) {
                             if tx.send(msg).await.is_err() {
@@ -628,7 +771,6 @@ impl SseTransport {
         // Stream ended normally (EOF)
         Ok(())
     }
-
 }
 
 // ---------------------------------------------------------------------------
@@ -636,12 +778,19 @@ impl SseTransport {
 // ---------------------------------------------------------------------------
 
 /// Streamable HTTP transport using standard HTTP request/response.
+///
+/// Implements the MCP Streamable HTTP transport as specified in the protocol:
+/// - POSTs JSON-RPC messages to the endpoint
+/// - Supports both JSON and SSE streaming responses
+/// - Manages session IDs via the `Mcp-Session-Id` header
 pub struct StreamableHttpTransport {
     url: String,
     headers: HashMap<String, String>,
     http_client: reqwest::Client,
     connected: bool,
-    // For streaming responses, we may need to buffer
+    /// The MCP session ID received from the server (sent back on each request).
+    session_id: Option<String>,
+    // For streaming responses, we buffer incoming messages
     pending_messages: Vec<JsonRpcMessage>,
 }
 
@@ -653,6 +802,7 @@ impl StreamableHttpTransport {
             headers,
             http_client: reqwest::Client::new(),
             connected: false,
+            session_id: None,
             pending_messages: Vec::new(),
         }
     }
@@ -661,7 +811,45 @@ impl StreamableHttpTransport {
 #[async_trait]
 impl McpTransport for StreamableHttpTransport {
     async fn connect(&mut self) -> McpResult<()> {
-        // For StreamableHTTP, we just verify the endpoint is reachable
+        // Verify the endpoint is reachable by sending a lightweight GET request.
+        // The server may return 200 (OK) or 405 (Method Not Allowed) — both
+        // indicate the server is alive. A connection failure here surfaces
+        // immediately instead of on the first send.
+        let mut request = self.http_client.get(&self.url);
+        for (key, value) in &self.headers {
+            request = request.header(key.as_str(), value.as_str());
+        }
+        request = request.header("Accept", "application/json, text/event-stream");
+
+        match request.send().await {
+            Ok(response) => {
+                // Extract session ID from the response if present
+                if let Some(sid) = response
+                    .headers()
+                    .get("mcp-session-id")
+                    .and_then(|v| v.to_str().ok())
+                {
+                    self.session_id = Some(sid.to_string());
+                    tracing::info!("StreamableHTTP received session ID: {}", sid);
+                }
+                // Any HTTP response (even 4xx) means the server is reachable
+                tracing::debug!(
+                    "StreamableHTTP connectivity check: status {}",
+                    response.status()
+                );
+            }
+            Err(e) => {
+                // If the connectivity check fails, log but don't hard-fail.
+                // Some servers may not support GET; we'll verify on the first
+                // actual request.
+                tracing::warn!(
+                    "StreamableHTTP connectivity check failed: {}. \
+                     Will attempt to connect on first request.",
+                    e
+                );
+            }
+        }
+
         self.connected = true;
         tracing::info!("StreamableHTTP transport ready for {}", self.url);
         Ok(())
@@ -669,6 +857,7 @@ impl McpTransport for StreamableHttpTransport {
 
     async fn close(&mut self) -> McpResult<()> {
         self.connected = false;
+        self.session_id = None;
         self.pending_messages.clear();
         tracing::info!("StreamableHTTP transport closed");
         Ok(())
@@ -682,11 +871,38 @@ impl McpTransport for StreamableHttpTransport {
         request = request.header("Content-Type", "application/json");
         request = request.header("Accept", "application/json, text/event-stream");
 
+        // Include the session ID if we have one
+        if let Some(ref sid) = self.session_id {
+            request = request.header("Mcp-Session-Id", sid.as_str());
+        }
+
         request = request.json(message);
 
         let response = request.send().await.map_err(|e| {
             McpError::TransportError(format!("StreamableHTTP send error: {}", e))
         })?;
+
+        // Update session ID if the server sends a new one
+        if let Some(sid) = response
+            .headers()
+            .get("mcp-session-id")
+            .and_then(|v| v.to_str().ok())
+        {
+            let new_sid = sid.to_string();
+            if self.session_id.as_ref() != Some(&new_sid) {
+                tracing::debug!("StreamableHTTP session ID updated: {}", new_sid);
+                self.session_id = Some(new_sid);
+            }
+        }
+
+        let status = response.status();
+        if !status.is_success() {
+            let body = response.text().await.unwrap_or_default();
+            return Err(McpError::TransportError(format!(
+                "StreamableHTTP send failed with status {}: {}",
+                status, body
+            )));
+        }
 
         let content_type = response
             .headers()
@@ -705,7 +921,9 @@ impl McpTransport for StreamableHttpTransport {
             while let Some(event) = event_stream.next().await {
                 match event {
                     Ok(sse_event) => {
-                        if let Ok(msg) = serde_json::from_str::<JsonRpcMessage>(&sse_event.data) {
+                        if let Ok(msg) =
+                            serde_json::from_str::<JsonRpcMessage>(&sse_event.data)
+                        {
                             self.pending_messages.push(msg);
                         }
                     }

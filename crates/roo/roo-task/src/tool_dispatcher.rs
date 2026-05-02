@@ -1210,9 +1210,11 @@ impl ToolHandler for ExecuteCommandHandler {
             .and_then(|v| v.as_str())
             .map(|s| PathBuf::from(s));
 
+        // The tool schema documents timeout in seconds; convert to milliseconds.
         let timeout_ms = params
             .get("timeout")
             .and_then(|v| v.as_u64())
+            .map(|secs| secs.saturating_mul(1000))
             .or_else(|| params.get("timeout_ms").and_then(|v| v.as_u64()));
 
         let cwd_ref = cwd.as_deref();

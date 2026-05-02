@@ -36,6 +36,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn, error};
 
 use roo_provider::handler::{CreateMessageMetadata, Provider};
+use roo_provider::ProviderError;
 use roo_auto_approval::types::AutoApprovalState;
 use roo_checkpoint::service::ShadowCheckpointService;
 use roo_checkpoint::types::SaveCheckpointOptions;
@@ -544,12 +545,6 @@ pub struct AgentLoop {
     /// completes and user message content is ready for the next API call.
     /// Source: `src/core/task/Task.ts` — `pWaitFor(() => this.userMessageContentReady)`
     user_message_content_ready_notify: Arc<Notify>,
-    /// Timestamp of the last global API request, used for provider rate limiting.
-    ///
-    /// Source: `src/core/task/Task.ts` — `Task.lastGlobalApiRequestTime`
-    /// This is a static field in TS shared across all task instances.
-    /// In Rust, we track it per AgentLoop instance.
-    last_global_api_request_time: Option<Instant>,
     /// Track which index each tool is at during streaming.
     ///
     /// Source: `src/core/task/Task.ts` line 394
@@ -750,7 +745,6 @@ impl AgentLoop {
             present_assistant_message: PresentAssistantMessage::with_mistake_limit(mistake_limit),
             diff_view_provider: None,
             user_message_content_ready_notify: Arc::new(Notify::new()),
-            last_global_api_request_time: None,
             // TS L394: streamingToolCallIndices: Map<string, number> = new Map()
             streaming_tool_call_indices: std::collections::HashMap::new(),
             // TS L361: assistantMessageSavedToHistory = false
@@ -1366,58 +1360,53 @@ impl AgentLoop {
             // TS: if (this.abort) { break; }
             // ---------------------------------------------------------------
             if !self.engine.should_continue() {
-                // P1-3: When mistake limit is reached, ask user for guidance
-                // instead of silently using one-time grace.
+                // P1-3: When mistake limit is reached, ask user for guidance.
                 // Source: TS `ask("mistake_limit_reached")`
                 if self.engine.loop_control().is_mistake_limit_reached() {
                     let mistake_count = self.engine.loop_control().consecutive_mistake_count;
                     let mistake_limit = self.engine.loop_control().max_consecutive_mistakes;
 
-                    // First try one-time grace as a fallback (for headless/CLI mode)
-                    if self.engine.loop_control_mut().try_use_mistake_grace() {
-                        warn!("Mistake limit reached, using one-time grace to continue");
-                    } else {
-                        // Grace already used — ask user via oneshot channel
-                        let (tx, rx) = oneshot::channel();
-                        *self.pending_mistake_limit_tx.lock().unwrap() = Some(tx);
+                    // TS: Always ask user when mistake limit is reached (no grace mechanism).
+                    // Source: TS `ask("mistake_limit_reached")`
+                    let (tx, rx) = oneshot::channel();
+                    *self.pending_mistake_limit_tx.lock().unwrap() = Some(tx);
 
-                        // Emit event for UI to present dialog
-                        self.engine.emitter().emit_mistake_limit_reached(
-                            &task_id,
-                            mistake_count,
-                            mistake_limit,
-                        );
+                    // Emit event for UI to present dialog
+                    self.engine.emitter().emit_mistake_limit_reached(
+                        &task_id,
+                        mistake_count,
+                        mistake_limit,
+                    );
 
-                        // Wait for user response
-                        match rx.await {
-                            Ok(MistakeLimitAction::Continue { feedback }) => {
-                                info!("User chose to continue after mistake limit");
-                                // Reset mistake count and optionally inject feedback
-                                self.engine.loop_control_mut().reset_mistake_count();
-                                if let Some(ref text) = feedback {
-                                    if !text.is_empty() {
-                                        let user_msg = MessageBuilder::create_user_message(
-                                            &format!(
-                                                "[USER FEEDBACK after mistake limit] {}",
-                                                text
-                                            ),
-                                            &[],
-                                        );
-                                        self.engine.add_api_message(user_msg);
-                                    }
+                    // Wait for user response
+                    match rx.await {
+                        Ok(MistakeLimitAction::Continue { feedback }) => {
+                            info!("User chose to continue after mistake limit");
+                            // Reset mistake count and optionally inject feedback
+                            self.engine.loop_control_mut().reset_mistake_count();
+                            if let Some(ref text) = feedback {
+                                if !text.is_empty() {
+                                    let user_msg = MessageBuilder::create_user_message(
+                                        &format!(
+                                            "[USER FEEDBACK after mistake limit] {}",
+                                            text
+                                        ),
+                                        &[],
+                                    );
+                                    self.engine.add_api_message(user_msg);
                                 }
                             }
-                            Ok(MistakeLimitAction::Cancel) => {
-                                warn!("User chose to cancel after mistake limit");
-                                self.handle_loop_termination().await?;
-                                break;
-                            }
-                            Err(_) => {
-                                // Channel dropped (timeout/cancellation) — fall back to termination
-                                warn!("Mistake limit channel dropped, terminating");
-                                self.handle_loop_termination().await?;
-                                break;
-                            }
+                        }
+                        Ok(MistakeLimitAction::Cancel) => {
+                            warn!("User chose to cancel after mistake limit");
+                            self.handle_loop_termination().await?;
+                            break;
+                        }
+                        Err(_) => {
+                            // Channel dropped (timeout/cancellation) — fall back to termination
+                            warn!("Mistake limit channel dropped, terminating");
+                            self.handle_loop_termination().await?;
+                            break;
                         }
                     }
                 } else {
@@ -1450,7 +1439,7 @@ impl AgentLoop {
             // TS L2586: Task.lastGlobalApiRequestTime = performance.now()
             // Set the timestamp right after rate limit wait to reserve this slot
             // before building environment details (which can take time).
-            self.last_global_api_request_time = Some(Instant::now());
+            Self::update_global_api_request_time();
 
             // ---------------------------------------------------------------
             // Step 4: say("api_req_started")
@@ -2307,7 +2296,7 @@ impl AgentLoop {
                 }
 
                 // TS L3608-3611: Push noToolsUsed message as user content
-                let no_tools_msg = "[ERROR] You did not use any tools. Please use tools to accomplish the task, or use attempt_completion if you're done.";
+                let no_tools_msg = roo_prompt::responses::no_tools_used();
 
                 if self.engine.should_continue() {
                     // Push re-prompt onto stack (TS: recursivelyMakeClineRequests with new content)
@@ -2328,18 +2317,7 @@ impl AgentLoop {
                     continue;
                 }
 
-                // Mistake limit from no-tool-use — try grace
-                if self.engine.loop_control_mut().try_use_mistake_grace() {
-                    warn!("Mistake limit from no-tool-use, using one-time grace");
-                    stack.push(StackItem {
-                        user_content: Some(no_tools_msg.to_string()),
-                        include_file_details: false,
-                        retry_attempt: 0,
-                        user_message_was_removed: false,
-                    });
-                    continue;
-                }
-
+                // Mistake limit from no-tool-use — terminate (matching TS behavior which always asks user)
                 self.handle_loop_termination().await?;
                 break;
             }
@@ -2428,15 +2406,110 @@ impl AgentLoop {
                         );
                         subtask_config.mode = subtask_mode.to_string();
                         subtask_config.task_text = Some(subtask_text.to_string());
+                        subtask_config = subtask_config.with_parent_task_id(&self.engine.config().task_id);
 
                         match crate::engine::TaskEngine::new(subtask_config) {
-                            Ok(_subtask_engine) => {
+                            Ok(subtask_engine) => {
                                 info!(
                                     subtask_id = %subtask_id,
                                     mode = subtask_mode,
-                                    "Created subtask engine for delegation"
+                                    "Created subtask engine, starting execution"
                                 );
+
+                                // Mark parent as delegated
                                 self.engine.delegate().ok();
+
+                                // Build subtask components — share the provider via Arc clone
+                                let subtask_mb = MessageBuilder::new("");
+                                let mut subtask_dispatch = ToolDispatcher::new();
+                                subtask_dispatch.set_repetition_detector(
+                                    ToolRepetitionDetector::with_default_limit()
+                                );
+
+                                // Wrap Arc<dyn Provider> in a newtype that implements Provider
+                                // so we can pass it as Box<dyn Provider> to the subtask.
+                                struct SharedProvider(Arc<dyn Provider>);
+                                #[async_trait::async_trait]
+                                impl Provider for SharedProvider {
+                                    async fn create_message(
+                                        &self, system_prompt: &str,
+                                        messages: Vec<roo_types::api::ApiMessage>,
+                                        tools: Option<Vec<serde_json::Value>>,
+                                        metadata: CreateMessageMetadata,
+                                    ) -> std::result::Result<roo_provider::handler::ApiStream, ProviderError> {
+                                        self.0.create_message(system_prompt, messages, tools, metadata).await
+                                    }
+                                    fn get_model(&self) -> (String, roo_types::model::ModelInfo) {
+                                        self.0.get_model()
+                                    }
+                                    async fn count_tokens(&self, content: &[roo_types::api::ContentBlock]) -> std::result::Result<u64, ProviderError> {
+                                        self.0.count_tokens(content).await
+                                    }
+                                    async fn complete_prompt(&self, prompt: &str) -> std::result::Result<String, ProviderError> {
+                                        self.0.complete_prompt(prompt).await
+                                    }
+                                    fn provider_name(&self) -> roo_types::api::ProviderName {
+                                        self.0.provider_name()
+                                    }
+                                }
+
+                                let mut subtask_loop = AgentLoop::new(
+                                    subtask_engine,
+                                    Box::new(SharedProvider(self.provider.clone())),
+                                    subtask_mb,
+                                    subtask_dispatch,
+                                )
+                                .with_config(self.config.clone());
+
+                                // Seed the subtask with the initial user message
+                                subtask_loop.engine.add_api_message(roo_types::api::ApiMessage {
+                                    role: roo_types::api::MessageRole::User,
+                                    content: vec![roo_types::api::ContentBlock::Text {
+                                        text: subtask_text.to_string(),
+                                    }],
+                                    reasoning: None,
+                                    ts: None,
+                                    truncation_parent: None,
+                                    is_truncation_marker: None,
+                                    truncation_id: None,
+                                    condense_parent: None,
+                                    is_summary: None,
+                                    condense_id: None,
+                                    reasoning_details: None,
+                                });
+
+                                // Run the subtask to completion (parent pauses while child runs)
+                                // Box::pin needed because this is a recursive async call
+                                let subtask_result = match Box::pin(subtask_loop.run_loop()).await {
+                                    Ok(result) => {
+                                        info!(
+                                            subtask_id = %subtask_id,
+                                            iterations = result.iterations,
+                                            "Subtask completed"
+                                        );
+                                        result
+                                    }
+                                    Err(e) => {
+                                        warn!(error = %e, "Subtask failed");
+                                        TaskResult::new(&subtask_id, TaskState::Aborted)
+                                    }
+                                };
+
+                                // Push the subtask result back to the parent as a tool result
+                                let delegation_msg = match &subtask_result.final_message {
+                                    Some(msg) => format!("Delegated task completed: {}", msg),
+                                    None => "Delegated task completed (no message)".to_string(),
+                                };
+                                self.user_message_content.push(
+                                    roo_types::api::ContentBlock::Text {
+                                        text: format!("[Subtask {} result]: {}", subtask_id, delegation_msg),
+                                    }
+                                );
+                                self.engine.emitter().emit_task_delegation_completed(
+                                    &self.engine.config().task_id,
+                                    &subtask_id,
+                                    &delegation_msg,
+                                );
                             }
                             Err(e) => {
                                 warn!(error = %e, "Failed to create subtask engine");
@@ -2839,7 +2912,7 @@ impl AgentLoop {
         // TS L4390-4395: Respect provider rate limit window
         // Uses lastGlobalApiRequestTime to calculate remaining time
         let mut rate_limit_delay_secs: u64 = 0;
-        if let Some(last_request_time) = self.last_global_api_request_time {
+        if let Some(last_request_time) = Self::get_global_api_request_time() {
             let rate_limit_secs = self.config.rate_limit_rpm; // Reuse as rateLimitSeconds
             if rate_limit_secs > 0 {
                 let elapsed = last_request_time.elapsed();
@@ -2904,8 +2977,10 @@ impl AgentLoop {
             // TS L4436: await this.say("api_req_retry_delayed",
             //     `${headerText}<retry_timer>${i}</retry_timer>`, undefined, true)
             self.engine.emitter().emit(
-                &crate::events::TaskEvent::ApiRequestStarted {
+                &crate::events::TaskEvent::ApiRequestRetryDelayed {
                     task_id: self.engine.config().task_id.clone(),
+                    delay_seconds: i,
+                    retry_attempt,
                 },
             );
 
@@ -2939,18 +3014,20 @@ impl AgentLoop {
     /// lines 3959-3985.
     ///
     /// Uses `rate_limit_rpm` (reused as `rateLimitSeconds`) from config and
-    /// `last_global_api_request_time` to calculate the remaining delay.
+    /// `LAST_GLOBAL_API_REQUEST_TIME` to calculate the remaining delay.
     /// Shows countdown UX only on the first attempt (retryAttempt === 0).
     async fn maybe_wait_for_rate_limit(&mut self, retry_attempt: u32) {
         // TS: const rateLimitSeconds = state?.apiConfiguration?.rateLimitSeconds ?? 0
         let rate_limit_seconds = self.config.rate_limit_rpm as u64; // Reuse as rateLimitSeconds
 
         // TS: if (rateLimitSeconds <= 0 || !Task.lastGlobalApiRequestTime) { return }
-        if rate_limit_seconds == 0 || self.last_global_api_request_time.is_none() {
+        let last_request_time = match Self::get_global_api_request_time() {
+            Some(t) => t,
+            None => return,
+        };
+        if rate_limit_seconds == 0 {
             return;
         }
-
-        let last_request_time = self.last_global_api_request_time.unwrap();
         let now = Instant::now();
         let elapsed = now.duration_since(last_request_time);
         let rate_limit_duration = std::time::Duration::from_secs(rate_limit_seconds);
@@ -5073,7 +5150,7 @@ mod tests {
         assert!(config.enable_checkpoints);
     }
 
-    // --- Phase Q1: noToolsUsed re-prompt and mistake grace tests ---
+    // --- Phase Q1: noToolsUsed re-prompt and mistake limit tests ---
 
     struct NoToolUseThenCompletionProvider {
         text_only_count: usize,
@@ -5139,7 +5216,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     #[ignore = "integration test: requires full async runtime with spawned stream consumer"]
-    async fn test_no_tool_used_hits_mistake_limit_with_grace() {
+    async fn test_no_tool_used_hits_mistake_limit() {
         let config = TaskConfig::new("test-task", "/tmp/work")
             .with_mode("code")
             .with_max_iterations(100)
@@ -5175,7 +5252,6 @@ mod tests {
         let result = agent.run_loop().await.unwrap();
 
         assert_eq!(result.status, TaskState::Aborted);
-        assert!(agent.engine().loop_control().mistake_grace_used);
     }
 
     #[tokio::test(flavor = "multi_thread")]
