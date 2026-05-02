@@ -11,6 +11,7 @@ import { useEffect, useMemo, useState } from 'react';
 import type { ConversationEntry, SessionSubtask, SessionSummary, ToolCallInfo } from '../../lib/types';
 import { cn, normalizePathKey, truncateMiddle } from '../../lib/utils';
 import { useAppStore } from '../../stores/useAppStore';
+import { useAgentStore } from '../../stores/useAgentStore';
 
 type SessionTaskStatus = 'pending' | 'running' | 'completed' | 'failed' | 'stopped';
 
@@ -286,7 +287,7 @@ export function Sidebar() {
   const archiveSession = useAppStore((state) => state.archiveSession);
   const pickFolderAndAddProject = useAppStore((state) => state.pickFolderAndAddProject);
   const conversation = useAppStore((state) => state.conversation);
-  const sessionTasks = useAppStore((state) => state.sessionTasks);
+  const sessionTasks = useAgentStore((state) => state.sessionTasks);
   const canCreateSession = !!activeProjectPath;
 
   const [expandedProjects, setExpandedProjects] = useState<Record<string, boolean>>({});

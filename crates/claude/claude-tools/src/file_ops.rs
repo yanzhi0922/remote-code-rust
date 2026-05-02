@@ -746,7 +746,6 @@ pub(crate) fn grep_files(input: &Value, context: &ToolExecutionContext) -> Resul
                             }
                             content_matches.push(String::new());
                         }
-                        total_content_matches += 1;
                     }
                 }
             }

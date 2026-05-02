@@ -2,7 +2,7 @@
 // Push local commit to GitHub via Git Data API
 // Usage: node scripts/gh-push.js <local-commit-sha> <parent-remote-sha>
 
-const { execSync } = require("child_process");
+const { execFileSync, execSync } = require("child_process");
 const fs = require("fs");
 const path = require("path");
 const os = require("os");
@@ -22,8 +22,9 @@ function ghPost(endpoint, body) {
   const tmpFile = path.join(os.tmpdir(), `gh-api-${Date.now()}.json`);
   try {
     fs.writeFileSync(tmpFile, JSON.stringify(body));
-    const result = execSync(
-      `gh api repos/${REPO}/git/${endpoint} --method POST --input "${tmpFile}"`,
+    const result = execFileSync(
+      "gh",
+      ["api", `repos/${REPO}/git/${endpoint}`, "--method", "POST", "--input", tmpFile],
       { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] }
     );
     return JSON.parse(result);
@@ -33,8 +34,9 @@ function ghPost(endpoint, body) {
 }
 
 function ghGet(endpoint) {
-  const result = execSync(
-    `gh api repos/${REPO}/git/${endpoint}`,
+  const result = execFileSync(
+    "gh",
+    ["api", `repos/${REPO}/git/${endpoint}`],
     { encoding: "utf-8" }
   );
   return JSON.parse(result);
@@ -44,8 +46,9 @@ function ghPatch(endpoint, body) {
   const tmpFile = path.join(os.tmpdir(), `gh-api-${Date.now()}.json`);
   try {
     fs.writeFileSync(tmpFile, JSON.stringify(body));
-    const result = execSync(
-      `gh api repos/${REPO}/git/${endpoint} --method PATCH --input "${tmpFile}"`,
+    const result = execFileSync(
+      "gh",
+      ["api", `repos/${REPO}/git/${endpoint}`, "--method", "PATCH", "--input", tmpFile],
       { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] }
     );
     return JSON.parse(result);
@@ -56,8 +59,9 @@ function ghPatch(endpoint, body) {
 
 // 1. Get list of changed files between parent and local commit
 console.log("1. Getting changed files...");
-const diffRaw = execSync(
-  `git diff-tree --no-commit-id -r ${localParentSha}..${localSha}`,
+const diffRaw = execFileSync(
+  "git",
+  ["diff-tree", "--no-commit-id", "-r", `${localParentSha}..${localSha}`],
   { encoding: "utf-8" }
 );
 
@@ -96,7 +100,7 @@ for (const change of changes) {
   // Read file content from local git (use newSha to get content)
   let content;
   try {
-    content = execSync(`git show ${change.newSha}`, { encoding: "utf-8", maxBuffer: 50 * 1024 * 1024 });
+    content = execFileSync("git", ["show", change.newSha], { encoding: "utf-8", maxBuffer: 50 * 1024 * 1024 });
   } catch (e) {
     console.log(`   SKIP ${change.filePath} (could not read content)`);
     continue;
@@ -129,7 +133,7 @@ console.log(`   New tree SHA: ${newTree.sha}`);
 
 // 5. Create commit
 console.log("5. Creating commit...");
-const commitMessage = execSync(`git log --format=%B -n 1 ${localSha}`, {
+const commitMessage = execFileSync("git", ["log", "--format=%B", "-n", "1", localSha], {
   encoding: "utf-8",
 }).trim();
 

@@ -2,6 +2,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Sidebar } from './Sidebar';
 import { resetAppStore } from '../../test/appStoreTestUtils';
+import { useAgentStore } from '../../stores/useAgentStore';
 
 describe('Sidebar', () => {
   beforeEach(() => {
@@ -43,6 +44,13 @@ describe('Sidebar', () => {
         },
       ],
       activeSessionId: 'session-1',
+      createSession,
+      selectSession,
+      archiveSession,
+      setActiveProject,
+    });
+
+    useAgentStore.setState({
       sessionTasks: {
         'session-1': [
           {
@@ -58,10 +66,6 @@ describe('Sidebar', () => {
           },
         ],
       },
-      createSession,
-      selectSession,
-      archiveSession,
-      setActiveProject,
     });
 
     render(<Sidebar />);

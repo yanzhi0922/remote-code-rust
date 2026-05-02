@@ -311,30 +311,43 @@ pub(crate) fn runner_uses_pull_commands(runner: &RunnerSnapshot) -> bool {
         .is_none_or(|value| value.trim().is_empty())
 }
 
+fn authorize_runner_request(
+    builder: reqwest::RequestBuilder,
+    runner: &RunnerSnapshot,
+) -> reqwest::RequestBuilder {
+    if let Some(token) = runner.registration.auth_token.as_deref() {
+        builder.bearer_auth(token)
+    } else {
+        builder
+    }
+}
+
 pub(crate) async fn dispatch_session_to_runner(
     client: &Client,
     runner: &RunnerSnapshot,
     request: &RunnerSessionCreateRequest,
 ) -> Result<RunnerSessionRecord, ApiError> {
     let base_url = runner_public_base_url(runner)?;
-    let response = client
-        .post(format!("{}/v1/sessions", base_url.trim_end_matches('/')))
-        .json(request)
-        .send()
-        .await
-        .map_err(|error| {
-            ApiError::bad_gateway(format!(
-                "failed to dispatch session to runner `{}`: {error}",
-                runner.registration.runner_id
-            ))
-        })?
-        .error_for_status()
-        .map_err(|error| {
-            ApiError::bad_gateway(format!(
-                "runner `{}` rejected session dispatch: {error}",
-                runner.registration.runner_id
-            ))
-        })?;
+    let response = authorize_runner_request(
+        client.post(format!("{}/v1/sessions", base_url.trim_end_matches('/'))),
+        runner,
+    )
+    .json(request)
+    .send()
+    .await
+    .map_err(|error| {
+        ApiError::bad_gateway(format!(
+            "failed to dispatch session to runner `{}`: {error}",
+            runner.registration.runner_id
+        ))
+    })?
+    .error_for_status()
+    .map_err(|error| {
+        ApiError::bad_gateway(format!(
+            "runner `{}` rejected session dispatch: {error}",
+            runner.registration.runner_id
+        ))
+    })?;
     response
         .json::<RunnerSessionRecord>()
         .await
@@ -353,27 +366,29 @@ pub(crate) async fn update_runner_session_state(
     request: &RunnerSessionStateUpdateRequest,
 ) -> Result<RunnerSessionRecord, ApiError> {
     let base_url = runner_public_base_url(runner)?;
-    let response = client
-        .post(format!(
+    let response = authorize_runner_request(
+        client.post(format!(
             "{}/v1/sessions/{session_id}/state",
             base_url.trim_end_matches('/')
+        )),
+        runner,
+    )
+    .json(request)
+    .send()
+    .await
+    .map_err(|error| {
+        ApiError::bad_gateway(format!(
+            "failed to update session `{session_id}` on runner `{}`: {error}",
+            runner.registration.runner_id
         ))
-        .json(request)
-        .send()
-        .await
-        .map_err(|error| {
-            ApiError::bad_gateway(format!(
-                "failed to update session `{session_id}` on runner `{}`: {error}",
-                runner.registration.runner_id
-            ))
-        })?
-        .error_for_status()
-        .map_err(|error| {
-            ApiError::bad_gateway(format!(
-                "runner `{}` rejected state update for session `{session_id}`: {error}",
-                runner.registration.runner_id
-            ))
-        })?;
+    })?
+    .error_for_status()
+    .map_err(|error| {
+        ApiError::bad_gateway(format!(
+            "runner `{}` rejected state update for session `{session_id}`: {error}",
+            runner.registration.runner_id
+        ))
+    })?;
     response
         .json::<RunnerSessionRecord>()
         .await
@@ -392,27 +407,29 @@ pub(crate) async fn relay_approval_to_runner(
     request: &ApprovalCreateRequest,
 ) -> Result<ApprovalRequestRecord, ApiError> {
     let base_url = runner_public_base_url(runner)?;
-    let response = client
-        .post(format!(
+    let response = authorize_runner_request(
+        client.post(format!(
             "{}/v1/sessions/{session_id}/approvals",
             base_url.trim_end_matches('/')
+        )),
+        runner,
+    )
+    .json(request)
+    .send()
+    .await
+    .map_err(|error| {
+        ApiError::bad_gateway(format!(
+            "failed to relay approval for session `{session_id}` to runner `{}`: {error}",
+            runner.registration.runner_id
         ))
-        .json(request)
-        .send()
-        .await
-        .map_err(|error| {
-            ApiError::bad_gateway(format!(
-                "failed to relay approval for session `{session_id}` to runner `{}`: {error}",
-                runner.registration.runner_id
-            ))
-        })?
-        .error_for_status()
-        .map_err(|error| {
-            ApiError::bad_gateway(format!(
-                "runner `{}` rejected approval relay for session `{session_id}`: {error}",
-                runner.registration.runner_id
-            ))
-        })?;
+    })?
+    .error_for_status()
+    .map_err(|error| {
+        ApiError::bad_gateway(format!(
+            "runner `{}` rejected approval relay for session `{session_id}`: {error}",
+            runner.registration.runner_id
+        ))
+    })?;
     response
         .json::<ApprovalRequestRecord>()
         .await
@@ -431,27 +448,29 @@ pub(crate) async fn relay_approval_decision_to_runner(
     request: &ApprovalDecisionRequest,
 ) -> Result<ApprovalRequestRecord, ApiError> {
     let base_url = runner_public_base_url(runner)?;
-    let response = client
-        .post(format!(
+    let response = authorize_runner_request(
+        client.post(format!(
             "{}/v1/approvals/{approval_id}/decision",
             base_url.trim_end_matches('/')
+        )),
+        runner,
+    )
+    .json(request)
+    .send()
+    .await
+    .map_err(|error| {
+        ApiError::bad_gateway(format!(
+            "failed to relay approval decision `{approval_id}` to runner `{}`: {error}",
+            runner.registration.runner_id
         ))
-        .json(request)
-        .send()
-        .await
-        .map_err(|error| {
-            ApiError::bad_gateway(format!(
-                "failed to relay approval decision `{approval_id}` to runner `{}`: {error}",
-                runner.registration.runner_id
-            ))
-        })?
-        .error_for_status()
-        .map_err(|error| {
-            ApiError::bad_gateway(format!(
-                "runner `{}` rejected approval decision `{approval_id}`: {error}",
-                runner.registration.runner_id
-            ))
-        })?;
+    })?
+    .error_for_status()
+    .map_err(|error| {
+        ApiError::bad_gateway(format!(
+            "runner `{}` rejected approval decision `{approval_id}`: {error}",
+            runner.registration.runner_id
+        ))
+    })?;
     response
         .json::<ApprovalRequestRecord>()
         .await
@@ -470,27 +489,29 @@ pub(crate) async fn dispatch_session_command_to_runner(
     request: &RunnerSessionCommandRequest,
 ) -> Result<RunnerSessionCommandResponse, ApiError> {
     let base_url = runner_public_base_url(runner)?;
-    let response = client
-        .post(format!(
+    let response = authorize_runner_request(
+        client.post(format!(
             "{}/v1/sessions/{session_id}/commands",
             base_url.trim_end_matches('/')
+        )),
+        runner,
+    )
+    .json(request)
+    .send()
+    .await
+    .map_err(|error| {
+        ApiError::bad_gateway(format!(
+            "failed to relay session command for `{session_id}` to runner `{}`: {error}",
+            runner.registration.runner_id
         ))
-        .json(request)
-        .send()
-        .await
-        .map_err(|error| {
-            ApiError::bad_gateway(format!(
-                "failed to relay session command for `{session_id}` to runner `{}`: {error}",
-                runner.registration.runner_id
-            ))
-        })?
-        .error_for_status()
-        .map_err(|error| {
-            ApiError::bad_gateway(format!(
-                "runner `{}` rejected session command for `{session_id}`: {error}",
-                runner.registration.runner_id
-            ))
-        })?;
+    })?
+    .error_for_status()
+    .map_err(|error| {
+        ApiError::bad_gateway(format!(
+            "runner `{}` rejected session command for `{session_id}`: {error}",
+            runner.registration.runner_id
+        ))
+    })?;
     response
         .json::<RunnerSessionCommandResponse>()
         .await

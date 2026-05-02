@@ -4,6 +4,7 @@
 
 use std::sync::Arc;
 
+use once_cell::sync::Lazy;
 use serde_json::json;
 use tracing::{debug, info};
 
@@ -12,6 +13,8 @@ use super::pkce;
 use super::types::{
     OAuthConfig, OAuthFlowResult, OAuthProfileResponse, OAuthTokenExchangeResponse, OAuthTokens,
 };
+
+static SHARED_HTTP_CLIENT: Lazy<reqwest::Client> = Lazy::new(reqwest::Client::new);
 
 /// Errors produced by the OAuth client.
 #[derive(Debug, thiserror::Error)]
@@ -177,8 +180,7 @@ pub async fn exchange_code_for_tokens(
         body["expires_in"] = json!(expires_in);
     }
 
-    let client = reqwest::Client::new();
-    let response = client
+    let response = SHARED_HTTP_CLIENT
         .post(&config.token_url)
         .header("Content-Type", "application/json")
         .json(&body)
@@ -226,8 +228,7 @@ pub async fn refresh_oauth_token(
         "scope": scope_str,
     });
 
-    let client = reqwest::Client::new();
-    let response = client
+    let response = SHARED_HTTP_CLIENT
         .post(&config.token_url)
         .header("Content-Type", "application/json")
         .json(&body)
@@ -268,8 +269,7 @@ pub async fn fetch_profile(
     config: &OAuthConfig,
     access_token: &str,
 ) -> Result<OAuthProfileResponse, OAuthClientError> {
-    let client = reqwest::Client::new();
-    let response = client
+    let response = SHARED_HTTP_CLIENT
         .get(&config.profile_url)
         .header("Authorization", format!("Bearer {access_token}"))
         .timeout(std::time::Duration::from_secs(15))
@@ -364,7 +364,7 @@ pub async fn run_oauth_flow(
     .await?;
 
     let expires_at =
-        chrono::Utc::now().timestamp_millis() + (token_response.expires_in as i64) * 1000;
+        chrono::Utc::now().timestamp_millis() + (token_response.expires_in as i64).saturating_mul(1000);
 
     let tokens = OAuthTokens {
         access_token: token_response.access_token.clone(),

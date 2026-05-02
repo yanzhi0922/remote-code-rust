@@ -327,6 +327,9 @@ async fn run_api_key_helper_command(command: &str) -> Result<String, ApiKeyHelpe
 }
 
 fn shell_command(command: &str) -> tokio::process::Command {
+    tracing::warn!(
+        "Executing apiKeyHelper command from config — ensure this is trusted: {command}"
+    );
     #[cfg(windows)]
     {
         let mut process = tokio::process::Command::new("cmd");

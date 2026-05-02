@@ -11,6 +11,9 @@
 use async_trait::async_trait;
 use tracing::debug;
 
+#[cfg(target_os = "linux")]
+use tracing::warn;
+
 use super::{SecureStorage, SecureStorageError};
 
 /// Platform-native keychain implementation.
@@ -139,17 +142,23 @@ async fn save_secret(service: &str, account: &str, secret: &str) -> Result<(), S
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .output()
-        .await
-        .map_err(|e| SecureStorageError::Platform(format!("cmdkey failed to execute: {e}")))?;
+        .await;
 
-    if output.status.success() {
-        debug!("Saved secret to Windows Credential Manager for target={target}");
-        return Ok(());
+    match output {
+        Ok(output) if output.status.success() => {
+            debug!("Saved secret to Windows Credential Manager for target={target}");
+        }
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            tracing::warn!("cmdkey save failed ({stderr}), using file-based storage");
+        }
+        Err(error) => {
+            tracing::warn!("cmdkey save failed to execute ({error}), using file-based storage");
+        }
     }
 
-    // Fall back to file-based storage if cmdkey is unavailable.
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    tracing::warn!("cmdkey save failed ({stderr}), falling back to file-based storage");
+    // `cmdkey` cannot load credentials non-interactively, so persist the
+    // readable fallback even when Credential Manager accepts the write.
     file_based_save(service, account, secret).await
 }
 
@@ -168,15 +177,19 @@ async fn delete_secret(service: &str, account: &str) -> Result<(), SecureStorage
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .output()
-        .await
-        .map_err(|e| SecureStorageError::Platform(format!("cmdkey failed to execute: {e}")))?;
+        .await;
 
-    if output.status.success() {
-        debug!("Deleted secret from Windows Credential Manager for target={target}");
-        return Ok(());
+    match output {
+        Ok(output) if output.status.success() => {
+            debug!("Deleted secret from Windows Credential Manager for target={target}");
+        }
+        Ok(_) => {}
+        Err(error) => {
+            tracing::warn!("cmdkey delete failed to execute ({error}), cleaning file fallback");
+        }
     }
 
-    // Not found is OK for delete — fall through to file-based cleanup.
+    // Not found is OK for delete. Always clean up the file fallback.
     file_based_delete(service, account).await
 }
 
@@ -286,10 +299,12 @@ async fn file_based_delete(service: &str, account: &str) -> Result<(), SecureSto
 }
 
 fn secrets_dir() -> Result<std::path::PathBuf, SecureStorageError> {
-    let base = dirs::config_dir().ok_or_else(|| {
-        SecureStorageError::NotAvailable("cannot determine config directory".to_owned())
-    })?;
-    Ok(base.join("remote-code").join("secrets"))
+    let base = directories::ProjectDirs::from("", "", "remote-code")
+        .map(|pd| pd.config_dir().to_path_buf())
+        .ok_or_else(|| {
+            SecureStorageError::NotAvailable("cannot determine config directory".to_owned())
+        })?;
+    Ok(base.join("secrets"))
 }
 
 fn safe_filename(service: &str, account: &str) -> String {
@@ -297,24 +312,4 @@ fn safe_filename(service: &str, account: &str) -> String {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     format!("{service}:{account}").hash(&mut hasher);
     format!("{:016x}.secret", hasher.finish())
-}
-
-/// Helper to get the config directory (uses `dirs` crate pattern).
-mod dirs {
-    use std::path::PathBuf;
-
-    pub fn config_dir() -> Option<PathBuf> {
-        if cfg!(target_os = "windows") {
-            std::env::var("APPDATA").ok().map(PathBuf::from)
-        } else {
-            std::env::var("XDG_CONFIG_HOME")
-                .ok()
-                .map(PathBuf::from)
-                .or_else(|| {
-                    std::env::var("HOME")
-                        .ok()
-                        .map(|h| PathBuf::from(h).join(".config"))
-                })
-        }
-    }
 }

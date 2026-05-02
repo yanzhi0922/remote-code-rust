@@ -51,7 +51,14 @@ pub static DANGEROUS_PATTERNS: &[DangerousPattern] = &[
         name: "sudo",
         level: DangerLevel::High,
         description: "Command runs with superuser privileges",
-        check: |cmd| cmd.trim().starts_with("sudo "),
+        check: |cmd| {
+            let c = cmd.trim();
+            c.starts_with("sudo ")
+                || c.starts_with("sudo\t")
+                || c.contains("; sudo ")
+                || c.contains("&& sudo ")
+                || c.contains("| sudo ")
+        },
     },
     DangerousPattern {
         name: "chmod_777",
@@ -117,6 +124,37 @@ pub static DANGEROUS_PATTERNS: &[DangerousPattern] = &[
             cmd.contains("docker rm")
                 || cmd.contains("docker rmi")
                 || cmd.contains("docker system prune")
+        },
+    },
+    DangerousPattern {
+        name: "wget_pipe_sh",
+        level: DangerLevel::Critical,
+        description: "Downloads and executes remote script via wget",
+        check: |cmd| {
+            cmd.contains("wget")
+                && cmd.contains("|")
+                && (cmd.contains("sh") || cmd.contains("bash"))
+        },
+    },
+    DangerousPattern {
+        name: "base64_decode_sh",
+        level: DangerLevel::Critical,
+        description: "Decodes base64 and pipes to shell",
+        check: |cmd| {
+            cmd.contains("base64")
+                && cmd.contains("-d")
+                && cmd.contains("|")
+                && (cmd.contains("sh") || cmd.contains("bash"))
+        },
+    },
+    DangerousPattern {
+        name: "reverse_shell",
+        level: DangerLevel::Critical,
+        description: "Reverse shell via netcat or mkfifo",
+        check: |cmd| {
+            (cmd.contains("nc ") || cmd.contains("ncat "))
+                && (cmd.contains("-e") || cmd.contains("-c"))
+                || (cmd.contains("mkfifo") && cmd.contains("|"))
         },
     },
 ];

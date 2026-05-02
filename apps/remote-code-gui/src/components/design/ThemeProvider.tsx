@@ -27,6 +27,7 @@ const STORAGE_KEY = 'rc-theme-mode';
 
 function getSystemTheme(): 'light' | 'dark' {
   if (typeof window === 'undefined') return 'light';
+  if (typeof window.matchMedia !== 'function') return 'light';
   return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
 }
 
@@ -70,6 +71,7 @@ export function ThemeProvider({ defaultTheme = 'system', children }: ThemeProvid
   // Listen for system theme changes when mode is 'system'
   useEffect(() => {
     if (mode !== 'system') return;
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return;
     const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
     const handler = () => {
       const resolved = getSystemTheme();

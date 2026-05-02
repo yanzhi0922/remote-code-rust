@@ -25,7 +25,7 @@ tokio = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
 directories = { workspace = true }
-keyring = "2"
+keyring = { workspace = true }
 claude-core = { path = "../../../crates/claude/claude-core" }
 claude-config = { path = "../../../crates/claude/claude-config" }
 claude-tools = { path = "../../../crates/claude/claude-tools" }

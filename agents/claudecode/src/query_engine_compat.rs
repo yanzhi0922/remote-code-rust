@@ -797,11 +797,13 @@ fn user_agents_dir() -> Option<std::path::PathBuf> {
     BaseDirs::new().map(|base| base.home_dir().join(".claude").join("agents"))
 }
 
-fn resolved_runtime_entrypoint(_config: &RuntimeConfig, is_non_interactive: bool) -> String {
-    std::env::var("CLAUDE_CODE_ENTRYPOINT")
-        .ok()
-        .map(|value| value.trim().to_owned())
-        .filter(|value| !value.is_empty())
+fn resolved_runtime_entrypoint(
+    _config: &RuntimeConfig,
+    is_non_interactive: bool,
+    env_entrypoint: Option<String>,
+) -> String {
+    env_entrypoint
+        .filter(|value| !value.trim().is_empty())
         .or_else(|| {
             let args = std::env::args().skip(1).collect::<Vec<_>>();
             if matches!(args.as_slice(), [cmd, subcmd, ..] if cmd == "mcp" && subcmd == "serve") {
@@ -816,11 +818,21 @@ fn resolved_runtime_entrypoint(_config: &RuntimeConfig, is_non_interactive: bool
 }
 
 fn build_runtime_identity_context(config: &RuntimeConfig) -> RuntimeIdentityContext {
+    build_runtime_identity_context_with_entrypoint(
+        config,
+        std::env::var("CLAUDE_CODE_ENTRYPOINT").ok(),
+    )
+}
+
+fn build_runtime_identity_context_with_entrypoint(
+    config: &RuntimeConfig,
+    env_entrypoint: Option<String>,
+) -> RuntimeIdentityContext {
     let resolved_settings = load_runtime_settings(&config.settings_files).unwrap_or_default();
     let is_non_interactive = config.print_mode
         || !matches!(config.output_format, claude_core::OutputFormat::Text)
-        || entrypoint_is_non_interactive(std::env::var("CLAUDE_CODE_ENTRYPOINT").ok().as_deref());
-    let entrypoint = Some(resolved_runtime_entrypoint(config, is_non_interactive));
+        || entrypoint_is_non_interactive(env_entrypoint.as_deref());
+    let entrypoint = Some(resolved_runtime_entrypoint(config, is_non_interactive, env_entrypoint));
     let user_type = runtime_user_type_from_env(std::env::var("USER_TYPE").ok().as_deref());
     let explicit_agent_team_opt_in = runtime_env_truthy("CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS")
         || std::env::args().any(|arg| arg == "--agent-teams");
@@ -2752,6 +2764,7 @@ mod tests {
         announced_deferred_tool_names, announced_mcp_instruction_names,
         augment_post_compact_conversation_for_runtime, build_agent_listing_delta_entry,
         build_mcp_instructions_delta_entry, build_runtime_identity_context,
+        build_runtime_identity_context_with_entrypoint,
         refresh_runtime_system_prompt, run_no_persist_forked_query,
         run_prompt_with_query_engine_compat, run_prompt_with_query_engine_compat_overrides,
         runtime_delta_entry,
@@ -3057,7 +3070,7 @@ mod tests {
     #[test]
     fn build_runtime_identity_context_defaults_to_cli_and_enables_fork_for_interactive_runs() {
         let (_tempdir, config, _store) = mock_config_and_store();
-        let identity = build_runtime_identity_context(&config);
+        let identity = build_runtime_identity_context_with_entrypoint(&config, None);
 
         assert_eq!(identity.entrypoint.as_deref(), Some("cli"));
         assert!(!identity.is_non_interactive);
@@ -3072,7 +3085,7 @@ mod tests {
         let (_tempdir, mut config, _store) = mock_config_and_store();
         config.print_mode = true;
 
-        let identity = build_runtime_identity_context(&config);
+        let identity = build_runtime_identity_context_with_entrypoint(&config, None);
 
         assert_eq!(identity.entrypoint.as_deref(), Some("sdk-cli"));
         assert!(identity.is_non_interactive);

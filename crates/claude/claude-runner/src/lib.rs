@@ -15,7 +15,8 @@ use anyhow::{Context, Result, anyhow};
 use axum::{
     Json, Router,
     extract::{Path as AxumPath, State},
-    http::StatusCode,
+    http::{StatusCode, header},
+    middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::get,
 };
@@ -50,6 +51,8 @@ pub struct RunnerConfigOverrides {
     pub workspaces: Option<Vec<RunnerWorkspace>>,
     /// Label overrides.
     pub labels: Option<BTreeMap<String, String>>,
+    /// Bearer token for protecting the runner API.
+    pub auth_token: Option<String>,
 }
 
 /// Full runner configuration.
@@ -74,6 +77,9 @@ pub struct RunnerConfig {
     /// Arbitrary key-value labels for scheduling.
     #[serde(default)]
     pub labels: BTreeMap<String, String>,
+    /// Bearer token for protecting the runner API.
+    #[serde(default, skip_serializing)]
+    pub auth_token: Option<String>,
     /// Runner capability flags.
     pub capabilities: RunnerCapabilities,
 }
@@ -156,8 +162,24 @@ pub struct RunnerRegistrationRequest {
     pub workspaces: Vec<RunnerWorkspace>,
     #[serde(default)]
     pub labels: BTreeMap<String, String>,
+    #[serde(default, skip_serializing)]
+    pub auth_token: Option<String>,
     pub capabilities: RunnerCapabilities,
     pub platform: RunnerPlatform,
+}
+
+#[derive(Debug, Serialize)]
+struct RunnerRegistrationWire<'a> {
+    pub runner_id: &'a str,
+    pub control_plane_url: &'a Option<String>,
+    pub public_base_url: &'a Option<String>,
+    pub workspaces: &'a [RunnerWorkspace],
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub labels: &'a BTreeMap<String, String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auth_token: &'a Option<String>,
+    pub capabilities: &'a RunnerCapabilities,
+    pub platform: &'a RunnerPlatform,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -199,6 +221,7 @@ pub struct RunnerStatus {
     pub workspaces: Vec<RunnerWorkspace>,
     pub heartbeat_interval_secs: u64,
     pub max_parallel_sessions: u16,
+    pub auth_required: bool,
     pub issues: Vec<String>,
     pub phase: &'static str,
 }
@@ -219,6 +242,7 @@ pub struct RunnerHealth {
     pub active_sessions: usize,
     pub queued_sessions: usize,
     pub workspace_count: usize,
+    pub auth_required: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -589,8 +613,7 @@ impl RunnerApi {
     }
 
     pub fn router(self) -> Router {
-        Router::new()
-            .route("/healthz", get(get_health))
+        let protected = Router::new()
             .route("/v1/meta", get(get_meta))
             .route("/v1/approvals", get(list_approvals))
             .route("/v1/approvals/{approval_id}", get(get_approval))
@@ -612,6 +635,14 @@ impl RunnerApi {
                 "/v1/sessions/{session_id}/approvals",
                 get(list_session_approvals).post(create_approval),
             )
+            .route_layer(middleware::from_fn_with_state(
+                self.clone(),
+                require_runner_auth,
+            ));
+
+        Router::new()
+            .route("/healthz", get(get_health))
+            .merge(protected)
             .with_state(self)
     }
 }
@@ -646,6 +677,7 @@ impl RunnerConfig {
             public_base_url: self.public_base_url.clone(),
             workspaces: self.workspaces.clone(),
             labels: self.labels.clone(),
+            auth_token: self.auth_token.clone(),
             capabilities: self.capabilities.clone(),
             platform: RunnerPlatform::detect(),
         }
@@ -686,6 +718,9 @@ pub fn load_runner_config(
     let public_base_url = overrides
         .public_base_url
         .or_else(|| read_env("REMOTE_CODE_RUNNER_PUBLIC_BASE_URL"));
+    let auth_token = overrides
+        .auth_token
+        .or_else(|| read_env("REMOTE_CODE_RUNNER_AUTH_TOKEN"));
     let heartbeat_interval_secs = overrides
         .heartbeat_interval_secs
         .or_else(|| parse_env_number("REMOTE_CODE_RUNNER_HEARTBEAT_SECS"))
@@ -726,6 +761,7 @@ pub fn load_runner_config(
         heartbeat_interval_secs,
         max_parallel_sessions,
         labels,
+        auth_token,
         capabilities: RunnerCapabilities {
             interactive_approvals: true,
             background_sessions: true,
@@ -736,7 +772,7 @@ pub fn load_runner_config(
 }
 
 pub fn describe_status(config: &RunnerConfig) -> Result<RunnerStatus> {
-    let mut issues = Vec::new();
+    let mut issues = validate_runner_config(config);
     if config.control_plane_url.is_none() {
         issues.push("REMOTE_CODE_CONTROL_PLANE_URL is not configured.".to_owned());
     }
@@ -755,9 +791,49 @@ pub fn describe_status(config: &RunnerConfig) -> Result<RunnerStatus> {
         workspaces: config.workspaces.clone(),
         heartbeat_interval_secs: config.heartbeat_interval_secs,
         max_parallel_sessions: config.max_parallel_sessions,
+        auth_required: config.auth_token.is_some(),
         issues,
         phase: PHASE,
     })
+}
+
+pub fn validate_runner_config(config: &RunnerConfig) -> Vec<String> {
+    let mut issues = Vec::new();
+    let auth_configured = config.auth_token.is_some();
+    let public_url = config.public_base_url.as_deref();
+    let remote_public_url = public_url.filter(|url| !is_local_runner_url(url));
+
+    if !config.bind.ip().is_loopback() && !auth_configured {
+        issues.push("non-loopback runner binds require REMOTE_CODE_RUNNER_AUTH_TOKEN".to_owned());
+    }
+
+    if remote_public_url.is_some() && !auth_configured {
+        issues.push(
+            "remote runner public_base_url requires REMOTE_CODE_RUNNER_AUTH_TOKEN".to_owned(),
+        );
+    }
+
+    if let Some(url) = remote_public_url
+        && !url.starts_with("https://")
+    {
+        issues.push("remote runner public_base_url must use https".to_owned());
+    }
+
+    issues
+}
+
+fn is_local_runner_url(raw: &str) -> bool {
+    let Ok(parsed) = reqwest::Url::parse(raw) else {
+        return false;
+    };
+
+    match parsed.host_str() {
+        Some("localhost") => true,
+        Some(host) => host
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback()),
+        None => false,
+    }
 }
 
 pub fn parse_runner_workspaces(raw: &str) -> Result<Vec<RunnerWorkspace>> {
@@ -829,11 +905,21 @@ pub async fn register_with_control_plane(
     registration: &RunnerRegistrationRequest,
 ) -> Result<RunnerRegistrationLease> {
     let client = Client::new();
+    let payload = RunnerRegistrationWire {
+        runner_id: &registration.runner_id,
+        control_plane_url: &registration.control_plane_url,
+        public_base_url: &registration.public_base_url,
+        workspaces: &registration.workspaces,
+        labels: &registration.labels,
+        auth_token: &registration.auth_token,
+        capabilities: &registration.capabilities,
+        platform: &registration.platform,
+    };
     let response = authorize_control_plane_request(client.post(control_plane_endpoint(
         control_plane_url,
         "/v1/runners/register",
     )?))
-    .json(registration)
+    .json(&payload)
     .send()
     .await
     .context("runner registration request failed")?
@@ -952,7 +1038,39 @@ async fn get_health(State(api): State<RunnerApi>) -> Json<RunnerHealth> {
         active_sessions,
         queued_sessions,
         workspace_count: api.meta.snapshot.registration.workspaces.len(),
+        auth_required: api.meta.snapshot.registration.auth_token.is_some(),
     })
+}
+
+async fn require_runner_auth(
+    State(api): State<RunnerApi>,
+    request: axum::extract::Request,
+    next: Next,
+) -> Response {
+    let Some(expected) = api.meta.snapshot.registration.auth_token.as_deref() else {
+        return next.run(request).await;
+    };
+    let authorized = request
+        .headers()
+        .get(header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .map(str::trim)
+        .is_some_and(|provided| constant_time_token_eq(provided, expected));
+
+    if authorized {
+        next.run(request).await
+    } else {
+        ApiError::unauthorized("missing or invalid runner bearer token".to_owned()).into_response()
+    }
+}
+
+fn constant_time_token_eq(provided: &str, expected: &str) -> bool {
+    use sha2::{Digest, Sha256};
+
+    let provided_digest: [u8; 32] = Sha256::digest(provided.as_bytes()).into();
+    let expected_digest: [u8; 32] = Sha256::digest(expected.as_bytes()).into();
+    constant_time_eq::constant_time_eq_32(&provided_digest, &expected_digest)
 }
 
 async fn get_meta(State(api): State<RunnerApi>) -> Json<RunnerMeta> {
@@ -1225,6 +1343,14 @@ impl ApiError {
             message,
         }
     }
+
+    fn unauthorized(message: String) -> Self {
+        Self {
+            status: StatusCode::UNAUTHORIZED,
+            code: "unauthorized",
+            message,
+        }
+    }
 }
 
 impl IntoResponse for ApiError {
@@ -1310,6 +1436,7 @@ mod tests {
                     String::from("region"),
                     String::from("lab"),
                 )])),
+                auth_token: Some("runner-secret".to_owned()),
             },
         )
         .expect("config should load");
@@ -1318,6 +1445,35 @@ mod tests {
         assert_eq!(config.bind.to_string(), "127.0.0.1:9999");
         assert_eq!(config.max_parallel_sessions, 8);
         assert_eq!(config.labels.get("region").map(String::as_str), Some("lab"));
+        assert_eq!(config.auth_token.as_deref(), Some("runner-secret"));
+    }
+
+    #[test]
+    fn remote_runner_config_requires_auth_and_https() {
+        let profile_dir = tempdir().expect("tempdir should exist");
+        let config = load_runner_config(
+            Some(profile_dir.path().join("profile")),
+            RunnerConfigOverrides {
+                bind: Some(SocketAddr::from_str("0.0.0.0:9999").expect("bind should parse")),
+                public_base_url: Some("http://remote.example.com".to_owned()),
+                workspaces: Some(vec![RunnerWorkspace {
+                    workspace_id: "default".to_owned(),
+                    root_dir: PathBuf::from("C:/workspace"),
+                    writable: true,
+                }]),
+                ..RunnerConfigOverrides::default()
+            },
+        )
+        .expect("config should load");
+
+        let issues = validate_runner_config(&config);
+        assert!(issues.iter().any(|issue| issue.contains("non-loopback")));
+        assert!(
+            issues
+                .iter()
+                .any(|issue| issue.contains("public_base_url requires"))
+        );
+        assert!(issues.iter().any(|issue| issue.contains("must use https")));
     }
 
     #[test]
@@ -1378,6 +1534,59 @@ mod tests {
             loaded.metadata.get("kind").map(String::as_str),
             Some("smoke")
         );
+    }
+
+    #[tokio::test]
+    async fn runner_router_requires_bearer_token_when_configured() {
+        let profile_dir = tempdir().expect("tempdir should exist");
+        let config = load_runner_config(
+            Some(profile_dir.path().join("profile")),
+            RunnerConfigOverrides {
+                runner_id: Some("runner-auth".to_owned()),
+                auth_token: Some("runner-secret".to_owned()),
+                workspaces: Some(vec![RunnerWorkspace {
+                    workspace_id: "default".to_owned(),
+                    root_dir: profile_dir.path().join("workspace"),
+                    writable: true,
+                }]),
+                ..RunnerConfigOverrides::default()
+            },
+        )
+        .expect("config should load");
+        let app = RunnerApi::new(config, "remote-code-runner", "0.1.0").router();
+
+        let health_response = app
+            .clone()
+            .oneshot(
+                Request::get("/healthz")
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("health request should complete");
+        assert_eq!(health_response.status(), StatusCode::OK);
+
+        let unauthorized = app
+            .clone()
+            .oneshot(
+                Request::get("/v1/meta")
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should complete");
+        assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+
+        let authorized = app
+            .oneshot(
+                Request::get("/v1/meta")
+                    .header("authorization", "Bearer runner-secret")
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should complete");
+        assert_eq!(authorized.status(), StatusCode::OK);
     }
 
     #[tokio::test]
@@ -1704,6 +1913,7 @@ mod tests {
                     public_base_url: Some("http://127.0.0.1:9".to_owned()),
                     workspaces: Vec::new(),
                     labels: BTreeMap::new(),
+                    auth_token: None,
                     capabilities: RunnerCapabilities {
                         interactive_approvals: true,
                         background_sessions: true,

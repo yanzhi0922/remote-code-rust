@@ -1,0 +1,28 @@
+[package]
+name = "claude-specialized-agents"
+description = "Specialized agent registry with built-in agents and Markdown-based custom agent definitions"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow.workspace = true
+dirs = "6"
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+walkdir.workspace = true
+claude-core = { path = "../claude-core" }
+
+[dev-dependencies]
+tempfile.workspace = true

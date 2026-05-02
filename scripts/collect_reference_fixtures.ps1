@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [string]$SourceRoot = "C:\Users\Yanzh\Desktop\remote-code",
+    [string]$SourceRoot = (Join-Path $PSScriptRoot "..\remote-code"),
     [string]$OutputRoot = "fixtures/reference/legacy-runtime-src"
 )
 

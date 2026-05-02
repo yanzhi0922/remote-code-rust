@@ -1,6 +1,4 @@
-import { listen } from '@tauri-apps/api/event';
 import { hasTauriRuntime } from '../runtime';
-import { onNetworkChange, isOnline } from './network';
 
 type LifecycleCallbacks = {
   onResume?: () => void;

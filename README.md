@@ -6,18 +6,18 @@
 
 | 指标 | 数值 |
 |------|------|
-| 应用程序 | 6 个 |
-| 库 Crate | 38 个 |
+| 应用程序 | 5 个（CLI、GUI、Control Plane、Runner、Migrate） |
+| Workspace Crates | 174 个（Claude 40 + Codex 80 + Adapters 3 + Apps 5） |
 | 内置工具 | 65+ |
 | 单元测试 | 860+ |
 | Clippy 警告 | 0 |
 | `unsafe` 代码 | 禁止（`forbid`） |
-| Rust 版本 | 1.93.1 (Edition 2024) |
+| Rust 版本 | 1.93 (Edition 2024) |
 | 许可证 | Proprietary |
 
 ## 特性
 
-- 🦀 **纯 Rust 实现** — 内存安全、零成本抽象、高性能异步运行时（Tokio）
+- 🦀 **Rust 核心引擎** — 内存安全、零成本抽象、高性能异步运行时（Tokio），GUI 前端使用 TypeScript + React 19
 - 🤖 **多 Provider 支持** — OpenAI、Anthropic、GLM/ZhipuAI、AWS Bedrock、Google Vertex AI
 - 🔄 **自动故障转移** — 多 Provider 健康追踪 + 熔断器 + 指数退避重试
 - 🔧 **65+ 内置工具** — 文件操作、代码搜索、Web 搜索、LSP、后台任务、代理系统
@@ -39,7 +39,7 @@
 - 📡 **SSH 模式** — 远程主机安全执行
 - ⌨️ **Vim 模式** — Normal / Insert / Visual / Buffer 四种模式
 - 🖥️ **桌面 GUI** — Tauri v2 + React 19，内置 Provider/Model/Runtime 管理
-- 📱 **移动端** — Capacitor 跨平台（iOS / Android）
+- 📱 **移动端** — Tauri v2 移动构建目标（iOS / Android），Capacitor 版已废弃
 - 🔐 **OAuth2 认证** — PKCE 流程 + 自动 Token 刷新
 - 📈 **遥测与分析** — Datadog / 自有端点 / 文件导出三种方式
 - 🎤 **语音输入** — Web Speech API + 音频级别实时反馈
@@ -56,11 +56,11 @@ remote-code-rust/
 │   └── roo-code/                  # Roo Code 源码（独立 Git 仓库）
 ├── apps/                          # 应用程序
 │   ├── remote-code-gui/           # 桌面 GUI（Tauri v2 + React 19）
-│   ├── remote-code-mobile/        # 移动端（Capacitor）
+│   ├── remote-code-mobile/        # 移动端（已废弃，迁移至 Tauri v2 移动构建）
 │   ├── remote-code-control-plane/ # 控制平面
 │   ├── remote-code-runner/        # 远程 Runner
 │   └── remote-code-migrate/       # 数据迁移
-├── crates/                        # 库 Crate（38 个）
+├── crates/                        # 库 Crates（Claude 40 + Codex 80 + Adapters 3）
 │   ├── adapters/                  # 三 Agent 独立适配器
 │   │   ├── rc-claude-adapter/     # Claude 适配器（QueryEngine）
 │   │   ├── rc-codex-adapter/      # Codex 适配器（AppServer + event_mapper）
@@ -72,7 +72,7 @@ remote-code-rust/
 │   │   ├── claude-provider/           # Provider 标准化与流式
 │   │   └── ...                    # 其他 Claude 核心 crate
 │   ├── codex/                     # Codex 核心 crate（core, exec, protocol 等）
-│   └── roo/                       # Roo 核心 crate（65 个，provider, task, tools 等）
+│   └── roo/                       # Roo 核心 crate（71 个，provider, task, tools 等）
 ├── plans/                         # 设计文档
 │   ├── multi-agent-architecture.md  # 多 Agent 架构设计
 │   ├── PROJECT_STATUS.md            # 项目状态
@@ -90,7 +90,7 @@ remote-code-rust/
 |------|------|
 | `remote-code` (claudecode) | Claude Code Rust 重写 — 交互式 / 无头 / 远程模式 |
 | `remote-code-gui` | 桌面 GUI（Tauri v2 + React 19） |
-| `remote-code-mobile` | 移动端（Capacitor + React） |
+| `remote-code-mobile` | 移动端（已废弃，迁移至 Tauri v2 移动构建） |
 | `remote-code-control-plane` | 控制平面服务器（HTTP + WebSocket） |
 | `remote-code-runner` | 远程 Runner 代理 |
 | `remote-code-migrate` | 数据迁移工具 |
@@ -139,8 +139,8 @@ remote-code-rust/
 | `claude-utils` | 工具函数（Git、Diff、Markdown、图片、Cron 等） |
 | `claude-agent-protocol` | 多 Agent 协议抽象层：`AgentAdapter` trait、`UnifiedAgentEvent`、`AgentRouter` |
 | `rc-claude-adapter` | Claude 适配器：`ClaudeInProcessAdapter` = `QueryEngine` |
-| `rc-codex-adapter` | Codex 适配器：`CodexInProcessAdapter` + `event_mapper` (754 行) |
-| `rc-roo-adapter` | Roo 适配器：`RooInProcessAdapter` + 12 Provider 后端 |
+| `rc-codex-adapter` | Codex 适配器：`CodexInProcessAdapter` + `event_mapper` (753 行) |
+| `rc-roo-adapter` | Roo 适配器：`RooInProcessAdapter` + 26 Provider 后端 |
 
 ### 数据流
 
@@ -267,7 +267,7 @@ npm run tauri dev
 | `unsafe_code` | `forbid` — 完全禁止 |
 | `dbg_macro` | `deny` — 禁止调试宏 |
 | `todo!` / `unimplemented!` | `deny` — 禁止未实现代码 |
-| `unwrap_used` | `warn` — 警告直接 unwrap |
+| `unwrap_used` | `warn` — 不建议直接 unwrap |
 | Release LTO | `thin` + `codegen-units = 1` |
 
 ### 验证
@@ -327,9 +327,9 @@ Remote Code GUI 支持三种 AI Agent 引擎，采用统一的进程内适配器
 
 | Agent | 适配器 | 通信方式 | 说明 |
 |-------|--------|----------|------|
-| **Remote Code** | `InProcessAdapter` | 进程内回调注入 | 默认引擎，基于 Claude Code 的 Rust 重写 |
+| **Remote Code** | `ClaudeInProcessAdapter` | 进程内 QueryEngine | 默认引擎，基于 Claude Code 的 Rust 重写 |
 | **OpenAI Codex** | `CodexInProcessAdapter` | 进程内事件泵 | 原生 Codex AppServerClient，无子进程 |
-| **Roo Code** | `SubprocessAdapter` | 子进程 Bridge（JSON-RPC over stdio） | Bridge Binary 翻译 JSON-RPC ↔ Roo-code I/O |
+| **Roo Code** | `RooInProcessAdapter` | 进程内 Provider+Dispatcher | 26 个 Provider 后端，原生 Roo AgentLoop |
 
 ### 架构概览
 
@@ -338,7 +338,7 @@ graph TB
     subgraph Main Process
         UI[前端 send_prompt]
         ROUTER[AgentRouter]
-        IPA[InProcessAdapter<br/>Claude Code]
+        IPA[ClaudeInProcessAdapter<br/>Claude Code]
         CXA[CodexInProcessAdapter<br/>Codex]
         ROA[RooInProcessAdapter<br/>Roo-code]
     end
@@ -362,7 +362,10 @@ graph TB
 | 限制 | 说明 |
 |------|------|
 | TTS 为 Mock 实现 | `claude-voice::tts` 目前返回占位响应，未接入真实 TTS 服务 |
-| 外部 Agent 回调为 Stub | Roo Code / Codex 的回调函数目前返回硬编码响应，需接入真实实现 |
+| Roo 权限系统未完全接线 | `RooInProcessAdapter::resolve_permission()` 可用但未完全接入 GUI 交互式权限弹窗 |
+| Roo Token 估算粗糙 | 使用 `text.len() / 4` 近似而非 tiktoken |
+| Roo MCP 未接入 | 声明了 McpSupport 能力但未在 send_message 中集成 McpServerConnection |
+| `rama-*` 依赖为预发布 | 锁定 `0.3.0-alpha.4`，待迁移至稳定版 |
 
 ## 项目文档
 

@@ -10,6 +10,7 @@ export async function secureStoreGet(key: string): Promise<string | null> {
 
 export async function secureStoreSet(key: string, value: string): Promise<void> {
   if (!hasTauriRuntime()) {
+    console.warn('secureStoreSet: using localStorage fallback — not secure for sensitive data');
     localStorage.setItem(`RC:${key}`, value);
     return;
   }

@@ -43,6 +43,10 @@ members = [
     "crates/claude/claude-telemetry",
     "crates/claude/claude-utils",
     "crates/claude/claude-voice",
+    # ZCode-inspired crates
+    "crates/claude/claude-checkpoint",
+    "crates/claude/claude-specialized-agents",
+    "crates/claude/claude-git",
     "crates/adapters/rc-roo-adapter",
     "apps/remote-code-gui/src-tauri",
     "agents/claudecode",

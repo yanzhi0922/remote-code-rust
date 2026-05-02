@@ -1,5 +1,6 @@
 import { useMemo } from 'react';
 import { useAppStore } from '../../stores/useAppStore';
+import { useAgentStore } from '../../stores/useAgentStore';
 
 export function StatusBar() {
   const provider = useAppStore((state) => state.provider);
@@ -7,7 +8,7 @@ export function StatusBar() {
   const activeSessionId = useAppStore((state) => state.activeSessionId);
   const sessions = useAppStore((state) => state.sessions);
   const contextUsageBySession = useAppStore((state) => state.contextUsageBySession);
-  const activeAgentType = useAppStore((state) => state.activeAgentType);
+  const activeAgentType = useAgentStore((state) => state.activeAgentType);
   const lastPromptResult = useAppStore((state) => state.lastPromptResult);
 
   const activeSession = useMemo(

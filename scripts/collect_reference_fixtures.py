@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 
-DEFAULT_SOURCE_ROOT = pathlib.Path(r"C:\Users\Yanzh\Desktop\remote-code")
+DEFAULT_SOURCE_ROOT = pathlib.Path(__file__).resolve().parent.parent / "remote-code"
 
 
 def sha256_text(text: str) -> str:

@@ -26,7 +26,6 @@ export function resetAppStore(overrides: Partial<StoreState> = {}): StoreState {
     lastPromptResult: null,
     liveToolProgress: [],
     liveToolResults: [],
-    sessionTasks: {},
     batchProgressBySession: {},
     contextUsageBySession: {},
     contextOverflowBySession: {},
