@@ -40,7 +40,7 @@ const IMAGE_MAX_TOKEN_SIZE: u64 = 2000;
 const COMPACTABLE_TOOLS: &[&str] = &[
     "Read",
     "Bash",
-    "Shell",
+    "PowerShell",
     "Grep",
     "Glob",
     "WebSearch",
@@ -332,7 +332,7 @@ mod tests {
         assert!(is_compactable_tool("Read"));
         assert!(is_compactable_tool("Bash"));
         assert!(is_compactable_tool("Grep"));
-        assert!(is_compactable_tool("Shell"));
+        assert!(is_compactable_tool("PowerShell"));
     }
 
     #[test]

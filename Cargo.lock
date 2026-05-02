@@ -13302,6 +13302,8 @@ dependencies = [
  "regex",
  "roo-diff",
  "roo-ignore",
+ "roo-prompt",
+ "roo-protect",
  "roo-types",
  "serde",
  "serde_json",

@@ -41,6 +41,7 @@ impl McpServerManager {
         let mut hub = self.hub.write().await;
         if hub.is_none() {
             let new_hub = Arc::new(McpHub::new());
+            new_hub.initialize_weak_self();
             *hub = Some(new_hub.clone());
             tracing::info!("McpServerManager: Created new McpHub instance");
         }

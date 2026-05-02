@@ -9,7 +9,7 @@ use crate::engine::compact_conversation;
 use crate::estimate_message_tokens;
 use crate::strategy::{
     CompactOptions, CompactStrategy, CompactStrategyType, CompactionResult, ProgressCallback,
-    SummaryProvider,
+    RecompactionInfo, SummaryProvider,
 };
 
 // ---------------------------------------------------------------------------
@@ -59,10 +59,13 @@ pub fn is_auto_compact_allowed_for_query_source(query_source: Option<&str>) -> b
 // Environment variable overrides
 // ---------------------------------------------------------------------------
 
-/// Check whether auto-compact is globally disabled via environment variables.
+/// Check whether auto-compact is enabled.
 ///
-/// Mirrors `isAutoCompactEnabled()` from the TS reference.
-pub fn is_auto_compact_env_enabled() -> bool {
+/// Mirrors `isAutoCompactEnabled()` from the TS reference which checks:
+/// 1. `DISABLE_COMPACT` env var (disables all compaction)
+/// 2. `DISABLE_AUTO_COMPACT` env var (disables only auto-compact)
+/// 3. User config `autoCompactEnabled` setting (defaults to `true`)
+pub fn is_auto_compact_env_enabled(user_config_auto_compact: Option<bool>) -> bool {
     if std::env::var("DISABLE_COMPACT")
         .ok()
         .as_deref()
@@ -77,15 +80,17 @@ pub fn is_auto_compact_env_enabled() -> bool {
     {
         return false;
     }
-    true
+    // Check user config — default to true (auto-compact enabled) if not set
+    user_config_auto_compact.unwrap_or(true)
 }
 
 /// Return the effective context window size, respecting the
 /// `CLAUDE_CODE_AUTO_COMPACT_WINDOW` environment variable override.
 ///
-/// Mirrors `getEffectiveContextWindowSize()` from the TS reference.
-pub fn get_effective_context_window(base_context_window: u64) -> u64 {
-    let reserved = MAX_OUTPUT_TOKENS_FOR_SUMMARY;
+/// Mirrors `getEffectiveContextWindowSize()` from the TS reference which uses
+/// `Math.min(getMaxOutputTokensForModel(model), 20_000)` as the reserved amount.
+pub fn get_effective_context_window(base_context_window: u64, max_output_tokens: u64) -> u64 {
+    let reserved = max_output_tokens.min(MAX_OUTPUT_TOKENS_FOR_SUMMARY);
     let mut context_window = base_context_window;
 
     if let Ok(val) = std::env::var("CLAUDE_CODE_AUTO_COMPACT_WINDOW") {
@@ -103,8 +108,8 @@ pub fn get_effective_context_window(base_context_window: u64) -> u64 {
 /// `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` environment variable.
 ///
 /// Mirrors `getAutoCompactThreshold()` from the TS reference.
-pub fn get_auto_compact_threshold(base_context_window: u64) -> u64 {
-    let effective = get_effective_context_window(base_context_window);
+pub fn get_auto_compact_threshold(base_context_window: u64, max_output_tokens: u64) -> u64 {
+    let effective = get_effective_context_window(base_context_window, max_output_tokens);
     let default_threshold = effective.saturating_sub(AUTOCOMPACT_BUFFER_TOKENS);
 
     if let Ok(val) = std::env::var("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE") {
@@ -179,6 +184,10 @@ pub struct TokenWarningState {
 pub struct AutoCompactStrategy {
     /// Base context window size for the model (before effective computation).
     pub context_window_size: u64,
+    /// Max output tokens for the model (used to compute reserved tokens).
+    pub max_output_tokens: u64,
+    /// User config override for auto-compact enabled (None = default true).
+    pub auto_compact_enabled: Option<bool>,
 }
 
 impl AutoCompactStrategy {
@@ -186,18 +195,35 @@ impl AutoCompactStrategy {
     pub fn new(context_window_size: u64) -> Self {
         Self {
             context_window_size,
+            max_output_tokens: MAX_OUTPUT_TOKENS_FOR_SUMMARY,
+            auto_compact_enabled: None,
         }
+    }
+
+    /// Create with explicit max output tokens.
+    pub fn with_max_output_tokens(context_window_size: u64, max_output_tokens: u64) -> Self {
+        Self {
+            context_window_size,
+            max_output_tokens,
+            auto_compact_enabled: None,
+        }
+    }
+
+    /// Set user config auto-compact enabled override.
+    pub fn with_auto_compact_enabled(mut self, enabled: Option<bool>) -> Self {
+        self.auto_compact_enabled = enabled;
+        self
     }
 
     /// Return the effective context window size (minus reserved output tokens
     /// and respecting `CLAUDE_CODE_AUTO_COMPACT_WINDOW` env var).
     pub fn effective_context_window(&self) -> u64 {
-        get_effective_context_window(self.context_window_size)
+        get_effective_context_window(self.context_window_size, self.max_output_tokens)
     }
 
     /// Return the auto-compact threshold (respecting env var overrides).
     pub fn auto_compact_threshold(&self) -> u64 {
-        get_auto_compact_threshold(self.context_window_size)
+        get_auto_compact_threshold(self.context_window_size, self.max_output_tokens)
     }
 
     /// Check if auto-compact should be triggered based on current token usage.
@@ -228,8 +254,8 @@ impl AutoCompactStrategy {
             return false;
         }
 
-        // Environment variable kill switches
-        if !is_auto_compact_env_enabled() {
+        // Environment variable kill switches + user config
+        if !is_auto_compact_env_enabled(self.auto_compact_enabled) {
             return false;
         }
 
@@ -315,21 +341,23 @@ impl CompactStrategy for AutoCompactStrategy {
 pub fn should_auto_compact(
     messages: &[Message],
     context_window_size: u64,
+    max_output_tokens: u64,
     tracking: &AutoCompactTrackingState,
     query_source: Option<&str>,
 ) -> bool {
-    should_auto_compact_with_snip(messages, context_window_size, 0, tracking, query_source)
+    should_auto_compact_with_snip(messages, context_window_size, max_output_tokens, 0, tracking, query_source)
 }
 
 /// Like [`should_auto_compact`] but accounts for tokens already freed by snip.
 pub fn should_auto_compact_with_snip(
     messages: &[Message],
     context_window_size: u64,
+    max_output_tokens: u64,
     snip_tokens_freed: u64,
     tracking: &AutoCompactTrackingState,
     query_source: Option<&str>,
 ) -> bool {
-    let strategy = AutoCompactStrategy::new(context_window_size);
+    let strategy = AutoCompactStrategy::with_max_output_tokens(context_window_size, max_output_tokens);
     let token_usage = estimate_message_tokens(messages);
     strategy.should_auto_compact_with_snip(token_usage, snip_tokens_freed, tracking, query_source)
 }
@@ -346,21 +374,38 @@ pub fn should_auto_compact_with_snip(
 pub async fn auto_compact(
     messages: &[Message],
     context_window_size: u64,
+    max_output_tokens: u64,
     options: &CompactOptions,
     provider: &dyn SummaryProvider,
     tracking: &mut AutoCompactTrackingState,
     query_source: Option<&str>,
+    auto_compact_user_config: Option<bool>,
+    snip_tokens_freed: u64,
 ) -> Result<Option<CompactionResult>, anyhow::Error> {
-    if !is_auto_compact_env_enabled() {
+    if !is_auto_compact_env_enabled(auto_compact_user_config) {
         return Ok(None);
     }
 
-    let strategy = AutoCompactStrategy::new(context_window_size);
+    let strategy = AutoCompactStrategy::with_max_output_tokens(context_window_size, max_output_tokens)
+        .with_auto_compact_enabled(auto_compact_user_config);
     let token_usage = estimate_message_tokens(messages);
 
-    if !strategy.should_auto_compact(token_usage, tracking, query_source) {
+    if !strategy.should_auto_compact_with_snip(token_usage, snip_tokens_freed, tracking, query_source) {
         return Ok(None);
     }
+
+    // Build RecompactionInfo for telemetry (mirrors TS autoCompactIfNeeded)
+    let recompaction_info = RecompactionInfo {
+        is_recompaction_in_chain: tracking.compacted,
+        turns_since_previous_compact: tracking.turn_counter as i64,
+        previous_compact_turn_id: if tracking.compacted {
+            Some(tracking.turn_id.clone())
+        } else {
+            None
+        },
+        auto_compact_threshold: strategy.auto_compact_threshold(),
+        query_source: query_source.map(|s| s.to_owned()),
+    };
 
     // Fire post-compact cleanup regardless of which path succeeds.
     let cleanup = options.post_compact_cleanup_provider.clone();
@@ -370,6 +415,7 @@ pub async fn auto_compact(
     let sm_options = CompactOptions {
         max_tokens: strategy.auto_compact_threshold(),
         is_auto_compact: true,
+        recompaction_info: Some(recompaction_info.clone()),
         ..options.clone()
     };
     if let Ok(sm_result) = sm_strategy
@@ -397,7 +443,12 @@ pub async fn auto_compact(
     }
 
     // Fallback: full LLM-based compaction
-    match strategy.compact(messages, options, provider, None).await {
+    let full_options = CompactOptions {
+        is_auto_compact: true,
+        recompaction_info: Some(recompaction_info),
+        ..options.clone()
+    };
+    match strategy.compact(messages, &full_options, provider, None).await {
         Ok(result) => {
             tracking.compacted = true;
             tracking.consecutive_failures = 0;
@@ -425,9 +476,10 @@ pub async fn auto_compact(
 pub async fn try_session_memory_auto_compact(
     messages: &[Message],
     context_window_size: u64,
+    max_output_tokens: u64,
     session_memory_strategy: &crate::session_memory::SessionMemoryCompactStrategy,
 ) -> Option<CompactionResult> {
-    let effective = get_effective_context_window(context_window_size);
+    let effective = get_effective_context_window(context_window_size, max_output_tokens);
     let threshold = effective.saturating_sub(AUTOCOMPACT_BUFFER_TOKENS);
 
     let options = CompactOptions {

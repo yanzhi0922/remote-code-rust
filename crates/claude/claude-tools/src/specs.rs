@@ -156,9 +156,18 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
                 "type": "object",
                 "properties": {
                     "pattern": {"type": "string", "description": "The regular expression pattern to search for in the contents of files."},
-                    "path": {"type": "string", "description": "File or directory to search in. If omitted, searches the current working directory."},
-                    "include": {"type": "string", "description": "File pattern to include in the search (e.g. '*.js', '*.{ts,tsx}')"},
-                    "output_mode": {"type": "string", "enum": ["content", "files_with_matches", "count"], "description": "The mode to use for the search. Default is 'content'. Use 'files_with_matches' for file names only, 'count' for a count of matches per file."}
+                    "path": {"type": "string", "description": "File or directory to search in. Defaults to current working directory."},
+                    "glob": {"type": "string", "description": "Glob pattern to filter files (e.g. \"*.js\", \"*.{ts,tsx}\"). This is the preferred way to filter by file type."},
+                    "output_mode": {"type": "string", "enum": ["content", "files_with_matches", "count"], "description": "The mode to use for the search. Default is 'files_with_matches'. Use 'content' to see matching lines, 'count' for a count of matches per file."},
+                    "-A": {"type": "integer", "description": "Number of lines to show after each match."},
+                    "-B": {"type": "integer", "description": "Number of lines to show before each match."},
+                    "-C": {"type": "integer", "description": "Number of lines of context to show around each match. Equivalent to setting both -A and -B."},
+                    "-i": {"type": "boolean", "description": "Case insensitive search. Default is false."},
+                    "-n": {"type": "boolean", "description": "Show line numbers. Default is true."},
+                    "type": {"type": "string", "description": "File type to search (e.g. 'js', 'py', 'rust', 'go', 'java'). Maps to ripgrep's --type flag."},
+                    "multiline": {"type": "boolean", "description": "Enable multiline mode where patterns can match across newlines. Default is false."},
+                    "head_limit": {"type": "integer", "description": "Limit the number of results. Defaults to 250."},
+                    "offset": {"type": "integer", "description": "Skip the first N results. Use with head_limit for pagination."}
                 },
                 "required": ["pattern"],
                 "additionalProperties": false,
@@ -285,7 +294,8 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
                                 "id": {"type": "string", "description": "Optional unique identifier for the todo item."},
                                 "content": {"type": "string", "description": "Brief description of the task."},
                                 "status": {"type": "string", "enum": ["pending", "in_progress", "completed"]},
-                                "priority": {"type": "string", "enum": ["high", "medium", "low"]}
+                                "priority": {"type": "string", "enum": ["high", "medium", "low"]},
+                                "activeForm": {"type": "string", "description": "Present continuous form of the task description (e.g., 'Fixing authentication bug'). Shown during in_progress status."}
                             },
                             "required": ["content", "status"],
                             "additionalProperties": false

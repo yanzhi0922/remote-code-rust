@@ -28,6 +28,7 @@ pub mod max_tokens;
 pub mod mcp_api;
 pub mod media;
 pub mod model_info;
+pub mod normalize;
 pub mod query_source;
 pub mod retry;
 pub mod server_tool_use;
@@ -1918,6 +1919,9 @@ async fn prepare_anthropic_request_surface(
     } else {
         inject_tool_reference_turn_boundary_siblings(messages)
     };
+    // Normalize messages for API: role alternation, tool pairing, thinking cleanup
+    let mut messages = messages;
+    normalize::normalize_messages_for_api(&mut messages);
     (system, messages, tools)
 }
 
@@ -2002,10 +2006,23 @@ fn apply_anthropic_thinking_options(body: &mut Value, provider: &ProviderConfig)
         return;
     }
 
-    let Some(budget) = provider.thinking_budget else {
+    let Some(raw_budget) = provider.thinking_budget else {
         body["temperature"] = json!(1.0);
         return;
     };
+
+    // Clamp budget_tokens so it is strictly less than max_tokens.
+    // This mirrors the TS reference: Math.min(maxOutputTokens - 1, thinkingBudget).
+    let max_tokens = body
+        .get("max_tokens")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let budget = if max_tokens > 0 {
+        std::cmp::min(u64::from(raw_budget), max_tokens.saturating_sub(1)) as u32
+    } else {
+        raw_budget
+    };
+
     body["thinking"] = json!({
         "type": "enabled",
         "budget_tokens": budget,
@@ -3724,5 +3741,78 @@ mod tests {
         let err = super::classify_provider_error(400, "invalid parameter", "test-provider");
         assert_eq!(err.category, super::ErrorCategory::InvalidRequest);
         assert_eq!(err.recovery, super::RecoveryAction::Abort);
+    }
+
+    // --- apply_anthropic_thinking_options budget clamping ---
+
+    #[test]
+    fn thinking_budget_is_clamped_to_max_tokens_minus_one() {
+        let mut provider = test_provider_config("https://api.anthropic.com/v1/messages".to_owned());
+        provider.protocol = claude_core::ProviderProtocol::Anthropic;
+        provider.max_output_tokens = 8_192;
+        provider.thinking_budget = Some(16_384); // exceeds max_output_tokens
+
+        let mut body = json!({
+            "max_tokens": 8_192u64,
+        });
+
+        super::apply_anthropic_thinking_options(&mut body, &provider);
+
+        let budget = body["thinking"]["budget_tokens"].as_u64().unwrap();
+        assert_eq!(budget, 8_191, "budget should be clamped to max_tokens - 1");
+        assert_eq!(body["max_tokens"].as_u64().unwrap(), 8_192, "max_tokens should remain unchanged since budget < max_tokens");
+    }
+
+    #[test]
+    fn thinking_budget_unchanged_when_already_below_max_tokens() {
+        let mut provider = test_provider_config("https://api.anthropic.com/v1/messages".to_owned());
+        provider.protocol = claude_core::ProviderProtocol::Anthropic;
+        provider.max_output_tokens = 8_192;
+        provider.thinking_budget = Some(5_000);
+
+        let mut body = json!({
+            "max_tokens": 8_192u64,
+        });
+
+        super::apply_anthropic_thinking_options(&mut body, &provider);
+
+        let budget = body["thinking"]["budget_tokens"].as_u64().unwrap();
+        assert_eq!(budget, 5_000, "budget should be unchanged when already below max_tokens");
+    }
+
+    #[test]
+    fn thinking_budget_equal_to_max_tokens_is_clamped() {
+        let mut provider = test_provider_config("https://api.anthropic.com/v1/messages".to_owned());
+        provider.protocol = claude_core::ProviderProtocol::Anthropic;
+        provider.max_output_tokens = 8_192;
+        provider.thinking_budget = Some(8_192); // exactly equal
+
+        let mut body = json!({
+            "max_tokens": 8_192u64,
+        });
+
+        super::apply_anthropic_thinking_options(&mut body, &provider);
+
+        let budget = body["thinking"]["budget_tokens"].as_u64().unwrap();
+        assert_eq!(budget, 8_191, "budget equal to max_tokens must be clamped to max_tokens - 1");
+    }
+
+    #[test]
+    fn thinking_budget_clamp_with_max_tokens_one() {
+        let mut provider = test_provider_config("https://api.anthropic.com/v1/messages".to_owned());
+        provider.protocol = claude_core::ProviderProtocol::Anthropic;
+        provider.max_output_tokens = 1;
+        provider.thinking_budget = Some(10_000);
+
+        let mut body = json!({
+            "max_tokens": 1u64,
+        });
+
+        super::apply_anthropic_thinking_options(&mut body, &provider);
+
+        let budget = body["thinking"]["budget_tokens"].as_u64().unwrap();
+        assert_eq!(budget, 0, "budget should clamp to 0 when max_tokens is 1 (1 - 1 = 0)");
+        // The safety net should still kick in and raise max_tokens.
+        assert!(body["max_tokens"].as_u64().unwrap() > budget);
     }
 }

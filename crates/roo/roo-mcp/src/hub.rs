@@ -51,6 +51,9 @@ use crate::types::{
 /// State change callback type.
 pub type StateChangeCallback = Box<dyn Fn() + Send + Sync>;
 
+/// Type alias for a weak reference to McpHub, used by file watcher tasks.
+type WeakHub = std::sync::Weak<McpHub>;
+
 /// Error level for error history entries.
 /// Corresponds to TS: the `level` parameter in `appendErrorMessage`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -209,6 +212,9 @@ struct FileWatcherHandle {
 ///
 /// Corresponds to TS: `McpHub` class.
 pub struct McpHub {
+    /// Weak reference to self, used by spawned tasks to call back.
+    /// Must be initialized via `initialize_weak_self()` after constructing the Arc.
+    weak_self: std::sync::Mutex<Option<WeakHub>>,
     /// All server connections (connected and disconnected).
     /// Corresponds to TS: `connections: McpConnection[]`
     connections: Arc<RwLock<Vec<McpConnection>>>,
@@ -263,6 +269,7 @@ impl McpHub {
     /// Corresponds to TS: `constructor(provider: ClineProvider)`
     pub fn new() -> Self {
         Self {
+            weak_self: std::sync::Mutex::new(None),
             connections: Arc::new(RwLock::new(Vec::new())),
             ref_count: Arc::new(RwLock::new(0)),
             mcp_enabled: Arc::new(RwLock::new(true)),
@@ -310,6 +317,15 @@ impl McpHub {
         let mut hub = Self::new_with_paths(workspace_path, settings_path);
         hub.on_state_change = Some(callback);
         hub
+    }
+
+    /// Initialize the weak self-reference.
+    ///
+    /// Must be called immediately after wrapping in `Arc`, before any
+    /// file watchers are set up. This enables spawned tasks to call
+    /// back into the hub.
+    pub fn initialize_weak_self(self: &Arc<Self>) {
+        *self.weak_self.lock().unwrap() = Some(Arc::downgrade(self));
     }
 
     /// Register a client (increment reference count).
@@ -1063,10 +1079,11 @@ impl McpHub {
 
     /// Toggle whether a tool is always allowed (auto-approved).
     ///
-    /// Updates the tool's `always_allow` flag in the server state and
-    /// persists the change to the server configuration's `alwaysAllow` list.
+    /// Updates the tool's `always_allow` flag in the server state, the
+    /// in-memory config, and persists the change to the config file on disk.
     ///
     /// Corresponds to TS: `toggleToolAlwaysAllow(serverName, source, toolName, shouldAllow)`
+    /// which calls `updateServerToolList(..., "alwaysAllow", ...)`.
     pub async fn toggle_tool_always_allow(
         &self,
         server_name: &str,
@@ -1076,44 +1093,52 @@ impl McpHub {
     ) -> McpResult<()> {
         self.check_disposed()?;
 
-        let mut connections = self.connections.write().await;
+        // 1. Update in-memory state
+        {
+            let mut connections = self.connections.write().await;
 
-        let connection = connections
-            .find_mut(server_name, source)
-            .ok_or_else(|| McpError::ServerNotFound(server_name.to_string()))?;
+            let connection = connections
+                .find_mut(server_name, source)
+                .ok_or_else(|| McpError::ServerNotFound(server_name.to_string()))?;
 
-        let server = connection.server_mut();
+            let server = connection.server_mut();
 
-        // Update the tool's always_allow flag in the server state
-        if let Some(tool) = server.tools.iter_mut().find(|t| t.name == tool_name) {
-            tool.always_allow = should_allow;
-        }
-
-        // Update the config's alwaysAllow list
-        let mut config: serde_json::Value = serde_json::from_str(&server.config)?;
-        if config.is_null() {
-            config = serde_json::json!({});
-        }
-        if config.get("alwaysAllow").is_none() {
-            config["alwaysAllow"] = serde_json::json!([]);
-        }
-
-        let always_allow = config["alwaysAllow"].as_array_mut().ok_or_else(|| {
-            McpError::ConfigError("alwaysAllow is not an array".to_string())
-        })?;
-
-        if should_allow {
-            if !always_allow
-                .iter()
-                .any(|v| v.as_str() == Some(tool_name))
-            {
-                always_allow.push(serde_json::Value::String(tool_name.to_string()));
+            // Update the tool's always_allow flag in the server state
+            if let Some(tool) = server.tools.iter_mut().find(|t| t.name == tool_name) {
+                tool.always_allow = should_allow;
             }
-        } else {
-            always_allow.retain(|v| v.as_str() != Some(tool_name));
+
+            // Update the config's alwaysAllow list in memory
+            let mut config: serde_json::Value = serde_json::from_str(&server.config)?;
+            if config.is_null() {
+                config = serde_json::json!({});
+            }
+            if config.get("alwaysAllow").is_none() {
+                config["alwaysAllow"] = serde_json::json!([]);
+            }
+
+            let always_allow = config["alwaysAllow"].as_array_mut().ok_or_else(|| {
+                McpError::ConfigError("alwaysAllow is not an array".to_string())
+            })?;
+
+            if should_allow {
+                if !always_allow
+                    .iter()
+                    .any(|v| v.as_str() == Some(tool_name))
+                {
+                    always_allow.push(serde_json::Value::String(tool_name.to_string()));
+                }
+            } else {
+                always_allow.retain(|v| v.as_str() != Some(tool_name));
+            }
+
+            server.config = serde_json::to_string(&config)?;
         }
 
-        server.config = serde_json::to_string(&config)?;
+        // 2. Persist to config file on disk
+        self.update_tool_list_in_config_file(server_name, source, tool_name, "alwaysAllow", should_allow)
+            .await?;
+
         tracing::info!(
             "Toggle always-allow for tool '{}' on '{}': {}",
             tool_name,
@@ -1121,7 +1146,6 @@ impl McpHub {
             should_allow
         );
 
-        drop(connections);
         self.notify_state_change();
         Ok(())
     }
@@ -1130,8 +1154,10 @@ impl McpHub {
     ///
     /// When `is_enabled` is true, removes the tool from `disabledTools`.
     /// When `is_enabled` is false, adds the tool to `disabledTools`.
+    /// Also persists the change to the config file on disk.
     ///
     /// Corresponds to TS: `toggleToolEnabledForPrompt(serverName, source, toolName, isEnabled)`
+    /// which calls `updateServerToolList(..., "disabledTools", ...)`.
     pub async fn toggle_tool_enabled_for_prompt(
         &self,
         server_name: &str,
@@ -1141,46 +1167,56 @@ impl McpHub {
     ) -> McpResult<()> {
         self.check_disposed()?;
 
-        let mut connections = self.connections.write().await;
+        // 1. Update in-memory state
+        {
+            let mut connections = self.connections.write().await;
 
-        let connection = connections
-            .find_mut(server_name, source)
-            .ok_or_else(|| McpError::ServerNotFound(server_name.to_string()))?;
+            let connection = connections
+                .find_mut(server_name, source)
+                .ok_or_else(|| McpError::ServerNotFound(server_name.to_string()))?;
 
-        let server = connection.server_mut();
+            let server = connection.server_mut();
 
-        // Update the tool's enabled_for_prompt flag in the server state
-        if let Some(tool) = server.tools.iter_mut().find(|t| t.name == tool_name) {
-            tool.enabled_for_prompt = is_enabled;
-        }
-
-        // Update the config's disabledTools list
-        let mut config: serde_json::Value = serde_json::from_str(&server.config)?;
-        if config.is_null() {
-            config = serde_json::json!({});
-        }
-        if config.get("disabledTools").is_none() {
-            config["disabledTools"] = serde_json::json!([]);
-        }
-
-        let disabled_tools = config["disabledTools"].as_array_mut().ok_or_else(|| {
-            McpError::ConfigError("disabledTools is not an array".to_string())
-        })?;
-
-        if is_enabled {
-            // Remove from disabled list
-            disabled_tools.retain(|v| v.as_str() != Some(tool_name));
-        } else {
-            // Add to disabled list
-            if !disabled_tools
-                .iter()
-                .any(|v| v.as_str() == Some(tool_name))
-            {
-                disabled_tools.push(serde_json::Value::String(tool_name.to_string()));
+            // Update the tool's enabled_for_prompt flag in the server state
+            if let Some(tool) = server.tools.iter_mut().find(|t| t.name == tool_name) {
+                tool.enabled_for_prompt = is_enabled;
             }
+
+            // Update the config's disabledTools list in memory
+            let mut config: serde_json::Value = serde_json::from_str(&server.config)?;
+            if config.is_null() {
+                config = serde_json::json!({});
+            }
+            if config.get("disabledTools").is_none() {
+                config["disabledTools"] = serde_json::json!([]);
+            }
+
+            let disabled_tools = config["disabledTools"].as_array_mut().ok_or_else(|| {
+                McpError::ConfigError("disabledTools is not an array".to_string())
+            })?;
+
+            if is_enabled {
+                // Remove from disabled list
+                disabled_tools.retain(|v| v.as_str() != Some(tool_name));
+            } else {
+                // Add to disabled list
+                if !disabled_tools
+                    .iter()
+                    .any(|v| v.as_str() == Some(tool_name))
+                {
+                    disabled_tools.push(serde_json::Value::String(tool_name.to_string()));
+                }
+            }
+
+            server.config = serde_json::to_string(&config)?;
         }
 
-        server.config = serde_json::to_string(&config)?;
+        // 2. Persist to config file on disk
+        // When is_enabled is true, we REMOVE the tool from disabledTools (add_tool=false).
+        // When is_enabled is false, we ADD the tool to disabledTools (add_tool=true).
+        self.update_tool_list_in_config_file(server_name, source, tool_name, "disabledTools", !is_enabled)
+            .await?;
+
         tracing::info!(
             "Toggle enabled-for-prompt for tool '{}' on '{}': {}",
             tool_name,
@@ -1188,7 +1224,6 @@ impl McpHub {
             is_enabled
         );
 
-        drop(connections);
         self.notify_state_change();
         Ok(())
     }
@@ -1617,6 +1652,19 @@ impl McpHub {
             ..
         } = config
         {
+            // Get the weak self reference for the spawned tasks
+            let weak_hub = self.weak_self.lock().unwrap().clone();
+            let weak_hub = match weak_hub {
+                Some(w) => w,
+                None => {
+                    tracing::warn!(
+                        "Cannot create file watcher for '{}': weak self not initialized",
+                        name
+                    );
+                    return;
+                }
+            };
+
             let mut watchers: Vec<FileWatcherHandle> = Vec::new();
 
             // Setup watchers for custom watchPaths if defined.
@@ -1628,6 +1676,7 @@ impl McpHub {
                             watch_path,
                             name.to_string(),
                             source,
+                            weak_hub.clone(),
                         ) {
                             watchers.push(handle);
                         }
@@ -1639,7 +1688,7 @@ impl McpHub {
             // Corresponds to TS: finding `build/index.js` in args
             if let Some(file_path) = args.iter().find(|arg| arg.contains("build/index.js")) {
                 if let Some(handle) =
-                    Self::create_path_watcher(file_path, name.to_string(), source)
+                    Self::create_path_watcher(file_path, name.to_string(), source, weak_hub)
                 {
                     watchers.push(handle);
                 }
@@ -1660,10 +1709,13 @@ impl McpHub {
     /// Create a file watcher for a specific path.
     ///
     /// Returns a `FileWatcherHandle` that keeps the watcher alive.
+    /// When a file change is detected, the server is restarted via the hub's
+    /// weak self-reference.
     fn create_path_watcher(
         path: &str,
         server_name: String,
-        _source: McpSource,
+        source: McpSource,
+        weak_hub: WeakHub,
     ) -> Option<FileWatcherHandle> {
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
         let path_buf = std::path::PathBuf::from(path);
@@ -1712,8 +1764,22 @@ impl McpHub {
                     "File change detected, triggering restart for server '{}'",
                     sn
                 );
-                // Note: The actual restart needs to be handled by the caller
-                // through the state change callback or a separate mechanism.
+                // Attempt to restart the server via the hub's weak reference
+                if let Some(hub) = weak_hub.upgrade() {
+                    if let Err(e) = hub.restart_connection(&sn, source).await {
+                        tracing::error!(
+                            "Failed to restart server '{}' after file change: {}",
+                            sn,
+                            e
+                        );
+                    }
+                } else {
+                    tracing::warn!(
+                        "Hub dropped, cannot restart server '{}' after file change",
+                        sn
+                    );
+                    break;
+                }
             }
         });
 
@@ -1747,7 +1813,8 @@ impl McpHub {
     ///
     /// Corresponds to TS: `watchMcpSettingsFile()` and `watchProjectMcpFile()`.
     /// Should be called after the hub is created with valid paths.
-    pub async fn start_config_watchers(&self) {
+    /// Takes `Arc<Self>` so the spawned watcher tasks can call back into the hub.
+    pub async fn start_config_watchers(self: Arc<Self>) {
         self.watch_mcp_settings_file().await;
         self.watch_project_mcp_file().await;
     }
@@ -1755,8 +1822,8 @@ impl McpHub {
     /// Watch the global MCP settings file for changes.
     ///
     /// Corresponds to TS: `watchMcpSettingsFile()`.
-    /// Debounces changes by 500ms and triggers config reload.
-    pub async fn watch_mcp_settings_file(&self) {
+    /// Debounces changes by 500ms and triggers config reload via `reload_config`.
+    async fn watch_mcp_settings_file(self: &Arc<Self>) {
         let settings_path = match &self.settings_path {
             Some(p) => p.clone(),
             None => return,
@@ -1793,6 +1860,7 @@ impl McpHub {
 
         let sp = settings_path.clone();
         let is_programmatic = self.is_programmatic_update.clone();
+        let hub = Arc::clone(self);
         let task = tokio::spawn(async move {
             loop {
                 if rx.recv().await.is_none() {
@@ -1806,7 +1874,9 @@ impl McpHub {
                 tokio::time::sleep(std::time::Duration::from_millis(500)).await;
                 while rx.try_recv().is_ok() {}
                 tracing::info!("MCP settings file changed: {}", sp);
-                // The actual reload is handled by the caller via the state change callback
+                if let Err(e) = hub.reload_config(&sp, McpSource::Global).await {
+                    tracing::error!("Failed to reload config from '{}': {}", sp, e);
+                }
             }
         });
 
@@ -1820,7 +1890,8 @@ impl McpHub {
     /// Watch the project MCP file (.roo/mcp.json) for changes.
     ///
     /// Corresponds to TS: `watchProjectMcpFile()`.
-    pub async fn watch_project_mcp_file(&self) {
+    /// Debounces changes by 500ms and triggers config reload via `reload_config`.
+    async fn watch_project_mcp_file(self: &Arc<Self>) {
         let workspace = match &self.workspace_path {
             Some(p) => p.clone(),
             None => return,
@@ -1867,6 +1938,7 @@ impl McpHub {
 
         let is_programmatic = self.is_programmatic_update.clone();
         let pmp = project_mcp_path.to_string_lossy().to_string();
+        let hub = Arc::clone(self);
         let task = tokio::spawn(async move {
             loop {
                 if rx.recv().await.is_none() {
@@ -1880,7 +1952,9 @@ impl McpHub {
                 tokio::time::sleep(std::time::Duration::from_millis(500)).await;
                 while rx.try_recv().is_ok() {}
                 tracing::info!("Project MCP file changed: {}", pmp);
-                // The actual reload is handled by the caller via the state change callback
+                if let Err(e) = hub.reload_config(&pmp, McpSource::Project).await {
+                    tracing::error!("Failed to reload config from '{}': {}", pmp, e);
+                }
             }
         });
 
@@ -1889,6 +1963,69 @@ impl McpHub {
             _watcher: watcher,
             _task: task,
         });
+    }
+
+    /// Reload MCP configuration from a config file.
+    ///
+    /// Corresponds to TS: `handleConfigFileChange(filePath, source)`.
+    /// Reads the file, parses it, and calls `update_server_connections` to
+    /// diff the new config with the current connections, adding/removing/restarting
+    /// servers as needed.
+    pub async fn reload_config(&self, file_path: &str, source: McpSource) -> McpResult<()> {
+        self.check_disposed()?;
+
+        let path = std::path::Path::new(file_path);
+
+        // If the file was deleted (project source), clean up all servers from that source
+        if !path.exists() {
+            if source == McpSource::Project {
+                tracing::info!("Project MCP config file deleted, cleaning up project servers");
+                self.update_server_connections(&HashMap::new(), source, false).await?;
+            }
+            return Ok(());
+        }
+
+        // Read the file
+        let content = match tokio::fs::read_to_string(file_path).await {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::error!("Failed to read MCP config file '{}': {}", file_path, e);
+                return Err(McpError::IoError(e));
+            }
+        };
+
+        // Parse the JSON
+        let config: serde_json::Value = match serde_json::from_str(&content) {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::error!("Invalid JSON in MCP config file '{}': {}", file_path, e);
+                return Err(McpError::SerializationError(e));
+            }
+        };
+
+        // Extract the mcpServers object
+        let mcp_servers = config
+            .get("mcpServers")
+            .and_then(|v| v.as_object())
+            .map(|obj| {
+                obj.iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect::<HashMap<String, serde_json::Value>>()
+            })
+            .unwrap_or_default();
+
+        // Update connections: this will diff with current state, removing deleted
+        // servers, adding new ones, and restarting changed ones.
+        self.update_server_connections(&mcp_servers, source, true).await?;
+
+        tracing::info!(
+            "Reloaded MCP config from '{}' ({:?}): {} server(s) defined",
+            file_path,
+            source,
+            mcp_servers.len()
+        );
+
+        Ok(())
     }
 
     /// Get the project MCP configuration path.
@@ -1932,6 +2069,137 @@ impl McpHub {
         if let Some(callback) = &self.on_state_change {
             callback();
         }
+    }
+
+    /// Resolve the config file path for a given source.
+    ///
+    /// Returns `None` if the source path is not configured or the file does not exist.
+    fn resolve_config_path(&self, source: McpSource) -> Option<String> {
+        match source {
+            McpSource::Global => self.settings_path.clone(),
+            McpSource::Project => {
+                let workspace = self.workspace_path.as_ref()?;
+                let path = std::path::PathBuf::from(workspace)
+                    .join(".roo")
+                    .join("mcp.json");
+                if path.exists() {
+                    Some(path.to_string_lossy().to_string())
+                } else {
+                    None
+                }
+            }
+        }
+    }
+
+    /// Persist a tool list change (alwaysAllow or disabledTools) to the config file on disk.
+    ///
+    /// Corresponds to TS: `updateServerToolList(serverName, source, toolName, listName, addTool)`.
+    /// Reads the config file, updates the specified list for the given server,
+    /// and writes the file back. Sets `is_programmatic_update` to prevent the
+    /// file watcher from triggering an unnecessary reload.
+    async fn update_tool_list_in_config_file(
+        &self,
+        server_name: &str,
+        source: McpSource,
+        tool_name: &str,
+        list_name: &str, // "alwaysAllow" or "disabledTools"
+        add_tool: bool,  // true = add tool to list, false = remove
+    ) -> McpResult<()> {
+        let config_path = match self.resolve_config_path(source) {
+            Some(p) => p,
+            None => {
+                // No config file configured (e.g., in tests or when no workspace is set).
+                // The in-memory state has already been updated, so this is a graceful no-op.
+                tracing::debug!(
+                    "No config file path for source {:?}, skipping disk persist",
+                    source
+                );
+                return Ok(());
+            }
+        };
+
+        let path = std::path::Path::new(&config_path);
+        if !path.exists() {
+            // Config file doesn't exist yet -- nothing to persist.
+            // The in-memory state has already been updated, which is sufficient.
+            tracing::debug!(
+                "Config file '{}' does not exist, skipping disk persist",
+                config_path
+            );
+            return Ok(());
+        }
+
+        // Read current config
+        let content = tokio::fs::read_to_string(&config_path).await
+            .map_err(|e| {
+                tracing::error!("Failed to read config file '{}': {}", config_path, e);
+                McpError::IoError(e)
+            })?;
+
+        let mut config: serde_json::Value = serde_json::from_str(&content)
+            .map_err(|e| {
+                tracing::error!("Invalid JSON in config file '{}': {}", config_path, e);
+                McpError::SerializationError(e)
+            })?;
+
+        // Ensure the structure exists
+        if config.get("mcpServers").is_none() {
+            config["mcpServers"] = serde_json::json!({});
+        }
+        let servers = config["mcpServers"].as_object_mut()
+            .ok_or_else(|| McpError::ConfigError("mcpServers is not an object".to_string()))?;
+
+        if servers.get(server_name).is_none() {
+            servers.insert(server_name.to_string(), serde_json::json!({}));
+        }
+        let server_cfg = servers.get_mut(server_name)
+            .ok_or_else(|| McpError::ConfigError(format!("Server '{}' not found in config", server_name)))?;
+
+        if server_cfg.get(list_name).is_none() {
+            server_cfg[list_name] = serde_json::json!([]);
+        }
+
+        let list = server_cfg[list_name].as_array_mut()
+            .ok_or_else(|| McpError::ConfigError(format!("{} is not an array", list_name)))?;
+
+        let tool_present = list.iter().any(|v| v.as_str() == Some(tool_name));
+
+        if add_tool && !tool_present {
+            list.push(serde_json::Value::String(tool_name.to_string()));
+        } else if !add_tool && tool_present {
+            list.retain(|v| v.as_str() != Some(tool_name));
+        }
+
+        // Write back with programmatic-update guard
+        *self.is_programmatic_update.write().await = true;
+        let json_bytes = serde_json::to_string_pretty(&config)
+            .map_err(|e| {
+                tracing::error!("Failed to serialize config: {}", e);
+                McpError::SerializationError(e)
+            })?;
+
+        tokio::fs::write(&config_path, &json_bytes).await
+            .map_err(|e| {
+                tracing::error!("Failed to write config file '{}': {}", config_path, e);
+                McpError::IoError(e)
+            })?;
+
+        // Reset the programmatic flag after the watcher debounce window
+        let is_programmatic = self.is_programmatic_update.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+            *is_programmatic.write().await = false;
+        });
+
+        tracing::debug!(
+            "Persisted {} change for tool '{}' on '{}' to '{}'",
+            list_name,
+            tool_name,
+            server_name,
+            config_path
+        );
+
+        Ok(())
     }
 
     /// Create a placeholder connection for disabled/disconnected servers.
