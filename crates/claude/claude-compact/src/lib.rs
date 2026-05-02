@@ -125,7 +125,7 @@ pub(crate) fn estimate_single_message_tokens(msg: &Message) -> u64 {
 pub use strategy::{
     CompactOptions, CompactProgressEvent, CompactStrategy, CompactStrategyType,
     CompactTelemetryProvider, CompactionResult, FnSummaryProvider, PostCompactAttachmentProvider,
-    PreservedSegment, SessionStartHookProvider, SummaryProvider,
+    PreservedSegment, RecompactionInfo, SessionStartHookProvider, SummaryProvider,
 };
 
 // ---------------------------------------------------------------------------
@@ -133,8 +133,9 @@ pub use strategy::{
 // ---------------------------------------------------------------------------
 
 pub use engine::{
-    FullCompactStrategy, PartialCompactStrategy, build_post_compact_messages, compact_conversation,
-    create_compact_boundary_message, merge_hook_instructions, partial_compact_conversation,
+    FullCompactStrategy, PartialCompactStrategy, annotate_boundary_with_preserved_segment,
+    build_post_compact_messages, compact_conversation, create_compact_boundary_message,
+    merge_hook_instructions, partial_compact_conversation,
 };
 
 // ---------------------------------------------------------------------------

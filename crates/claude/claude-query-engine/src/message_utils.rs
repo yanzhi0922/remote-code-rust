@@ -16,6 +16,7 @@ pub fn create_user_message(text: &str) -> Message {
         text: text.to_owned(),
         attachments: Vec::new(),
         provider_content_blocks: Vec::new(),
+        summarize_metadata: None,
     })
 }
 

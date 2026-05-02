@@ -232,6 +232,7 @@ fn create_compaction_result_from_session_memory(
         text: summary_text.clone(),
         attachments: Vec::new(),
         provider_content_blocks: Vec::new(),
+        summarize_metadata: None,
     });
 
     let post_compact_token_count =
@@ -544,6 +545,7 @@ mod tests {
             text: "hello".into(),
             attachments: Vec::new(),
             provider_content_blocks: Vec::new(),
+            summarize_metadata: None,
         });
         assert!(has_text_blocks(&message));
     }
@@ -607,12 +609,14 @@ mod tests {
                 text: "a".repeat(100),
                 attachments: Vec::new(),
                 provider_content_blocks: Vec::new(),
+                summarize_metadata: None,
             }),
             Message::User(UserMessage {
                 base: MessageBase::default(),
                 text: "b".repeat(100),
                 attachments: Vec::new(),
                 provider_content_blocks: Vec::new(),
+                summarize_metadata: None,
             }),
         ];
         let index =
@@ -642,6 +646,7 @@ mod tests {
                 "tool_use_id": "tool-1",
                 "content": "ok"
             })],
+            summarize_metadata: None,
         });
         let messages = vec![assistant, user];
         assert_eq!(adjust_index_to_preserve_api_invariants(&messages, 1), 0);

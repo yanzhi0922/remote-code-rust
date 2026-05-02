@@ -64,6 +64,32 @@ pub struct PreservedSegment {
 }
 
 // ---------------------------------------------------------------------------
+// Recompaction info (telemetry)
+// ---------------------------------------------------------------------------
+
+/// Diagnosis context passed from auto-compact into the compact engine.
+///
+/// Lets the `tengu_compact` telemetry event disambiguate same-chain loops
+/// from cross-agent and manual-vs-auto compactions without joins.
+///
+/// Mirrors `RecompactionInfo` from the TypeScript reference
+/// (`services/compact/compact.ts`).
+#[derive(Debug, Clone, Default)]
+pub struct RecompactionInfo {
+    /// Whether this compaction happens in a chain where a previous compact
+    /// already occurred.
+    pub is_recompaction_in_chain: bool,
+    /// How many turns elapsed since the last compaction.
+    pub turns_since_previous_compact: i64,
+    /// UUID of the turn where the previous compact happened.
+    pub previous_compact_turn_id: Option<String>,
+    /// Token threshold that triggers auto-compaction for the current model.
+    pub auto_compact_threshold: u64,
+    /// Origin of the query (e.g., "user", "api").
+    pub query_source: Option<String>,
+}
+
+// ---------------------------------------------------------------------------
 // Compaction result
 // ---------------------------------------------------------------------------
 
@@ -227,6 +253,12 @@ pub struct CompactOptions {
     /// sections, classifier approvals, file state, etc.).
     /// Mirrors `runPostCompactCleanup()` from the TS reference.
     pub post_compact_cleanup_provider: Option<Arc<PostCompactCleanupProvider>>,
+    /// Optional recompaction diagnostic context for telemetry.
+    ///
+    /// When `Some`, included in the `tengu_compact` telemetry event to
+    /// disambiguate same-chain loops from cross-agent compactions.
+    /// Mirrors `RecompactionInfo` from the TS reference.
+    pub recompaction_info: Option<RecompactionInfo>,
     /// Optional telemetry callback for analytics events.
     ///
     /// When `Some`, called at key points during compaction (success, failure,
@@ -250,6 +282,7 @@ impl Default for CompactOptions {
             pre_compact_hook_provider: None,
             post_compact_hook_provider: None,
             post_compact_cleanup_provider: None,
+            recompaction_info: None,
             telemetry_provider: None,
         }
     }

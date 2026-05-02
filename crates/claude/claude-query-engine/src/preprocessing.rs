@@ -429,6 +429,7 @@ pub fn create_continuation_message() -> Message {
         text: "Please continue from where you left off.".to_owned(),
         attachments: Vec::new(),
         provider_content_blocks: Vec::new(),
+        summarize_metadata: None,
     })
 }
 

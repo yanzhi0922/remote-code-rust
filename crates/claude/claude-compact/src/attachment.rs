@@ -182,6 +182,7 @@ pub fn create_file_attachment_message(
             Some(filename.to_string()),
         )],
         provider_content_blocks: Vec::new(),
+        summarize_metadata: None,
     })
 }
 
@@ -248,6 +249,7 @@ pub fn create_plan_attachment_if_needed(
             Some(path.to_string()),
         )],
         provider_content_blocks: Vec::new(),
+        summarize_metadata: None,
     }))
 }
 
@@ -294,6 +296,7 @@ pub fn create_skill_attachment_if_needed(registry: &InvokedSkillRegistry) -> Opt
         text,
         attachments: Vec::new(),
         provider_content_blocks: Vec::new(),
+        summarize_metadata: None,
     }))
 }
 

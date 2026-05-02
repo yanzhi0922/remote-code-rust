@@ -321,6 +321,7 @@ mod tests {
             text: text.to_owned(),
             attachments: Vec::new(),
             provider_content_blocks: Vec::new(),
+            summarize_metadata: None,
         })
     }
 
@@ -356,6 +357,7 @@ mod tests {
             text: "short result".into(),
             attachments: Vec::new(),
             provider_content_blocks: Vec::new(),
+            summarize_metadata: None,
         })];
         let config = MicroCompactConfig {
             min_result_tokens: 5000,
