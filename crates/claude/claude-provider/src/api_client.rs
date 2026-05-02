@@ -591,7 +591,7 @@ fn build_auth_headers(provider: &ProviderConfig) -> Result<HeaderMap> {
     headers.insert(ACCEPT, HeaderValue::from_static("application/json"));
 
     if matches!(provider.protocol, ProviderProtocol::Anthropic) {
-        headers.insert(USER_AGENT, HeaderValue::from_static("claude-code/1.0.18"));
+        headers.insert(USER_AGENT, HeaderValue::from_str(&super::claude_code_user_agent())?);
         headers.insert(
             HeaderName::from_static("anthropic-version"),
             HeaderValue::from_static("2023-06-01"),

@@ -791,9 +791,10 @@ fn build_request_header_overrides(session_id: Option<Uuid>) -> BTreeMap<String, 
 }
 
 fn build_request_metadata(session_id: Option<Uuid>) -> BTreeMap<String, String> {
+    let device_id = get_or_create_device_id();
     let mut metadata = BTreeMap::from([
-        ("client".to_owned(), "remote-code-rust".to_owned()),
-        ("version".to_owned(), RUNTIME_VERSION.to_owned()),
+        ("device_id".to_owned(), device_id),
+        ("account_uuid".to_owned(), String::new()),
     ]);
     if let Some(session_id) = session_id {
         metadata.insert("session_id".to_owned(), session_id.to_string());
@@ -821,6 +822,40 @@ fn build_request_metadata(session_id: Option<Uuid>) -> BTreeMap<String, String> 
     }
 
     metadata
+}
+
+/// Get or create a persistent device ID, matching the official CLI's
+/// `getOrCreateUserID()` behavior (64-char hex string persisted in config).
+fn get_or_create_device_id() -> String {
+    let config_path = default_profile_dir()
+        .ok()
+        .map(|dir| dir.join("device_id"));
+
+    if let Some(ref path) = config_path
+        && let Ok(existing) = fs::read_to_string(path)
+    {
+        let trimmed = existing.trim().to_owned();
+        if !trimmed.is_empty() {
+            return trimmed;
+        }
+    }
+
+    // Generate a 64-char hex string (256 bits) matching crypto.randomBytes(32).toString('hex')
+    let id = format!(
+        "{}{}{}{}",
+        Uuid::new_v4().simple(),
+        Uuid::new_v4().simple(),
+        Uuid::new_v4().simple(),
+        Uuid::new_v4().simple(),
+    );
+    // Take first 64 chars
+    let id = &id[..64];
+
+    if let Some(ref path) = config_path {
+        let _ = fs::write(path, id);
+    }
+
+    id.to_owned()
 }
 
 /// Parse a permission mode string from settings files.
