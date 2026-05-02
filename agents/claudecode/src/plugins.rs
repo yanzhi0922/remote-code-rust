@@ -3,7 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Result, anyhow};
-use claude_config::{RUNTIME_VERSION, RuntimeConfig, SettingSource};
+use claude_config::{runtime_version, RuntimeConfig, SettingSource};
 
 use crate::cli::{
     PluginsCommand, PluginsInspectArgs, PluginsInstallArgs, PluginsInvokeArgs, PluginsListArgs,
@@ -609,7 +609,7 @@ async fn build_plugins_list_output(
                 Some(
                     match claude_plugins::inspect_runtime(
                         &entry.bundle,
-                        &claude_plugins::PluginHostInfo::new("remote-code-rust", RUNTIME_VERSION),
+                        &claude_plugins::PluginHostInfo::new("remote-code-rust", runtime_version()),
                     )
                     .await
                     {
@@ -655,7 +655,7 @@ async fn build_plugins_inspect_output(
         Some(
             match claude_plugins::inspect_runtime(
                 &resolution.entry.bundle,
-                &claude_plugins::PluginHostInfo::new("remote-code-rust", RUNTIME_VERSION),
+                &claude_plugins::PluginHostInfo::new("remote-code-rust", runtime_version()),
             )
             .await
             {
@@ -693,7 +693,7 @@ async fn build_plugins_invoke_output(
     let input = parse_plugin_invoke_input(args)?;
     let response = claude_plugins::invoke_runtime(
         &resolution.entry.bundle,
-        &claude_plugins::PluginHostInfo::new("remote-code-rust", RUNTIME_VERSION),
+        &claude_plugins::PluginHostInfo::new("remote-code-rust", runtime_version()),
         &args.action,
         input.clone(),
     )

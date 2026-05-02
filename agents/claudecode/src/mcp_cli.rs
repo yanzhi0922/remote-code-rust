@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
 use anyhow::{Result, anyhow};
-use claude_config::{RUNTIME_VERSION, RuntimeConfig};
+use claude_config::{runtime_version, RuntimeConfig};
 use claude_tools::mcp_runtime::{
     RuntimeMcpResolution, RuntimeMcpServerObservation, observe_runtime_mcp_servers,
     resolve_runtime_mcp_server,
@@ -624,7 +624,7 @@ pub(crate) async fn build_mcp_list_output(
         config,
         &args.config_paths,
         args.connect,
-        &claude_mcp::McpClientInfo::new("remote-code-rust", RUNTIME_VERSION),
+        &claude_mcp::McpClientInfo::new("remote-code-rust", runtime_version()),
     )
     .await;
     let filters = args.servers.iter().cloned().collect::<BTreeSet<_>>();
@@ -698,7 +698,7 @@ pub(crate) async fn build_mcp_call_output(
     let arguments = parse_mcp_call_arguments(args)?;
     let response = claude_mcp::call_tool(
         &resolution.entry.server,
-        &claude_mcp::McpClientInfo::new("remote-code-rust", RUNTIME_VERSION),
+        &claude_mcp::McpClientInfo::new("remote-code-rust", runtime_version()),
         &args.tool,
         arguments.clone(),
     )
