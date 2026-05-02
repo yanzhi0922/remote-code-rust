@@ -380,89 +380,131 @@ pub async fn run_query_loop(
                 .await;
         }
 
-        for (batch_index, tool_call) in response.tool_calls.iter().enumerate() {
-            let _ = config
-                .observer
-                .on_event(QueryObserverEvent::ToolCallStarted {
-                    tool_call: tool_call.clone(),
-                    turn: state.turn,
-                    batch_size: response.tool_calls.len(),
-                    batch_index,
-                })
-                .await;
-            config.event_stream.emit(EngineEvent::ToolUseStarted {
-                tool_use_id: tool_call.id.clone(),
-                tool_name: tool_call.name.clone(),
-                input: tool_call.input.clone(),
-            });
-            let tool_run = match config.tool_runner.run_tool(tool_call, &context).await {
-                Ok(result) => result,
-                Err(error) => {
-                    config.event_stream.emit(EngineEvent::ToolUseError {
+        // --- Tool execution with parallel dispatch ---
+        // Mirrors the TS reference's StreamingToolExecutor + toolOrchestration pattern:
+        // tool calls are partitioned into batches of consecutive concurrency-safe
+        // (parallel) or unsafe (serial) tools.  Safe batches run concurrently;
+        // unsafe tools run one at a time.  Results are committed in the original
+        // order to maintain message ordering invariants.
+        let tool_batches = partition_tool_calls(&response.tool_calls);
+        let mut global_index = 0usize;
+
+        for batch in &tool_batches {
+            if batch.parallel && batch.indices.len() > 1 {
+                // Concurrent batch — run all tools in parallel via tokio::spawn
+                let mut handles: Vec<(usize, tokio::task::JoinHandle<Result<ToolRunResult>>)> =
+                    Vec::new();
+                for &local_idx in &batch.indices {
+                    let tool_call = response.tool_calls[local_idx].clone();
+                    let runner = Arc::clone(&config.tool_runner);
+                    let ctx = context.clone();
+
+                    config.event_stream.emit(EngineEvent::ToolUseStarted {
                         tool_use_id: tool_call.id.clone(),
-                        error: ToolError {
-                            message: format!("{error:#}"),
-                            retryable: false,
-                        },
+                        tool_name: tool_call.name.clone(),
+                        input: tool_call.input.clone(),
                     });
-                    ToolRunResult::from(ToolResult {
-                        content: format!("Tool execution error: {error:#}"),
-                        is_error: true,
-                        content_blocks: Vec::new(),
-                        follow_up_user_blocks: Vec::new(),
-                    })
+
+                    let handle = tokio::spawn(async move {
+                        runner.run_tool(&tool_call, &ctx).await
+                    });
+                    handles.push((local_idx, handle));
                 }
-            };
-            if let Some(permission_denial) = tool_run.permission_denial.clone() {
-                state.permission_denials.push(permission_denial);
+
+                // Await all concurrent tool runs
+                let mut results: Vec<(usize, ToolRunResult)> = Vec::with_capacity(handles.len());
+                for (local_idx, handle) in handles {
+                    let tool_run = match handle.await {
+                        Ok(Ok(r)) => r,
+                        Ok(Err(error)) => ToolRunResult::from(ToolResult {
+                            content: format!("Tool execution error: {error:#}"),
+                            is_error: true,
+                            content_blocks: Vec::new(),
+                            follow_up_user_blocks: Vec::new(),
+                        }),
+                        Err(join_err) => ToolRunResult::from(ToolResult {
+                            content: format!("Tool task panicked: {join_err}"),
+                            is_error: true,
+                            content_blocks: Vec::new(),
+                            follow_up_user_blocks: Vec::new(),
+                        }),
+                    };
+                    results.push((local_idx, tool_run));
+                }
+
+                // Commit results in original order
+                results.sort_by_key(|(idx, _)| *idx);
+                for (local_idx, tool_run) in results {
+                    let tool_call = &response.tool_calls[local_idx];
+                    let batch_size = response.tool_calls.len();
+                    commit_tool_result(
+                        config,
+                        state,
+                        &context,
+                        tool_call,
+                        &tool_run,
+                        state.turn,
+                        batch_size,
+                        global_index,
+                    )
+                    .await;
+                    global_index += 1;
+                }
             } else {
-                record_permission_denial(state, tool_call, &tool_run.result);
-            }
-            config.event_stream.emit(EngineEvent::ToolUseCompleted {
-                tool_use_id: tool_call.id.clone(),
-                result: EventToolResult {
-                    content: tool_run.result.content.clone(),
-                    is_error: tool_run.result.is_error,
-                    mime_type: None,
-                },
-            });
-            if !tool_run.pre_messages.is_empty() {
-                state.messages.extend(tool_run.pre_messages.clone());
-                let _ = config
-                    .observer
-                    .on_event(QueryObserverEvent::MessagesAppended {
-                        session_id: context.session_id.clone(),
-                        appended: tool_run.pre_messages.clone(),
-                        total_messages: state.messages.len(),
-                    })
+                // Serial batch — one tool at a time
+                for &local_idx in &batch.indices {
+                    let tool_call = &response.tool_calls[local_idx];
+                    let batch_size = response.tool_calls.len();
+
+                    let _ = config
+                        .observer
+                        .on_event(QueryObserverEvent::ToolCallStarted {
+                            tool_call: tool_call.clone(),
+                            turn: state.turn,
+                            batch_size,
+                            batch_index: global_index,
+                        })
+                        .await;
+                    config.event_stream.emit(EngineEvent::ToolUseStarted {
+                        tool_use_id: tool_call.id.clone(),
+                        tool_name: tool_call.name.clone(),
+                        input: tool_call.input.clone(),
+                    });
+
+                    let tool_run =
+                        match config.tool_runner.run_tool(tool_call, &context).await {
+                            Ok(result) => result,
+                            Err(error) => {
+                                config.event_stream.emit(EngineEvent::ToolUseError {
+                                    tool_use_id: tool_call.id.clone(),
+                                    error: ToolError {
+                                        message: format!("{error:#}"),
+                                        retryable: false,
+                                    },
+                                });
+                                ToolRunResult::from(ToolResult {
+                                    content: format!("Tool execution error: {error:#}"),
+                                    is_error: true,
+                                    content_blocks: Vec::new(),
+                                    follow_up_user_blocks: Vec::new(),
+                                })
+                            }
+                        };
+
+                    commit_tool_result(
+                        config,
+                        state,
+                        &context,
+                        tool_call,
+                        &tool_run,
+                        state.turn,
+                        batch_size,
+                        global_index,
+                    )
                     .await;
+                    global_index += 1;
+                }
             }
-            state
-                .messages
-                .push(tool_result_message(tool_call, &tool_run.result));
-            let _ = config
-                .observer
-                .on_event(QueryObserverEvent::ToolResultCommitted {
-                    tool_call: tool_call.clone(),
-                    result: tool_run.result.clone(),
-                    turn: state.turn,
-                    total_messages: state.messages.len(),
-                })
-                .await;
-            if !tool_run.post_messages.is_empty() {
-                state.messages.extend(tool_run.post_messages.clone());
-                let _ = config
-                    .observer
-                    .on_event(QueryObserverEvent::MessagesAppended {
-                        session_id: context.session_id.clone(),
-                        appended: tool_run.post_messages.clone(),
-                        total_messages: state.messages.len(),
-                    })
-                    .await;
-            }
-            config.event_stream.emit(EngineEvent::StateUpdated {
-                state_snapshot: state_snapshot(state, 1),
-            });
         }
 
         for checkpoint in checkpoints {
@@ -840,4 +882,150 @@ impl SwitchResultExt for crate::model_switch::SwitchResult {
     fn is_switched(&self) -> bool {
         matches!(self, Self::Switched { .. })
     }
+}
+
+// ---------------------------------------------------------------------------
+// Parallel tool execution — mirrors TS toolOrchestration + StreamingToolExecutor
+// ---------------------------------------------------------------------------
+
+/// A batch of tool calls sharing the same concurrency safety.
+struct ToolBatch {
+    /// Whether every tool in this batch is safe to run concurrently.
+    parallel: bool,
+    /// Indices into the original tool_calls vector.
+    indices: Vec<usize>,
+}
+
+/// Determine whether a tool is concurrency-safe (read-only / no side effects).
+/// Matches the TS reference's concurrency safety classification.
+fn is_concurrency_safe_tool(name: &str) -> bool {
+    matches!(
+        name,
+        "Read"
+            | "read_file"
+            | "Glob"
+            | "glob"
+            | "Grep"
+            | "grep"
+            | "search_files"
+            | "WebSearch"
+            | "web_search"
+            | "WebFetch"
+            | "web_fetch"
+            | "LSP"
+            | "lsp"
+            | "ListMcpResources"
+            | "list_mcp_resources"
+            | "ReadMcpResource"
+            | "read_mcp_resource"
+            | "find_references"
+            | "go_to_definition"
+            | "hover"
+            | "document_symbol"
+            | "workspace_symbol"
+            | "go_to_implementation"
+            | "get_diagnostics"
+    )
+}
+
+/// Partition tool calls into batches of consecutive concurrency-safe or
+/// non-concurrency-safe tools, matching the TS `partition_tool_calls`.
+fn partition_tool_calls(tool_calls: &[claude_core::ToolCall]) -> Vec<ToolBatch> {
+    let mut batches: Vec<ToolBatch> = Vec::new();
+
+    for (i, call) in tool_calls.iter().enumerate() {
+        let safe = is_concurrency_safe_tool(&call.name);
+        if safe {
+            if let Some(last) = batches.last_mut()
+                && last.parallel
+            {
+                last.indices.push(i);
+                continue;
+            }
+            batches.push(ToolBatch {
+                parallel: true,
+                indices: vec![i],
+            });
+        } else {
+            batches.push(ToolBatch {
+                parallel: false,
+                indices: vec![i],
+            });
+        }
+    }
+
+    batches
+}
+
+/// Commit a single tool result to state: record permission denials, emit events,
+/// append pre/post messages and the tool result message.
+async fn commit_tool_result(
+    config: &QueryEngineConfig,
+    state: &mut EngineState,
+    context: &ProcessUserInputContext,
+    tool_call: &claude_core::ToolCall,
+    tool_run: &ToolRunResult,
+    turn: u32,
+    batch_size: usize,
+    batch_index: usize,
+) {
+    if let Some(permission_denial) = tool_run.permission_denial.clone() {
+        state.permission_denials.push(permission_denial);
+    } else {
+        record_permission_denial(state, tool_call, &tool_run.result);
+    }
+    let _ = config
+        .observer
+        .on_event(QueryObserverEvent::ToolCallStarted {
+            tool_call: tool_call.clone(),
+            turn,
+            batch_size,
+            batch_index,
+        })
+        .await;
+    config.event_stream.emit(EngineEvent::ToolUseCompleted {
+        tool_use_id: tool_call.id.clone(),
+        result: EventToolResult {
+            content: tool_run.result.content.clone(),
+            is_error: tool_run.result.is_error,
+            mime_type: None,
+        },
+    });
+    if !tool_run.pre_messages.is_empty() {
+        state.messages.extend(tool_run.pre_messages.clone());
+        let _ = config
+            .observer
+            .on_event(QueryObserverEvent::MessagesAppended {
+                session_id: context.session_id.clone(),
+                appended: tool_run.pre_messages.clone(),
+                total_messages: state.messages.len(),
+            })
+            .await;
+    }
+    state
+        .messages
+        .push(tool_result_message(tool_call, &tool_run.result));
+    let _ = config
+        .observer
+        .on_event(QueryObserverEvent::ToolResultCommitted {
+            tool_call: tool_call.clone(),
+            result: tool_run.result.clone(),
+            turn,
+            total_messages: state.messages.len(),
+        })
+        .await;
+    if !tool_run.post_messages.is_empty() {
+        state.messages.extend(tool_run.post_messages.clone());
+        let _ = config
+            .observer
+            .on_event(QueryObserverEvent::MessagesAppended {
+                session_id: context.session_id.clone(),
+                appended: tool_run.post_messages.clone(),
+                total_messages: state.messages.len(),
+            })
+            .await;
+    }
+    config.event_stream.emit(EngineEvent::StateUpdated {
+        state_snapshot: state_snapshot(state, 1),
+    });
 }
