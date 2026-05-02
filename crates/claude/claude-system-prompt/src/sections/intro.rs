@@ -33,8 +33,8 @@ impl SystemPromptSection for IntroSection {
 
         let content = format!(
             "\nYou are an interactive agent that helps users {output_style_line} Use the instructions below and the tools available to you to assist the user.\n\n\
-            {CYBER_RISK_INSTRUCTION}\n\
-            IMPORTANT: You must NEVER generate or guess URLs for the user unless you are confident that the URLs are for helping the user with programming. You may use URLs provided by the user in their messages or local files."
+{CYBER_RISK_INSTRUCTION}\n\
+IMPORTANT: You must NEVER generate or guess URLs for the user unless you are confident that the URLs are for helping the user with programming. You may use URLs provided by the user in their messages or local files."
         );
 
         Ok(Some(content))

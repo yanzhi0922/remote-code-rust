@@ -18,7 +18,7 @@ pub const ATTRIBUTION_HEADER: &str = "x-attribution";
 pub fn build_attribution_header() -> Result<HeaderValue, reqwest::header::InvalidHeaderValue> {
     let value = format!(
         r#"{{"client":"claude-code","version":"{}"}}"#,
-        claude_config::RUNTIME_VERSION
+        claude_config::runtime_version()
     );
     HeaderValue::from_str(&value)
 }
@@ -38,7 +38,7 @@ pub fn build_attribution_header_pair()
 ///
 /// This matches the TS reference `getAttributionHeader` in `constants/system.ts`.
 pub fn build_billing_attribution_text(fingerprint: &str) -> String {
-    let version = claude_config::RUNTIME_VERSION;
+    let version = claude_config::runtime_version();
     let entrypoint = std::env::var("CLAUDE_CODE_ENTRYPOINT")
         .ok()
         .filter(|s| !s.trim().is_empty())

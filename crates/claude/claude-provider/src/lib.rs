@@ -1077,7 +1077,7 @@ fn claude_code_user_agent() -> String {
     }
     format!(
         "claude-cli/{} ({})",
-        claude_config::RUNTIME_VERSION,
+        claude_config::runtime_version(),
         parts.join(", ")
     )
 }
@@ -1935,7 +1935,7 @@ async fn build_anthropic_request_body(
     // the official Claude Code CLI.  The fingerprint is derived from the first
     // user message text using the same SHA-256 + salt algorithm.
     if matches!(provider.protocol, ProviderProtocol::Anthropic) {
-        let fp = fingerprint::compute_attribution_fingerprint(&messages, claude_config::RUNTIME_VERSION);
+        let fp = fingerprint::compute_attribution_fingerprint(&messages, claude_config::runtime_version());
         let attr_text = attribution::build_billing_attribution_text(&fp);
         system.insert(0, json!({
             "type": "text",

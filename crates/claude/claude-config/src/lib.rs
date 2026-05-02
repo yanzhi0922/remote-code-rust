@@ -29,7 +29,22 @@ use crate::settings_layers::{
 };
 use crate::tool_filters::merge_tool_filters;
 
-pub const RUNTIME_VERSION: &str = env!("CARGO_PKG_VERSION");
+/// Runtime version used in User-Agent, billing attribution, and API metadata.
+///
+/// Can be overridden at runtime via the `CLAUDE_CODE_CLI_VERSION` environment
+/// variable to match the official Claude Code CLI version (e.g. "2.1.39").
+pub fn runtime_version() -> &'static str {
+    static VERSION: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    VERSION.get_or_init(|| {
+        std::env::var("CLAUDE_CODE_CLI_VERSION")
+            .ok()
+            .filter(|v| !v.trim().is_empty())
+            .unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_owned())
+    })
+}
+
+/// Compile-time fallback version (CARGO_PKG_VERSION).
+pub const CARGO_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 const RESERVED_PROVIDER_HEADER_NAMES: &[&str] = &["content-length", "content-type", "host"];
 
@@ -784,7 +799,7 @@ fn build_request_header_overrides(session_id: Option<Uuid>) -> BTreeMap<String, 
         }
         let resolved = value
             .replace("${REMOTE_CODE_SESSION_ID}", &session)
-            .replace("${REMOTE_CODE_VERSION}", RUNTIME_VERSION);
+            .replace("${REMOTE_CODE_VERSION}", runtime_version());
         filtered.insert(name, resolved);
     }
     filtered
