@@ -1291,6 +1291,7 @@ impl Handler {
         let ask_response = match ask_response_str {
             "yesButtonClicked" | "yes" => AskResponse::YesButtonClicked,
             "noButtonClicked" | "no" => AskResponse::NoButtonClicked,
+            "objectResponse" => AskResponse::ObjectResponse,
             _ => AskResponse::MessageResponse,
         };
 

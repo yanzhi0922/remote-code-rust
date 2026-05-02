@@ -248,41 +248,46 @@ impl AnthropicHandler {
         }
 
         // Add extended thinking configuration
+        // Source: `src/api/transform/model-params.ts` — 3-step clamping:
+        //   1. Default = 8192 (DEFAULT_HYBRID_REASONING_MODEL_THINKING_TOKENS)
+        //   2. Cap at 80% of maxTokens
+        //   3. Floor at 1024
         if self.use_extended_thinking {
-            let budget_tokens = self
+            let mut budget_tokens = self
                 .max_thinking_tokens
-                .unwrap_or(10000)
-                .min(max_tokens.saturating_sub(1));
+                .unwrap_or(8192);
+
+            // Cap at 80% of maxTokens
+            let cap = (max_tokens as f64 * 0.8).floor() as u64;
+            if budget_tokens > cap {
+                budget_tokens = cap;
+            }
+
+            // Floor at 1024 minimum
+            const MIN_THINKING_TOKENS: u64 = 1024;
+            if budget_tokens < MIN_THINKING_TOKENS {
+                budget_tokens = MIN_THINKING_TOKENS;
+            }
+
             body["thinking"] = json!({
                 "type": "enabled",
                 "budget_tokens": budget_tokens,
             });
             // Extended thinking requires temperature to be unset (or 1.0)
-            // Remove temperature from body when thinking is enabled
             if let Some(obj) = body.as_object_mut() {
                 obj.remove("temperature");
             }
         }
 
         // Add tools if provided
+        // Source: `src/api/providers/anthropic.ts` — tools are passed without
+        // cache_control; caching is applied only to system and user messages.
         if let Some(tools) = tools {
             if !tools.is_empty() {
-                let mut anthropic_tools: Vec<Value> = tools
+                let anthropic_tools: Vec<Value> = tools
                     .iter()
                     .map(|tool| convert_tool_for_anthropic(tool))
                     .collect();
-
-                // Add cache_control to the last tool definition for prompt caching
-                if self.model_info.supports_prompt_cache {
-                    if let Some(last_tool) = anthropic_tools.last_mut() {
-                        if let Some(obj) = last_tool.as_object_mut() {
-                            obj.insert(
-                                "cache_control".to_string(),
-                                json!({ "type": "ephemeral" }),
-                            );
-                        }
-                    }
-                }
 
                 body["tools"] = json!(anthropic_tools);
             }
@@ -618,11 +623,10 @@ fn convert_to_anthropic_messages(messages: &[ApiMessage]) -> Vec<Value> {
                             "data": data,
                         }),
                         roo_types::api::ImageSource::Url { url } => {
-                            // Anthropic doesn't support URL images directly,
-                            // but we include the URL as a text description
+                            // Anthropic supports URL images via "type": "url" source
                             json!({
-                                "type": "text",
-                                "text": format!("[Image: {}]", url),
+                                "type": "url",
+                                "url": url,
                             })
                         }
                     };
@@ -895,19 +899,15 @@ impl Provider for AnthropicHandler {
 
         let resp: Value = response.json().await.map_err(ProviderError::Reqwest)?;
 
-        // Extract text from content blocks
+        // Extract text from content blocks — return first text block (matches TS `.find()`)
         if let Some(content) = resp.get("content").and_then(|c| c.as_array()) {
-            let text: String = content
-                .iter()
-                .filter_map(|block| {
-                    if block.get("type").and_then(|t| t.as_str()) == Some("text") {
-                        block.get("text").and_then(|t| t.as_str())
-                    } else {
-                        None
+            for block in content {
+                if block.get("type").and_then(|t| t.as_str()) == Some("text") {
+                    if let Some(text) = block.get("text").and_then(|t| t.as_str()) {
+                        return Ok(text.to_string());
                     }
-                })
-                .collect();
-            return Ok(text);
+                }
+            }
         }
 
         Ok(String::new())
@@ -953,7 +953,7 @@ impl AnthropicVertexHandler {
     /// account JSON. If parsing succeeds, a [`VertexTokenProvider`] is created
     /// for automatic OAuth2 token management. Otherwise, the raw string is
     /// used as a static access token (backward-compatible behavior).
-    pub fn new(config: AnthropicVertexConfig) -> Result<Self> {
+    pub fn new(mut config: AnthropicVertexConfig) -> Result<Self> {
         let model_id = config
             .model_id
             .clone()
@@ -1019,6 +1019,8 @@ impl AnthropicVertexHandler {
         // using it as a raw access token (backward-compatible).
         let token_provider = VertexTokenProvider::new(&config.access_token).ok();
 
+        let max_thinking_tokens = config.max_thinking_tokens.take();
+
         Ok(Self {
             http_client,
             config,
@@ -1027,7 +1029,7 @@ impl AnthropicVertexHandler {
             model_info,
             temperature,
             use_extended_thinking,
-            max_thinking_tokens: None,
+            max_thinking_tokens,
             betas,
         })
     }
@@ -1098,11 +1100,24 @@ impl AnthropicVertexHandler {
         }
 
         // Add extended thinking configuration
+        // Source: `src/api/transform/model-params.ts` — 3-step clamping
         if self.use_extended_thinking {
-            let budget_tokens = self
+            let mut budget_tokens = self
                 .max_thinking_tokens
-                .unwrap_or(10000)
-                .min(max_tokens.saturating_sub(1));
+                .unwrap_or(8192);
+
+            // Cap at 80% of maxTokens
+            let cap = (max_tokens as f64 * 0.8).floor() as u64;
+            if budget_tokens > cap {
+                budget_tokens = cap;
+            }
+
+            // Floor at 1024 minimum
+            const MIN_THINKING_TOKENS: u64 = 1024;
+            if budget_tokens < MIN_THINKING_TOKENS {
+                budget_tokens = MIN_THINKING_TOKENS;
+            }
+
             body["thinking"] = json!({
                 "type": "enabled",
                 "budget_tokens": budget_tokens,
@@ -1113,7 +1128,7 @@ impl AnthropicVertexHandler {
             }
         }
 
-        // Add tools if provided
+        // Add tools if provided (no cache_control on tools — matches TS)
         if let Some(tools) = tools {
             if !tools.is_empty() {
                 let anthropic_tools: Vec<Value> = tools
@@ -1296,19 +1311,15 @@ impl Provider for AnthropicVertexHandler {
 
         let resp: Value = response.json().await.map_err(ProviderError::Reqwest)?;
 
-        // Extract text from content blocks
+        // Extract text from content blocks — return first text block (matches TS `.find()`)
         if let Some(content) = resp.get("content").and_then(|c| c.as_array()) {
-            let text: String = content
-                .iter()
-                .filter_map(|block| {
-                    if block.get("type").and_then(|t| t.as_str()) == Some("text") {
-                        block.get("text").and_then(|t| t.as_str())
-                    } else {
-                        None
+            for block in content {
+                if block.get("type").and_then(|t| t.as_str()) == Some("text") {
+                    if let Some(text) = block.get("text").and_then(|t| t.as_str()) {
+                        return Ok(text.to_string());
                     }
-                })
-                .collect();
-            return Ok(text);
+                }
+            }
         }
 
         Ok(String::new())
