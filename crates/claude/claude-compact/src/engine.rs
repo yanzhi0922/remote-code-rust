@@ -265,18 +265,12 @@ pub async fn compact_conversation(
     let messages_removed = messages.len().saturating_sub(preserve_count);
 
     // Build the compact boundary system message
-    let boundary_metadata = serde_json::json!({
-        "trigger": trigger,
-        "preTokens": pre_compact_token_count,
-    });
-    let boundary_marker = Message::System(SystemMessage {
-        base: MessageBase::with_origin(MessageOrigin::Compact),
-        subtype: SystemMessageSubtype::CompactBoundary,
-        text: serde_json::to_string(&boundary_metadata).unwrap_or_else(|_| {
-            format!("{{\"trigger\":\"{trigger}\",\"preTokens\":{pre_compact_token_count}}}")
-        }),
-        error: None,
-    });
+    let last_pre_compact_uuid = messages.last().map(|m| m.uuid());
+    let mut boundary_marker = create_compact_boundary_message(
+        trigger,
+        pre_compact_token_count,
+        last_pre_compact_uuid,
+    );
 
     // Build the summary user message
     let formatted_summary = format_compact_summary(&summary);
@@ -309,16 +303,24 @@ pub async fn compact_conversation(
         text: summary_text,
         attachments: Vec::new(),
         provider_content_blocks: Vec::new(),
+        summarize_metadata: None,
     });
 
     // Build preserved segments
     let preserved_segments = if preserve_count > 0 {
         let kept: Vec<&Message> = messages.iter().rev().take(preserve_count).collect();
-        vec![PreservedSegment {
+        let seg = PreservedSegment {
             head_uuid: kept.last().map(|m| m.uuid()).unwrap_or_default(),
             anchor_uuid: summary_message.uuid(),
             tail_uuid: kept.first().map(|m| m.uuid()).unwrap_or_default(),
-        }]
+        };
+        // Annotate boundary with preservedSegment (TS: annotateBoundaryWithPreservedSegment)
+        boundary_marker = annotate_boundary_with_preserved_segment(
+            &boundary_marker,
+            seg.anchor_uuid,
+            &messages.iter().rev().take(preserve_count).cloned().collect::<Vec<_>>(),
+        );
+        vec![seg]
     } else {
         Vec::new()
     };
@@ -385,13 +387,26 @@ pub async fn compact_conversation(
     }
 
     // Telemetry: successful full compaction
+    let ri = options.recompaction_info.as_ref();
+    let query_source_for_event = ri
+        .and_then(|r| r.query_source.as_deref())
+        .unwrap_or("unknown");
+    let auto_compact_threshold = ri.map(|r| r.auto_compact_threshold).unwrap_or(0);
+    let true_post_compact = result.post_compact_token_count.unwrap_or(0);
     emit_telemetry(
         &options,
         "tengu_compact",
         serde_json::json!({
             "preCompactTokenCount": result.pre_compact_token_count,
             "postCompactTokenCount": result.post_compact_token_count,
+            "truePostCompactTokenCount": true_post_compact,
+            "autoCompactThreshold": auto_compact_threshold,
+            "willRetriggerNextTurn": ri.is_some() && true_post_compact >= auto_compact_threshold,
             "isAutoCompact": options.is_auto_compact,
+            "querySource": query_source_for_event,
+            "isRecompactionInChain": ri.map(|r| r.is_recompaction_in_chain).unwrap_or(false),
+            "turnsSincePreviousCompact": ri.map(|r| r.turns_since_previous_compact).unwrap_or(-1),
+            "previousCompactTurnId": ri.and_then(|r| r.previous_compact_turn_id.as_deref()).unwrap_or(""),
             "messagesRemoved": result.messages_removed,
             "tokensSaved": result.tokens_saved,
         }),
@@ -582,42 +597,73 @@ pub async fn partial_compact_conversation(
 
     let formatted_summary = format_compact_summary(&summary);
     let summary_text = build_compact_user_summary_message(
-        &formatted_summary,
+        &summary,
         false,
         None,
         !messages_to_keep.is_empty(),
     );
 
+    let has_kept = !messages_to_keep.is_empty();
+
+    // Build summarizeMetadata for the summary message (TS: summarizeMetadata)
+    let summarize_metadata = if has_kept {
+        Some(serde_json::json!({
+            "messagesSummarized": messages_to_summarize.len(),
+            "userContext": user_feedback,
+            "direction": match direction {
+                PartialCompactDirection::UpTo => "up_to",
+                PartialCompactDirection::From => "from",
+            },
+        }))
+    } else {
+        None
+    };
+
     let summary_message = Message::User(UserMessage {
         base: {
             let mut base = MessageBase::with_origin(MessageOrigin::Compact);
             base.is_compact_summary = true;
-            base.is_visible_in_transcript_only = true;
+            // TS: only set isVisibleInTranscriptOnly when there are NO messages to keep
+            if !has_kept {
+                base.is_visible_in_transcript_only = true;
+            }
             base
         },
         text: summary_text.clone(),
         attachments: Vec::new(),
         provider_content_blocks: Vec::new(),
+        summarize_metadata,
     });
 
-    // Build boundary marker
+    // Build boundary marker with direction-dependent lastPreCompactMessageUuid
+    // TS: direction==='up_to' → last non-progress message before pivot; 'from' → last kept message
     let trigger_str = if options.is_auto_compact {
         "auto"
     } else {
         "manual"
     };
-    let boundary_metadata = serde_json::json!({
-        "trigger": trigger_str,
-        "preTokens": pre_compact_token_count,
-        "messagesSummarized": messages_to_summarize.len(),
-    });
-    let boundary_marker = Message::System(SystemMessage {
-        base: MessageBase::with_origin(MessageOrigin::Compact),
-        subtype: SystemMessageSubtype::CompactBoundary,
-        text: serde_json::to_string(&boundary_metadata).unwrap_or_else(|_| {
-            format!("{{\"trigger\":\"{trigger_str}\",\"preTokens\":{pre_compact_token_count}}}")
-        }),
-        error: None,
+    let last_pre_compact_uuid: Option<uuid::Uuid> = match direction {
+        PartialCompactDirection::UpTo => all_messages
+            .iter()
+            .take(pivot_index)
+            .rev()
+            .find(|m| !matches!(m, Message::Progress(_)))
+            .map(|m| m.uuid()),
+        PartialCompactDirection::From => messages_to_keep.last().map(|m| m.uuid()),
+    };
+    let mut boundary_marker = create_compact_boundary_message(
+        trigger_str,
+        pre_compact_token_count,
+        last_pre_compact_uuid,
+    );
+    // Enrich boundary with userContext and messagesSummarized
+    if let Some(uf) = user_feedback {
+        boundary_marker = enrich_boundary_metadata(&boundary_marker, |meta| {
+            meta["userContext"] = serde_json::Value::String(uf.to_string());
+        });
+    }
+    boundary_marker = enrich_boundary_metadata(&boundary_marker, |meta| {
+        meta["messagesSummarized"] = serde_json::json!(messages_to_summarize.len());
     });
 
     let post_compact_token_count = rough_token_count(&formatted_summary)
@@ -627,11 +673,12 @@ pub async fn partial_compact_conversation(
     let tokens_saved = pre_compact_token_count.saturating_sub(post_compact_token_count);
 
     let preserved_segments = if !messages_to_keep.is_empty() {
+        // TS: 'from' → prefix-preserving (anchor = boundary); 'up_to' → suffix (anchor = last summary)
         let anchor_uuid = match direction {
             PartialCompactDirection::UpTo => summary_message.uuid(),
             PartialCompactDirection::From => boundary_marker.uuid(),
         };
-        vec![PreservedSegment {
+        let seg = PreservedSegment {
             head_uuid: messages_to_keep
                 .first()
                 .map(|m| m.uuid())
@@ -641,7 +688,14 @@ pub async fn partial_compact_conversation(
                 .last()
                 .map(|m| m.uuid())
                 .unwrap_or_default(),
-        }]
+        };
+        // Annotate boundary with preservedSegment (TS: annotateBoundaryWithPreservedSegment)
+        boundary_marker = annotate_boundary_with_preserved_segment(
+            &boundary_marker,
+            seg.anchor_uuid,
+            &messages_to_keep,
+        );
+        vec![seg]
     } else {
         Vec::new()
     };
@@ -857,6 +911,7 @@ pub fn truncate_head_for_ptl_retry_with_gap(
             text: PTL_RETRY_MARKER.to_string(),
             attachments: Vec::new(),
             provider_content_blocks: Vec::new(),
+            summarize_metadata: None,
         })];
         result.extend(remaining);
         Some(result)
@@ -893,6 +948,56 @@ pub fn create_compact_boundary_message(
         text: serde_json::to_string(&metadata).unwrap_or_else(|_| format!("{{\"trigger\":\"{trigger}\",\"preTokens\":{pre_compact_token_count}}}")),
         error: None,
     })
+}
+
+/// Annotate a compact boundary with preserved segment relink metadata.
+///
+/// If `messages_to_keep` is empty, returns the boundary unmodified.
+/// Otherwise adds `preservedSegment: { headUuid, anchorUuid, tailUuid }`
+/// to the boundary's `compactMetadata`.
+///
+/// Mirrors `annotateBoundaryWithPreservedSegment()` from the TS reference.
+pub fn annotate_boundary_with_preserved_segment(
+    boundary: &Message,
+    anchor_uuid: uuid::Uuid,
+    messages_to_keep: &[Message],
+) -> Message {
+    if messages_to_keep.is_empty() {
+        return boundary.clone();
+    }
+
+    enrich_boundary_metadata(boundary, |meta| {
+        meta["preservedSegment"] = serde_json::json!({
+            "headUuid": messages_to_keep.first().map(|m| m.uuid()).unwrap_or_default().to_string(),
+            "anchorUuid": anchor_uuid.to_string(),
+            "tailUuid": messages_to_keep.last().map(|m| m.uuid()).unwrap_or_default().to_string(),
+        });
+    })
+}
+
+/// Enrich the JSON metadata of a compact boundary message.
+///
+/// Parses the `text` field as JSON, applies `f` to mutate the metadata
+/// object, then re-serializes. If parsing fails, returns the boundary
+/// unmodified.
+fn enrich_boundary_metadata(
+    boundary: &Message,
+    f: impl FnOnce(&mut serde_json::Value),
+) -> Message {
+    match boundary {
+        Message::System(sys) if sys.subtype == SystemMessageSubtype::CompactBoundary => {
+            let mut metadata: serde_json::Value =
+                serde_json::from_str(&sys.text).unwrap_or_else(|_| serde_json::json!({}));
+            f(&mut metadata);
+            Message::System(SystemMessage {
+                base: sys.base.clone(),
+                subtype: sys.subtype.clone(),
+                text: serde_json::to_string(&metadata).unwrap_or_else(|_| sys.text.clone()),
+                error: sys.error.clone(),
+            })
+        }
+        other => other.clone(),
+    }
 }
 
 /// Merge user-supplied custom instructions with hook-provided instructions.
@@ -1106,6 +1211,7 @@ mod tests {
             text: "hello".into(),
             attachments: Vec::new(),
             provider_content_blocks: Vec::new(),
+            summarize_metadata: None,
         })];
         assert!(truncate_head_for_ptl_retry(&msgs).is_none());
     }
@@ -1121,6 +1227,7 @@ mod tests {
             text: PTL_RETRY_MARKER.to_string(),
             attachments: Vec::new(),
             provider_content_blocks: Vec::new(),
+            summarize_metadata: None,
         });
         let a1 = Message::Assistant(claude_core::AssistantMessage {
             base: MessageBase::default(),
@@ -1134,6 +1241,7 @@ mod tests {
             text: "followup".into(),
             attachments: Vec::new(),
             provider_content_blocks: Vec::new(),
+            summarize_metadata: None,
         });
         let a2 = Message::Assistant(claude_core::AssistantMessage {
             base: MessageBase::default(),
@@ -1162,6 +1270,7 @@ mod tests {
             text: "x".repeat(4000), // ~1000 tokens
             attachments: Vec::new(),
             provider_content_blocks: Vec::new(),
+            summarize_metadata: None,
         });
         let a2 = Message::Assistant(claude_core::AssistantMessage {
             base: MessageBase::default(),
@@ -1175,6 +1284,7 @@ mod tests {
             text: "small".into(),
             attachments: Vec::new(),
             provider_content_blocks: Vec::new(),
+            summarize_metadata: None,
         });
         let a3 = Message::Assistant(claude_core::AssistantMessage {
             base: MessageBase::default(),
@@ -1200,6 +1310,7 @@ mod tests {
             text: "summary".into(),
             attachments: Vec::new(),
             provider_content_blocks: Vec::new(),
+            summarize_metadata: None,
         });
 
         let result = CompactionResult {
@@ -1215,6 +1326,7 @@ mod tests {
                 text: "kept".into(),
                 attachments: Vec::new(),
                 provider_content_blocks: Vec::new(),
+                summarize_metadata: None,
             })],
             attachments: vec![boundary.clone(), summary.clone()],
             hook_results: Vec::new(),
@@ -1247,6 +1359,7 @@ mod tests {
                 json!({"type": "text", "text": "check this"}),
                 json!({"type": "image", "source": {"type": "base64", "data": "abc123"}}),
             ],
+            summarize_metadata: None,
         })];
         let stripped = strip_media_from_messages(&msgs);
         match &stripped[0] {
@@ -1272,6 +1385,7 @@ mod tests {
                 json!({"type": "text", "text": "read this pdf"}),
                 json!({"type": "document", "source": {"type": "base64", "data": "pdfdata"}}),
             ],
+            summarize_metadata: None,
         })];
         let stripped = strip_media_from_messages(&msgs);
         match &stripped[0] {
@@ -1298,6 +1412,7 @@ mod tests {
                     {"type": "image", "source": {"type": "base64", "data": "xyz"}},
                 ]
             })],
+            summarize_metadata: None,
         })];
         let stripped = strip_media_from_messages(&msgs);
         match &stripped[0] {
@@ -1329,6 +1444,7 @@ mod tests {
                 text: "hello".into(),
                 attachments: Vec::new(),
                 provider_content_blocks: vec![json!({"type": "text", "text": "hello"})],
+                summarize_metadata: None,
             }),
         ];
         let stripped = strip_media_from_messages(&msgs);
@@ -1355,6 +1471,7 @@ mod tests {
                 filename: None,
             }],
             provider_content_blocks: Vec::new(),
+            summarize_metadata: None,
         })];
         // Materialize and check it would have had image blocks
         let blocks = match &msgs[0] {
@@ -1386,6 +1503,7 @@ mod tests {
                 text: "hello".into(),
                 attachments: Vec::new(),
                 provider_content_blocks: Vec::new(),
+                summarize_metadata: None,
             }),
             Message::Attachment(AttachmentMessage {
                 base: MessageBase::default(),
@@ -1425,5 +1543,103 @@ mod tests {
 
         let stripped = strip_media_from_messages_ex(&msgs, false);
         assert_eq!(stripped.len(), 1, "strip_skill_attachments=false should preserve all");
+    }
+
+    // -- Boundary metadata tests ------------------------------------------------
+
+    #[test]
+    fn create_compact_boundary_includes_last_pre_compact_uuid() {
+        let uuid = uuid::Uuid::new_v4();
+        let boundary = create_compact_boundary_message("manual", 5000, Some(uuid));
+        match &boundary {
+            Message::System(s) => {
+                let meta: serde_json::Value = serde_json::from_str(&s.text).unwrap();
+                assert_eq!(meta["trigger"], "manual");
+                assert_eq!(meta["preTokens"], 5000);
+                assert_eq!(meta["lastPreCompactMessageUuid"], uuid.to_string());
+            }
+            other => panic!("expected System, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn create_compact_boundary_without_uuid() {
+        let boundary = create_compact_boundary_message("auto", 1000, None);
+        match &boundary {
+            Message::System(s) => {
+                let meta: serde_json::Value = serde_json::from_str(&s.text).unwrap();
+                assert_eq!(meta["trigger"], "auto");
+                assert_eq!(meta["preTokens"], 1000);
+                assert!(meta.get("lastPreCompactMessageUuid").is_none());
+            }
+            other => panic!("expected System, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn annotate_boundary_adds_preserved_segment() {
+        let boundary = create_compact_boundary_message("manual", 5000, None);
+        let head = Message::User(UserMessage {
+            base: MessageBase::default(),
+            text: "head".into(),
+            attachments: Vec::new(),
+            provider_content_blocks: Vec::new(),
+            summarize_metadata: None,
+        });
+        let tail = Message::User(UserMessage {
+            base: MessageBase::default(),
+            text: "tail".into(),
+            attachments: Vec::new(),
+            provider_content_blocks: Vec::new(),
+            summarize_metadata: None,
+        });
+        let anchor_uuid = uuid::Uuid::new_v4();
+        let annotated = annotate_boundary_with_preserved_segment(
+            &boundary,
+            anchor_uuid,
+            &[head.clone(), tail.clone()],
+        );
+        match &annotated {
+            Message::System(s) => {
+                let meta: serde_json::Value = serde_json::from_str(&s.text).unwrap();
+                let seg = &meta["preservedSegment"];
+                assert_eq!(seg["headUuid"], head.uuid().to_string());
+                assert_eq!(seg["anchorUuid"], anchor_uuid.to_string());
+                assert_eq!(seg["tailUuid"], tail.uuid().to_string());
+            }
+            other => panic!("expected System, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn annotate_boundary_noop_for_empty_keep() {
+        let boundary = create_compact_boundary_message("manual", 5000, None);
+        let annotated = annotate_boundary_with_preserved_segment(
+            &boundary,
+            uuid::Uuid::new_v4(),
+            &[],
+        );
+        match (&boundary, &annotated) {
+            (Message::System(a), Message::System(b)) => assert_eq!(a.text, b.text),
+            _ => panic!("unexpected message types"),
+        }
+    }
+
+    #[test]
+    fn enrich_boundary_metadata_adds_fields() {
+        let boundary = create_compact_boundary_message("manual", 5000, None);
+        let enriched = enrich_boundary_metadata(&boundary, |meta| {
+            meta["userContext"] = serde_json::Value::String("test feedback".into());
+            meta["messagesSummarized"] = serde_json::json!(42);
+        });
+        match &enriched {
+            Message::System(s) => {
+                let meta: serde_json::Value = serde_json::from_str(&s.text).unwrap();
+                assert_eq!(meta["trigger"], "manual");
+                assert_eq!(meta["userContext"], "test feedback");
+                assert_eq!(meta["messagesSummarized"], 42);
+            }
+            other => panic!("expected System, got {other:?}"),
+        }
     }
 }

@@ -101,6 +101,13 @@ pub struct UserMessage {
     /// conversions. This is used for system-reminder style meta messages.
     #[serde(default)]
     pub provider_content_blocks: Vec<Value>,
+    /// Metadata attached to compact summary messages for UI rendering.
+    ///
+    /// When `Some`, contains the number of messages summarized, optional
+    /// user context (feedback), and the direction of partial compaction.
+    /// Mirrors `summarizeMetadata` from the TS reference.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summarize_metadata: Option<Value>,
 }
 
 impl UserMessage {
@@ -486,6 +493,7 @@ impl From<ConversationEntry> for Message {
                 text: value.text,
                 attachments: value.attachments,
                 provider_content_blocks: value.content_blocks,
+                summarize_metadata: None,
             }),
             ConversationRole::Assistant => Self::Assistant(AssistantMessage {
                 base: MessageBase::with_origin(MessageOrigin::Provider),
