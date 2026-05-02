@@ -684,6 +684,11 @@ pub struct AgentLoop {
     ///   `debouncedEmitTokenUsage` (debounce-based throttle)
     last_token_usage_emit: Option<Instant>,
 
+    /// Snapshot of last emitted token usage for change detection.
+    ///
+    /// Source: `src/core/task/Task.ts` — `tokenUsageSnapshot`
+    token_usage_snapshot: Option<roo_types::message::TokenUsage>,
+
     // =================================================================
     // MCP tools & Tool approval fields
     // =================================================================
@@ -799,6 +804,7 @@ impl AgentLoop {
 
             // Token usage throttling — tracks last emit time
             last_token_usage_emit: None,
+            token_usage_snapshot: None,
 
             // --- MCP tools & Tool approval fields ---
             mcp_servers: Vec::new(),
@@ -1131,7 +1137,7 @@ impl AgentLoop {
         }
 
         // Check if token usage or tool usage has changed compared to snapshot
-        let token_changed = true; // Simplified: always report changed for token usage
+        let token_changed = self.has_token_usage_changed(token_usage);
         let tool_changed = self.has_tool_usage_changed(tool_usage);
 
         if token_changed || tool_changed {
@@ -1140,7 +1146,25 @@ impl AgentLoop {
 
             // Update snapshots
             self.last_token_usage_emit = Some(now);
+            self.token_usage_snapshot = Some(token_usage.clone());
             self.tool_usage_snapshot = tool_usage.clone();
+        }
+    }
+
+    /// Check if token usage has changed compared to the last snapshot.
+    ///
+    /// Source: `packages/core/src/message-utils/consolidateTokenUsage.ts` — `hasTokenUsageChanged`
+    fn has_token_usage_changed(&self, current: &roo_types::message::TokenUsage) -> bool {
+        match &self.token_usage_snapshot {
+            None => true,
+            Some(snapshot) => {
+                current.total_tokens_in != snapshot.total_tokens_in
+                    || current.total_tokens_out != snapshot.total_tokens_out
+                    || current.total_cache_writes != snapshot.total_cache_writes
+                    || current.total_cache_reads != snapshot.total_cache_reads
+                    || (current.total_cost - snapshot.total_cost).abs() > f64::EPSILON
+                    || current.context_tokens != snapshot.context_tokens
+            }
         }
     }
 
@@ -4668,8 +4692,10 @@ fn parse_retry_info_from_error(error: &str) -> Option<u64> {
 // ===========================================================================
 
 /// Validate and fix tool result IDs to match tool call IDs.
+/// Also sanitizes tool use IDs to conform to Anthropic format requirements.
 ///
 /// Source: `src/core/task/Task.ts` — `validateAndFixToolResultIds()`
+/// Source: `src/utils/tool-id.ts` — `sanitizeToolUseId()`
 pub fn validate_and_fix_tool_result_ids(tool_calls: Vec<ParsedToolCall>) -> Vec<ParsedToolCall> {
     tool_calls
         .into_iter()
@@ -4678,6 +4704,12 @@ pub fn validate_and_fix_tool_result_ids(tool_calls: Vec<ParsedToolCall>) -> Vec<
             if tc.id.is_empty() {
                 tc.id = format!("tool_call_{}", i);
                 warn!(tool = %tc.name, generated_id = %tc.id, "Generated missing tool call ID");
+            }
+            // Sanitize tool use ID to conform to Anthropic format (a-zA-Z0-9_-)
+            let sanitized = crate::present_assistant_message::sanitize_tool_use_id(&tc.id);
+            if sanitized != tc.id {
+                warn!(original = %tc.id, sanitized = %sanitized, "Sanitized tool call ID");
+                tc.id = sanitized;
             }
             tc
         })

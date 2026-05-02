@@ -56,7 +56,7 @@ pub struct GenerateSystemPromptResult {
 // ---------------------------------------------------------------------------
 
 /// Default mode slug when none is specified.
-const DEFAULT_MODE_SLUG: &str = "code";
+const DEFAULT_MODE_SLUG: &str = "architect";
 
 /// Generates a system prompt for the given configuration.
 ///
@@ -255,7 +255,7 @@ mod tests {
         let result = generate_system_prompt(params, &default_prompt_builder);
         assert!(result.success);
         let prompt = result.system_prompt.unwrap();
-        assert!(prompt.contains("code"));
+        assert!(prompt.contains("architect"));
     }
 
     #[test]

@@ -21,6 +21,9 @@ pub struct MiniMaxConfig {
 
 impl MiniMaxConfig {
     /// Default MiniMax API base URL (Anthropic-compatible endpoint).
+    /// International endpoint: https://api.minimax.io/anthropic
+    /// China endpoint: https://api.minimaxi.com/anthropic
+    /// Default is the China endpoint; override with base_url for international.
     pub const DEFAULT_BASE_URL: &'static str = "https://api.minimaxi.com/anthropic";
 
     /// Create configuration from provider settings.

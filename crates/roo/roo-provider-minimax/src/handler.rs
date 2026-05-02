@@ -48,9 +48,12 @@ impl MiniMaxHandler {
                 ..Default::default()
             });
 
+        // Normalize base URL: if user provided /v1, convert to /anthropic
+        let base_url = normalize_minimax_url(&config.base_url);
+
         let anthropic_config = roo_provider_anthropic::AnthropicConfig {
             api_key: config.api_key,
-            base_url: config.base_url,
+            base_url,
             model_id: Some(model_id),
             temperature: config.temperature.or(Some(DEFAULT_TEMPERATURE)),
             use_extended_thinking: None,
@@ -104,6 +107,32 @@ impl Provider for MiniMaxHandler {
 
     fn provider_name(&self) -> ProviderName {
         ProviderName::MiniMax
+    }
+}
+
+/// Normalize a MiniMax base URL to use the `/anthropic` path.
+///
+/// Source: `src/api/providers/minimax.ts` — constructor URL normalization.
+fn normalize_minimax_url(url: &str) -> String {
+    let trimmed = url.trim_end_matches('/');
+    if trimmed.ends_with("/v1") {
+        trimmed.replace_suffix(trimmed.len() - 3, "/anthropic")
+    } else if trimmed.ends_with("/anthropic") {
+        trimmed.to_string()
+    } else {
+        format!("{trimmed}/anthropic")
+    }
+}
+
+trait ReplaceSuffix {
+    fn replace_suffix(&self, from: usize, replacement: &str) -> String;
+}
+
+impl ReplaceSuffix for str {
+    fn replace_suffix(&self, from: usize, replacement: &str) -> String {
+        let mut s = self[..from].to_string();
+        s.push_str(replacement);
+        s
     }
 }
 
@@ -291,5 +320,33 @@ mod tests {
     fn test_model_count() {
         let all_models = models::models();
         assert!(all_models.len() >= 8, "Expected at least 8 models, got {}", all_models.len());
+    }
+
+    #[test]
+    fn test_normalize_minimax_url() {
+        // /v1 should be converted to /anthropic
+        assert_eq!(
+            normalize_minimax_url("https://api.minimax.io/v1"),
+            "https://api.minimax.io/anthropic"
+        );
+        assert_eq!(
+            normalize_minimax_url("https://api.minimaxi.com/v1"),
+            "https://api.minimaxi.com/anthropic"
+        );
+        // Already /anthropic — no change
+        assert_eq!(
+            normalize_minimax_url("https://api.minimax.io/anthropic"),
+            "https://api.minimax.io/anthropic"
+        );
+        // No suffix — append /anthropic
+        assert_eq!(
+            normalize_minimax_url("https://api.minimax.io"),
+            "https://api.minimax.io/anthropic"
+        );
+        // Trailing slash — strip and append
+        assert_eq!(
+            normalize_minimax_url("https://api.minimax.io/"),
+            "https://api.minimax.io/anthropic"
+        );
     }
 }
