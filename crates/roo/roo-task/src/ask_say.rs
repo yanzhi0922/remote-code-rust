@@ -44,6 +44,9 @@ pub enum AskResponse {
     NoButtonClicked,
     /// User provided a message response.
     MessageResponse,
+    /// User provided per-file permissions as a JSON object.
+    /// Source: `src/shared/vscode-extension-host.ts` — `objectResponse`
+    ObjectResponse,
 }
 
 // ---------------------------------------------------------------------------

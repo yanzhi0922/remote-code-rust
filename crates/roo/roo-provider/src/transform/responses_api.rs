@@ -188,6 +188,24 @@ pub enum ResponseApiEvent {
         delta: String,
     },
 
+    /// Start of a function/tool call (streaming).
+    /// Source: TS `response.output_item.added` with type `function_call`.
+    FunctionCallStart {
+        /// The call ID.
+        id: String,
+        /// The function name.
+        name: String,
+    },
+
+    /// Incremental function call arguments delta (streaming).
+    /// Source: TS `response.function_call_arguments.delta`.
+    FunctionCallArgumentsDelta {
+        /// The call ID.
+        id: String,
+        /// The incremental arguments string.
+        delta: String,
+    },
+
     /// A completed function/tool call.
     FunctionCall {
         /// The call ID.
@@ -266,6 +284,47 @@ pub fn parse_responses_api_stream(data: &str) -> Result<Option<ResponseApiEvent>
                     delta: delta.to_string(),
                 }));
             }
+        }
+        return Ok(None);
+    }
+
+    // Function call started (streaming) — `response.output_item.added`
+    if event_type == "response.output_item.added" {
+        let item = &event["item"];
+        let item_type = item["type"].as_str().unwrap_or("");
+        if item_type == "function_call" {
+            let call_id = item
+                .get("call_id")
+                .or_else(|| item.get("id"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let name = item
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            if !call_id.is_empty() && !name.is_empty() {
+                return Ok(Some(ResponseApiEvent::FunctionCallStart {
+                    id: call_id.to_string(),
+                    name: name.to_string(),
+                }));
+            }
+        }
+        return Ok(None);
+    }
+
+    // Function call arguments delta (streaming) — `response.function_call_arguments.delta`
+    if event_type == "response.function_call_arguments.delta" {
+        let call_id = event
+            .get("call_id")
+            .or_else(|| event.get("item_id"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let delta = event["delta"].as_str().unwrap_or("");
+        if !call_id.is_empty() && !delta.is_empty() {
+            return Ok(Some(ResponseApiEvent::FunctionCallArgumentsDelta {
+                id: call_id.to_string(),
+                delta: delta.to_string(),
+            }));
         }
         return Ok(None);
     }
@@ -539,6 +598,32 @@ mod tests {
             event,
             ResponseApiEvent::ReasoningDelta {
                 delta: "thinking...".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn test_parse_function_call_start() {
+        let data = r#"{"type":"response.output_item.added","item":{"type":"function_call","call_id":"call_1","name":"read_file"}}"#;
+        let event = parse_responses_api_stream(data).unwrap().unwrap();
+        assert_eq!(
+            event,
+            ResponseApiEvent::FunctionCallStart {
+                id: "call_1".to_string(),
+                name: "read_file".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn test_parse_function_call_arguments_delta() {
+        let data = r#"{"type":"response.function_call_arguments.delta","call_id":"call_1","delta":"{\"path\":"}"#;
+        let event = parse_responses_api_stream(data).unwrap().unwrap();
+        assert_eq!(
+            event,
+            ResponseApiEvent::FunctionCallArgumentsDelta {
+                id: "call_1".to_string(),
+                delta: "{\"path\":".to_string(),
             }
         );
     }
