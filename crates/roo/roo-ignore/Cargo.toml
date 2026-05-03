@@ -9,5 +9,6 @@ description = "File ignore controller for Roo Code Rust"
 [dependencies]
 thiserror = { workspace = true }
 glob = { workspace = true }
+ignore = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

@@ -351,6 +351,12 @@ pub struct ToolUse {
     pub params: serde_json::Value,
     pub partial: bool,
     pub id: Option<String>,
+    /// Original tool name if an alias was resolved (e.g. "write_file" -> "write_to_file").
+    #[serde(default)]
+    pub original_name: Option<String>,
+    /// Whether the legacy format was used (for telemetry).
+    #[serde(default)]
+    pub used_legacy_format: bool,
 }
 
 /// A parsed MCP tool use block.
@@ -365,6 +371,35 @@ pub struct McpToolUse {
     pub params: serde_json::Value,
     pub partial: bool,
     pub id: Option<String>,
+}
+
+// ---------------------------------------------------------------------------
+// Tool display names
+// ---------------------------------------------------------------------------
+
+/// Returns a human-readable display name for a tool.
+///
+/// Source: `src/shared/tools.ts` — `TOOL_DISPLAY_NAMES`
+pub fn tool_display_name(tool: &str) -> &str {
+    match tool {
+        "read_file" => "Read File",
+        "write_to_file" => "Write to File",
+        "apply_diff" => "Apply Diff",
+        "search_and_replace" => "Search and Replace",
+        "execute_command" => "Execute Command",
+        "list_files" => "List Files",
+        "list_code_definition_names" => "List Code Definition Names",
+        "search_files" => "Search Files",
+        "codebase_search" => "Codebase Search",
+        "browser_action" => "Browser Action",
+        "use_mcp_tool" => "Use MCP Tool",
+        "ask_followup_question" => "Ask Followup Question",
+        "attempt_completion" => "Attempt Completion",
+        "new_task" => "New Task",
+        "switch_mode" => "Switch Mode",
+        "run_slash_command" => "Run Slash Command",
+        _ => tool,
+    }
 }
 
 // ---------------------------------------------------------------------------

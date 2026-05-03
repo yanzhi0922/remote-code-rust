@@ -113,7 +113,7 @@ notify = "7"
 regex = "1"
 
 # Token counting
-tiktoken-rs = "0.6"
+tiktoken-rs = "0.7"
 
 # Diff
 similar = "2"

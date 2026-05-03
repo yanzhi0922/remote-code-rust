@@ -19,3 +19,4 @@ futures = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
 regex = { workspace = true }
+tiktoken-rs = { workspace = true }
