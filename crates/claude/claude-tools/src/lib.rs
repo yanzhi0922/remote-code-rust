@@ -3272,14 +3272,15 @@ while True:
         };
         let broker = StaticPermissionBroker::new(true);
 
-        // Search with include filter
+        // Search with include filter and content mode to verify matching lines
         let result = execute_tool_call(
             &ToolCall {
                 id: "1".to_owned(),
                 name: "grep".to_owned(),
                 input: json!({
                     "pattern": "fn hello",
-                    "include": "*.rs"
+                    "include": "*.rs",
+                    "output_mode": "content"
                 }),
             },
             &context,
