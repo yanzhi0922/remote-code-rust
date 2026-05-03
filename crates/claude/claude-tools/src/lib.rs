@@ -1887,7 +1887,7 @@ mod tests {
     };
     use claude_mcp::{
         McpCapabilityMatrix, McpPromptArgument, McpPromptDescriptor, McpServerConfig,
-        McpServerInspection, McpToolDescriptor, McpTransportConfig,
+        McpServerInspection, McpToolDescriptor, McpToolPolicy, McpTransportConfig,
     };
     use claude_permissions::{
         LayeredPermissionBroker, PermissionBroker, PermissionDecision, PermissionRequest,
@@ -2317,6 +2317,7 @@ while True:
                 request_timeout_secs: Some(1),
                 metadata: BTreeMap::new(),
                 oauth: None,
+                tool_policy: McpToolPolicy::default(),
             },
         }
     }
@@ -5653,6 +5654,7 @@ while True:
                     request_timeout_secs: None,
                     metadata: Default::default(),
                     oauth: None,
+                    tool_policy: McpToolPolicy::default(),
                 },
             }],
             shell_policy: Default::default(),
@@ -5747,6 +5749,7 @@ while True:
                     request_timeout_secs: None,
                     metadata: Default::default(),
                     oauth: None,
+                    tool_policy: McpToolPolicy::default(),
                 },
             }],
             shell_policy: Default::default(),
@@ -5824,6 +5827,7 @@ while True:
                     request_timeout_secs: Some(1),
                     metadata: Default::default(),
                     oauth: None,
+                    tool_policy: McpToolPolicy::default(),
                 },
             }],
             shell_policy: Default::default(),
@@ -5893,6 +5897,7 @@ while True:
                     request_timeout_secs: None,
                     metadata: Default::default(),
                     oauth: None,
+                    tool_policy: McpToolPolicy::default(),
                 },
             };
         configure_tool_runtime_policy(ToolRuntimePolicy {
@@ -5980,6 +5985,7 @@ while True:
                     request_timeout_secs: None,
                     metadata: Default::default(),
                     oauth: None,
+                    tool_policy: McpToolPolicy::default(),
                 },
             }],
             shell_policy: Default::default(),
@@ -6057,6 +6063,7 @@ while True:
                 request_timeout_secs: Some(1),
                 metadata: Default::default(),
                 oauth: None,
+                tool_policy: McpToolPolicy::default(),
             },
         };
         configure_tool_runtime_policy(ToolRuntimePolicy {
@@ -6132,6 +6139,7 @@ while True:
                     request_timeout_secs: Some(1),
                     metadata: Default::default(),
                     oauth: None,
+                    tool_policy: McpToolPolicy::default(),
                 },
             }],
             shell_policy: Default::default(),
@@ -6210,6 +6218,7 @@ while True:
                     request_timeout_secs: None,
                     metadata: Default::default(),
                     oauth: None,
+                    tool_policy: McpToolPolicy::default(),
                 },
             }],
             shell_policy: Default::default(),

@@ -52,6 +52,9 @@ impl McpDiscovery {
     ///
     /// This spawns a new connection, performs the MCP handshake, lists tools
     /// and resources, then disconnects. The results are cached.
+    ///
+    /// Tools are filtered through the server's [`McpToolPolicy`] before
+    /// being cached, so the model never sees denied tools.
     pub async fn discover_for_server(
         &mut self,
         name: &str,
@@ -60,7 +63,8 @@ impl McpDiscovery {
     ) -> Result<McpDiscoveryResult, McpRuntimeError> {
         let inspection = crate::session::inspect_server(config, client_info).await?;
 
-        let tools = inspection.tools.clone();
+        // Apply tool policy filtering before caching.
+        let tools = config.tool_policy.filter_tools(&inspection.tools);
         let resources = inspection.resources.clone();
         let prompts = inspection.prompts.clone();
         let instructions = inspection.instructions.clone();

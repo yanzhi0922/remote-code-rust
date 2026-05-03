@@ -42,17 +42,79 @@ pub(crate) async fn web_fetch(input: &Value, _context: &ToolExecutionContext) ->
     if !status.is_success() {
         return Err(anyhow!("HTTP {} for {}", status, url));
     }
+
+    let content_type = response
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+
+    let is_html = content_type.contains("text/html");
     let text = response
         .text()
         .await
         .context("failed to read response body")?;
-    let fetched: String = text.chars().take(50_000).collect();
-    Ok(json!({
-        "url": url,
-        "prompt": prompt,
-        "content": fetched,
-    })
-    .to_string())
+
+    // Convert HTML to readable text, or use raw text for non-HTML
+    let readable_content = if is_html {
+        html_to_readable_text(&text)
+    } else {
+        text.clone()
+    };
+
+    // Truncate to prevent excessive context usage
+    const MAX_CONTENT_LENGTH: usize = 100_000;
+    let truncated = if readable_content.len() > MAX_CONTENT_LENGTH {
+        format!(
+            "{}\n\n[Content truncated due to length...]",
+            &readable_content[..MAX_CONTENT_LENGTH]
+        )
+    } else {
+        readable_content
+    };
+
+    // Build a result that includes the prompt context
+    let result = format!(
+        "URL: {}\nPrompt: {}\n\n{}",
+        url, prompt, truncated
+    );
+
+    Ok(result)
+}
+
+/// Convert HTML to readable plain text by stripping tags and normalizing whitespace.
+fn html_to_readable_text(html: &str) -> String {
+    // Remove script and style blocks entirely
+    let re_script = Regex::new(r"(?is)<script[^>]*>.*?</script>").unwrap_or_else(|_| Regex::new(".").unwrap());
+    let re_style = Regex::new(r"(?is)<style[^>]*>.*?</style>").unwrap_or_else(|_| Regex::new(".").unwrap());
+    let no_scripts = re_script.replace_all(html, "");
+    let no_style = re_style.replace_all(&no_scripts, "");
+
+    // Convert block-level elements to newlines for structure
+    let re_block = Regex::new(r"(?i)</?(p|div|br|h[1-6]|li|tr|hr|blockquote|pre|section|article|header|footer|nav|aside|main|figure|figcaption|details|summary)[^>]*>")
+        .unwrap_or_else(|_| Regex::new(".").unwrap());
+    let with_breaks = re_block.replace_all(&no_style, "\n");
+
+    // Strip remaining tags
+    let re_tag = Regex::new(r"<[^>]+>").unwrap_or_else(|_| Regex::new(".").unwrap());
+    let stripped = re_tag.replace_all(&with_breaks, "");
+
+    // Decode common HTML entities
+    let decoded = stripped
+        .replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&nbsp;", " ")
+        .replace("&mdash;", "—")
+        .replace("&ndash;", "–")
+        .replace("&hellip;", "…");
+
+    // Collapse excessive whitespace while preserving structure
+    let lines: Vec<&str> = decoded.lines().map(|l| l.trim()).filter(|l| !l.is_empty()).collect();
+    lines.join("\n")
 }
 
 pub(crate) async fn web_search(input: &Value, _context: &ToolExecutionContext) -> Result<String> {

@@ -92,6 +92,8 @@ pub struct StreamingCallbacks {
     pub on_tool_call_delta: Option<PairCallback>,
     /// Fired when usage information becomes available (input, output tokens).
     pub on_usage: Option<UsageCallback>,
+    /// Fired for every thinking delta received during extended thinking.
+    pub on_thinking_delta: Option<TextCallback>,
 }
 
 // ---------------------------------------------------------------------------
@@ -1157,6 +1159,11 @@ fn process_anthropic_event(
                 }) = content_block_accumulators.get_mut(&index)
             {
                 existing.push_str(thinking);
+                if let Some(callbacks) = callbacks
+                    && let Some(ref on_thinking_delta) = callbacks.on_thinking_delta
+                {
+                    on_thinking_delta(thinking);
+                }
             } else if delta_type == "signature_delta"
                 && let Some(signature) = delta
                     .and_then(|d| d.get("signature"))
@@ -1294,6 +1301,7 @@ fn wrap_streaming_callbacks(
         on_tool_call_start,
         on_tool_call_delta,
         on_usage,
+        on_thinking_delta,
     } = callbacks;
 
     let start_activity = Arc::clone(&streamed_tool_activity);
@@ -1317,6 +1325,7 @@ fn wrap_streaming_callbacks(
         on_tool_call_start: Some(tracked_tool_call_start),
         on_tool_call_delta: Some(tracked_tool_call_delta),
         on_usage,
+        on_thinking_delta,
     }
 }
 

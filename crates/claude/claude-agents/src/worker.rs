@@ -13,6 +13,7 @@
 //! - [`format_task_notification_xml`] — Format task notification XML
 //! - [`parse_worker_tools`] — Parse tools from the allowed set
 
+use std::path::PathBuf;
 use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
@@ -23,6 +24,9 @@ use crate::coordinator::{
 };
 use crate::definition::AgentDefinition;
 use crate::runner::{AgentRunConfig, AgentRunResult, UsageSummary};
+use crate::transcript::{
+    TranscriptMessage, persist_transcript, persist_transcript_from_result,
+};
 
 /// The worker agent type identifier.
 pub const WORKER_AGENT: &str = "worker";
@@ -45,6 +49,9 @@ pub struct WorkerConfig {
     pub simple_mode: bool,
     /// Optional working directory override.
     pub working_dir: Option<String>,
+    /// Optional session directory for transcript persistence.
+    #[serde(default)]
+    pub session_dir: Option<PathBuf>,
 }
 
 impl Default for WorkerConfig {
@@ -56,6 +63,7 @@ impl Default for WorkerConfig {
             max_turns: DEFAULT_WORKER_MAX_TURNS,
             simple_mode: false,
             working_dir: None,
+            session_dir: None,
         }
     }
 }
@@ -131,6 +139,9 @@ pub struct WorkerAgent {
     pub tool_use_count: u32,
     /// Final output text.
     pub output: Option<String>,
+    /// Accumulated conversation messages for transcript persistence.
+    #[serde(default)]
+    pub transcript_messages: Vec<TranscriptMessage>,
 }
 
 impl WorkerAgent {
@@ -145,6 +156,7 @@ impl WorkerAgent {
             usage: UsageSummary::default(),
             tool_use_count: 0,
             output: None,
+            transcript_messages: Vec::new(),
         }
     }
 
@@ -162,31 +174,43 @@ impl WorkerAgent {
     }
 
     /// Mark the worker as completed with the given output.
+    ///
+    /// If a session directory is configured, the transcript is automatically
+    /// persisted to disk.
     pub fn complete(&mut self, output: String) -> std::result::Result<(), String> {
         if self.status != WorkerStatus::Running {
             return Err(format!("Cannot complete worker in {} state", self.status));
         }
         self.status = WorkerStatus::Completed;
         self.output = Some(output);
+        let _ = self.try_persist_transcript();
         Ok(())
     }
 
     /// Mark the worker as failed with an error message.
+    ///
+    /// If a session directory is configured, the transcript is automatically
+    /// persisted to disk.
     pub fn fail(&mut self, error: String) -> std::result::Result<(), String> {
         if self.status != WorkerStatus::Running {
             return Err(format!("Cannot fail worker in {} state", self.status));
         }
         self.status = WorkerStatus::Failed;
         self.output = Some(error);
+        let _ = self.try_persist_transcript();
         Ok(())
     }
 
     /// Kill the worker.
+    ///
+    /// If a session directory is configured, the transcript is automatically
+    /// persisted to disk.
     pub fn kill(&mut self) -> std::result::Result<(), String> {
         if self.status != WorkerStatus::Running {
             return Err(format!("Cannot kill worker in {} state", self.status));
         }
         self.status = WorkerStatus::Killed;
+        let _ = self.try_persist_transcript();
         Ok(())
     }
 
@@ -269,6 +293,47 @@ impl WorkerAgent {
         };
 
         format_task_notification(&params)
+    }
+
+    /// Add a message to the transcript log.
+    ///
+    /// Call this as messages arrive during the worker's execution so that
+    /// the transcript is available when the worker finishes.
+    pub fn add_transcript_message(&mut self, role: impl Into<String>, content: impl Into<String>) {
+        self.transcript_messages.push(TranscriptMessage::new(role, content));
+    }
+
+    /// Try to persist the transcript to disk.
+    ///
+    /// Called automatically by [`complete`](Self::complete),
+    /// [`fail`](Self::fail), and [`kill`](Self::kill) when a session
+    /// directory is configured. Returns `Ok(())` if no session directory is
+    /// set (no-op), or the result of the write attempt.
+    pub fn try_persist_transcript(&self) -> anyhow::Result<()> {
+        let Some(ref session_dir) = self.config.session_dir else {
+            return Ok(());
+        };
+
+        let result = self.to_result();
+        if self.transcript_messages.is_empty() {
+            // No accumulated messages -- persist from the result alone.
+            persist_transcript_from_result(session_dir, &result)
+        } else {
+            persist_transcript(session_dir, &result, &self.transcript_messages)
+        }
+    }
+
+    /// Manually persist the transcript with an explicit session directory.
+    ///
+    /// Use this when you want to persist outside the auto-persist flow,
+    /// or when the session directory was not set at construction time.
+    pub fn persist_transcript_to(&self, session_dir: &std::path::Path) -> anyhow::Result<()> {
+        let result = self.to_result();
+        if self.transcript_messages.is_empty() {
+            persist_transcript_from_result(session_dir, &result)
+        } else {
+            persist_transcript(session_dir, &result, &self.transcript_messages)
+        }
     }
 }
 
@@ -558,6 +623,7 @@ mod tests {
             model: Some("haiku".to_owned()),
             simple_mode: false,
             working_dir: Some("/tmp/test".to_owned()),
+            session_dir: None,
         };
         let run_config = worker_run_config(&config);
         assert_eq!(run_config.max_turns, 50);
@@ -654,5 +720,139 @@ mod tests {
         let parsed: WorkerResult = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(parsed.agent_id, "w-1");
         assert_eq!(parsed.status, WorkerStatus::Completed);
+    }
+
+    // -- Transcript persistence tests ------------------------------------
+
+    #[test]
+    fn worker_config_session_dir_default_none() {
+        let config = WorkerConfig::default();
+        assert!(config.session_dir.is_none());
+    }
+
+    #[test]
+    fn complete_auto_persists_transcript() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let config = WorkerConfig {
+            description: "Auto-persist test".to_owned(),
+            prompt: "Do work".to_owned(),
+            session_dir: Some(dir.path().to_path_buf()),
+            ..Default::default()
+        };
+        let mut worker = WorkerAgent::new("w-auto", config);
+        worker.add_transcript_message("user", "Fix the bug");
+        worker.add_transcript_message("assistant", "Fixed it");
+
+        assert!(worker.start().is_ok());
+        assert!(worker.complete("All done".to_owned()).is_ok());
+
+        // Transcript file should exist
+        let transcript_path = dir.path().join("transcripts").join("w-auto.json");
+        assert!(transcript_path.exists(), "transcript file should be created");
+
+        let loaded: crate::transcript::SubagentTranscript =
+            serde_json::from_str(&std::fs::read_to_string(&transcript_path).expect("read"))
+                .expect("parse");
+        assert_eq!(loaded.agent_id, "w-auto");
+        assert_eq!(loaded.status, WorkerStatus::Completed);
+        assert_eq!(loaded.messages.len(), 2);
+        assert_eq!(loaded.messages[0].content, "Fix the bug");
+    }
+
+    #[test]
+    fn fail_auto_persists_transcript() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let config = WorkerConfig {
+            description: "Fail test".to_owned(),
+            prompt: "Do work".to_owned(),
+            session_dir: Some(dir.path().to_path_buf()),
+            ..Default::default()
+        };
+        let mut worker = WorkerAgent::new("w-fail", config);
+
+        assert!(worker.start().is_ok());
+        assert!(worker.fail("Something went wrong".to_owned()).is_ok());
+
+        let transcript_path = dir.path().join("transcripts").join("w-fail.json");
+        assert!(transcript_path.exists());
+
+        let loaded: crate::transcript::SubagentTranscript =
+            serde_json::from_str(&std::fs::read_to_string(&transcript_path).expect("read"))
+                .expect("parse");
+        assert_eq!(loaded.status, WorkerStatus::Failed);
+    }
+
+    #[test]
+    fn kill_auto_persists_transcript() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let config = WorkerConfig {
+            description: "Kill test".to_owned(),
+            prompt: "Do work".to_owned(),
+            session_dir: Some(dir.path().to_path_buf()),
+            ..Default::default()
+        };
+        let mut worker = WorkerAgent::new("w-kill", config);
+
+        assert!(worker.start().is_ok());
+        assert!(worker.kill().is_ok());
+
+        let transcript_path = dir.path().join("transcripts").join("w-kill.json");
+        assert!(transcript_path.exists());
+    }
+
+    #[test]
+    fn no_session_dir_is_noop_on_complete() {
+        let config = WorkerConfig {
+            description: "No dir test".to_owned(),
+            prompt: "Test".to_owned(),
+            session_dir: None,
+            ..Default::default()
+        };
+        let mut worker = WorkerAgent::new("w-nodir", config);
+        assert!(worker.start().is_ok());
+        // Should succeed even though no session_dir is set
+        assert!(worker.complete("Done".to_owned()).is_ok());
+    }
+
+    #[test]
+    fn persist_transcript_to_explicit_dir() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let config = WorkerConfig {
+            description: "Manual persist".to_owned(),
+            prompt: "Test".to_owned(),
+            session_dir: None,
+            ..Default::default()
+        };
+        let mut worker = WorkerAgent::new("w-manual", config);
+        worker.add_transcript_message("user", "Do the thing");
+        worker.add_transcript_message("assistant", "Done");
+
+        assert!(worker.start().is_ok());
+        assert!(worker.complete("Finished".to_owned()).is_ok());
+
+        // Manually persist to an explicit directory
+        worker.persist_transcript_to(dir.path()).expect("persist");
+
+        let transcript_path = dir.path().join("transcripts").join("w-manual.json");
+        assert!(transcript_path.exists());
+
+        let loaded: crate::transcript::SubagentTranscript =
+            serde_json::from_str(&std::fs::read_to_string(&transcript_path).expect("read"))
+                .expect("parse");
+        assert_eq!(loaded.messages.len(), 2);
+        assert_eq!(loaded.messages[0].content, "Do the thing");
+    }
+
+    #[test]
+    fn add_transcript_message_accumulates() {
+        let config = WorkerConfig::default();
+        let mut worker = WorkerAgent::new("w-msgs", config);
+        assert!(worker.transcript_messages.is_empty());
+
+        worker.add_transcript_message("user", "Hello");
+        worker.add_transcript_message("assistant", "Hi");
+        worker.add_transcript_message("assistant", "How can I help?");
+
+        assert_eq!(worker.transcript_messages.len(), 3);
     }
 }

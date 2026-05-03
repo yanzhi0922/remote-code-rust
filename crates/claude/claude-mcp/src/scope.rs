@@ -157,6 +157,7 @@ mod tests {
             request_timeout_secs: None,
             metadata: std::collections::BTreeMap::new(),
             oauth: None,
+            tool_policy: crate::tool_policy::McpToolPolicy::default(),
         };
         let scoped = ScopedMcpServerConfig::new(inner.clone(), ConfigScope::User)
             .with_plugin_source("my-plugin");

@@ -997,6 +997,7 @@ mod tests {
             request_timeout_secs: None,
             metadata: Default::default(),
             oauth: None,
+            tool_policy: crate::tool_policy::McpToolPolicy::default(),
         };
 
         let first = mcp_oauth_server_key("docs", &make_server("https://one.example/mcp"));

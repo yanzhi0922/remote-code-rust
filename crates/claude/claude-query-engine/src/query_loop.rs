@@ -18,8 +18,9 @@ use crate::config::{
     ProcessUserInputContext, ProviderInvocationMode, QueryEngineConfig, ToolRunResult,
 };
 use crate::engine::{
-    EngineError, EngineState, QueryResult, assistant_message_from_response, budget_stop_message,
-    tool_result_message, usage_from_accumulator,
+    EngineError, EngineState, QueryResult,
+    assistant_message_from_response_with_parent, budget_stop_message,
+    tool_result_message_with_parent, usage_from_accumulator,
 };
 use crate::max_tokens_recovery::{MaxTokensRecovery, MaxTokensRecoveryAction};
 use crate::observer::{
@@ -235,7 +236,8 @@ pub async fn run_query_loop(
                     context.max_output_tokens_override =
                         Some(u32::try_from(max_tokens).unwrap_or(u32::MAX));
                     // Append the assistant's truncated response
-                    let assistant_message = assistant_message_from_response(&response);
+                    let last_uuid = state.messages.last().and_then(|m| Some(m.base().uuid));
+                    let assistant_message = assistant_message_from_response_with_parent(&response, last_uuid);
                     state.messages.push(assistant_message.clone());
                     // Append the continuation prompt
                     state.messages.push(continuation_message.clone());
@@ -268,7 +270,8 @@ pub async fn run_query_loop(
         config.event_stream.emit(EngineEvent::UsageUpdated {
             usage: usage_from_accumulator(&state.usage),
         });
-        let assistant_message = assistant_message_from_response(&response);
+        let last_uuid = state.messages.last().and_then(|m| Some(m.base().uuid));
+        let assistant_message = assistant_message_from_response_with_parent(&response, last_uuid);
         state.messages.push(assistant_message.clone());
         let _ = config
             .observer
@@ -780,6 +783,23 @@ fn build_streaming_callbacks(
         });
     });
 
+    let thinking_tx = tx.clone();
+    let thinking_accumulated = Arc::new(Mutex::new(String::new()));
+    let on_thinking_delta = Box::new(move |delta: &str| {
+        let accumulated_thinking = {
+            let mut accumulated = thinking_accumulated
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            accumulated.push_str(delta);
+            accumulated.clone()
+        };
+        let _ = thinking_tx.send(QueryObserverEvent::StreamingThinkingDelta {
+            turn,
+            delta: delta.to_owned(),
+            accumulated_thinking,
+        });
+    });
+
     let on_usage = Box::new(move |input_tokens: u64, output_tokens: u64| {
         let _ = tx.send(QueryObserverEvent::StreamingUsageUpdated {
             turn,
@@ -798,6 +818,7 @@ fn build_streaming_callbacks(
         on_tool_call_start: Some(on_tool_call_start),
         on_tool_call_delta: Some(on_tool_call_delta),
         on_usage: Some(on_usage),
+        on_thinking_delta: Some(on_thinking_delta),
     }
 }
 
@@ -1002,9 +1023,10 @@ async fn commit_tool_result(
             })
             .await;
     }
+    let last_uuid = state.messages.last().and_then(|m| Some(m.base().uuid));
     state
         .messages
-        .push(tool_result_message(tool_call, &tool_run.result));
+        .push(tool_result_message_with_parent(tool_call, &tool_run.result, last_uuid));
     let _ = config
         .observer
         .on_event(QueryObserverEvent::ToolResultCommitted {

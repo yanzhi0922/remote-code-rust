@@ -263,6 +263,13 @@ pub(crate) fn usage_from_accumulator(accumulator: &UsageAccumulator) -> Usage {
 }
 
 pub(crate) fn assistant_message_from_response(response: &claude_core::ProviderResponse) -> Message {
+    assistant_message_from_response_with_parent(response, None)
+}
+
+pub(crate) fn assistant_message_from_response_with_parent(
+    response: &claude_core::ProviderResponse,
+    parent_uuid: Option<Uuid>,
+) -> Message {
     let mut blocks = Vec::new();
     if !response.text.trim().is_empty() {
         blocks.push(AssistantContentBlock::Text {
@@ -324,8 +331,10 @@ pub(crate) fn assistant_message_from_response(response: &claude_core::ProviderRe
         provider_content_blocks
     };
 
+    let mut base = MessageBase::with_origin(MessageOrigin::Provider);
+    base.parent_uuid = parent_uuid;
     Message::Assistant(AssistantMessage {
-        base: MessageBase::with_origin(MessageOrigin::Provider),
+        base,
         text: response.text.clone(),
         blocks,
         tool_calls: response.tool_calls.clone(),
@@ -334,8 +343,18 @@ pub(crate) fn assistant_message_from_response(response: &claude_core::ProviderRe
 }
 
 pub(crate) fn tool_result_message(tool_call: &ToolCall, result: &claude_core::ToolResult) -> Message {
+    tool_result_message_with_parent(tool_call, result, None)
+}
+
+pub(crate) fn tool_result_message_with_parent(
+    tool_call: &ToolCall,
+    result: &claude_core::ToolResult,
+    parent_uuid: Option<Uuid>,
+) -> Message {
+    let mut base = MessageBase::with_origin(MessageOrigin::Tool);
+    base.parent_uuid = parent_uuid;
     Message::ToolUseSummary(ToolUseSummaryMessage {
-        base: MessageBase::with_origin(MessageOrigin::Tool),
+        base,
         tool_call_id: tool_call.id.clone(),
         tool_name: tool_call.name.clone(),
         summary: result.content.clone(),

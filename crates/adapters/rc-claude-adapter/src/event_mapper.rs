@@ -145,6 +145,7 @@ pub fn map_observer_event(
         | QueryObserverEvent::MessagesAppended { .. }
         | QueryObserverEvent::BudgetEvaluated { .. }
         | QueryObserverEvent::CheckpointCreated { .. }
-        | QueryObserverEvent::CheckpointCleared { .. } => None,
+        | QueryObserverEvent::CheckpointCleared { .. }
+        | QueryObserverEvent::StreamingThinkingDelta { .. } => None,
     }
 }

@@ -18,6 +18,36 @@ const FILE_UNCHANGED_STUB: &str = "File unchanged since last read. The content f
 const FILE_UNEXPECTEDLY_MODIFIED_ERROR: &str =
     "File has been unexpectedly modified. Read it again before attempting to write it.";
 
+const BLOCKED_DEVICE_PATHS: &[&str] = &[
+    "/dev/zero",
+    "/dev/random",
+    "/dev/urandom",
+    "/dev/full",
+    "/dev/stdin",
+    "/dev/tty",
+    "/dev/console",
+    "/dev/stdout",
+    "/dev/stderr",
+    "/dev/fd/0",
+    "/dev/fd/1",
+    "/dev/fd/2",
+];
+
+fn is_blocked_device_path(path: &str) -> bool {
+    if BLOCKED_DEVICE_PATHS.contains(&path) {
+        return true;
+    }
+    // /proc/self/fd/0-2 and /proc/<pid>/fd/0-2 are Linux aliases for stdio
+    if path.starts_with("/proc/")
+        && (path.ends_with("/fd/0")
+            || path.ends_with("/fd/1")
+            || path.ends_with("/fd/2"))
+    {
+        return true;
+    }
+    false
+}
+
 tokio::task_local! {
     static TOOL_FILESYSTEM_PERMISSION_CONFIRMED: bool;
 }
@@ -42,6 +72,24 @@ fn normalize_quotes(s: &str) -> String {
      .replace('\u{201D}', "\"")
      .replace('\u{2018}', "'")
      .replace('\u{2019}', "'")
+}
+
+fn find_actual_string(file_content: &str, search_string: &str) -> Option<String> {
+    // First try exact match
+    if file_content.contains(search_string) {
+        return Some(search_string.to_owned());
+    }
+    // Try with normalized quotes — both sides get curly→straight normalization
+    let normalized_search = normalize_quotes(search_string);
+    let normalized_file = normalize_quotes(file_content);
+    if let Some(index) = normalized_file.find(&normalized_search) {
+        // Extract the actual substring from the original file content at the same position
+        let end = index + search_string.len();
+        if end <= file_content.len() {
+            return Some(file_content[index..end].to_owned());
+        }
+    }
+    None
 }
 
 fn normalize_for_comparison(path: PathBuf) -> PathBuf {
@@ -232,6 +280,12 @@ pub(crate) fn list_directory(input: &Value, context: &ToolExecutionContext) -> R
 
 pub fn read_file(input: &Value, context: &ToolExecutionContext) -> Result<String> {
     let path = file_path_input(input).ok_or_else(|| anyhow!("read_file requires file_path"))?;
+    if is_blocked_device_path(path) {
+        return Err(anyhow!(
+            "Cannot read '{}': this device file would block or produce infinite output.",
+            path
+        ));
+    }
     let target =
         resolve_workspace_path_for_operation(context, Some(path), FilesystemOperation::Read)?;
     let start_line = input
@@ -288,9 +342,58 @@ pub fn read_file(input: &Value, context: &ToolExecutionContext) -> Result<String
     }
 
     if ext == "pdf" {
-        return Ok(format!("PDF file detected: {}\nSize: {} bytes\nPDF reading requires a dedicated PDF parser. Use `pdftotext` or similar tools via Bash for now.",
+        let file_size = std::fs::metadata(&target).map(|m| m.len()).unwrap_or(0);
+        let pages_param = input
+            .get("pages")
+            .and_then(Value::as_str);
+
+        // Try pdftotext (poppler-utils) for text extraction
+        if let Ok(text) = extract_pdf_via_pdftotext(&target, pages_param, file_size) {
+            if let Ok(timestamp) = file_mtime_ms(&target) {
+                context.read_file_state.set(
+                    &target,
+                    FileState::read(text.clone(), timestamp, start_line, limit),
+                );
+            }
+            return Ok(text);
+        }
+
+        // Try pdftotext without page range as fallback
+        if pages_param.is_some() {
+            if let Ok(text) = extract_pdf_via_pdftotext(&target, None, file_size) {
+                if let Ok(timestamp) = file_mtime_ms(&target) {
+                    context.read_file_state.set(
+                        &target,
+                        FileState::read(text.clone(), timestamp, start_line, limit),
+                    );
+                }
+                return Ok(text);
+            }
+        }
+
+        return Err(anyhow!(
+            "PDF reading requires `pdftotext` from poppler-utils. \
+             Install with: `brew install poppler` (macOS) or `apt-get install poppler-utils` (Debian/Ubuntu).\n\
+             File: {} ({} bytes)",
             target.display(),
-            std::fs::metadata(&target).map(|m| m.len()).unwrap_or(0)));
+            file_size
+        ));
+    }
+
+    // Notebook (.ipynb) files
+    if ext == "ipynb" {
+        let contents = std::fs::read_to_string(&target)
+            .with_context(|| format!("failed to read {}", target.display()))?;
+        let rendered = render_notebook_cells(&contents, start_line, end_line, max_chars)?;
+        if let Ok(timestamp) = file_mtime_ms(&target) {
+            let raw_cells = render_notebook_cells(&contents, 1, usize::MAX, usize::MAX)
+                .unwrap_or_default();
+            context.read_file_state.set(
+                &target,
+                FileState::read(raw_cells, timestamp, start_line, limit),
+            );
+        }
+        return Ok(rendered);
     }
 
     let contents = std::fs::read_to_string(&target)
@@ -463,19 +566,22 @@ pub(crate) fn replace_in_file(input: &Value, context: &ToolExecutionContext) -> 
             "No changes to make: old_string and new_string are exactly the same."
         ));
     }
-    if !original.contains(search) {
-        return Err(anyhow!(
-            "String to replace not found in file.\nString: {search}"
-        ));
-    }
-    let match_count = original.matches(search).count();
+    let actual_search = match find_actual_string(&original, search) {
+        Some(s) => s,
+        None => {
+            return Err(anyhow!(
+                "String to replace not found in file.\nString: {search}"
+            ));
+        }
+    };
+    let match_count = original.matches(&*actual_search).count();
     if match_count > 1 && !replace_all {
         return Err(anyhow!("Found {match_count} occurrences of the search string. Use 'all: true' to replace all, or provide a more specific search string."));
     }
     let updated = if replace_all {
-        original.replace(search, replace)
+        original.replace(&*actual_search, replace)
     } else {
-        original.replacen(search, replace, 1)
+        original.replacen(&*actual_search, replace, 1)
     };
     ensure_current_read_state_before_atomic_write(context, &target, &original)?;
     std::fs::write(&target, updated)?;
@@ -559,21 +665,24 @@ pub(crate) fn edit_file(input: &Value, context: &ToolExecutionContext) -> Result
                 "No changes to make: old_string and new_string are exactly the same."
             ));
         }
-        let matches = content.matches(&*search).count();
-        if matches == 0 {
-            return Err(anyhow!(
-                "String to replace not found in file.\nString: {search}"
-            ));
-        }
+        let actual_search = match find_actual_string(&content, &search) {
+            Some(s) => s,
+            None => {
+                return Err(anyhow!(
+                    "String to replace not found in file.\nString: {search}"
+                ));
+            }
+        };
+        let matches = content.matches(&*actual_search).count();
         if matches > 1 && !replace_all {
             return Err(anyhow!(
                 "Found {matches} matches of the string to replace, but replace_all is false. To replace all occurrences, set replace_all to true. To replace only one occurrence, please provide more context to uniquely identify the instance.\nString: {search}"
             ));
         }
         content = if replace_all {
-            content.replace(&*search, &*replace)
+            content.replace(&*actual_search, &*replace)
         } else {
-            content.replacen(&*search, &*replace, 1)
+            content.replacen(&*actual_search, &*replace, 1)
         };
     }
     if let Some(parent) = target.parent() {
@@ -839,6 +948,201 @@ pub(crate) fn grep_files(input: &Value, context: &ToolExecutionContext) -> Resul
 
 fn current_plan_file_path() -> Option<PathBuf> {
     crate::plan_mode::current_plan_file_path()
+}
+
+fn extract_pdf_via_pdftotext(
+    path: &Path,
+    pages: Option<&str>,
+    file_size: u64,
+) -> Result<String> {
+    let pdftotext = which_pdftotext()?;
+    let mut cmd = std::process::Command::new(&pdftotext);
+    cmd.arg("-layout");
+
+    if let Some(page_range) = pages {
+        let (start, end) = parse_pdf_page_range(page_range)?;
+        if end - start + 1 > 20 {
+            return Err(anyhow!(
+                "Maximum 20 pages per read request. Requested {} pages.",
+                end - start + 1
+            ));
+        }
+        cmd.arg("-f").arg(start.to_string());
+        cmd.arg("-l").arg(end.to_string());
+    } else if file_size > 5_000_000 {
+        cmd.arg("-f").arg("1").arg("-l").arg("20");
+    }
+
+    let output = cmd.arg(path).arg("-").output()?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(anyhow!("pdftotext failed: {}", stderr.trim()));
+    }
+
+    let text = String::from_utf8_lossy(&output.stdout);
+    let truncated: String = text.chars().take(50_000).collect();
+    let header = format!(
+        "PDF file: {} ({} bytes)\n{}\n",
+        path.display(),
+        file_size,
+        if pages.is_some() {
+            format!("Pages: {}", pages.unwrap())
+        } else {
+            "Full document".to_owned()
+        }
+    );
+    Ok(format!("{}{}", header, truncated))
+}
+
+fn which_pdftotext() -> Result<PathBuf> {
+    #[cfg(windows)]
+    let resolver = "where";
+    #[cfg(not(windows))]
+    let resolver = "which";
+
+    let output = std::process::Command::new(resolver)
+        .arg("pdftotext")
+        .output()?;
+
+    if !output.status.success() {
+        return Err(anyhow!("pdftotext not found in PATH"));
+    }
+
+    let path = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .next()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from)
+        .ok_or_else(|| anyhow!("pdftotext not found"))?;
+
+    if path.exists() {
+        Ok(path)
+    } else {
+        Err(anyhow!("pdftotext not found at {}", path.display()))
+    }
+}
+
+fn parse_pdf_page_range(range: &str) -> Result<(u32, u32)> {
+    let range = range.trim();
+    if let Some((s, e)) = range.split_once('-') {
+        let start: u32 = s.trim().parse().map_err(|_| anyhow!("Invalid page number: {}", s))?;
+        let end: u32 = e.trim().parse().map_err(|_| anyhow!("Invalid page number: {}", e))?;
+        if start == 0 || end == 0 || start > end {
+            return Err(anyhow!("Invalid page range: {}", range));
+        }
+        return Ok((start, end));
+    }
+    let pages: Vec<u32> = range
+        .split(',')
+        .filter_map(|p| p.trim().parse().ok())
+        .filter(|&p| p > 0)
+        .collect();
+    if pages.is_empty() {
+        return Err(anyhow!("Invalid page range: {}", range));
+    }
+    let start = *pages.iter().min().unwrap();
+    let end = *pages.iter().max().unwrap();
+    Ok((start, end))
+}
+
+fn render_notebook_cells(
+    raw: &str,
+    start_line: usize,
+    end_line: usize,
+    max_chars: usize,
+) -> Result<String> {
+    let notebook: serde_json::Value = serde_json::from_str(raw)
+        .with_context(|| "failed to parse .ipynb JSON")?;
+
+    let cells = notebook
+        .get("cells")
+        .and_then(Value::as_array)
+        .ok_or_else(|| anyhow!("notebook has no cells array"))?;
+
+    let mut lines = Vec::new();
+    lines.push(format!("Notebook: {} cells\n", cells.len()));
+
+    for (idx, cell) in cells.iter().enumerate() {
+        let cell_type = cell.get("cell_type").and_then(Value::as_str).unwrap_or("unknown");
+        let cell_id = cell.get("id").and_then(Value::as_str).unwrap_or("?");
+        let source = cell
+            .get("source")
+            .and_then(|s| {
+                if s.is_array() {
+                    Some(
+                        s.as_array()
+                            .unwrap()
+                            .iter()
+                            .filter_map(Value::as_str)
+                            .collect::<Vec<_>>()
+                            .join(""),
+                    )
+                } else {
+                    s.as_str().map(|s| s.to_owned())
+                }
+            })
+            .unwrap_or_default();
+
+        let outputs = cell
+            .get("outputs")
+            .and_then(|o| o.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|out| {
+                        out.get("text")
+                            .or_else(|| out.get("data").and_then(|d| d.get("text/plain")))
+                            .and_then(|t| {
+                                if t.is_array() {
+                                    Some(
+                                        t.as_array()
+                                            .unwrap()
+                                            .iter()
+                                            .filter_map(Value::as_str)
+                                            .collect::<Vec<_>>()
+                                            .join(""),
+                                    )
+                                } else {
+                                    t.as_str().map(|s| s.to_owned())
+                                }
+                            })
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            })
+            .unwrap_or_default();
+
+        let cell_header = format!("--- Cell {} ({}) [id={}] ---", idx + 1, cell_type, cell_id);
+        lines.push(cell_header);
+        for source_line in source.lines() {
+            lines.push(source_line.to_owned());
+        }
+        if !outputs.is_empty() {
+            lines.push("Output:".to_owned());
+            for output_line in outputs.lines() {
+                lines.push(format!("  {}", output_line));
+            }
+        }
+        lines.push(String::new());
+    }
+
+    let all_text = lines.join("\n");
+    let rendered: String = all_text
+        .lines()
+        .enumerate()
+        .filter_map(|(i, line)| {
+            let line_num = i + 1;
+            if line_num < start_line || line_num > end_line {
+                None
+            } else {
+                Some(format!("{line_num:>4} {line}"))
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    Ok(rendered.chars().take(max_chars).collect())
 }
 
 #[cfg(test)]

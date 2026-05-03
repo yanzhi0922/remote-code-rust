@@ -13887,6 +13887,7 @@ dependencies = [
  "roo-editor",
  "roo-environment",
  "roo-ignore",
+ "roo-index",
  "roo-mcp",
  "roo-mentions",
  "roo-message-queue",

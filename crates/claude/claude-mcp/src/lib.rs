@@ -57,6 +57,7 @@ pub mod scope;
 pub mod serialization;
 pub mod session;
 pub mod transport;
+pub mod tool_policy;
 pub mod types;
 pub mod validation;
 
@@ -168,6 +169,9 @@ pub use validation::{
     DuplicateEntry, McpConfigValidator, SecurityLevel, SecurityWarning, ValidationWarning,
     ValidationWarningKind,
 };
+
+// Tool policy
+pub use tool_policy::McpToolPolicy;
 
 // ── Tests ───────────────────────────────────────────────────────────────────
 

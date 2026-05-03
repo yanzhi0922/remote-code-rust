@@ -291,6 +291,7 @@ fn run_mcp_add(config: &RuntimeConfig, args: McpAddArgs) -> Result<()> {
             request_timeout_secs: args.request_timeout_secs,
             metadata,
             oauth: None,
+            tool_policy: claude_mcp::McpToolPolicy::default(),
         },
     );
     mcp_config.save(&config_path)?;
