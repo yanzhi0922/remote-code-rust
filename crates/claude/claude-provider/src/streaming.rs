@@ -37,6 +37,10 @@ use crate::{
 /// Default stream idle timeout in milliseconds (90 seconds).
 const DEFAULT_STREAM_IDLE_TIMEOUT_MS: u64 = 90_000;
 
+/// Maximum size of the SSE buffer before discarding stale data.
+/// Prevents unbounded memory growth from misbehaving endpoints.
+const MAX_SSE_BUFFER_SIZE: usize = 10 * 1024 * 1024; // 10 MB
+
 /// Read the stream idle timeout from `CLAUDE_STREAM_IDLE_TIMEOUT_MS`.
 /// Falls back to 90 seconds if unset or unparseable.
 fn stream_idle_timeout() -> Duration {
@@ -326,6 +330,10 @@ impl ProviderClient {
             let Some(chunk) = chunk_result else { break };
             let bytes = chunk.with_context(|| "failed to read streaming chunk")?;
             sse_buffer.push_str(&String::from_utf8_lossy(&bytes));
+            if sse_buffer.len() > MAX_SSE_BUFFER_SIZE {
+                tracing::warn!("SSE buffer exceeded {MAX_SSE_BUFFER_SIZE} bytes, discarding stale data");
+                sse_buffer.clear();
+            }
 
             while let Some(event_end) = sse_buffer.find("\n\n") {
                 let event_text = sse_buffer[..event_end].to_owned();
@@ -524,6 +532,10 @@ impl ProviderClient {
             let Some(chunk) = chunk_result else { break };
             let bytes = chunk.with_context(|| "failed to read streaming chunk")?;
             sse_buffer.push_str(&String::from_utf8_lossy(&bytes));
+            if sse_buffer.len() > MAX_SSE_BUFFER_SIZE {
+                tracing::warn!("SSE buffer exceeded {MAX_SSE_BUFFER_SIZE} bytes, discarding stale data");
+                sse_buffer.clear();
+            }
 
             for event in parse_sse_events_from_buffer(&mut sse_buffer) {
                 // Direct Anthropic API returns cache token counts.
@@ -714,6 +726,14 @@ impl ProviderClient {
                 // Minimum frame size: 4 (total_len) + 4 (headers_len) + 4 (prelude_crc)
                 let total_len =
                     u32::from_be_bytes([buffer[0], buffer[1], buffer[2], buffer[3]]) as usize;
+                if total_len < 14 {
+                    // Malformed frame — minimum valid frame is 14 bytes:
+                    // 4 (total_len) + 4 (headers_len) + 4 (prelude_crc) + 0 payload + 4 (message CRC)
+                    // Anything smaller cannot have a valid payload_end = total_len - 4.
+                    tracing::warn!("Bedrock frame with total_len={total_len} < 14, discarding");
+                    buffer.drain(..4.min(buffer.len()));
+                    continue;
+                }
                 if buffer.len() < total_len {
                     break; // Incomplete frame, wait for more data.
                 }
@@ -899,6 +919,10 @@ impl ProviderClient {
             let Some(chunk) = chunk_result else { break };
             let bytes = chunk.with_context(|| "failed to read Vertex streaming chunk")?;
             sse_buffer.push_str(&String::from_utf8_lossy(&bytes));
+            if sse_buffer.len() > MAX_SSE_BUFFER_SIZE {
+                tracing::warn!("SSE buffer exceeded {MAX_SSE_BUFFER_SIZE} bytes, discarding stale data");
+                sse_buffer.clear();
+            }
 
             for event in parse_sse_events_from_buffer(&mut sse_buffer) {
                 // Vertex does not return cache token counts.

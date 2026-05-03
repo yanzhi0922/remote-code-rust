@@ -45,6 +45,8 @@ mod event_mapper;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+use futures::FutureExt;
+
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use serde_json::json;
@@ -756,6 +758,7 @@ impl AgentAdapter for ClaudeInProcessAdapter {
         let cancel_token = self.cancel_token.clone();
         let event_tx_for_completion = event_tx.clone();
         let session_id_for_completion = session_id.to_owned();
+        let session_id_for_panic = session_id.to_owned();
 
         let handle = tokio::spawn(async move {
             // Check cancellation before starting.
@@ -765,28 +768,48 @@ impl AgentAdapter for ClaudeInProcessAdapter {
                 return;
             }
 
-            // Run the query engine to completion.
-            let result = engine.submit_message(user_message, context).await;
+            // Run the query engine to completion, catching panics.
+            let fut = async {
+                let result = engine.submit_message(user_message, context).await;
+                match result {
+                    Ok(query_result) => {
+                        debug!(
+                            stops = %query_result.stop_reason,
+                            turns = query_result.turns,
+                            "Query engine completed"
+                        );
+                    }
+                    Err(e) => {
+                        warn!("Query engine error: {e}");
+                        let _ = event_tx_for_completion
+                            .send(UnifiedAgentEvent::Error {
+                                session_id: session_id_for_completion,
+                                message: format!("{e:#}"),
+                                recoverable: false,
+                            })
+                            .await;
+                    }
+                }
+            };
 
-            match result {
-                Ok(query_result) => {
-                    debug!(
-                        stops = %query_result.stop_reason,
-                        turns = query_result.turns,
-                        "Query engine completed"
-                    );
-                    // Session persistence is handled by the observer and tool runner.
-                }
-                Err(e) => {
-                    warn!("Query engine error: {e}");
-                    let _ = event_tx_for_completion
-                        .send(UnifiedAgentEvent::Error {
-                            session_id: session_id_for_completion,
-                            message: format!("{e:#}"),
-                            recoverable: false,
-                        })
-                        .await;
-                }
+            // Wrap with AssertUnwindSafe so we can catch panics inside the async block.
+            let result = std::panic::AssertUnwindSafe(fut).catch_unwind().await;
+            if let Err(panic_payload) = result {
+                let msg = if let Some(s) = panic_payload.downcast_ref::<&str>() {
+                    s.to_string()
+                } else if let Some(s) = panic_payload.downcast_ref::<String>() {
+                    s.clone()
+                } else {
+                    "internal query engine panic".to_owned()
+                };
+                tracing::error!("Query engine task panicked: {msg}");
+                let _ = event_tx_for_completion
+                    .send(UnifiedAgentEvent::Error {
+                        session_id: session_id_for_panic,
+                        message: format!("internal error: {msg}"),
+                        recoverable: false,
+                    })
+                    .await;
             }
         });
 
