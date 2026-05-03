@@ -40,6 +40,11 @@ roo-prompt = { path = "../../roo/roo-prompt" }
 roo-modes = { path = "../../roo/roo-modes" }
 roo-terminal = { path = "../../roo/roo-terminal" }
 roo-auto-approval = { path = "../../roo/roo-auto-approval" }
+roo-ignore = { path = "../../roo/roo-ignore" }
+roo-protect = { path = "../../roo/roo-protect" }
+roo-context-tracking = { path = "../../roo/roo-context-tracking" }
+roo-editor = { path = "../../roo/roo-editor" }
+roo-mcp = { path = "../../roo/roo-mcp" }
 tokio = { workspace = true }
 tokio-util = { workspace = true }
 futures = { workspace = true }

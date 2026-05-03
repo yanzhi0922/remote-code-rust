@@ -43,6 +43,10 @@ roo-terminal = { path = "../roo-terminal" }
 roo-prompt = { path = "../roo-prompt" }
 roo-modes = { path = "../roo-modes" }
 roo-tools = { path = "../roo-tools" }
+roo-ignore = { path = "../roo-ignore" }
+roo-index = { path = "../roo-index" }
+roo-context-tracking = { path = "../roo-context-tracking" }
+roo-protect = { path = "../roo-protect" }
 tokio = { workspace = true, features = ["full"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
