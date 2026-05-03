@@ -305,24 +305,40 @@ impl DiffViewProvider {
         Ok(result)
     }
 
-    /// Reverts all changes, restoring the file to its original content.
+    /// Reverts all changes, restoring the file to its original content on disk.
     ///
-    /// If the file was newly created, it is deleted.
+    /// If the file was newly created (no original content), it is deleted from disk.
     /// If the file was modified, the original content is written back.
-    pub async fn revert_changes(&mut self) -> Result<(), DiffViewError> {
-        let _rel_path = self
+    ///
+    /// `cwd` is the workspace root used to resolve the relative path to an
+    /// absolute path for file I/O.
+    pub async fn revert_changes(&mut self, cwd: &Path) -> Result<(), DiffViewError> {
+        let rel_path = self
             .rel_path
             .as_ref()
             .ok_or(DiffViewError::NotOpen)?
             .clone();
+        let full_path = cwd.join(&rel_path);
 
         match &self.original_content {
             Some(original) => {
-                // File existed before — restore original content
+                // File existed before — write original content back to disk
+                use tokio::io::AsyncWriteExt;
+                let mut file = tokio::fs::File::create(&full_path)
+                    .await
+                    .map_err(|e| DiffViewError::Editor(FileEditorError::Io(e)))?;
+                file.write_all(original.as_bytes())
+                    .await
+                    .map_err(|e| DiffViewError::Editor(FileEditorError::Io(e)))?;
                 self.current_content = Some(original.clone());
             }
             None => {
-                // New file — clear content
+                // New file — delete it from disk if it exists
+                if full_path.exists() {
+                    tokio::fs::remove_file(&full_path)
+                        .await
+                        .map_err(|e| DiffViewError::Editor(FileEditorError::Io(e)))?;
+                }
                 self.current_content = None;
             }
         }
@@ -335,9 +351,12 @@ impl DiffViewProvider {
     ///
     /// This mirrors the TS `DiffViewProvider.close()` method which closes the
     /// diff editor tab and reverts the file to its original content.
-    pub async fn close(&mut self) -> Result<(), DiffViewError> {
+    ///
+    /// `cwd` is needed to resolve the relative path for restoring the original
+    /// file content on disk during revert.
+    pub async fn close(&mut self, cwd: &Path) -> Result<(), DiffViewError> {
         if self.has_unsaved_changes() {
-            self.revert_changes().await?;
+            self.revert_changes(cwd).await?;
         }
         self.reset();
         Ok(())
@@ -615,9 +634,12 @@ mod tests {
         provider.update("modified", false).unwrap();
         assert_eq!(provider.get_current_content().unwrap(), "modified");
 
-        provider.revert_changes().await.unwrap();
+        provider.revert_changes(dir.path()).await.unwrap();
         assert_eq!(provider.get_current_content().unwrap(), "original");
         assert!(!provider.is_active());
+        // File on disk should still have original content
+        let content = tokio::fs::read_to_string(&file_path).await.unwrap();
+        assert_eq!(content, "original");
     }
 
     #[tokio::test]
@@ -629,9 +651,11 @@ mod tests {
         provider.open(&file_path).await.unwrap();
         provider.update("new content", false).unwrap();
 
-        provider.revert_changes().await.unwrap();
+        provider.revert_changes(dir.path()).await.unwrap();
         assert!(provider.get_current_content().is_none());
         assert!(!provider.is_active());
+        // File should be deleted after revert
+        assert!(!file_path.exists());
     }
 
     // ── Reset ──
@@ -669,11 +693,14 @@ mod tests {
         provider.update("modified", false).unwrap();
         assert!(provider.has_unsaved_changes());
 
-        provider.close().await.unwrap();
+        provider.close(dir.path()).await.unwrap();
         assert!(!provider.is_active());
         // After close, the provider is fully reset (idle state)
         assert!(provider.rel_path().is_none());
         assert!(provider.get_current_content().is_none());
+        // File on disk should be restored to original
+        let content = tokio::fs::read_to_string(&file_path).await.unwrap();
+        assert_eq!(content, "original");
     }
 
     #[tokio::test]
@@ -686,7 +713,7 @@ mod tests {
         provider.open(&file_path).await.unwrap();
         // No changes made
 
-        provider.close().await.unwrap();
+        provider.close(dir.path()).await.unwrap();
         assert!(!provider.is_active());
         assert!(provider.rel_path().is_none());
     }
@@ -700,9 +727,11 @@ mod tests {
         provider.open(&file_path).await.unwrap();
         provider.update("new content", false).unwrap();
 
-        provider.close().await.unwrap();
+        provider.close(dir.path()).await.unwrap();
         assert!(!provider.is_active());
         assert!(provider.rel_path().is_none());
+        // File should be deleted after close + revert
+        assert!(!file_path.exists());
     }
 
     // ── Diff summary ──

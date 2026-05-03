@@ -979,10 +979,14 @@ impl TaskLifecycle {
 
         // Source: TS lines 2367–2374 — revert diff changes if editing
         if self.engine.streaming().is_streaming {
-            if let Some(ref _diff_view) = self.diff_view_provider {
-                // TODO: Implement DiffViewProvider::revert_changes() async method
-                // In TS: `this.diffViewProvider.revertChanges().catch(console.error)`
-                warn!("DiffViewProvider revert_changes not yet implemented in Rust");
+            if let Some(mut diff_view) = self.diff_view_provider.take() {
+                // TS: `this.diffViewProvider.revertChanges().catch(console.error)`
+                let cwd = std::path::PathBuf::from(&self.engine.config().cwd);
+                let _handle = tokio::spawn(async move {
+                    if let Err(e) = diff_view.revert_changes(&cwd).await {
+                        warn!("Failed to revert diff changes: {}", e);
+                    }
+                });
             }
         }
     }

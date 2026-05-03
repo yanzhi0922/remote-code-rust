@@ -525,7 +525,7 @@ impl ToolHandler for WriteToFileHandler {
 
         let write_params = roo_types::tool::WriteToFileParams { path, content };
 
-        match roo_tools_fs::process_write_to_file(&write_params, &context.cwd, context.roo_ignore_controller.as_ref(), context.model_id.as_deref()) {
+        match roo_tools_fs::process_write_to_file(&write_params, &context.cwd, context.roo_ignore_controller.as_ref(), context.roo_protected_controller.as_ref(), context.model_id.as_deref()) {
             Ok(result) => {
                 let msg = if result.is_new_file {
                     format!(

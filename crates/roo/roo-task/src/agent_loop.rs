@@ -353,6 +353,14 @@ pub struct AgentLoopConfig {
     ///
     /// Source: TS `mcpHub.getServers()` — passed to `buildNativeToolsArrayWithRestrictions`
     pub mcp_servers: Vec<McpServerConnection>,
+    /// Custom mode configurations (user-defined modes).
+    ///
+    /// Source: TS `state.customModes` — passed to `generatePrompt()` / `buildSystemPrompt`
+    pub custom_modes: Option<Vec<roo_types::mode::ModeConfig>>,
+    /// Custom mode prompts (per-mode prompt overrides).
+    ///
+    /// Source: TS `state.customModePrompts` — passed to `getRoleDefinition()` / `getPromptComponent`
+    pub custom_mode_prompts: Option<roo_types::mode::CustomModePrompts>,
 }
 
 impl Default for AgentLoopConfig {
@@ -375,8 +383,107 @@ impl Default for AgentLoopConfig {
             has_mcp: false,
             skills: Vec::new(),
             mcp_servers: Vec::new(),
+            custom_modes: None,
+            custom_mode_prompts: None,
         }
     }
+}
+
+// ===========================================================================
+// Runtime System Detection Helpers
+// ===========================================================================
+
+/// Map compile-time architecture constant to human-readable short form.
+fn arch_short() -> &'static str {
+    match std::env::consts::ARCH {
+        "x86_64" => "x64",
+        "aarch64" => "arm64",
+        "x86" => "x86",
+        "arm" => "arm",
+        other => other,
+    }
+}
+
+/// Detect OS information at runtime.
+///
+/// Returns a string like "Windows NT (x64)", "macOS (arm64)", "Ubuntu 22.04 (x64)".
+fn detect_os_info() -> String {
+    let arch = arch_short();
+
+    if cfg!(target_os = "windows") {
+        // Try running `ver` command; fall back to "Windows NT"
+        let os_name = std::process::Command::new("cmd")
+            .args(["/C", "ver"])
+            .output()
+            .ok()
+            .map(|_| "Windows NT")
+            .unwrap_or("Windows NT");
+        format!("{os_name} ({arch})")
+    } else if cfg!(target_os = "macos") {
+        let os_name = std::process::Command::new("sw_vers")
+            .arg("-productVersion")
+            .output()
+            .ok()
+            .and_then(|o| {
+                let v = String::from_utf8_lossy(&o.stdout).trim().to_string();
+                if v.is_empty() {
+                    None
+                } else {
+                    Some(format!("macOS {v}"))
+                }
+            })
+            .unwrap_or_else(|| "macOS".to_string());
+        format!("{os_name} ({arch})")
+    } else if cfg!(target_os = "linux") {
+        let os_name = std::fs::read_to_string("/etc/os-release")
+            .ok()
+            .and_then(|content| {
+                content.lines().find_map(|line| {
+                    line.strip_prefix("PRETTY_NAME=")
+                        .map(|v| v.trim().trim_matches('"').to_string())
+                })
+            })
+            .unwrap_or_else(|| "Linux".to_string());
+        format!("{os_name} ({arch})")
+    } else {
+        format!("{} ({arch})", std::env::consts::OS)
+    }
+}
+
+/// Detect the user's shell at runtime.
+///
+/// - On Windows: checks `PSModulePath` for PowerShell, then `COMSPEC`, falls back to `cmd.exe`.
+/// - On Unix: reads `SHELL` env var, falls back to `bash`.
+fn detect_shell() -> String {
+    if cfg!(target_os = "windows") {
+        // Check for PowerShell via PSModulePath env var
+        if std::env::var("PSModulePath").is_ok() {
+            return "powershell.exe".to_string();
+        }
+        // Use COMSPEC (usually cmd.exe or powershell.exe)
+        if let Ok(comspec) = std::env::var("COMSPEC") {
+            return comspec;
+        }
+        "cmd.exe".to_string()
+    } else {
+        std::env::var("SHELL").unwrap_or_else(|_| "bash".to_string())
+    }
+}
+
+/// Detect the system language/locale at runtime.
+///
+/// - On Unix: parses `LANG` env var (e.g., "en_US.UTF-8" → "en").
+/// - On Windows: returns "en" (locale auto-detection is complex and rarely needed).
+/// - Falls back to "en".
+fn detect_language() -> String {
+    if !cfg!(target_os = "windows") {
+        if let Ok(lang) = std::env::var("LANG") {
+            if let Some(lang_code) = lang.split('_').next() {
+                return lang_code.to_string();
+            }
+        }
+    }
+    "en".to_string()
 }
 
 // ===========================================================================
@@ -3225,23 +3332,30 @@ impl AgentLoop {
         let cwd = &self.engine.config().cwd;
         let mode = &self.engine.config().mode;
 
-        // Compute OS/shell/home info
-        let os_info = format!("{} {}", std::env::consts::OS, env!("CARGO_PKG_VERSION"));
-        let shell = if cfg!(windows) { "cmd.exe" } else { "bash" };
+        // Runtime OS/shell/home detection
+        let os_info = detect_os_info();
+        let shell = detect_shell();
         let home_dir = dirs::home_dir()
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_else(|| "~".to_string());
 
         let settings = roo_prompt::SystemPromptSettings::default();
 
+        // Auto-detect language from system locale when not configured
+        let language = self
+            .config
+            .language
+            .clone()
+            .unwrap_or_else(detect_language);
+
         roo_prompt::build_system_prompt(
             cwd,
             mode,
-            None, // custom_modes — not yet wired through config
-            None, // custom_mode_prompts — not yet wired through config
+            self.config.custom_modes.as_deref(),
+            self.config.custom_mode_prompts.as_ref(),
             self.config.has_mcp,
             self.config.custom_instructions.as_deref(),
-            self.config.language.as_deref(),
+            Some(&language),
             self.roo_ignore_controller
                 .as_ref()
                 .and_then(|c| c.get_instructions())
@@ -3249,7 +3363,7 @@ impl AgentLoop {
             Some(&settings),
             &self.config.skills,
             &os_info,
-            shell,
+            &shell,
             &home_dir,
         )
     }
