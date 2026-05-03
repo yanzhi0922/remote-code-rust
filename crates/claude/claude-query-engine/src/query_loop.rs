@@ -168,6 +168,15 @@ pub async fn run_query_loop(
                                     ),
                                 },
                             });
+                            state.consecutive_failures += 1;
+                            if state.consecutive_failures > 5 {
+                                state.state_machine.force_set(EnginePhase::Failed);
+                                return Err(EngineError::Other(
+                                    anyhow::anyhow!(
+                                        "prompt-too-long persists after 5 reactive compaction attempts"
+                                    ),
+                                ));
+                            }
                             continue; // Retry the turn
                         }
                     }
@@ -882,10 +891,14 @@ fn estimate_current_max_tokens(usage: &claude_core::UsageAccumulator) -> usize {
     if output == 0 {
         return 8192; // Default starting tier
     }
-    // Round up to the nearest power of 2
-    let mut tier = 8192;
+    // Round up to the nearest power of 2, with overflow protection.
+    let mut tier = 8192usize;
     while tier < output as usize {
-        tier *= 2;
+        tier = match tier.checked_mul(2) {
+            Some(next) if next > output as usize => return next,
+            Some(next) => next,
+            None => return tier, // Overflow — use current tier as upper bound.
+        };
     }
     tier
 }

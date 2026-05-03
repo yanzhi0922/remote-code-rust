@@ -2370,6 +2370,27 @@ fn codex_cli_binary_path() -> Result<PathBuf> {
 // In-process Codex prompt execution
 // ---------------------------------------------------------------------------
 
+/// Receive the next event from `rx` with a 30-second timeout.
+/// If the timeout fires, checks `is_alive` to determine whether the worker
+/// crashed (return `Err`) or is just slow (return `Ok(None)` to retry).
+async fn recv_with_liveness_check<T: Send>(
+    rx: &mut mpsc::Receiver<T>,
+    is_alive: impl Fn() -> bool,
+) -> std::result::Result<T, String> {
+    loop {
+        match timeout(Duration::from_secs(30), rx.recv()).await {
+            Ok(Some(event)) => return Ok(event),
+            Ok(None) => return Err("agent channel closed unexpectedly".to_string()),
+            Err(_) => {
+                if !is_alive() {
+                    return Err("agent worker crashed unexpectedly".to_string());
+                }
+                // Worker alive but slow — retry.
+            }
+        }
+    }
+}
+
 /// Execute a prompt via the native Codex in-process adapter.
 ///
 /// Creates or reuses a [`CodexInProcessAdapter`] with isolated storage,
@@ -2433,7 +2454,26 @@ async fn run_codex_in_process_prompt(
     let mut tool_calls: Vec<ToolCallDto> = Vec::new();
     let mut usage_info: claude_agent_protocol::events::UsageInfo = Default::default();
     let mut stop_reason = "completed".to_owned();
-    while let Some(event) = rx.recv().await {
+    'codex_stream: loop {
+        let event = {
+            let adapters_ref = codex_adapters.clone();
+            let sid = session_id.to_string();
+            match recv_with_liveness_check(&mut rx, move || {
+                adapters_ref.try_lock().map_or(false, |a| a.get(&sid).map_or(false, |adapter| adapter.is_alive()))
+            }).await {
+                Ok(e) => e,
+                Err(msg) => {
+                    tracing::error!(error = %msg, "Codex streaming loop aborted");
+                    let _ = app.emit(APP_EVENT_PROMPT_DONE, PromptDoneDto {
+                        session_id: session_id.to_string(),
+                        is_error: true,
+                        error: Some(msg.clone()),
+                        result: None,
+                    });
+                    return Err(msg);
+                }
+            }
+        };
         use claude_agent_protocol::events::UnifiedAgentEvent;
         match event {
             UnifiedAgentEvent::MessageDelta { delta, .. } => {
@@ -2656,7 +2696,7 @@ async fn run_codex_in_process_prompt(
                 {
                     usage_info = result.usage;
                 }
-                break;
+                break 'codex_stream;
             }
             UnifiedAgentEvent::Error {
                 message,
@@ -2679,7 +2719,7 @@ async fn run_codex_in_process_prompt(
             }
             UnifiedAgentEvent::Stopped => {
                 stop_reason = "stopped".to_owned();
-                break;
+                break 'codex_stream;
             }
             UnifiedAgentEvent::Started(_) | UnifiedAgentEvent::Ready => {
                 tracing::debug!(event = ?event, "Codex lifecycle event");
@@ -2773,7 +2813,26 @@ async fn run_roo_in_process_prompt(
     let mut tool_calls: Vec<ToolCallDto> = Vec::new();
     let mut usage_info: claude_agent_protocol::events::UsageInfo = Default::default();
     let mut stop_reason = "completed".to_owned();
-    while let Some(event) = rx.recv().await {
+    'roo_stream: loop {
+        let event = {
+            let adapters_ref = roo_adapters.clone();
+            let sid = session_id.to_string();
+            match recv_with_liveness_check(&mut rx, move || {
+                adapters_ref.try_lock().map_or(false, |a| a.get(&sid).map_or(false, |adapter| adapter.is_alive()))
+            }).await {
+                Ok(e) => e,
+                Err(msg) => {
+                    tracing::error!(error = %msg, "Roo streaming loop aborted");
+                    let _ = app.emit(APP_EVENT_PROMPT_DONE, PromptDoneDto {
+                        session_id: session_id.to_string(),
+                        is_error: true,
+                        error: Some(msg.clone()),
+                        result: None,
+                    });
+                    return Err(msg);
+                }
+            }
+        };
         use claude_agent_protocol::events::UnifiedAgentEvent;
         match event {
             UnifiedAgentEvent::MessageDelta { delta, .. } => {
@@ -2966,7 +3025,7 @@ async fn run_roo_in_process_prompt(
                 {
                     usage_info = result.usage;
                 }
-                break;
+                break 'roo_stream;
             }
             UnifiedAgentEvent::Error {
                 message,
@@ -2980,7 +3039,7 @@ async fn run_roo_in_process_prompt(
             }
             UnifiedAgentEvent::Stopped => {
                 stop_reason = "stopped".to_owned();
-                break;
+                break 'roo_stream;
             }
             UnifiedAgentEvent::Started(_) | UnifiedAgentEvent::Ready => {
                 tracing::debug!(event = ?event, "Roo lifecycle event");
@@ -3073,7 +3132,26 @@ async fn run_claude_in_process_prompt(
     let mut tool_calls: Vec<ToolCallDto> = Vec::new();
     let mut usage_info: claude_agent_protocol::events::UsageInfo = Default::default();
     let mut stop_reason = "completed".to_owned();
-    while let Some(event) = rx.recv().await {
+    'claude_stream: loop {
+        let event = {
+            let adapters_ref = claude_adapters.clone();
+            let sid = session_id.to_string();
+            match recv_with_liveness_check(&mut rx, move || {
+                adapters_ref.try_lock().map_or(false, |a| a.get(&sid).map_or(false, |adapter| adapter.is_alive()))
+            }).await {
+                Ok(e) => e,
+                Err(msg) => {
+                    tracing::error!(error = %msg, "Claude streaming loop aborted");
+                    let _ = app.emit(APP_EVENT_PROMPT_DONE, PromptDoneDto {
+                        session_id: session_id.to_string(),
+                        is_error: true,
+                        error: Some(msg.clone()),
+                        result: None,
+                    });
+                    return Err(msg);
+                }
+            }
+        };
         use claude_agent_protocol::events::UnifiedAgentEvent;
         match event {
             UnifiedAgentEvent::MessageDelta { delta, .. } => {
@@ -3266,7 +3344,7 @@ async fn run_claude_in_process_prompt(
                 {
                     usage_info = result.usage;
                 }
-                break;
+                break 'claude_stream;
             }
             UnifiedAgentEvent::Error {
                 message,
@@ -3280,7 +3358,7 @@ async fn run_claude_in_process_prompt(
             }
             UnifiedAgentEvent::Stopped => {
                 stop_reason = "stopped".to_owned();
-                break;
+                break 'claude_stream;
             }
             UnifiedAgentEvent::Started(_) | UnifiedAgentEvent::Ready => {
                 tracing::debug!(event = ?event, "Claude lifecycle event");
@@ -3702,6 +3780,25 @@ async fn cancel_prompt(
     if let Some(handle) = running.remove(&session_id) {
         handle.abort();
         drop(running);
+
+        // Cascade cancel to the adapter so internal resources are cleaned up.
+        let sid = &session_id;
+        if let Ok(mut adapters) = state.active_claude_adapters.try_lock() {
+            if let Some(adapter) = adapters.get_mut(sid) {
+                let _ = adapter.cancel(sid).await;
+            }
+        }
+        if let Ok(mut adapters) = state.active_codex_adapters.try_lock() {
+            if let Some(adapter) = adapters.get_mut(sid) {
+                let _ = adapter.cancel(sid).await;
+            }
+        }
+        if let Ok(mut adapters) = state.active_roo_adapters.try_lock() {
+            if let Some(adapter) = adapters.get_mut(sid) {
+                let _ = adapter.cancel(sid).await;
+            }
+        }
+
         let _ = app.emit(
             APP_EVENT_PROMPT_DONE,
             PromptDoneDto {

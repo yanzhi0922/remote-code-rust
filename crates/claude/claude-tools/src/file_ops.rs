@@ -79,14 +79,27 @@ fn find_actual_string(file_content: &str, search_string: &str) -> Option<String>
     if file_content.contains(search_string) {
         return Some(search_string.to_owned());
     }
-    // Try with normalized quotes — both sides get curly→straight normalization
+    // Try with normalized quotes — both sides get curly→straight normalization.
+    // Use character-level indexing to avoid slicing on non-character boundaries
+    // when the normalized string differs in length from the original.
     let normalized_search = normalize_quotes(search_string);
     let normalized_file = normalize_quotes(file_content);
-    if let Some(index) = normalized_file.find(&normalized_search) {
-        // Extract the actual substring from the original file content at the same position
-        let end = index + search_string.len();
-        if end <= file_content.len() {
-            return Some(file_content[index..end].to_owned());
+    if let Some(byte_index) = normalized_file.find(&normalized_search) {
+        // Count characters up to the match position in the normalized string,
+        // then use that character count to index into the original string.
+        let char_offset = normalized_file[..byte_index].chars().count();
+        let char_len = normalized_search.chars().count();
+        let start_ok = file_content
+            .char_indices()
+            .nth(char_offset)
+            .map(|(b, _)| b);
+        let end_ok = file_content
+            .char_indices()
+            .nth(char_offset + char_len)
+            .map(|(b, _)| b)
+            .unwrap_or(file_content.len());
+        if let Some(start) = start_ok {
+            return Some(file_content[start..end_ok].to_owned());
         }
     }
     None
@@ -1073,11 +1086,13 @@ fn render_notebook_cells(
                 if s.is_array() {
                     Some(
                         s.as_array()
-                            .unwrap()
-                            .iter()
-                            .filter_map(Value::as_str)
-                            .collect::<Vec<_>>()
-                            .join(""),
+                            .map(|arr| {
+                                arr.iter()
+                                    .filter_map(Value::as_str)
+                                    .collect::<Vec<_>>()
+                                    .join("")
+                            })
+                            .unwrap_or_default(),
                     )
                 } else {
                     s.as_str().map(|s| s.to_owned())
@@ -1097,11 +1112,13 @@ fn render_notebook_cells(
                                 if t.is_array() {
                                     Some(
                                         t.as_array()
-                                            .unwrap()
-                                            .iter()
-                                            .filter_map(Value::as_str)
-                                            .collect::<Vec<_>>()
-                                            .join(""),
+                                            .map(|arr| {
+                                                arr.iter()
+                                                    .filter_map(Value::as_str)
+                                                    .collect::<Vec<_>>()
+                                                    .join("")
+                                            })
+                                            .unwrap_or_default(),
                                     )
                                 } else {
                                     t.as_str().map(|s| s.to_owned())
