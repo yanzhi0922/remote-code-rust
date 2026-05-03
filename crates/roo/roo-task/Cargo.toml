@@ -8,6 +8,7 @@ description = "Task engine for Roo Code Rust"
 
 [dependencies]
 roo-types = { path = "../roo-types" }
+roo-index = { path = "../roo-index" }
 roo-task-persistence = { path = "../roo-task-persistence" }
 roo-provider = { path = "../roo-provider" }
 roo-tools = { path = "../roo-tools" }
