@@ -2595,6 +2595,7 @@ dependencies = [
  "roo-context",
  "roo-context-tracking",
  "roo-custom-tools",
+ "roo-diff",
  "roo-editor",
  "roo-environment",
  "roo-ignore",
@@ -2683,6 +2684,7 @@ name = "roo-tools-command"
 version = "0.1.0"
 dependencies = [
  "regex",
+ "roo-ignore",
  "roo-terminal",
  "roo-types",
  "serde",
@@ -2696,6 +2698,7 @@ dependencies = [
 name = "roo-tools-fs"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "regex",
  "roo-diff",
  "roo-ignore",

@@ -38,6 +38,7 @@ roo-prompt = { path = "../roo-prompt" }
 roo-environment = { path = "../roo-environment" }
 roo-config = { path = "../roo-config" }
 roo-modes = { path = "../roo-modes" }
+roo-diff = { path = "../roo-diff" }
 thiserror = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
