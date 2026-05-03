@@ -115,7 +115,7 @@ impl PreprocessingPipeline {
     ) -> PreprocessingResult {
         // Stage 1: truncate oversized tool results
         let tool_results_truncated =
-            Self::apply_tool_result_budget(messages, self.tool_result_budget);
+            Self::apply_tool_result_budget(messages, self.tool_result_budget, &Default::default());
 
         // Stage 2: snip old history when context usage exceeds threshold
         let messages_snipped =
@@ -157,12 +157,20 @@ impl PreprocessingPipeline {
 
     /// Truncate tool-result content that exceeds `budget` characters.
     ///
+    /// `exempt_tool_names` — tools that should NOT be truncated (e.g. those with
+    /// infinite maxResultSizeChars). Mirrors TS `query.ts` lines 390–393.
+    ///
     /// Returns the number of tool results that were truncated.
-    pub fn apply_tool_result_budget(messages: &mut [Message], budget: usize) -> usize {
+    pub fn apply_tool_result_budget(
+        messages: &mut [Message],
+        budget: usize,
+        exempt_tool_names: &std::collections::HashSet<String>,
+    ) -> usize {
         let mut truncated = 0;
         for msg in messages.iter_mut() {
             if let Message::ToolUseSummary(tool_summary) = msg
                 && tool_summary.summary.len() > budget
+                && !exempt_tool_names.contains(&tool_summary.tool_name)
             {
                 let truncated_text = format!(
                     "{}\n\n[Tool result truncated: {} chars → {} chars]",
@@ -175,6 +183,11 @@ impl PreprocessingPipeline {
             }
         }
         truncated
+    }
+
+    /// Convenience — apply tool result budget without exemptions.
+    pub fn apply_tool_result_budget_unrestricted(messages: &mut [Message], budget: usize) -> usize {
+        Self::apply_tool_result_budget(messages, budget, &std::collections::HashSet::new())
     }
 
     // -----------------------------------------------------------------------
@@ -491,7 +504,7 @@ mod tests {
         let long_content = "x".repeat(1_000);
         let mut messages = vec![make_tool_summary("id1", &long_content, false)];
 
-        let truncated = PreprocessingPipeline::apply_tool_result_budget(&mut messages, 500);
+        let truncated = PreprocessingPipeline::apply_tool_result_budget(&mut messages, 500, &Default::default());
         assert_eq!(truncated, 1);
 
         if let Message::ToolUseSummary(ts) = &messages[0] {
@@ -509,7 +522,7 @@ mod tests {
         let short_content = "small result";
         let mut messages = vec![make_tool_summary("id1", short_content, false)];
 
-        let truncated = PreprocessingPipeline::apply_tool_result_budget(&mut messages, 200_000);
+        let truncated = PreprocessingPipeline::apply_tool_result_budget(&mut messages, 200_000, &Default::default());
         assert_eq!(truncated, 0);
 
         if let Message::ToolUseSummary(ts) = &messages[0] {

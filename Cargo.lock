@@ -12636,8 +12636,13 @@ dependencies = [
  "futures",
  "roo-app",
  "roo-auto-approval",
+ "roo-context-tracking",
+ "roo-editor",
+ "roo-ignore",
+ "roo-mcp",
  "roo-modes",
  "roo-prompt",
+ "roo-protect",
  "roo-provider",
  "roo-provider-anthropic",
  "roo-provider-aws",
@@ -13884,6 +13889,7 @@ dependencies = [
  "roo-context",
  "roo-context-tracking",
  "roo-custom-tools",
+ "roo-diff",
  "roo-editor",
  "roo-environment",
  "roo-ignore",
@@ -13969,6 +13975,7 @@ name = "roo-tools-command"
 version = "0.1.0"
 dependencies = [
  "regex",
+ "roo-ignore",
  "roo-terminal",
  "roo-types",
  "serde",
@@ -13981,6 +13988,7 @@ dependencies = [
 name = "roo-tools-fs"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "regex",
  "roo-diff",
  "roo-ignore",

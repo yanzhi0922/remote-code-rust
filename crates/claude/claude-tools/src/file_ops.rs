@@ -5,9 +5,9 @@ use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
 use anyhow::{Context, Result, anyhow};
+use claude_permissions::{FilesystemOperation, assess_filesystem_access};
 use globset::GlobBuilder;
 use ignore::WalkBuilder;
-use claude_permissions::{FilesystemOperation, assess_filesystem_access};
 use regex::Regex;
 use serde_json::Value;
 use walkdir::WalkDir;
@@ -39,9 +39,7 @@ fn is_blocked_device_path(path: &str) -> bool {
     }
     // /proc/self/fd/0-2 and /proc/<pid>/fd/0-2 are Linux aliases for stdio
     if path.starts_with("/proc/")
-        && (path.ends_with("/fd/0")
-            || path.ends_with("/fd/1")
-            || path.ends_with("/fd/2"))
+        && (path.ends_with("/fd/0") || path.ends_with("/fd/1") || path.ends_with("/fd/2"))
     {
         return true;
     }
@@ -69,9 +67,9 @@ fn filesystem_permission_confirmed_for_dispatch() -> bool {
 
 fn normalize_quotes(s: &str) -> String {
     s.replace('\u{201C}', "\"")
-     .replace('\u{201D}', "\"")
-     .replace('\u{2018}', "'")
-     .replace('\u{2019}', "'")
+        .replace('\u{201D}', "\"")
+        .replace('\u{2018}', "'")
+        .replace('\u{2019}', "'")
 }
 
 fn find_actual_string(file_content: &str, search_string: &str) -> Option<String> {
@@ -89,10 +87,7 @@ fn find_actual_string(file_content: &str, search_string: &str) -> Option<String>
         // then use that character count to index into the original string.
         let char_offset = normalized_file[..byte_index].chars().count();
         let char_len = normalized_search.chars().count();
-        let start_ok = file_content
-            .char_indices()
-            .nth(char_offset)
-            .map(|(b, _)| b);
+        let start_ok = file_content.char_indices().nth(char_offset).map(|(b, _)| b);
         let end_ok = file_content
             .char_indices()
             .nth(char_offset + char_len)
@@ -103,6 +98,38 @@ fn find_actual_string(file_content: &str, search_string: &str) -> Option<String>
         }
     }
     None
+}
+
+/// Preserves curly quote style from the file content in the replacement string.
+///
+/// When the file uses curly quotes (e.g. `\u{201c}...\u{201d}`) but the user
+/// typed straight quotes in `old_string`, this function maps the straight quotes in
+/// `new_string` back to curly style so the replaced text blends in. Matches TS
+/// `preserveQuoteStyle`.
+fn preserve_quote_style(user_old: &str, actual_old: &str, new_str: &str) -> String {
+    // Only transform when the file uses a curly quote that the user typed as straight.
+    let has_curly_double = actual_old.contains('\u{201C}') || actual_old.contains('\u{201D}');
+    let has_curly_single = actual_old.contains('\u{2018}') || actual_old.contains('\u{2019}');
+    let user_has_straight_double = user_old.contains('"');
+    let user_has_straight_single = user_old.contains('\'');
+
+    let mut result = new_str.to_owned();
+    if has_curly_double && user_has_straight_double {
+        // Replace each straight double quote with the curly variant found in the file.
+        // Prefer \u{201C} for opening, \u{201D} for closing.
+        result = result.replace('"', "\u{201D}");
+        // Crude heuristic: first occurrence is opening quote if file has both.
+        if let Some(pos) = result.find('\u{201D}') {
+            result.replace_range(pos..pos + '\u{201D}'.len_utf8(), "\u{201C}");
+        }
+    }
+    if has_curly_single && user_has_straight_single {
+        result = result.replace('\'', "\u{2019}");
+        if let Some(pos) = result.find('\u{2019}') {
+            result.replace_range(pos..pos + '\u{2019}'.len_utf8(), "\u{2018}");
+        }
+    }
+    result
 }
 
 fn normalize_for_comparison(path: PathBuf) -> PathBuf {
@@ -334,12 +361,16 @@ pub fn read_file(input: &Value, context: &ToolExecutionContext) -> Result<String
         return Ok(FILE_UNCHANGED_STUB.to_owned());
     }
 
-    let ext = target.extension()
+    let ext = target
+        .extension()
         .and_then(|e| e.to_str())
         .unwrap_or("")
         .to_ascii_lowercase();
 
-    if matches!(ext.as_str(), "png" | "jpg" | "jpeg" | "gif" | "webp" | "svg") {
+    if matches!(
+        ext.as_str(),
+        "png" | "jpg" | "jpeg" | "gif" | "webp" | "svg"
+    ) {
         let data = std::fs::read(&target)?;
         let mime = match ext.as_str() {
             "png" => "image/png",
@@ -350,15 +381,19 @@ pub fn read_file(input: &Value, context: &ToolExecutionContext) -> Result<String
             _ => "application/octet-stream",
         };
         let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &data);
-        return Ok(format!("Image file: {}\nMIME type: {}\nSize: {} bytes\nBase64 data: data:{};base64,{}",
-            target.display(), mime, data.len(), mime, &b64[..b64.len().min(50000)]));
+        return Ok(format!(
+            "Image file: {}\nMIME type: {}\nSize: {} bytes\nBase64 data: data:{};base64,{}",
+            target.display(),
+            mime,
+            data.len(),
+            mime,
+            &b64[..b64.len().min(50000)]
+        ));
     }
 
     if ext == "pdf" {
         let file_size = std::fs::metadata(&target).map(|m| m.len()).unwrap_or(0);
-        let pages_param = input
-            .get("pages")
-            .and_then(Value::as_str);
+        let pages_param = input.get("pages").and_then(Value::as_str);
 
         // Try pdftotext (poppler-utils) for text extraction
         if let Ok(text) = extract_pdf_via_pdftotext(&target, pages_param, file_size) {
@@ -399,8 +434,8 @@ pub fn read_file(input: &Value, context: &ToolExecutionContext) -> Result<String
             .with_context(|| format!("failed to read {}", target.display()))?;
         let rendered = render_notebook_cells(&contents, start_line, end_line, max_chars)?;
         if let Ok(timestamp) = file_mtime_ms(&target) {
-            let raw_cells = render_notebook_cells(&contents, 1, usize::MAX, usize::MAX)
-                .unwrap_or_default();
+            let raw_cells =
+                render_notebook_cells(&contents, 1, usize::MAX, usize::MAX).unwrap_or_default();
             context.read_file_state.set(
                 &target,
                 FileState::read(raw_cells, timestamp, start_line, limit),
@@ -589,7 +624,9 @@ pub(crate) fn replace_in_file(input: &Value, context: &ToolExecutionContext) -> 
     };
     let match_count = original.matches(&*actual_search).count();
     if match_count > 1 && !replace_all {
-        return Err(anyhow!("Found {match_count} occurrences of the search string. Use 'all: true' to replace all, or provide a more specific search string."));
+        return Err(anyhow!(
+            "Found {match_count} occurrences of the search string. Use 'all: true' to replace all, or provide a more specific search string."
+        ));
     }
     let updated = if replace_all {
         original.replace(&*actual_search, replace)
@@ -606,8 +643,32 @@ pub(crate) fn replace_in_file(input: &Value, context: &ToolExecutionContext) -> 
 
 pub(crate) fn edit_file(input: &Value, context: &ToolExecutionContext) -> Result<String> {
     let path = file_path_input(input).ok_or_else(|| anyhow!("edit_file requires file_path"))?;
+
+    // Reject edits to .ipynb files — the NotebookEdit tool is the dedicated path.
+    // Matches TS FileEditTool validateInput guard.
+    if path.to_lowercase().ends_with(".ipynb") {
+        return Err(anyhow!(
+            "File is a Jupyter Notebook. Use the NotebookEdit tool to edit this file."
+        ));
+    }
+
     let target =
         resolve_workspace_path_for_operation(context, Some(path), FilesystemOperation::Write)?;
+
+    // File size guard: prevent OOM on multi-GB files. 1 GiB matches TS MAX_EDIT_FILE_SIZE.
+    const MAX_EDIT_FILE_SIZE: u64 = 1024 * 1024 * 1024; // 1 GiB
+    if target.exists() {
+        if let Ok(metadata) = std::fs::metadata(&target) {
+            if metadata.len() > MAX_EDIT_FILE_SIZE {
+                return Err(anyhow!(
+                    "File is too large to edit ({} bytes). Maximum editable file size is {} GiB.",
+                    metadata.len(),
+                    MAX_EDIT_FILE_SIZE / (1024 * 1024 * 1024)
+                ));
+            }
+        }
+    }
+
     let legacy_edits;
     let edits = if let Some(edits) = input.get("edits").and_then(Value::as_array) {
         edits
@@ -663,6 +724,8 @@ pub(crate) fn edit_file(input: &Value, context: &ToolExecutionContext) -> Result
             .get("replace")
             .and_then(Value::as_str)
             .ok_or_else(|| anyhow!("edit is missing replace"))?;
+        let original_search = search.to_owned();
+        let original_replace = replace.to_owned();
         let search = normalize_quotes(search);
         let replace = normalize_quotes(replace);
         let replace_all = edit.get("all").and_then(Value::as_bool).unwrap_or(false);
@@ -686,6 +749,10 @@ pub(crate) fn edit_file(input: &Value, context: &ToolExecutionContext) -> Result
                 ));
             }
         };
+        // Preserve curly quote style in the replacement when the file uses them
+        // and the user typed straight quotes. Matches TS preserveQuoteStyle.
+        let actual_replace =
+            preserve_quote_style(&original_search, &actual_search, &original_replace);
         let matches = content.matches(&*actual_search).count();
         if matches > 1 && !replace_all {
             return Err(anyhow!(
@@ -693,9 +760,9 @@ pub(crate) fn edit_file(input: &Value, context: &ToolExecutionContext) -> Result
             ));
         }
         content = if replace_all {
-            content.replace(&*actual_search, &*replace)
+            content.replace(&*actual_search, &*actual_replace)
         } else {
-            content.replacen(&*actual_search, &*replace, 1)
+            content.replacen(&*actual_search, &*actual_replace, 1)
         };
     }
     if let Some(parent) = target.parent() {
@@ -777,22 +844,27 @@ pub(crate) fn grep_files(input: &Value, context: &ToolExecutionContext) -> Resul
         .get("head_limit")
         .and_then(Value::as_u64)
         .unwrap_or(250) as usize;
-    let offset = input
-        .get("offset")
-        .and_then(Value::as_u64)
-        .unwrap_or(0) as usize;
+    let offset = input.get("offset").and_then(Value::as_u64).unwrap_or(0) as usize;
 
-    // Context lines: -C overrides -A and -B
-    let context_before = input
-        .get("-B")
+    // Context lines: `context` or `-C` overrides `-A` and `-B` (matches TS priority).
+    // TS: context/C > -C > -B/-A. We treat `context` and `-C` as synonyms for the
+    // symmetric "-C N" ripgrep mode — but only when neither -B nor -A is explicitly
+    // set (TS precedence: context wins over everything else).
+    let resolved_c = input
+        .get("context")
         .or_else(|| input.get("-C"))
-        .and_then(Value::as_u64)
-        .unwrap_or(0) as usize;
-    let context_after = input
-        .get("-A")
-        .or_else(|| input.get("-C"))
-        .and_then(Value::as_u64)
-        .unwrap_or(0) as usize;
+        .and_then(Value::as_u64);
+
+    let context_before = if let Some(c) = resolved_c {
+        c as usize
+    } else {
+        input.get("-B").and_then(Value::as_u64).unwrap_or(0) as usize
+    };
+    let context_after = if let Some(c) = resolved_c {
+        c as usize
+    } else {
+        input.get("-A").and_then(Value::as_u64).unwrap_or(0) as usize
+    };
 
     // Use default 1-line context when no explicit context is given (for content mode)
     let (ctx_before, ctx_after) = if context_before == 0 && context_after == 0 {
@@ -963,11 +1035,7 @@ fn current_plan_file_path() -> Option<PathBuf> {
     crate::plan_mode::current_plan_file_path()
 }
 
-fn extract_pdf_via_pdftotext(
-    path: &Path,
-    pages: Option<&str>,
-    file_size: u64,
-) -> Result<String> {
+fn extract_pdf_via_pdftotext(path: &Path, pages: Option<&str>, file_size: u64) -> Result<String> {
     let pdftotext = which_pdftotext()?;
     let mut cmd = std::process::Command::new(&pdftotext);
     cmd.arg("-layout");
@@ -1040,8 +1108,14 @@ fn which_pdftotext() -> Result<PathBuf> {
 fn parse_pdf_page_range(range: &str) -> Result<(u32, u32)> {
     let range = range.trim();
     if let Some((s, e)) = range.split_once('-') {
-        let start: u32 = s.trim().parse().map_err(|_| anyhow!("Invalid page number: {}", s))?;
-        let end: u32 = e.trim().parse().map_err(|_| anyhow!("Invalid page number: {}", e))?;
+        let start: u32 = s
+            .trim()
+            .parse()
+            .map_err(|_| anyhow!("Invalid page number: {}", s))?;
+        let end: u32 = e
+            .trim()
+            .parse()
+            .map_err(|_| anyhow!("Invalid page number: {}", e))?;
         if start == 0 || end == 0 || start > end {
             return Err(anyhow!("Invalid page range: {}", range));
         }
@@ -1066,8 +1140,8 @@ fn render_notebook_cells(
     end_line: usize,
     max_chars: usize,
 ) -> Result<String> {
-    let notebook: serde_json::Value = serde_json::from_str(raw)
-        .with_context(|| "failed to parse .ipynb JSON")?;
+    let notebook: serde_json::Value =
+        serde_json::from_str(raw).with_context(|| "failed to parse .ipynb JSON")?;
 
     let cells = notebook
         .get("cells")
@@ -1078,7 +1152,10 @@ fn render_notebook_cells(
     lines.push(format!("Notebook: {} cells\n", cells.len()));
 
     for (idx, cell) in cells.iter().enumerate() {
-        let cell_type = cell.get("cell_type").and_then(Value::as_str).unwrap_or("unknown");
+        let cell_type = cell
+            .get("cell_type")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown");
         let cell_id = cell.get("id").and_then(Value::as_str).unwrap_or("?");
         let source = cell
             .get("source")

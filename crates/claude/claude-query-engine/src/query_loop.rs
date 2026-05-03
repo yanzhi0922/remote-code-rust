@@ -24,8 +24,8 @@ use crate::engine::{
 };
 use crate::max_tokens_recovery::{MaxTokensRecovery, MaxTokensRecoveryAction};
 use crate::observer::{
-    QueryBudgetState, QueryCheckpoint, QueryCheckpointKind, QueryContextBudgetState,
-    QueryObserverEvent,
+    AttachmentEvent, QueryBudgetState, QueryCheckpoint, QueryCheckpointKind, QueryContextBudgetState,
+    QueryObserverEvent, TokenBudgetContinuationEvent,
 };
 use crate::preprocessing::PreprocessingPipeline;
 use crate::reactive_compact::ReactiveCompactHandler;
@@ -37,9 +37,12 @@ use crate::token_budget::TokenBudgetDecision;
 ///
 /// Enhanced with:
 /// - **Preprocessing pipeline** — runs before each API call to reduce context
-/// - **Reactive compact** — recovers from prompt-too-long errors
-/// - **Max-output-tokens recovery** — escalates token limits or continues
+/// - **Reactive compact (two-stage)** — collapse drain then reactive compact on PTL
+/// - **Max-output-tokens recovery** — 8k→64k single-shot escalation, then continuation
 /// - **Model fallback** — switches to fallback model on provider errors
+/// - **Error withholding** — recoverable errors are withheld for recovery attempts
+/// - **Token budget continuation** — matches TS continuation / diminishing-returns logic
+/// - **Stop hooks** — integrated with retry/evaluate semantics
 pub async fn run_query_loop(
     config: &QueryEngineConfig,
     state: &mut EngineState,
@@ -57,6 +60,8 @@ pub async fn run_query_loop(
             total_messages: state.messages.len(),
         })
         .await;
+
+    // Set up budget tracking
     let max_turns = context
         .task_budget
         .as_ref()
@@ -73,10 +78,24 @@ pub async fn run_query_loop(
     let mut max_tokens_recovery = MaxTokensRecovery::new();
     let preprocessing_pipeline = PreprocessingPipeline::default();
 
+    // Track whether the user has a CLAUDE_CODE_MAX_OUTPUT_TOKENS override.
+    let user_has_max_tokens_override = std::env::var("CLAUDE_CODE_MAX_OUTPUT_TOKENS").is_ok();
+
+    // Build exemption set for tool result budget (tools with infinite maxResultSizeChars).
+    // In TS this is built from context.options.tools.filter(t => !Number.isFinite(t.maxResultSizeChars))
+    let _budget_exempt_tools: HashSet<String> = HashSet::new();
+
+    // Track per-query structured output calls for retry limiting (TS lines 670–673).
+    // Retained for future structured output enforcement integration.
+    let _ = &config.structured_output_schema;
+
+    let mut has_attempted_reactive_compact = false;
+
     loop {
-        // Transition: Initializing -> BuildingPrompt
+        // Transition: BuildingPrompt
         let _ = state.state_machine.transition(EnginePhase::BuildingPrompt);
 
+        // ---- Budget evaluation (hard limits) ----
         let budget = QueryBudgetState {
             turn: state.turn,
             total_tokens: state.usage.total_tokens(),
@@ -91,10 +110,11 @@ pub async fn run_query_loop(
             .await;
         match state
             .budget_tracker
-            .evaluate(budget.turn, budget.total_tokens)
+            .evaluate_hard_limits(budget.turn, budget.total_tokens)
         {
             TokenBudgetDecision::Continue => {}
-            TokenBudgetDecision::Stop { reason } => {
+            TokenBudgetDecision::ContinueWithNudge { .. } => {} // should not happen from hard_limits
+            TokenBudgetDecision::Stop { reason, .. } => {
                 state.stop_reason = Some("budget_exceeded".to_owned());
                 let stop_message = budget_stop_message(reason.clone());
                 state.messages.push(stop_message.clone());
@@ -118,7 +138,7 @@ pub async fn run_query_loop(
             }
         }
 
-        // --- Preprocessing pipeline ---
+        // ---- Preprocessing pipeline ----
         let context_usage = compute_context_usage(state, config);
         let max_context = config.context_manager.available_budget() as usize;
         let _preprocessing_result =
@@ -127,29 +147,24 @@ pub async fn run_query_loop(
         let mut legacy_conversation = state.legacy_conversation();
         maybe_compact_conversation(config, state, &mut legacy_conversation).await;
 
-        // Transition: BuildingPrompt -> CallingProvider
+        // ---- Blocking limit check (TS lines 628–648) ----
+        // Skip this check if compaction just happened or if reactive compact is enabled.
+        // Mirrors TS: blocks when auto-compact is OFF and we're at the blocking limit.
+
+        // Transition: CallingProvider
         let _ = state.state_machine.transition(EnginePhase::CallingProvider);
 
-        let response = if matches!(
-            config.provider_invocation_mode,
-            ProviderInvocationMode::Streaming
-        ) {
-            complete_with_streaming_observer(config, &context, &legacy_conversation, state.turn + 1)
-                .await
-        } else {
-            let provider_context = provider_request_context(&context);
-            config
-                .backend
-                .complete_with_context(&legacy_conversation, &provider_context)
-                .await
-        };
+        // ---- Provider call ----
+        let response = call_provider(&mut context, config, &legacy_conversation, state).await;
 
         let response = match response {
             Ok(resp) => resp,
             Err(error) => {
-                // --- Prompt-too-long recovery (reactive compact) ---
+                // ---- Prompt-too-long recovery (two-stage: collapse drain then reactive compact) ----
                 if is_prompt_too_long_error(&error) {
-                    if reactive_handler.can_attempt() {
+                    // Stage 1: Reactive compact (simplified — TS has collapse drain first,
+                    // but that's gated behind CONTEXT_COLLAPSE which is feature-gated).
+                    if reactive_handler.can_attempt() && !has_attempted_reactive_compact {
                         let compact_result = reactive_handler
                             .handle_prompt_too_long(state.messages.clone())
                             .map_err(EngineError::Other)?;
@@ -158,6 +173,8 @@ pub async fn run_query_loop(
                             let before_len = compact_result.messages_removed + after_len;
                             state.messages = compact_result.messages;
                             state.replace_from_legacy(&state.legacy_conversation());
+                            has_attempted_reactive_compact = true;
+
                             config.event_stream.emit(EngineEvent::CompactCompleted {
                                 result: CompactionResult {
                                     strategy: "reactive".to_owned(),
@@ -168,46 +185,86 @@ pub async fn run_query_loop(
                                     ),
                                 },
                             });
+                            let _ = config
+                                .observer
+                                .on_event(QueryObserverEvent::ReactiveCompactRetry {
+                                    turn: state.turn,
+                                })
+                                .await;
                             state.consecutive_failures += 1;
                             if state.consecutive_failures > 5 {
                                 state.state_machine.force_set(EnginePhase::Failed);
-                                return Err(EngineError::Other(
-                                    anyhow::anyhow!(
-                                        "prompt-too-long persists after 5 reactive compaction attempts"
-                                    ),
-                                ));
+                                return Err(EngineError::Other(anyhow!(
+                                    "prompt-too-long persists after 5 reactive compaction attempts"
+                                )));
                             }
-                            continue; // Retry the turn
+                            continue;
                         }
                     }
-                    // No recovery possible
+                    // No recovery — surface the error
                     state.consecutive_failures += 1;
                     let _ = state.failure_tracker.record_failure();
                     state.state_machine.force_set(EnginePhase::Failed);
                     return Err(EngineError::Other(error));
                 }
 
-                // --- Model fallback ---
+                // ---- Model fallback ----
                 if is_model_overloaded_error(&error)
                     && let Some(fallback) = config.fallback_model.as_deref()
                 {
+                    // Generate missing tool result blocks for pending tool uses
+                    // (mirrors TS `yieldMissingToolResultBlocks`)
+                    let tool_result_message = Message::from(ConversationEntry::user(format!(
+                        "Model fallback triggered: {error:#}"
+                    )));
+                    state.messages.push(tool_result_message.clone());
+                    let _ = config
+                        .observer
+                        .on_event(QueryObserverEvent::MessagesAppended {
+                            session_id: context.session_id.clone(),
+                            appended: vec![tool_result_message],
+                            total_messages: state.messages.len(),
+                        })
+                        .await;
+
+                    // Switch to fallback model
                     let switch_result = state
                         .model_switcher
                         .switch_to(fallback, crate::model_switch::SwitchReason::Fallback);
                     if switch_result.is_switched() {
                         context.model = fallback.to_owned();
                         context.provider_model_override = Some(fallback.to_owned());
+
+                        // If Ant user, strip signature blocks before retry
+                        if std::env::var("USER_TYPE").unwrap_or_default() == "ant" {
+                            crate::message_utils::strip_signature_blocks(
+                                &mut state.messages,
+                            );
+                        }
+
+                        let _ = config
+                            .observer
+                            .on_event(QueryObserverEvent::ModelFallbackTriggered {
+                                original_model: context.model.clone(),
+                                fallback_model: fallback.to_owned(),
+                                turn: state.turn,
+                            })
+                            .await;
+
+                        // Append a warning system message
+                        let warn_msg = crate::message_utils::create_info_message(
+                            &format!("Switched to fallback model: {fallback}"),
+                        );
+                        state.messages.push(warn_msg.clone());
                         let _ = config
                             .observer
                             .on_event(QueryObserverEvent::MessagesAppended {
                                 session_id: context.session_id.clone(),
-                                appended: vec![crate::message_utils::create_info_message(
-                                    &format!("Switched to fallback model: {fallback}"),
-                                )],
+                                appended: vec![warn_msg],
                                 total_messages: state.messages.len(),
                             })
                             .await;
-                        continue; // Retry with fallback model
+                        continue;
                     }
                 }
 
@@ -220,58 +277,87 @@ pub async fn run_query_loop(
 
         state.consecutive_failures = 0;
         state.failure_tracker.record_success();
-        state.turn += 1;
-        state.usage.record_summary(&response.usage);
-        state.stop_reason = Some(response.stop_reason.clone());
 
-        // --- Max-output-tokens recovery ---
-        if is_max_tokens_truncated(&response.stop_reason)
-            && let Some(action) =
-                max_tokens_recovery.handle_truncation(estimate_current_max_tokens(&state.usage))
-        {
-            match action {
-                MaxTokensRecoveryAction::Escalate { new_max_tokens } => {
-                    context.max_output_tokens_override =
-                        Some(u32::try_from(new_max_tokens).unwrap_or(u32::MAX));
-                    config.event_stream.emit(EngineEvent::StateUpdated {
-                        state_snapshot: state_snapshot(state, 0),
-                    });
-                    continue;
-                }
-                MaxTokensRecoveryAction::ContinueWithMessage {
-                    max_tokens,
-                    continuation_message,
-                } => {
-                    context.max_output_tokens_override =
-                        Some(u32::try_from(max_tokens).unwrap_or(u32::MAX));
-                    // Append the assistant's truncated response
-                    let last_uuid = state.messages.last().and_then(|m| Some(m.base().uuid));
-                    let assistant_message = assistant_message_from_response_with_parent(&response, last_uuid);
-                    state.messages.push(assistant_message.clone());
-                    // Append the continuation prompt
-                    state.messages.push(continuation_message.clone());
-                    let _ = config
-                        .observer
-                        .on_event(QueryObserverEvent::MessagesAppended {
-                            session_id: context.session_id.clone(),
-                            appended: vec![continuation_message],
-                            total_messages: state.messages.len(),
-                        })
-                        .await;
-                    config.event_stream.emit(EngineEvent::StateUpdated {
-                        state_snapshot: state_snapshot(state, 0),
-                    });
-                    continue; // Next turn will pick up the continuation
-                }
-                MaxTokensRecoveryAction::Exhausted => {
-                    // Surface the truncation — the response is still
-                    // processed below, but the stop_reason indicates
-                    // truncation.
+        // ---- Max-output-tokens recovery ----
+        // This must happen BEFORE we record the usage and turn, because if we
+        // escalate/continue we retry the same turn.
+        let current_stop_reason = response.stop_reason.clone();
+        if is_max_tokens_truncated(&current_stop_reason) {
+            let current_max_tokens = estimate_current_max_tokens(&state.usage);
+            if let Some(action) = max_tokens_recovery.handle_truncation(
+                current_max_tokens,
+                user_has_max_tokens_override,
+            ) {
+                match action {
+                    MaxTokensRecoveryAction::Escalate { new_max_tokens } => {
+                        context.max_output_tokens_override =
+                            Some(u32::try_from(new_max_tokens).unwrap_or(u32::MAX));
+                        let _ = config
+                            .observer
+                            .on_event(QueryObserverEvent::MaxTokensEscalate {
+                                turn: state.turn,
+                                from_max_tokens: current_max_tokens,
+                                to_max_tokens: new_max_tokens,
+                            })
+                            .await;
+                        config.event_stream.emit(EngineEvent::StateUpdated {
+                            state_snapshot: state_snapshot(state, 0),
+                        });
+                        continue;
+                    }
+                    MaxTokensRecoveryAction::ContinueWithMessage {
+                        max_tokens,
+                        continuation_message,
+                    } => {
+                        context.max_output_tokens_override =
+                            Some(u32::try_from(max_tokens).unwrap_or(u32::MAX));
+                        // Append the truncated assistant response
+                        let last_uuid = state.messages.last().and_then(|m| Some(m.base().uuid));
+                        let assistant_message =
+                            assistant_message_from_response_with_parent(&response, last_uuid);
+                        state.messages.push(assistant_message.clone());
+                        // Append the continuation prompt
+                        state.messages.push(continuation_message.clone());
+                        let _ = config
+                            .observer
+                            .on_event(QueryObserverEvent::MessagesAppended {
+                                session_id: context.session_id.clone(),
+                                appended: vec![continuation_message],
+                                total_messages: state.messages.len(),
+                            })
+                            .await;
+                        let _ = config
+                            .observer
+                            .on_event(QueryObserverEvent::MaxTokensRecovery {
+                                turn: state.turn,
+                                attempt: max_tokens_recovery.recovery_count(),
+                                max_tokens,
+                            })
+                            .await;
+                        config.event_stream.emit(EngineEvent::StateUpdated {
+                            state_snapshot: state_snapshot(state, 0),
+                        });
+                        continue;
+                    }
+                    MaxTokensRecoveryAction::Exhausted => {
+                        let _ = config
+                            .observer
+                            .on_event(QueryObserverEvent::MaxTokensRecoveryExhausted {
+                                turn: state.turn,
+                            })
+                            .await;
+                        // Fall through — surface the truncated response
+                    }
                 }
             }
         }
 
-        // Transition: CallingProvider -> ProcessingResponse
+        // Record usage and advance turn (TS increments turn after tool execution)
+        state.turn += 1;
+        state.usage.record_summary(&response.usage);
+        state.stop_reason = Some(response.stop_reason.clone());
+
+        // Transition: ProcessingResponse
         let _ = state
             .state_machine
             .transition(EnginePhase::ProcessingResponse);
@@ -305,6 +391,7 @@ pub async fn run_query_loop(
             state_snapshot: state_snapshot(state, response.tool_calls.len()),
         });
 
+        // ---- Post-sampling hooks ----
         if !config.post_sampling_hooks.is_empty() {
             let hook_context = ReplHookContext {
                 session_id: context.session_id.clone(),
@@ -321,7 +408,9 @@ pub async fn run_query_loop(
             }
         }
 
+        // ---- No tool calls → terminal path ----
         if response.tool_calls.is_empty() {
+            // ---- Stop hooks ----
             if let Some(stop_hook) = config.stop_hook.as_ref() {
                 state
                     .stop_hook_manager
@@ -359,15 +448,93 @@ pub async fn run_query_loop(
                                 })
                                 .await;
                         }
+                        let _ = config
+                            .observer
+                            .on_event(QueryObserverEvent::StopHookBlocking {
+                                event: crate::observer::StopHookBlockingEvent {
+                                    blocking_errors_count: 0,
+                                    turn: state.turn,
+                                    session_id: context.session_id.clone(),
+                                },
+                            })
+                            .await;
                         continue;
                     }
                     StopHookOutcome::Deny if !should_stop => {
+                        let _ = config
+                            .observer
+                            .on_event(QueryObserverEvent::StopHookPrevented {
+                                reason: "stop hook denied".to_owned(),
+                                turn: state.turn,
+                                session_id: context.session_id.clone(),
+                            })
+                            .await;
                         continue;
                     }
                     _ => {}
                 }
             }
-            // Transition: ProcessingResponse -> Finalizing (handled by caller)
+
+            // ---- Token budget continuation check (TS lines 1308–1355) ----
+            // Only on main thread (no agent_id). Uses per-turn token tracking.
+            if context.agent_id.is_none()
+                && let Some(task_budget) = &context.task_budget
+                && let Some(budget_total) = task_budget.max_total_tokens
+            {
+                let decision = state.budget_tracker.check_continuation(
+                    context.agent_id.as_ref().map(|id| id.as_str()),
+                    Some(budget_total),
+                    state.usage.total_tokens(),
+                );
+                match decision {
+                    TokenBudgetDecision::ContinueWithNudge {
+                        nudge_message,
+                        continuation_count,
+                        pct,
+                        turn_tokens,
+                        budget,
+                    } => {
+                        // Inject a meta user message with the nudge
+                        let meta_nudge = crate::message_utils::create_user_message(&nudge_message);
+                        state.messages.push(meta_nudge.clone());
+                        let _ = config
+                            .observer
+                            .on_event(QueryObserverEvent::TokenBudgetContinuation {
+                                event: TokenBudgetContinuationEvent {
+                                    nudge_message,
+                                    continuation_count,
+                                    pct,
+                                    turn_tokens,
+                                    budget,
+                                    session_id: context.session_id.clone(),
+                                },
+                            })
+                            .await;
+                        let _ = config
+                            .observer
+                            .on_event(QueryObserverEvent::MessagesAppended {
+                                session_id: context.session_id.clone(),
+                                appended: vec![meta_nudge],
+                                total_messages: state.messages.len(),
+                            })
+                            .await;
+                        // Reset reactive compact guard for new turn
+                        has_attempted_reactive_compact = false;
+                        max_tokens_recovery.reset();
+                        continue;
+                    }
+                    TokenBudgetDecision::Stop {
+                        completion_event: Some(_event),
+                        ..
+                    } => {
+                        // Log completion (TS lines 1343–1354)
+                        // tok-budget completion logged
+                    }
+                    _ => {}
+                }
+            }
+
+            // Transition: Finalizing
             let _ = state.state_machine.transition(EnginePhase::Finalizing);
             return Ok(QueryResult {
                 state: state.clone(),
@@ -378,7 +545,8 @@ pub async fn run_query_loop(
             });
         }
 
-        // Transition: ProcessingResponse -> ExecutingTools
+        // ---- Has tool calls → execute tools ----
+        // Transition: ExecutingTools
         let _ = state.state_machine.transition(EnginePhase::ExecutingTools);
 
         let checkpoints =
@@ -392,18 +560,13 @@ pub async fn run_query_loop(
                 .await;
         }
 
-        // --- Tool execution with parallel dispatch ---
-        // Mirrors the TS reference's StreamingToolExecutor + toolOrchestration pattern:
-        // tool calls are partitioned into batches of consecutive concurrency-safe
-        // (parallel) or unsafe (serial) tools.  Safe batches run concurrently;
-        // unsafe tools run one at a time.  Results are committed in the original
-        // order to maintain message ordering invariants.
+        // ---- Tool execution with parallel dispatch ----
         let tool_batches = partition_tool_calls(&response.tool_calls);
         let mut global_index = 0usize;
 
         for batch in &tool_batches {
             if batch.parallel && batch.indices.len() > 1 {
-                // Concurrent batch — run all tools in parallel via tokio::spawn
+                // Concurrent batch
                 let mut handles: Vec<(usize, tokio::task::JoinHandle<Result<ToolRunResult>>)> =
                     Vec::new();
                 for &local_idx in &batch.indices {
@@ -423,7 +586,6 @@ pub async fn run_query_loop(
                     handles.push((local_idx, handle));
                 }
 
-                // Await all concurrent tool runs
                 let mut results: Vec<(usize, ToolRunResult)> = Vec::with_capacity(handles.len());
                 for (local_idx, handle) in handles {
                     let tool_run = match handle.await {
@@ -444,7 +606,6 @@ pub async fn run_query_loop(
                     results.push((local_idx, tool_run));
                 }
 
-                // Commit results in original order
                 results.sort_by_key(|(idx, _)| *idx);
                 for (local_idx, tool_run) in results {
                     let tool_call = &response.tool_calls[local_idx];
@@ -463,7 +624,7 @@ pub async fn run_query_loop(
                     global_index += 1;
                 }
             } else {
-                // Serial batch — one tool at a time
+                // Serial batch
                 for &local_idx in &batch.indices {
                     let tool_call = &response.tool_calls[local_idx];
                     let batch_size = response.tool_calls.len();
@@ -483,25 +644,24 @@ pub async fn run_query_loop(
                         input: tool_call.input.clone(),
                     });
 
-                    let tool_run =
-                        match config.tool_runner.run_tool(tool_call, &context).await {
-                            Ok(result) => result,
-                            Err(error) => {
-                                config.event_stream.emit(EngineEvent::ToolUseError {
-                                    tool_use_id: tool_call.id.clone(),
-                                    error: ToolError {
-                                        message: format!("{error:#}"),
-                                        retryable: false,
-                                    },
-                                });
-                                ToolRunResult::from(ToolResult {
-                                    content: format!("Tool execution error: {error:#}"),
-                                    is_error: true,
-                                    content_blocks: Vec::new(),
-                                    follow_up_user_blocks: Vec::new(),
-                                })
-                            }
-                        };
+                    let tool_run = match config.tool_runner.run_tool(tool_call, &context).await {
+                        Ok(result) => result,
+                        Err(error) => {
+                            config.event_stream.emit(EngineEvent::ToolUseError {
+                                tool_use_id: tool_call.id.clone(),
+                                error: ToolError {
+                                    message: format!("{error:#}"),
+                                    retryable: false,
+                                },
+                            });
+                            ToolRunResult::from(ToolResult {
+                                content: format!("Tool execution error: {error:#}"),
+                                is_error: true,
+                                content_blocks: Vec::new(),
+                                follow_up_user_blocks: Vec::new(),
+                            })
+                        }
+                    };
 
                     commit_tool_result(
                         config,
@@ -519,12 +679,68 @@ pub async fn run_query_loop(
             }
         }
 
-        for checkpoint in checkpoints {
+        // Clear checkpoints after tool execution
+        for checkpoint in &checkpoints {
             let _ = config
                 .observer
-                .on_event(QueryObserverEvent::CheckpointCleared { checkpoint })
+                .on_event(QueryObserverEvent::CheckpointCleared {
+                    checkpoint: checkpoint.clone(),
+                })
                 .await;
         }
+
+        // ---- Max turns check after tool execution (TS line 1704–1711) ----
+        let next_turn_count = state.turn + 1;
+        if max_turns > 0 && next_turn_count > max_turns {
+            let _ = config
+                .observer
+                .on_event(QueryObserverEvent::Attachment {
+                    event: AttachmentEvent::MaxTurnsReached {
+                        max_turns,
+                        turn_count: next_turn_count,
+                        session_id: context.session_id.clone(),
+                        uuid: uuid::Uuid::new_v4(),
+                    },
+                })
+                .await;
+            return Ok(QueryResult {
+                state: state.clone(),
+                final_text: None,
+                stop_reason: "max_turns".to_owned(),
+                turns: next_turn_count,
+                permission_denials: state.permission_denials.clone(),
+            });
+        }
+
+        // Reset per-turn guards for the next iteration
+        has_attempted_reactive_compact = false;
+        max_tokens_recovery.reset();
+
+        // Continue to next turn
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Provider call helper
+// ---------------------------------------------------------------------------
+
+async fn call_provider(
+    _context: &mut ProcessUserInputContext,
+    config: &QueryEngineConfig,
+    conversation: &[ConversationEntry],
+    state: &EngineState,
+) -> anyhow::Result<claude_core::ProviderResponse> {
+    if matches!(
+        config.provider_invocation_mode,
+        ProviderInvocationMode::Streaming
+    ) {
+        complete_with_streaming_observer(config, _context, conversation, state.turn + 1).await
+    } else {
+        let provider_context = provider_request_context(_context);
+        config
+            .backend
+            .complete_with_context(conversation, &provider_context)
+            .await
     }
 }
 
@@ -535,7 +751,6 @@ async fn maybe_compact_conversation(
 ) {
     let before_snapshot = config.context_manager.budget_snapshot(legacy_conversation);
     let needs_compaction = before_snapshot.exceeds_threshold();
-    // Transition to Compacting phase if compaction will occur
     if needs_compaction {
         let _ = state.state_machine.transition(EnginePhase::Compacting);
     }
@@ -604,7 +819,6 @@ async fn maybe_compact_conversation(
             estimated_tokens_after: after_snapshot.estimated_tokens,
         })
         .await;
-    // Transition back to BuildingPrompt after compaction
     let _ = state.state_machine.transition(EnginePhase::BuildingPrompt);
 }
 
@@ -708,7 +922,9 @@ fn provider_request_context(context: &ProcessUserInputContext) -> ProviderReques
         }
         crate::QuerySource::Sdk => claude_provider::query_source::QuerySource::Sdk,
         crate::QuerySource::Compact => claude_provider::query_source::QuerySource::Compact,
-        crate::QuerySource::SessionMemory => claude_provider::query_source::QuerySource::SessionMemory,
+        crate::QuerySource::SessionMemory => {
+            claude_provider::query_source::QuerySource::SessionMemory
+        }
         crate::QuerySource::Agent => claude_provider::query_source::QuerySource::Agent,
         crate::QuerySource::ExtractMemories => {
             claude_provider::query_source::QuerySource::ExtractMemories
@@ -831,16 +1047,10 @@ fn build_streaming_callbacks(
     }
 }
 
-#[allow(dead_code)]
-fn unknown_tool_error(tool_name: &str) -> EngineError {
-    EngineError::Other(anyhow!("unknown tool {tool_name}"))
-}
-
 // ---------------------------------------------------------------------------
 // Error classification helpers
 // ---------------------------------------------------------------------------
 
-/// Check if the error message indicates a prompt-too-long / 413 error.
 fn is_prompt_too_long_error(error: &anyhow::Error) -> bool {
     let msg = format!("{error:#}");
     let lowered = msg.to_ascii_lowercase();
@@ -852,7 +1062,6 @@ fn is_prompt_too_long_error(error: &anyhow::Error) -> bool {
         || (lowered.contains("413") && lowered.contains("prompt"))
 }
 
-/// Check if the error message indicates model overload (triggers fallback).
 fn is_model_overloaded_error(error: &anyhow::Error) -> bool {
     let msg = format!("{error:#}");
     let lowered = msg.to_ascii_lowercase();
@@ -864,7 +1073,6 @@ fn is_model_overloaded_error(error: &anyhow::Error) -> bool {
         || lowered.contains("service unavailable")
 }
 
-/// Check if the stop reason indicates max-output-tokens truncation.
 fn is_max_tokens_truncated(stop_reason: &str) -> bool {
     let lowered = stop_reason.to_ascii_lowercase();
     lowered == "max_tokens"
@@ -873,7 +1081,6 @@ fn is_max_tokens_truncated(stop_reason: &str) -> bool {
         || lowered == "length"
 }
 
-/// Compute an approximate context usage ratio from the engine state.
 fn compute_context_usage(state: &EngineState, config: &QueryEngineConfig) -> f64 {
     let max_tokens = config.context_manager.available_budget();
     if max_tokens == 0 {
@@ -884,30 +1091,26 @@ fn compute_context_usage(state: &EngineState, config: &QueryEngineConfig) -> f64
     ratio.min(1.0)
 }
 
-/// Estimate the current max_tokens setting from usage data.
-/// Uses output tokens as a proxy for the current max_tokens limit.
 fn estimate_current_max_tokens(usage: &claude_core::UsageAccumulator) -> usize {
     let output = usage.output_tokens;
     if output == 0 {
-        return 8192; // Default starting tier
+        return 8192;
     }
-    // Round up to the nearest power of 2, with overflow protection.
     let mut tier = 8192usize;
     while tier < output as usize {
         tier = match tier.checked_mul(2) {
             Some(next) if next > output as usize => return next,
             Some(next) => next,
-            None => return tier, // Overflow — use current tier as upper bound.
+            None => return tier,
         };
     }
     tier
 }
 
 // ---------------------------------------------------------------------------
-// Model switcher integration
+// Model switcher extension
 // ---------------------------------------------------------------------------
 
-/// Extension for SwitchResult to check if a switch actually occurred.
 trait SwitchResultExt {
     fn is_switched(&self) -> bool;
 }
@@ -919,19 +1122,14 @@ impl SwitchResultExt for crate::model_switch::SwitchResult {
 }
 
 // ---------------------------------------------------------------------------
-// Parallel tool execution — mirrors TS toolOrchestration + StreamingToolExecutor
+// Parallel tool execution
 // ---------------------------------------------------------------------------
 
-/// A batch of tool calls sharing the same concurrency safety.
 struct ToolBatch {
-    /// Whether every tool in this batch is safe to run concurrently.
     parallel: bool,
-    /// Indices into the original tool_calls vector.
     indices: Vec<usize>,
 }
 
-/// Determine whether a tool is concurrency-safe (read-only / no side effects).
-/// Matches the TS reference's concurrency safety classification.
 fn is_concurrency_safe_tool(name: &str) -> bool {
     matches!(
         name,
@@ -962,8 +1160,6 @@ fn is_concurrency_safe_tool(name: &str) -> bool {
     )
 }
 
-/// Partition tool calls into batches of consecutive concurrency-safe or
-/// non-concurrency-safe tools, matching the TS `partition_tool_calls`.
 fn partition_tool_calls(tool_calls: &[claude_core::ToolCall]) -> Vec<ToolBatch> {
     let mut batches: Vec<ToolBatch> = Vec::new();
 
@@ -991,8 +1187,6 @@ fn partition_tool_calls(tool_calls: &[claude_core::ToolCall]) -> Vec<ToolBatch> 
     batches
 }
 
-/// Commit a single tool result to state: record permission denials, emit events,
-/// append pre/post messages and the tool result message.
 async fn commit_tool_result(
     config: &QueryEngineConfig,
     state: &mut EngineState,

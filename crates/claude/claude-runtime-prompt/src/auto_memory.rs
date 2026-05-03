@@ -13,6 +13,7 @@ const AUTO_MEMORY_DIRNAME: &str = "memory";
 const AUTO_MEMORY_PROJECTS_DIRNAME: &str = "projects";
 const ENTRYPOINT_NAME: &str = "MEMORY.md";
 const MAX_ENTRYPOINT_LINES: usize = 200;
+const MAX_ENTRYPOINT_BYTES: usize = 25_000;
 const MAX_SANITIZED_LENGTH: usize = 200;
 const DIR_EXISTS_GUIDANCE: &str = "This directory already exists — write to it directly with the Write tool (do not run mkdir or check for its existence).";
 const MEMORY_DRIFT_CAVEAT: &str = "- Memory records can become stale over time. Use memory as context for what was true at a given point in time. Before answering the user or building assumptions based solely on information in memory records, verify that the memory is still correct and up-to-date by reading the current state of the files or resources. If a recalled memory conflicts with current information, trust what you observe now — and update or remove the stale memory rather than acting on it.";
@@ -1015,6 +1016,68 @@ fn load_cowork_memory_mechanics_prompt_with(
         )
         .join("\n"),
     ))
+}
+
+pub(crate) fn truncate_entrypoint_content(raw: &str) -> String {
+    let trimmed = raw.trim();
+    let line_count = trimmed.lines().count();
+    let byte_count = trimmed.len();
+    let was_line_truncated = line_count > MAX_ENTRYPOINT_LINES;
+    let was_byte_truncated = byte_count > MAX_ENTRYPOINT_BYTES;
+
+    if !was_line_truncated && !was_byte_truncated {
+        return trimmed.to_owned();
+    }
+
+    let mut truncated = if was_line_truncated {
+        trimmed
+            .lines()
+            .take(MAX_ENTRYPOINT_LINES)
+            .collect::<Vec<_>>()
+            .join("\n")
+    } else {
+        trimmed.to_owned()
+    };
+
+    if truncated.len() > MAX_ENTRYPOINT_BYTES {
+        if let Some(cut_at) = truncated[..MAX_ENTRYPOINT_BYTES].rfind('\n') {
+            truncated.truncate(if cut_at > 0 { cut_at } else { MAX_ENTRYPOINT_BYTES });
+        } else {
+            truncated.truncate(MAX_ENTRYPOINT_BYTES);
+        }
+    }
+
+    let reason = if was_byte_truncated && !was_line_truncated {
+        format!("{byte_count} bytes (limit: {MAX_ENTRYPOINT_BYTES}) — index entries are too long")
+    } else if was_line_truncated && !was_byte_truncated {
+        format!("{line_count} lines (limit: {MAX_ENTRYPOINT_LINES})")
+    } else {
+        format!("{line_count} lines and {byte_count} bytes")
+    };
+
+    format!(
+        "{truncated}\n\n> WARNING: {ENTRYPOINT_NAME} is {reason}. Only part of it was loaded. Keep index entries to one line under ~200 chars; move detail into topic files."
+    )
+}
+
+#[allow(dead_code)]
+fn append_entrypoint_section(lines: &mut Vec<String>, memory_dir: &str) {
+    let entrypoint_path = Path::new(memory_dir).join(ENTRYPOINT_NAME);
+    match fs::read_to_string(&entrypoint_path) {
+        Ok(raw) if !raw.trim().is_empty() => {
+            let content = truncate_entrypoint_content(&raw);
+            lines.push(format!("## {ENTRYPOINT_NAME}"));
+            lines.push(String::new());
+            lines.push(content);
+        }
+        _ => {
+            lines.push(format!("## {ENTRYPOINT_NAME}"));
+            lines.push(String::new());
+            lines.push(format!(
+                "Your {ENTRYPOINT_NAME} is currently empty. When you save new memories, they will appear here."
+            ));
+        }
+    }
 }
 
 fn load_default_memory_prompt_with(
