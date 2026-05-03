@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::error::McpConfigError;
+use crate::tool_policy::McpToolPolicy;
 use crate::transport::{McpOAuthConfig, McpTransport, McpTransportConfig, infer_transport_kind};
 
 /// Capability flags reported by an MCP server during initialisation.
@@ -58,6 +59,9 @@ pub struct McpServerConfig {
     /// OAuth configuration for HTTP/SSE MCP servers.
     #[serde(default)]
     pub oauth: Option<McpOAuthConfig>,
+    /// Per-tool policy for filtering which tools this server exposes.
+    #[serde(default)]
+    pub tool_policy: McpToolPolicy,
 }
 
 /// Top-level MCP configuration containing all servers.
@@ -111,6 +115,8 @@ pub(crate) struct RawMcpServer {
     pub(crate) metadata: BTreeMap<String, String>,
     #[serde(default)]
     pub(crate) oauth: Option<McpOAuthConfig>,
+    #[serde(default)]
+    pub(crate) tool_policy: McpToolPolicy,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -276,6 +282,7 @@ impl McpConfig {
                     request_timeout_secs: raw_server.request_timeout_secs,
                     metadata: raw_server.metadata,
                     oauth: raw_server.oauth,
+                    tool_policy: raw_server.tool_policy,
                 },
             );
         }
@@ -366,6 +373,7 @@ impl From<&McpConfig> for RawMcpConfig {
                         },
                         metadata: server.metadata.clone(),
                         oauth: server.oauth.clone(),
+                        tool_policy: server.tool_policy.clone(),
                     },
                 )
             })
@@ -522,6 +530,7 @@ url = "https://example.com""#,
                     request_timeout_secs: None,
                     metadata: BTreeMap::new(),
                     oauth: None,
+                    tool_policy: McpToolPolicy::default(),
                 },
             )]),
         };

@@ -126,6 +126,11 @@ pub enum QueryObserverEvent {
         turn: u32,
         usage: Usage,
     },
+    StreamingThinkingDelta {
+        turn: u32,
+        delta: String,
+        accumulated_thinking: String,
+    },
     AssistantMessageCommitted {
         message: Message,
         stop_reason: String,
@@ -173,6 +178,9 @@ pub enum QueryStreamingEvent {
     AssistantMessageDelta {
         delta: String,
     },
+    ThinkingDelta {
+        delta: String,
+    },
     ToolCallStarted {
         tool_call_id: String,
         tool_name: String,
@@ -197,6 +205,7 @@ impl QueryObserverEvent {
             Self::StreamingToolCallStarted { .. } => "streaming_tool_call_started",
             Self::StreamingToolCallDelta { .. } => "streaming_tool_call_delta",
             Self::StreamingUsageUpdated { .. } => "streaming_usage_updated",
+            Self::StreamingThinkingDelta { .. } => "streaming_thinking_delta",
             Self::AssistantMessageCommitted { .. } => "assistant_message_committed",
             Self::ToolCallStarted { .. } => "tool_call_started",
             Self::ToolResultCommitted { .. } => "tool_result_committed",

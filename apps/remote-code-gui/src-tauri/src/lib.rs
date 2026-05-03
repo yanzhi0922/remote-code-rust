@@ -1218,6 +1218,7 @@ fn save_managed_mcp_server_at_path(
             request_timeout_secs: request.request_timeout_secs,
             metadata: request.metadata.clone(),
             oauth: None,
+            tool_policy: claude_mcp::McpToolPolicy::default(),
         },
     );
     mcp_config.save(config_path)?;

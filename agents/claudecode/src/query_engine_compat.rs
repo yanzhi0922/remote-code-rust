@@ -1838,7 +1838,8 @@ impl QueryObserver for CompatObserver {
             | QueryObserverEvent::CheckpointCreated { .. }
             | QueryObserverEvent::MessagesAppended { .. }
             | QueryObserverEvent::QueryFailed { .. }
-            | QueryObserverEvent::QueryStarted { .. } => {}
+            | QueryObserverEvent::QueryStarted { .. }
+            | QueryObserverEvent::StreamingThinkingDelta { .. } => {}
             QueryObserverEvent::QueryFinished { .. } => {}
             QueryObserverEvent::CheckpointCleared { .. } => {}
         }

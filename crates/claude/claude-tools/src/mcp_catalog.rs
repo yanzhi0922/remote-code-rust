@@ -445,6 +445,7 @@ mod tests {
                 request_timeout_secs: None,
                 metadata: BTreeMap::new(),
                 oauth: None,
+                tool_policy: claude_mcp::McpToolPolicy::default(),
             },
         }
     }

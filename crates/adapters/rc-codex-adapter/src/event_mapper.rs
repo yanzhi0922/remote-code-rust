@@ -591,6 +591,10 @@ fn map_server_notification(
             official_event(session_id, "account/login/completed", notification)
         }
 
+        ServerNotification::RemoteControlStatusChanged(notification) => {
+            official_event(session_id, "remoteControl/status/changed", notification)
+        }
+
         // ── Errors ──
         ServerNotification::Error(notification) => {
             vec![UnifiedAgentEvent::Error {

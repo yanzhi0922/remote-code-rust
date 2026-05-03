@@ -314,6 +314,7 @@ mod tests {
             request_timeout_secs: None,
             metadata: BTreeMap::new(),
             oauth: None,
+            tool_policy: crate::tool_policy::McpToolPolicy::default(),
         }
     }
 
@@ -330,6 +331,7 @@ mod tests {
             request_timeout_secs: None,
             metadata: BTreeMap::new(),
             oauth: None,
+            tool_policy: crate::tool_policy::McpToolPolicy::default(),
         }
     }
 

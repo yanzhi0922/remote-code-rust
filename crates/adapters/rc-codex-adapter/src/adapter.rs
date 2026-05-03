@@ -121,13 +121,14 @@ pub struct CodexInProcessAdapter {
     model_provider: Option<String>,
     approval_policy: Option<AskForApproval>,
     sandbox: Option<SandboxMode>,
-    permission_profile: Option<codex_app_server_protocol::PermissionProfile>,
+    permissions: Option<codex_app_server_protocol::PermissionProfileSelectionParams>,
     service_tier: Option<Option<codex_protocol::config_types::ServiceTier>>,
     config_overrides: Option<HashMap<String, serde_json::Value>>,
     ephemeral: Option<bool>,
     persist_extended_history: bool,
-    /// Placeholder to hold the client until `start()` consumes it for the event pump.
-    _client_placeholder: Option<AppServerClient>,
+    /// Shared client wrapped in an async mutex so the event pump and
+    /// resolve/reject calls can both access it.
+    client: Option<Arc<tokio::sync::Mutex<AppServerClient>>>,
 }
 
 impl CodexInProcessAdapter {
@@ -167,13 +168,13 @@ impl CodexInProcessAdapter {
             model_provider: None,
             approval_policy: None,
             sandbox: None,
-            permission_profile: None,
+            permissions: None,
             service_tier: None,
             config_overrides: None,
             ephemeral: None,
             persist_extended_history: true,
             // Hold the client until start() consumes it for the event pump.
-            _client_placeholder: Some(client),
+            client: Some(Arc::new(tokio::sync::Mutex::new(client))),
         }
     }
 
@@ -207,12 +208,12 @@ impl CodexInProcessAdapter {
             model_provider: None,
             approval_policy: None,
             sandbox: None,
-            permission_profile: None,
+            permissions: None,
             service_tier: None,
             config_overrides: None,
             ephemeral: None,
             persist_extended_history: true,
-            _client_placeholder: None,
+            client: None,
         }
     }
 
@@ -221,7 +222,7 @@ impl CodexInProcessAdapter {
     /// Must be called before [`AgentAdapter::start`].
     pub fn set_client(&mut self, client: AppServerClient) {
         self.request_handle = Some(client.request_handle());
-        self._client_placeholder = Some(client);
+        self.client = Some(Arc::new(tokio::sync::Mutex::new(client)));
     }
 
     /// Set the working directory for Codex operations.
@@ -271,8 +272,8 @@ impl CodexInProcessAdapter {
         let mut cli_overrides = options.cli_overrides.clone();
         cli_overrides.extend(build_cli_overrides(&options)?);
         let harness_overrides = build_harness_overrides(&options, &cwd)?;
-        let loader_overrides = codex_core::config_loader::LoaderOverrides::default();
-        let cloud_requirements = codex_core::config_loader::CloudRequirementsLoader::default();
+        let loader_overrides = codex_config::LoaderOverrides::default();
+        let cloud_requirements = codex_config::CloudRequirementsLoader::default();
 
         // 2. Build Codex Config with the isolated home and GUI/native overrides.
         let config = codex_core::config::ConfigBuilder::default()
@@ -297,9 +298,9 @@ impl CodexInProcessAdapter {
         )
         .map_err(|e| anyhow::anyhow!("Codex runtime paths unavailable: {e}"))?;
         let environment_manager = EnvironmentManager::new(EnvironmentManagerArgs {
-            exec_server_url: options.exec_server_url.clone(),
             local_runtime_paths: runtime_paths,
-        });
+        })
+        .await;
 
         let state_db = codex_state::StateRuntime::init(
             config.sqlite_home.clone(),
@@ -362,7 +363,7 @@ impl CodexInProcessAdapter {
             .as_deref()
             .map(parse_sandbox_mode)
             .transpose()?;
-        self.permission_profile = options
+        self.permissions = options
             .permission_profile
             .clone()
             .map(serde_json::from_value)
@@ -390,6 +391,12 @@ impl CodexInProcessAdapter {
         self.request_handle
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("Codex request handle not initialized"))
+    }
+
+    fn client(&self) -> anyhow::Result<&Arc<tokio::sync::Mutex<AppServerClient>>> {
+        self.client
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Codex client not available"))
     }
 
     async fn request_typed<T>(&self, request: ClientRequest) -> anyhow::Result<T>
@@ -450,7 +457,7 @@ impl CodexInProcessAdapter {
             service_tier: self.service_tier.clone(),
             approval_policy: self.approval_policy,
             sandbox: self.sandbox,
-            permission_profile: self.permission_profile.clone(),
+            permissions: self.permissions.clone(),
             config: self.config_overrides.clone(),
             ephemeral: self.ephemeral,
             persist_extended_history: self.persist_extended_history,
@@ -467,7 +474,7 @@ impl CodexInProcessAdapter {
             cwd: Some(self.cwd.to_string_lossy().into_owned()),
             approval_policy: self.approval_policy,
             sandbox: self.sandbox,
-            permission_profile: self.permission_profile.clone(),
+            permissions: self.permissions.clone(),
             config: self.config_overrides.clone(),
             exclude_turns: !include_turns,
             persist_extended_history: self.persist_extended_history,
@@ -484,7 +491,7 @@ impl CodexInProcessAdapter {
             cwd: Some(self.cwd.to_string_lossy().into_owned()),
             approval_policy: self.approval_policy,
             sandbox: self.sandbox,
-            permission_profile: self.permission_profile.clone(),
+            permissions: self.permissions.clone(),
             config: self.config_overrides.clone(),
             ephemeral: self.ephemeral.unwrap_or(false),
             exclude_turns: !include_turns,
@@ -497,13 +504,17 @@ impl CodexInProcessAdapter {
     /// maps them through the event mapper, and forwards them to the current
     /// event sender.
     async fn event_pump(
-        mut client: AppServerClient,
+        client: Arc<tokio::sync::Mutex<AppServerClient>>,
         event_state: Arc<Mutex<EventPumpState>>,
         session_id: String,
     ) {
         info!("Codex event pump started");
         loop {
-            match client.next_event().await {
+            let event = {
+                let mut locked = client.lock().await;
+                locked.next_event().await
+            };
+            match event {
                 Some(event) => {
                     if let AppServerEvent::ServerRequest(request) = &event {
                         let id = request_id_to_string(request.id());
@@ -1671,12 +1682,16 @@ impl CodexInProcessAdapter {
         };
 
         if let Some(response) = typed_server_request_response(kind, decision, resolution)? {
-            self.handle()?
+            self.client()?
+                .lock()
+                .await
                 .resolve_server_request(req_id, response)
                 .await
                 .map_err(|e| anyhow::anyhow!("resolve_server_request failed: {e}"))?;
         } else {
-            self.handle()?
+            self.client()?
+                .lock()
+                .await
                 .reject_server_request(
                     req_id,
                     JSONRPCErrorError {
@@ -1713,10 +1728,10 @@ impl AgentAdapter for CodexInProcessAdapter {
         self.session_id = Some(uuid::Uuid::new_v4().to_string());
         let session_id = self.session_id.as_ref().unwrap().clone();
 
-        // Take the client and spawn the background event pump.
-        let client = self._client_placeholder.take().ok_or_else(|| {
+        // Clone the Arc<Mutex<client>> for the event pump; keep our reference for resolve/reject.
+        let client = self.client.as_ref().ok_or_else(|| {
             anyhow::anyhow!("Codex client not set — call set_client() before start()")
-        })?;
+        })?.clone();
 
         // Request handle was already extracted in new()/set_client().
         let handle = self.event_state.clone();
@@ -1787,7 +1802,7 @@ impl AgentAdapter for CodexInProcessAdapter {
                     model: self.model.clone(),
                     service_tier: self.service_tier.clone(),
                     approval_policy: self.approval_policy,
-                    permission_profile: self.permission_profile.clone(),
+                    permissions: self.permissions.clone(),
                     ..Default::default()
                 },
             })
@@ -1854,10 +1869,12 @@ impl AgentAdapter for CodexInProcessAdapter {
 
             // Reject each pending request.  Best-effort — errors are logged
             // but don't prevent shutdown.
-            if let Ok(handle) = self.handle() {
+            if let Ok(client) = self.client() {
                 for id in pending_ids {
                     let req_id = RequestId::String(id);
-                    if let Err(err) = handle
+                    if let Err(err) = client
+                        .lock()
+                        .await
                         .reject_server_request(
                             req_id,
                             JSONRPCErrorError {

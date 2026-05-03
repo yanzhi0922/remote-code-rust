@@ -4,13 +4,10 @@
 fn main() {
     #[cfg(not(any(target_os = "ios", target_os = "android")))]
     {
-        let _codex_arg0_guard = match rc_codex_adapter::isolated_codex_home() {
-            Ok(codex_home) => codex_arg0::arg0_dispatch_with_codex_home(&codex_home),
-            Err(err) => {
-                eprintln!("FATAL: failed to isolate CODEX_HOME for embedded Codex: {err}");
-                std::process::exit(1);
-            }
-        };
+        if let Err(err) = rc_codex_adapter::isolated_codex_home() {
+            eprintln!("WARNING: failed to isolate CODEX_HOME for embedded Codex: {err}");
+        }
+        let _codex_arg0_guard = codex_arg0::arg0_dispatch();
         remote_code_gui_lib::run()
     }
     #[cfg(any(target_os = "ios", target_os = "android"))]

@@ -24,6 +24,7 @@
 //! - [`coordinator`]  — Coordinator/Worker mode
 //! - [`worker`]       — Worker agent lifecycle
 //! - [`resume`]       — Agent checkpoint & resume
+//! - [`transcript`]   — Subagent transcript persistence
 
 // ── Modules ──────────────────────────────────────────────────────────────
 pub mod builtins;
@@ -37,15 +38,18 @@ pub mod memory;
 pub mod prompt;
 pub mod resume;
 pub mod runner;
+pub mod transcript;
 pub mod worker;
 
 // ── Existing scheduler types ─────────────────────────────────────────────
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::sync::Arc;
 
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 // Re-export key types from submodules at the crate root for backward compat.
@@ -57,6 +61,7 @@ pub use runner::{
     ConversationEntry, UsageSummary, compose_agent_system_prompt,
 };
 pub use worker::{WorkerAgent, WorkerConfig, WorkerResult, WorkerStatus};
+pub use transcript::{SubagentTranscript, TranscriptMessage, persist_transcript, persist_transcript_from_result};
 
 /// Current state of an agent.
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -247,6 +252,9 @@ pub struct AgentTask {
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub state: TaskState,
+    /// ID of the parent task, if this task was spawned as a sub-task.
+    #[serde(default)]
+    pub parent_task_id: Option<Uuid>,
     #[serde(default)]
     pub description: String,
     #[serde(default)]
@@ -274,6 +282,7 @@ impl AgentTask {
             created_at: now,
             updated_at: now,
             state: TaskState::Pending,
+            parent_task_id: None,
             description: String::new(),
             ownership_paths: Vec::new(),
             required_labels: BTreeMap::new(),
@@ -370,6 +379,10 @@ pub struct AgentScheduler {
     mailboxes: BTreeMap<Uuid, VecDeque<AgentMailboxMessage>>,
     active_task_count: BTreeMap<Uuid, usize>,
     events: Vec<AgentLifecycleEvent>,
+    /// Cancellation tokens for tasks that have been started.
+    /// When a task is cancelled, its token is fired so that any async work
+    /// listening on it will terminate cooperatively.
+    cancel_tokens: Arc<std::sync::Mutex<BTreeMap<Uuid, CancellationToken>>>,
 }
 
 impl AgentScheduler {
@@ -387,6 +400,7 @@ impl AgentScheduler {
             mailboxes: BTreeMap::new(),
             active_task_count: BTreeMap::new(),
             events: Vec::new(),
+            cancel_tokens: Arc::new(std::sync::Mutex::new(BTreeMap::new())),
         }
     }
 
@@ -537,6 +551,12 @@ impl AgentScheduler {
         if let Some(agent) = self.agents.get_mut(&agent_id) {
             agent.state = AgentState::Busy;
         }
+        // Register a cancellation token for this task so that callers can
+        // cancel it cooperatively via [`cancel_task_with_propagation`].
+        self.cancel_tokens
+            .lock()
+            .expect("cancel_tokens lock")
+            .insert(task_id, CancellationToken::new());
         self.updated_at = Utc::now();
         self.record_event(
             "task_started",
@@ -580,6 +600,26 @@ impl AgentScheduler {
         )
     }
 
+    /// Cancel a task and propagate cancellation to all child sub-tasks recursively.
+    ///
+    /// Sets the task state to [`TaskState::Cancelled`], fires the associated
+    /// cancellation token (if one exists) so that any async work listening on
+    /// it will terminate cooperatively, and then recursively cancels all child
+    /// tasks whose `parent_task_id` points to this task.
+    ///
+    /// Returns the total number of tasks cancelled (including the root).
+    pub fn cancel_task_with_propagation(
+        &mut self,
+        task_id: Uuid,
+        message: impl Into<String>,
+    ) -> Option<usize> {
+        let msg = message.into();
+        self.cancel_task_recursive(task_id, msg)
+    }
+
+    /// Legacy single-task cancel without propagation.
+    ///
+    /// Prefer [`cancel_task_with_propagation`] which also cancels child tasks.
     pub fn cancel_task(&mut self, task_id: Uuid, message: impl Into<String>) -> Option<()> {
         self.finish_task(
             task_id,
@@ -588,6 +628,133 @@ impl AgentScheduler {
             Some(message.into()),
             "task_cancelled",
         )
+    }
+
+    /// Internal recursive cancellation implementation.
+    ///
+    /// Collects all descendant task IDs first to avoid borrow-checker issues,
+    /// then cancels each one in turn.
+    fn cancel_task_recursive(&mut self, task_id: Uuid, message: String) -> Option<usize> {
+        // Verify the root task exists.
+        if !self.tasks.contains_key(&task_id) {
+            return None;
+        }
+
+        // Collect all descendant task IDs (BFS order, parent first).
+        let mut to_cancel = vec![task_id];
+        let mut queue = std::collections::VecDeque::from([task_id]);
+
+        while let Some(parent_id) = queue.pop_front() {
+            for task in self.tasks.values() {
+                if task.parent_task_id == Some(parent_id) {
+                    if !to_cancel.contains(&task.id) {
+                        to_cancel.push(task.id);
+                        queue.push_back(task.id);
+                    }
+                }
+            }
+        }
+
+        let total = to_cancel.len();
+        for tid in to_cancel {
+            // Fire the cancellation token if one exists.
+            if let Some(token) = self
+                .cancel_tokens
+                .lock()
+                .expect("cancel_tokens lock")
+                .remove(&tid)
+            {
+                token.cancel();
+            }
+            // Mark the task as cancelled.
+            self.finish_task(
+                tid,
+                TaskState::Cancelled,
+                None,
+                Some(message.clone()),
+                "task_cancelled",
+            );
+        }
+
+        Some(total)
+    }
+
+    /// Spawn a child sub-task under an existing parent task.
+    ///
+    /// Creates a new [`AgentTask`] linked to `parent_task_id` via the
+    /// [`AgentTask::parent_task_id`] field. The child inherits context
+    /// from the parent (ownership paths and required labels are cloned).
+    ///
+    /// Returns the new task's ID, or `None` if the parent task does not exist.
+    pub fn spawn_child_task(
+        &mut self,
+        parent_task_id: Uuid,
+        title: impl Into<String>,
+    ) -> Option<Uuid> {
+        let (owner, ownership_paths, required_labels, parent_title) = {
+            let parent = self.tasks.get(&parent_task_id)?;
+            (
+                parent.owner.clone(),
+                parent.ownership_paths.clone(),
+                parent.required_labels.clone(),
+                parent.title.chars().take(60).collect::<String>(),
+            )
+        };
+
+        let now = Utc::now();
+        let child = AgentTask {
+            id: Uuid::new_v4(),
+            title: title.into(),
+            owner,
+            created_at: now,
+            updated_at: now,
+            state: TaskState::Pending,
+            parent_task_id: Some(parent_task_id),
+            description: String::new(),
+            ownership_paths,
+            required_labels,
+            context: ContextSlice::default(),
+            budget: ToolBudget::default(),
+            result_summary: None,
+            failure_message: None,
+        };
+
+        let child_id = child.id;
+        self.tasks.insert(child_id, child.clone());
+        self.updated_at = Utc::now();
+        self.record_event(
+            "child_task_spawned",
+            "scheduler",
+            Some(child_id),
+            self.tasks.get(&parent_task_id).map(|p| p.owner.clone()).unwrap_or_default(),
+            format!(
+                "spawned child of task {}",
+                parent_title
+            ),
+        );
+        Some(child_id)
+    }
+
+    /// Get the cancellation token for a task, if one has been registered.
+    ///
+    /// Returns a cloned [`CancellationToken`] that the caller can poll or
+    /// select on. The token is registered when [`start_task`] is called and
+    /// removed when the task finishes or is cancelled.
+    pub fn cancellation_token(&self, task_id: Uuid) -> Option<CancellationToken> {
+        self.cancel_tokens
+            .lock()
+            .expect("cancel_tokens lock")
+            .get(&task_id)
+            .cloned()
+    }
+
+    /// Return the IDs of all direct children of the given task.
+    pub fn child_task_ids(&self, parent_task_id: Uuid) -> Vec<Uuid> {
+        self.tasks
+            .values()
+            .filter(|t| t.parent_task_id == Some(parent_task_id))
+            .map(|t| t.id)
+            .collect()
     }
 
     pub fn consume_budget(&mut self, task_id: Uuid, scope: BudgetScope) -> bool {
@@ -761,6 +928,11 @@ impl AgentScheduler {
         task.updated_at = Utc::now();
         task.result_summary = result_summary;
         task.failure_message = failure_message;
+        // Clean up cancellation token when a task finishes normally.
+        self.cancel_tokens
+            .lock()
+            .expect("cancel_tokens lock")
+            .remove(&task_id);
         if let Some(agent_id) = agent_id {
             let counter = self.active_task_count.entry(agent_id).or_insert(0);
             if *counter > 0 {
@@ -1060,5 +1232,225 @@ mod tests {
         assert_eq!(snapshot.tasks.len(), 1);
         assert_eq!(snapshot.pending_messages, 1);
         assert!(scheduler.events().len() >= 5);
+    }
+
+    // ── Cancellation propagation tests ─────────────────────────────────────
+
+    #[test]
+    fn cancel_task_single_task() {
+        let mut scheduler = AgentScheduler::new("lead", "Cancel test");
+        let _agent_id = scheduler.register_agent(agent("worker-1", &["src/"]));
+
+        let mut task = AgentTask::new("Task to cancel");
+        task.ownership_paths = vec!["src/main.rs".to_owned()];
+        let task_id = scheduler.add_task(task);
+        scheduler.assign_next_task();
+        scheduler.start_task(task_id);
+
+        // Cancel via legacy method
+        assert_eq!(scheduler.cancel_task(task_id, "user requested"), Some(()));
+        let task = scheduler.tasks().into_iter().next().unwrap();
+        assert_eq!(task.state, TaskState::Cancelled);
+        assert_eq!(task.failure_message, Some("user requested".to_owned()));
+
+        // Agent should be idle again
+        let agent = scheduler.agents().into_iter().next().unwrap();
+        assert_eq!(agent.state, AgentState::Idle);
+    }
+
+    #[test]
+    fn cancel_task_with_propagation_cancels_children() {
+        let mut scheduler = AgentScheduler::new("lead", "Propagation test");
+        let agent_id = scheduler.register_agent(agent("worker-1", &[]));
+
+        // Create parent task
+        let parent_id = scheduler.add_task(AgentTask::new("Parent task"));
+        scheduler.assign_task(parent_id, agent_id);
+        scheduler.start_task(parent_id);
+
+        // Spawn children under parent
+        let child_a = scheduler.spawn_child_task(parent_id, "Child A").unwrap();
+        let child_b = scheduler.spawn_child_task(parent_id, "Child B").unwrap();
+
+        // Start children so they get cancellation tokens
+        scheduler.assign_task(child_a, agent_id);
+        scheduler.start_task(child_a);
+        scheduler.assign_task(child_b, agent_id);
+        scheduler.start_task(child_b);
+
+        // Spawn a grandchild under child_a
+        let grandchild = scheduler.spawn_child_task(child_a, "Grandchild").unwrap();
+        scheduler.assign_task(grandchild, agent_id);
+        scheduler.start_task(grandchild);
+
+        // Cancel the parent with propagation
+        let cancelled_count = scheduler
+            .cancel_task_with_propagation(parent_id, "parent cancelled")
+            .unwrap();
+
+        // All 4 tasks should be cancelled
+        assert_eq!(cancelled_count, 4);
+
+        for tid in &[parent_id, child_a, child_b, grandchild] {
+            let task = scheduler
+                .tasks()
+                .into_iter()
+                .find(|t| t.id == *tid)
+                .unwrap();
+            assert_eq!(task.state, TaskState::Cancelled);
+        }
+    }
+
+    #[test]
+    fn cancel_propagation_fires_cancellation_tokens() {
+        let mut scheduler = AgentScheduler::new("lead", "Token test");
+        let agent_id = scheduler.register_agent(agent("worker-1", &[]));
+
+        let parent_id = scheduler.add_task(AgentTask::new("Parent"));
+        scheduler.assign_task(parent_id, agent_id);
+        scheduler.start_task(parent_id);
+
+        let child_id = scheduler.spawn_child_task(parent_id, "Child").unwrap();
+        scheduler.assign_task(child_id, agent_id);
+        scheduler.start_task(child_id);
+
+        // Grab tokens before cancellation
+        let parent_token = scheduler.cancellation_token(parent_id).unwrap();
+        let child_token = scheduler.cancellation_token(child_id).unwrap();
+
+        assert!(!parent_token.is_cancelled());
+        assert!(!child_token.is_cancelled());
+
+        // Cancel parent with propagation
+        let count = scheduler
+            .cancel_task_with_propagation(parent_id, "test")
+            .unwrap();
+        assert_eq!(count, 2);
+
+        // Tokens should be cancelled
+        assert!(parent_token.is_cancelled());
+        assert!(child_token.is_cancelled());
+    }
+
+    #[test]
+    fn cancel_propagation_no_children() {
+        let mut scheduler = AgentScheduler::new("lead", "Leaf cancel");
+        let agent_id = scheduler.register_agent(agent("w1", &[]));
+
+        let task_id = scheduler.add_task(AgentTask::new("Leaf task"));
+        scheduler.assign_task(task_id, agent_id);
+        scheduler.start_task(task_id);
+
+        let count = scheduler
+            .cancel_task_with_propagation(task_id, "cancelled")
+            .unwrap();
+        assert_eq!(count, 1);
+
+        let task = scheduler.tasks().into_iter().next().unwrap();
+        assert_eq!(task.state, TaskState::Cancelled);
+    }
+
+    #[test]
+    fn cancel_propagation_nonexistent_task() {
+        let mut scheduler = AgentScheduler::new("lead", "Nothing");
+        let result = scheduler.cancel_task_with_propagation(Uuid::new_v4(), "gone");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn spawn_child_task_links_parent() {
+        let mut scheduler = AgentScheduler::new("lead", "Child test");
+        let agent_id = scheduler.register_agent(agent("w1", &[]));
+
+        let mut parent = AgentTask::new("Parent task");
+        parent.ownership_paths = vec!["src/".to_owned()];
+        parent.required_labels.insert("lang".to_owned(), "rust".to_owned());
+        let parent_id = scheduler.add_task(parent);
+        scheduler.assign_task(parent_id, agent_id);
+
+        let child_id = scheduler.spawn_child_task(parent_id, "Child task").unwrap();
+
+        let child = scheduler
+            .tasks()
+            .into_iter()
+            .find(|t| t.id == child_id)
+            .unwrap();
+        assert_eq!(child.parent_task_id, Some(parent_id));
+        assert_eq!(child.owner, Some(agent_id));
+        assert_eq!(child.ownership_paths, vec!["src/".to_owned()]);
+        assert_eq!(
+            child.required_labels.get("lang").map(|s| s.as_str()),
+            Some("rust")
+        );
+        assert_eq!(child.state, TaskState::Pending);
+    }
+
+    #[test]
+    fn spawn_child_task_nonexistent_parent() {
+        let mut scheduler = AgentScheduler::new("lead", "Orphan test");
+        let result = scheduler.spawn_child_task(Uuid::new_v4(), "Orphan");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn child_task_ids_returns_direct_children() {
+        let mut scheduler = AgentScheduler::new("lead", "Children test");
+        let agent_id = scheduler.register_agent(agent("w1", &[]));
+
+        let parent_id = scheduler.add_task(AgentTask::new("Parent"));
+        scheduler.assign_task(parent_id, agent_id);
+
+        let child_a = scheduler.spawn_child_task(parent_id, "A").unwrap();
+        let child_b = scheduler.spawn_child_task(parent_id, "B").unwrap();
+        let _child_c = scheduler.spawn_child_task(child_a, "Grandchild").unwrap();
+
+        let children = scheduler.child_task_ids(parent_id);
+        assert_eq!(children.len(), 2);
+        assert!(children.contains(&child_a));
+        assert!(children.contains(&child_b));
+    }
+
+    #[test]
+    fn cancellation_token_none_for_unstarted_task() {
+        let scheduler = AgentScheduler::new("lead", "Token test");
+        assert!(scheduler.cancellation_token(Uuid::new_v4()).is_none());
+    }
+
+    #[test]
+    fn cancel_task_creates_lifecycle_events() {
+        let mut scheduler = AgentScheduler::new("lead", "Events test");
+        let agent_id = scheduler.register_agent(agent("w1", &[]));
+
+        let parent_id = scheduler.add_task(AgentTask::new("Parent"));
+        scheduler.assign_task(parent_id, agent_id);
+        scheduler.start_task(parent_id);
+
+        let child_id = scheduler.spawn_child_task(parent_id, "Child").unwrap();
+        scheduler.assign_task(child_id, agent_id);
+        scheduler.start_task(child_id);
+
+        let event_count_before = scheduler.events().len();
+
+        scheduler
+            .cancel_task_with_propagation(parent_id, "testing")
+            .unwrap();
+
+        // Should have events for: child_task_spawned, cancel (parent), cancel (child)
+        let events = scheduler.events();
+        let new_events = &events[event_count_before..];
+
+        // At least the two cancel events plus the spawn event
+        let cancel_events: Vec<_> = new_events
+            .iter()
+            .filter(|e| e.kind == "task_cancelled")
+            .collect();
+        assert_eq!(cancel_events.len(), 2);
+    }
+
+    #[test]
+    fn agent_task_new_has_no_parent() {
+        let task = AgentTask::new("Standalone");
+        assert_eq!(task.parent_task_id, None);
+        assert_eq!(task.state, TaskState::Pending);
     }
 }

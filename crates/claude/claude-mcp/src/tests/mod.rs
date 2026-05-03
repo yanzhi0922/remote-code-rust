@@ -161,6 +161,7 @@ fn saves_config_in_round_trip_format() {
                     request_timeout_secs: Some(5),
                     metadata: BTreeMap::from([("scope".to_owned(), "local".to_owned())]),
                     oauth: None,
+                    tool_policy: crate::tool_policy::McpToolPolicy::default(),
                 },
             ),
             (
@@ -180,6 +181,7 @@ fn saves_config_in_round_trip_format() {
                     request_timeout_secs: None,
                     metadata: BTreeMap::new(),
                     oauth: None,
+                    tool_policy: crate::tool_policy::McpToolPolicy::default(),
                 },
             ),
         ]),
@@ -293,6 +295,7 @@ while True:
         request_timeout_secs: Some(3),
         metadata: BTreeMap::new(),
         oauth: None,
+        tool_policy: crate::tool_policy::McpToolPolicy::default(),
     };
 
     let inspection = inspect_server(&server, &McpClientInfo::new("remote-code-rust", "test"))
@@ -344,6 +347,7 @@ async fn inspection_lists_prompts_and_get_prompt_returns_messages() {
         request_timeout_secs: Some(3),
         metadata: BTreeMap::new(),
         oauth: None,
+        tool_policy: crate::tool_policy::McpToolPolicy::default(),
     };
 
     let inspection = inspect_server(&server, &McpClientInfo::new("remote-code-rust", "test"))
@@ -401,6 +405,7 @@ async fn inspection_lists_advertised_resources() {
         request_timeout_secs: Some(3),
         metadata: BTreeMap::new(),
         oauth: None,
+        tool_policy: crate::tool_policy::McpToolPolicy::default(),
     };
 
     let inspection = inspect_server(&server, &McpClientInfo::new("remote-code-rust", "test"))
@@ -451,6 +456,7 @@ async fn inspection_tolerates_unsupported_advertised_resources() {
         request_timeout_secs: Some(3),
         metadata: BTreeMap::new(),
         oauth: None,
+        tool_policy: crate::tool_policy::McpToolPolicy::default(),
     };
 
     let inspection = inspect_server(&server, &McpClientInfo::new("remote-code-rust", "test"))
@@ -490,6 +496,7 @@ async fn calls_stdio_tool_and_returns_typed_result() {
         request_timeout_secs: Some(3),
         metadata: BTreeMap::new(),
         oauth: None,
+        tool_policy: crate::tool_policy::McpToolPolicy::default(),
     };
 
     let response = call_tool(
@@ -551,6 +558,7 @@ async fn preserves_tool_error_payloads() {
         request_timeout_secs: Some(3),
         metadata: BTreeMap::new(),
         oauth: None,
+        tool_policy: crate::tool_policy::McpToolPolicy::default(),
     };
 
     let response = call_tool(
@@ -599,6 +607,7 @@ async fn surfaces_json_rpc_errors_from_tool_call() {
         request_timeout_secs: Some(3),
         metadata: BTreeMap::new(),
         oauth: None,
+        tool_policy: crate::tool_policy::McpToolPolicy::default(),
     };
 
     let error = call_tool(
@@ -637,6 +646,7 @@ async fn http_transport_attempts_connection() {
         request_timeout_secs: None,
         metadata: BTreeMap::new(),
         oauth: None,
+        tool_policy: crate::tool_policy::McpToolPolicy::default(),
     };
 
     let error = inspect_server(&server, &McpClientInfo::default())
@@ -679,6 +689,7 @@ fn connection_states_have_correct_type_tags() {
             request_timeout_secs: None,
             metadata: BTreeMap::new(),
             oauth: None,
+            tool_policy: crate::tool_policy::McpToolPolicy::default(),
         },
         ConfigScope::Local,
     );
