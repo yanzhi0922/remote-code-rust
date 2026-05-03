@@ -711,6 +711,314 @@ impl Default for MessageBuilder {
 }
 
 // ---------------------------------------------------------------------------
+// Tool Result ID Validation
+// ---------------------------------------------------------------------------
+
+/// Validate and fix tool_result IDs in user messages against the previous
+/// assistant message's tool_use IDs.
+///
+/// This is a centralized validation that catches all tool_use/tool_result
+/// issues before messages are sent to the API. It handles scenarios like:
+/// - Race conditions during streaming
+/// - Message editing scenarios
+/// - Resume/delegation scenarios
+/// - Missing tool_result blocks for tool_use calls
+/// - Orphaned tool_result blocks without matching tool_use calls
+/// - Duplicate tool_result blocks with the same tool_use_id
+///
+/// Returns the validated history with corrected messages.
+///
+/// Source: `src/core/task/validateToolResultIds.ts` — `validateAndFixToolResultIds()`
+pub fn validate_and_fix_tool_result_ids(
+    history: &[ApiMessage],
+) -> Vec<ApiMessage> {
+    // Need at least 2 messages (assistant + user) to validate
+    if history.len() < 2 {
+        return history.to_vec();
+    }
+
+    // Find the last assistant message that has tool_use blocks
+    let last_assistant_idx = history.iter().rposition(|msg| {
+        msg.role == MessageRole::Assistant
+            && msg.content.iter().any(|b| matches!(b, ContentBlock::ToolUse { .. }))
+    });
+
+    let last_assistant_idx = match last_assistant_idx {
+        Some(idx) => idx,
+        None => return history.to_vec(),
+    };
+
+    // Collect tool_use IDs from the assistant message
+    let tool_use_blocks: Vec<&ContentBlock> = history[last_assistant_idx]
+        .content
+        .iter()
+        .filter(|b| matches!(b, ContentBlock::ToolUse { .. }))
+        .collect();
+
+    // No tool_use blocks — nothing to validate against
+    if tool_use_blocks.is_empty() {
+        return history.to_vec();
+    }
+
+    let tool_use_ids: Vec<String> = tool_use_blocks
+        .iter()
+        .filter_map(|b| {
+            if let ContentBlock::ToolUse { id, .. } = b {
+                Some(id.clone())
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    let valid_tool_use_ids: std::collections::HashSet<&str> =
+        tool_use_ids.iter().map(|s| s.as_str()).collect();
+
+    let mut result = history.to_vec();
+    let mut modified = false;
+
+    // Process all user messages after the last assistant message
+    // In the Rust codebase, tool results may be in separate user messages or
+    // accumulated in a single user message. We need to handle both patterns.
+    for msg_idx in (last_assistant_idx + 1)..result.len() {
+        let msg = &mut result[msg_idx];
+        if msg.role != MessageRole::User {
+            continue;
+        }
+
+        // Collect tool_result blocks info
+        let tool_results: Vec<(usize, String)> = msg
+            .content
+            .iter()
+            .enumerate()
+            .filter_map(|(i, b)| {
+                if let ContentBlock::ToolResult { tool_use_id, .. } = b {
+                    Some((i, tool_use_id.clone()))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        if tool_results.is_empty() {
+            continue;
+        }
+
+        // --- Step 1: Deduplicate tool_result blocks ---
+        let mut seen_ids = std::collections::HashSet::new();
+        let mut deduplicated_content: Vec<ContentBlock> = Vec::new();
+        let mut had_duplicates = false;
+
+        for block in msg.content.drain(..) {
+            if let ContentBlock::ToolResult { ref tool_use_id, .. } = block {
+                if seen_ids.contains(tool_use_id.as_str()) {
+                    debug!(
+                        tool_use_id = %tool_use_id,
+                        "Removing duplicate tool_result block"
+                    );
+                    had_duplicates = true;
+                    continue;
+                }
+                seen_ids.insert(tool_use_id.clone());
+            }
+            deduplicated_content.push(block);
+        }
+
+        if had_duplicates {
+            msg.content = deduplicated_content;
+            modified = true;
+        }
+
+        // --- Step 2: Check for invalid tool_result IDs ---
+        let existing_tool_result_ids: std::collections::HashSet<&str> = msg
+            .content
+            .iter()
+            .filter_map(|b| {
+                if let ContentBlock::ToolResult { tool_use_id, .. } = b {
+                    Some(tool_use_id.as_str())
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        let has_invalid_ids = existing_tool_result_ids
+            .iter()
+            .any(|id| !valid_tool_use_ids.contains(id));
+
+        // Check for missing tool_results (tool_use IDs without matching tool_results)
+        let missing_tool_use_ids: Vec<&str> = tool_use_ids
+            .iter()
+            .filter(|id| !existing_tool_result_ids.contains(id.as_str()))
+            .map(|s| s.as_str())
+            .collect();
+
+        // If no issues found, no changes needed
+        if !has_invalid_ids && missing_tool_use_ids.is_empty() {
+            continue;
+        }
+
+        modified = true;
+
+        // --- Step 3: Fix invalid tool_result IDs by positional matching ---
+        if has_invalid_ids {
+            // Collect tool_result indices for positional matching
+            let tool_result_positions: Vec<usize> = msg
+                .content
+                .iter()
+                .enumerate()
+                .filter(|(_, b)| matches!(b, ContentBlock::ToolResult { .. }))
+                .map(|(i, _)| i)
+                .collect();
+
+            let mut used_ids = std::collections::HashSet::new();
+
+            // First pass: mark IDs that are already valid
+            for &pos in &tool_result_positions {
+                if let ContentBlock::ToolResult { ref tool_use_id, .. } = msg.content[pos] {
+                    if valid_tool_use_ids.contains(tool_use_id.as_str()) {
+                        used_ids.insert(tool_use_id.clone());
+                    }
+                }
+            }
+
+            // Second pass: fix invalid IDs by positional matching
+            for (result_idx, &pos) in tool_result_positions.iter().enumerate() {
+                if let ContentBlock::ToolResult { ref tool_use_id, .. } = msg.content[pos] {
+                    // If already valid and not duplicate, keep it
+                    if valid_tool_use_ids.contains(tool_use_id.as_str())
+                        && !used_ids.contains(tool_use_id.as_str())
+                    {
+                        // Already valid but might be duplicate
+                        if used_ids.contains(tool_use_id.as_str()) {
+                            // This is a duplicate of a valid ID — try positional match
+                            if result_idx < tool_use_ids.len() {
+                                let correct_id = &tool_use_ids[result_idx];
+                                if !used_ids.contains(correct_id.as_str()) {
+                                    let old_id = tool_use_id.clone();
+                                    fix_tool_result_id(&mut msg.content[pos], correct_id);
+                                    used_ids.insert(correct_id.clone());
+                                    debug!(
+                                        old_id = %old_id,
+                                        new_id = %correct_id,
+                                        "Fixed tool_result ID by positional match"
+                                    );
+                                } else {
+                                    // No valid ID to assign — remove this block
+                                    msg.content[pos] = ContentBlock::Text {
+                                        text: String::new(),
+                                    };
+                                    debug!("Removed orphaned duplicate tool_result block");
+                                }
+                            }
+                        } else {
+                            used_ids.insert(tool_use_id.clone());
+                        }
+                        continue;
+                    }
+
+                    // Invalid ID — try positional match
+                    if result_idx < tool_use_ids.len() {
+                        let correct_id = &tool_use_ids[result_idx];
+                        if !used_ids.contains(correct_id.as_str()) {
+                            let old_id = tool_use_id.clone();
+                            fix_tool_result_id(&mut msg.content[pos], correct_id);
+                            used_ids.insert(correct_id.clone());
+                            debug!(
+                                old_id = %old_id,
+                                new_id = %correct_id,
+                                "Fixed invalid tool_result ID by positional match"
+                            );
+                            continue;
+                        }
+                    }
+
+                    // No valid ID to assign — remove this block
+                    msg.content[pos] = ContentBlock::Text {
+                        text: String::new(),
+                    };
+                    debug!("Removed orphaned tool_result block with no matching tool_use");
+                }
+            }
+
+            // Remove empty text blocks we inserted as placeholders for removed blocks
+            msg.content
+                .retain(|b| !matches!(b, ContentBlock::Text { text } if text.is_empty()));
+        }
+
+        // --- Step 4: Add missing tool_result blocks ---
+        if !missing_tool_use_ids.is_empty() {
+            // Re-check which tool_use IDs are now covered after fixes
+            let covered_ids: std::collections::HashSet<&str> = msg
+                .content
+                .iter()
+                .filter_map(|b| {
+                    if let ContentBlock::ToolResult { tool_use_id, .. } = b {
+                        Some(tool_use_id.as_str())
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+
+            let still_missing: Vec<&str> = missing_tool_use_ids
+                .iter()
+                .filter(|id| !covered_ids.contains(*id))
+                .copied()
+                .collect();
+
+            if !still_missing.is_empty() {
+                // Build placeholder error results for missing tool_results
+                let mut placeholder_results: Vec<ContentBlock> = still_missing
+                    .iter()
+                    .map(|&id| {
+                        debug!(
+                            tool_use_id = %id,
+                            "Adding placeholder tool_result for missing tool_use"
+                        );
+                        ContentBlock::ToolResult {
+                            tool_use_id: id.to_string(),
+                            content: vec![ToolResultContent::Text {
+                                text: "Tool execution was interrupted before completion."
+                                    .to_string(),
+                            }],
+                            is_error: Some(true),
+                        }
+                    })
+                    .collect();
+
+                // Insert placeholder results at the beginning of the content array
+                // (before any text blocks that may summarize the results)
+                placeholder_results.extend(msg.content.drain(..));
+                msg.content = placeholder_results;
+            }
+        }
+    }
+
+    if !modified {
+        // No changes were made; return a clone but avoid unnecessary work
+        history.to_vec()
+    } else {
+        debug!("validate_and_fix_tool_result_ids: applied fixes to API history");
+        result
+    }
+}
+
+/// Helper to fix a tool_result block's tool_use_id in-place.
+fn fix_tool_result_id(block: &mut ContentBlock, new_id: &str) {
+    if let ContentBlock::ToolResult {
+        tool_use_id,
+        content,
+        is_error,
+    } = block
+    {
+        *tool_use_id = new_id.to_string();
+        // Ensure content and is_error remain intact
+        let _ = (content, is_error);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 

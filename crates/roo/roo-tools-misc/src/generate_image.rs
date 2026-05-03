@@ -138,6 +138,7 @@ pub struct ImageProviderResponse {
 /// Implementations call the actual API (OpenRouter, Roo Cloud, etc.).
 /// This mirrors the TS pattern where `RooHandler` and `OpenRouterHandler`
 /// each have a `generateImage` method.
+#[allow(async_fn_in_trait)]
 pub trait ImageGenerationProvider: Send + Sync {
     /// Generate an image from a prompt.
     ///
@@ -146,7 +147,7 @@ pub trait ImageGenerationProvider: Send + Sync {
     /// * `model` - The model ID to use for generation.
     /// * `input_image_data` - Optional base64 data URI of an input image.
     /// * `api_key` - Optional API key for the provider.
-    fn generate_image(
+    async fn generate_image(
         &self,
         prompt: &str,
         model: &str,
@@ -166,9 +167,8 @@ pub trait ImageGenerationProvider: Send + Sync {
 /// models like Gemini, GPT-5 Image, and FLUX.
 ///
 /// Corresponds to the TS `OpenRouterHandler.generateImage()` method which
-/// sends a chat completion request with the image generation model.
-///
-/// **Status**: Wiring is complete. The actual HTTP API call is a TODO.
+/// calls `generateImageWithProvider` to send a chat completion request with
+/// image generation modalities to `{baseURL}/chat/completions`.
 pub struct OpenRouterImageProvider {
     /// The base URL for the OpenRouter API.
     pub base_url: String,
@@ -197,15 +197,15 @@ impl Default for OpenRouterImageProvider {
 }
 
 impl ImageGenerationProvider for OpenRouterImageProvider {
-    fn generate_image(
+    async fn generate_image(
         &self,
         prompt: &str,
         model: &str,
-        _input_image_data: Option<&str>,
+        input_image_data: Option<&str>,
         api_key: Option<&str>,
     ) -> Result<ImageProviderResponse, ImageGenerationError> {
         // Validate API key
-        let _key = match api_key {
+        let key = match api_key {
             Some(k) if !k.is_empty() => k,
             _ => {
                 return Err(ImageGenerationError::ApiKeyRequired(
@@ -221,21 +221,103 @@ impl ImageGenerationProvider for OpenRouterImageProvider {
             return Err(ImageGenerationError::MissingParam("prompt".to_string()));
         }
 
-        // TODO: Implement actual HTTP API call to OpenRouter.
-        // The TS implementation sends a POST to /chat/completions with:
-        //   { model, messages: [{ role: "user", content: prompt }] }
-        // and extracts the base64 image data from the response.
-        //
-        // For now, return a clear "not yet implemented" message so callers
-        // know the wiring is in place but the API call is pending.
+        // Build the message content.
+        // If an input image is provided, send a multipart content array (text + image),
+        // otherwise just the text prompt — matching the TS `generateImageWithProvider`.
+        let content: serde_json::Value = match input_image_data {
+            Some(img) => serde_json::json!([
+                { "type": "text", "text": prompt },
+                { "type": "image_url", "image_url": { "url": img } }
+            ]),
+            None => serde_json::json!(prompt),
+        };
+
+        let body = serde_json::json!({
+            "model": model,
+            "messages": [
+                { "role": "user", "content": content }
+            ],
+            "modalities": ["image", "text"]
+        });
+
+        let url = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
+
+        let client = reqwest::Client::new();
+        let response = client
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", key))
+            .header("Content-Type", "application/json")
+            .header("HTTP-Referer", "https://github.com/RooVetGit/Roo-Code")
+            .header("X-Title", "Roo Code")
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| ImageGenerationError::ProviderError(format!("HTTP request failed: {}", e)))?;
+
+        let status = response.status();
+        if !status.is_success() {
+            let error_text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "<no body>".to_string());
+            // Try to extract a structured error message from the JSON body
+            if let Ok(err_json) = serde_json::from_str::<serde_json::Value>(&error_text) {
+                if let Some(msg) = err_json["error"]["message"].as_str() {
+                    return Ok(ImageProviderResponse {
+                        success: false,
+                        image_data: None,
+                        error: Some(msg.to_string()),
+                    });
+                }
+            }
+            return Ok(ImageProviderResponse {
+                success: false,
+                image_data: None,
+                error: Some(format!(
+                    "Image generation failed with status {}: {}",
+                    status, error_text
+                )),
+            });
+        }
+
+        let result: serde_json::Value = response
+            .json()
+            .await
+            .map_err(|e| ImageGenerationError::ProviderError(format!("Failed to parse response JSON: {}", e)))?;
+
+        // Check for top-level error in the response body
+        if let Some(error_obj) = result.get("error") {
+            let msg = error_obj["message"]
+                .as_str()
+                .unwrap_or("Unknown provider error");
+            return Ok(ImageProviderResponse {
+                success: false,
+                image_data: None,
+                error: Some(msg.to_string()),
+            });
+        }
+
+        // Extract the generated image from: choices[0].message.images[0].image_url.url
+        let images = result["choices"][0]["message"]["images"]
+            .as_array()
+            .ok_or_else(|| ImageGenerationError::ProviderError("No images in response".to_string()))?;
+
+        if images.is_empty() {
+            return Ok(ImageProviderResponse {
+                success: false,
+                image_data: None,
+                error: Some("No image generated".to_string()),
+            });
+        }
+
+        let image_data = images[0]["image_url"]["url"]
+            .as_str()
+            .ok_or_else(|| ImageGenerationError::ProviderError("Invalid image data in response".to_string()))?;
+
         Ok(ImageProviderResponse {
-            success: false,
-            image_data: None,
-            error: Some(format!(
-                "Image generation via OpenRouter (model: {}) is not yet implemented in the Rust port. \
-                 The provider wiring is complete — the actual HTTP API call to {} is a TODO.",
-                model, self.base_url
-            )),
+            success: true,
+            image_data: Some(image_data.to_string()),
+            error: None,
         })
     }
 }
@@ -246,9 +328,9 @@ impl ImageGenerationProvider for OpenRouterImageProvider {
 
 /// Image generation provider for the Roo Cloud service.
 ///
-/// Corresponds to the TS `RooHandler.generateImage()` method.
-///
-/// **Status**: Placeholder — the actual API call is a TODO.
+/// Corresponds to the TS `RooHandler.generateImage()` method which calls
+/// `generateImageWithProvider` to send a chat completion request with image
+/// generation modalities to the Roo Cloud `{baseURL}/chat/completions` endpoint.
 pub struct RooImageProvider {
     /// The base URL for the Roo Cloud API.
     pub base_url: String,
@@ -277,15 +359,15 @@ impl Default for RooImageProvider {
 }
 
 impl ImageGenerationProvider for RooImageProvider {
-    fn generate_image(
+    async fn generate_image(
         &self,
         prompt: &str,
         model: &str,
-        _input_image_data: Option<&str>,
+        input_image_data: Option<&str>,
         api_key: Option<&str>,
     ) -> Result<ImageProviderResponse, ImageGenerationError> {
-        // Validate API key
-        let _key = match api_key {
+        // Validate API key / session token
+        let key = match api_key {
             Some(k) if !k.is_empty() => k,
             _ => {
                 return Err(ImageGenerationError::ApiKeyRequired(
@@ -300,15 +382,100 @@ impl ImageGenerationProvider for RooImageProvider {
             return Err(ImageGenerationError::MissingParam("prompt".to_string()));
         }
 
-        // TODO: Implement actual HTTP API call to Roo Cloud.
+        // Build the message content — same pattern as OpenRouter's chat completions.
+        let content: serde_json::Value = match input_image_data {
+            Some(img) => serde_json::json!([
+                { "type": "text", "text": prompt },
+                { "type": "image_url", "image_url": { "url": img } }
+            ]),
+            None => serde_json::json!(prompt),
+        };
+
+        let body = serde_json::json!({
+            "model": model,
+            "messages": [
+                { "role": "user", "content": content }
+            ],
+            "modalities": ["image", "text"]
+        });
+
+        let url = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
+
+        let client = reqwest::Client::new();
+        let response = client
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", key))
+            .header("Content-Type", "application/json")
+            .header("HTTP-Referer", "https://github.com/RooVetGit/Roo-Code")
+            .header("X-Title", "Roo Code")
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| ImageGenerationError::ProviderError(format!("HTTP request failed: {}", e)))?;
+
+        let status = response.status();
+        if !status.is_success() {
+            let error_text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "<no body>".to_string());
+            if let Ok(err_json) = serde_json::from_str::<serde_json::Value>(&error_text) {
+                if let Some(msg) = err_json["error"]["message"].as_str() {
+                    return Ok(ImageProviderResponse {
+                        success: false,
+                        image_data: None,
+                        error: Some(msg.to_string()),
+                    });
+                }
+            }
+            return Ok(ImageProviderResponse {
+                success: false,
+                image_data: None,
+                error: Some(format!(
+                    "Image generation failed with status {}: {}",
+                    status, error_text
+                )),
+            });
+        }
+
+        let result: serde_json::Value = response
+            .json()
+            .await
+            .map_err(|e| ImageGenerationError::ProviderError(format!("Failed to parse response JSON: {}", e)))?;
+
+        // Check for top-level error
+        if let Some(error_obj) = result.get("error") {
+            let msg = error_obj["message"]
+                .as_str()
+                .unwrap_or("Unknown provider error");
+            return Ok(ImageProviderResponse {
+                success: false,
+                image_data: None,
+                error: Some(msg.to_string()),
+            });
+        }
+
+        // Extract the generated image from: choices[0].message.images[0].image_url.url
+        let images = result["choices"][0]["message"]["images"]
+            .as_array()
+            .ok_or_else(|| ImageGenerationError::ProviderError("No images in response".to_string()))?;
+
+        if images.is_empty() {
+            return Ok(ImageProviderResponse {
+                success: false,
+                image_data: None,
+                error: Some("No image generated".to_string()),
+            });
+        }
+
+        let image_data = images[0]["image_url"]["url"]
+            .as_str()
+            .ok_or_else(|| ImageGenerationError::ProviderError("Invalid image data in response".to_string()))?;
+
         Ok(ImageProviderResponse {
-            success: false,
-            image_data: None,
-            error: Some(format!(
-                "Image generation via Roo Cloud (model: {}) is not yet implemented in the Rust port. \
-                 The provider wiring is complete — the actual HTTP API call to {} is a TODO.",
-                model, self.base_url
-            )),
+            success: true,
+            image_data: Some(image_data.to_string()),
+            error: None,
         })
     }
 }
@@ -799,38 +966,29 @@ mod tests {
         assert_eq!(provider.base_url, "https://openrouter.ai/api/v1");
     }
 
-    #[test]
-    fn test_openrouter_provider_no_api_key() {
+    #[tokio::test]
+    async fn test_openrouter_provider_no_api_key() {
         let provider = OpenRouterImageProvider::new();
-        let result = provider.generate_image("sunset", "model", None, None);
+        let result = provider.generate_image("sunset", "model", None, None).await;
         assert!(result.is_err());
         let err = result.unwrap_err();
         let msg = format!("{}", err);
         assert!(msg.contains("API key"));
     }
 
-    #[test]
-    fn test_openrouter_provider_empty_api_key() {
+    #[tokio::test]
+    async fn test_openrouter_provider_empty_api_key() {
         let provider = OpenRouterImageProvider::new();
-        let result = provider.generate_image("sunset", "model", None, Some(""));
+        let result = provider.generate_image("sunset", "model", None, Some(""))
+            .await;
         assert!(result.is_err());
     }
 
-    #[test]
-    fn test_openrouter_provider_returns_not_implemented() {
+    #[tokio::test]
+    async fn test_openrouter_provider_empty_prompt() {
         let provider = OpenRouterImageProvider::new();
-        let result = provider.generate_image("sunset", "test-model", None, Some("sk-test-key"));
-        assert!(result.is_ok());
-        let response = result.unwrap();
-        assert!(!response.success);
-        assert!(response.error.as_ref().unwrap().contains("not yet implemented"));
-        assert!(response.error.as_ref().unwrap().contains("test-model"));
-    }
-
-    #[test]
-    fn test_openrouter_provider_empty_prompt() {
-        let provider = OpenRouterImageProvider::new();
-        let result = provider.generate_image("", "model", None, Some("key"));
+        let result = provider.generate_image("", "model", None, Some("key"))
+            .await;
         assert!(result.is_err());
     }
 
@@ -842,36 +1000,10 @@ mod tests {
         assert!(!provider.base_url.is_empty());
     }
 
-    #[test]
-    fn test_roo_provider_no_api_key() {
+    #[tokio::test]
+    async fn test_roo_provider_no_api_key() {
         let provider = RooImageProvider::new();
-        let result = provider.generate_image("sunset", "model", None, None);
+        let result = provider.generate_image("sunset", "model", None, None).await;
         assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_roo_provider_returns_not_implemented() {
-        let provider = RooImageProvider::new();
-        let result = provider.generate_image("sunset", "test-model", None, Some("roo-key"));
-        assert!(result.is_ok());
-        let response = result.unwrap();
-        assert!(!response.success);
-        assert!(response.error.as_ref().unwrap().contains("not yet implemented"));
-    }
-
-    // ---- Provider trait object test ----
-
-    #[test]
-    fn test_provider_as_trait_object() {
-        let providers: Vec<Box<dyn ImageGenerationProvider>> = vec![
-            Box::new(OpenRouterImageProvider::new()),
-            Box::new(RooImageProvider::new()),
-        ];
-
-        for provider in &providers {
-            let result = provider.generate_image("test", "model", None, Some("key"));
-            // Both should succeed with a "not yet implemented" response
-            assert!(result.is_ok());
-        }
     }
 }

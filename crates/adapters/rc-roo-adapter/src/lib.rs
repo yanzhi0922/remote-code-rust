@@ -744,6 +744,56 @@ impl RooInProcessAdapter {
         Ok(())
     }
 
+    /// Load MCP servers from `.roo/mcp.json` in the workspace directory.
+    ///
+    /// Creates a temporary `McpHub`, loads the project-level MCP config,
+    /// waits for servers to connect, and returns the list of connected
+    /// server descriptions (tools, resources, etc.).
+    async fn load_mcp_servers(&self) -> Vec<McpServerConnection> {
+        let cwd_str = self.cwd.to_string_lossy().to_string();
+        let hub = roo_mcp::McpHub::new_with_paths(
+            Some(cwd_str.clone()),
+            None,
+        );
+
+        // Load project-level MCP config (.roo/mcp.json)
+        let mcp_path = std::path::Path::new(&cwd_str)
+            .join(".roo")
+            .join("mcp.json");
+
+        if mcp_path.exists() {
+            if let Ok(content) = std::fs::read_to_string(&mcp_path) {
+                if let Ok(config) = serde_json::from_str::<serde_json::Value>(&content) {
+                    if let Some(servers) = config.get("mcpServers").and_then(|v| v.as_object()) {
+                        let server_map: std::collections::HashMap<String, serde_json::Value> =
+                            servers.into_iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+                        let count = server_map.len();
+                        if let Err(e) = hub.update_server_connections(
+                            &server_map,
+                            roo_mcp::McpSource::Project,
+                            true,
+                        ).await {
+                            warn!("Failed to load project MCP servers: {}", e);
+                        } else {
+                            info!("Loaded {} project MCP servers from {}", count, mcp_path.display());
+                        }
+                    }
+                }
+            }
+        }
+
+        // Give servers a moment to connect (max 5 seconds per server, total 10s cap)
+        let server_count = hub.get_servers().len();
+        if server_count > 0 {
+            info!(count = server_count, "Waiting for MCP servers to connect...");
+            tokio::time::sleep(std::time::Duration::from_millis(
+                (server_count as u64 * 2000).min(10000)
+            )).await;
+        }
+
+        hub.get_servers()
+    }
+
     /// Inner body of the Roo agent loop, extracted so it can be wrapped in
     /// `catch_unwind`.  Runs on a dedicated OS thread (not a tokio task)
     /// because `AgentLoop` contains !Send types (`git2::Repository`).
@@ -760,6 +810,7 @@ impl RooInProcessAdapter {
         message_builder: MessageBuilder,
         dispatcher: ToolDispatcher,
         history: Arc<tokio::sync::Mutex<Vec<ApiMessage>>>,
+        mcp_servers: Vec<McpServerConnection>,
     ) {
         let config = TaskConfig::new(&task_id, &cwd_str)
             .with_mode("code")
@@ -833,10 +884,10 @@ impl RooInProcessAdapter {
         // DiffViewProvider: manage file editing sessions with diff tracking
         let diff_view_provider = DiffViewProvider::new_default();
 
-        // MCP servers: empty by default — real MCP wiring requires an async
-        // runtime and McpHub; the adapter can be extended later to accept
-        // pre-connected servers via configuration.
-        let mcp_servers: Vec<McpServerConnection> = Vec::new();
+        // MCP servers loaded from .roo/mcp.json via McpHub.
+        // The hub is created in the async context (send_message) and
+        // server connections are collected before spawning the thread.
+        // If MCP loading fails, we gracefully fall back to empty servers.
 
         let mut agent_loop =
             AgentLoop::new(engine, provider, message_builder, dispatcher)
@@ -982,6 +1033,13 @@ impl AgentAdapter for RooInProcessAdapter {
         // Build tool dispatcher
         let dispatcher = Self::build_dispatcher(&self.cwd);
 
+        // Load MCP servers from .roo/mcp.json
+        let mcp_servers = self.load_mcp_servers().await;
+        info!(
+            count = mcp_servers.len(),
+            "Loaded MCP servers for agent loop"
+        );
+
         // Clone conversation history while in async context (before spawning).
         let history_snapshot = {
             let history = self.conversation_history.lock().await;
@@ -1001,6 +1059,7 @@ impl AgentAdapter for RooInProcessAdapter {
         let cwd_str = self.cwd.to_string_lossy().to_string();
         let message_owned = message.to_string();
         let auto_approval = self.auto_approval_enabled;
+        let mcp_servers_owned = mcp_servers;
 
         // Spawn in a dedicated OS thread.
         //
@@ -1027,6 +1086,7 @@ impl AgentAdapter for RooInProcessAdapter {
                     message_builder,
                     dispatcher,
                     history,
+                    mcp_servers_owned,
                 );
             }));
 

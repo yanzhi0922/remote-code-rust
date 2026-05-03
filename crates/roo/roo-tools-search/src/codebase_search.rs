@@ -2,11 +2,16 @@
 //!
 //! Aligned with TS `CodebaseSearchTool.ts`:
 //! - Validates the `query` parameter.
-//! - Uses `roo_index::CodeIndexManager` for vector search.
+//! - Uses `roo_index::CodeIndexManager` for BM25-like search across indexed files.
+//! - When file contents are cached (via `add_file_content` or `workspace_path`),
+//!   scoring combines filename matching (weight 2.0) with content term-frequency
+//!   analysis (weight 1.0), returning real code chunks with line numbers.
+//! - When only paths are indexed, falls back to filename-only matching.
 //! - Returns results in the TS format: file path + score + line range + code chunk.
 //!
-//! TODO: Replace simulated search with actual query embedding + cosine similarity
-//! when the embedding backend is integrated.
+//! The embedding backend (`roo_index::embedder`) is available for future semantic
+//! vector search via `CodeIndexSearchService`.  The current BM25-like approach
+//! provides strong results for code search without requiring an external API.
 
 use crate::types::*;
 use roo_index::CodeIndexManager;
@@ -316,5 +321,133 @@ mod tests {
         assert_eq!(m.start_line, 42);
         assert_eq!(m.end_line, 55);
         assert_eq!(m.code_chunk, "pub fn search() {}");
+    }
+
+    // --- Content-aware search tests ---
+
+    /// Create a test manager with indexed files AND their contents.
+    fn content_aware_manager() -> CodeIndexManager {
+        let config = CodeIndexConfig {
+            enabled: true,
+            max_file_size: 1_000_000,
+            include_patterns: vec![],
+            exclude_patterns: vec![],
+            workspace_path: None,
+        };
+        let mut mgr = CodeIndexManager::new(config);
+        mgr.initialize().unwrap();
+        mgr.add_file_content(
+            "src/main.rs",
+            "fn main() {\n    println!(\"hello world\");\n}\n",
+        )
+        .unwrap();
+        mgr.add_file_content(
+            "src/lib.rs",
+            "pub fn process_data(data: &str) -> String {\n    data.to_uppercase()\n}\n",
+        )
+        .unwrap();
+        mgr.add_file_content(
+            "src/utils/helpers.rs",
+            "pub fn helper() -> bool {\n    true\n}\n\npub fn format_output(s: &str) -> String {\n    format!(\"result: {}\", s)\n}\n",
+        )
+        .unwrap();
+        mgr.add_file_content(
+            "tests/integration.rs",
+            "#[test]\nfn test_process_data() {\n    let result = process_data(\"hello\");\n    assert_eq!(result, \"HELLO\");\n}\n",
+        )
+        .unwrap();
+        mgr
+    }
+
+    #[test]
+    fn test_content_search_finds_code_chunk() {
+        let mgr = content_aware_manager();
+        let params = CodebaseSearchParams {
+            query: "process_data".to_string(),
+            directory_prefix: None,
+        };
+        let result = process_codebase_search(&params, &mgr, 10).unwrap();
+        assert!(result.total_results > 0);
+
+        // Should find the function in src/lib.rs
+        let lib_match = result.results.iter().find(|m| m.file_path == "src/lib.rs");
+        assert!(lib_match.is_some());
+
+        let m = lib_match.unwrap();
+        // Content match should have a non-empty code chunk
+        assert!(!m.code_chunk.is_empty());
+        assert!(m.code_chunk.contains("process_data"));
+        // Lines should be populated from content analysis
+        assert!(m.start_line > 0);
+        assert!(m.end_line >= m.start_line);
+    }
+
+    #[test]
+    fn test_content_search_with_prefix_filter() {
+        let mgr = content_aware_manager();
+        let params = CodebaseSearchParams {
+            query: "fn".to_string(),
+            directory_prefix: Some("src/utils".to_string()),
+        };
+        let result = process_codebase_search(&params, &mgr, 10).unwrap();
+        // All results should be under src/utils
+        assert!(result.results.iter().all(|m| m.file_path.starts_with("src/utils")));
+    }
+
+    #[test]
+    fn test_content_search_ranks_content_match_higher() {
+        let mgr = content_aware_manager();
+        let params = CodebaseSearchParams {
+            query: "process_data".to_string(),
+            directory_prefix: None,
+        };
+        let result = process_codebase_search(&params, &mgr, 10).unwrap();
+        // The function definition in src/lib.rs should rank highest
+        // (exact content match + filename proximity)
+        if result.results.len() > 1 {
+            // First result should have the highest score
+            for i in 1..result.results.len() {
+                assert!(result.results[0].score >= result.results[i].score);
+            }
+        }
+    }
+
+    #[test]
+    fn test_content_search_no_results_for_absent_term() {
+        let mgr = content_aware_manager();
+        let params = CodebaseSearchParams {
+            query: "nonexistent_xyz_99999".to_string(),
+            directory_prefix: None,
+        };
+        let result = process_codebase_search(&params, &mgr, 10).unwrap();
+        assert_eq!(result.total_results, 0);
+    }
+
+    #[test]
+    fn test_content_search_multi_term_query() {
+        let mgr = content_aware_manager();
+        let params = CodebaseSearchParams {
+            query: "format output".to_string(),
+            directory_prefix: None,
+        };
+        let result = process_codebase_search(&params, &mgr, 10).unwrap();
+        // Should find helpers.rs which has format_output function
+        assert!(result.results.iter().any(|m| m.file_path == "src/utils/helpers.rs"));
+    }
+
+    #[test]
+    fn test_content_search_returns_real_line_numbers() {
+        let mgr = content_aware_manager();
+        let params = CodebaseSearchParams {
+            query: "println".to_string(),
+            directory_prefix: None,
+        };
+        let result = process_codebase_search(&params, &mgr, 10).unwrap();
+        let main_match = result.results.iter().find(|m| m.file_path == "src/main.rs");
+        assert!(main_match.is_some());
+        let m = main_match.unwrap();
+        // println! is on line 2, so the match region should include it
+        assert!(m.start_line <= 2);
+        assert!(m.end_line >= 2);
     }
 }

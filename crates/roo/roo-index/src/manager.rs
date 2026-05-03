@@ -207,6 +207,38 @@ impl CodeIndexManager {
         Ok(())
     }
 
+    /// Add a file to the index with explicit content.
+    ///
+    /// This registers the file path in the index AND caches the provided content
+    /// for content-based (BM25-like) search, regardless of whether `workspace_path`
+    /// is configured.  Useful for testing and for programmatic index population
+    /// where files may not exist on disk.
+    ///
+    /// Skips include/exclude pattern checks so that callers have full control
+    /// over what is indexed.
+    pub fn add_file_content(
+        &mut self,
+        path: &str,
+        content: &str,
+    ) -> Result<(), IndexError> {
+        if self.state == IndexingState::NotInitialized {
+            return Err(IndexError::NotInitialized);
+        }
+
+        if content.len() as u64 > self.config.max_file_size {
+            return Err(IndexError::FileTooLarge(content.len() as u64));
+        }
+
+        self.indexed_files.insert(path.to_string());
+        self.file_contents.insert(path.to_string(), content.to_string());
+
+        self.stats.indexed_files = self.indexed_files.len();
+        self.stats.total_files = self.stats.total_files.max(self.indexed_files.len());
+        self.stats.total_chunks += 1;
+
+        Ok(())
+    }
+
     /// Add a file to the index.
     ///
     /// Checks the file against include/exclude patterns and size limits.
@@ -884,5 +916,69 @@ mod tests {
             compute_content_score(content, &["search".to_string(), "query".to_string()]);
         // Line 3 has both terms, should be the best match
         assert_eq!(line, Some(3));
+    }
+
+    // --- add_file_content tests ---
+
+    #[test]
+    fn test_add_file_content_basic() {
+        let mut mgr = default_manager();
+        mgr.initialize().unwrap();
+        mgr.add_file_content("src/main.rs", "fn main() {\n    println!(\"hello\");\n}\n")
+            .unwrap();
+        assert_eq!(1, mgr.get_stats().indexed_files);
+    }
+
+    #[test]
+    fn test_add_file_content_not_initialized() {
+        let mut mgr = default_manager();
+        let result = mgr.add_file_content("src/main.rs", "fn main() {}");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_add_file_content_enables_content_search() {
+        let mut mgr = default_manager();
+        mgr.initialize().unwrap();
+        mgr.add_file_content(
+            "src/main.rs",
+            "fn main() {\n    println!(\"hello world\");\n}\n",
+        )
+        .unwrap();
+        mgr.add_file_content(
+            "src/lib.rs",
+            "pub fn library_func() -> i32 { 42 }\n",
+        )
+        .unwrap();
+
+        let results = mgr.search("hello", 10);
+        assert_eq!(1, results.len());
+        assert_eq!("src/main.rs", results[0].file_path);
+        // Content-aware: should have real code chunk
+        assert!(results[0].code_chunk.is_some());
+        assert!(results[0].code_chunk.as_ref().unwrap().contains("hello"));
+        assert!(results[0].line_number.is_some());
+    }
+
+    #[test]
+    fn test_add_file_content_replaces_existing() {
+        let mut mgr = default_manager();
+        mgr.initialize().unwrap();
+        mgr.add_file_content("src/main.rs", "old content").unwrap();
+        mgr.add_file_content("src/main.rs", "new content with search_term").unwrap();
+        // Should only be one file indexed
+        assert_eq!(1, mgr.get_stats().indexed_files);
+        let results = mgr.search("search_term", 10);
+        assert_eq!(1, results.len());
+        assert!(results[0].code_chunk.as_ref().unwrap().contains("search_term"));
+    }
+
+    #[test]
+    fn test_add_file_content_too_large() {
+        let mut mgr = default_manager();
+        mgr.initialize().unwrap();
+        let big_content = "x".repeat(2_000_000);
+        let result = mgr.add_file_content("src/big.rs", &big_content);
+        assert!(result.is_err());
     }
 }
