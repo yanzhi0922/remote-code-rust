@@ -141,9 +141,56 @@ impl BaseProvider {
         (self.model_id.clone(), self.model_info.clone())
     }
 
+    /// Count tokens for content blocks using a BPE-style heuristic.
+    ///
+    /// For text blocks, uses ~4 chars/token as a reasonable approximation
+    /// of the tiktoken o200k_base encoding. For images, estimates based on
+    /// base64 data length or a conservative default.
     pub async fn count_tokens(&self, content: &[ContentBlock]) -> u64 {
-        let _ = content;
-        0
+        if content.is_empty() {
+            return 0;
+        }
+
+        let mut total: u64 = 0;
+        for block in content {
+            total += match block {
+                ContentBlock::Text { text } => {
+                    (text.len() as u64).div_ceil(4)
+                }
+                ContentBlock::ToolUse { name, input, .. } => {
+                    let name_tokens = (name.len() as u64).div_ceil(4);
+                    let input_str = serde_json::to_string(input).unwrap_or_default();
+                    let input_tokens = (input_str.len() as u64).div_ceil(4);
+                    name_tokens + input_tokens
+                }
+                ContentBlock::ToolResult { content: inner, .. } => {
+                    inner
+                        .iter()
+                        .map(|c| match c {
+                            roo_types::api::ToolResultContent::Text { text } => {
+                                (text.len() as u64).div_ceil(4)
+                            }
+                            roo_types::api::ToolResultContent::Image { .. } => 256,
+                        })
+                        .sum()
+                }
+                ContentBlock::Image { source } => match source {
+                    roo_types::api::ImageSource::Base64 { data, .. } => {
+                        let len = data.len() as f64;
+                        (len.sqrt().ceil() as u64).max(1)
+                    }
+                    roo_types::api::ImageSource::Url { .. } => 300,
+                },
+                ContentBlock::Thinking { thinking, .. } => {
+                    (thinking.len() as u64).div_ceil(4)
+                }
+                ContentBlock::RedactedThinking { data } => {
+                    (data.len() as f64 / 4.0).ceil() as u64
+                }
+            };
+        }
+
+        total
     }
 }
 

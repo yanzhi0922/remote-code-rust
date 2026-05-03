@@ -12,43 +12,26 @@ use crate::client::{BaseTelemetryClient, TelemetryClient};
 use crate::types::{TelemetryEvent, TelemetryEventName, SubscriptionType, TelemetryEventSubscription};
 
 // ---------------------------------------------------------------------------
-// PostHog capture request
+// PostHog batch request types
 // ---------------------------------------------------------------------------
 
+/// A single event in a PostHog batch.
 #[derive(Debug, serde::Serialize)]
-#[allow(dead_code)]
-struct PostHogCaptureBody {
-    api_key: String,
+struct PostHogBatchEvent {
     event: String,
-    properties: PostHogProperties,
+    properties: HashMap<String, Value>,
+    /// ISO-8601 timestamp (optional — PostHog will use server time if omitted).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    timestamp: Option<String>,
 }
 
+/// PostHog batch request body.
+///
+/// POST to `https://app.posthog.com/batch/` (or `https://eu.posthog.com/batch/` for EU).
 #[derive(Debug, serde::Serialize)]
-#[allow(dead_code)]
-struct PostHogProperties {
-    distinct_id: String,
-    #[serde(flatten)]
-    extra: HashMap<String, Value>,
-}
-
-#[derive(Debug, serde::Serialize)]
-#[allow(dead_code)]
-struct PostHogExceptionBody {
+struct PostHogBatchBody {
     api_key: String,
-    event: String,
-    properties: PostHogExceptionProperties,
-}
-
-#[derive(Debug, serde::Serialize)]
-#[allow(dead_code)]
-struct PostHogExceptionProperties {
-    distinct_id: String,
-    #[serde(rename = "$exception_message")]
-    exception_message: String,
-    #[serde(rename = "$exception_type")]
-    exception_type: String,
-    #[serde(flatten)]
-    extra: HashMap<String, Value>,
+    batch: Vec<PostHogBatchEvent>,
 }
 
 // ---------------------------------------------------------------------------
@@ -137,52 +120,6 @@ impl PostHogTelemetryClient {
         !msg_contains_rate_limit && !msg_contains_billing
     }
 
-    #[allow(dead_code)]
-    async fn send_capture(&self, event: &str, properties: HashMap<String, Value>) {
-        let body = PostHogCaptureBody {
-            api_key: self.api_key.clone(),
-            event: event.to_string(),
-            properties: PostHogProperties {
-                distinct_id: self.distinct_id.clone(),
-                extra: properties,
-            },
-        };
-
-        let url = format!("{}/capture/", self.host);
-        let _ = self
-            .http_client
-            .post(&url)
-            .json(&body)
-            .send()
-            .await;
-    }
-
-    #[allow(dead_code)]
-    async fn send_exception(
-        &self,
-        error_type: &str,
-        error_message: &str,
-        properties: HashMap<String, Value>,
-    ) {
-        let body = PostHogExceptionBody {
-            api_key: self.api_key.clone(),
-            event: "$exception".to_string(),
-            properties: PostHogExceptionProperties {
-                distinct_id: self.distinct_id.clone(),
-                exception_message: error_message.to_string(),
-                exception_type: error_type.to_string(),
-                extra: properties,
-            },
-        };
-
-        let url = format!("{}/capture/", self.host);
-        let _ = self
-            .http_client
-            .post(&url)
-            .json(&body)
-            .send()
-            .await;
-    }
 }
 
 impl TelemetryClient for PostHogTelemetryClient {
@@ -204,18 +141,37 @@ impl TelemetryClient for PostHogTelemetryClient {
             eprintln!("[PostHogTelemetryClient#capture] {:?}", event.event_name);
         }
 
-        let properties = match &event.properties {
-            Some(props) => self.filter_properties(props),
+        let mut properties = match event.properties {
+            Some(props) => self.filter_properties(&props),
             None => HashMap::new(),
         };
+        // Inject distinct_id into every event
+        properties.insert("distinct_id".to_string(), Value::String(self.distinct_id.clone()));
 
-        // Spawn an async task for the HTTP request
         let event_name = format!("{:?}", event.event_name);
-        let rt = tokio::runtime::Handle::current();
-        let _ = rt.spawn(async move {
-            // We need to reconstruct the client for the spawned task
-            // In practice, the send_capture would be called directly
-            let _ = (event_name, properties);
+        let api_key = self.api_key.clone();
+        let host = self.host.clone();
+        let http_client = self.http_client.clone();
+
+        // Fire-and-forget: spawn an async task that POSTs to the PostHog batch endpoint.
+        // We never block on the result; failures are silently dropped.
+        tokio::spawn(async move {
+            let body = PostHogBatchBody {
+                api_key,
+                batch: vec![PostHogBatchEvent {
+                    event: event_name.clone(),
+                    properties,
+                    timestamp: None,
+                }],
+            };
+
+            let url = if host.contains("eu.posthog.com") {
+                "https://eu.posthog.com/batch/".to_string()
+            } else {
+                "https://app.posthog.com/batch/".to_string()
+            };
+
+            let _ = http_client.post(&url).json(&body).send().await;
         });
     }
 
@@ -253,13 +209,51 @@ impl TelemetryClient for PostHogTelemetryClient {
         }
 
         let mut properties = additional_properties.unwrap_or_default();
-        properties.insert("$app_version".to_string(), Value::Null);
+        properties.insert("distinct_id".to_string(), Value::String(self.distinct_id.clone()));
 
         let error_type = std::any::type_name_of_val(error).to_string();
         let error_message = error.to_string();
 
-        // Note: In a real async context, this would be awaited
-        let _ = (error_type, error_message, properties);
+        let api_key = self.api_key.clone();
+        let host = self.host.clone();
+        let distinct_id = self.distinct_id.clone();
+        let http_client = self.http_client.clone();
+
+        // Fire-and-forget: spawn an async task for the exception event.
+        // Failures are silently dropped.
+        tokio::spawn(async move {
+            let body = PostHogBatchBody {
+                api_key,
+                batch: vec![PostHogBatchEvent {
+                    event: "$exception".to_string(),
+                    properties: {
+                        let mut p = properties;
+                        p.insert(
+                            "$exception_message".to_string(),
+                            Value::String(error_message),
+                        );
+                        p.insert(
+                            "$exception_type".to_string(),
+                            Value::String(error_type),
+                        );
+                        p.insert(
+                            "distinct_id".to_string(),
+                            Value::String(distinct_id),
+                        );
+                        p
+                    },
+                    timestamp: None,
+                }],
+            };
+
+            let url = if host.contains("eu.posthog.com") {
+                "https://eu.posthog.com/batch/".to_string()
+            } else {
+                "https://app.posthog.com/batch/".to_string()
+            };
+
+            let _ = http_client.post(&url).json(&body).send().await;
+        });
     }
 
     fn update_telemetry_state(&mut self, did_user_opt_in: bool) {

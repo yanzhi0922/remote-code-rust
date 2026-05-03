@@ -7,6 +7,8 @@
 //!
 //! Also provides binary detection and long line truncation.
 
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use crate::helpers::*;
 use crate::image_processing::{
     is_image_file, process_image_file, ImageSkipReason, DEFAULT_MAX_IMAGE_FILE_SIZE_MB,
@@ -15,6 +17,36 @@ use crate::image_processing::{
 use crate::types::*;
 use roo_ignore::RooIgnoreController;
 use roo_types::tool_params::{IndentationParams, ReadFileMode, ReadFileParams};
+
+/// Cumulative image bytes processed across `read_file` calls in the same
+/// logical read operation. This mirrors the TS `ImageMemoryTracker` which
+/// persists across files in a single `read_file` tool invocation.
+///
+/// The TS version creates a new `ImageMemoryTracker` per `read_file` execute
+/// call. In Rust, `process_read_file` is called once per file, so we track
+/// cumulative memory at module level. Callers should call
+/// [`reset_cumulative_image_bytes`] at the start of each tool invocation to
+/// match the TS per-invocation lifecycle.
+static CUMULATIVE_IMAGE_BYTES: AtomicU64 = AtomicU64::new(0);
+
+/// Reset the cumulative image byte counter.
+///
+/// Call this at the start of each `read_file` tool invocation to mirror the
+/// TS behavior where `ImageMemoryTracker` is created fresh per `execute()`.
+pub fn reset_cumulative_image_bytes() {
+    CUMULATIVE_IMAGE_BYTES.store(0, Ordering::SeqCst);
+}
+
+/// Read the current cumulative image byte total and convert to megabytes.
+fn current_image_memory_mb() -> f64 {
+    let bytes = CUMULATIVE_IMAGE_BYTES.load(Ordering::SeqCst);
+    bytes as f64 / (1024.0 * 1024.0)
+}
+
+/// Add image bytes to the cumulative counter after successful processing.
+fn add_cumulative_image_bytes(size_bytes: u64) {
+    CUMULATIVE_IMAGE_BYTES.fetch_add(size_bytes, Ordering::SeqCst);
+}
 
 /// Validate read_file parameters.
 pub fn validate_read_file_params(params: &ReadFileParams) -> Result<(), FsToolError> {
@@ -84,6 +116,10 @@ pub fn process_read_file(
 ) -> Result<ReadResult, FsToolError> {
     validate_read_file_params(params)?;
 
+    // Reset cumulative image byte counter at the start of each tool invocation.
+    // This mirrors TS creating a fresh `ImageMemoryTracker` per `read_file` execute.
+    reset_cumulative_image_bytes();
+
     // Check .rooignore before any file I/O
     check_roo_ignore(&params.path, ignore_controller)?;
 
@@ -115,8 +151,12 @@ pub fn process_read_file(
             let max_image_mb = DEFAULT_MAX_IMAGE_FILE_SIZE_MB;
             let max_total_mb = DEFAULT_MAX_TOTAL_IMAGE_SIZE_MB;
 
-            return match process_image_file(&file_path, max_image_mb, 0.0, max_total_mb) {
+            let current_mb = current_image_memory_mb();
+            return match process_image_file(&file_path, max_image_mb, current_mb, max_total_mb) {
                 Ok(Ok(image)) => {
+                    // Track cumulative image bytes to enforce total memory limit
+                    // across multiple read_file calls in a single tool invocation.
+                    add_cumulative_image_bytes(image.size_bytes);
                     let size_kb = (image.size_bytes as f64 / 1024.0).round() as u64;
                     Ok(ReadResult {
                         content: format!(

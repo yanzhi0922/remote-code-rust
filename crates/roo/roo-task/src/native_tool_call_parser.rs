@@ -461,34 +461,105 @@ impl NativeToolCallParser {
     ///
     /// This is a simplified version of the TS `partial-json` library.
     /// It tries to parse the string as-is first, then attempts to close
-    /// open braces/brackets.
+    /// open braces/brackets and handle truncated strings/values.
+    ///
+    /// Edge cases handled:
+    /// 1. Truncated strings — unescaped quotes inside string values are odd, append closing quote.
+    /// 2. Escaped characters — `\"`, `\\`, `\n`, `\t`, `\r` inside strings are recognised.
+    /// 3. Truncated arrays — `[` count > `]` count → close arrays before closing objects.
+    /// 4. Best-effort completion — find last valid JSON structural character,
+    ///    truncate incomplete tail (unquoted value fragments), close braces/brackets.
     fn try_parse_partial_json(s: &str) -> Option<Value> {
         // Try full parse first
         if let Ok(v) = serde_json::from_str::<Value>(s) {
             return Some(v);
         }
 
-        // Try to fix incomplete JSON by closing open structures
-        let mut fixed = s.to_string();
-        let mut open_braces = 0i32;
-        let mut open_brackets = 0i32;
+        let input = s.to_string();
+
+        // ── Pass 1: find the last valid structural position for truncation ──
+        // We track only the string state so we know when commas/colons/numbers
+        // are inside a string value (still valid) vs outside.
         let mut in_string = false;
         let mut escape_next = false;
+        let mut last_good_idx: Option<usize> = None;
+
+        let chars: Vec<char> = input.chars().collect();
+        let char_len = chars.len();
+
+        for (i, &ch) in chars.iter().enumerate() {
+            if escape_next {
+                escape_next = false;
+                last_good_idx = Some(i);
+                continue;
+            }
+            if in_string {
+                if ch == '\\' {
+                    escape_next = true;
+                    last_good_idx = Some(i);
+                } else if ch == '"' {
+                    in_string = false;
+                    last_good_idx = Some(i);
+                } else {
+                    last_good_idx = Some(i);
+                }
+                continue;
+            }
+            // Outside string — track structural characters
+            match ch {
+                '{' | '}' | '[' | ']' | ',' | ':' => {
+                    last_good_idx = Some(i);
+                }
+                '"' => {
+                    in_string = true;
+                    last_good_idx = Some(i);
+                }
+                // Whitespace, numeric digits, minus, dot are valid structural context
+                ' ' | '\t' | '\n' | '\r' | '0'..='9' | '-' | '.' => {
+                    last_good_idx = Some(i);
+                }
+                // Letters may be JSON keywords (true, false, null) or value content
+                'a'..='z' | 'A'..='Z' => {
+                    last_good_idx = Some(i);
+                }
+                _ => {
+                    // Other chars could be structural (e.g. +, e in numbers), keep them
+                }
+            }
+        }
+
+        // ── Build the fixed string ──
+
+        // Truncate at last good index + 1 as a best-effort baseline.
+        // Only truncate if we found at least one good structural position
+        // and the input actually has trailing garbage.
+        let mut fixed = if let Some(last_idx) = last_good_idx {
+            if last_idx + 1 < char_len {
+                input[..=last_idx].to_string()
+            } else {
+                input.clone()
+            }
+        } else {
+            input.clone()
+        };
+
+        // ── Pass 2: count open braces/brackets and handle strings ──
+        let mut open_braces: i32 = 0;
+        let mut open_brackets: i32 = 0;
+        in_string = false;
+        escape_next = false;
 
         for ch in fixed.chars() {
             if escape_next {
                 escape_next = false;
                 continue;
             }
-            if ch == '\\' && in_string {
-                escape_next = true;
-                continue;
-            }
-            if ch == '"' {
-                in_string = !in_string;
-                continue;
-            }
             if in_string {
+                if ch == '\\' {
+                    escape_next = true;
+                } else if ch == '"' {
+                    in_string = false;
+                }
                 continue;
             }
             match ch {
@@ -496,16 +567,20 @@ impl NativeToolCallParser {
                 '}' => open_braces -= 1,
                 '[' => open_brackets += 1,
                 ']' => open_brackets -= 1,
+                '"' => in_string = true,
                 _ => {}
             }
         }
 
-        // Close any open string
+        // Close any open string: an unterminated string value means the quote
+        // count is odd → append a closing quote.
         if in_string {
             fixed.push('"');
         }
 
-        // Close open structures
+        // Close open structures: arrays first, then objects.
+        // This ordering matters because an un-closed array inside an un-closed
+        // object needs its brackets closed before the enclosing braces.
         for _ in 0..open_brackets.max(0) {
             fixed.push(']');
         }

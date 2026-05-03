@@ -30,14 +30,49 @@ use std::time::Duration;
 /// Matches TS: `const canonicalCommand = unescapeHtmlEntities(command)`
 /// Some LLMs (non-Claude) may output HTML entities like `<` instead of `<`
 /// in their tool call parameters.
+///
+/// Handles:
+/// - Named entities: `&amp;`, `&lt;`, `&gt;`, `&quot;`, `&apos;`, `&#39;`
+/// - Hex numeric references: `&#x2F;`, `&#X3C;` etc.
+/// - Decimal numeric references: `&#60;`, `&#47;` etc.
 pub fn unescape_command(command: &str) -> String {
-    command
+    let mut result = command
         .replace("&amp;", "&")
         .replace("&lt;", "<")
         .replace("&gt;", ">")
         .replace("&quot;", "\"")
         .replace("&#39;", "'")
-        .replace("&apos;", "'")
+        .replace("&apos;", "'");
+
+    // Handle hex numeric references: &#xHH; or &#XHH;
+    let hex_re = regex::Regex::new(r"&#[xX]([0-9a-fA-F]+);").unwrap();
+    let hex_result = hex_re.replace_all(&result, |caps: &regex::Captures| {
+        if let Ok(code) = u32::from_str_radix(&caps[1], 16) {
+            char::from_u32(code).map_or_else(
+                || caps[0].to_string(),
+                |c| c.to_string(),
+            )
+        } else {
+            caps[0].to_string()
+        }
+    });
+    result = hex_result.into_owned();
+
+    // Handle decimal numeric references: &#NN;
+    let dec_re = regex::Regex::new(r"&#(\d+);").unwrap();
+    let dec_result = dec_re.replace_all(&result, |caps: &regex::Captures| {
+        if let Ok(code) = caps[1].parse::<u32>() {
+            char::from_u32(code).map_or_else(
+                || caps[0].to_string(),
+                |c| c.to_string(),
+            )
+        } else {
+            caps[0].to_string()
+        }
+    });
+    result = dec_result.into_owned();
+
+    result
 }
 
 // ---------------------------------------------------------------------------
@@ -410,6 +445,12 @@ pub async fn execute_command_with_opts(
     opts: ExecuteCommandOptions,
     roo_ignore: Option<&RooIgnoreController>,
 ) -> Result<ExecuteCommandResult, String> {
+    // --- 0. Unescape HTML entities in command -------------------------
+    // TS: `const canonicalCommand = unescapeHtmlEntities(command)`
+    // Some LLMs (non-Claude) may output HTML entities like &lt; instead of <
+    // in their tool call parameters. This must happen BEFORE any validation.
+    let command = unescape_command(command);
+
     // --- 1. Validate command non-empty --------------------------------
     if command.trim().is_empty() {
         return Err("Command cannot be empty".to_string());
@@ -417,7 +458,7 @@ pub async fn execute_command_with_opts(
 
     // --- 2. RooIgnore command validation ------------------------------
     if let Some(controller) = roo_ignore {
-        if let Some(blocked_path) = controller.validate_command(command) {
+        if let Some(blocked_path) = controller.validate_command(&command) {
             return Ok(ExecuteCommandResult {
                 output: format!(
                     "Command blocked by .rooignore rules: '{}' accesses a restricted file. \
@@ -462,7 +503,7 @@ pub async fn execute_command_with_opts(
         .ok_or("Terminal not found after creation")?;
 
     // 6. Generate artifact_id for potential output persistence
-    let artifact_id = generate_artifact_id(command);
+    let artifact_id = generate_artifact_id(&command);
 
     // --- 7. Dual-timeout execution ------------------------------------
     let callbacks = StreamingCallbacks::new(streamer, opts.stream_throttle_ms);
@@ -487,7 +528,7 @@ pub async fn execute_command_with_opts(
 
     let result = {
         let guard = terminal.lock().await;
-        let cmd_future = guard.run_command(command, &callbacks);
+        let cmd_future = guard.run_command(&command, &callbacks);
 
         // We wrap the command future in a helper that respects both timeouts.
         let result = run_with_dual_timeout(
@@ -660,6 +701,30 @@ mod tests {
             unescape_command("<div>hello&world</div>"),
             "<div>hello&world</div>"
         );
+    }
+
+    #[test]
+    fn test_unescape_command_hex_numeric() {
+        // &#x2F; → /
+        assert_eq!(unescape_command("echo &#x2F;usr&#x2F;bin"), "echo /usr/bin");
+        // &#x3C; → <  (uppercase X)
+        assert_eq!(unescape_command("&#X3C;tag&#X3E;"), "<tag>");
+    }
+
+    #[test]
+    fn test_unescape_command_decimal_numeric() {
+        // &#60; → <, &#62; → >
+        assert_eq!(unescape_command("&#60;div&#62;"), "<div>");
+        // &#47; → /
+        assert_eq!(unescape_command("a&#47;b"), "a/b");
+    }
+
+    #[test]
+    fn test_unescape_command_invalid_numeric() {
+        // Invalid hex should be left unchanged
+        assert_eq!(unescape_command("&#xGG;"), "&#xGG;");
+        // Invalid decimal should be left unchanged
+        assert_eq!(unescape_command("&#abc;"), "&#abc;");
     }
 
     // --- RooIgnore command validation tests ---

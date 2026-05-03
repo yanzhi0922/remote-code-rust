@@ -235,6 +235,7 @@ pub struct ProviderSettings {
     // --- MiniMax-specific ---
     pub minimax_base_url: Option<String>,
     pub minimax_api_key: Option<String>,
+    pub minimax_group_id: Option<String>,
 
     // --- Requesty-specific ---
     pub requesty_base_url: Option<String>,

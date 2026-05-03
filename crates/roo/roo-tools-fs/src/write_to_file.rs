@@ -7,6 +7,7 @@
 use crate::helpers::*;
 use crate::types::*;
 use roo_ignore::RooIgnoreController;
+use roo_protect::RooProtectedController;
 use roo_types::tool::WriteToFileParams;
 
 /// Validate write_to_file parameters.
@@ -61,13 +62,20 @@ pub fn clean_write_content(content: &str, model_id: Option<&str>) -> String {
 /// `model_id` is used for model-dependent content cleaning (e.g. skipping
 /// HTML entity unescaping for Claude models). Pass `None` to apply all
 /// cleaning steps unconditionally.
+///
+/// `roo_protected` is used to check whether the target path is write-protected
+/// (e.g. `.rooignore`, `.roo/config.json`). If protected, returns an error.
 pub fn process_write_to_file(
     params: &WriteToFileParams,
     cwd: &std::path::Path,
     ignore_controller: Option<&RooIgnoreController>,
+    roo_protected: Option<&RooProtectedController>,
     model_id: Option<&str>,
 ) -> Result<WriteResult, FsToolError> {
     validate_write_to_file_params(params)?;
+
+    // Check write protection before any file I/O
+    check_roo_protect(&params.path, roo_protected)?;
 
     // Check .rooignore before any file I/O
     check_roo_ignore(&params.path, ignore_controller)?;
@@ -199,7 +207,7 @@ mod tests {
             path: file_path.to_str().unwrap().to_string(),
             content: "hello\nworld".to_string(),
         };
-        let result = process_write_to_file(&params, std::path::Path::new("."), None, None).unwrap();
+        let result = process_write_to_file(&params, std::path::Path::new("."), None, None, None).unwrap();
         assert!(result.is_new_file);
         assert_eq!(result.lines_written, 2);
 
@@ -217,7 +225,7 @@ mod tests {
             path: file_path.to_str().unwrap().to_string(),
             content: "new content".to_string(),
         };
-        let result = process_write_to_file(&params, std::path::Path::new("."), None, None).unwrap();
+        let result = process_write_to_file(&params, std::path::Path::new("."), None, None, None).unwrap();
         assert!(!result.is_new_file);
 
         let written = std::fs::read_to_string(&file_path).unwrap();
@@ -233,7 +241,7 @@ mod tests {
             path: file_path.to_str().unwrap().to_string(),
             content: "deep content".to_string(),
         };
-        let result = process_write_to_file(&params, std::path::Path::new("."), None, None).unwrap();
+        let result = process_write_to_file(&params, std::path::Path::new("."), None, None, None).unwrap();
         assert!(result.is_new_file);
         assert!(file_path.exists());
     }
@@ -247,7 +255,7 @@ mod tests {
             path: file_path.to_str().unwrap().to_string(),
             content: "```javascript\nconsole.log(\"hello\");\n```".to_string(),
         };
-        process_write_to_file(&params, std::path::Path::new("."), None, None).unwrap();
+        process_write_to_file(&params, std::path::Path::new("."), None, None, None).unwrap();
 
         let written = std::fs::read_to_string(&file_path).unwrap();
         assert_eq!(written, "console.log(\"hello\");\n");
@@ -287,7 +295,7 @@ mod tests {
             path: file_path.to_str().unwrap().to_string(),
             content: "new content".to_string(),
         };
-        process_write_to_file(&params, std::path::Path::new("."), None, None).unwrap();
+        process_write_to_file(&params, std::path::Path::new("."), None, None, None).unwrap();
 
         // Original should have new content
         assert_eq!(std::fs::read_to_string(&file_path).unwrap(), "new content");
@@ -307,7 +315,7 @@ mod tests {
             path: file_path.to_str().unwrap().to_string(),
             content: "fresh content".to_string(),
         };
-        process_write_to_file(&params, std::path::Path::new("."), None, None).unwrap();
+        process_write_to_file(&params, std::path::Path::new("."), None, None, None).unwrap();
 
         // No backup should exist
         let backup_path = dir.path().join("new_file.txt.bak");
@@ -350,7 +358,7 @@ mod tests {
             path: file_path.to_str().unwrap().to_string(),
             content,
         };
-        process_write_to_file(&params, std::path::Path::new("."), None, None).unwrap();
+        process_write_to_file(&params, std::path::Path::new("."), None, None, None).unwrap();
 
         let written = std::fs::read_to_string(&file_path).unwrap();
         assert_eq!(written, "if (x < 10 && y > 5)");
@@ -380,7 +388,7 @@ mod tests {
             path: file_path.to_str().unwrap().to_string(),
             content: "  1 | fn main() {\n  2 |     println!(\"hello\");\n  3 | }\n".to_string(),
         };
-        process_write_to_file(&params, std::path::Path::new("."), None, None).unwrap();
+        process_write_to_file(&params, std::path::Path::new("."), None, None, None).unwrap();
 
         let written = std::fs::read_to_string(&file_path).unwrap();
         assert_eq!(written, "fn main() {\n    println!(\"hello\");\n}\n");
@@ -396,7 +404,7 @@ mod tests {
             path: file_path.to_str().unwrap().to_string(),
             content: "```\n  1 | x < 10\n  2 | y > 5\n```".to_string(),
         };
-        process_write_to_file(&params, std::path::Path::new("."), None, None).unwrap();
+        process_write_to_file(&params, std::path::Path::new("."), None, None, None).unwrap();
 
         let written = std::fs::read_to_string(&file_path).unwrap();
         assert_eq!(written, "x < 10\ny > 5\n");
@@ -436,7 +444,7 @@ mod tests {
             content: entity_content.clone(),
         };
         // With Claude model → entities preserved
-        process_write_to_file(&params, std::path::Path::new("."), None, Some("claude-3.5-sonnet")).unwrap();
+        process_write_to_file(&params, std::path::Path::new("."), None, None, Some("claude-3.5-sonnet")).unwrap();
         let written = std::fs::read_to_string(&file_path).unwrap();
         assert_eq!(written, entity_content);
     }

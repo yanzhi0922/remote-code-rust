@@ -37,7 +37,7 @@ impl MiniMaxConfig {
         Some(Self {
             api_key,
             base_url,
-            group_id: settings.minimax_base_url.clone(),
+            group_id: settings.minimax_group_id.clone(),
             model_id: settings.api_model_id.clone(),
             temperature: settings.model_temperature.flatten(),
             request_timeout: settings.request_timeout,
