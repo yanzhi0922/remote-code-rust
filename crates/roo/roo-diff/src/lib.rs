@@ -1,14 +1,19 @@
 //! # roo-diff
 //!
-//! MultiSearchReplace diff strategy for Roo Code Rust.
+//! Diff strategies for Roo Code Rust.
 //!
-//! This crate implements the MultiSearchReplace diff algorithm, which supports:
-//! - Exact and fuzzy matching using Levenshtein similarity
-//! - Middle-out search for finding the best match location
-//! - Indentation preservation across replacements
-//! - Multiple diff blocks in a single request
-//! - Line number handling (addition, stripping, detection)
-//! - Marker validation with helpful error messages
+//! This crate implements multiple diff algorithms:
+//!
+//! - **MultiSearchReplace**: The primary strategy supporting multiple SEARCH/REPLACE blocks
+//!   with exact and fuzzy matching, indentation preservation, and line number handling.
+//!
+//! - **UnifiedDiff**: Applies standard unified diff format (`@@ ... @@` hunks with `+`/`-`/` `
+//!   line prefixes).
+//!
+//! - **SingleSearchReplace**: A simpler single-block `<<< SEARCH` / `>>> REPLACE` strategy.
+//!
+//! - **ApplyPatch**: Codex-format patch strategy using `*** Begin Patch` / `*** End Patch`
+//!   markers with `*** Update File:` hunks.
 //!
 //! # Example
 //!
@@ -32,14 +37,22 @@
 //! assert!(result.success);
 //! ```
 
+mod apply_patch;
+mod search_replace;
 mod similarity;
 mod strategy;
 mod text_utils;
 mod types;
+mod unified_diff;
 mod validate;
 
-// Public exports
+// Public exports — strategies
 pub use strategy::MultiSearchReplaceDiffStrategy;
+pub use unified_diff::UnifiedDiffStrategy;
+pub use search_replace::SingleSearchReplaceDiffStrategy;
+pub use apply_patch::ApplyPatchDiffStrategy;
+
+// Public exports — types
 pub use types::{DiffResult, ToolProgressStatus, ToolUse, ToolUseParams};
 
 // Utility function exports

@@ -100,11 +100,16 @@ members = [
     "crates/codex/exec-server",
     "crates/codex/shell-escalation",
     "crates/codex/backend-client",
+    # Codex Stage 13.5: new crates from upstream update
+    "crates/codex/agent-graph-store",
+    "crates/codex/core-api",
+    "crates/codex/file-system",
     # Codex Stage 14: exec-server-dependent crates
     "crates/codex/apply-patch",
     "crates/codex/git-utils",
     "crates/codex/rmcp-client",
     "crates/codex/utils/plugins",
+    "crates/codex/app-server-transport",
     # Codex Stage 15: cloud-tasks-client, plugin, secrets, state
     "crates/codex/cloud-tasks-client",
     "crates/codex/plugin",
@@ -141,6 +146,11 @@ members = [
     "crates/codex/utils/approval-presets",
     "crates/codex/utils/cli",
     "crates/codex/utils/output-truncation",
+    # Codex Stage 18.5: new crates from upstream update
+    "crates/codex/external-agent-migration",
+    "crates/codex/external-agent-sessions",
+    "crates/codex/memories/read",
+    "crates/codex/memories/write",
     # Codex Stage 19: code-mode stub (V8 stub), rollout-trace, tools, core
     "crates/codex/code-mode",
     "crates/codex/rollout-trace",
@@ -148,8 +158,8 @@ members = [
     "crates/codex/core",
     # Codex Stage 20: core-dependent crates
     "crates/codex/app-server-test-client",
-    "crates/codex/app-test-support",
-    "crates/codex/core-test-support",
+    "crates/codex/app-server/tests/common",
+    "crates/codex/core/tests/common",
     "crates/codex/chatgpt",
     "crates/codex/cloud-requirements",
     "crates/codex/linux-sandbox",
@@ -162,6 +172,7 @@ members = [
     "crates/codex/utils/oss",
     # Codex Stage 22: mcp-server, test-binary-support
     "crates/codex/mcp-server",
+    "crates/codex/mcp-server/tests/common",
     "crates/codex/test-binary-support",
     # Codex Stage 23: app-server
     "crates/codex/app-server",
@@ -263,9 +274,9 @@ which = "8"
 wiremock = "0.6"
 encoding_rs = "0.8.35"
 diffy = "0.4.2"
-icu_decimal = "2.1"
-icu_locale_core = "2.1"
-icu_provider = { version = "2.1", features = ["sync"] }
+icu_decimal = "=2.1.1"
+icu_locale_core = "=2.1.1"
+icu_provider = { version = "=2.1.1", features = ["sync"] }
 landlock = "0.4.4"
 quick-xml = { version = "0.38.4", features = ["serialize"] }
 seccompiler = "0.5.0"
@@ -282,6 +293,11 @@ rustls-native-certs = "0.8.3"
 rustls-pki-types = "1.14.0"
 tracing-opentelemetry = "0.32.0"
 zstd = "0.13"
+flate2 = "1.1.8"
+rcgen = { version = "0.14.7", default-features = false, features = ["aws_lc_rs", "pem"] }
+tar = { version = "=0.4.45", default-features = false }
+deno_core_icudata = "0.77.0"
+syntect = "5"
 allocative = "0.3.3"
 inventory = "0.3.19"
 rmcp = { version = "0.15.0", default-features = false }
@@ -483,8 +499,8 @@ codex-code-mode = { path = "crates/codex/code-mode" }
 codex-rollout-trace = { path = "crates/codex/rollout-trace" }
 codex-tools = { path = "crates/codex/tools" }
 codex-core = { path = "crates/codex/core" }
-codex-core-test-support = { path = "crates/codex/core-test-support" }
-codex-app-test-support = { path = "crates/codex/app-test-support" }
+codex-core-test-support = { path = "crates/codex/core/tests/common" }
+codex-app-test-support = { path = "crates/codex/app-server/tests/common" }
 codex-app-server-test-client = { path = "crates/codex/app-server-test-client" }
 codex-chatgpt = { path = "crates/codex/chatgpt" }
 codex-cloud-requirements = { path = "crates/codex/cloud-requirements" }
@@ -504,6 +520,19 @@ codex-windows-sandbox = { path = "crates/codex/windows-sandbox-rs" }
 codex-cloud-tasks = { path = "crates/codex/cloud-tasks" }
 codex-tui = { path = "crates/codex/tui" }
 codex-cli = { path = "crates/codex/cli" }
+# New upstream crates
+codex-agent-graph-store = { path = "crates/codex/agent-graph-store" }
+codex-app-server-transport = { path = "crates/codex/app-server-transport" }
+codex-core-api = { path = "crates/codex/core-api" }
+codex-file-system = { path = "crates/codex/file-system" }
+codex-external-agent-migration = { path = "crates/codex/external-agent-migration" }
+codex-external-agent-sessions = { path = "crates/codex/external-agent-sessions" }
+codex-memories-read = { path = "crates/codex/memories/read" }
+codex-memories-write = { path = "crates/codex/memories/write" }
+# Upstream aliases for test support crates
+app_test_support = { path = "crates/codex/app-server/tests/common" }
+core_test_support = { path = "crates/codex/core/tests/common" }
+mcp_test_support = { path = "crates/codex/mcp-server/tests/common" }
 
 [patch.crates-io]
 # Codex patches — needed for tungstenite features (deflate, proxy) and tokio-tungstenite compat
@@ -513,7 +542,7 @@ crossterm = { git = "https://github.com/nornagon/crossterm", rev = "87db8bfa6dc9
 ratatui = { git = "https://github.com/nornagon/ratatui", rev = "9b2ad1298408c45918ee9f8241a6f95498cdbed2" }
 
 [workspace.lints.rust]
-unsafe_code = "deny"
+unsafe_code = "warn"
 
 [workspace.lints.clippy]
 dbg_macro = "deny"

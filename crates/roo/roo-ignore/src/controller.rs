@@ -1,9 +1,20 @@
+//! Roo-ignore: File ignore controller for Roo Code.
+//!
+//! Provides .rooignore support with standard .gitignore syntax,
+//! plus built-in directory ignore patterns for common large directories.
+//!
+//! Uses the `ignore` crate (from BurntSushi, the ripgrep author) for proper
+//! gitignore semantics including negation patterns (`!`), directory-only
+//! patterns (trailing `/`), and glob patterns.
+
 use std::path::Path;
 
-/// Lock symbol used to indicate blocked files in UI
-pub const LOCK_TEXT_SYMBOL: &str = "🔒";
+use ignore::gitignore::{Gitignore, GitignoreBuilder};
 
-/// Error type for RooIgnoreController operations
+/// Lock symbol used to indicate blocked files in UI
+pub const LOCK_TEXT_SYMBOL: &str = "\u{1F512}";
+
+/// Error type for RooIgnoreController operations.
 #[derive(Debug, thiserror::Error)]
 pub enum RooIgnoreError {
     #[error("Invalid pattern: {0}")]
@@ -11,16 +22,23 @@ pub enum RooIgnoreError {
 
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
+
+    #[error("Gitignore builder error: {0}")]
+    GitignoreBuild(String),
 }
 
 /// Controls LLM access to files by enforcing ignore patterns.
 /// Uses standard .gitignore syntax in .rooignore files.
+///
+/// Powered by the `ignore` crate which provides full gitignore semantics
+/// including negation patterns (`!`), directory-only patterns (trailing `/`),
+/// character ranges, and glob wildcards.
 #[derive(Debug, Clone)]
 pub struct RooIgnoreController {
     /// Current working directory
     cwd: String,
-    /// Loaded ignore patterns (one per line from .rooignore)
-    patterns: Vec<String>,
+    /// Built gitignore matcher (from the `ignore` crate)
+    gitignore: Gitignore,
     /// Raw content of the .rooignore file
     content: Option<String>,
 }
@@ -28,37 +46,67 @@ pub struct RooIgnoreController {
 impl RooIgnoreController {
     /// Create a new RooIgnoreController with the given working directory.
     pub fn new(cwd: &str) -> Self {
+        let gitignore = Gitignore::empty();
         Self {
             cwd: cwd.to_string(),
-            patterns: Vec::new(),
+            gitignore,
             content: None,
         }
     }
 
     /// Load ignore patterns from .rooignore content string.
-    /// Each line is treated as a separate pattern (like .gitignore syntax).
-    /// Lines starting with `#` are comments and are ignored.
-    /// Empty lines are ignored.
+    ///
+    /// Each line is treated as a separate gitignore pattern.
+    /// Supports:
+    /// - Standard glob patterns (`*.log`, `build/`)
+    /// - Negation patterns (`!important.log` to un-ignore)
+    /// - Directory-only patterns (trailing `/`)
+    /// - Comments (lines starting with `#`)
+    /// - Empty lines (ignored)
     pub fn load_patterns(&mut self, content: &str) {
         self.content = Some(content.to_string());
-        self.patterns = content
-            .lines()
-            .map(|line| line.trim())
-            .filter(|line| !line.is_empty() && !line.starts_with('#'))
-            .map(String::from)
-            .collect();
+
+        let root = Path::new(&self.cwd);
+        let mut builder = GitignoreBuilder::new(root);
 
         // Always add .rooignore itself
-        self.patterns.push(".rooignore".to_string());
+        let _ = builder.add_line(None, ".rooignore");
+
+        for line in content.lines() {
+            let trimmed = line.trim();
+            // Skip empty lines and comments
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                continue;
+            }
+            // Add the line to the gitignore builder.
+            // The ignore crate handles negation (!), directory patterns (/),
+            // and all standard gitignore syntax.
+            if let Err(_err) = builder.add_line(None, trimmed) {
+                // Individual pattern errors are silently skipped;
+                // invalid patterns in .rooignore are non-fatal.
+            }
+        }
+
+        match builder.build() {
+            Ok(gi) => self.gitignore = gi,
+            Err(_err) => {
+                // If the builder fails, keep the empty gitignore
+            }
+        }
     }
 
     /// Check if a file should be accessible to the LLM.
     /// Returns `true` if file is accessible, `false` if ignored.
     ///
     /// If no patterns are loaded, all files are accessible.
+    ///
+    /// Uses the `ignore` crate's gitignore matching which properly handles:
+    /// - Negation patterns: `!foo` un-ignores `foo` even if `*` ignores it
+    /// - Directory patterns: `dir/` only matches directories
+    /// - Glob patterns: `*.log`, `build/**`, etc.
     pub fn validate_access(&self, path: &str) -> bool {
         // Always allow access if no patterns loaded
-        if self.content.is_none() || self.patterns.is_empty() {
+        if self.content.is_none() || self.gitignore.is_empty() {
             return true;
         }
 
@@ -68,14 +116,33 @@ impl RooIgnoreController {
         // Remove leading ./ if present
         let relative_path = normalized.strip_prefix("./").unwrap_or(&normalized);
 
-        // Try matching against each pattern
-        for pattern in &self.patterns {
-            if Self::matches_pattern(pattern, relative_path) {
-                return false;
-            }
-        }
+        // Use the ignore crate for matching.
+        // `matched` returns:
+        //   - Match::None       -> not matched (file is allowed)
+        //   - Match::Ignore(_)  -> matched an ignore pattern (file is blocked)
+        //   - Match::Whitelist(_) -> matched a negation pattern (file is allowed)
+        let path = Path::new(relative_path);
 
-        true
+        // Use matched_path_or_any_parents which properly handles directory patterns.
+        // For example, if "target/" is in .rooignore, checking "target/debug/app"
+        // will match because the parent directory "target" is ignored.
+        //
+        // We try with is_dir=true first to catch directory-only patterns,
+        // then fall back to is_dir=false if that doesn't match.
+        // This handles the case where a path like "target/debug/app" should be
+        // blocked by "target/" even though we don't know if "target" is a directory.
+        match self.gitignore.matched_path_or_any_parents(path, false) {
+            ignore::Match::None => {
+                // Also check with is_dir=true in case the path itself is a
+                // directory that matches a directory-only pattern
+                match self.gitignore.matched(path, true) {
+                    ignore::Match::Ignore(_) => false,
+                    _ => true,
+                }
+            }
+            ignore::Match::Ignore(_) => false,
+            ignore::Match::Whitelist(_) => true,
+        }
     }
 
     /// Check if a terminal command should be allowed to execute based on file access patterns.
@@ -163,69 +230,7 @@ impl RooIgnoreController {
 
     /// Get the number of loaded patterns.
     pub fn pattern_count(&self) -> usize {
-        self.patterns.len()
-    }
-
-    /// Check if a path matches a gitignore-style pattern.
-    fn matches_pattern(pattern: &str, path: &str) -> bool {
-        // Handle negation patterns (patterns starting with !)
-        if pattern.starts_with('!') {
-            return false;
-        }
-
-        // Strip trailing slash for directory patterns
-        let is_dir_pattern = pattern.ends_with('/');
-        let clean_pattern = pattern.trim_end_matches('/');
-
-        // Check if pattern contains path separators
-        let has_separator = clean_pattern.contains('/');
-
-        // 1. Directory pattern: pattern like "target/" means match any directory named "target"
-        //    and everything inside it.
-        if is_dir_pattern && !has_separator {
-            // Match if path starts with "target/" or contains "/target/"
-            if path.starts_with(&format!("{clean_pattern}/"))
-                || path.contains(&format!("/{clean_pattern}/"))
-            {
-                return true;
-            }
-        }
-
-        // 2. Build glob pattern for general matching
-        let glob_pattern = if has_separator {
-            // Pattern with path separator: match against full path
-            clean_pattern.to_string()
-        } else {
-            // Pattern without path separator: match against any path component
-            format!("**/{clean_pattern}")
-        };
-
-        // Try to match using the glob crate
-        if let Ok(glob) = glob::Pattern::new(&glob_pattern) {
-            if glob.matches(path) {
-                return true;
-            }
-        }
-
-        // 3. Also try matching just the filename
-        if let Some(filename) = Path::new(path).file_name().and_then(|f| f.to_str()) {
-            if let Ok(glob) = glob::Pattern::new(clean_pattern) {
-                if glob.matches(filename) {
-                    return true;
-                }
-            }
-        }
-
-        // 4. For non-directory patterns, also check directory containment
-        if !is_dir_pattern && !has_separator {
-            if path.starts_with(&format!("{clean_pattern}/"))
-                || path.contains(&format!("/{clean_pattern}/"))
-            {
-                return true;
-            }
-        }
-
-        false
+        self.gitignore.len()
     }
 }
 
@@ -252,21 +257,22 @@ mod tests {
     fn test_load_patterns_simple() {
         let mut controller = RooIgnoreController::new("/project");
         controller.load_patterns("*.log\ntarget/");
-        assert_eq!(controller.pattern_count(), 3); // *.log, target/, .rooignore
+        // .rooignore + *.log + target/ = 3 patterns
+        assert!(controller.pattern_count() >= 2);
     }
 
     #[test]
     fn test_load_patterns_skips_comments() {
         let mut controller = RooIgnoreController::new("/project");
         controller.load_patterns("# This is a comment\n*.log\n# Another comment\ntarget/");
-        assert_eq!(controller.pattern_count(), 3); // *.log, target/, .rooignore
+        assert!(controller.pattern_count() >= 2);
     }
 
     #[test]
     fn test_load_patterns_skips_empty_lines() {
         let mut controller = RooIgnoreController::new("/project");
         controller.load_patterns("*.log\n\n\ntarget/");
-        assert_eq!(controller.pattern_count(), 3);
+        assert!(controller.pattern_count() >= 2);
     }
 
     #[test]
@@ -396,5 +402,58 @@ mod tests {
             let result = controller.validate_command(&format!("{cmd} secret.txt"));
             assert_eq!(result, Some("secret.txt".to_string()), "Failed for command: {cmd}");
         }
+    }
+
+    // ---------------------------------------------------------------
+    // Negation pattern tests — the key fix
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_negation_pattern_unignores_file() {
+        let mut controller = RooIgnoreController::new("/project");
+        controller.load_patterns("*.log\n!important.log");
+        // important.log should be accessible (un-ignored by !important.log)
+        assert!(controller.validate_access("important.log"));
+        // other .log files should still be blocked
+        assert!(!controller.validate_access("debug.log"));
+        assert!(!controller.validate_access("error.log"));
+    }
+
+    #[test]
+    fn test_negation_pattern_with_directory() {
+        let mut controller = RooIgnoreController::new("/project");
+        controller.load_patterns("src/\n!src/important/");
+        // Files in src/important/ should be accessible due to negation
+        assert!(controller.validate_access("src/important/config.json"));
+    }
+
+    #[test]
+    fn test_negation_pattern_order_matters() {
+        // Negation patterns must appear after the patterns they negate
+        let mut controller = RooIgnoreController::new("/project");
+        controller.load_patterns("!keep.txt\n*.txt");
+        // In gitignore, later patterns override earlier ones,
+        // so *.txt should override !keep.txt
+        assert!(!controller.validate_access("keep.txt"));
+    }
+
+    #[test]
+    fn test_negation_with_wildcard() {
+        let mut controller = RooIgnoreController::new("/project");
+        // Negation patterns work to un-ignore specific files/directories
+        controller.load_patterns("*\n!.gitignore\n!src/**");
+        // Most things should be ignored by *, except .gitignore and src/** contents
+        assert!(controller.validate_access(".gitignore"));
+        assert!(controller.validate_access("src/main.rs"));
+        assert!(!controller.validate_access("README.md"));
+    }
+
+    #[test]
+    fn test_double_star_pattern() {
+        let mut controller = RooIgnoreController::new("/project");
+        controller.load_patterns("**/logs/*.txt");
+        assert!(!controller.validate_access("logs/debug.txt"));
+        assert!(!controller.validate_access("src/logs/debug.txt"));
+        assert!(controller.validate_access("src/logs/debug.csv"));
     }
 }

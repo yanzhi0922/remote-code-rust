@@ -3,17 +3,29 @@
 //! Derived from `src/utils/tiktoken.ts`.
 //!
 //! Provides accurate token counting for content blocks using the o200k_base
-//! tokenizer encoding. Falls back to character-based estimation when the
-//! tiktoken library is not available.
+//! tokenizer encoding (GPT-4o family). Falls back to character-based estimation
+//! when the tiktoken library fails to initialize.
+
+use std::sync::LazyLock;
 
 use roo_types::api::{ContentBlock, ImageSource, ToolResultContent};
+use tiktoken_rs::CoreBPE;
 
 /// Fudge factor to account for tiktoken not always being accurate.
-/// Source: `src/utils/tiktoken.ts` — `TOKEN_FUDGE_FACTOR`
+/// Source: `src/utils/tiktoken.ts` -- `TOKEN_FUDGE_FACTOR`
 const TOKEN_FUDGE_FACTOR: f64 = 1.5;
 
 /// Conservative estimate for unknown images.
 const DEFAULT_IMAGE_TOKENS: u64 = 300;
+
+/// Lazily initialized BPE tokenizer using o200k_base encoding (GPT-4o family).
+/// Falls back to `cl100k_base` if o200k_base fails, and ultimately to `None`
+/// if neither can be loaded.
+static BPE: LazyLock<Option<CoreBPE>> = LazyLock::new(|| {
+    tiktoken_rs::o200k_base()
+        .ok()
+        .or_else(|| tiktoken_rs::cl100k_base().ok())
+});
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -21,7 +33,7 @@ const DEFAULT_IMAGE_TOKENS: u64 = 300;
 
 /// Counts tokens for a slice of content blocks.
 ///
-/// Source: `src/utils/tiktoken.ts` — `tiktoken`
+/// Source: `src/utils/tiktoken.ts` -- `tiktoken`
 ///
 /// Uses the o200k_base encoding (GPT-4o family) with a fudge factor of 1.5x
 /// to account for encoding differences between tiktoken and actual API tokenizers.
@@ -53,7 +65,7 @@ fn count_block_tokens(block: &ContentBlock) -> u64 {
             if text.is_empty() {
                 0
             } else {
-                estimate_tokens_for_text(text)
+                count_tokens_for_text(text)
             }
         }
         ContentBlock::Image { source } => count_image_tokens(source),
@@ -62,7 +74,7 @@ fn count_block_tokens(block: &ContentBlock) -> u64 {
             if serialized.is_empty() {
                 0
             } else {
-                estimate_tokens_for_text(&serialized)
+                count_tokens_for_text(&serialized)
             }
         }
         ContentBlock::ToolResult {
@@ -75,14 +87,14 @@ fn count_block_tokens(block: &ContentBlock) -> u64 {
             if serialized.is_empty() {
                 0
             } else {
-                estimate_tokens_for_text(&serialized)
+                count_tokens_for_text(&serialized)
             }
         }
         ContentBlock::Thinking { thinking, .. } => {
             if thinking.is_empty() {
                 0
             } else {
-                estimate_tokens_for_text(thinking)
+                count_tokens_for_text(thinking)
             }
         }
         ContentBlock::RedactedThinking { data } => {
@@ -92,14 +104,24 @@ fn count_block_tokens(block: &ContentBlock) -> u64 {
     }
 }
 
-/// Estimates tokens for a text string using character-based heuristic.
+/// Counts tokens for a text string using real BPE encoding.
 ///
-/// Uses the ~4 chars/token approximation when tiktoken is not available.
-/// When tiktoken-rs becomes available, this should be replaced with
-/// actual BPE encoding.
-fn estimate_tokens_for_text(text: &str) -> u64 {
-    // Simple heuristic: ~4 characters per token for English text
-    // This matches the default implementation in the Provider trait
+/// Uses the `o200k_base` encoding (same as the TS tiktoken implementation).
+/// Falls back to chars/4 heuristic if BPE encoding fails.
+fn count_tokens_for_text(text: &str) -> u64 {
+    if let Some(bpe) = BPE.as_ref() {
+        let tokens = bpe.encode_with_special_tokens(text);
+        tokens.len() as u64
+    } else {
+        // Fallback: simple heuristic ~4 characters per token
+        fallback_estimate(text)
+    }
+}
+
+/// Fallback token estimation using character-based heuristic.
+///
+/// Uses ~4 chars/token approximation when BPE encoding is unavailable.
+fn fallback_estimate(text: &str) -> u64 {
     (text.len() as u64).div_ceil(4)
 }
 
@@ -120,7 +142,7 @@ fn count_image_tokens(source: &ImageSource) -> u64 {
 
 /// Serializes a tool_use block to text for token counting.
 ///
-/// Source: `src/utils/tiktoken.ts` — `serializeToolUse`
+/// Source: `src/utils/tiktoken.ts` -- `serializeToolUse`
 fn serialize_tool_use(name: &str, input: &serde_json::Value) -> String {
     let mut parts = vec![format!("Tool: {name}")];
     if !input.is_null() {
@@ -134,7 +156,7 @@ fn serialize_tool_use(name: &str, input: &serde_json::Value) -> String {
 
 /// Serializes a tool_result block to text for token counting.
 ///
-/// Source: `src/utils/tiktoken.ts` — `serializeToolResult`
+/// Source: `src/utils/tiktoken.ts` -- `serializeToolResult`
 fn serialize_tool_result(
     tool_use_id: &str,
     content: &[ToolResultContent],
@@ -176,9 +198,24 @@ mod tests {
             text: "Hello, world!".to_string(),
         }];
         let tokens = count_tokens(&content).await;
-        // 13 chars / 4 = ~3.25, ceil = 4, * 1.5 = 6
+        // With real BPE, "Hello, world!" is ~4 tokens, * 1.5 = 6
         assert!(tokens > 0);
-        assert!(tokens >= 4); // At least the raw estimate
+        assert!(tokens >= 3); // BPE should produce at least 3 tokens
+    }
+
+    #[tokio::test]
+    async fn test_count_tokens_long_text() {
+        let long_text = "The quick brown fox jumps over the lazy dog. ".repeat(10);
+        let content = vec![ContentBlock::Text {
+            text: long_text.clone(),
+        }];
+        let tokens = count_tokens(&content).await;
+        // BPE should give a more accurate count than chars/4
+        // For 440 chars, BPE produces roughly 80-90 tokens
+        assert!(tokens > 0);
+        // Verify it's less than chars/4 * fudge (which would be ~165)
+        let chars_per_4 = (long_text.len() as f64 / 4.0 * TOKEN_FUDGE_FACTOR).ceil() as u64;
+        assert!(tokens <= chars_per_4 * 2); // generous bound
     }
 
     #[tokio::test]
@@ -272,12 +309,34 @@ mod tests {
     }
 
     #[test]
-    fn test_estimate_tokens_for_text() {
+    fn test_count_tokens_for_text_bpe() {
+        // "Hello" should be 1 token in BPE
+        let tokens = count_tokens_for_text("Hello");
+        assert!(tokens >= 1);
+
+        // "Hello, world!" should be ~4 tokens in o200k_base
+        let tokens = count_tokens_for_text("Hello, world!");
+        assert!(tokens >= 2);
+    }
+
+    #[test]
+    fn test_count_tokens_for_text_empty() {
+        assert_eq!(count_tokens_for_text(""), 0);
+    }
+
+    #[test]
+    fn test_fallback_estimate() {
         // "Hello" = 5 chars, 5/4 = 1.25, ceil = 2
-        assert_eq!(estimate_tokens_for_text("Hello"), 2);
+        assert_eq!(fallback_estimate("Hello"), 2);
         // "Hello, world!" = 13 chars, 13/4 = 3.25, ceil = 4
-        assert_eq!(estimate_tokens_for_text("Hello, world!"), 4);
+        assert_eq!(fallback_estimate("Hello, world!"), 4);
         // Empty string
-        assert_eq!(estimate_tokens_for_text(""), 0);
+        assert_eq!(fallback_estimate(""), 0);
+    }
+
+    #[test]
+    fn test_bpe_initializer_succeeds() {
+        // Verify that the BPE tokenizer initialized successfully
+        assert!(BPE.is_some(), "BPE tokenizer should initialize successfully");
     }
 }
