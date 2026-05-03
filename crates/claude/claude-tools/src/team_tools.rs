@@ -287,6 +287,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn sanitize_team_name_handles_special_chars() {
         assert_eq!(sanitize_team_name("my-team"), "my-team");
         assert_eq!(sanitize_team_name("my team"), "my_team");
@@ -295,12 +296,14 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn sanitize_team_name_preserves_alphanumeric() {
         assert_eq!(sanitize_team_name("team123"), "team123");
         assert_eq!(sanitize_team_name("My-Team_2"), "My-Team_2");
     }
 
     #[test]
+    #[serial_test::serial]
     fn team_delete_returns_noop_when_session_has_no_team() {
         let result = with_base_dir_override(PathBuf::from("/tmp"), || {
             let input = json!({});
@@ -395,6 +398,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn team_delete_fails_with_active_members() {
         let temp = TempDir::new().expect("temp dir");
         let team_dir = temp.path().join("active-team");
@@ -429,6 +433,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn team_list_returns_empty_when_no_teams() {
         let temp = TempDir::new().expect("temp dir");
         let result = with_base_dir_override(temp.path().to_path_buf(), || {
@@ -444,6 +449,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn team_list_returns_existing_teams() {
         let temp = TempDir::new().expect("temp dir");
         let team_dir = temp.path().join("my-team");
@@ -476,6 +482,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn resolve_team_dir_sanitizes_name() {
         let dir =
             with_base_dir_override(PathBuf::from("/tmp"), || resolve_team_dir("my cool team"));
@@ -496,6 +503,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn team_delete_json_output_format() {
         let temp = TempDir::new().expect("temp dir");
         let result = with_base_dir_override(temp.path().to_path_buf(), || {
