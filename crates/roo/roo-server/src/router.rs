@@ -69,6 +69,15 @@ impl Router {
         }
         responses
     }
+
+    /// Drain all pending event notifications from the handler.
+    ///
+    /// After processing a request-response cycle, the server calls this to
+    /// retrieve any task events that were queued by event listeners and
+    /// forward them to the client as JSON-RPC notifications.
+    pub fn drain_notifications(&self) -> Vec<Message> {
+        self.handler.drain_notifications()
+    }
 }
 
 /// List of all supported JSON-RPC method names.

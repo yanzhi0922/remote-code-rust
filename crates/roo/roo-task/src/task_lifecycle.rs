@@ -29,10 +29,11 @@
 use std::sync::Arc;
 
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 
 use roo_checkpoint::service::ShadowCheckpointService;
 use roo_checkpoint::types::GetDiffParams;
+use roo_provider::handler::Provider;
 use roo_types::message::{ClineAsk, ClineMessage, ClineSay, MessageType};
 
 use crate::ask_say::{AskResponse, AskSayHandler, SayOptions};
@@ -159,6 +160,12 @@ pub struct TaskLifecycle {
     ///
     /// Source: TS `this.checkpointService`
     checkpoint_service: Option<ShadowCheckpointService>,
+    /// API provider for making LLM calls.
+    ///
+    /// Set by the caller before `start()` is invoked. When present,
+    /// `start_task()` will build and spawn an [`crate::AgentLoop`]
+    /// on a background thread.
+    provider: Option<Box<dyn Provider>>,
 }
 
 impl TaskLifecycle {
@@ -214,6 +221,7 @@ impl TaskLifecycle {
             max_mcp_tools_threshold: 128,
             cancellation_token: None,
             checkpoint_service: None,
+            provider: None,
         }
     }
 
@@ -237,6 +245,16 @@ impl TaskLifecycle {
     /// Set or replace the checkpoint service.
     pub fn set_checkpoint_service(&mut self, service: Option<ShadowCheckpointService>) {
         self.checkpoint_service = service;
+    }
+
+    /// Set the API provider for the agent loop.
+    ///
+    /// Must be called before `start()` if you want `start_task()` to
+    /// spawn the agent loop on a background thread. If no provider is
+    /// set, `start_task()` will complete its normal bookkeeping but
+    /// will **not** run the agent loop.
+    pub fn set_provider(&mut self, provider: Box<dyn Provider>) {
+        self.provider = Some(provider);
     }
 
     // -------------------------------------------------------------------
@@ -474,7 +492,126 @@ impl TaskLifecycle {
         // Telemetry: task created
         self.emit_telemetry_task_created();
 
+        // ── Spawn the AgentLoop on a background thread ─────────────────
+        //
+        // Source: TS `initiateTaskLoop()` (lines 2472–2504) — in TS this
+        // is called at the end of startTask() to kick off the recursive
+        // request loop. In Rust we spawn it on a dedicated OS thread
+        // because the AgentLoop may contain !Send types (e.g. git2).
+        if let Some(provider) = self.provider.take() {
+            self.spawn_agent_loop(provider);
+        } else {
+            warn!(
+                task_id = %self.task_id(),
+                "No provider set — AgentLoop will not be spawned. \
+                 Call set_provider() before start() to enable it."
+            );
+        }
+
         Ok(())
+    }
+
+    /// Build an [`AgentLoop`] from the current engine config and the given
+    /// provider, wire in the lifecycle's controllers, and spawn it on a
+    /// background OS thread.
+    ///
+    /// Events from the agent loop's engine are forwarded to this lifecycle's
+    /// engine emitter so that the server layer can deliver them to clients.
+    fn spawn_agent_loop(&mut self, provider: Box<dyn Provider>) {
+        let task_id = self.task_id().to_string();
+
+        // Build a fresh TaskEngine for the AgentLoop (it needs its own state).
+        let config = self.engine.config().clone();
+        let mut loop_engine = match TaskEngine::new(config) {
+            Ok(e) => e,
+            Err(e) => {
+                error!(task_id = %task_id, error = %e, "Failed to create engine for AgentLoop");
+                return;
+            }
+        };
+
+        // Copy over any conversation history that the lifecycle has accumulated.
+        loop_engine.set_api_conversation_history(self.engine.api_conversation_history().to_vec());
+
+        // Forward events from the loop engine back to the lifecycle engine's
+        // emitter so the server layer can drain them.
+        let lifecycle_emitter = self.engine.emitter().clone();
+        loop_engine.emitter().on(move |event: &TaskEvent| {
+            lifecycle_emitter.emit(event);
+        });
+
+        // Build the MessageBuilder with a system prompt placeholder.
+        // The AgentLoop builds the real system prompt on each iteration
+        // via environment-details injection, so an empty placeholder is
+        // safe here.
+        let message_builder = crate::MessageBuilder::new("");
+
+        // Build a default ToolDispatcher.
+        let dispatcher = crate::tool_dispatcher::default_dispatcher();
+
+        // Take the controllers that belong to the lifecycle so we can move
+        // them into the AgentLoop on its thread.
+        let roo_ignore = self.roo_ignore_controller.take();
+        let roo_protected = self.roo_protected_controller.take();
+        let file_context_tracker = self.file_context_tracker.take();
+        let diff_view = self.diff_view_provider.take();
+
+        info!(task_id = %task_id, "Spawning AgentLoop on background thread");
+
+        let spawn_task_id = task_id.clone();
+        std::thread::Builder::new()
+            .name(format!("agent-loop-{task_id}"))
+            .spawn(move || {
+                let mut agent_loop = crate::AgentLoop::new(
+                    loop_engine,
+                    provider,
+                    message_builder,
+                    dispatcher,
+                );
+
+                // Wire in controllers from the lifecycle
+                if let Some(ig) = roo_ignore {
+                    agent_loop = agent_loop.with_roo_ignore_controller(ig);
+                }
+                if let Some(pr) = roo_protected {
+                    agent_loop = agent_loop.with_roo_protected_controller(pr);
+                }
+                if let Some(tr) = file_context_tracker {
+                    agent_loop = agent_loop.with_file_context_tracker(tr);
+                }
+                if let Some(dv) = diff_view {
+                    agent_loop = agent_loop.with_diff_view_provider(dv);
+                }
+
+                // Create a minimal tokio runtime on this thread
+                let rt = match tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                {
+                    Ok(rt) => rt,
+                    Err(e) => {
+                        error!(task_id = %task_id, error = %e, "Failed to create tokio runtime for AgentLoop");
+                        return;
+                    }
+                };
+
+                match rt.block_on(agent_loop.run_loop()) {
+                    Ok(result) => {
+                        info!(
+                            task_id = %result.task_id,
+                            iterations = result.iterations,
+                            "AgentLoop completed successfully"
+                        );
+                    }
+                    Err(e) => {
+                        error!(task_id = %task_id, error = %e, "AgentLoop failed");
+                    }
+                }
+            })
+            .map_err(|e| {
+                error!(task_id = %spawn_task_id, error = %e, "Failed to spawn AgentLoop thread");
+            })
+            .ok();
     }
 
     /// Check MCP tools count and warn if too many.

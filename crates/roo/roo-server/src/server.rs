@@ -8,7 +8,7 @@
 use std::sync::Arc;
 
 use tokio::sync::RwLock;
-use tracing::{error, info, instrument};
+use tracing::{debug, error, info, instrument};
 
 use roo_app::App;
 
@@ -111,7 +111,8 @@ impl Server {
         self.run_message_loop(&router, transport).await
     }
 
-    /// Core message loop — read messages, route them, write responses.
+    /// Core message loop — read messages, route them, write responses,
+    /// and forward any pending event notifications to the client.
     async fn run_message_loop<T: Transport>(
         &self,
         router: &Router,
@@ -145,6 +146,21 @@ impl Server {
             // Write the response.
             if let Err(e) = transport.send(&response).await {
                 error!(error = %e, "Failed to write response");
+            }
+
+            // Drain any pending event notifications that were generated
+            // during request processing (e.g. task started, state changed,
+            // tool executed) and forward them to the client as JSON-RPC
+            // notifications (no id field).
+            let notifications = router.drain_notifications();
+            for notification in &notifications {
+                if let Err(e) = transport.send(notification).await {
+                    error!(error = %e, "Failed to write notification");
+                    // Continue sending remaining notifications on error
+                }
+            }
+            if !notifications.is_empty() {
+                debug!(count = notifications.len(), "Forwarded notifications to client");
             }
         }
     }

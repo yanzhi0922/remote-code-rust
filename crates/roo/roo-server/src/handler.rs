@@ -683,44 +683,59 @@ impl Handler {
             app.cwd().to_string()
         };
 
-        // Create a TaskEngine, then wrap it in a TaskLifecycle
+        // Create a TaskLifecycle via the App so services (MCP Hub, Terminal
+        // Registry, Message Queue, Telemetry) are wired in automatically.
         let mut task_config = roo_task::types::TaskConfig::new(&task_id, &cwd);
         task_config.mode = mode.to_string();
         task_config.task_text = if text.is_empty() { None } else { Some(text.to_string()) };
         task_config.images = images;
 
-        match roo_task::engine::TaskEngine::new(task_config) {
-            Ok(engine) => {
-                let lifecycle = TaskLifecycle::new(engine);
-
-                // Register event forwarder before storing
-                self.register_event_forwarder(&lifecycle);
-
-                // Store lifecycle in TaskManager, set as active task
-                self.task_manager.create_task(task_id.clone(), lifecycle);
-
-                // Now start the task via TaskLifecycle
-                let lifecycle_arc = self.task_manager.get_task(&task_id).unwrap();
-                let mut lc = lifecycle_arc.lock().await;
-                match lc.start().await {
-                    Ok(()) => Ok(json!({
+        let lifecycle = {
+            let app = self.app.read().await;
+            match app.create_task_lifecycle(task_config) {
+                Ok(lc) => lc,
+                Err(e) => {
+                    error!(error = %e, "Failed to create task lifecycle");
+                    return Ok(json!({
                         "taskId": task_id,
                         "mode": mode,
-                        "status": "started",
-                    })),
-                    Err(e) => {
-                        error!(error = %e, "Failed to start task lifecycle");
-                        Ok(json!({
-                            "taskId": task_id,
-                            "mode": mode,
-                            "status": "error",
-                            "error": e.to_string(),
-                        }))
-                    }
+                        "status": "error",
+                        "error": e.to_string(),
+                    }));
                 }
             }
+        };
+
+        // Register event forwarder before storing
+        self.register_event_forwarder(&lifecycle);
+
+        // Store lifecycle in TaskManager, set as active task
+        self.task_manager.create_task(task_id.clone(), lifecycle);
+
+        // Build the API provider from the app's provider settings and inject
+        // it into the lifecycle so that `start()` can spawn the AgentLoop.
+        let lifecycle_arc = self.task_manager.get_task(&task_id).unwrap();
+        {
+            let app = self.app.read().await;
+            let settings = app.provider_settings();
+            if let Ok(provider) = roo_provider::handler::build_api_handler(settings) {
+                let mut lc = lifecycle_arc.lock().await;
+                lc.set_provider(provider);
+            } else {
+                debug!("No API provider available; task will start without AgentLoop");
+            }
+        }
+
+        // Now start the task via TaskLifecycle
+        let mut lc = lifecycle_arc.lock().await;
+        match lc.start().await {
+            Ok(()) => Ok(json!({
+                "taskId": task_id,
+                "mode": mode,
+                "status": "started",
+            })),
             Err(e) => {
-                error!(error = %e, "Failed to create task engine");
+                error!(error = %e, "Failed to start task lifecycle");
                 Ok(json!({
                     "taskId": task_id,
                     "mode": mode,

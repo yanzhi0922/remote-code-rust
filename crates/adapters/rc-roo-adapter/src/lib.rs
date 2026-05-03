@@ -58,6 +58,11 @@ use roo_task::types::TaskConfig;
 use roo_task::TaskEvent as RooTaskEvent;
 use roo_terminal::TerminalRegistry;
 use roo_types::api::ApiMessage;
+use roo_types::mcp::McpServerConnection;
+use roo_ignore::RooIgnoreController;
+use roo_protect::RooProtectedController;
+use roo_context_tracking::{FileContextTracker, InMemoryMetadataStore};
+use roo_editor::diff_view::DiffViewProvider;
 
 // ---------------------------------------------------------------------------
 // Provider builder — mirrors roo-cli's build_handler()
@@ -738,6 +743,178 @@ impl RooInProcessAdapter {
         debug!(allowed, "Roo approval resolution received (auto-approval mode)");
         Ok(())
     }
+
+    /// Inner body of the Roo agent loop, extracted so it can be wrapped in
+    /// `catch_unwind`.  Runs on a dedicated OS thread (not a tokio task)
+    /// because `AgentLoop` contains !Send types (`git2::Repository`).
+    #[allow(clippy::too_many_arguments)]
+    fn run_agent_loop_inner(
+        task_id: String,
+        cwd_str: String,
+        message_owned: String,
+        auto_approval: bool,
+        session_id: String,
+        tx: tokio::sync::mpsc::Sender<UnifiedAgentEvent>,
+        history_snapshot: Vec<ApiMessage>,
+        provider: Box<dyn Provider>,
+        message_builder: MessageBuilder,
+        dispatcher: ToolDispatcher,
+        history: Arc<tokio::sync::Mutex<Vec<ApiMessage>>>,
+    ) {
+        let config = TaskConfig::new(&task_id, &cwd_str)
+            .with_mode("code")
+            .with_task_text(&message_owned)
+            .with_auto_approval(auto_approval)
+            .with_start_task(true);
+
+        let mut engine = match TaskEngine::new(config) {
+            Ok(e) => e,
+            Err(e) => {
+                let _ = tx.blocking_send(UnifiedAgentEvent::Error {
+                    session_id: session_id.clone(),
+                    message: format!("TaskEngine creation failed: {}", e),
+                    recoverable: false,
+                });
+                return;
+            }
+        };
+
+        if !history_snapshot.is_empty() {
+            engine.set_api_conversation_history(history_snapshot);
+        }
+
+        let tx_ev = tx.clone();
+        let sid_ev = session_id.clone();
+        engine.emitter().on(move |event: &RooTaskEvent| {
+            if let Some(unified) = map_task_event(event, &sid_ev) {
+                let _ = tx_ev.blocking_send(unified);
+            }
+        });
+
+        let loop_config = AgentLoopConfig {
+            auto_approval_enabled: auto_approval,
+            auto_approval: AutoApprovalState {
+                auto_approval_enabled: auto_approval,
+                always_allow_read_only: true,
+                always_allow_read_only_outside_workspace: true,
+                always_allow_write: true,
+                always_allow_write_outside_workspace: true,
+                always_allow_write_protected: false,
+                always_allow_mcp: true,
+                always_allow_mode_switch: true,
+                always_allow_subtasks: true,
+                always_allow_execute: true,
+                always_allow_followup_questions: true,
+                ..AutoApprovalState::default()
+            },
+            enable_condense: true,
+            ..AgentLoopConfig::default()
+        };
+
+        // --- Wire service controllers into AgentLoop ---
+
+        // RooIgnoreController: load .rooignore patterns if the file exists
+        let mut ignore_controller = RooIgnoreController::new(&cwd_str);
+        let rooignore_path = std::path::Path::new(&cwd_str).join(".rooignore");
+        if let Ok(content) = std::fs::read_to_string(&rooignore_path) {
+            ignore_controller.load_patterns(&content);
+            info!(
+                path = %rooignore_path.display(),
+                "Loaded .rooignore patterns"
+            );
+        }
+
+        // RooProtectedController: enforce write-protection on Roo config files
+        let protected_controller = RooProtectedController::new(&cwd_str);
+
+        // FileContextTracker: track file reads/edits for stale context detection
+        let context_tracker = FileContextTracker::new(&task_id, InMemoryMetadataStore::new());
+
+        // DiffViewProvider: manage file editing sessions with diff tracking
+        let diff_view_provider = DiffViewProvider::new_default();
+
+        // MCP servers: empty by default — real MCP wiring requires an async
+        // runtime and McpHub; the adapter can be extended later to accept
+        // pre-connected servers via configuration.
+        let mcp_servers: Vec<McpServerConnection> = Vec::new();
+
+        let mut agent_loop =
+            AgentLoop::new(engine, provider, message_builder, dispatcher)
+                .with_config(loop_config)
+                .with_roo_ignore_controller(ignore_controller)
+                .with_roo_protected_controller(protected_controller)
+                .with_file_context_tracker(context_tracker)
+                .with_diff_view_provider(diff_view_provider)
+                .with_mcp_servers(mcp_servers);
+
+        let _ = tx.blocking_send(UnifiedAgentEvent::Ready);
+
+        let rt = match tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+        {
+            Ok(rt) => rt,
+            Err(e) => {
+                tracing::warn!(error = %e, "Failed to create tokio runtime for agent loop");
+                return;
+            }
+        };
+
+        match rt.block_on(agent_loop.run_loop()) {
+            Ok(result) => {
+                tracing::info!(
+                    task_id = %result.task_id,
+                    iterations = result.iterations,
+                    "AgentLoop completed successfully"
+                );
+
+                {
+                    let engine_history = agent_loop.engine().api_conversation_history();
+                    let mut h = history.blocking_lock();
+                    *h = engine_history.to_vec();
+                }
+
+                let final_message = result.final_message.clone().unwrap_or_default();
+                let usage_info = claude_agent_protocol::events::UsageInfo {
+                    input_tokens: result.token_usage.total_tokens_in,
+                    output_tokens: result.token_usage.total_tokens_out,
+                    cache_read: result.token_usage.total_cache_reads.unwrap_or(0),
+                    cache_write: result.token_usage.total_cache_writes.unwrap_or(0),
+                };
+
+                let tool_calls: Vec<claude_agent_protocol::events::ToolCallInfo> = result
+                    .tool_usage
+                    .iter()
+                    .map(|(name, count)| claude_agent_protocol::events::ToolCallInfo {
+                        id: String::new(),
+                        name: name.clone(),
+                        input: serde_json::json!({}),
+                        output: serde_json::json!({ "count": count }),
+                    })
+                    .collect();
+
+                let _ = tx.blocking_send(UnifiedAgentEvent::Completed {
+                    session_id,
+                    result: claude_agent_protocol::events::AgentResult {
+                        response_text: final_message,
+                        tool_calls,
+                        usage: usage_info,
+                        cost: Some(result.token_usage.total_cost),
+                    },
+                });
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "AgentLoop ended with error");
+                let _ = tx.blocking_send(UnifiedAgentEvent::Error {
+                    session_id,
+                    message: format!("AgentLoop error: {}", e),
+                    recoverable: false,
+                });
+            }
+        }
+
+        tracing::debug!("Roo native agent loop background task finished");
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -833,144 +1010,37 @@ impl AgentAdapter for RooInProcessAdapter {
         // thread boundary, so the closure only needs to capture Send-safe
         // components (provider, message_builder, dispatcher, etc.).
         let handle = std::thread::spawn(move || {
-            // ── Build TaskConfig ──────────────────────────────────────
-            let config = TaskConfig::new(&task_id, &cwd_str)
-                .with_mode("code")
-                .with_task_text(&message_owned)
-                .with_auto_approval(auto_approval)
-                .with_start_task(true);
+            // Wrap entire agent loop body in catch_unwind so a panic inside
+            // the Roo AgentLoop (which contains !Send types like git2::Repository)
+            // is converted to an error event instead of crashing the whole
+            // Tauri process.
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                Self::run_agent_loop_inner(
+                    task_id,
+                    cwd_str,
+                    message_owned,
+                    auto_approval,
+                    session_id_for_completion,
+                    tx,
+                    history_snapshot,
+                    provider,
+                    message_builder,
+                    dispatcher,
+                    history,
+                );
+            }));
 
-            // ── Create TaskEngine ─────────────────────────────────────
-            let mut engine = match TaskEngine::new(config) {
-                Ok(e) => e,
-                Err(e) => {
-                    let _ = tx.blocking_send(UnifiedAgentEvent::Error {
-                        session_id: session_id_for_completion,
-                        message: format!("TaskEngine creation failed: {}", e),
-                        recoverable: false,
-                    });
-                    return;
-                }
-            };
-
-            // Pre-populate with existing conversation history.
-            if !history_snapshot.is_empty() {
-                engine.set_api_conversation_history(history_snapshot);
+            if let Err(panic_payload) = result {
+                // Best-effort: try to extract a string message from the panic.
+                let msg = if let Some(s) = panic_payload.downcast_ref::<&str>() {
+                    s.to_string()
+                } else if let Some(s) = panic_payload.downcast_ref::<String>() {
+                    s.clone()
+                } else {
+                    "Roo agent loop panicked (unknown cause)".to_string()
+                };
+                tracing::error!(error = %msg, "Roo agent loop panicked — isolated to thread");
             }
-
-            // ── Register event bridge on the emitter ──────────────────
-            let tx_ev = tx.clone();
-            let sid_ev = session_id_for_completion.clone();
-            engine.emitter().on(move |event: &RooTaskEvent| {
-                if let Some(unified) = map_task_event(event, &sid_ev) {
-                    let _ = tx_ev.blocking_send(unified);
-                }
-            });
-
-            // ── Build AgentLoopConfig ─────────────────────────────────
-            let loop_config = AgentLoopConfig {
-                auto_approval_enabled: auto_approval,
-                auto_approval: AutoApprovalState {
-                    auto_approval_enabled: auto_approval,
-                    always_allow_read_only: true,
-                    always_allow_read_only_outside_workspace: true,
-                    always_allow_write: true,
-                    always_allow_write_outside_workspace: true,
-                    always_allow_write_protected: false,
-                    always_allow_mcp: true,
-                    always_allow_mode_switch: true,
-                    always_allow_subtasks: true,
-                    always_allow_execute: true,
-                    always_allow_followup_questions: true,
-                    ..AutoApprovalState::default()
-                },
-                enable_condense: true,
-                ..AgentLoopConfig::default()
-            };
-
-            // ── Create AgentLoop (inside the thread — never crosses boundary) ──
-            let mut agent_loop =
-                AgentLoop::new(engine, provider, message_builder, dispatcher)
-                    .with_config(loop_config);
-
-            // Emit initial Ready event.
-            let _ = tx.blocking_send(UnifiedAgentEvent::Ready);
-
-            // ── Create a single-threaded tokio runtime ────────────────
-            // AgentLoop::run_loop() is async and internally uses
-            // tokio::spawn for stream consumption.  A current-thread
-            // runtime is sufficient because the spawned stream-consumer
-            // only captures Send-safe types (stream, cancel_token, tx).
-            let rt = match tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-            {
-                Ok(rt) => rt,
-                Err(e) => {
-                    warn!(error = %e, "Failed to create tokio runtime for agent loop");
-                    return;
-                }
-            };
-
-            // ── Run the agent loop ────────────────────────────────────
-            match rt.block_on(agent_loop.run_loop()) {
-                Ok(result) => {
-                    info!(
-                        task_id = %result.task_id,
-                        iterations = result.iterations,
-                        "AgentLoop completed successfully"
-                    );
-
-                    // Update conversation history from the engine.
-                    {
-                        let engine_history = agent_loop.engine().api_conversation_history();
-                        let mut h = history.blocking_lock();
-                        *h = engine_history.to_vec();
-                    }
-
-                    // Build and emit final Completed event.
-                    let final_message = result.final_message.clone().unwrap_or_default();
-                    let usage_info = claude_agent_protocol::events::UsageInfo {
-                        input_tokens: result.token_usage.total_tokens_in,
-                        output_tokens: result.token_usage.total_tokens_out,
-                        cache_read: result.token_usage.total_cache_reads.unwrap_or(0),
-                        cache_write: result.token_usage.total_cache_writes.unwrap_or(0),
-                    };
-
-                    let tool_calls: Vec<claude_agent_protocol::events::ToolCallInfo> = result
-                        .tool_usage
-                        .iter()
-                        .map(|(name, count)| claude_agent_protocol::events::ToolCallInfo {
-                            id: String::new(),
-                            name: name.clone(),
-                            input: serde_json::json!({}),
-                            output: serde_json::json!({
-                                "count": count,
-                            }),
-                        })
-                        .collect();
-
-                    let _ = tx.blocking_send(UnifiedAgentEvent::Completed {
-                        session_id: session_id_for_completion,
-                        result: claude_agent_protocol::events::AgentResult {
-                            response_text: final_message,
-                            tool_calls,
-                            usage: usage_info,
-                            cost: Some(result.token_usage.total_cost),
-                        },
-                    });
-                }
-                Err(e) => {
-                    warn!(error = %e, "AgentLoop ended with error");
-                    let _ = tx.blocking_send(UnifiedAgentEvent::Error {
-                        session_id: session_id_for_completion,
-                        message: format!("AgentLoop error: {}", e),
-                        recoverable: false,
-                    });
-                }
-            }
-
-            debug!("Roo native agent loop background task finished");
         });
 
         let _ = cancel_token; // already stored in self.cancel_token

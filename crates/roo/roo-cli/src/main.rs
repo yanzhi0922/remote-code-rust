@@ -40,12 +40,51 @@ use roo_provider_moonshot::{MoonshotConfig, MoonshotHandler};
 use roo_provider_zai::{ZaiConfig, ZaiHandler};
 use roo_provider_aws::{AwsBedrockConfig, AwsBedrockHandler};
 use roo_task::tool_dispatcher::{
-    ToolContext, ToolDispatcher, ToolExecutionResult,
+    FileContextTrackerOps, ToolContext, ToolDispatcher, ToolExecutionResult,
     default_dispatcher_with_terminal,
 };
 use roo_terminal::TerminalRegistry;
 use roo_tools::definition::{NativeToolsOptions, get_native_tools};
 use roo_types::api::{ApiMessage, ApiStreamChunk, ContentBlock, MessageRole, ToolResultContent};
+use roo_index::CodeIndexManager;
+
+// ---------------------------------------------------------------------------
+// CLIFileContextTracker — adapter implementing FileContextTrackerOps
+// ---------------------------------------------------------------------------
+
+/// Thin adapter that wraps a [`roo_context_tracking::FileContextTracker`] with
+/// an in-memory store and implements the [`FileContextTrackerOps`] trait so it
+/// can be wired into [`ToolContext`].
+struct CliFileContextTracker {
+    inner: std::sync::Mutex<roo_context_tracking::FileContextTracker<roo_context_tracking::InMemoryMetadataStore>>,
+}
+
+impl CliFileContextTracker {
+    fn new(task_id: &str) -> Self {
+        let store = roo_context_tracking::InMemoryMetadataStore::new();
+        Self {
+            inner: std::sync::Mutex::new(
+                roo_context_tracking::FileContextTracker::new(task_id, store),
+            ),
+        }
+    }
+}
+
+impl FileContextTrackerOps for CliFileContextTracker {
+    fn track_file_read(&self, path: &str) -> Result<(), String> {
+        let mut tracker = self.inner.lock().map_err(|e| e.to_string())?;
+        tracker
+            .track_file_context_mut(path, roo_context_tracking::RecordSource::ReadTool)
+            .map_err(|e| e.to_string())
+    }
+
+    fn track_file_edit(&self, path: &str) -> Result<(), String> {
+        let mut tracker = self.inner.lock().map_err(|e| e.to_string())?;
+        tracker
+            .track_file_context_mut(path, roo_context_tracking::RecordSource::RooEdited)
+            .map_err(|e| e.to_string())
+    }
+}
 
 // ---------------------------------------------------------------------------
 // CLI argument definitions
@@ -106,6 +145,10 @@ struct Cli {
     /// Working directory for tool execution (default: current directory).
     #[arg(long, global = true)]
     working_dir: Option<String>,
+
+    /// Mode to operate in (e.g. "code", "architect", "ask").
+    #[arg(long, default_value = "code")]
+    mode: String,
 }
 
 /// Configuration loaded from a JSON file.
@@ -172,7 +215,7 @@ async fn main() -> Result<()> {
     let app_config = AppConfig {
         cwd: cwd.clone(),
         global_storage_path: home_roo_dir(),
-        mode: "code".to_string(),
+        mode: cli.mode.clone(),
         ..Default::default()
     };
 
@@ -207,16 +250,58 @@ async fn main() -> Result<()> {
     let output_dir = std::env::temp_dir().join("roo-cli-output");
     std::fs::create_dir_all(&output_dir).ok();
 
-    let dispatcher = default_dispatcher_with_terminal(registry, output_dir, "code");
+    let dispatcher = default_dispatcher_with_terminal(registry, output_dir, &cli.mode);
+
+    // ── Build a fully-wired ToolContext ─────────────────────────────────
+    // Load RooIgnore from the App layer (which already read .rooignore).
+    let roo_ignore_ctrl = app.roo_ignore()
+        .map(|arc| (**arc).clone())
+        .unwrap_or_else(|| {
+            let mut ctrl = roo_ignore::RooIgnoreController::new(app.cwd());
+            let rooignore_path = std::path::Path::new(app.cwd()).join(".rooignore");
+            if rooignore_path.exists() {
+                if let Ok(content) = std::fs::read_to_string(&rooignore_path) {
+                    ctrl.load_patterns(&content);
+                }
+            }
+            ctrl
+        });
+
+    // Create a CodeIndexManager for the workspace.
+    let code_index_config = roo_index::CodeIndexConfig {
+        enabled: true,
+        workspace_path: Some(app.cwd().to_string()),
+        ..Default::default()
+    };
+    let mut code_index_mgr = CodeIndexManager::new(code_index_config);
+    let _ = code_index_mgr.initialize();
+    let code_index_manager = Arc::new(std::sync::Mutex::new(code_index_mgr));
+
+    // Create a FileContextTracker adapter for the CLI.
+    let file_context_tracker: Arc<dyn FileContextTrackerOps> =
+        Arc::new(CliFileContextTracker::new("cli-session"));
+
+    // Mode updater: logs the mode change (no agent loop to update in CLI).
+    let mode_updater: Arc<dyn Fn(String) + Send + Sync> = Arc::new(|new_mode: String| {
+        tracing::info!("Mode updated to: {}", new_mode);
+    });
+
+    let tool_context = ToolContext::new(&working_dir, "cli-session")
+        .with_roo_ignore_controller(roo_ignore_ctrl)
+        .with_code_index_manager(code_index_manager)
+        .with_file_context_tracker(file_context_tracker)
+        .with_current_mode(&cli.mode)
+        .with_mode_updater(mode_updater);
 
     let result = if cli.interactive {
-        run_interactive(&*handler, &system_prompt, &tools_json, &dispatcher, &working_dir).await
+        run_interactive(&*handler, &system_prompt, &tools_json, &dispatcher, &tool_context, &working_dir).await
     } else if let Some(msg) = &cli.message {
         run_single(
             &*handler,
             &system_prompt,
             &tools_json,
             &dispatcher,
+            &tool_context,
             &working_dir,
             msg,
         )
@@ -736,7 +821,8 @@ async fn run_single(
     system_prompt: &str,
     tools_json: &[serde_json::Value],
     dispatcher: &ToolDispatcher,
-    working_dir: &PathBuf,
+    tool_context: &ToolContext,
+    _working_dir: &PathBuf,
     message: &str,
 ) -> Result<()> {
     let mut messages = vec![ApiMessage {
@@ -817,7 +903,7 @@ async fn run_single(
         }
 
         // Execute tool calls and collect results.
-        let tool_results = execute_tool_calls(tool_calls, dispatcher, working_dir).await;
+        let tool_results = execute_tool_calls(tool_calls, dispatcher, tool_context).await;
 
         messages.push(ApiMessage {
             role: MessageRole::User,
@@ -847,7 +933,8 @@ async fn run_interactive(
     system_prompt: &str,
     tools_json: &[serde_json::Value],
     dispatcher: &ToolDispatcher,
-    working_dir: &PathBuf,
+    tool_context: &ToolContext,
+    _working_dir: &PathBuf,
 ) -> Result<()> {
     println!("Roo CLI — interactive mode (type :quit or Ctrl-C to exit)\n");
 
@@ -956,7 +1043,7 @@ async fn run_interactive(
             }
 
             // Execute tool calls and collect results.
-            let tool_results = execute_tool_calls(tool_calls, dispatcher, working_dir).await;
+            let tool_results = execute_tool_calls(tool_calls, dispatcher, tool_context).await;
 
             conversation.push(ApiMessage {
                 role: MessageRole::User,
@@ -1189,7 +1276,7 @@ fn process_chunk(
 async fn execute_tool_calls(
     tool_calls: Vec<CollectedToolCall>,
     dispatcher: &ToolDispatcher,
-    working_dir: &PathBuf,
+    tool_context: &ToolContext,
 ) -> Vec<ContentBlock> {
     let mut results: Vec<ContentBlock> = Vec::new();
 
@@ -1220,9 +1307,7 @@ async fn execute_tool_calls(
             truncate_str(&args_preview, 200)
         );
 
-        let context = ToolContext::new(working_dir, "cli-session");
-
-        let result = dispatcher.dispatch(&tc.name, params, &context).await;
+        let result = dispatcher.dispatch(&tc.name, params, tool_context).await;
 
         let (output_text, is_error) = match result {
             ToolExecutionResult {

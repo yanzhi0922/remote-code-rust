@@ -343,6 +343,9 @@ pub type EventListenerFn = dyn Fn(&TaskEvent) + Send + Sync;
 /// An event emitter for task lifecycle events.
 ///
 /// Listeners are stored in a thread-safe manner and called in order of registration.
+/// Cloning an emitter creates a new handle that shares the same listener list,
+/// so listeners registered on any clone are visible to all clones.
+#[derive(Clone)]
 pub struct TaskEventEmitter {
     listeners: Arc<Mutex<Vec<Arc<EventListenerFn>>>>,
 }
