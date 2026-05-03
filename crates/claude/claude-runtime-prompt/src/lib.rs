@@ -668,12 +668,112 @@ fn detect_git_repository(cwd: &Path) -> bool {
         .is_some_and(|output| output.status.success())
 }
 
+const MAX_GIT_STATUS_CHARS: usize = 2000;
+
+fn run_git_command(cwd: &Path, args: &[&str]) -> Option<String> {
+    let output = std::process::Command::new("git")
+        .args(args)
+        .current_dir(cwd)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    if stdout.is_empty() {
+        None
+    } else {
+        Some(stdout)
+    }
+}
+
+/// Generate the git status context text matching the TS `getGitStatus()` format exactly.
+///
+/// The output matches:
+/// ```
+/// This is the git status at the start of the conversation. Note that this status
+/// is a snapshot in time, and will not update during the conversation.
+///
+/// Current branch: <branch>
+///
+/// Main branch (you will usually use this for PRs): <default-branch>
+///
+/// Git user: <username>
+///
+/// Status:
+/// <git status --short output, truncated at 2000 chars>
+///
+/// Recent commits:
+/// <git log --oneline -n 5 output>
+/// ```
+fn get_git_status_context(cwd: &Path) -> Option<String> {
+    if runtime_env_truthy("CLAUDE_CODE_REMOTE") {
+        return None;
+    }
+    if !detect_git_repository(cwd) {
+        return None;
+    }
+
+    let branch = run_git_command(cwd, &["branch", "--show-current"]);
+    let main_branch = run_git_command(cwd, &["rev-parse", "--abbrev-ref", "origin/HEAD"])
+        .map(|refname| {
+            refname
+                .strip_prefix("origin/")
+                .unwrap_or(&refname)
+                .to_owned()
+        })
+        .unwrap_or_else(|| "main".to_owned());
+
+    let git_user = run_git_command(cwd, &["config", "user.name"]);
+
+    let status_output = run_git_command(cwd, &["--no-optional-locks", "status", "--short"])
+        .unwrap_or_default();
+
+    let truncated_status = if status_output.len() > MAX_GIT_STATUS_CHARS {
+        format!(
+            "{}\n... (truncated because it exceeds 2k characters. If you need more information, run \"git status\" using BashTool)",
+            &status_output[..MAX_GIT_STATUS_CHARS]
+        )
+    } else {
+        status_output
+    };
+
+    let recent_log = run_git_command(
+        cwd,
+        &["--no-optional-locks", "log", "--oneline", "-n", "5"],
+    )
+    .unwrap_or_else(|| "(no commits)".to_owned());
+
+    let mut lines = vec![
+        "This is the git status at the start of the conversation. Note that this status is a snapshot in time, and will not update during the conversation.".to_owned(),
+        "".to_owned(),
+        format!("Current branch: {}", branch.as_deref().unwrap_or("(unknown)")),
+        "".to_owned(),
+        format!("Main branch (you will usually use this for PRs): {main_branch}"),
+    ];
+
+    if let Some(ref user) = git_user {
+        lines.push("".to_owned());
+        lines.push(format!("Git user: {user}"));
+    }
+
+    lines.push("".to_owned());
+    lines.push(format!("Status:\n{}", if truncated_status.is_empty() { "(clean)" } else { &truncated_status }));
+
+    lines.push("".to_owned());
+    lines.push(format!("Recent commits:\n{recent_log}"));
+
+    Some(lines.join("\n"))
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ClaudeMemoryType {
     Managed,
     User,
     Project,
     Local,
+    AutoMem,
+    TeamMem,
 }
 
 impl ClaudeMemoryType {
@@ -682,6 +782,8 @@ impl ClaudeMemoryType {
             Self::Project => " (project instructions, checked into the codebase)",
             Self::Local => " (user's private project instructions, not checked in)",
             Self::Managed | Self::User => " (user's private global instructions for all projects)",
+            Self::AutoMem => " (user's auto-memory, persists across conversations)",
+            Self::TeamMem => " (shared team memory, synced across the organization)",
         }
     }
 }
@@ -1286,6 +1388,7 @@ fn rule_glob_base_dir(
             .and_then(Path::parent)
             .map(canonical_or_original)
             .unwrap_or_else(|| canonical_or_original(original_cwd)),
+        ClaudeMemoryType::AutoMem | ClaudeMemoryType::TeamMem => canonical_or_original(original_cwd),
     }
 }
 
@@ -1716,6 +1819,33 @@ fn collect_claude_md_context_with_roots(
         }
     }
 
+    // Load AutoMem MEMORY.md entrypoint (matching TS getMemoryFiles AutoMem loading)
+    // Content is truncated to match TS truncateEntrypointContent (200 lines / 25KB caps)
+    if is_auto_memory_enabled(config) {
+        if let Ok(Some(auto_entrypoint)) = auto_memory_entrypoint(config) {
+            if let Some((mut auto_file, _)) = read_memory_file(
+                &auto_entrypoint,
+                ClaudeMemoryType::AutoMem,
+            ) {
+                auto_file.content = auto_memory::truncate_entrypoint_content(&auto_file.content);
+                memory_files.push(auto_file);
+            }
+        }
+    }
+
+    // Load TeamMem MEMORY.md entrypoint (matching TS getMemoryFiles TeamMem loading)
+    if let Ok(Some(team_entrypoint)) =
+        team_memory_entrypoint_with_features(config, &MemoryPromptFeatures::default())
+    {
+        if let Some((mut team_file, _)) = read_memory_file(
+            &team_entrypoint,
+            ClaudeMemoryType::TeamMem,
+        ) {
+            team_file.content = auto_memory::truncate_entrypoint_content(&team_file.content);
+            memory_files.push(team_file);
+        }
+    }
+
     if memory_files.is_empty() {
         return None;
     }
@@ -1723,12 +1853,22 @@ fn collect_claude_md_context_with_roots(
     let formatted = memory_files
         .into_iter()
         .map(|file| {
-            format!(
-                "Contents of {}{}:\n\n{}",
-                file.path.display(),
-                file.memory_type.description(),
-                file.content
-            )
+            let description = file.memory_type.description();
+            if matches!(file.memory_type, ClaudeMemoryType::TeamMem) {
+                format!(
+                    "Contents of {}{}:\n\n<team-memory-content source=\"shared\">\n{}\n</team-memory-content>",
+                    file.path.display(),
+                    description,
+                    file.content
+                )
+            } else {
+                format!(
+                    "Contents of {}{}:\n\n{}",
+                    file.path.display(),
+                    description,
+                    file.content
+                )
+            }
         })
         .collect::<Vec<_>>();
     Some(format!(
@@ -1755,6 +1895,11 @@ fn base_runtime_user_context_entries(
     {
         entries.push(("claudeMd".to_owned(), claude_md));
     }
+    if !overrides.omit_git_status
+        && let Some(git_status) = get_git_status_context(&config.cwd)
+    {
+        entries.push(("gitStatus".to_owned(), git_status));
+    }
     entries.push((
         "currentDate".to_owned(),
         format!("Today's date is {}.", Local::now().format("%Y-%m-%d")),
@@ -1772,6 +1917,11 @@ async fn runtime_user_context_entries_with_settings(
         && let Some(claude_md) = collect_claude_md_context(config, Some(settings))
     {
         entries.push(("claudeMd".to_owned(), claude_md));
+    }
+    if !overrides.omit_git_status
+        && let Some(git_status) = get_git_status_context(&config.cwd)
+    {
+        entries.push(("gitStatus".to_owned(), git_status));
     }
     entries.push((
         "currentDate".to_owned(),

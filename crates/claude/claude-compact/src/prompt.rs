@@ -155,8 +155,8 @@ Here's an example of how your output should be structured:\n\n\
 Please provide your summary based on the conversation so far, following this \
 structure and ensuring precision and thoroughness in your response.\n\n\
 There may be additional summarization instructions provided in the included \
-context. If there are, remember to follow these instructions when creating \
-this summary. Examples of instructions include:\n\
+context. If so, remember to follow these instructions when creating \
+the above summary. Examples of instructions include:\n\
 <example>
 ## Compact Instructions
 When summarizing the conversation focus on typescript code changes and also \

@@ -34,9 +34,9 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
                 "type": "object",
                 "properties": {
                     "file_path": {"type": "string", "description": "The absolute path to the file to read"},
-                    "offset": {"type": "integer", "minimum": 1, "description": "The line number to start reading from (1-indexed). Only provide if reading a specific range."},
-                    "limit": {"type": "integer", "minimum": 1, "description": "The number of lines to read. Only provide if reading a specific range."},
-                    "pages": {"type": "string", "description": "For PDF files, page ranges to read, e.g. '1-5' or '1,3,5'"}
+                    "offset": {"type": "integer", "minimum": 0, "description": "The line number to start reading from. Only provide if the file is too large to read at once"},
+                    "limit": {"type": "integer", "minimum": 1, "description": "The number of lines to read. Only provide if the file is too large to read at once."},
+                    "pages": {"type": "string", "description": "Page range for PDF files (e.g., \"1-5\", \"3\", \"10-20\"). Only applicable to PDF files. Maximum 20 pages per request."}
                 },
                 "required": ["file_path"],
                 "additionalProperties": false,
@@ -140,7 +140,7 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
                 "type": "object",
                 "properties": {
                     "pattern": {"type": "string"},
-                    "path": {"type": "string", "description": "The directory to search in. Defaults to current working directory. IMPORTANT: Omit this field if you want to search the default directory. DO NOT enter 'undefined' or 'null'."}
+                    "path": {"type": "string", "description": "The directory to search in. If not specified, the current working directory will be used. IMPORTANT: Omit this field to use the default directory. DO NOT enter \"undefined\" or \"null\" - simply omit it for the default behavior. Must be a valid directory path if provided."}
                 },
                 "required": ["pattern"],
                 "additionalProperties": false,
@@ -156,18 +156,19 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
                 "type": "object",
                 "properties": {
                     "pattern": {"type": "string", "description": "The regular expression pattern to search for in the contents of files."},
-                    "path": {"type": "string", "description": "File or directory to search in. Defaults to current working directory."},
-                    "glob": {"type": "string", "description": "Glob pattern to filter files (e.g. \"*.js\", \"*.{ts,tsx}\"). This is the preferred way to filter by file type."},
-                    "output_mode": {"type": "string", "enum": ["content", "files_with_matches", "count"], "description": "The mode to use for the search. Default is 'files_with_matches'. Use 'content' to see matching lines, 'count' for a count of matches per file."},
-                    "-A": {"type": "integer", "description": "Number of lines to show after each match."},
-                    "-B": {"type": "integer", "description": "Number of lines to show before each match."},
-                    "-C": {"type": "integer", "description": "Number of lines of context to show around each match. Equivalent to setting both -A and -B."},
-                    "-i": {"type": "boolean", "description": "Case insensitive search. Default is false."},
-                    "-n": {"type": "boolean", "description": "Show line numbers. Default is true."},
-                    "type": {"type": "string", "description": "File type to search (e.g. 'js', 'py', 'rust', 'go', 'java'). Maps to ripgrep's --type flag."},
-                    "multiline": {"type": "boolean", "description": "Enable multiline mode where patterns can match across newlines. Default is false."},
-                    "head_limit": {"type": "integer", "description": "Limit the number of results. Defaults to 250."},
-                    "offset": {"type": "integer", "description": "Skip the first N results. Use with head_limit for pagination."}
+                    "path": {"type": "string", "description": "File or directory to search in (rg PATH). Defaults to current working directory."},
+                    "glob": {"type": "string", "description": "Glob pattern to filter files (e.g. \"*.js\", \"*.{ts,tsx}\") - maps to rg --glob"},
+                    "output_mode": {"type": "string", "enum": ["content", "files_with_matches", "count"], "description": "Output mode: \"content\" shows matching lines (supports -A/-B/-C context, -n line numbers, head_limit), \"files_with_matches\" shows file paths (supports head_limit), \"count\" shows match counts (supports head_limit). Defaults to \"files_with_matches\"."},
+                    "-A": {"type": "integer", "description": "Number of lines to show after each match (rg -A). Requires output_mode: \"content\", ignored otherwise."},
+                    "-B": {"type": "integer", "description": "Number of lines to show before each match (rg -B). Requires output_mode: \"content\", ignored otherwise."},
+                    "-C": {"type": "integer", "description": "Alias for context."},
+                    "context": {"type": "integer", "description": "Number of lines to show before and after each match (rg -C). Requires output_mode: \"content\", ignored otherwise."},
+                    "-i": {"type": "boolean", "description": "Case insensitive search (rg -i)"},
+                    "-n": {"type": "boolean", "description": "Show line numbers in output (rg -n). Requires output_mode: \"content\", ignored otherwise. Defaults to true."},
+                    "type": {"type": "string", "description": "File type to search (rg --type). Common types: js, py, rust, go, java, etc. More efficient than include for standard file types."},
+                    "multiline": {"type": "boolean", "description": "Enable multiline mode where . matches newlines and patterns can span lines (rg -U --multiline-dotall). Default: false."},
+                    "head_limit": {"type": "integer", "description": "Limit output to first N lines/entries, equivalent to \"| head -N\". Works across all output modes: content (limits output lines), files_with_matches (limits file paths), count (limits count entries). Defaults to 250 when unspecified. Pass 0 for unlimited (use sparingly \u{2014} large result sets waste context)."},
+                    "offset": {"type": "integer", "description": "Skip first N lines/entries before applying head_limit, equivalent to \"| tail -n +N | head -N\". Works across all output modes. Defaults to 0."}
                 },
                 "required": ["pattern"],
                 "additionalProperties": false,
@@ -183,7 +184,7 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
                 "type": "object",
                 "properties": {
                     "url": {"type": "string", "format": "uri", "description": "The URL to fetch content from."},
-                    "prompt": {"type": "string", "description": "The prompt to run on the fetched content. This should be a clear, specific instruction for how to process the fetched content."}
+                    "prompt": {"type": "string", "description": "The prompt to run on the fetched content"}
                 },
                 "required": ["url", "prompt"],
                 "additionalProperties": false,
@@ -356,16 +357,16 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "query": {"type": "string", "minLength": 2, "description": "The search query. Aim for 3-5 keywords for best results."},
+                    "query": {"type": "string", "minLength": 2, "description": "The search query to use"},
                     "allowed_domains": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "description": "Only include search results from these domains."
+                        "description": "Only include search results from these domains"
                     },
                     "blocked_domains": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "description": "Never include search results from these domains."
+                        "description": "Never include search results from these domains"
                     }
                 },
                 "required": ["query"],
@@ -887,7 +888,7 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "name": {"type": "string", "description": "Optional name for the new worktree"}
+                    "name": {"type": "string", "description": "Optional name for the worktree. Each \"/\"-separated segment may contain only letters, digits, dots, underscores, and dashes; max 64 chars total. A random name is generated if not provided."}
                 },
                 "additionalProperties": false,
             }),
@@ -901,8 +902,8 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "action": {"type": "string", "enum": ["keep", "remove"]},
-                    "discard_changes": {"type": "boolean"}
+                    "action": {"type": "string", "enum": ["keep", "remove"], "description": "\"keep\" leaves the worktree and branch on disk; \"remove\" deletes both."},
+                    "discard_changes": {"type": "boolean", "description": "Required true when action is \"remove\" and the worktree has uncommitted files or unmerged commits. The tool will refuse and list them otherwise."}
                 },
                 "required": ["action"],
                 "additionalProperties": false,

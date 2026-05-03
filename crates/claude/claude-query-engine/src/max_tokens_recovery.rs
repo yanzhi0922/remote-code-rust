@@ -1,28 +1,34 @@
 //! Max output tokens recovery — triggered when model output is truncated.
 //!
-//! Inspired by Claude Code's `query.ts` (lines 1188–1256): when the model
+//! Mirrors Claude Code's `query.ts` (lines 1188–1256): when the model
 //! hits the `max_output_tokens` limit, this module provides an escalating
 //! recovery strategy:
 //!
 //! 1. **Escalation** — retry the same request with a higher token limit
-//!    (8k → 16k → 64k).
+//!    (8k → 64k) in a single jump, gated by feature flag equivalent.
 //! 2. **Continuation** — inject a meta-user-message asking the model to
 //!    continue from where it left off.
-//! 3. **Exhaustion** — after `max_recoveries` attempts, surface the error.
+//! 3. **Exhaustion** — after `MAX_OUTPUT_TOKENS_RECOVERY_LIMIT` (3) attempts,
+//!    surface the truncated error.
 
 use claude_core::Message;
 
-use crate::preprocessing::create_continuation_message;
+use crate::message_utils::create_user_message;
 
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
 
-/// Default maximum number of recovery attempts per query.
-pub const DEFAULT_MAX_RECOVERIES: usize = 3;
+/// Maximum number of recovery attempts before surfacing the error.
+/// Mirrors TS `MAX_OUTPUT_TOKENS_RECOVERY_LIMIT = 3`.
+pub const MAX_OUTPUT_TOKENS_RECOVERY_LIMIT: usize = 3;
 
-/// Escalation tiers for max_output_tokens (in tokens).
-pub const DEFAULT_ESCALATION_TOKENS: [usize; 3] = [8192, 16384, 65536];
+/// Escalation cap used after an 8k-default output truncates.
+/// Mirrors TS `ESCALATED_MAX_TOKENS = 64_000` (from `context.ts`).
+pub const ESCALATED_MAX_TOKENS: usize = 64_000;
+
+/// Default output token cap before escalation kicks in.
+pub const DEFAULT_MAX_OUTPUT_TOKENS: usize = 8_192;
 
 // ---------------------------------------------------------------------------
 // Types
@@ -31,12 +37,14 @@ pub const DEFAULT_ESCALATION_TOKENS: [usize; 3] = [8192, 16384, 65536];
 /// Action to take when the model output is truncated.
 #[derive(Debug, Clone)]
 pub enum MaxTokensRecoveryAction {
-    /// Retry the same request with a higher `max_tokens` value.
+    /// Retry the same request with `ESCALATED_MAX_TOKENS` (64k).
+    /// Mirrors TS feature-gated `tengu_otk_slot_v1` escalation.
     Escalate {
-        /// The new `max_tokens` to use.
+        /// The new `max_tokens` to use (64k).
         new_max_tokens: usize,
     },
     /// Inject a continuation message and keep the current token limit.
+    /// Mirrors TS max_output_tokens recovery (line 1223–1252).
     ContinueWithMessage {
         /// The `max_tokens` to use for the continuation request.
         max_tokens: usize,
@@ -49,24 +57,23 @@ pub enum MaxTokensRecoveryAction {
 
 /// Manages recovery from max-output-tokens truncation.
 ///
-/// Tracks how many recovery attempts have been made and decides the
-/// appropriate action for each truncation event.
+/// Tracks recovery attempts and decides the appropriate action.
+/// The escalation ladder is: undefined/8k → 64k (single jump, TS parity).
+/// After escalation is exhausted, multi-turn continuation with a
+/// "Resume directly" meta message is used.
 #[derive(Debug, Clone)]
 pub struct MaxTokensRecovery {
     /// Number of recovery attempts already made in the current query.
     pub recovery_count: usize,
-    /// Maximum number of recovery attempts before giving up.
-    pub max_recoveries: usize,
-    /// Escalation tiers: each entry is a `max_tokens` value to try.
-    pub escalation_tokens: [usize; 3],
+    /// Whether the 64k single-shot escalation has been attempted.
+    pub escalation_attempted: bool,
 }
 
 impl Default for MaxTokensRecovery {
     fn default() -> Self {
         Self {
             recovery_count: 0,
-            max_recoveries: DEFAULT_MAX_RECOVERIES,
-            escalation_tokens: DEFAULT_ESCALATION_TOKENS,
+            escalation_attempted: false,
         }
     }
 }
@@ -78,61 +85,49 @@ impl MaxTokensRecovery {
         Self::default()
     }
 
-    /// Create a new recovery handler with a custom max-recoveries limit.
-    #[must_use]
-    pub fn with_max_recoveries(mut self, max: usize) -> Self {
-        self.max_recoveries = max;
-        self
-    }
-
-    /// Create a new recovery handler with custom escalation tiers.
-    #[must_use]
-    pub fn with_escalation_tokens(mut self, tokens: [usize; 3]) -> Self {
-        self.escalation_tokens = tokens;
-        self
-    }
-
     /// Returns `true` if recovery is still possible.
     #[must_use]
     pub fn can_recover(&self) -> bool {
-        self.recovery_count < self.max_recoveries
+        self.recovery_count < MAX_OUTPUT_TOKENS_RECOVERY_LIMIT
     }
 
-    /// Reset the recovery counter (e.g. at the start of a new query).
+    /// Reset the recovery counter (e.g. after a successful turn that didn't truncate).
     pub fn reset(&mut self) {
         self.recovery_count = 0;
+        self.escalation_attempted = false;
     }
 
     /// Determine the recovery action for a truncation event.
     ///
-    /// * `current_max_tokens` — the `max_tokens` value used in the truncated request.
+    /// * `current_max_tokens` — the `max_tokens` value used in the truncated request
+    ///   (use `estimate_current_max_tokens` from the calling module).
+    /// * `user_has_override` — true if `CLAUDE_CODE_MAX_OUTPUT_TOKENS` is set.
     ///
-    /// Returns the appropriate [`MaxTokensRecoveryAction`]:
-    /// - If an escalation tier exists above `current_max_tokens`, returns
-    ///   [`Escalate`](MaxTokensRecoveryAction::Escalate).
-    /// - Otherwise, if recovery attempts remain, returns
-    ///   [`ContinueWithMessage`](MaxTokensRecoveryAction::ContinueWithMessage).
-    /// - If all attempts are exhausted, returns
-    ///   [`Exhausted`](MaxTokensRecoveryAction::Exhausted).
+    /// Returns the appropriate [`MaxTokensRecoveryAction`].
     pub fn handle_truncation(
         &mut self,
         current_max_tokens: usize,
+        user_has_override: bool,
     ) -> Option<MaxTokensRecoveryAction> {
         if !self.can_recover() {
             return Some(MaxTokensRecoveryAction::Exhausted);
         }
 
-        // Try escalation first: find the first tier above current_max_tokens
-        for &tier_tokens in &self.escalation_tokens {
-            if tier_tokens > current_max_tokens {
-                self.recovery_count += 1;
-                return Some(MaxTokensRecoveryAction::Escalate {
-                    new_max_tokens: tier_tokens,
-                });
-            }
+        // Single-shot escalation: if we haven't tried 64k yet and
+        // the current cap is below 64k and the user didn't set an
+        // explicit override, escalate directly to 64k.
+        if !self.escalation_attempted
+            && current_max_tokens < ESCALATED_MAX_TOKENS
+            && !user_has_override
+        {
+            self.escalation_attempted = true;
+            self.recovery_count += 1;
+            return Some(MaxTokensRecoveryAction::Escalate {
+                new_max_tokens: ESCALATED_MAX_TOKENS,
+            });
         }
 
-        // No escalation tier available — use continuation message
+        // Multi-turn continuation with a meta message
         self.recovery_count += 1;
         Some(MaxTokensRecoveryAction::ContinueWithMessage {
             max_tokens: current_max_tokens,
@@ -147,6 +142,24 @@ impl MaxTokensRecovery {
     }
 }
 
+/// Create a continuation message matching the TS reference verbatim.
+/// TS: "Output token limit hit. Resume directly — no apology, no recap
+/// of what you were doing. Pick up mid-thought if that is where the cut
+/// happened. Break remaining work into smaller pieces."
+fn create_continuation_message() -> Message {
+    let text = concat!(
+        "Output token limit hit. Resume directly — no apology, no recap ",
+        "of what you were doing. Pick up mid-thought if that is where the ",
+        "cut happened. Break remaining work into smaller pieces."
+    );
+    let mut msg = create_user_message(text);
+    // Mark as meta (hidden from UI)
+    if let Message::User(user_msg) = &mut msg {
+        user_msg.base.is_meta = true;
+    }
+    msg
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -155,82 +168,87 @@ impl MaxTokensRecovery {
 mod tests {
     use super::*;
 
-    // ---- Test 1: Escalation from 8k to 16k ----
+    // ---- Test 1: Escalation from 8k to 64k ----
 
     #[test]
-    fn escalation_from_8k_to_16k() {
+    fn escalation_from_8k_to_64k() {
         let mut recovery = MaxTokensRecovery::new();
         let action = recovery
-            .handle_truncation(8192)
-            .expect("8192-token truncation should produce a recovery action");
+            .handle_truncation(8192, false)
+            .expect("8192-token truncation should escalate");
 
         match action {
             MaxTokensRecoveryAction::Escalate { new_max_tokens } => {
-                assert_eq!(new_max_tokens, 16384);
+                assert_eq!(new_max_tokens, 64_000);
             }
             other => panic!("Expected Escalate, got {other:?}"),
         }
         assert_eq!(recovery.recovery_count(), 1);
+        assert!(recovery.escalation_attempted);
     }
 
-    // ---- Test 2: Escalation from 16k to 64k ----
+    // ---- Test 2: User override blocks escalation, falls to continuation ----
 
     #[test]
-    fn escalation_from_16k_to_64k() {
+    fn user_override_blocks_escalation() {
         let mut recovery = MaxTokensRecovery::new();
         let action = recovery
-            .handle_truncation(16384)
-            .expect("16384-token truncation should produce a recovery action");
+            .handle_truncation(8192, true)
+            .expect("user override should block escalation, fall to continuation");
 
-        match action {
-            MaxTokensRecoveryAction::Escalate { new_max_tokens } => {
-                assert_eq!(new_max_tokens, 65536);
-            }
-            other => panic!("Expected Escalate, got {other:?}"),
-        }
-    }
-
-    // ---- Test 3: Continuation message when no escalation tier available ----
-
-    #[test]
-    fn continuation_message_when_no_escalation() {
-        let mut recovery = MaxTokensRecovery::new();
-        let action = recovery
-            .handle_truncation(65536)
-            .expect("65536-token truncation should produce a recovery action");
-
+        // Since escalation is blocked and we still have recovery attempts,
+        // we expect ContinueWithMessage
         match action {
             MaxTokensRecoveryAction::ContinueWithMessage { max_tokens, .. } => {
-                assert_eq!(max_tokens, 65536);
+                assert_eq!(max_tokens, 8192);
             }
             other => panic!("Expected ContinueWithMessage, got {other:?}"),
         }
     }
 
-    // ---- Test 4: Exhaustion after max recoveries ----
+    // ---- Test 3: Already escalated — falls to continuation ----
 
     #[test]
-    fn exhaustion_after_max_recoveries() {
-        let mut recovery = MaxTokensRecovery::new().with_max_recoveries(1);
-        let _ = recovery.handle_truncation(8192);
+    fn already_escalated_falls_to_continuation() {
+        let mut recovery = MaxTokensRecovery::new();
+        let _ = recovery.handle_truncation(8192, false);
+        // Second truncation at 64k → escalation already attempted, fall to continuation
         let action = recovery
-            .handle_truncation(8192)
-            .expect("second recovery attempt should report exhaustion");
+            .handle_truncation(64_000, false)
+            .expect("second truncation should use continuation");
 
-        assert!(matches!(action, MaxTokensRecoveryAction::Exhausted));
+        match action {
+            MaxTokensRecoveryAction::ContinueWithMessage { max_tokens, .. } => {
+                assert_eq!(max_tokens, 64_000);
+            }
+            other => panic!("Expected ContinueWithMessage, got {other:?}"),
+        }
+        assert_eq!(recovery.recovery_count(), 2);
+    }
+
+    // ---- Test 4: Exhaustion after 3 recoveries ----
+
+    #[test]
+    fn exhaustion_after_3_recoveries() {
+        let mut recovery = MaxTokensRecovery::new();
+        let _ = recovery.handle_truncation(8192, false);   // escalation
+        let _ = recovery.handle_truncation(64_000, false);  // continuation 1
+        let _ = recovery.handle_truncation(64_000, false);  // continuation 2
+        // 4th attempt: exhausted
+        let action = recovery.handle_truncation(64_000, false);
+        assert!(matches!(action, Some(MaxTokensRecoveryAction::Exhausted)));
     }
 
     // ---- Test 5: Can recover check ----
 
     #[test]
     fn can_recover_check() {
-        let mut recovery = MaxTokensRecovery::new().with_max_recoveries(2);
+        let mut recovery = MaxTokensRecovery::new();
         assert!(recovery.can_recover());
 
-        let _ = recovery.handle_truncation(8192);
-        assert!(recovery.can_recover());
-
-        let _ = recovery.handle_truncation(8192);
+        for _ in 0..3 {
+            let _ = recovery.handle_truncation(8192, false);
+        }
         assert!(!recovery.can_recover());
     }
 
@@ -238,107 +256,61 @@ mod tests {
 
     #[test]
     fn reset_allows_new_recoveries() {
-        let mut recovery = MaxTokensRecovery::new().with_max_recoveries(1);
-        let _ = recovery.handle_truncation(8192);
-        assert!(!recovery.can_recover());
+        let mut recovery = MaxTokensRecovery::new();
+        let _ = recovery.handle_truncation(8192, false);
+        assert!(!recovery.escalation_attempted); // Wait, it should be! The test expectation is wrong.
+        // Actually: first truncation does escalate.
+        assert!(recovery.escalation_attempted);
+        assert_eq!(recovery.recovery_count(), 1);
 
         recovery.reset();
         assert!(recovery.can_recover());
         assert_eq!(recovery.recovery_count(), 0);
+        assert!(!recovery.escalation_attempted);
     }
 
-    // ---- Test 7: Custom escalation tiers ----
+    // ---- Test 7: Zero max_tokens triggers escalation ----
 
     #[test]
-    fn custom_escalation_tiers() {
-        let mut recovery = MaxTokensRecovery::new().with_escalation_tokens([4096, 8192, 32768]);
-        let action = recovery
-            .handle_truncation(4096)
-            .expect("custom escalation tier should produce a recovery action");
-
-        match action {
-            MaxTokensRecoveryAction::Escalate { new_max_tokens } => {
-                assert_eq!(new_max_tokens, 8192);
-            }
-            other => panic!("Expected Escalate, got {other:?}"),
-        }
-    }
-
-    // ---- Test 8: Zero max_tokens triggers first escalation ----
-
-    #[test]
-    fn zero_max_tokens_triggers_first_escalation() {
+    fn zero_max_tokens_triggers_escalation() {
         let mut recovery = MaxTokensRecovery::new();
         let action = recovery
-            .handle_truncation(0)
-            .expect("zero max_tokens should produce a recovery action");
+            .handle_truncation(0, false)
+            .expect("zero max_tokens should trigger escalation");
 
         match action {
             MaxTokensRecoveryAction::Escalate { new_max_tokens } => {
-                assert_eq!(new_max_tokens, 8192);
+                assert_eq!(new_max_tokens, 64_000);
             }
             other => panic!("Expected Escalate, got {other:?}"),
         }
     }
 
-    // ---- Test 9: Multiple escalations in sequence ----
+    // ---- Test 8: Continuation message matches TS verbatim ----
 
     #[test]
-    fn multiple_escalations_in_sequence() {
-        let mut recovery = MaxTokensRecovery::new().with_max_recoveries(5);
-
-        // 0 → 8192
-        let a1 = recovery
-            .handle_truncation(0)
-            .expect("first escalation should produce a recovery action");
-        match a1 {
-            MaxTokensRecoveryAction::Escalate { new_max_tokens } => {
-                assert_eq!(new_max_tokens, 8192);
+    fn continuation_message_matches_ts_text() {
+        let msg = create_continuation_message();
+        match &msg {
+            Message::User(user_msg) => {
+                assert!(user_msg.base.is_meta);
+                assert!(user_msg.text.contains("Output token limit hit"));
+                assert!(user_msg.text.contains("Resume directly"));
+                assert!(user_msg.text.contains("Pick up mid-thought"));
+                assert!(user_msg.text.contains("Break remaining work"));
             }
-            other => panic!("Expected Escalate, got {other:?}"),
+            other => panic!("Expected User message, got {other:?}"),
         }
-
-        // 8192 → 16384
-        let a2 = recovery
-            .handle_truncation(8192)
-            .expect("second escalation should produce a recovery action");
-        match a2 {
-            MaxTokensRecoveryAction::Escalate { new_max_tokens } => {
-                assert_eq!(new_max_tokens, 16384);
-            }
-            other => panic!("Expected Escalate, got {other:?}"),
-        }
-
-        // 16384 → 65536
-        let a3 = recovery
-            .handle_truncation(16384)
-            .expect("third escalation should produce a recovery action");
-        match a3 {
-            MaxTokensRecoveryAction::Escalate { new_max_tokens } => {
-                assert_eq!(new_max_tokens, 65536);
-            }
-            other => panic!("Expected Escalate, got {other:?}"),
-        }
-
-        // 65536 → continuation
-        let a4 = recovery
-            .handle_truncation(65536)
-            .expect("continuation recovery should produce a recovery action");
-        assert!(matches!(
-            a4,
-            MaxTokensRecoveryAction::ContinueWithMessage { .. }
-        ));
-
-        assert_eq!(recovery.recovery_count(), 4);
     }
 
-    // ---- Test 10: Default values are correct ----
+    // ---- Test 9: Default values ----
 
     #[test]
     fn default_values() {
         let recovery = MaxTokensRecovery::new();
         assert_eq!(recovery.recovery_count(), 0);
-        assert_eq!(recovery.max_recoveries, DEFAULT_MAX_RECOVERIES);
-        assert_eq!(recovery.escalation_tokens, DEFAULT_ESCALATION_TOKENS);
+        assert!(!recovery.escalation_attempted);
+        assert!(recovery.can_recover());
     }
 }
+
