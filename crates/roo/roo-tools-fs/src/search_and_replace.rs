@@ -23,6 +23,7 @@ use crate::types::FsToolError;
 ///     file_path: string
 ///     old_string: string
 ///     new_string: string
+///     replace_all?: boolean
 /// }
 /// ```
 #[derive(Debug, Clone)]
@@ -30,6 +31,8 @@ pub struct SearchReplaceParams {
     pub file_path: String,
     pub old_string: String,
     pub new_string: String,
+    /// When `true`, replace ALL occurrences instead of requiring a unique match.
+    pub replace_all: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -199,13 +202,14 @@ fn count_occurrences(haystack: &str, needle: &str) -> usize {
 /// 1. Normalise line endings (CRLF → LF) in both file content and strings.
 /// 2. Count occurrences of `old_string`.
 /// 3. If 0 matches → `NoMatch` error.
-/// 4. If >1 matches → `MultipleMatches` error.
-/// 5. Apply single replacement.
+/// 4. If >1 matches and `replace_all` is false → `MultipleMatches` error.
+/// 5. If `replace_all` is true, replace ALL occurrences; otherwise single.
 /// 6. Return the new content.
 pub fn apply_search_replace(
     file_content: &str,
     old_string: &str,
     new_string: &str,
+    replace_all: bool,
 ) -> Result<SearchReplaceResult, SearchReplaceError> {
     // Normalize line endings to LF for consistent matching
     let normalized_content = normalize_line_endings(file_content);
@@ -219,12 +223,16 @@ pub fn apply_search_replace(
         return Err(SearchReplaceError::NoMatch);
     }
 
-    if match_count > 1 {
+    if match_count > 1 && !replace_all {
         return Err(SearchReplaceError::MultipleMatches(match_count));
     }
 
-    // Apply the single replacement
-    let new_content = normalized_content.replacen(&normalized_old as &str, &normalized_new as &str, 1);
+    // Apply replacement(s)
+    let new_content = if replace_all {
+        normalized_content.replace(&normalized_old as &str, &normalized_new as &str)
+    } else {
+        normalized_content.replacen(&normalized_old as &str, &normalized_new as &str, 1)
+    };
 
     Ok(SearchReplaceResult {
         path: String::new(), // Caller fills this in
@@ -271,6 +279,7 @@ mod tests {
             file_path: "test.txt".to_string(),
             old_string: "old".to_string(),
             new_string: "new".to_string(),
+            replace_all: false,
         };
         assert!(validate_search_replace_params(&params).is_ok());
     }
@@ -281,6 +290,7 @@ mod tests {
             file_path: String::new(),
             old_string: "old".to_string(),
             new_string: "new".to_string(),
+            replace_all: false,
         };
         let err = validate_search_replace_params(&params).unwrap_err();
         assert!(matches!(err, SearchReplaceError::MissingFilePath));
@@ -292,6 +302,7 @@ mod tests {
             file_path: "test.txt".to_string(),
             old_string: String::new(),
             new_string: "new".to_string(),
+            replace_all: false,
         };
         let err = validate_search_replace_params(&params).unwrap_err();
         assert!(matches!(err, SearchReplaceError::MissingOldString));
@@ -303,6 +314,7 @@ mod tests {
             file_path: "test.txt".to_string(),
             old_string: "same".to_string(),
             new_string: "same".to_string(),
+            replace_all: false,
         };
         let err = validate_search_replace_params(&params).unwrap_err();
         assert!(matches!(err, SearchReplaceError::IdenticalStrings));
@@ -314,6 +326,7 @@ mod tests {
             file_path: "../etc/passwd".to_string(),
             old_string: "old".to_string(),
             new_string: "new".to_string(),
+            replace_all: false,
         };
         let err = validate_search_replace_params_full(&params).unwrap_err();
         assert!(matches!(err, FsToolError::InvalidPath(_)));
@@ -324,7 +337,7 @@ mod tests {
     #[test]
     fn test_single_replacement() {
         let content = "line1\nline2\nline3\n";
-        let result = apply_search_replace(content, "line2", "LINE2").unwrap();
+        let result = apply_search_replace(content, "line2", "LINE2", false).unwrap();
         assert_eq!(result.new_content, "line1\nLINE2\nline3\n");
         assert_eq!(result.original_content, content);
     }
@@ -332,21 +345,21 @@ mod tests {
     #[test]
     fn test_no_match() {
         let content = "line1\nline2\n";
-        let err = apply_search_replace(content, "not_found", "replacement").unwrap_err();
+        let err = apply_search_replace(content, "not_found", "replacement", false).unwrap_err();
         assert!(matches!(err, SearchReplaceError::NoMatch));
     }
 
     #[test]
     fn test_multiple_matches() {
         let content = "foo\nbar\nfoo\n";
-        let err = apply_search_replace(content, "foo", "baz").unwrap_err();
+        let err = apply_search_replace(content, "foo", "baz", false).unwrap_err();
         assert!(matches!(err, SearchReplaceError::MultipleMatches(2)));
     }
 
     #[test]
     fn test_crlf_normalization() {
         let content = "line1\r\nline2\r\nline3\r\n";
-        let result = apply_search_replace(content, "line2", "LINE2").unwrap();
+        let result = apply_search_replace(content, "line2", "LINE2", false).unwrap();
         assert_eq!(result.new_content, "line1\nLINE2\nline3\n");
     }
 
@@ -354,7 +367,7 @@ mod tests {
     fn test_crlf_in_old_string() {
         let content = "line1\r\nline2\r\n";
         // Both content and old_string are normalized to LF before matching
-        let result = apply_search_replace(content, "line1\r\nline2", "replaced").unwrap();
+        let result = apply_search_replace(content, "line1\r\nline2", "replaced", false).unwrap();
         assert_eq!(result.new_content, "replaced\n");
     }
 
@@ -363,7 +376,7 @@ mod tests {
         let content = "fn main() {\n    println!(\"hello\");\n}\n";
         let old = "    println!(\"hello\");";
         let new_ = "    println!(\"world\");";
-        let result = apply_search_replace(content, old, new_).unwrap();
+        let result = apply_search_replace(content, old, new_, false).unwrap();
         assert!(result.new_content.contains("world"));
         assert!(!result.new_content.contains("hello"));
     }
@@ -371,22 +384,43 @@ mod tests {
     #[test]
     fn test_replacement_at_beginning() {
         let content = "first\nsecond\nthird\n";
-        let result = apply_search_replace(content, "first", "FIRST").unwrap();
+        let result = apply_search_replace(content, "first", "FIRST", false).unwrap();
         assert_eq!(result.new_content, "FIRST\nsecond\nthird\n");
     }
 
     #[test]
     fn test_replacement_at_end() {
         let content = "first\nsecond\nthird\n";
-        let result = apply_search_replace(content, "third", "THIRD").unwrap();
+        let result = apply_search_replace(content, "third", "THIRD", false).unwrap();
         assert_eq!(result.new_content, "first\nsecond\nTHIRD\n");
     }
 
     #[test]
     fn test_empty_replacement_deletes() {
         let content = "before\ntarget\nafter\n";
-        let result = apply_search_replace(content, "target\n", "").unwrap();
+        let result = apply_search_replace(content, "target\n", "", false).unwrap();
         assert_eq!(result.new_content, "before\nafter\n");
+    }
+
+    #[test]
+    fn test_replace_all_multiple() {
+        let content = "foo\nbar\nfoo\nbaz\nfoo\n";
+        let result = apply_search_replace(content, "foo", "FOO", true).unwrap();
+        assert_eq!(result.new_content, "FOO\nbar\nFOO\nbaz\nFOO\n");
+    }
+
+    #[test]
+    fn test_replace_all_single_match() {
+        let content = "foo\nbar\n";
+        let result = apply_search_replace(content, "foo", "FOO", true).unwrap();
+        assert_eq!(result.new_content, "FOO\nbar\n");
+    }
+
+    #[test]
+    fn test_replace_all_no_match() {
+        let content = "foo\nbar\n";
+        let err = apply_search_replace(content, "xyz", "XYZ", true).unwrap_err();
+        assert!(matches!(err, SearchReplaceError::NoMatch));
     }
 
     // ---- count_occurrences tests ----

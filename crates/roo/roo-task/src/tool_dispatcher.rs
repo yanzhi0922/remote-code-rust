@@ -14,6 +14,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use serde_json::Value;
 
+use roo_index::CodeIndexManager;
 use roo_tools::ToolRepetitionDetector;
 
 // ---------------------------------------------------------------------------
@@ -117,6 +118,10 @@ pub struct ToolContext {
     ///
     /// Source: `src/core/task/Task.ts` — `this.terminalProcess`
     pub terminal_process: Option<roo_terminal::SharedTerminalProcess>,
+    /// Optional code index manager for codebase search.
+    ///
+    /// Source: `src/core/task/Task.ts` — `this.codeIndexManager`
+    pub code_index_manager: Option<Arc<std::sync::Mutex<CodeIndexManager>>>,
 }
 
 impl std::fmt::Debug for ToolContext {
@@ -130,6 +135,7 @@ impl std::fmt::Debug for ToolContext {
             .field("diff_view_provider", &self.diff_view_provider.is_some())
             .field("file_context_tracker", &self.file_context_tracker.is_some())
             .field("terminal_process", &self.terminal_process.is_some())
+            .field("code_index_manager", &self.code_index_manager.is_some())
             .finish()
     }
 }
@@ -146,6 +152,7 @@ impl ToolContext {
             diff_view_provider: None,
             file_context_tracker: None,
             terminal_process: None,
+            code_index_manager: None,
         }
     }
 
@@ -192,6 +199,14 @@ impl ToolContext {
     /// Source: `src/core/task/Task.ts` — `this.terminalProcess`
     pub fn with_terminal_process(mut self, process: roo_terminal::SharedTerminalProcess) -> Self {
         self.terminal_process = Some(process);
+        self
+    }
+
+    /// Set the code index manager for codebase search.
+    ///
+    /// Source: `src/core/task/Task.ts` — `this.codeIndexManager`
+    pub fn with_code_index_manager(mut self, manager: Arc<std::sync::Mutex<CodeIndexManager>>) -> Self {
+        self.code_index_manager = Some(manager);
         self
     }
 }
@@ -623,6 +638,10 @@ impl ToolHandler for EditFileHandler {
                 .or_else(|| params.get("expected_replacements"))
                 .and_then(|v| v.as_u64())
                 .map(|v| v as u32),
+            replace_all: params
+                .get("replaceAll")
+                .or_else(|| params.get("replace_all"))
+                .and_then(|v| v.as_bool()),
         };
 
         // Check .rooignore before any file I/O
@@ -689,10 +708,17 @@ impl ToolHandler for SearchReplaceHandler {
             None => return ToolExecutionResult::error("Missing required parameter: newString"),
         };
 
+        let replace_all = params
+            .get("replaceAll")
+            .or_else(|| params.get("replace_all"))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
         let sr_params = roo_tools_fs::search_and_replace::SearchReplaceParams {
             file_path: file_path.clone(),
             old_string,
             new_string,
+            replace_all,
         };
 
         // Validate
@@ -731,6 +757,7 @@ impl ToolHandler for SearchReplaceHandler {
             &content,
             &sr_params.old_string,
             &sr_params.new_string,
+            sr_params.replace_all,
         ) {
             Ok(result) => {
                 // Write result
@@ -794,6 +821,10 @@ impl ToolHandler for EditHandler {
                 .or_else(|| params.get("expected_replacements"))
                 .and_then(|v| v.as_u64())
                 .map(|v| v as u32),
+            replace_all: params
+                .get("replaceAll")
+                .or_else(|| params.get("replace_all"))
+                .and_then(|v| v.as_bool()),
         };
 
         // Check .rooignore before any file I/O
@@ -1136,6 +1167,10 @@ impl ToolHandler for SearchFilesHandler {
             200,
         );
 
+        // Filter results by .rooignore
+        let matches =
+            roo_tools_search::filter_results_by_rooignore(matches, context.roo_ignore_controller.as_ref());
+
         if matches.is_empty() {
             return ToolExecutionResult::success("No matches found.");
         }
@@ -1150,6 +1185,9 @@ impl ToolHandler for SearchFilesHandler {
 }
 
 /// Helper to recursively search files for regex matches.
+///
+/// Includes `context_lines` lines before and after each match (matching
+/// the TypeScript `--context=2` behaviour).
 fn search_in_dir(
     base: &std::path::Path,
     current: &std::path::Path,
@@ -1158,6 +1196,8 @@ fn search_in_dir(
     matches: &mut Vec<roo_tools_search::FileMatch>,
     max_matches: usize,
 ) {
+    const CONTEXT_LINES: usize = 2;
+
     if matches.len() >= max_matches {
         return;
     }
@@ -1181,17 +1221,29 @@ fn search_in_dir(
 
                 // Read and search
                 if let Ok(content) = std::fs::read_to_string(&path) {
-                    for (i, line) in content.lines().enumerate() {
+                    let all_lines: Vec<&str> = content.lines().collect();
+                    for (i, line) in all_lines.iter().enumerate() {
                         if matches.len() >= max_matches {
                             break;
                         }
                         if re.is_match(line) {
+                            // Gather context lines before the match
+                            let context_before: Vec<String> = (i.saturating_sub(CONTEXT_LINES)..i)
+                                .filter_map(|idx| all_lines.get(idx).map(|l| l.to_string()))
+                                .collect();
+
+                            // Gather context lines after the match
+                            let context_after: Vec<String> =
+                                ((i + 1)..(i + 1 + CONTEXT_LINES))
+                                    .filter_map(|idx| all_lines.get(idx).map(|l| l.to_string()))
+                                    .collect();
+
                             matches.push(roo_tools_search::FileMatch {
                                 file_path: relative_str.to_string(),
                                 line_number: i + 1,
                                 line_content: line.to_string(),
-                                context_before: vec![],
-                                context_after: vec![],
+                                context_before,
+                                context_after,
                             });
                         }
                     }
@@ -1202,11 +1254,16 @@ fn search_in_dir(
 }
 
 /// Handler for the `codebase_search` tool.
+///
+/// Uses [`roo_tools_search::process_codebase_search`] to perform BM25-like
+/// search against the code index when a [`CodeIndexManager`] is available
+/// in the [`ToolContext`]. Falls back to a helpful message when no index
+/// manager has been configured.
 pub struct CodebaseSearchHandler;
 
 #[async_trait]
 impl ToolHandler for CodebaseSearchHandler {
-    async fn execute(&self, params: Value, _context: &ToolContext) -> ToolExecutionResult {
+    async fn execute(&self, params: Value, context: &ToolContext) -> ToolExecutionResult {
         let query = match params.get("query").and_then(|v| v.as_str()) {
             Some(q) => q.to_string(),
             None => return ToolExecutionResult::error("Missing required parameter: query"),
@@ -1226,11 +1283,33 @@ impl ToolHandler for CodebaseSearchHandler {
             return ToolExecutionResult::error(format!("codebase_search error: {}", e));
         }
 
-        // Codebase search requires an index; return placeholder
-        ToolExecutionResult::success(format!(
-            "Codebase search for '{}' (index not yet available)",
-            search_params.query
-        ))
+        // Attempt to use the real CodeIndexManager if available.
+        if let Some(ref manager_arc) = context.code_index_manager {
+            let manager = match manager_arc.lock() {
+                Ok(m) => m,
+                Err(e) => {
+                    return ToolExecutionResult::error(format!(
+                        "codebase_search error: failed to acquire index manager lock: {}",
+                        e
+                    ))
+                }
+            };
+
+            match roo_tools_search::process_codebase_search(&search_params, &manager, 20) {
+                Ok(result) => {
+                    let output = roo_tools_search::format_codebase_search_output(&result);
+                    ToolExecutionResult::success(output)
+                }
+                Err(e) => ToolExecutionResult::error(format!("codebase_search error: {}", e)),
+            }
+        } else {
+            // No index manager configured — return informative message
+            ToolExecutionResult::success(format!(
+                "Codebase search for '{}' — no code index is currently configured. \
+                 Index the workspace first to enable codebase search.",
+                search_params.query
+            ))
+        }
     }
 
     fn tool_name(&self) -> &str {

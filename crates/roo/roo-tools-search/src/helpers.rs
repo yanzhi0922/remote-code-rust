@@ -29,15 +29,78 @@ pub fn validate_file_pattern(pattern: &str) -> Result<(), SearchToolError> {
 }
 
 /// Format search results with line numbers and context.
+///
+/// Matches the TypeScript output style: grouped by file, each match block
+/// shows context lines (before/after) padded with line numbers and a pipe
+/// separator, delimited by `----`.
 pub fn format_search_results(matches: &[crate::types::FileMatch]) -> String {
-    let mut output = String::new();
-    for m in matches {
-        output.push_str(&format!(
-            "{}:{}: {}\n",
-            m.file_path, m.line_number, m.line_content
-        ));
+    if matches.is_empty() {
+        return String::new();
     }
-    output
+
+    // Group matches by file path, preserving order
+    let mut grouped: Vec<(&str, Vec<&crate::types::FileMatch>)> = Vec::new();
+    let mut seen_files: std::collections::HashSet<&str> = std::collections::HashSet::new();
+
+    for m in matches {
+        if !seen_files.contains(m.file_path.as_str()) {
+            seen_files.insert(&m.file_path);
+            grouped.push((&m.file_path, Vec::new()));
+        }
+        if let Some(entry) = grouped.iter_mut().find(|(f, _)| *f == m.file_path) {
+            entry.1.push(m);
+        }
+    }
+
+    let total = matches.len();
+    let mut output = String::new();
+
+    // Header line matching TS behaviour
+    if total == 1 {
+        output.push_str("Found 1 result.\n\n");
+    } else {
+        output.push_str(&format!("Found {} results.\n\n", total));
+    }
+
+    for (file_path, file_matches) in &grouped {
+        output.push_str(&format!("# {}\n", file_path));
+
+        for m in file_matches {
+            // Context lines before
+            let start_line = m.line_number.saturating_sub(m.context_before.len());
+            for (offset, ctx_line) in m.context_before.iter().enumerate() {
+                let line_num = start_line + offset;
+                output.push_str(&format!(
+                    "{:>3} | {}\n",
+                    line_num,
+                    ctx_line.trim_end()
+                ));
+            }
+
+            // The match line itself
+            output.push_str(&format!(
+                "{:>3} | {}\n",
+                m.line_number,
+                m.line_content.trim_end()
+            ));
+
+            // Context lines after
+            for (offset, ctx_line) in m.context_after.iter().enumerate() {
+                let line_num = m.line_number + 1 + offset;
+                output.push_str(&format!(
+                    "{:>3} | {}\n",
+                    line_num,
+                    ctx_line.trim_end()
+                ));
+            }
+
+            output.push_str("----\n");
+        }
+
+        output.push('\n');
+    }
+
+    output.trim_end().to_string()
 }
 
 /// Format a file list for display.
@@ -153,8 +216,42 @@ mod tests {
             },
         ];
         let result = format_search_results(&matches);
-        assert!(result.contains("src/main.rs:10: fn main()"));
-        assert!(result.contains("src/lib.rs:5: pub mod foo"));
+        assert!(result.contains("# src/main.rs"));
+        assert!(result.contains(" 10 | fn main()"));
+        assert!(result.contains("# src/lib.rs"));
+        assert!(result.contains("  5 | pub mod foo"));
+        assert!(result.contains("----"));
+        assert!(result.contains("Found 2 results"));
+    }
+
+    #[test]
+    fn test_format_results_with_context() {
+        let matches = vec![crate::types::FileMatch {
+            file_path: "src/main.rs".to_string(),
+            line_number: 10,
+            line_content: "fn main() {".to_string(),
+            context_before: vec!["use std::io;".to_string(), "mod utils;".to_string()],
+            context_after: vec!["    println!".to_string(), "}".to_string()],
+        }];
+        let result = format_search_results(&matches);
+        assert!(result.contains("  8 | use std::io;"));
+        assert!(result.contains("  9 | mod utils;"));
+        assert!(result.contains(" 10 | fn main()"));
+        assert!(result.contains(" 11 |     println!"));
+        assert!(result.contains(" 12 | }"));
+    }
+
+    #[test]
+    fn test_format_results_single_match() {
+        let matches = vec![crate::types::FileMatch {
+            file_path: "foo.rs".to_string(),
+            line_number: 1,
+            line_content: "hello".to_string(),
+            context_before: vec![],
+            context_after: vec![],
+        }];
+        let result = format_search_results(&matches);
+        assert!(result.contains("Found 1 result"));
     }
 
     #[test]

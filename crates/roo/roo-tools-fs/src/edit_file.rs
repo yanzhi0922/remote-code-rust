@@ -373,7 +373,17 @@ pub fn process_edit_file(
     let file_exists = file_path.exists();
     let old_string = &params.old_string;
     let new_string = &params.new_string;
-    let expected_replacements = params.expected_replacements.unwrap_or(1).max(1) as usize;
+    let replace_all = params.replace_all.unwrap_or(false);
+
+    // When replace_all is true we first need to read the file to count matches.
+    // For the non-replace_all path, expected_replacements defaults to 1.
+    let expected_replacements = if replace_all {
+        // We'll compute this after reading the file below.
+        // Use a sentinel — 0 means "not yet determined".
+        0usize
+    } else {
+        params.expected_replacements.unwrap_or(1).max(1) as usize
+    };
 
     // Case: Creating a new file (old_string is empty)
     if old_string.is_empty() {
@@ -424,6 +434,23 @@ pub fn process_edit_file(
             "old_string and new_string are identical after normalizing line endings. No changes to apply.".to_string(),
         ));
     }
+
+    // Resolve the final expected_replacements count.
+    // When replace_all is true, count all occurrences of old_string.
+    let expected_replacements = if replace_all {
+        let count = count_occurrences(&current_lf, &old_lf);
+        if count == 0 {
+            return Err(build_detailed_error(
+                &params.file_path,
+                &old_lf,
+                &new_lf,
+                &current_lf,
+            ));
+        }
+        count
+    } else {
+        expected_replacements
+    };
 
     // --- Three-layer matching strategy ---
 
@@ -498,6 +525,7 @@ mod tests {
             old_string: "old".to_string(),
             new_string: "new".to_string(),
             expected_replacements: None,
+            replace_all: None,
         };
         assert!(validate_edit_file_params(&params).is_err());
     }
@@ -509,6 +537,7 @@ mod tests {
             old_string: "old".to_string(),
             new_string: "new".to_string(),
             expected_replacements: None,
+            replace_all: None,
         };
         assert!(validate_edit_file_params(&params).is_err());
     }
@@ -520,6 +549,7 @@ mod tests {
             old_string: "old".to_string(),
             new_string: "new".to_string(),
             expected_replacements: None,
+            replace_all: None,
         };
         assert!(validate_edit_file_params(&params).is_ok());
     }
@@ -531,6 +561,7 @@ mod tests {
             old_string: "foo".to_string(),
             new_string: "bar".to_string(),
             expected_replacements: None,
+            replace_all: None,
         };
         let result = process_edit_file(&params, std::path::Path::new("."), None);
         assert!(result.is_err());
@@ -546,6 +577,7 @@ mod tests {
             old_string: "".to_string(),
             new_string: "hello world\n".to_string(),
             expected_replacements: None,
+            replace_all: None,
         };
         let result = process_edit_file(&params, std::path::Path::new("."), None).unwrap();
         assert!(result.success);
@@ -566,6 +598,7 @@ mod tests {
             old_string: "".to_string(),
             new_string: "new content".to_string(),
             expected_replacements: None,
+            replace_all: None,
         };
         let result = process_edit_file(&params, std::path::Path::new("."), None);
         assert!(result.is_err());
@@ -582,6 +615,7 @@ mod tests {
             old_string: "hello world".to_string(),
             new_string: "HELLO WORLD".to_string(),
             expected_replacements: None,
+            replace_all: None,
         };
         let result = process_edit_file(&params, std::path::Path::new("."), None).unwrap();
         assert!(result.success);
@@ -603,6 +637,7 @@ mod tests {
             old_string: "nonexistent string".to_string(),
             new_string: "replacement".to_string(),
             expected_replacements: None,
+            replace_all: None,
         };
         let result = process_edit_file(&params, std::path::Path::new("."), None);
         assert!(result.is_err());
@@ -623,6 +658,7 @@ mod tests {
             old_string: "foo".to_string(),
             new_string: "bar".to_string(),
             expected_replacements: Some(1),
+            replace_all: None,
         };
         let result = process_edit_file(&params, std::path::Path::new("."), None);
         assert!(result.is_err());
@@ -639,6 +675,7 @@ mod tests {
             old_string: "foo".to_string(),
             new_string: "bar".to_string(),
             expected_replacements: Some(3),
+            replace_all: None,
         };
         let result = process_edit_file(&params, std::path::Path::new("."), None).unwrap();
         assert!(result.success);
@@ -658,6 +695,7 @@ mod tests {
             old_string: "hello".to_string(),
             new_string: "hello".to_string(),
             expected_replacements: None,
+            replace_all: None,
         };
         let result = process_edit_file(&params, std::path::Path::new("."), None);
         assert!(result.is_err());
@@ -682,6 +720,7 @@ mod tests {
             old_string: "hello\nworld".to_string(),
             new_string: "HELLO\nWORLD".to_string(),
             expected_replacements: None,
+            replace_all: None,
         };
         let result = process_edit_file(&params, std::path::Path::new("."), None).unwrap();
         assert!(result.success);
@@ -700,6 +739,7 @@ mod tests {
             old_string: "".to_string(),
             new_string: "deep content".to_string(),
             expected_replacements: None,
+            replace_all: None,
         };
         let result = process_edit_file(&params, std::path::Path::new("."), None).unwrap();
         assert!(result.success);
@@ -721,6 +761,7 @@ mod tests {
             old_string: "hello world".to_string(),
             new_string: "HELLO WORLD".to_string(),
             expected_replacements: None,
+            replace_all: None,
         };
         let result = process_edit_file(&params, std::path::Path::new("."), None).unwrap();
         assert!(result.success);
@@ -740,6 +781,7 @@ mod tests {
             old_string: "hello world".to_string(),
             new_string: "HELLO WORLD".to_string(),
             expected_replacements: None,
+            replace_all: None,
         };
         let result = process_edit_file(&params, std::path::Path::new("."), None).unwrap();
         assert!(result.success);
@@ -762,6 +804,7 @@ mod tests {
             old_string: "hello world".to_string(),
             new_string: "HELLO WORLD".to_string(),
             expected_replacements: None,
+            replace_all: None,
         };
         let result = process_edit_file(&params, std::path::Path::new("."), None).unwrap();
         assert!(result.success);
@@ -783,6 +826,7 @@ mod tests {
             old_string: "function myFunc".to_string(),
             new_string: "def myFunc".to_string(),
             expected_replacements: None,
+            replace_all: None,
         };
         let result = process_edit_file(&params, std::path::Path::new("."), None).unwrap();
         assert!(result.success);
@@ -803,6 +847,7 @@ mod tests {
             old_string: "fn foo() { bar }".to_string(),
             new_string: "fn baz() { qux }".to_string(),
             expected_replacements: None,
+            replace_all: None,
         };
         let result = process_edit_file(&params, std::path::Path::new("."), None);
         assert!(result.is_err());
@@ -905,6 +950,7 @@ mod tests {
             old_string: "fn foo() { bar }".to_string(),
             new_string: "fn baz() { qux }".to_string(),
             expected_replacements: None,
+            replace_all: None,
         };
         let result = process_edit_file(&params, std::path::Path::new("."), None);
         assert!(result.is_err());

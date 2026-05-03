@@ -587,6 +587,11 @@ pub struct EditFileParams {
     /// Number of replacements expected. Defaults to 1.
     #[serde(default)]
     pub expected_replacements: Option<u32>,
+    /// When `true`, replace ALL occurrences of `old_string` in the file.
+    /// Mutually exclusive with `expected_replacements` — if both are set,
+    /// `replace_all` takes precedence.
+    #[serde(default)]
+    pub replace_all: Option<bool>,
 }
 
 /// Parameters for apply_patch tool.

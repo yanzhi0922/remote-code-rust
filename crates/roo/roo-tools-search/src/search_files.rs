@@ -148,19 +148,32 @@ fn search_with_ripgrep(
 }
 
 /// Parse ripgrep JSON output into FileMatch results.
+///
+/// Handles both `match` and `context` message types so that surrounding
+/// context lines are captured alongside each match.
 fn parse_ripgrep_output(output: &str) -> Result<Vec<FileMatch>, SearchToolError> {
-    let mut matches = Vec::new();
+    let mut matches: Vec<FileMatch> = Vec::new();
+
+    // We collect match + context lines grouped by file.  The ripgrep JSON
+    // stream interleaves `match` and `context` entries for a given file
+    // between `begin` and `end` markers.  We build up context_before and
+    // context_after by looking at context lines that are adjacent to each
+    // match line.
+
+    // Intermediate representation: (file_path, line_number, text, is_match)
+    let mut pending: Vec<(String, usize, String, bool)> = Vec::new();
 
     for line in output.lines() {
         if line.trim().is_empty() {
             continue;
         }
 
-        // Try to parse as JSON
         if let Ok(json) = serde_json::from_str::<serde_json::Value>(line) {
             let msg_type = json.get("type").and_then(|t| t.as_str()).unwrap_or("");
 
-            if msg_type == "match" {
+            if msg_type == "match" || msg_type == "context" {
+                let is_match = msg_type == "match";
+
                 let file_path = json
                     .get("data")
                     .and_then(|d| d.get("path"))
@@ -185,18 +198,100 @@ fn parse_ripgrep_output(output: &str) -> Result<Vec<FileMatch>, SearchToolError>
                     .unwrap_or(0) as usize;
 
                 if !file_path.is_empty() {
+                    pending.push((file_path, line_number, line_content, is_match));
+                }
+            } else if msg_type == "end" {
+                // Finished a file — convert pending entries into FileMatches
+                let file_path = json
+                    .get("data")
+                    .and_then(|d| d.get("path"))
+                    .and_then(|p| p.get("text"))
+                    .and_then(|t| t.as_str())
+                    .unwrap_or("")
+                    .to_string();
+
+                // Extract match indices
+                let match_indices: Vec<usize> = pending
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, (_, _, _, is_match))| *is_match)
+                    .map(|(i, _)| i)
+                    .collect();
+
+                for &mi in &match_indices {
+                    let (_, line_number, line_content, _) = &pending[mi];
+
+                    // Context before: up to 2 preceding context lines
+                    let context_before: Vec<String> = (0..mi)
+                        .rev()
+                        .take(DEFAULT_CONTEXT_LINES)
+                        .map(|j| pending[j].2.clone())
+                        .collect::<Vec<_>>()
+                        .into_iter()
+                        .rev()
+                        .collect();
+
+                    // Context after: up to 2 following context lines
+                    let context_after: Vec<String> = ((mi + 1)..pending.len())
+                        .take(DEFAULT_CONTEXT_LINES)
+                        .map(|j| pending[j].2.clone())
+                        .collect();
+
                     matches.push(FileMatch {
-                        file_path,
-                        line_number,
-                        line_content,
-                        context_before: vec![],
-                        context_after: vec![],
+                        file_path: file_path.clone(),
+                        line_number: *line_number,
+                        line_content: line_content.clone(),
+                        context_before,
+                        context_after,
                     });
+
+                    if matches.len() >= 100 {
+                        return Ok(matches);
+                    }
                 }
 
-                if matches.len() >= 100 {
-                    break;
-                }
+                pending.clear();
+            }
+        }
+    }
+
+    // Handle any remaining pending entries (if no `end` marker was seen)
+    if !pending.is_empty() {
+        let file_path = pending.first().map(|(f, _, _, _)| f.clone()).unwrap_or_default();
+        let match_indices: Vec<usize> = pending
+            .iter()
+            .enumerate()
+            .filter(|(_, (_, _, _, is_match))| *is_match)
+            .map(|(i, _)| i)
+            .collect();
+
+        for mi in match_indices {
+            let (_, line_number, line_content, _) = &pending[mi];
+
+            let context_before: Vec<String> = (0..mi)
+                .rev()
+                .take(DEFAULT_CONTEXT_LINES)
+                .map(|j| pending[j].2.clone())
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect();
+
+            let context_after: Vec<String> = ((mi + 1)..pending.len())
+                .take(DEFAULT_CONTEXT_LINES)
+                .map(|j| pending[j].2.clone())
+                .collect();
+
+            matches.push(FileMatch {
+                file_path: file_path.clone(),
+                line_number: *line_number,
+                line_content: line_content.clone(),
+                context_before,
+                context_after,
+            });
+
+            if matches.len() >= 100 {
+                break;
             }
         }
     }
@@ -219,6 +314,9 @@ fn search_with_regex(
     search_in_dir_pure(&re, search_path, file_pattern, &mut results, 100);
     Ok(results)
 }
+
+/// Default number of context lines to include around each match.
+const DEFAULT_CONTEXT_LINES: usize = 2;
 
 /// Recursively search a directory using regex.
 fn search_in_dir_pure(
@@ -270,17 +368,30 @@ fn search_in_dir_pure(
 
             // Try to read and search the file
             if let Ok(content) = std::fs::read_to_string(&path) {
-                for (line_num, line) in content.lines().enumerate() {
+                let all_lines: Vec<&str> = content.lines().collect();
+                for (i, line) in all_lines.iter().enumerate() {
                     if results.len() >= max_results {
                         return;
                     }
                     if re.is_match(line) {
+                        // Gather context lines before the match
+                        let context_before: Vec<String> =
+                            (i.saturating_sub(DEFAULT_CONTEXT_LINES)..i)
+                                .filter_map(|idx| all_lines.get(idx).map(|l| l.to_string()))
+                                .collect();
+
+                        // Gather context lines after the match
+                        let context_after: Vec<String> =
+                            ((i + 1)..(i + 1 + DEFAULT_CONTEXT_LINES))
+                                .filter_map(|idx| all_lines.get(idx).map(|l| l.to_string()))
+                                .collect();
+
                         results.push(FileMatch {
                             file_path: path.to_string_lossy().to_string(),
-                            line_number: line_num + 1,
+                            line_number: i + 1,
                             line_content: line.to_string(),
-                            context_before: vec![],
-                            context_after: vec![],
+                            context_before,
+                            context_after,
                         });
                     }
                 }
