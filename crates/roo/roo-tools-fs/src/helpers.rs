@@ -580,6 +580,7 @@ mod tests {
             is_binary: false,
             start_line: 1,
             end_line: 1,
+            image_data_url: None,
         };
         let json = serde_json::to_string(&result).unwrap();
         let parsed: crate::types::ReadResult = serde_json::from_str(&json).unwrap();

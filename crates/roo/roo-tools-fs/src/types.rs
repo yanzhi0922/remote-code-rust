@@ -19,6 +19,11 @@ pub struct ReadResult {
     pub start_line: usize,
     /// The last line number shown (1-based). 0 for binary files.
     pub end_line: usize,
+    /// If the file was an image, this contains the base64 data URL.
+    /// When present, `content` holds a human-readable notice and `is_binary`
+    /// is `true`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_data_url: Option<String>,
 }
 
 /// Result of a write_to_file operation.
@@ -111,3 +116,55 @@ pub const MAX_FILE_SIZE: usize = 50 * 1024 * 1024;
 
 /// Default line limit for read operations.
 pub const DEFAULT_READ_LIMIT: usize = 2000;
+
+/// Maximum number of diagnostic messages to include in post-write results.
+pub const MAX_DIAGNOSTIC_MESSAGES: usize = 50;
+
+/// Result of running post-write diagnostics on a file.
+#[derive(Debug, Clone)]
+pub struct DiagnosticsResult {
+    /// The file path that was checked.
+    pub path: String,
+    /// Diagnostic messages (errors only), formatted for display.
+    pub messages: Vec<String>,
+    /// Whether the diagnostics check was actually performed.
+    /// `false` if the file type is not supported for diagnostics.
+    pub ran: bool,
+}
+
+impl DiagnosticsResult {
+    /// Create an empty result (no diagnostics run).
+    pub fn skipped(path: &str) -> Self {
+        Self {
+            path: path.to_string(),
+            messages: Vec::new(),
+            ran: false,
+        }
+    }
+
+    /// Create a result with diagnostic messages.
+    pub fn with_messages(path: &str, messages: Vec<String>) -> Self {
+        let ran = true;
+        Self {
+            path: path.to_string(),
+            messages,
+            ran,
+        }
+    }
+
+    /// Returns true if there are any diagnostic messages.
+    pub fn has_problems(&self) -> bool {
+        !self.messages.is_empty()
+    }
+
+    /// Format the diagnostics as a human-readable string.
+    pub fn to_problems_string(&self) -> String {
+        if !self.ran || self.messages.is_empty() {
+            return String::new();
+        }
+        format!(
+            "\n\nNew problems detected after saving the file:\n{}",
+            self.messages.join("\n")
+        )
+    }
+}

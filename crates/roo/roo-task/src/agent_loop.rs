@@ -363,7 +363,8 @@ impl Default for AgentLoopConfig {
             auto_approval: AutoApprovalState::default(),
             max_context_tokens: None,
             enable_checkpoints: false,
-            enable_condense: false,
+            // Source: `src/core/task/Task.ts` — `state.autoCondenseContext` defaults to true
+            enable_condense: true,
             rate_limit_rpm: 0,
             request_delay_seconds: 5,
             auto_approval_enabled: false,
@@ -4976,7 +4977,7 @@ mod tests {
         let config = AgentLoopConfig::default();
         assert_eq!(config.max_api_retries, 3);
         assert!(!config.stop_on_tool_error);
-        assert!(!config.enable_condense);
+        assert!(config.enable_condense);
         assert_eq!(config.rate_limit_rpm, 0);
     }
 

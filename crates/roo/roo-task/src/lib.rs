@@ -54,7 +54,10 @@ pub use engine::TaskEngine;
 pub use config::{validate_config, default_config, DEFAULT_MAX_MISTAKES, DEFAULT_MODE};
 pub use stream_parser::{StreamParser, ParsedStreamContent, ParsedToolCall, StreamUsage};
 pub use native_tool_call_parser::NativeToolCallParser;
-pub use tool_dispatcher::{ToolDispatcher, ToolExecutionResult, ToolContext, ToolHandler};
+pub use tool_dispatcher::{
+    ToolDispatcher, ToolExecutionResult, ToolContext, ToolHandler,
+    SubtaskConfig, SubtaskResult, execute_subtask, NEW_TASK_SENTINEL,
+};
 pub use message_builder::MessageBuilder;
 pub use agent_loop::{AgentLoop, AgentLoopConfig};
 pub use task_manager::TaskManager;

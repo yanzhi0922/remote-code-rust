@@ -61,3 +61,95 @@ pub use text_utils::{
 };
 pub use similarity::{get_similarity, fuzzy_search, FuzzySearchResult};
 pub use validate::{validate_marker_sequencing, ValidationResult};
+
+// ---------------------------------------------------------------------------
+// DiffStrategy trait — unified interface for all diff strategies
+// ---------------------------------------------------------------------------
+
+/// Trait shared by all diff strategy implementations.
+///
+/// Source: `src/shared/tools.ts` — `DiffStrategy` interface.
+pub trait DiffStrategy {
+    /// Returns the name of this strategy (for diagnostics / telemetry).
+    fn name(&self) -> &str;
+
+    /// Apply a diff to `original_content`, returning a [`DiffResult`].
+    fn apply_diff(&self, original_content: &str, diff_content: &str) -> DiffResult;
+}
+
+impl DiffStrategy for MultiSearchReplaceDiffStrategy {
+    fn name(&self) -> &str {
+        MultiSearchReplaceDiffStrategy::name(self)
+    }
+
+    fn apply_diff(&self, original_content: &str, diff_content: &str) -> DiffResult {
+        MultiSearchReplaceDiffStrategy::apply_diff(self, original_content, diff_content)
+    }
+}
+
+impl DiffStrategy for SingleSearchReplaceDiffStrategy {
+    fn name(&self) -> &str {
+        SingleSearchReplaceDiffStrategy::name(self)
+    }
+
+    fn apply_diff(&self, original_content: &str, diff_content: &str) -> DiffResult {
+        SingleSearchReplaceDiffStrategy::apply_diff(self, original_content, diff_content)
+    }
+}
+
+impl DiffStrategy for UnifiedDiffStrategy {
+    fn name(&self) -> &str {
+        UnifiedDiffStrategy::name(self)
+    }
+
+    fn apply_diff(&self, original_content: &str, diff_content: &str) -> DiffResult {
+        UnifiedDiffStrategy::apply_diff(self, original_content, diff_content)
+    }
+}
+
+impl DiffStrategy for ApplyPatchDiffStrategy {
+    fn name(&self) -> &str {
+        ApplyPatchDiffStrategy::name(self)
+    }
+
+    fn apply_diff(&self, original_content: &str, diff_content: &str) -> DiffResult {
+        ApplyPatchDiffStrategy::apply_diff(self, original_content, diff_content)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Strategy selection — mirrors TS getDiffStrategy(modelId)
+// ---------------------------------------------------------------------------
+
+/// Select the appropriate diff strategy based on the model ID.
+///
+/// Matching the TypeScript behaviour in `src/core/task/Task.ts`:
+/// - The default (and most common) strategy is [`MultiSearchReplaceDiffStrategy`].
+/// - For OpenAI models (gpt-4, gpt-3.5, o1, o3, etc.) the [`ApplyPatchDiffStrategy`]
+///   is preferred because those models tend to produce Codex-style patches.
+/// - For Claude models with a legacy format prefix, [`SingleSearchReplaceDiffStrategy`]
+///   is returned.
+pub fn get_diff_strategy(model_id: &str) -> Box<dyn DiffStrategy> {
+    let lower = model_id.to_lowercase();
+
+    // OpenAI models — use the Codex-format ApplyPatch strategy
+    if lower.starts_with("gpt-")
+        || lower.starts_with("o1")
+        || lower.starts_with("o3")
+        || lower.starts_with("o4")
+        || lower.contains("chatgpt")
+    {
+        return Box::new(ApplyPatchDiffStrategy::new());
+    }
+
+    // Claude models with legacy single-block format preference
+    // (older Claude models that used the simpler SEARCH/REPLACE markers)
+    if (lower.starts_with("claude-2") || lower.starts_with("claude-instant"))
+        && !lower.contains("legacy")
+    {
+        return Box::new(SingleSearchReplaceDiffStrategy::new(None, None));
+    }
+
+    // Default: MultiSearchReplace — the primary strategy used by most models
+    Box::new(MultiSearchReplaceDiffStrategy::new(None, None))
+}

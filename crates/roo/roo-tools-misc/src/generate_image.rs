@@ -8,6 +8,7 @@
 //! - Input image handling (reading, format validation, base64 encoding)
 //! - Result types for image generation
 //! - A trait for provider-specific image generation API calls
+//! - Concrete provider implementations (OpenRouter, Roo)
 
 // ---------------------------------------------------------------------------
 // GenerateImageParams
@@ -152,6 +153,164 @@ pub trait ImageGenerationProvider: Send + Sync {
         input_image_data: Option<&str>,
         api_key: Option<&str>,
     ) -> Result<ImageProviderResponse, ImageGenerationError>;
+}
+
+// ---------------------------------------------------------------------------
+// OpenRouterImageProvider
+// ---------------------------------------------------------------------------
+
+/// Image generation provider for OpenRouter.
+///
+/// OpenRouter is the most common provider for image generation in Roo Code.
+/// It uses the OpenAI-compatible chat completions API with image generation
+/// models like Gemini, GPT-5 Image, and FLUX.
+///
+/// Corresponds to the TS `OpenRouterHandler.generateImage()` method which
+/// sends a chat completion request with the image generation model.
+///
+/// **Status**: Wiring is complete. The actual HTTP API call is a TODO.
+pub struct OpenRouterImageProvider {
+    /// The base URL for the OpenRouter API.
+    pub base_url: String,
+}
+
+impl OpenRouterImageProvider {
+    /// Create a new OpenRouter image provider with the default API URL.
+    pub fn new() -> Self {
+        Self {
+            base_url: "https://openrouter.ai/api/v1".to_string(),
+        }
+    }
+
+    /// Create a new OpenRouter image provider with a custom base URL.
+    pub fn with_base_url(base_url: &str) -> Self {
+        Self {
+            base_url: base_url.to_string(),
+        }
+    }
+}
+
+impl Default for OpenRouterImageProvider {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ImageGenerationProvider for OpenRouterImageProvider {
+    fn generate_image(
+        &self,
+        prompt: &str,
+        model: &str,
+        _input_image_data: Option<&str>,
+        api_key: Option<&str>,
+    ) -> Result<ImageProviderResponse, ImageGenerationError> {
+        // Validate API key
+        let _key = match api_key {
+            Some(k) if !k.is_empty() => k,
+            _ => {
+                return Err(ImageGenerationError::ApiKeyRequired(
+                    "OpenRouter API key is required for image generation. \
+                     Please set the OpenRouter API key in your Roo Code settings."
+                        .to_string(),
+                ));
+            }
+        };
+
+        // Validate prompt
+        if prompt.is_empty() {
+            return Err(ImageGenerationError::MissingParam("prompt".to_string()));
+        }
+
+        // TODO: Implement actual HTTP API call to OpenRouter.
+        // The TS implementation sends a POST to /chat/completions with:
+        //   { model, messages: [{ role: "user", content: prompt }] }
+        // and extracts the base64 image data from the response.
+        //
+        // For now, return a clear "not yet implemented" message so callers
+        // know the wiring is in place but the API call is pending.
+        Ok(ImageProviderResponse {
+            success: false,
+            image_data: None,
+            error: Some(format!(
+                "Image generation via OpenRouter (model: {}) is not yet implemented in the Rust port. \
+                 The provider wiring is complete — the actual HTTP API call to {} is a TODO.",
+                model, self.base_url
+            )),
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// RooImageProvider
+// ---------------------------------------------------------------------------
+
+/// Image generation provider for the Roo Cloud service.
+///
+/// Corresponds to the TS `RooHandler.generateImage()` method.
+///
+/// **Status**: Placeholder — the actual API call is a TODO.
+pub struct RooImageProvider {
+    /// The base URL for the Roo Cloud API.
+    pub base_url: String,
+}
+
+impl RooImageProvider {
+    /// Create a new Roo image provider with the default API URL.
+    pub fn new() -> Self {
+        Self {
+            base_url: "https://api.roocode.com/v1".to_string(),
+        }
+    }
+
+    /// Create a new Roo image provider with a custom base URL.
+    pub fn with_base_url(base_url: &str) -> Self {
+        Self {
+            base_url: base_url.to_string(),
+        }
+    }
+}
+
+impl Default for RooImageProvider {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ImageGenerationProvider for RooImageProvider {
+    fn generate_image(
+        &self,
+        prompt: &str,
+        model: &str,
+        _input_image_data: Option<&str>,
+        api_key: Option<&str>,
+    ) -> Result<ImageProviderResponse, ImageGenerationError> {
+        // Validate API key
+        let _key = match api_key {
+            Some(k) if !k.is_empty() => k,
+            _ => {
+                return Err(ImageGenerationError::ApiKeyRequired(
+                    "Roo Cloud API key is required for image generation. \
+                     Please set the Roo API key in your Roo Code settings."
+                        .to_string(),
+                ));
+            }
+        };
+
+        if prompt.is_empty() {
+            return Err(ImageGenerationError::MissingParam("prompt".to_string()));
+        }
+
+        // TODO: Implement actual HTTP API call to Roo Cloud.
+        Ok(ImageProviderResponse {
+            success: false,
+            image_data: None,
+            error: Some(format!(
+                "Image generation via Roo Cloud (model: {}) is not yet implemented in the Rust port. \
+                 The provider wiring is complete — the actual HTTP API call to {} is a TODO.",
+                model, self.base_url
+            )),
+        })
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -618,5 +777,101 @@ mod tests {
         assert!(!response.success);
         assert!(response.image_data.is_none());
         assert!(response.error.is_some());
+    }
+
+    // ---- OpenRouterImageProvider tests ----
+
+    #[test]
+    fn test_openrouter_provider_default() {
+        let provider = OpenRouterImageProvider::new();
+        assert_eq!(provider.base_url, "https://openrouter.ai/api/v1");
+    }
+
+    #[test]
+    fn test_openrouter_provider_custom_url() {
+        let provider = OpenRouterImageProvider::with_base_url("https://custom.api.com/v1");
+        assert_eq!(provider.base_url, "https://custom.api.com/v1");
+    }
+
+    #[test]
+    fn test_openrouter_provider_default_trait() {
+        let provider = OpenRouterImageProvider::default();
+        assert_eq!(provider.base_url, "https://openrouter.ai/api/v1");
+    }
+
+    #[test]
+    fn test_openrouter_provider_no_api_key() {
+        let provider = OpenRouterImageProvider::new();
+        let result = provider.generate_image("sunset", "model", None, None);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        let msg = format!("{}", err);
+        assert!(msg.contains("API key"));
+    }
+
+    #[test]
+    fn test_openrouter_provider_empty_api_key() {
+        let provider = OpenRouterImageProvider::new();
+        let result = provider.generate_image("sunset", "model", None, Some(""));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_openrouter_provider_returns_not_implemented() {
+        let provider = OpenRouterImageProvider::new();
+        let result = provider.generate_image("sunset", "test-model", None, Some("sk-test-key"));
+        assert!(result.is_ok());
+        let response = result.unwrap();
+        assert!(!response.success);
+        assert!(response.error.as_ref().unwrap().contains("not yet implemented"));
+        assert!(response.error.as_ref().unwrap().contains("test-model"));
+    }
+
+    #[test]
+    fn test_openrouter_provider_empty_prompt() {
+        let provider = OpenRouterImageProvider::new();
+        let result = provider.generate_image("", "model", None, Some("key"));
+        assert!(result.is_err());
+    }
+
+    // ---- RooImageProvider tests ----
+
+    #[test]
+    fn test_roo_provider_default() {
+        let provider = RooImageProvider::new();
+        assert!(!provider.base_url.is_empty());
+    }
+
+    #[test]
+    fn test_roo_provider_no_api_key() {
+        let provider = RooImageProvider::new();
+        let result = provider.generate_image("sunset", "model", None, None);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_roo_provider_returns_not_implemented() {
+        let provider = RooImageProvider::new();
+        let result = provider.generate_image("sunset", "test-model", None, Some("roo-key"));
+        assert!(result.is_ok());
+        let response = result.unwrap();
+        assert!(!response.success);
+        assert!(response.error.as_ref().unwrap().contains("not yet implemented"));
+    }
+
+    // ---- Provider trait object test ----
+
+    #[test]
+    fn test_provider_as_trait_object() {
+        let providers: Vec<Box<dyn ImageGenerationProvider>> = vec![
+            Box::new(OpenRouterImageProvider::new()),
+            Box::new(RooImageProvider::new()),
+        ];
+
+        for provider in &providers {
+            let result = provider.generate_image("test", "model", None, Some("key"));
+            // Both should succeed with a "not yet implemented" response
+            assert!(result.is_ok());
+        }
     }
 }

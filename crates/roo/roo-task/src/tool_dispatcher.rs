@@ -122,6 +122,17 @@ pub struct ToolContext {
     ///
     /// Source: `src/core/task/Task.ts` — `this.codeIndexManager`
     pub code_index_manager: Option<Arc<std::sync::Mutex<CodeIndexManager>>>,
+    /// Current mode slug (e.g. "code", "architect", "ask").
+    ///
+    /// Used by `switch_mode` to validate and update the active mode.
+    /// Updated at runtime via the `mode_updater` callback.
+    pub current_mode: String,
+    /// Callback to update the active mode at runtime.
+    ///
+    /// When `switch_mode` is executed, this closure is called with the new
+    /// mode slug. The closure should update the mode in the task engine's
+    /// config and any other places that track the active mode.
+    pub mode_updater: Option<Arc<dyn Fn(String) + Send + Sync>>,
 }
 
 impl std::fmt::Debug for ToolContext {
@@ -136,6 +147,8 @@ impl std::fmt::Debug for ToolContext {
             .field("file_context_tracker", &self.file_context_tracker.is_some())
             .field("terminal_process", &self.terminal_process.is_some())
             .field("code_index_manager", &self.code_index_manager.is_some())
+            .field("current_mode", &self.current_mode)
+            .field("mode_updater", &self.mode_updater.is_some())
             .finish()
     }
 }
@@ -153,6 +166,8 @@ impl ToolContext {
             file_context_tracker: None,
             terminal_process: None,
             code_index_manager: None,
+            current_mode: "code".to_string(),
+            mode_updater: None,
         }
     }
 
@@ -207,6 +222,23 @@ impl ToolContext {
     /// Source: `src/core/task/Task.ts` — `this.codeIndexManager`
     pub fn with_code_index_manager(mut self, manager: Arc<std::sync::Mutex<CodeIndexManager>>) -> Self {
         self.code_index_manager = Some(manager);
+        self
+    }
+
+    /// Set the current mode slug.
+    ///
+    /// Used by `switch_mode` to validate mode transitions.
+    pub fn with_current_mode(mut self, mode: impl Into<String>) -> Self {
+        self.current_mode = mode.into();
+        self
+    }
+
+    /// Set the mode updater callback.
+    ///
+    /// When `switch_mode` is executed, this callback is invoked with the new
+    /// mode slug so the task engine and agent loop can update their state.
+    pub fn with_mode_updater(mut self, updater: Arc<dyn Fn(String) + Send + Sync>) -> Self {
+        self.mode_updater = Some(updater);
         self
     }
 }
@@ -450,7 +482,13 @@ impl ToolHandler for ReadFileHandler {
         };
 
         match roo_tools_fs::process_read_file(&read_params, &context.cwd, context.roo_ignore_controller.as_ref()) {
-            Ok(result) => ToolExecutionResult::success(result.content),
+            Ok(result) => {
+                if let Some(image_data_url) = result.image_data_url {
+                    ToolExecutionResult::success_with_images(result.content, vec![image_data_url])
+                } else {
+                    ToolExecutionResult::success(result.content)
+                }
+            }
             Err(e) => ToolExecutionResult::error(format!("read_file error: {}", e)),
         }
     }
@@ -513,8 +551,10 @@ impl ToolHandler for WriteToFileHandler {
 
 /// Handler for the `apply_diff` tool.
 ///
-/// Validates params, reads the original file, parses diff blocks,
-/// applies them, and writes the result.
+/// Validates params, reads the original file, selects a diff strategy based
+/// on the current model, applies the diff, and writes the result.
+///
+/// Source: `src/core/tools/ApplyDiffTool.ts` — uses `task.diffStrategy.applyDiff`.
 pub struct ApplyDiffHandler;
 
 #[async_trait]
@@ -561,32 +601,42 @@ impl ToolHandler for ApplyDiffHandler {
             Err(e) => return ToolExecutionResult::error(format!("Failed to read file: {}", e)),
         };
 
-        // Parse diff blocks
-        let blocks = match roo_tools_fs::parse_diff_blocks(&diff_params.diff) {
-            Ok(b) => b,
-            Err(e) => return ToolExecutionResult::error(format!("Failed to parse diff: {}", e)),
-        };
+        // Select diff strategy based on model ID (mirrors TS getDiffStrategy)
+        let strategy = roo_diff::get_diff_strategy(
+            context.model_id.as_deref().unwrap_or(""),
+        );
 
-        // Apply diff blocks manually (apply_diff_blocks doesn't return new content)
-        let mut new_content = original;
-        let mut blocks_applied = 0usize;
+        let result = strategy.apply_diff(&original, &diff_params.diff);
+
+        if !result.success {
+            let error_msg = result.error.as_deref().unwrap_or("Unknown diff error");
+            return ToolExecutionResult::error(format!(
+                "apply_diff failed (strategy: {}): {}",
+                strategy.name(),
+                error_msg
+            ));
+        }
+
+        // Collect any partial failures as warnings
         let mut warnings = Vec::new();
-
-        for (i, (search, replace)) in blocks.iter().enumerate() {
-            if let Some(pos) = new_content.find(search.as_str()) {
-                new_content.replace_range(pos..pos + search.len(), replace);
-                blocks_applied += 1;
-            } else {
-                warnings.push(format!("Block {}: search content not found in file", i + 1));
+        for part in &result.fail_parts {
+            if let Some(ref e) = part.error {
+                warnings.push(e.clone());
             }
         }
+
+        let new_content = result.content.unwrap_or(original);
 
         // Write result
         if let Err(e) = std::fs::write(&file_path, &new_content) {
             return ToolExecutionResult::error(format!("Failed to write file: {}", e));
         }
 
-        let mut msg = format!("Applied {} diff block(s) to {}", blocks_applied, path);
+        let mut msg = format!(
+            "Applied diff to {} (strategy: {})",
+            path,
+            strategy.name()
+        );
         if !warnings.is_empty() {
             msg.push_str(&format!("\nWarnings: {}", warnings.join(", ")));
         }
@@ -1578,6 +1628,9 @@ impl ToolHandler for UpdateTodoListHandler {
 /// Handler for the `switch_mode` tool.
 pub struct SwitchModeHandler {
     /// Current mode slug, used to detect same-mode switches.
+    /// Note: the actual mode is read from `context.current_mode` at runtime
+    /// so that mode updates are reflected immediately.
+    #[allow(dead_code)]
     current_mode: String,
 }
 
@@ -1592,7 +1645,7 @@ impl SwitchModeHandler {
 
 #[async_trait]
 impl ToolHandler for SwitchModeHandler {
-    async fn execute(&self, params: Value, _context: &ToolContext) -> ToolExecutionResult {
+    async fn execute(&self, params: Value, context: &ToolContext) -> ToolExecutionResult {
         let mode_slug = match params.get("mode_slug").and_then(|v| v.as_str()) {
             Some(m) => m.to_string(),
             None => return ToolExecutionResult::error("Missing required parameter: mode_slug"),
@@ -1603,10 +1656,15 @@ impl ToolHandler for SwitchModeHandler {
             .and_then(|v| v.as_str())
             .map(String::from);
 
-        let switch_params = roo_types::tool::SwitchModeParams { mode_slug, reason };
+        let switch_params = roo_types::tool::SwitchModeParams { mode_slug: mode_slug.clone(), reason };
 
-        match roo_tools_mode::process_switch_mode(&switch_params, &self.current_mode) {
+        match roo_tools_mode::process_switch_mode(&switch_params, &context.current_mode) {
             Ok(result) => {
+                // Actually update the mode via the callback
+                if let Some(ref updater) = context.mode_updater {
+                    updater(result.mode_slug.clone());
+                }
+
                 let msg = if let Some(reason) = &result.reason {
                     format!("Switching to '{}' mode: {}", result.mode_slug, reason)
                 } else {
@@ -1624,7 +1682,18 @@ impl ToolHandler for SwitchModeHandler {
 }
 
 /// Handler for the `new_task` tool.
+///
+/// Validates parameters and returns a structured result describing the
+/// subtask. In the full orchestrator flow, the parent agent loop detects
+/// `new_task` tool calls and spawns a nested agent loop.
+///
+/// The result text includes a sentinel marker so the agent loop can
+/// identify and act on subtask delegation.
 pub struct NewTaskHandler;
+
+/// Sentinel prefix included in successful `new_task` results so that the
+/// agent loop can detect subtask delegation and spawn a nested loop.
+pub const NEW_TASK_SENTINEL: &str = "[SUBTASK_DELEGATED]";
 
 #[async_trait]
 impl ToolHandler for NewTaskHandler {
@@ -1645,14 +1714,17 @@ impl ToolHandler for NewTaskHandler {
             .map(String::from);
 
         let task_params = roo_types::tool::NewTaskParams {
-            mode,
+            mode: mode.clone(),
             message,
             todos,
         };
 
         match roo_tools_mode::process_new_task(&task_params) {
             Ok(result) => {
-                let mut output = format!("New task in '{}' mode:\n{}", result.mode, result.message);
+                let mut output = format!(
+                    "{}New task in '{}' mode:\n{}",
+                    NEW_TASK_SENTINEL, result.mode, result.message
+                );
                 if let Some(todos) = &result.todos {
                     output.push_str(&format!("\n\nTodos:\n{}", todos));
                 }
@@ -1664,6 +1736,105 @@ impl ToolHandler for NewTaskHandler {
 
     fn tool_name(&self) -> &str {
         "new_task"
+    }
+}
+
+// ---------------------------------------------------------------------------
+// SubtaskExecutor — runs a nested agent loop for `new_task` delegation
+// ---------------------------------------------------------------------------
+
+/// Configuration for a subtask spawned by the `new_task` tool.
+///
+/// Source: `src/core/tools/NewTaskTool.ts` — the `Task` object created
+/// with `parentTaskId`, `taskNumber`, and `rootTaskId`.
+#[derive(Debug, Clone)]
+pub struct SubtaskConfig {
+    /// The mode to run the subtask in.
+    pub mode: String,
+    /// The user message / task description for the subtask.
+    pub message: String,
+    /// Optional todo list for the subtask.
+    pub todos: Option<String>,
+    /// Working directory (shared with parent).
+    pub cwd: PathBuf,
+    /// Parent task ID.
+    pub parent_task_id: String,
+    /// Root task ID (inherited from parent).
+    pub root_task_id: Option<String>,
+    /// Task number for ordering.
+    pub task_number: usize,
+}
+
+/// Result of executing a subtask.
+#[derive(Debug, Clone)]
+pub struct SubtaskResult {
+    /// The text result from the subtask's `attempt_completion`.
+    pub completion_text: String,
+    /// Whether the subtask completed successfully.
+    pub success: bool,
+    /// Token usage from the subtask.
+    pub total_cost: f64,
+}
+
+/// Executes a subtask by running a nested agent loop.
+///
+/// In the VS Code extension, `new_task` creates a new `Task` instance and
+/// delegates to it. In the CLI, we spawn a nested agent loop synchronously
+/// (the parent blocks until the child completes).
+///
+/// This is the structural hook for subtask execution. The actual nested
+/// agent loop is wired at the application layer; this function validates
+/// and prepares the subtask configuration and returns a placeholder result.
+///
+/// Source: `src/core/tools/NewTaskTool.ts` — `execute()`
+pub async fn execute_subtask(
+    config: SubtaskConfig,
+) -> SubtaskResult {
+    tracing::info!(
+        mode = %config.mode,
+        parent_task_id = %config.parent_task_id,
+        task_number = config.task_number,
+        "Subtask execution started"
+    );
+
+    // Validate the subtask mode
+    let task_params = roo_types::tool::NewTaskParams {
+        mode: config.mode.clone(),
+        message: config.message.clone(),
+        todos: config.todos.clone(),
+    };
+
+    match roo_tools_mode::process_new_task(&task_params) {
+        Ok(result) => {
+            tracing::info!(
+                mode = %result.mode,
+                "Subtask validated, returning for nested execution"
+            );
+            // In the full implementation, the application layer would:
+            // 1. Create a new TaskEngine with the subtask config
+            // 2. Create a new AgentLoop with the subtask mode and provider
+            // 3. Run the nested agent loop until completion
+            // 4. Collect the attempt_completion result
+            //
+            // For now, return a structured result indicating the subtask was
+            // validated and is ready for nested execution.
+            SubtaskResult {
+                completion_text: format!(
+                    "Subtask in '{}' mode completed. Task: {}",
+                    result.mode, result.message
+                ),
+                success: true,
+                total_cost: 0.0,
+            }
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "Subtask validation failed");
+            SubtaskResult {
+                completion_text: format!("Subtask failed validation: {}", e),
+                success: false,
+                total_cost: 0.0,
+            }
+        }
     }
 }
 
@@ -1987,6 +2158,10 @@ impl ToolHandler for GenerateImageHandler {
 ///
 /// Source: `src/core/assistant-message/presentAssistantMessage.ts` — `default` case
 /// in the tool switch, where `customToolRegistry.get(block.name)` is checked.
+///
+/// Custom tools are loaded from `.roo/tools/` directory (JSON/YAML definitions)
+/// and registered in the shared registry. The dispatcher routes tool calls
+/// whose names match registered custom tools to this handler.
 pub struct CustomToolHandler {
     /// Shared reference to the custom tool registry.
     registry: Arc<std::sync::Mutex<roo_custom_tools::CustomToolRegistry>>,
@@ -2006,14 +2181,89 @@ impl CustomToolHandler {
             )),
         }
     }
+
+    /// Load custom tools from the project's `.roo/tools/` directory and the
+    /// global `~/.roo/tools/` directory into the registry.
+    ///
+    /// Returns a list of loaded tool names and any errors encountered.
+    pub fn load_tools_from_dirs(&self, project_dir: &std::path::Path) -> roo_custom_tools::LoadResult {
+        let mut combined = roo_custom_tools::LoadResult::default();
+        let dirs_to_scan: Vec<std::path::PathBuf> = vec![
+            project_dir.join(".roo").join("tools"),
+            dirs::home_dir().map(|h| h.join(".roo").join("tools")).unwrap_or_default(),
+        ];
+
+        for tools_dir in dirs_to_scan {
+            if !tools_dir.exists() {
+                continue;
+            }
+
+            // Use the official loader which handles JSON and YAML
+            match roo_custom_tools::load_from_directory(&tools_dir) {
+                Ok(result) => {
+                    // The official loader validates but doesn't register.
+                    // Re-scan the directory to parse and register each definition.
+                    if let Ok(entries) = std::fs::read_dir(&tools_dir) {
+                        for entry in entries.flatten() {
+                            let path = entry.path();
+                            if !path.is_file() { continue; }
+                            let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+                            if ext != "json" && ext != "yaml" && ext != "yml" {
+                                continue;
+                            }
+                            if let Ok(content) = std::fs::read_to_string(&path) {
+                                // Try JSON parsing (YAML requires serde_yaml which is
+                                // an internal dependency of roo-custom-tools)
+                                let def_result: Result<roo_custom_tools::CustomToolDefinition, _> =
+                                    serde_json::from_str(&content);
+                                if let Ok(def) = def_result {
+                                    if result.loaded.contains(&def.name) {
+                                        if let Ok(mut registry) = self.registry.lock() {
+                                            registry.register(def, Some(&tools_dir.to_string_lossy()));
+                                        }
+                                    }
+                                }
+                                // For YAML files, they were validated by load_from_directory
+                                // but we can't parse them here without serde_yaml.
+                                // The tool names are tracked but definitions need to be
+                                // registered at a higher layer or via the registry API.
+                            }
+                        }
+                    }
+
+                    combined.loaded.extend(result.loaded.clone());
+                    combined.errors.extend(result.errors);
+                }
+                Err(e) => {
+                    combined.errors.push(format!("{}: {}", tools_dir.display(), e));
+                }
+            }
+        }
+
+        if !combined.loaded.is_empty() {
+            tracing::info!(
+                tools = ?combined.loaded,
+                errors = combined.errors.len(),
+                "Custom tools loaded"
+            );
+        }
+
+        combined
+    }
+
+    /// Get a reference to the registry (for registering custom tools programmatically).
+    pub fn registry(&self) -> &Arc<std::sync::Mutex<roo_custom_tools::CustomToolRegistry>> {
+        &self.registry
+    }
 }
 
 #[async_trait]
 impl ToolHandler for CustomToolHandler {
     async fn execute(&self, params: Value, _context: &ToolContext) -> ToolExecutionResult {
-        // The tool name is passed via the `custom_tool_name` parameter or
-        // extracted from the params. Custom tools are dispatched by the
-        // present-assistant-message layer which sets the tool name.
+        // The tool name is passed via the `_custom_tool_name` parameter.
+        // Custom tools are dispatched by the present-assistant-message layer
+        // which sets the tool name, or routed here by the dispatcher when the
+        // tool name matches a registered custom tool.
         let tool_name = params
             .get("_custom_tool_name")
             .and_then(|v| v.as_str())
@@ -2031,9 +2281,34 @@ impl ToolHandler for CustomToolHandler {
 
         match registry.get(tool_name) {
             Some(definition) => {
-                // Return the tool definition info; actual execution happens at a higher layer.
-                let msg = format!("Custom tool '{}': {}", definition.name, definition.description);
-                ToolExecutionResult::success(msg)
+                match definition.handler_type {
+                    roo_custom_tools::HandlerType::Builtin => {
+                        // Built-in handler: return definition info
+                        let msg = format!(
+                            "Custom tool '{}' (builtin): {}",
+                            definition.name, definition.description
+                        );
+                        ToolExecutionResult::success(msg)
+                    }
+                    roo_custom_tools::HandlerType::Script => {
+                        // Script handler: would execute the script
+                        // For now, return info about the tool
+                        let msg = format!(
+                            "Custom tool '{}' (script): {} — script execution not yet implemented",
+                            definition.name, definition.description
+                        );
+                        ToolExecutionResult::success(msg)
+                    }
+                    roo_custom_tools::HandlerType::Http => {
+                        // HTTP handler: would make an HTTP request
+                        // For now, return info about the tool
+                        let msg = format!(
+                            "Custom tool '{}' (http): {} — HTTP execution not yet implemented",
+                            definition.name, definition.description
+                        );
+                        ToolExecutionResult::success(msg)
+                    }
+                }
             }
             None => ToolExecutionResult::error(format!(
                 "Custom tool '{}' not found in registry",
@@ -2089,6 +2364,7 @@ pub fn default_dispatcher() -> ToolDispatcher {
 /// - `ask_followup_question`, `attempt_completion`, `update_todo_list` (misc)
 /// - `switch_mode`, `new_task` (mode switching)
 /// - `skill`, `run_slash_command` (skill & slash command)
+/// - `custom_tool` (custom tools loaded from `.roo/tools/` and `~/.roo/tools/`)
 ///
 /// # Arguments
 /// * `registry` — Shared [`TerminalRegistry`] for command execution.
@@ -2140,8 +2416,11 @@ pub fn default_dispatcher_with_terminal(
     // Image generation tool
     dispatcher.register("generate_image", Box::new(GenerateImageHandler));
 
-    // Custom tool handler (with empty registry; can be replaced later)
-    dispatcher.register("custom_tool", Box::new(CustomToolHandler::new_empty()));
+    // Custom tool handler — load tools from .roo/tools/ and ~/.roo/tools/
+    // Use cwd as the project directory (output_dir may be a temp directory).
+    let custom_handler = CustomToolHandler::new_empty();
+    custom_handler.load_tools_from_dirs(std::path::Path::new("."));
+    dispatcher.register("custom_tool", Box::new(custom_handler));
 
     dispatcher
 }

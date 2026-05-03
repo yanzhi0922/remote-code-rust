@@ -8,6 +8,10 @@
 //! Also provides binary detection and long line truncation.
 
 use crate::helpers::*;
+use crate::image_processing::{
+    is_image_file, process_image_file, ImageSkipReason, DEFAULT_MAX_IMAGE_FILE_SIZE_MB,
+    DEFAULT_MAX_TOTAL_IMAGE_SIZE_MB,
+};
 use crate::types::*;
 use roo_ignore::RooIgnoreController;
 use roo_types::tool_params::{IndentationParams, ReadFileMode, ReadFileParams};
@@ -106,6 +110,59 @@ pub fn process_read_file(
     let raw_data = std::fs::read(&file_path)?;
 
     if is_binary_content(&raw_data) {
+        // Check if the binary file is a supported image format
+        if is_image_file(&file_path) {
+            let max_image_mb = DEFAULT_MAX_IMAGE_FILE_SIZE_MB;
+            let max_total_mb = DEFAULT_MAX_TOTAL_IMAGE_SIZE_MB;
+
+            return match process_image_file(&file_path, max_image_mb, 0.0, max_total_mb) {
+                Ok(Ok(image)) => {
+                    let size_kb = (image.size_bytes as f64 / 1024.0).round() as u64;
+                    Ok(ReadResult {
+                        content: format!(
+                            "Image file processed ({} KB, {})",
+                            size_kb, image.media_type
+                        ),
+                        path: params.path.clone(),
+                        total_lines: 0,
+                        truncated: false,
+                        is_binary: true,
+                        start_line: 0,
+                        end_line: 0,
+                        image_data_url: Some(image.data_url),
+                    })
+                }
+                Ok(Err(skip_reason)) => {
+                    let notice = match skip_reason {
+                        ImageSkipReason::SizeLimit { size_bytes, max_mb } => format!(
+                            "Image file too large ({} bytes, max {} MB). Skipping image processing.",
+                            size_bytes, max_mb
+                        ),
+                        ImageSkipReason::MemoryLimit {
+                            size_bytes,
+                            current_total_mb,
+                            max_total_mb,
+                        } => format!(
+                            "Image skipped to avoid size limit ({} MB). Current: {:.1} MB + this file: {} bytes. \
+                             Try fewer or smaller images.",
+                            max_total_mb, current_total_mb, size_bytes
+                        ),
+                    };
+                    Ok(ReadResult {
+                        content: notice,
+                        path: params.path.clone(),
+                        total_lines: 0,
+                        truncated: false,
+                        is_binary: true,
+                        start_line: 0,
+                        end_line: 0,
+                        image_data_url: None,
+                    })
+                }
+                Err(e) => Err(e),
+            };
+        }
+
         return Ok(ReadResult {
             content: format!(
                 "(Binary file: {} bytes, not displaying)",
@@ -117,6 +174,7 @@ pub fn process_read_file(
             is_binary: true,
             start_line: 0,
             end_line: 0,
+            image_data_url: None,
         });
     }
 
@@ -199,6 +257,7 @@ pub fn build_read_result(
         is_binary: false,
         start_line,
         end_line,
+        image_data_url: None,
     })
 }
 
@@ -271,6 +330,7 @@ pub fn build_read_result_indentation(
         is_binary: false,
         start_line,
         end_line,
+        image_data_url: None,
     })
 }
 

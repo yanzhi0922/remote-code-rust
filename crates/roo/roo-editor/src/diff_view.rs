@@ -1,8 +1,16 @@
 //! Diff view provider for tracking file editing sessions.
 //!
 //! [`DiffViewProvider`] mirrors the lifecycle of the TypeScript `DiffViewProvider`:
-//! open a file → stream incremental updates → save or revert. It is purely
+//! open a file -> stream incremental updates -> save or revert. It is purely
 //! state-based and does not depend on any particular UI framework.
+//!
+//! ## User edit detection
+//!
+//! After `save_changes()`, the provider can detect whether the user manually
+//! edited the file during the diff view by comparing the file's actual content
+//! with the content that was streamed. This mirrors the TS behavior where the
+//! `DiffViewProvider` compares `editedContent` (from the VS Code document) with
+//! `newContent` (what was streamed) and generates a diff patch if they differ.
 
 use std::path::{Path, PathBuf};
 
@@ -48,6 +56,11 @@ pub struct DiffViewProvider {
     created_files: Vec<PathBuf>,
     /// Whether a diff view has been opened at least once.
     opened_diff: bool,
+    /// Detected user edits as a unified diff patch string.
+    ///
+    /// Set by `save_changes()` when the actual file content differs from what
+    /// was streamed. Mirrors TS `DiffViewProvider.userEdits`.
+    user_edits: Option<String>,
 }
 
 impl DiffViewProvider {
@@ -62,6 +75,7 @@ impl DiffViewProvider {
             last_saved_content: None,
             created_files: Vec::new(),
             opened_diff: false,
+            user_edits: None,
         }
     }
 
@@ -112,12 +126,65 @@ impl DiffViewProvider {
         self.opened_diff
     }
 
+    /// Returns the detected user edits as a unified diff patch, if any.
+    ///
+    /// This is set after `save_changes()` when the actual file content differs
+    /// from what was streamed. Mirrors TS `DiffViewProvider.userEdits`.
+    pub fn user_edits(&self) -> Option<&str> {
+        self.user_edits.as_deref()
+    }
+
     /// Returns `true` if there are unsaved changes.
     pub fn has_unsaved_changes(&self) -> bool {
         match (&self.current_content, &self.last_saved_content) {
             (Some(current), Some(saved)) => current != saved,
             (Some(_), None) => true,
             _ => false,
+        }
+    }
+
+    // ── User edit detection ──
+
+    /// Detect whether the user manually edited the file during the diff view.
+    ///
+    /// Compares the current file content on disk with the content that was
+    /// streamed. If they differ, returns `true` and sets `user_edits` to a
+    /// unified diff patch showing the user's changes.
+    ///
+    /// This mirrors the TS `DiffViewProvider.saveChanges()` logic where
+    /// `editedContent` (what's actually on disk) is compared against
+    /// `newContent` (what was streamed), and a diff is generated via
+    /// `formatResponse.createPrettyPatch()`.
+    ///
+    /// # Arguments
+    /// * `current_content` - The actual content on disk (what the user may have edited).
+    ///
+    /// # Returns
+    /// `true` if user edits were detected (content differs from streamed content).
+    pub fn detect_user_edits(&mut self, current_content: &str) -> bool {
+        let streamed = match self.current_content.as_deref() {
+            Some(c) => c,
+            None => return false,
+        };
+
+        // Normalize EOL for comparison (same as TS)
+        let streamed_normalized = normalize_eol(streamed);
+        let current_normalized = normalize_eol(current_content);
+
+        if current_normalized != streamed_normalized {
+            // Generate a unified diff patch of user edits
+            self.user_edits = Some(create_user_edits_diff(
+                self.rel_path
+                    .as_ref()
+                    .and_then(|p| p.to_str())
+                    .unwrap_or("unknown"),
+                &streamed_normalized,
+                &current_normalized,
+            ));
+            true
+        } else {
+            self.user_edits = None;
+            false
         }
     }
 
@@ -233,6 +300,7 @@ impl DiffViewProvider {
 
         self.last_saved_content = Some(new_content);
         self.state = EditorState::Idle;
+        self.user_edits = None;
 
         Ok(result)
     }
@@ -284,6 +352,7 @@ impl DiffViewProvider {
         self.last_saved_content = None;
         self.created_files.clear();
         self.opened_diff = false;
+        self.user_edits = None;
     }
 }
 
@@ -298,6 +367,70 @@ fn format_diff_summary(path: &Path, diffs: &[crate::file_editor::LineDiff]) -> S
         additions,
         deletions
     )
+}
+
+/// Normalize line endings to LF for comparison.
+///
+/// Mirrors TS:
+/// ```ts
+/// const normalizedContent = content.replace(/\r\n|\n/g, eol)
+/// ```
+fn normalize_eol(content: &str) -> String {
+    content.replace("\r\n", "\n")
+}
+
+/// Create a unified diff patch showing user edits.
+///
+/// Mirrors TS `formatResponse.createPrettyPatch()` which generates a
+/// diff between what was streamed (newContent) and what is actually
+/// on disk (editedContent) to show the user's manual changes.
+fn create_user_edits_diff(rel_path: &str, old_content: &str, new_content: &str) -> String {
+    use similar::TextDiff;
+
+    let diff = TextDiff::from_lines(old_content, new_content);
+
+    let mut result = String::new();
+    result.push_str(&format!("--- a/{}\n", rel_path.replace('\\', "/")));
+    result.push_str(&format!("+++ b/{}\n", rel_path.replace('\\', "/")));
+
+    let mut additions = 0usize;
+    let mut deletions = 0usize;
+
+    // Collect stats first
+    for change in diff.iter_all_changes() {
+        match change.tag() {
+            similar::ChangeTag::Insert => additions += 1,
+            similar::ChangeTag::Delete => deletions += 1,
+            similar::ChangeTag::Equal => {}
+        }
+    }
+
+    result.push_str(&format!(
+        "@@ -{} +{} @@\n",
+        format_hunk_bounds(deletions, old_content.lines().count()),
+        format_hunk_bounds(additions, new_content.lines().count()),
+    ));
+
+    for change in diff.iter_all_changes() {
+        let sign = match change.tag() {
+            similar::ChangeTag::Insert => '+',
+            similar::ChangeTag::Delete => '-',
+            similar::ChangeTag::Equal => ' ',
+        };
+        result.push(sign);
+        result.push_str(change.as_str().unwrap_or(""));
+    }
+
+    result
+}
+
+/// Format a hunk bound for unified diff output.
+fn format_hunk_bounds(changed: usize, total: usize) -> String {
+    if changed == 0 {
+        format!("{},0", total)
+    } else {
+        format!("{}", total)
+    }
 }
 
 #[cfg(test)]
@@ -322,6 +455,7 @@ mod tests {
         assert!(provider.get_current_content().is_none());
         assert!(provider.created_files().is_empty());
         assert!(!provider.opened_diff());
+        assert!(provider.user_edits().is_none());
     }
 
     #[test]
@@ -580,5 +714,98 @@ mod tests {
         assert!(summary.contains("test.rs"));
         assert!(summary.contains("+1"));
         assert!(summary.contains("-1"));
+    }
+
+    // ── User edit detection ──
+
+    #[test]
+    fn test_detect_user_edits_no_edits() {
+        let mut provider = make_provider();
+        provider.rel_path = Some(PathBuf::from("test.rs"));
+        provider.current_content = Some("hello\nworld\n".to_string());
+
+        // Same content — no edits
+        assert!(!provider.detect_user_edits("hello\nworld\n"));
+        assert!(provider.user_edits().is_none());
+    }
+
+    #[test]
+    fn test_detect_user_edits_with_edits() {
+        let mut provider = make_provider();
+        provider.rel_path = Some(PathBuf::from("test.rs"));
+        provider.current_content = Some("hello\nworld\n".to_string());
+
+        // Different content — edits detected
+        assert!(provider.detect_user_edits("hello\nmodified world\n"));
+        assert!(provider.user_edits().is_some());
+        let edits = provider.user_edits().unwrap();
+        assert!(edits.contains("test.rs"));
+        assert!(edits.contains("modified world"));
+    }
+
+    #[test]
+    fn test_detect_user_edits_crlf_normalized() {
+        let mut provider = make_provider();
+        provider.rel_path = Some(PathBuf::from("test.rs"));
+        provider.current_content = Some("hello\nworld\n".to_string());
+
+        // CRLF vs LF should be treated as the same (no edits)
+        assert!(!provider.detect_user_edits("hello\r\nworld\r\n"));
+        assert!(provider.user_edits().is_none());
+    }
+
+    #[test]
+    fn test_detect_user_edits_no_current_content() {
+        let mut provider = make_provider();
+        // No current_content set
+        assert!(!provider.detect_user_edits("anything"));
+        assert!(provider.user_edits().is_none());
+    }
+
+    #[tokio::test]
+    async fn test_user_edits_cleared_on_save() {
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join("test.txt");
+        tokio::fs::write(&file_path, "original").await.unwrap();
+
+        let mut provider = make_provider();
+        provider.open(&file_path).await.unwrap();
+        provider.update("new content", true).unwrap();
+
+        // Simulate user edits detection before save
+        provider.detect_user_edits("user modified content");
+        assert!(provider.user_edits().is_some());
+
+        // Save clears user_edits
+        provider.save_changes(dir.path(), false).await.unwrap();
+        assert!(provider.user_edits().is_none());
+    }
+
+    #[test]
+    fn test_user_edits_cleared_on_reset() {
+        let mut provider = make_provider();
+        provider.rel_path = Some(PathBuf::from("test.rs"));
+        provider.current_content = Some("original".to_string());
+        provider.detect_user_edits("modified");
+        assert!(provider.user_edits().is_some());
+
+        provider.reset();
+        assert!(provider.user_edits().is_none());
+    }
+
+    #[test]
+    fn test_normalize_eol() {
+        assert_eq!(normalize_eol("a\r\nb\r\n"), "a\nb\n");
+        assert_eq!(normalize_eol("a\nb\n"), "a\nb\n");
+        assert_eq!(normalize_eol("no newlines"), "no newlines");
+    }
+
+    #[test]
+    fn test_create_user_edits_diff() {
+        let diff = create_user_edits_diff("src/main.rs", "hello\nworld\n", "hello\nmodified\n");
+        assert!(diff.contains("--- a/src/main.rs"));
+        assert!(diff.contains("+++ b/src/main.rs"));
+        assert!(diff.contains("-world"));
+        assert!(diff.contains("+modified"));
     }
 }
