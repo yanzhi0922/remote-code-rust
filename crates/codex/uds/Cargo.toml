@@ -8,9 +8,8 @@ license.workspace = true
 name = "codex_uds"
 path = "src/lib.rs"
 
-# Override workspace unsafe_code=forbid — needs Win32 socket FFI
-[lints.rust]
-unsafe_code = "allow"
+[lints]
+workspace = true
 
 [dependencies]
 tokio = { workspace = true, features = ["fs", "net", "rt"] }
