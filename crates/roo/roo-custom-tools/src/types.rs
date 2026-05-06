@@ -24,6 +24,12 @@ pub struct CustomToolDefinition {
     pub parameters_schema: CustomToolParametersSchema,
     /// The type of handler for this tool.
     pub handler_type: HandlerType,
+    /// Path to the script to execute (used when `handler_type` is `Script`).
+    #[serde(default)]
+    pub path: Option<String>,
+    /// URL for the HTTP endpoint (used when `handler_type` is `Http`).
+    #[serde(default)]
+    pub url: Option<String>,
 }
 
 /// The parameters schema for a custom tool.
@@ -90,6 +96,8 @@ mod tests {
                 }
             }),
             handler_type: HandlerType::Builtin,
+            path: None,
+            url: None,
         };
         let json_str = serde_json::to_string(&def).unwrap();
         let deserialized: CustomToolDefinition = serde_json::from_str(&json_str).unwrap();
@@ -105,6 +113,8 @@ mod tests {
             description: "A test tool".to_string(),
             parameters_schema: json!(null),
             handler_type: HandlerType::Script,
+            path: Some("/path/to/script.sh".to_string()),
+            url: None,
         };
         let cloned = def.clone();
         assert_eq!(cloned.name, "my_tool");
@@ -172,6 +182,8 @@ mod tests {
             description: "Search tool".to_string(),
             parameters_schema: schema,
             handler_type: HandlerType::Http,
+            path: None,
+            url: Some("https://api.example.com/search".to_string()),
         };
         assert!(def.parameters_schema.is_object());
     }

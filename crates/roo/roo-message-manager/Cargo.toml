@@ -2,8 +2,8 @@
 name = "roo-message-manager"
 version.workspace = true
 edition.workspace = true
-license.workspace = true
-repository.workspace = true
+license = "Apache-2.0"
+repository = "https://github.com/roo-code/rust"
 description = "Message management module for Roo Code Rust — handles conversation rewind, cleanup, and truncation"
 
 [dependencies]

@@ -147,6 +147,14 @@ impl<S: MetadataStore> FileContextTracker<S> {
         self.recently_modified_files.drain().collect()
     }
 
+    /// Returns a reference to the set of recently modified files (read-only).
+    ///
+    /// Use this when you only need to inspect the files without clearing them,
+    /// for example when building environment details.
+    pub fn recently_modified_files(&self) -> &HashSet<String> {
+        &self.recently_modified_files
+    }
+
     /// Returns (and clears) the set of checkpoint-possible files.
     pub fn get_and_clear_checkpoint_possible_files(&mut self) -> Vec<String> {
         self.checkpoint_possible_files.drain().collect()

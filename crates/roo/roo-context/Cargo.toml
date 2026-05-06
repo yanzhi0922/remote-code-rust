@@ -2,8 +2,8 @@
 name = "roo-context"
 version.workspace = true
 edition.workspace = true
-license.workspace = true
-repository.workspace = true
+license = "Apache-2.0"
+repository = "https://github.com/roo-code/rust"
 description = "Context management for Roo Code Rust"
 
 [dependencies]

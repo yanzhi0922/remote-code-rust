@@ -88,6 +88,8 @@ mod tests {
             description: format!("Tool {name}"),
             parameters_schema: json!({"type": "object"}),
             handler_type: HandlerType::Builtin,
+            path: None,
+            url: None,
         }
     }
 
