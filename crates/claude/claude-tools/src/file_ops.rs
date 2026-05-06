@@ -451,8 +451,41 @@ fn find_actual_string(file_content: &str, search_string: &str) -> Option<String>
             return Some(file_content[start..end_ok].to_owned());
         }
     }
+    // Try with de-sanitized tag names — maps abbreviated forms back to real ones.
+    // Matches TS desanitizeMatchString / DESANITIZATIONS.
+    let desanitized = desanitize_match_string(search_string);
+    if desanitized != search_string && file_content.contains(&desanitized) {
+        return Some(desanitized);
+    }
     None
 }
+
+/// Map of sanitized tag abbreviations to their real forms, matching TS DESANITIZATIONS.
+fn desanitize_match_string(s: &str) -> String {
+    let mut result = s.to_owned();
+    for (sanitized, real) in DESANITIZATIONS {
+        result = result.replace(sanitized, real);
+    }
+    result
+}
+
+const DESANITIZATIONS: &[(&str, &str)] = &[
+    ("<fnr>", "<function_results>"),
+    ("</fnr>", "</function_results>"),
+    ("<n>", "<name>"),
+    ("</n>", "</name>"),
+    ("<o>", "<output>"),
+    ("</o>", "</output>"),
+    ("<e>", "<error>"),
+    ("</e>", "</error>"),
+    ("<s>", "<system>"),
+    ("</s>", "</system>"),
+    ("<r>", "<result>"),
+    ("</r>", "</result>"),
+    ("< META_START >", "<META_START>"),
+    ("\n\nH:", "\n\nHuman:"),
+    ("\n\nA:", "\n\nAssistant:"),
+];
 
 /// Preserves curly quote style from the file content in the replacement string.
 ///

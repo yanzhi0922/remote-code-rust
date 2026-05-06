@@ -146,7 +146,8 @@ pub struct ProcessUserInputContext {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_output_tokens_override: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub task_budget: Option<TaskBudget>,
+    #[serde(default, skip)]
+    pub task_budget: Arc<std::sync::Mutex<Option<TaskBudget>>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub memory_content: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -182,7 +183,7 @@ impl ProcessUserInputContext {
             model: model.into(),
             provider_model_override: None,
             max_output_tokens_override: None,
-            task_budget: None,
+            task_budget: Arc::new(std::sync::Mutex::new(None)),
             memory_content: None,
             mcp_instructions: None,
             discovered_skills: HashSet::new(),

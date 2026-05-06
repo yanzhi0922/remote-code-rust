@@ -9,29 +9,34 @@ use super::tool_prompts;
 /// when the `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS` environment variable is set.
 #[must_use]
 fn bash_tool_schema() -> serde_json::Value {
+    let max_timeout = std::env::var("CLAUDE_BASH_MAX_TIMEOUT_MS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(600_000);
+
     let mut properties = serde_json::Map::from_iter([
         (
             "command".to_owned(),
-            json!({"type": "string", "description": "The bash command to run."}),
+            json!({"type": "string", "description": "The command to execute"}),
         ),
         (
             "timeout".to_owned(),
-            json!({"type": "number", "description": "Optional maximum execution time in milliseconds. Default is 120000 (2 minutes)."}),
+            json!({"type": "number", "description": format!("Optional timeout in milliseconds (max {})", max_timeout)}),
         ),
         (
             "description".to_owned(),
-            json!({"type": "string", "description": "A clear, concise description of what this command does in 5-10 words."}),
+            json!({"type": "string", "description": "Clear, concise description of what this command does in active voice. Never use words like \"complex\" or \"risk\" in the description - just describe what it does.\n\nFor simple commands (git, npm, standard CLI tools), keep it brief (5-10 words):\n- ls -> \"List files in current directory\"\n- git status -> \"Show working tree status\"\n- npm install -> \"Install package dependencies\"\n\nFor commands that are harder to parse at a glance (piped commands, obscure flags, etc.), add enough context to clarify what it does:\n- find . -name \"*.tmp\" -exec rm {} \\; -> \"Find and delete all .tmp files recursively\"\n- git reset --hard origin/main -> \"Discard all local changes and match remote main\"\n- curl -s url | jq '.data[]' -> \"Fetch JSON from URL and extract data array elements\""}),
         ),
         (
             "dangerouslyDisableSandbox".to_owned(),
-            json!({"type": "boolean", "description": "When set to true, disables the sandbox for this command."}),
+            json!({"type": "boolean", "description": "Set this to true to dangerously override sandbox mode and run commands without sandboxing."}),
         ),
     ]);
 
     if std::env::var("CLAUDE_CODE_DISABLE_BACKGROUND_TASKS").is_err() {
         properties.insert(
             "run_in_background".to_owned(),
-            json!({"type": "boolean", "description": "If true, run the command in the background and return a task handle immediately."}),
+            json!({"type": "boolean", "description": "Set to true to run this command in the background. Use Read to read the output later."}),
         );
     }
 
@@ -166,7 +171,7 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "pattern": {"type": "string"},
+                    "pattern": {"type": "string", "description": "The glob pattern to match files against"},
                     "path": {"type": "string", "description": "The directory to search in. If not specified, the current working directory will be used. IMPORTANT: Omit this field to use the default directory. DO NOT enter \"undefined\" or \"null\" - simply omit it for the default behavior. Must be a valid directory path if provided."}
                 },
                 "required": ["pattern"],

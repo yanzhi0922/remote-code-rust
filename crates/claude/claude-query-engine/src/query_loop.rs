@@ -64,12 +64,14 @@ pub async fn run_query_loop(
     // Set up budget tracking
     let max_turns = context
         .task_budget
+        .lock().unwrap()
         .as_ref()
         .and_then(|budget| budget.max_turns)
         .unwrap_or(config.max_turns);
     state.budget_tracker.max_turns = max_turns;
     state.budget_tracker.max_total_tokens = context
         .task_budget
+        .lock().unwrap()
         .as_ref()
         .and_then(|budget| budget.max_total_tokens);
 
@@ -647,7 +649,7 @@ pub async fn run_query_loop(
             // ---- Token budget continuation check (TS lines 1308–1355) ----
             // Only on main thread (no agent_id). Uses per-turn output tokens.
             if context.agent_id.is_none()
-                && let Some(task_budget) = &context.task_budget
+                && let Some(task_budget) = context.task_budget.lock().unwrap().as_ref()
                 && let Some(budget_total) = task_budget.max_total_tokens
             {
                 let per_turn_output_tokens = response.usage.output_tokens;
@@ -1117,14 +1119,16 @@ fn provider_request_context(context: &ProcessUserInputContext) -> ProviderReques
         .with_effort(context.requested_effort.clone())
         .with_fast_mode(context.fast_mode)
         .with_task_budget(
-            context
-                .task_budget
+            {
+                let guard = context.task_budget.lock().unwrap();
+                guard
                 .as_ref()
                 .and_then(|budget| budget.max_total_tokens)
                 .map(|total| ProviderTaskBudget {
                     total,
-                    remaining: context.task_budget.as_ref().and_then(|b| b.remaining()),
-                }),
+                    remaining: guard.as_ref().and_then(|b| b.remaining()),
+                })
+            },
         );
     provider_context
 }
@@ -1564,7 +1568,7 @@ async fn commit_tool_result(
     }
     // Record sub-agent token consumption against the task budget.
     if let Some(tokens) = tool_run.output_tokens_consumed {
-        if let Some(ref mut budget) = context.task_budget {
+        if let Some(budget) = context.task_budget.lock().unwrap().as_mut() {
             budget.record_sub_agent_usage(tokens);
         }
     }

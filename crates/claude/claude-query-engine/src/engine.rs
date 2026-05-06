@@ -61,7 +61,7 @@ impl EngineState {
     #[must_use]
     pub fn new(messages: Vec<Message>, budget_tracker: BudgetTracker) -> Self {
         Self {
-            turn: 0,
+            turn: 1,
             messages,
             usage: UsageAccumulator::default(),
             budget_tracker,
@@ -816,10 +816,10 @@ mod tests {
         );
         let mut context =
             ProcessUserInputContext::new(session_id, PermissionMode::Default, "mock-model");
-        context.task_budget = Some(crate::TaskBudget {
+        context.task_budget = std::sync::Arc::new(std::sync::Mutex::new(Some(crate::TaskBudget {
             max_turns: Some(0),
             max_total_tokens: None,
-        });
+        })));
 
         let error = engine
             .submit_message(

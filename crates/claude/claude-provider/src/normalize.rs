@@ -75,6 +75,9 @@ pub fn normalize_messages_for_api_with_config(
     strip_empty_content_blocks(messages);
     // Pass 3b: strip tool_reference blocks from tool_result content
     strip_tool_reference_blocks(messages, config.tool_search_enabled, config.available_tool_names);
+    // Pass 3c: strip advisor blocks (server_tool_use with name "advisor" and advisor_tool_result)
+    // The API rejects these unless the advisor beta header is present.
+    strip_advisor_blocks(messages);
     // Pass 4: filter artifacts (orphaned thinking, trailing thinking, whitespace)
     filter_orphaned_thinking_only(messages);
     filter_trailing_thinking_from_last_assistant(messages);
@@ -84,6 +87,8 @@ pub fn normalize_messages_for_api_with_config(
     ensure_non_empty_assistant_content(messages);
     // Pass 5: ensure first message is user role
     ensure_first_message_is_user(messages);
+    // Pass 5b: smoosh system-reminder siblings into the last tool_result
+    smoosh_system_reminder_siblings(messages);
     // Pass 6: validate content block types (also normalizes tool_use inputs)
     validate_content_block_types(messages);
     // Pass 6b: validate image sizes for API (replace oversized images)
@@ -512,7 +517,10 @@ fn validate_content_block_types(messages: &mut [Value]) {
                         // Normalize tool_use blocks: keep only standard fields
                         let id = block.get("id").cloned().unwrap_or(Value::Null);
                         let name = block.get("name").cloned().unwrap_or(Value::Null);
-                        let input = block.get("input").cloned().unwrap_or(json!({}));
+                        let input = normalize_tool_input_for_api(
+                            name.as_str().unwrap_or(""),
+                            block.get("input").cloned().unwrap_or(json!({})),
+                        );
                         *block = json!({
                             "type": "tool_use",
                             "id": id,
@@ -815,6 +823,66 @@ fn is_user_with_error_tool_result(msg: &Value) -> bool {
                     && b["is_error"].as_bool() == Some(true)
             })
         })
+}
+
+// ---------------------------------------------------------------------------
+// Pass 3c — stripAdvisorBlocks
+// ---------------------------------------------------------------------------
+
+/// Strip advisor blocks from assistant messages.
+///
+/// The API rejects `server_tool_use` blocks with name `"advisor"` and
+/// `advisor_tool_result` blocks unless the advisor beta header is present.
+/// Matches TS `stripAdvisorBlocks`.
+fn strip_advisor_blocks(messages: &mut Vec<Value>) {
+    let mut changed = false;
+    for msg in messages.iter_mut() {
+        let role = msg.get("role").and_then(Value::as_str).unwrap_or("");
+        if role != "assistant" {
+            continue;
+        }
+        let Some(content) = msg.get_mut("content").and_then(|c| c.as_array_mut()) else {
+            continue;
+        };
+        let before_len = content.len();
+        content.retain(|block| !is_advisor_block(block));
+        if content.len() != before_len {
+            changed = true;
+            // If all blocks were removed (or only thinking/empty text remain),
+            // insert a placeholder so the message is not empty.
+            let all_trivial = content.iter().all(|b| {
+                let t = b.get("type").and_then(Value::as_str).unwrap_or("");
+                matches!(t, "thinking" | "redacted_thinking")
+                    || (t == "text"
+                        && b.get("text")
+                            .and_then(Value::as_str)
+                            .is_none_or(|s| s.trim().is_empty()))
+            });
+            if all_trivial {
+                content.push(serde_json::json!({
+                    "type": "text",
+                    "text": "[Advisor response]",
+                }));
+            }
+        }
+    }
+    if changed {
+        // Remove entirely empty messages left after stripping
+        messages.retain(|msg| {
+            msg.get("content")
+                .and_then(|c| c.as_array())
+                .is_none_or(|arr| !arr.is_empty())
+        });
+    }
+}
+
+fn is_advisor_block(block: &Value) -> bool {
+    let block_type = block.get("type").and_then(Value::as_str).unwrap_or("");
+    if block_type == "advisor_tool_result" {
+        return true;
+    }
+    block_type == "server_tool_use"
+        && block.get("name").and_then(Value::as_str) == Some("advisor")
 }
 
 // ---------------------------------------------------------------------------
@@ -2022,5 +2090,130 @@ mod tests {
         let first_content = messages[0]["content"].as_array().unwrap();
         let has_document = first_content.iter().any(|b| b["type"].as_str() == Some("document"));
         assert!(!has_document, "document block should have been stripped from meta user message");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tool input normalization (mirrors TS normalizeToolInputForAPI)
+// ---------------------------------------------------------------------------
+
+/// Normalize tool inputs before sending to the API.
+///
+/// Strips tool-specific synthetic fields that were injected by the runtime
+/// but are not part of the tool's API schema.  Mirrors the TS reference's
+/// `normalizeToolInputForAPI()` in `src/utils/api.ts`.
+fn normalize_tool_input_for_api(tool_name: &str, input: Value) -> Value {
+    let Some(obj) = input.as_object() else {
+        return input;
+    };
+
+    match tool_name {
+        "exit_plan_mode" => {
+            if obj.contains_key("plan") || obj.contains_key("planFilePath") {
+                let mut cleaned = obj.clone();
+                cleaned.remove("plan");
+                cleaned.remove("planFilePath");
+                Value::Object(cleaned)
+            } else {
+                input
+            }
+        }
+        "apply_diff" | "FileEdit" => {
+            if obj.contains_key("edits") {
+                let mut cleaned = obj.clone();
+                cleaned.remove("old_string");
+                cleaned.remove("new_string");
+                cleaned.remove("replace_all");
+                Value::Object(cleaned)
+            } else {
+                input
+            }
+        }
+        _ => input,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Pass 5b — smooshSystemReminderSiblings
+// ---------------------------------------------------------------------------
+
+/// Merge `<system-reminder>` text blocks that are siblings of `tool_result`
+/// blocks in the same user message into the last `tool_result`.
+///
+/// Mirrors the TS `smooshSystemReminderSiblings()`.  When a user message
+/// contains both `tool_result` blocks and text blocks starting with
+/// `<system-reminder>`, the system-reminder texts are appended to the last
+/// tool_result's content.  This avoids the API interpreting system-reminder
+/// text as a separate human turn sandwiched between tool results.
+fn smoosh_system_reminder_siblings(messages: &mut [Value]) {
+    for msg in messages.iter_mut() {
+        if msg["role"].as_str() != Some("user") {
+            continue;
+        }
+        let Some(content) = msg.get_mut("content").and_then(|c| c.as_array_mut()) else {
+            continue;
+        };
+
+        let has_tool_result = content.iter().any(|b| b["type"].as_str() == Some("tool_result"));
+        if !has_tool_result {
+            continue;
+        }
+
+        let has_system_reminder = content.iter().any(|b| {
+            b["type"].as_str() == Some("text")
+                && b.get("text")
+                    .and_then(|t| t.as_str())
+                    .is_some_and(|t| t.starts_with("<system-reminder>"))
+        });
+        if !has_system_reminder {
+            continue;
+        }
+
+        let mut sr_texts: Vec<Value> = Vec::new();
+        let mut kept: Vec<Value> = Vec::new();
+        for block in content.drain(..) {
+            if block["type"].as_str() == Some("text")
+                && block.get("text")
+                    .and_then(|t| t.as_str())
+                    .is_some_and(|t| t.starts_with("<system-reminder>"))
+            {
+                sr_texts.push(block);
+            } else {
+                kept.push(block);
+            }
+        }
+
+        if sr_texts.is_empty() {
+            *content = kept;
+            continue;
+        }
+
+        let last_tr_idx = kept.iter().rposition(|b| b["type"].as_str() == Some("tool_result"));
+        let Some(tr_idx) = last_tr_idx else {
+            kept.extend(sr_texts);
+            *content = kept;
+            continue;
+        };
+
+        if kept[tr_idx].get("is_error").and_then(|v| v.as_bool()) == Some(true) {
+            kept.extend(sr_texts);
+            *content = kept;
+            continue;
+        }
+
+        let tr = &mut kept[tr_idx];
+        match tr.get_mut("content").and_then(|c| c.as_array_mut()) {
+            Some(inner) => {
+                inner.extend(sr_texts);
+            }
+            None => {
+                let text = tr.get("content").and_then(|c| c.as_str()).unwrap_or("").to_owned();
+                let mut arr = vec![json!({"type": "text", "text": text})];
+                arr.extend(sr_texts);
+                tr["content"] = json!(arr);
+            }
+        }
+
+        *content = kept;
     }
 }
