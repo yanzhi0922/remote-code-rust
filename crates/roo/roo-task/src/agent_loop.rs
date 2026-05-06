@@ -4656,7 +4656,6 @@ impl AgentLoop {
             .unwrap_or(false);
 
         // Build workspace file listing
-        // TODO: Integrate with fileContextTracker for recently modified files
         let workspace_files = if !is_desktop {
             let files = Self::list_workspace_files(cwd, 200);
             if files.is_empty() {

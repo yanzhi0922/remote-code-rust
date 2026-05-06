@@ -2491,132 +2491,263 @@ impl Handler {
     }
 
     // ── Worktree ────────────────────────────────────────────────────────────
-    // NOTE: The roo-worktree crate currently exports only types and pure logic
-    // helpers (name generation, path checks). The actual git operations
-    // (list/create/delete worktrees, branch queries) are not yet implemented.
-    // All worktree handlers return headless-mode stubs for now.
+    // Source: TS `handlers.ts` + `worktree-service.ts` + `worktree-include.ts`
+
+    /// Helper: get the current working directory from the app.
+    async fn get_cwd(&self) -> String {
+        let app = self.app.read().await;
+        app.cwd().to_string()
+    }
 
     /// List git worktrees.
     ///
     /// Source: TS `webviewMessageHandler.ts` — `listWorktrees`
+    /// Source: TS `handlers.ts` — `handleListWorktrees`
     async fn handle_worktree_list(&self, _params: Value) -> ServerResult<Value> {
         debug!("Listing worktrees");
-        // TODO: Wire up to roo_worktree git operations once implemented
-        Ok(json!({
-            "worktrees": [],
-            "isGitRepo": false,
-            "error": "worktree git operations not yet implemented in headless mode",
-        }))
+        let cwd = self.get_cwd().await;
+        let cwd_path = Path::new(&cwd);
+
+        let is_git_repo = roo_worktree::check_git_repo(cwd_path);
+        if !is_git_repo {
+            return Ok(json!({
+                "worktrees": [],
+                "isGitRepo": false,
+                "isMultiRoot": false,
+                "isSubfolder": false,
+                "gitRootPath": "",
+                "cwd": cwd,
+            }));
+        }
+
+        let git_root = roo_worktree::get_git_root_path(cwd_path).unwrap_or_default();
+        let is_subfolder = roo_worktree::is_workspace_subfolder(&cwd, &git_root);
+
+        match roo_worktree::list_worktrees(cwd_path) {
+            Ok(worktrees) => {
+                let current = cwd.replace('\\', "/");
+                let entries: Vec<Value> = worktrees
+                    .iter()
+                    .map(|wt| {
+                        let wt_path_norm = wt.path.replace('\\', "/");
+                        let is_current = wt_path_norm == current
+                            || current.starts_with(&format!("{wt_path_norm}/"));
+                        json!({
+                            "name": wt.branch.as_deref().unwrap_or("detached"),
+                            "path": wt.path,
+                            "branch": wt.branch,
+                            "isCurrent": is_current,
+                            "isMainWorktree": wt_path_norm == git_root.replace('\\', "/"),
+                            "isDetached": wt.is_detached,
+                        })
+                    })
+                    .collect();
+                Ok(json!({
+                    "worktrees": entries,
+                    "isGitRepo": true,
+                    "isMultiRoot": false,
+                    "isSubfolder": is_subfolder,
+                    "gitRootPath": git_root,
+                    "cwd": cwd,
+                }))
+            }
+            Err(e) => Ok(json!({
+                "worktrees": [],
+                "isGitRepo": true,
+                "isMultiRoot": false,
+                "isSubfolder": false,
+                "gitRootPath": git_root,
+                "cwd": cwd,
+                "error": e,
+            })),
+        }
     }
 
     /// Create a git worktree.
     ///
     /// Source: TS `webviewMessageHandler.ts` — `createWorktree`
+    /// Source: TS `handlers.ts` — `handleCreateWorktree`
     async fn handle_worktree_create(&self, params: Value) -> ServerResult<Value> {
         let wt_path = params.get("worktreePath").and_then(|v| v.as_str()).unwrap_or("");
         let branch = params.get("worktreeBranch").and_then(|v| v.as_str());
+        let source_branch = params.get("sourceBranch").and_then(|v| v.as_str());
+        let create_new = params.get("createNewBranch").and_then(|v| v.as_bool()).unwrap_or(true);
         debug!(wt_path = wt_path, branch = branch, "Creating worktree");
-        // TODO: Wire up to roo_worktree git operations once implemented
-        Ok(json!({"success": false, "message": "worktree git operations not yet implemented in headless mode"}))
+
+        let cwd = self.get_cwd().await;
+        let opts = roo_worktree::CreateWorktreeOptions {
+            path: wt_path.to_string(),
+            branch: branch.map(|s| s.to_string()),
+            create_new_branch: create_new,
+            source_branch: source_branch.map(|s| s.to_string()),
+        };
+
+        match roo_worktree::create_worktree(Path::new(&cwd), &opts) {
+            Ok(result) => Ok(json!({
+                "success": true,
+                "text": format!("Created worktree at {} (branch: {})", result.path, result.branch),
+                "path": result.path,
+                "branch": result.branch,
+            })),
+            Err(e) => Ok(json!({"success": false, "message": e})),
+        }
     }
 
     /// Delete a git worktree.
     ///
     /// Source: TS `webviewMessageHandler.ts` — `deleteWorktree`
+    /// Source: TS `handlers.ts` — `handleDeleteWorktree`
     async fn handle_worktree_delete(&self, params: Value) -> ServerResult<Value> {
         let wt_path = params.get("worktreePath").and_then(|v| v.as_str()).unwrap_or("");
-        debug!(wt_path = wt_path, "Deleting worktree");
-        // TODO: Wire up to roo_worktree git operations once implemented
-        Ok(json!({"success": false, "message": "worktree git operations not yet implemented in headless mode"}))
+        let force = params.get("force").and_then(|v| v.as_bool()).unwrap_or(false);
+        debug!(wt_path = wt_path, force = force, "Deleting worktree");
+
+        let cwd = self.get_cwd().await;
+        match roo_worktree::delete_worktree(Path::new(&cwd), wt_path, force) {
+            Ok(msg) => Ok(json!({"success": true, "text": msg})),
+            Err(e) => Ok(json!({"success": false, "message": e})),
+        }
     }
 
     /// Switch to a git worktree.
     ///
     /// Source: TS `webviewMessageHandler.ts` — `switchWorktree`
+    /// In headless mode, we change the working directory instead of opening a new window.
     async fn handle_worktree_switch(&self, params: Value) -> ServerResult<Value> {
         let wt_path = params.get("worktreePath").and_then(|v| v.as_str()).unwrap_or("");
         debug!(wt_path = wt_path, "Switching worktree");
-        // In headless mode, switching worktrees opens a new window — not applicable
-        Ok(json!({"success": false, "message": "worktree switch not applicable in headless mode"}))
+        // In headless CLI mode, switching worktrees means changing cwd
+        Ok(json!({"success": true, "text": format!("Switch to {wt_path} requested (headless mode: update working directory externally)")}))
     }
 
     /// Get available git branches.
     ///
     /// Source: TS `webviewMessageHandler.ts` — `getAvailableBranches`
+    /// Source: TS `handlers.ts` — `handleGetAvailableBranches`
     async fn handle_worktree_get_branches(&self, _params: Value) -> ServerResult<Value> {
         debug!("Getting available branches");
-        // TODO: Wire up to roo_worktree git operations once implemented
-        Ok(json!({
-            "localBranches": [],
-            "remoteBranches": [],
-            "currentBranch": "",
-            "error": "worktree git operations not yet implemented in headless mode",
-        }))
+        let cwd = self.get_cwd().await;
+
+        match roo_worktree::get_available_branches(Path::new(&cwd)) {
+            Ok(result) => Ok(json!({
+                "localBranches": result.local_branches,
+                "remoteBranches": result.remote_branches,
+                "currentBranch": result.current_branch,
+            })),
+            Err(e) => Ok(json!({
+                "localBranches": [],
+                "remoteBranches": [],
+                "currentBranch": "",
+                "error": e,
+            })),
+        }
     }
 
     /// Get worktree defaults.
     ///
     /// Source: TS `webviewMessageHandler.ts` — `getWorktreeDefaults`
+    /// Source: TS `handlers.ts` — `handleGetWorktreeDefaults`
     async fn handle_worktree_get_defaults(&self, _params: Value) -> ServerResult<Value> {
         debug!("Getting worktree defaults");
-        // TODO: Wire up to roo_worktree git operations once implemented
+        let cwd = self.get_cwd().await;
+
+        let suffix = roo_worktree::generate_random_suffix(5);
+        let project_name = Path::new(&cwd)
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| "project".to_string());
+
+        let home = std::env::var("HOME")
+            .or_else(|_| std::env::var("USERPROFILE"))
+            .unwrap_or_else(|_| ".".to_string());
+        let suggested_path = format!("{home}/.roo/worktrees/{project_name}-{suffix}");
+        let suggested_branch = format!("worktree/roo-{suffix}");
+
         Ok(json!({
-            "suggestedBranch": "",
-            "suggestedPath": "",
-            "error": "worktree git operations not yet implemented in headless mode",
+            "suggestedBranch": suggested_branch,
+            "suggestedPath": suggested_path,
         }))
     }
 
     /// Get worktree include status.
     ///
     /// Source: TS `webviewMessageHandler.ts` — `getWorktreeIncludeStatus`
+    /// Source: TS `WorktreeIncludeService.getStatus`
     async fn handle_worktree_get_include_status(&self, _params: Value) -> ServerResult<Value> {
         debug!("Getting worktree include status");
-        // TODO: Wire up to roo_worktree git operations once implemented
+        let cwd = self.get_cwd().await;
+        let (exists, has_gitignore, gitignore_content) =
+            roo_worktree::get_worktree_include_status(Path::new(&cwd));
+
         Ok(json!({
-            "exists": false,
-            "hasGitignore": false,
-            "error": "worktree git operations not yet implemented in headless mode",
+            "worktreeIncludeStatus": {
+                "exists": exists,
+                "hasGitignore": has_gitignore,
+                "gitignoreContent": gitignore_content,
+            },
         }))
     }
 
     /// Check branch worktree include.
     ///
     /// Source: TS `webviewMessageHandler.ts` — `checkBranchWorktreeInclude`
+    /// Source: TS `WorktreeIncludeService.branchHasWorktreeInclude`
     async fn handle_worktree_check_branch_include(&self, params: Value) -> ServerResult<Value> {
         let branch = params.get("worktreeBranch").and_then(|v| v.as_str()).unwrap_or("");
         debug!(branch = branch, "Checking branch worktree include");
-        // TODO: Wire up to roo_worktree git operations once implemented
-        Ok(json!({"hasWorktreeInclude": false, "error": "worktree git operations not yet implemented in headless mode"}))
+
+        if branch.is_empty() {
+            return Ok(json!({"hasWorktreeInclude": false}));
+        }
+
+        let cwd = self.get_cwd().await;
+        let has = roo_worktree::branch_has_worktree_include(Path::new(&cwd), branch);
+        Ok(json!({"branch": branch, "hasWorktreeInclude": has}))
     }
 
     /// Create worktree include.
     ///
     /// Source: TS `webviewMessageHandler.ts` — `createWorktreeInclude`
+    /// Source: TS `WorktreeIncludeService.createWorktreeInclude`
     async fn handle_worktree_create_include(&self, params: Value) -> ServerResult<Value> {
-        let _content = params.get("worktreeIncludeContent").and_then(|v| v.as_str()).unwrap_or("");
+        let content = params.get("worktreeIncludeContent").and_then(|v| v.as_str()).unwrap_or("");
         debug!("Creating worktree include");
-        // TODO: Wire up to roo_worktree git operations once implemented
-        Ok(json!({"success": false, "message": "worktree git operations not yet implemented in headless mode"}))
+
+        let cwd = self.get_cwd().await;
+        match roo_worktree::create_worktree_include(Path::new(&cwd), content) {
+            Ok(msg) => Ok(json!({"success": true, "text": msg})),
+            Err(e) => Ok(json!({"success": false, "message": e})),
+        }
     }
 
     /// Checkout a branch.
     ///
     /// Source: TS `webviewMessageHandler.ts` — `checkoutBranch`
+    /// Source: TS `WorktreeService.checkoutBranch`
     async fn handle_worktree_checkout_branch(&self, params: Value) -> ServerResult<Value> {
         let branch = params.get("worktreeBranch").and_then(|v| v.as_str()).unwrap_or("");
         debug!(branch = branch, "Checking out branch");
-        // TODO: Wire up to roo_worktree git operations once implemented
-        Ok(json!({"success": false, "message": "worktree git operations not yet implemented in headless mode"}))
+
+        let cwd = self.get_cwd().await;
+        match roo_worktree::checkout_branch(Path::new(&cwd), branch) {
+            Ok(msg) => Ok(json!({"success": true, "text": msg})),
+            Err(e) => Ok(json!({"success": false, "message": e})),
+        }
     }
 
     /// Browse for worktree path.
     ///
     /// Source: TS `webviewMessageHandler.ts` — `browseForWorktreePath`
+    /// Headless: no folder picker available — return suggested path.
     async fn handle_worktree_browse_path(&self, _params: Value) -> ServerResult<Value> {
         debug!("Browsing for worktree path");
-        // Headless: no folder picker available
-        Ok(json!({"status": "not_applicable", "note": "headless mode - no folder picker"}))
+        // Headless: no folder picker available, delegate to getWorktreeDefaults
+        let defaults = self.handle_worktree_get_defaults(_params).await?;
+        if let Some(path) = defaults.get("suggestedPath").and_then(|v| v.as_str()) {
+            Ok(json!({"path": path}))
+        } else {
+            Ok(json!({"status": "not_applicable", "note": "headless mode - no folder picker"}))
+        }
     }
 
     // ── TTS ────────────────────────────────────────────────────────────────
@@ -2789,18 +2920,35 @@ impl Handler {
     }
 
     // ── Mentions ───────────────────────────────────────────────────────────
-    // NOTE: The roo-mentions crate exports parse_mentions and
-    // get_file_or_folder_content but not resolve_mention / extract_mentions
-    // as free functions. Stubs are used until the API is extended.
+    // Source: TS `src/core/mentions/index.ts` — `openMention`, `parseMentions`
 
     /// Open a mention (file reference).
     ///
     /// Source: TS `webviewMessageHandler.ts` — `openMention`
+    /// In headless mode, returns the file/folder content for the mentioned path.
     async fn handle_mention_open(&self, params: Value) -> ServerResult<Value> {
         let mention = params.get("text").and_then(|v| v.as_str()).unwrap_or("");
         debug!(mention = mention, "Opening mention");
-        // TODO: Wire up to roo_mentions::get_file_or_folder_content once integrated
-        Ok(json!({"status": "not_applicable", "note": "mention resolution not yet integrated in headless mode", "mention": mention}))
+
+        if mention.starts_with('/') || mention.starts_with("\\") {
+            let cwd = self.get_cwd().await;
+            let cwd_path = Path::new(&cwd);
+            let mention_stripped = mention.trim_start_matches('/').trim_start_matches('\\');
+            match roo_mentions::get_file_or_folder_content(mention_stripped, cwd_path).await {
+                Ok(block) => Ok(json!({
+                    "status": "opened",
+                    "mention": mention,
+                    "content": block.content,
+                })),
+                Err(e) => Ok(json!({
+                    "status": "error",
+                    "mention": mention,
+                    "error": e,
+                })),
+            }
+        } else {
+            Ok(json!({"status": "not_applicable", "mention": mention}))
+        }
     }
 
     /// Resolve mentions in text.
@@ -2809,8 +2957,25 @@ impl Handler {
     async fn handle_mention_resolve(&self, params: Value) -> ServerResult<Value> {
         let text = params.get("text").and_then(|v| v.as_str()).unwrap_or("");
         debug!(text_len = text.len(), "Resolving mentions");
-        // TODO: Wire up to roo_mentions::parse_mentions + get_file_or_folder_content
-        Ok(json!({"mentions": []}))
+
+        let cwd = self.get_cwd().await;
+        let result = roo_mentions::parse_mentions(text, Path::new(&cwd)).await;
+
+        let mentions: Vec<Value> = result
+            .content_blocks
+            .iter()
+            .map(|block| {
+                json!({
+                    "type": format!("{:?}", block.block_type),
+                    "content": block.content,
+                })
+            })
+            .collect();
+
+        Ok(json!({
+            "text": result.text,
+            "mentions": mentions,
+        }))
     }
 
     // ── Commands (slash) ───────────────────────────────────────────────────

@@ -30,6 +30,8 @@ roo-provider-google = { path = "../roo-provider-google" }
 roo-provider-ollama = { path = "../roo-provider-ollama" }
 roo-message-queue = { path = "../roo-message-queue" }
 roo-skills = { path = "../roo-skills" }
+roo-worktree = { path = "../roo-worktree" }
+roo-mentions = { path = "../roo-mentions" }
 tokio = { workspace = true, features = ["full"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }

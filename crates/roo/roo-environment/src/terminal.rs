@@ -39,9 +39,7 @@ pub fn format_active_terminals(terminals: &[TerminalInfo]) -> String {
 
         if let Some(ref output) = terminal.new_output {
             if !output.is_empty() {
-                // Stub: in the TS version this goes through
-                // Terminal.compressTerminalOutput. We keep the output as-is
-                // (compression belongs to the terminal crate).
+                // Compress terminal output (strips ANSI codes, collapses blanks, truncates)
                 let compressed = compress_terminal_output(output);
                 details.push_str(&format!("\n### New Output\n{}", compressed));
             }

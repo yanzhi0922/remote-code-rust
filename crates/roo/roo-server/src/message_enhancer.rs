@@ -174,15 +174,14 @@ pub fn extract_task_history(messages: &[ClineMessage]) -> String {
 /// Source: `src/core/webview/messageEnhancer.ts` — uses `supportPrompt.create("ENHANCE", ...)`
 fn create_enhancement_prompt(
     user_input: &str,
-    _custom_support_prompts: Option<&serde_json::Value>,
+    custom_support_prompts: Option<&serde_json::Value>,
 ) -> String {
-    // Default enhancement prompt template
-    format!(
-        "You are a prompt enhancement assistant. Your task is to improve the following user prompt \
-         to make it clearer, more specific, and more likely to get a good response from an AI coding assistant. \
-         Do not change the intent of the prompt. Just make it clearer and more detailed.\n\n\
-         User prompt:\n{user_input}\n\n\
-         Enhanced prompt:"
+    let mut params = std::collections::HashMap::new();
+    params.insert("userInput".to_string(), user_input.to_string());
+    crate::support_prompt::create_support_prompt(
+        crate::support_prompt::SupportPromptType::Enhance,
+        custom_support_prompts,
+        &params,
     )
 }
 

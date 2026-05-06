@@ -103,23 +103,73 @@ pub async fn try_load_command(
 }
 
 // ---------------------------------------------------------------------------
-// Built-in commands (placeholder)
+// Built-in commands
+// Source: `src/services/command/built-in-commands.ts` — `BUILT_IN_COMMANDS`
 // ---------------------------------------------------------------------------
+
+/// The `/init` built-in command — analyzes codebase and creates AGENTS.md.
+const BUILTIN_INIT_NAME: &str = "init";
+const BUILTIN_INIT_DESCRIPTION: &str =
+    "Analyze codebase and create concise AGENTS.md files for AI assistants";
+const BUILTIN_INIT_CONTENT: &str = r#"<task>
+Please analyze this codebase and create an AGENTS.md file containing:
+1. Build/lint/test commands - especially for running a single test
+2. Code style guidelines including imports, formatting, types, naming conventions, error handling, etc.
+</task>
+
+<initialization>
+  <purpose>
+    Create (or update) a concise AGENTS.md file that enables immediate productivity for AI assistants.
+    Focus ONLY on project-specific, non-obvious information that you had to discover by reading files.
+  </purpose>
+</initialization>
+
+<analysis_workflow>
+  Follow the comprehensive analysis workflow to:
+  1. Discovery Phase — check for existing AGENTS.md and other AI assistant rules
+  2. Project Identification — identify language, stack, and build system
+  3. Command Extraction — extract and verify essential commands
+  4. Architecture Mapping — map core processes
+  5. Component Analysis — document key components and interactions
+  6. Pattern Analysis — identify project-specific patterns
+  7. Code Style Extraction — extract formatting and naming conventions
+  8. Testing Discovery — understand testing setup
+</analysis_workflow>
+
+<output_structure>
+  Create or update AGENTS.md in the project root with ONLY non-obvious information.
+  Include existing AI assistant rules from CLAUDE.md, .cursorrules, or .github/copilot-instructions.md.
+  Keep it concise (~20 lines). Every line should prevent a potential mistake.
+</output_structure>
+
+<quality_criteria>
+  - ONLY include non-obvious information discovered by reading files
+  - Exclude anything derivable from standard practices
+  - Focus on gotchas, hidden requirements, and counterintuitive patterns
+  - Be extremely concise - if it's obvious, don't include it
+</quality_criteria>
+"#;
 
 /// Returns the list of built-in commands.
 ///
-/// Currently returns an empty list. Built-in commands will be added in a
-/// future iteration when the built-in command definitions are ported from
-/// the TypeScript source.
+/// Source: `src/services/command/built-in-commands.ts` — `getBuiltInCommands`
 pub fn get_built_in_commands() -> Vec<Command> {
-    Vec::new()
+    vec![Command {
+        name: BUILTIN_INIT_NAME.to_string(),
+        content: BUILTIN_INIT_CONTENT.to_string(),
+        source: CommandSource::BuiltIn,
+        file_path: std::path::PathBuf::from(format!("<built-in:{BUILTIN_INIT_NAME}>")),
+        description: Some(BUILTIN_INIT_DESCRIPTION.to_string()),
+        argument_hint: None,
+        mode: None,
+    }]
 }
 
 /// Returns a built-in command by name.
 ///
-/// Currently always returns `None`. See [`get_built_in_commands`].
-pub fn get_built_in_command(_name: &str) -> Option<Command> {
-    None
+/// Source: `src/services/command/built-in-commands.ts` — `getBuiltInCommand`
+pub fn get_built_in_command(name: &str) -> Option<Command> {
+    get_built_in_commands().into_iter().find(|c| c.name == name)
 }
 
 #[cfg(test)]

@@ -5,7 +5,7 @@
 //! - Checks `did_tool_fail_in_current_turn` and blocks completion if true.
 //! - Checks for incomplete todos and optionally blocks (configurable).
 //! - Populates `attempt_completion_result` with text and images.
-//! - Emits a telemetry event stub for task completion.
+//! - Emits a telemetry event for task completion.
 
 use crate::helpers::*;
 use crate::types::*;
