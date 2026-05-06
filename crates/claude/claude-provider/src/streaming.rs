@@ -1084,16 +1084,42 @@ fn parse_sse_events_from_buffer(sse_buffer: &mut String) -> Vec<Value> {
         let event_text = sse_buffer[..event_end].to_owned();
         sse_buffer.replace_range(..event_end + 2, "");
 
+        let mut data_lines: Vec<&str> = Vec::new();
+        let mut event_type: Option<&str> = None;
         for line in event_text.lines() {
-            let Some(data) = line.strip_prefix("data: ") else {
-                continue;
-            };
-            let data = data.trim();
-            if data == "[DONE]" {
+            if let Some(data) = line.strip_prefix("data: ") {
+                data_lines.push(data.trim());
+            } else if let Some(evt) = line.strip_prefix("event: ") {
+                event_type = Some(evt.trim());
+            } else if line.starts_with(':') {
+                // SSE comment — ignore per spec
+            } else if line.starts_with("id: ") {
+                // SSE last-event-id — not used for API events
+            }
+        }
+
+        let mut had_data_event = false;
+        for data in &data_lines {
+            if *data == "[DONE]" {
                 continue;
             }
             if let Ok(event) = serde_json::from_str::<Value>(data) {
                 events.push(event);
+                had_data_event = true;
+            }
+        }
+
+        // If no data events were parsed but an event: type was present,
+        // synthesize a minimal event from the event type header.
+        if !had_data_event {
+            if let Some(evt) = event_type {
+                if !evt.is_empty() {
+                    if let Ok(obj) =
+                        serde_json::from_str::<Value>(&format!("{{\"type\":\"{}\"}}", evt))
+                    {
+                        events.push(obj);
+                    }
+                }
             }
         }
     }
@@ -1301,6 +1327,72 @@ fn process_anthropic_event(
                         },
                     );
                 }
+                "mcp_tool_use" => {
+                    let id = content_block
+                        .and_then(|b| b.get("id"))
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .to_owned();
+                    let name = content_block
+                        .and_then(|b| b.get("name"))
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .to_owned();
+                    let server_name = content_block
+                        .and_then(|b| b.get("server_name"))
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .to_owned();
+                    content_block_accumulators.insert(
+                        index,
+                        AnthropicContentAccumulator::McpToolUse {
+                            id,
+                            name,
+                            server_name,
+                            partial_json: String::new(),
+                        },
+                    );
+                }
+                "mcp_tool_result" => {
+                    content_block_accumulators.insert(
+                        index,
+                        AnthropicContentAccumulator::McpToolResult {
+                            block: content_block
+                                .cloned()
+                                .unwrap_or_else(|| json!({"type": "mcp_tool_result"})),
+                        },
+                    );
+                }
+                "code_edit" => {
+                    content_block_accumulators.insert(
+                        index,
+                        AnthropicContentAccumulator::CodeEdit {
+                            block: content_block
+                                .cloned()
+                                .unwrap_or_else(|| json!({"type": "code_edit"})),
+                        },
+                    );
+                }
+                "code_output" => {
+                    content_block_accumulators.insert(
+                        index,
+                        AnthropicContentAccumulator::CodeOutput {
+                            block: content_block
+                                .cloned()
+                                .unwrap_or_else(|| json!({"type": "code_output"})),
+                        },
+                    );
+                }
+                "context_block" => {
+                    content_block_accumulators.insert(
+                        index,
+                        AnthropicContentAccumulator::ContextBlock {
+                            block: content_block
+                                .cloned()
+                                .unwrap_or_else(|| json!({"type": "context_block"})),
+                        },
+                    );
+                }
                 _ => {}
             }
         }
@@ -1367,22 +1459,23 @@ fn process_anthropic_event(
                 }
             }
 
-            if (delta_type == "input_json_delta"
-                || matches!(
-                    content_block_accumulators.get(&index),
-                    Some(AnthropicContentAccumulator::ToolUse(_))
-                ))
+            if delta_type == "input_json_delta"
                 && let Some(partial) = delta
                     .and_then(|d| d.get("partial_json"))
                     .and_then(Value::as_str)
-                && let Some(AnthropicContentAccumulator::ToolUse(acc)) =
-                    content_block_accumulators.get_mut(&index)
             {
-                // Fire on_tool_call_delta callback.
-                if let Some(cb) = callbacks.and_then(|c| c.on_tool_call_delta.as_ref()) {
-                    cb(&acc.id, partial);
+                match content_block_accumulators.get_mut(&index) {
+                    Some(AnthropicContentAccumulator::ToolUse(acc)) => {
+                        if let Some(cb) = callbacks.and_then(|c| c.on_tool_call_delta.as_ref()) {
+                            cb(&acc.id, partial);
+                        }
+                        acc.partial_json.push_str(partial);
+                    }
+                    Some(AnthropicContentAccumulator::McpToolUse { partial_json, .. }) => {
+                        partial_json.push_str(partial);
+                    }
+                    _ => {}
                 }
-                acc.partial_json.push_str(partial);
             }
         }
         "content_block_stop" | "message_stop" => {}
@@ -1613,6 +1706,29 @@ enum AnthropicContentAccumulator {
     WebSearchToolResult {
         block: Value,
     },
+    /// MCP tool use block — distinct from regular tool_use.
+    McpToolUse {
+        id: String,
+        name: String,
+        server_name: String,
+        partial_json: String,
+    },
+    /// MCP tool result block.
+    McpToolResult {
+        block: Value,
+    },
+    /// Code edit block — code modification result from the API.
+    CodeEdit {
+        block: Value,
+    },
+    /// Code output block — code execution output from the API.
+    CodeOutput {
+        block: Value,
+    },
+    /// Context block — additional context provided by the API.
+    ContextBlock {
+        block: Value,
+    },
 }
 
 fn finalize_anthropic_content_blocks(
@@ -1703,6 +1819,48 @@ fn finalize_anthropic_content_blocks(
                 }));
             }
             AnthropicContentAccumulator::WebSearchToolResult { block } => {
+                content_blocks.push(block);
+            }
+            AnthropicContentAccumulator::McpToolUse {
+                id,
+                name,
+                server_name,
+                partial_json,
+            } => {
+                if id.is_empty() || name.is_empty() {
+                    continue;
+                }
+                let input = if partial_json.is_empty() {
+                    json!({})
+                } else {
+                    serde_json::from_str::<Value>(&partial_json)
+                        .ok()
+                        .unwrap_or_else(|| json!({}))
+                };
+                tool_calls.push(ToolCall {
+                    id: id.clone(),
+                    name: name.clone(),
+                    input: input.clone(),
+                });
+                let mut block = json!({
+                    "type": "mcp_tool_use",
+                    "id": id,
+                    "name": name,
+                    "input": input,
+                });
+                block["server_name"] = Value::String(server_name);
+                content_blocks.push(block);
+            }
+            AnthropicContentAccumulator::McpToolResult { block } => {
+                content_blocks.push(block);
+            }
+            AnthropicContentAccumulator::CodeEdit { block } => {
+                content_blocks.push(block);
+            }
+            AnthropicContentAccumulator::CodeOutput { block } => {
+                content_blocks.push(block);
+            }
+            AnthropicContentAccumulator::ContextBlock { block } => {
                 content_blocks.push(block);
             }
         }

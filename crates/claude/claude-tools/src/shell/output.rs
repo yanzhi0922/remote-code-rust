@@ -337,6 +337,7 @@ mod tests {
             destructive_git: false,
             dangerous: false,
             changes_directory: false,
+            security_flags: vec![],
         };
         let summary = ShellOutputSummary {
             exit_code: Some(0),

@@ -859,6 +859,7 @@ async fn run_conversation_turn_with_messages(
             claude_core::task_stack::TaskStack::default(),
         )),
         read_file_state: claude_tools::FileStateCache::new(),
+        sub_agent_output_tokens: Arc::new(std::sync::atomic::AtomicU64::new(0)),
     };
 
     let model_name = config

@@ -1,4 +1,5 @@
 pub mod backgrounding;
+pub mod bash_security;
 pub mod destructive_warning;
 pub mod git_safety;
 pub mod output;

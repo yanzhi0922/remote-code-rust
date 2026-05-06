@@ -1104,6 +1104,7 @@ impl PersistedMcpBlob {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
+    use std::sync::Arc;
 
     use base64::Engine;
     use tempfile::tempdir;
@@ -1324,6 +1325,7 @@ mod tests {
             progress_cb: None,
             task_stack: Default::default(),
             read_file_state: crate::FileStateCache::new(),
+            sub_agent_output_tokens: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         };
         let original_policy = current_tool_runtime_policy();
         configure_tool_runtime_policy(ToolRuntimePolicy {

@@ -2421,6 +2421,7 @@ while True:
             progress_cb: None,
             task_stack: Default::default(),
             read_file_state: crate::FileStateCache::new(),
+            sub_agent_output_tokens: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         };
         let broker = StaticPermissionBroker::new(true);
 
@@ -2508,6 +2509,7 @@ while True:
             progress_cb: None,
             task_stack: Default::default(),
             read_file_state: crate::FileStateCache::new(),
+            sub_agent_output_tokens: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         };
         let broker = StaticPermissionBroker::new(true);
 
@@ -2546,6 +2548,7 @@ while True:
             progress_cb: None,
             task_stack: Default::default(),
             read_file_state: crate::FileStateCache::new(),
+            sub_agent_output_tokens: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         };
         let requests = Arc::new(Mutex::new(Vec::new()));
         let broker = RecordingPermissionBroker {
@@ -2598,6 +2601,7 @@ while True:
             progress_cb: None,
             task_stack: Default::default(),
             read_file_state: crate::FileStateCache::new(),
+            sub_agent_output_tokens: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         };
         let requests = Arc::new(Mutex::new(Vec::new()));
         let deny_blocks = vec![json!({
@@ -2644,6 +2648,7 @@ while True:
             progress_cb: None,
             task_stack: Default::default(),
             read_file_state: crate::FileStateCache::new(),
+            sub_agent_output_tokens: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         };
         let requests = Arc::new(Mutex::new(Vec::new()));
         let extra_blocks = vec![json!({
@@ -2702,6 +2707,7 @@ while True:
             progress_cb: None,
             task_stack: Default::default(),
             read_file_state: crate::FileStateCache::new(),
+            sub_agent_output_tokens: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         };
         let requests = Arc::new(Mutex::new(Vec::new()));
         let broker = RecordingPermissionBroker {
@@ -2757,6 +2763,7 @@ while True:
             progress_cb: None,
             task_stack: Default::default(),
             read_file_state: crate::FileStateCache::new(),
+            sub_agent_output_tokens: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         };
         let broker = StaticPermissionBroker::new(false);
         let runtime_context = crate::RuntimeAgentPromptContext {
@@ -2805,6 +2812,7 @@ while True:
             progress_cb: None,
             task_stack: Default::default(),
             read_file_state: crate::FileStateCache::new(),
+            sub_agent_output_tokens: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         };
         let broker = StaticPermissionBroker::new(false);
         let runtime_context = crate::RuntimeAgentPromptContext {
@@ -2852,6 +2860,7 @@ while True:
             progress_cb: None,
             task_stack: Default::default(),
             read_file_state: crate::FileStateCache::new(),
+            sub_agent_output_tokens: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         };
         let broker = StaticPermissionBroker::new(false);
         let runtime_context = crate::RuntimeAgentPromptContext {
@@ -2899,6 +2908,7 @@ while True:
             progress_cb: None,
             task_stack: Default::default(),
             read_file_state: crate::FileStateCache::new(),
+            sub_agent_output_tokens: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         };
         let broker = StaticPermissionBroker::new(false);
         let runtime_context = crate::RuntimeAgentPromptContext {
@@ -2941,6 +2951,7 @@ while True:
             progress_cb: None,
             task_stack: Default::default(),
             read_file_state: crate::FileStateCache::new(),
+            sub_agent_output_tokens: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         };
         let requests = Arc::new(Mutex::new(Vec::new()));
         let forced_requests = Arc::new(Mutex::new(Vec::new()));
@@ -2986,6 +2997,7 @@ while True:
             progress_cb: None,
             task_stack: Default::default(),
             read_file_state: crate::FileStateCache::new(),
+            sub_agent_output_tokens: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         };
         let forced_requests = Arc::new(Mutex::new(Vec::new()));
         let broker = RuleAwareBroker {
@@ -3030,6 +3042,7 @@ while True:
             progress_cb: None,
             task_stack: Default::default(),
             read_file_state: crate::FileStateCache::new(),
+            sub_agent_output_tokens: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         };
         let requests = Arc::new(Mutex::new(Vec::new()));
         let broker = RecordingPermissionBroker {
@@ -3073,6 +3086,7 @@ while True:
             progress_cb: None,
             task_stack: Default::default(),
             read_file_state: crate::FileStateCache::new(),
+            sub_agent_output_tokens: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         };
         let forced_requests = Arc::new(Mutex::new(Vec::new()));
         let broker = RuleAwareBroker {
@@ -3121,6 +3135,7 @@ while True:
             progress_cb: None,
             task_stack: Default::default(),
             read_file_state: crate::FileStateCache::new(),
+            sub_agent_output_tokens: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         };
         let forced_requests = Arc::new(Mutex::new(Vec::new()));
         let broker = RuleAwareBroker {
@@ -3185,6 +3200,7 @@ while True:
             progress_cb: None,
             task_stack: Default::default(),
             read_file_state: crate::FileStateCache::new(),
+            sub_agent_output_tokens: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         };
         let requests = Arc::new(Mutex::new(Vec::new()));
         let broker = RecordingPermissionBroker {
@@ -3268,6 +3284,7 @@ while True:
             progress_cb: None,
             task_stack: Default::default(),
             read_file_state: crate::FileStateCache::new(),
+            sub_agent_output_tokens: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         };
         let broker = StaticPermissionBroker::new(true);
 
@@ -3315,6 +3332,7 @@ while True:
             progress_cb: None,
             task_stack: Default::default(),
             read_file_state: crate::FileStateCache::new(),
+            sub_agent_output_tokens: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         };
         let broker = StaticPermissionBroker::new(true);
 
@@ -3362,6 +3380,7 @@ while True:
             progress_cb: None,
             task_stack: Default::default(),
             read_file_state: crate::FileStateCache::new(),
+            sub_agent_output_tokens: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         };
         let broker = StaticPermissionBroker::new(true);
 
@@ -3395,6 +3414,7 @@ while True:
             progress_cb: None,
             task_stack: Default::default(),
             read_file_state: crate::FileStateCache::new(),
+            sub_agent_output_tokens: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         };
         let broker = StaticPermissionBroker::new(true);
 
@@ -3448,6 +3468,7 @@ while True:
             progress_cb: None,
             task_stack: Default::default(),
             read_file_state: crate::FileStateCache::new(),
+            sub_agent_output_tokens: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         };
         let broker = StaticPermissionBroker::new(true);
 
@@ -3488,6 +3509,7 @@ while True:
             progress_cb: None,
             task_stack: Default::default(),
             read_file_state: crate::FileStateCache::new(),
+            sub_agent_output_tokens: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         };
         let broker = StaticPermissionBroker::new(true);
 
@@ -3541,6 +3563,7 @@ while True:
             progress_cb: None,
             task_stack: Default::default(),
             read_file_state: crate::FileStateCache::new(),
+            sub_agent_output_tokens: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         };
         let broker = StaticPermissionBroker::new(true);
 
@@ -3616,6 +3639,7 @@ while True:
             progress_cb: None,
             task_stack: Default::default(),
             read_file_state: crate::FileStateCache::new(),
+            sub_agent_output_tokens: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         };
         let broker = StaticPermissionBroker::new(true);
 
@@ -3663,6 +3687,7 @@ while True:
             progress_cb: None,
             task_stack: Default::default(),
             read_file_state: crate::FileStateCache::new(),
+            sub_agent_output_tokens: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         };
         let broker = StaticPermissionBroker::new(true);
 
@@ -3710,6 +3735,7 @@ while True:
             progress_cb: None,
             task_stack: Default::default(),
             read_file_state: crate::FileStateCache::new(),
+            sub_agent_output_tokens: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         };
         let broker = StaticPermissionBroker::new(true);
 
@@ -3751,6 +3777,7 @@ while True:
             progress_cb: None,
             task_stack: Default::default(),
             read_file_state: crate::FileStateCache::new(),
+            sub_agent_output_tokens: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         };
         let broker = StaticPermissionBroker::new(true);
 
@@ -3794,6 +3821,7 @@ while True:
             progress_cb: None,
             task_stack: Default::default(),
             read_file_state: crate::FileStateCache::new(),
+            sub_agent_output_tokens: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         };
         let broker = StaticPermissionBroker::new(true);
 
@@ -3933,6 +3961,7 @@ while True:
             progress_cb: None,
             task_stack: Default::default(),
             read_file_state: crate::FileStateCache::new(),
+            sub_agent_output_tokens: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         };
         let broker = StaticPermissionBroker::new(true);
 
@@ -4012,6 +4041,7 @@ while True:
             progress_cb: None,
             task_stack: Default::default(),
             read_file_state: crate::FileStateCache::new(),
+            sub_agent_output_tokens: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         };
         let broker = StaticPermissionBroker::new(true);
 
@@ -4102,6 +4132,7 @@ while True:
             progress_cb: None,
             task_stack: Default::default(),
             read_file_state: crate::FileStateCache::new(),
+            sub_agent_output_tokens: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         };
         let broker = StaticPermissionBroker::new(true);
 
@@ -4150,6 +4181,7 @@ while True:
             progress_cb: None,
             task_stack: Default::default(),
             read_file_state: crate::FileStateCache::new(),
+            sub_agent_output_tokens: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         };
         let broker = StaticPermissionBroker::new(true);
 
@@ -4286,6 +4318,7 @@ while True:
             progress_cb: None,
             task_stack: Default::default(),
             read_file_state: crate::FileStateCache::new(),
+            sub_agent_output_tokens: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         };
         let allow_broker = StaticPermissionBroker::new(true);
         create_team_via_tool(&context, &allow_broker, "cleanup-team").await;
@@ -4389,6 +4422,7 @@ while True:
             progress_cb: None,
             task_stack: Default::default(),
             read_file_state: crate::FileStateCache::new(),
+            sub_agent_output_tokens: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         };
         let broker = StaticPermissionBroker::new(true);
 
@@ -4434,6 +4468,7 @@ while True:
             progress_cb: None,
             task_stack: Default::default(),
             read_file_state: crate::FileStateCache::new(),
+            sub_agent_output_tokens: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         };
         let broker = StaticPermissionBroker::new(true);
 
@@ -4495,6 +4530,7 @@ while True:
             progress_cb: Some(progress_cb),
             task_stack: Default::default(),
             read_file_state: crate::FileStateCache::new(),
+            sub_agent_output_tokens: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         };
         let broker = StaticPermissionBroker::new(true);
 
@@ -4580,6 +4616,7 @@ while True:
             progress_cb: None,
             task_stack: Default::default(),
             read_file_state: crate::FileStateCache::new(),
+            sub_agent_output_tokens: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         };
         let broker = StaticPermissionBroker::new(true);
 
@@ -4626,6 +4663,7 @@ while True:
             progress_cb: None,
             task_stack: Default::default(),
             read_file_state: crate::FileStateCache::new(),
+            sub_agent_output_tokens: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         };
         let broker = StaticPermissionBroker::new(false);
 
@@ -4661,6 +4699,7 @@ while True:
             progress_cb: None,
             task_stack: Default::default(),
             read_file_state: crate::FileStateCache::new(),
+            sub_agent_output_tokens: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         };
         let broker = StaticPermissionBroker::new(true);
 
@@ -4722,6 +4761,7 @@ while True:
             progress_cb: None,
             task_stack: Default::default(),
             read_file_state: crate::FileStateCache::new(),
+            sub_agent_output_tokens: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         };
         let enter_calls = Arc::new(Mutex::new(Vec::new()));
         let exit_calls = Arc::new(Mutex::new(Vec::new()));
@@ -4771,6 +4811,7 @@ while True:
             progress_cb: None,
             task_stack: Default::default(),
             read_file_state: crate::FileStateCache::new(),
+            sub_agent_output_tokens: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         };
         let enter_calls = Arc::new(Mutex::new(Vec::new()));
         let exit_calls = Arc::new(Mutex::new(Vec::new()));
@@ -4822,6 +4863,7 @@ while True:
             progress_cb: None,
             task_stack: Default::default(),
             read_file_state: crate::FileStateCache::new(),
+            sub_agent_output_tokens: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         };
         let broker = StaticPermissionBroker::new(true);
 
@@ -4859,6 +4901,7 @@ while True:
             progress_cb: None,
             task_stack: Default::default(),
             read_file_state: crate::FileStateCache::new(),
+            sub_agent_output_tokens: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         };
         let broker = StaticPermissionBroker::new(true);
 
@@ -4915,6 +4958,7 @@ while True:
             progress_cb: None,
             task_stack: Default::default(),
             read_file_state: crate::FileStateCache::new(),
+            sub_agent_output_tokens: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         };
         let broker = StaticPermissionBroker::new(true);
 
@@ -4999,6 +5043,7 @@ while True:
             progress_cb: None,
             task_stack: Default::default(),
             read_file_state: crate::FileStateCache::new(),
+            sub_agent_output_tokens: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         };
         let broker = StaticPermissionBroker::new(true);
 
@@ -5047,6 +5092,7 @@ while True:
             progress_cb: None,
             task_stack: Default::default(),
             read_file_state: crate::FileStateCache::new(),
+            sub_agent_output_tokens: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         };
         let broker = StaticPermissionBroker::new(true);
 
@@ -5082,6 +5128,7 @@ while True:
             progress_cb: None,
             task_stack: Default::default(),
             read_file_state: crate::FileStateCache::new(),
+            sub_agent_output_tokens: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         };
         let broker = StaticPermissionBroker::new(true);
 
@@ -5118,6 +5165,7 @@ while True:
             progress_cb: None,
             task_stack: Default::default(),
             read_file_state: crate::FileStateCache::new(),
+            sub_agent_output_tokens: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         };
         let broker = StaticPermissionBroker::new(true);
 
@@ -5157,6 +5205,7 @@ while True:
             progress_cb: None,
             task_stack: Default::default(),
             read_file_state: crate::FileStateCache::new(),
+            sub_agent_output_tokens: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         };
         let broker = StaticPermissionBroker::new(true);
 
@@ -5194,6 +5243,7 @@ while True:
             progress_cb: None,
             task_stack: Default::default(),
             read_file_state: crate::FileStateCache::new(),
+            sub_agent_output_tokens: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         };
         let broker = StaticPermissionBroker::new(true);
 
@@ -5257,6 +5307,7 @@ while True:
             progress_cb: None,
             task_stack: Default::default(),
             read_file_state: crate::FileStateCache::new(),
+            sub_agent_output_tokens: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         };
 
         let allow_broker = StaticPermissionBroker::new(true);
@@ -5339,6 +5390,7 @@ while True:
             progress_cb: None,
             task_stack: Default::default(),
             read_file_state: crate::FileStateCache::new(),
+            sub_agent_output_tokens: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         };
         let broker = StaticPermissionBroker::new(true);
 
@@ -5376,6 +5428,7 @@ while True:
             progress_cb: None,
             task_stack: Default::default(),
             read_file_state: crate::FileStateCache::new(),
+            sub_agent_output_tokens: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         };
         let broker = StaticPermissionBroker::new(true);
 
@@ -5434,6 +5487,7 @@ while True:
             progress_cb: None,
             task_stack: Default::default(),
             read_file_state: crate::FileStateCache::new(),
+            sub_agent_output_tokens: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         };
         let broker = StaticPermissionBroker::new(true);
 
@@ -5475,6 +5529,7 @@ while True:
             progress_cb: None,
             task_stack: Default::default(),
             read_file_state: crate::FileStateCache::new(),
+            sub_agent_output_tokens: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         };
         let broker = StaticPermissionBroker::new(true);
 
@@ -5512,6 +5567,7 @@ while True:
             progress_cb: None,
             task_stack: Default::default(),
             read_file_state: crate::FileStateCache::new(),
+            sub_agent_output_tokens: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         };
         let broker = StaticPermissionBroker::new(true);
 
@@ -5561,6 +5617,7 @@ while True:
             progress_cb: None,
             task_stack: Default::default(),
             read_file_state: crate::FileStateCache::new(),
+            sub_agent_output_tokens: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         };
         let broker = StaticPermissionBroker::new(true);
 
@@ -5595,6 +5652,7 @@ while True:
             progress_cb: None,
             task_stack: Default::default(),
             read_file_state: crate::FileStateCache::new(),
+            sub_agent_output_tokens: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         };
         let broker = StaticPermissionBroker::new(true);
 
@@ -5631,6 +5689,7 @@ while True:
             progress_cb: None,
             task_stack: Default::default(),
             read_file_state: crate::FileStateCache::new(),
+            sub_agent_output_tokens: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         };
         let broker = StaticPermissionBroker::new(true);
 
@@ -5674,6 +5733,7 @@ while True:
             progress_cb: None,
             task_stack: Default::default(),
             read_file_state: crate::FileStateCache::new(),
+            sub_agent_output_tokens: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         };
         let broker = StaticPermissionBroker::new(true);
         let original_policy = super::current_tool_runtime_policy();
@@ -5768,6 +5828,7 @@ while True:
             progress_cb: None,
             task_stack: Default::default(),
             read_file_state: crate::FileStateCache::new(),
+            sub_agent_output_tokens: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         };
         let broker = StaticPermissionBroker::new(true);
 
@@ -5843,6 +5904,7 @@ while True:
             progress_cb: None,
             task_stack: Default::default(),
             read_file_state: crate::FileStateCache::new(),
+            sub_agent_output_tokens: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         };
         let broker = StaticPermissionBroker::new(true);
 
@@ -5921,6 +5983,7 @@ while True:
             progress_cb: None,
             task_stack: Default::default(),
             read_file_state: crate::FileStateCache::new(),
+            sub_agent_output_tokens: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         };
         let broker = StaticPermissionBroker::new(true);
 
@@ -6002,6 +6065,7 @@ while True:
             progress_cb: None,
             task_stack: Default::default(),
             read_file_state: crate::FileStateCache::new(),
+            sub_agent_output_tokens: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         };
         let broker = StaticPermissionBroker::new(true);
         let original_policy = super::current_tool_runtime_policy();
@@ -6086,6 +6150,7 @@ while True:
             progress_cb: None,
             task_stack: Default::default(),
             read_file_state: crate::FileStateCache::new(),
+            sub_agent_output_tokens: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         };
         let broker = StaticPermissionBroker::new(true);
         let original_policy = super::current_tool_runtime_policy();
@@ -6156,6 +6221,7 @@ while True:
             progress_cb: None,
             task_stack: Default::default(),
             read_file_state: crate::FileStateCache::new(),
+            sub_agent_output_tokens: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         };
         let broker = StaticPermissionBroker::new(true);
         let original_policy = super::current_tool_runtime_policy();
@@ -6235,6 +6301,7 @@ while True:
             progress_cb: None,
             task_stack: Default::default(),
             read_file_state: crate::FileStateCache::new(),
+            sub_agent_output_tokens: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         };
         let broker = StaticPermissionBroker::new(true);
         let original_policy = super::current_tool_runtime_policy();
@@ -6313,6 +6380,7 @@ while True:
             progress_cb: None,
             task_stack: Default::default(),
             read_file_state: crate::FileStateCache::new(),
+            sub_agent_output_tokens: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         };
         let broker = StaticPermissionBroker::new(true);
 
@@ -6350,6 +6418,7 @@ while True:
             progress_cb: None,
             task_stack: Default::default(),
             read_file_state: crate::FileStateCache::new(),
+            sub_agent_output_tokens: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         };
         let broker = StaticPermissionBroker::new(true);
 
@@ -6861,6 +6930,7 @@ while True:
             progress_cb: None,
             task_stack: Default::default(),
             read_file_state: crate::FileStateCache::new(),
+            sub_agent_output_tokens: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         };
 
         let precheck = super::precheck_filesystem_permission(&spec, &call, &context, &layered);
