@@ -999,6 +999,9 @@ pub struct ToolExecutionContext {
     /// Fork/subagent contexts should use [`FileStateCache::clone_isolated`]
     /// unless a caller explicitly wants to pass a setup cache into the child.
     pub read_file_state: FileStateCache,
+    /// Accumulated output tokens from sub-agent executions in this turn.
+    /// The query engine reads this after each tool call to track budget carryover.
+    pub sub_agent_output_tokens: Arc<std::sync::atomic::AtomicU64>,
 }
 
 /// Returns the default bash timeout in milliseconds.
@@ -1031,6 +1034,7 @@ impl Default for ToolExecutionContext {
             progress_cb: None,
             task_stack: Arc::new(std::sync::Mutex::new(TaskStack::default())),
             read_file_state: crate::FileStateCache::new(),
+            sub_agent_output_tokens: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         }
     }
 }
@@ -1072,6 +1076,7 @@ impl ToolExecutionContext {
             progress_cb: None,
             task_stack: Arc::new(std::sync::Mutex::new(TaskStack::default())),
             read_file_state: self.read_file_state.clone_isolated(),
+            sub_agent_output_tokens: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         }
     }
 
