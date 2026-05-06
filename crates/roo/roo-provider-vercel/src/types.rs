@@ -27,14 +27,21 @@ impl VercelConfig {
         "https://sdk.vercel.ai/api/v1/ai-gateway-gateway";
 
     /// Create configuration from provider settings.
+    ///
+    /// Checks both `vercelAiGatewayApiKey` and `vercelApiKey` for the API key,
+    /// and `vercelAiGatewayModelId` / `vercelModelId` for the model.
     pub fn from_settings(settings: &ProviderSettings) -> Option<Self> {
-        let api_key = settings.vercel_api_key.clone()?;
+        let api_key = settings
+            .vercel_ai_gateway_api_key
+            .clone()
+            .or(settings.vercel_api_key.clone())?;
         Some(Self {
             api_key,
             base_url: settings.vercel_base_url.clone(),
             model_id: settings
-                .vercel_model_id
+                .vercel_ai_gateway_model_id
                 .clone()
+                .or(settings.vercel_model_id.clone())
                 .or(settings.api_model_id.clone()),
             temperature: settings.model_temperature.flatten(),
             request_timeout: settings.request_timeout,

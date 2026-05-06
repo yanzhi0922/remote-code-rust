@@ -63,6 +63,96 @@ struct OpenAiReasoningDetail {
 }
 
 // ---------------------------------------------------------------------------
+// ReasoningDetailsAccumulator — merges fragments across SSE chunks
+// Source: `src/api/providers/openrouter.ts` and `src/api/providers/roo.ts`
+// ---------------------------------------------------------------------------
+
+/// Accumulated reasoning detail entry being built across SSE chunks.
+#[derive(Debug, Clone, Default)]
+#[allow(dead_code)]
+struct AccumulatedReasoningDetail {
+    detail_type: String,
+    text: Option<String>,
+    summary: Option<String>,
+    data: Option<String>,
+    id: Option<String>,
+    format: Option<String>,
+    signature: Option<String>,
+    index: u64,
+}
+
+/// Accumulates reasoning detail fragments across SSE chunks into a Map,
+/// keyed by `"type-index"` (OpenRouter style).
+///
+/// Source: `src/api/providers/openrouter.ts` — `reasoningDetailsAccumulator`
+#[derive(Debug, Clone, Default)]
+struct ReasoningDetailsAccumulator {
+    entries: std::collections::HashMap<String, AccumulatedReasoningDetail>,
+}
+
+impl ReasoningDetailsAccumulator {
+    /// Process a list of reasoning details from an SSE chunk delta.
+    /// Merges text/summary/data fragments into existing entries.
+    fn accumulate(&mut self, details: &[OpenAiReasoningDetail]) {
+        for (i, detail) in details.iter().enumerate() {
+            let detail_type = detail.detail_type.as_deref().unwrap_or("");
+            if detail_type.is_empty() {
+                continue;
+            }
+
+            let index = detail.index.unwrap_or(i as u64);
+            let key = format!("{detail_type}-{index}");
+
+            let entry = self.entries.entry(key).or_insert_with(|| AccumulatedReasoningDetail {
+                detail_type: detail_type.to_string(),
+                index,
+                ..Default::default()
+            });
+
+            // Concatenate text fragments
+            if let Some(ref text) = detail.text {
+                if let Some(ref mut existing) = entry.text {
+                    existing.push_str(text);
+                } else {
+                    entry.text = Some(text.clone());
+                }
+            }
+
+            // Concatenate summary fragments
+            if let Some(ref summary) = detail.summary {
+                if let Some(ref mut existing) = entry.summary {
+                    existing.push_str(summary);
+                } else {
+                    entry.summary = Some(summary.clone());
+                }
+            }
+
+            // Concatenate data fragments
+            if let Some(ref data) = detail.data {
+                if let Some(ref mut existing) = entry.data {
+                    existing.push_str(data);
+                } else {
+                    entry.data = Some(data.clone());
+                }
+            }
+
+            // Update metadata from later chunks (take last seen)
+            if let Some(ref id) = detail.id {
+                if let Some(inner_id) = id.as_deref() {
+                    entry.id = Some(inner_id.to_string());
+                }
+            }
+            if let Some(ref format) = detail.format {
+                entry.format = Some(format.clone());
+            }
+            if let Some(ref sig) = detail.signature {
+                entry.signature = Some(sig.clone());
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // ThinkTagMatcher — extracts <think_open>...<think_close> from content
 // Source: `.research/Roo-Code/src/utils/tag-matcher.ts` + usage in
 //         `base-openai-compatible-provider.ts` line 120
@@ -299,6 +389,15 @@ pub struct OpenAiCompatibleConfig {
     /// chat completion.
     /// Source: `src/api/providers/openai.ts` — `openAiStreamingEnabled`
     pub streaming_enabled: Option<bool>,
+    /// Whether to use `max_completion_tokens` instead of `max_tokens` in the
+    /// request body. This is required for O-family models (o1, o3, o4) and
+    /// certain other newer models.
+    ///
+    /// Source: `src/api/providers/openai.ts` — `includeMaxTokens`
+    pub include_max_tokens: Option<bool>,
+    /// Additional JSON fields to merge into the request body.
+    /// Used by providers like Ollama that accept extra parameters (e.g. `num_ctx`).
+    pub extra_body_fields: Option<serde_json::Value>,
 }
 
 /// Base class for OpenAI-compatible API providers.
@@ -313,6 +412,8 @@ pub struct OpenAiCompatibleProvider {
     default_temperature: f64,
     reasoning_effort: Option<String>,
     streaming_enabled: bool,
+    include_max_tokens: bool,
+    extra_body_fields: Option<serde_json::Value>,
 }
 
 impl OpenAiCompatibleProvider {
@@ -343,6 +444,8 @@ impl OpenAiCompatibleProvider {
             default_temperature: config.default_temperature,
             reasoning_effort: config.reasoning_effort,
             streaming_enabled: config.streaming_enabled.unwrap_or(true),
+            include_max_tokens: config.include_max_tokens.unwrap_or(false),
+            extra_body_fields: config.extra_body_fields,
         })
     }
 
@@ -395,8 +498,11 @@ impl OpenAiCompatibleProvider {
         }
 
         // o-family models use max_completion_tokens instead of max_tokens.
+        // When include_max_tokens is configured, also use max_completion_tokens
+        // for non-o-family models (for providers that require it).
+        // Source: `src/api/providers/openai.ts` — `includeMaxTokens`
         if let Some(max_tokens) = max_tokens {
-            if is_o_family {
+            if is_o_family || self.include_max_tokens {
                 body["max_completion_tokens"] = serde_json::json!(max_tokens);
             } else {
                 body["max_tokens"] = serde_json::json!(max_tokens);
@@ -415,6 +521,17 @@ impl OpenAiCompatibleProvider {
         // Source: `src/api/providers/openai.ts` — `reasoning_effort` in request body
         if let Some(ref effort) = self.reasoning_effort {
             body["reasoning_effort"] = serde_json::json!(effort);
+        }
+
+        // Merge extra body fields (e.g. Ollama's `num_ctx`).
+        if let Some(ref extra) = self.extra_body_fields {
+            if let Some(obj) = body.as_object_mut() {
+                if let Some(extra_obj) = extra.as_object() {
+                    for (key, value) in extra_obj {
+                        obj.insert(key.clone(), value.clone());
+                    }
+                }
+            }
         }
 
         Ok(body)
@@ -438,6 +555,9 @@ impl OpenAiCompatibleProvider {
             .post(&url)
             .header("Authorization", format!("Bearer {}", self.api_key))
             .header("Content-Type", "application/json")
+            .header("HTTP-Referer", "https://github.com/RooVetGit/Roo-Cline")
+            .header("X-Title", "Roo Code")
+            .header("User-Agent", "Roo Code")
             .json(&body)
             .send()
             .await
@@ -500,6 +620,9 @@ impl OpenAiCompatibleProvider {
             .post(&url)
             .header("Authorization", format!("Bearer {}", self.api_key))
             .header("Content-Type", "application/json")
+            .header("HTTP-Referer", "https://github.com/RooVetGit/Roo-Cline")
+            .header("X-Title", "Roo Code")
+            .header("User-Agent", "Roo Code")
             .json(&body)
             .send()
             .await
@@ -549,6 +672,7 @@ impl OpenAiCompatibleProvider {
         let mut active_tool_call_ids: HashSet<String> = HashSet::new();
         let model_info = model_info.clone();
         let tag_matcher = std::sync::Arc::new(std::sync::Mutex::new(ThinkTagMatcher::new()));
+        let reasoning_accumulator = std::sync::Arc::new(std::sync::Mutex::new(ReasoningDetailsAccumulator::default()));
 
         let processed = stream.flat_map(move |chunk_result| {
             let results: Vec<Result<ApiStreamChunk>> = match chunk_result {
@@ -595,8 +719,16 @@ impl OpenAiCompatibleProvider {
                         // Priority: reasoning_details > reasoning_content > reasoning
                         // If reasoning_details has displayable content, skip top-level reasoning
                         // to avoid duplicate display (matches TS behavior).
+                        //
+                        // Also accumulates fragments into a Map for later retrieval via
+                        // consolidate_reasoning_details().
+                        // Source: `src/api/providers/openrouter.ts` — reasoningDetailsAccumulator
                         let mut has_reasoning_from_details = false;
                         if let Some(ref details) = delta.reasoning_details {
+                            // Accumulate into the Map for later retrieval
+                            if let Ok(mut acc) = reasoning_accumulator.lock() {
+                                acc.accumulate(details);
+                            }
                             for detail in details {
                                 let reasoning_text = match detail.detail_type.as_deref() {
                                     Some("reasoning.text") => detail.text.as_deref(),
@@ -679,6 +811,71 @@ impl OpenAiCompatibleProvider {
         Ok(Box::pin(processed))
     }
 
+    /// Create a message using developer role for O-family models.
+    ///
+    /// This method builds a request body with the system message using
+    /// the `"developer"` role (required by o1/o3/o4 models), omits the
+    /// `temperature` parameter, adds `reasoning_effort`, and uses
+    /// `max_completion_tokens` instead of `max_tokens`.
+    ///
+    /// Source: `src/api/providers/openai.ts` — `handleO3FamilyMessage`
+    pub async fn create_message_with_developer_role(
+        &self,
+        system_prompt: &str,
+        messages: Vec<ApiMessage>,
+        tools: Option<Vec<serde_json::Value>>,
+        metadata: CreateMessageMetadata,
+    ) -> Result<ApiStream> {
+        // Build the base body using the standard method.
+        // The builder already detects o-family models and sets developer role,
+        // omits temperature, and uses max_completion_tokens. We override
+        // explicitly here for safety.
+        let mut body = self.build_stream_request_body(
+            &format!("Formatting re-enabled\n{}", system_prompt),
+            &messages,
+            tools.as_ref(),
+            &metadata,
+        )?;
+
+        // Ensure the system message uses "developer" role
+        if let Some(msgs) = body.get_mut("messages") {
+            if let Some(msgs_arr) = msgs.as_array_mut() {
+                if let Some(first) = msgs_arr.first_mut() {
+                    if first.get("role").and_then(|r| r.as_str()) == Some("system") {
+                        first["role"] = serde_json::Value::String("developer".to_string());
+                    }
+                }
+            }
+        }
+
+        // Remove temperature for O-family models
+        if let Some(obj) = body.as_object_mut() {
+            obj.remove("temperature");
+        }
+
+        // Ensure reasoning_effort is set
+        if let Some(ref effort) = self.reasoning_effort {
+            body["reasoning_effort"] = serde_json::json!(effort);
+        }
+
+        // Use max_completion_tokens instead of max_tokens
+        if let Some(obj) = body.as_object_mut() {
+            if let Some(max_tokens) = obj.remove("max_tokens") {
+                obj.insert("max_completion_tokens".to_string(), max_tokens);
+            }
+        }
+
+        // When streaming is disabled, convert to non-streaming body
+        if !self.streaming_enabled {
+            body["stream"] = serde_json::json!(false);
+            if let Some(obj) = body.as_object_mut() {
+                obj.remove("stream_options");
+            }
+        }
+
+        self.create_message_from_body(body).await
+    }
+
     /// Non-streaming fallback when streaming is disabled.
     ///
     /// Source: `src/api/providers/openai.ts` — the `else` branch when
@@ -704,6 +901,9 @@ impl OpenAiCompatibleProvider {
             .post(&url)
             .header("Authorization", format!("Bearer {}", self.api_key))
             .header("Content-Type", "application/json")
+            .header("HTTP-Referer", "https://github.com/RooVetGit/Roo-Cline")
+            .header("X-Title", "Roo Code")
+            .header("User-Agent", "Roo Code")
             .json(&body)
             .send()
             .await
@@ -809,6 +1009,7 @@ impl Provider for OpenAiCompatibleProvider {
         let mut active_tool_call_ids: HashSet<String> = HashSet::new();
         let model_info = model_info.clone();
         let tag_matcher = std::sync::Arc::new(std::sync::Mutex::new(ThinkTagMatcher::new()));
+        let reasoning_accumulator = std::sync::Arc::new(std::sync::Mutex::new(ReasoningDetailsAccumulator::default()));
 
         let processed = stream.flat_map(move |chunk_result| {
             let results: Vec<Result<ApiStreamChunk>> = match chunk_result {
@@ -955,6 +1156,9 @@ impl Provider for OpenAiCompatibleProvider {
             .post(&url)
             .header("Authorization", format!("Bearer {}", self.api_key))
             .header("Content-Type", "application/json")
+            .header("HTTP-Referer", "https://github.com/RooVetGit/Roo-Cline")
+            .header("X-Title", "Roo Code")
+            .header("User-Agent", "Roo Code")
             .json(&body)
             .send()
             .await

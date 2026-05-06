@@ -3564,6 +3564,14 @@ fn task_event_to_notification(event: &TaskEvent, task_id: &str) -> Option<Messag
             "autoApprovalLimitReached",
             json!({"taskId": task_id}),
         ),
+        TaskEvent::FollowupQuestion { tool_call_id, question_json, .. } => (
+            "followupQuestion",
+            json!({"taskId": task_id, "toolCallId": tool_call_id, "question": question_json}),
+        ),
+        TaskEvent::CompletionResult { tool_call_id, completion_text, .. } => (
+            "completionResult",
+            json!({"taskId": task_id, "toolCallId": tool_call_id, "completionText": completion_text}),
+        ),
     };
 
     Some(Message::notification(

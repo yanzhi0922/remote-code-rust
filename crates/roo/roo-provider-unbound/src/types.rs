@@ -10,6 +10,8 @@ use roo_types::provider_settings::ProviderSettings;
 pub struct UnboundConfig {
     /// API key for Unbound.
     pub api_key: String,
+    /// Custom base URL override.
+    pub base_url: Option<String>,
     /// Model ID to use.
     pub model_id: Option<String>,
     /// Temperature for generation.
@@ -27,6 +29,7 @@ impl UnboundConfig {
         let api_key = settings.unbound_api_key.clone()?;
         Some(Self {
             api_key,
+            base_url: settings.unbound_base_url.clone(),
             model_id: settings.unbound_model_id.clone(),
             temperature: settings.model_temperature.flatten(),
             request_timeout: settings.request_timeout,

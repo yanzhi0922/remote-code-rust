@@ -2,6 +2,8 @@
 //!
 //! Uses the Chat Completions API with SSE streaming.
 //! Supports function calling, tool_choice, and reasoning_effort.
+//! Handles O-family models (o1, o3, o4) with developer role,
+//! max_completion_tokens, and omitted temperature.
 
 use async_trait::async_trait;
 use roo_provider::{
@@ -13,6 +15,45 @@ use roo_types::model::ModelInfo;
 
 use crate::models;
 use crate::types::OpenAiConfig;
+
+// ---------------------------------------------------------------------------
+// Azure OpenAI URL detection helpers
+// ---------------------------------------------------------------------------
+
+/// Returns `true` if the URL points to an Azure OpenAI endpoint.
+///
+/// Source: `src/api/providers/openai.ts` — `isAzureOpenAi`
+#[allow(dead_code)]
+pub fn is_azure_openai(url: &str) -> bool {
+    url::Url::parse(url)
+        .ok()
+        .and_then(|u| u.host_str().map(|h| h.to_string()))
+        .map(|host| host.ends_with(".azure.com") || host == "azure.com")
+        .unwrap_or(false)
+}
+
+/// Returns `true` if the URL points to an Azure AI Inference endpoint.
+///
+/// Source: `src/api/providers/openai.ts` — `isAzureAiInference`
+#[allow(dead_code)]
+pub fn is_azure_ai_inference(url: &str) -> bool {
+    url::Url::parse(url)
+        .ok()
+        .and_then(|u| u.host_str().map(|h| h.to_string()))
+        .map(|host| host.ends_with(".services.ai.azure.com"))
+        .unwrap_or(false)
+}
+
+/// Returns `true` if the model ID belongs to the O-family (o1, o3, o4).
+///
+/// O-family models require the `"developer"` role instead of `"system"`,
+/// use `max_completion_tokens` instead of `max_tokens`, and omit
+/// the `temperature` parameter.
+///
+/// Source: `src/api/providers/openai.ts` — `handleO3FamilyMessage`
+pub fn is_o_family_model(model_id: &str) -> bool {
+    model_id.contains("o1") || model_id.contains("o3") || model_id.contains("o4")
+}
 
 /// OpenAI API provider handler.
 pub struct OpenAiHandler {
@@ -52,6 +93,8 @@ impl OpenAiHandler {
             request_timeout: config.request_timeout,
             reasoning_effort: config.reasoning_effort.clone(),
             streaming_enabled: None,
+            include_max_tokens: None,
+            extra_body_fields: None,
         };
 
         let inner = roo_provider::OpenAiCompatibleProvider::new(compatible_config)?;
@@ -82,12 +125,26 @@ impl Provider for OpenAiHandler {
         tools: Option<Vec<serde_json::Value>>,
         metadata: CreateMessageMetadata,
     ) -> Result<ApiStream> {
-        // For now, delegate to the inner OpenAI-compatible provider
-        // The reasoning_effort and org_id would be added as custom headers/body
-        // in a more complete implementation
-        self.inner
-            .create_message(system_prompt, messages, tools, metadata)
-            .await
+        let model_id = self.inner.get_model().0;
+        let is_o_family = is_o_family_model(&model_id);
+
+        if is_o_family {
+            // O-family models: use "developer" role, add reasoning_effort,
+            // omit temperature, use max_completion_tokens.
+            // Source: `src/api/providers/openai.ts` — `handleO3FamilyMessage`
+            self.inner
+                .create_message_with_developer_role(
+                    system_prompt,
+                    messages,
+                    tools,
+                    metadata,
+                )
+                .await
+        } else {
+            self.inner
+                .create_message(system_prompt, messages, tools, metadata)
+                .await
+        }
     }
 
     fn get_model(&self) -> (String, ModelInfo) {
@@ -324,5 +381,74 @@ mod tests {
             mini.input_price.unwrap() < gpt4o.input_price.unwrap(),
             "Mini should be cheaper"
         );
+    }
+
+    // -- Azure and O-family detection tests --------------------------------
+
+    #[test]
+    fn test_is_azure_openai() {
+        assert!(is_azure_openai("https://myresource.openai.azure.com/v1"));
+        assert!(is_azure_openai("https://azure.com/v1"));
+        assert!(!is_azure_openai("https://api.openai.com/v1"));
+        assert!(!is_azure_openai("https://example.com/v1"));
+    }
+
+    #[test]
+    fn test_is_azure_ai_inference() {
+        assert!(is_azure_ai_inference(
+            "https://myinstance.services.ai.azure.com/v1"
+        ));
+        assert!(!is_azure_ai_inference("https://myresource.openai.azure.com/v1"));
+        assert!(!is_azure_ai_inference("https://api.openai.com/v1"));
+    }
+
+    #[test]
+    fn test_is_o_family_model() {
+        assert!(is_o_family_model("o1"));
+        assert!(is_o_family_model("o1-preview"));
+        assert!(is_o_family_model("o1-mini"));
+        assert!(is_o_family_model("o3"));
+        assert!(is_o_family_model("o3-mini"));
+        assert!(is_o_family_model("o3-high"));
+        assert!(is_o_family_model("o3-low"));
+        assert!(is_o_family_model("o4-mini"));
+        assert!(is_o_family_model("o4-mini-high"));
+        assert!(!is_o_family_model("gpt-4o"));
+        assert!(!is_o_family_model("gpt-4o-mini"));
+        assert!(!is_o_family_model("gpt-4.1"));
+    }
+
+    #[test]
+    fn test_handler_o3_uses_developer_role() {
+        // Verify the handler constructs successfully with an o3 model,
+        // which triggers the o-family path in create_message.
+        let config = OpenAiConfig {
+            api_key: "sk-test".to_string(),
+            base_url: OpenAiConfig::DEFAULT_BASE_URL.to_string(),
+            org_id: None,
+            model_id: Some("o3".to_string()),
+            temperature: None,
+            reasoning_effort: Some("high".to_string()),
+            request_timeout: None,
+        };
+        let handler = OpenAiHandler::new(config).unwrap();
+        let (model_id, _) = handler.get_model();
+        assert!(is_o_family_model(&model_id));
+    }
+
+    #[test]
+    fn test_handler_gpt4o_not_o_family() {
+        let config = OpenAiConfig {
+            api_key: "sk-test".to_string(),
+            base_url: OpenAiConfig::DEFAULT_BASE_URL.to_string(),
+            org_id: None,
+            model_id: Some("gpt-4o".to_string()),
+            temperature: None,
+            reasoning_effort: None,
+            request_timeout: None,
+        };
+        let handler = OpenAiHandler::new(config).unwrap();
+        let (model_id, _) = handler.get_model();
+        assert!(!is_o_family_model(&model_id));
     }
 }

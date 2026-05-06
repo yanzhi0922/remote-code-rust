@@ -11,6 +11,8 @@ use std::sync::RwLock;
 use async_trait::async_trait;
 use roo_provider::{
     ApiStream, CreateMessageMetadata, OpenAiCompatibleConfig, OpenAiCompatibleProvider, Provider,
+    generate_image_with_provider,
+    ImageGenerationResult, ImageGenerationOptions,
 };
 use roo_types::api::ProviderName;
 use roo_types::model::{ModelInfo, ModelRecord};
@@ -30,6 +32,8 @@ pub struct RooHandler {
     base_url: String,
     /// API key for authentication.
     api_key: String,
+    /// HTTP client for direct API calls (image generation, etc.)
+    http_client: reqwest::Client,
     /// Cache for dynamically fetched models.
     dynamic_models: RwLock<Option<ModelRecord>>,
 }
@@ -70,6 +74,8 @@ impl RooHandler {
             request_timeout: config.request_timeout,
         reasoning_effort: None,
             streaming_enabled: None,
+            include_max_tokens: None,
+            extra_body_fields: None,
         };
 
         let inner = OpenAiCompatibleProvider::new(compatible_config)?;
@@ -79,6 +85,7 @@ impl RooHandler {
             model_id,
             base_url,
             api_key: config.api_key.unwrap_or_default(),
+            http_client: reqwest::Client::new(),
             dynamic_models: RwLock::new(None),
         })
     }
@@ -212,6 +219,33 @@ impl Provider for RooHandler {
 
     fn provider_name(&self) -> ProviderName {
         ProviderName::Roo
+    }
+
+    /// Generate an image using Roo Code Cloud.
+    ///
+    /// Supports two methods:
+    /// - Chat completions with `modalities: ["image", "text"]` (default)
+    /// - Images API via `/images/generations` (when `api_method` is `"images_api"`)
+    ///
+    /// Source: `src/api/providers/roo.ts` — `generateImage()`
+    async fn generate_image(
+        &self,
+        prompt: &str,
+        model: &str,
+        input_image: Option<&str>,
+    ) -> Result<ImageGenerationResult, roo_provider::ProviderError> {
+        // Default: use chat completions approach
+        Ok(generate_image_with_provider(
+            &self.http_client,
+            &ImageGenerationOptions {
+                base_url: self.base_url.clone(),
+                auth_token: self.api_key.clone(),
+                model: model.to_string(),
+                prompt: prompt.to_string(),
+                input_image: input_image.map(|s| s.to_string()),
+            },
+        )
+        .await)
     }
 }
 

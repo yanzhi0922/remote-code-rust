@@ -1,5 +1,7 @@
 //! OpenAI-specific configuration types.
 
+use std::collections::HashMap;
+
 use roo_types::provider_settings::ProviderSettings;
 
 /// Configuration for the OpenAI provider.
@@ -19,6 +21,18 @@ pub struct OpenAiConfig {
     pub reasoning_effort: Option<String>,
     /// Request timeout in milliseconds.
     pub request_timeout: Option<u64>,
+    /// Whether to use Azure OpenAI.
+    pub use_azure: bool,
+    /// Azure API version (when use_azure is true).
+    pub azure_api_version: Option<String>,
+    /// Whether streaming is enabled.
+    pub streaming_enabled: bool,
+    /// Additional HTTP headers to send with requests.
+    pub headers: HashMap<String, String>,
+    /// Whether to use the R1 format for reasoning.
+    pub r1_format_enabled: bool,
+    /// Custom model info override.
+    pub custom_model_info: Option<roo_types::model::ModelInfo>,
 }
 
 impl OpenAiConfig {
@@ -51,6 +65,12 @@ impl OpenAiConfig {
                     })
                 }),
             request_timeout: settings.request_timeout,
+            use_azure: settings.open_ai_use_azure.unwrap_or(false),
+            azure_api_version: settings.azure_api_version.clone(),
+            streaming_enabled: settings.open_ai_streaming_enabled.unwrap_or(true),
+            headers: settings.open_ai_headers.clone().unwrap_or_default(),
+            r1_format_enabled: settings.open_ai_r1_format_enabled.unwrap_or(false),
+            custom_model_info: settings.open_ai_custom_model_info.clone().map(|b| *b),
         })
     }
 }
