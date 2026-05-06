@@ -12,9 +12,8 @@ path = "src/lib.rs"
 name = "codex-responses-api-proxy"
 path = "src/main.rs"
 
-# Override workspace unsafe_code=forbid — ctor macro uses unsafe
-[lints.rust]
-unsafe_code = "allow"
+[lints]
+workspace = true
 
 [dependencies]
 anyhow = { workspace = true }

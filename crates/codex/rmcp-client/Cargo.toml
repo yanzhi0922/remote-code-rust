@@ -4,11 +4,11 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
-[lints.rust]
-unsafe_code = "allow"
+[lints]
+workspace = true
 
 [dependencies]
-anyhow = { workspace = true }
+anyhow = "1"
 axum = { workspace = true, default-features = false, features = [
     "http1",
     "tokio",
@@ -24,8 +24,8 @@ codex-utils-home-dir = { workspace = true }
 bytes = { workspace = true }
 futures = { workspace = true, default-features = false, features = ["std"] }
 keyring = { workspace = true, features = ["crypto-rust"] }
-oauth2 = { workspace = true }
-reqwest = { workspace = true, default-features = false, features = [
+oauth2 = "5"
+reqwest = { version = "0.12", default-features = false, features = [
     "json",
     "stream",
     "rustls-tls",
@@ -44,7 +44,7 @@ rmcp = { workspace = true, default-features = false, features = [
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
-sse-stream = { workspace = true }
+sse-stream = "0.2.1"
 thiserror = { workspace = true }
 tiny_http = { workspace = true }
 tokio = { workspace = true, features = [
