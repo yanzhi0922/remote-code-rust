@@ -19,8 +19,8 @@ use codex_protocol::protocol::GitInfo;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use codex_thread_store::StoredThread;
-use codex_core_test_support::PathBufExt;
-use codex_core_test_support::PathExt;
+use core_test_support::PathBufExt;
+use core_test_support::PathExt;
 use pretty_assertions::assert_eq;
 use std::fs;
 use std::path::PathBuf;
@@ -70,7 +70,6 @@ fn message(role: &str, content: ContentItem) -> ResponseItem {
         id: None,
         role: role.to_string(),
         content: vec![content],
-        end_turn: None,
         phase: None,
     }
 }
