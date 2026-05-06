@@ -22,6 +22,7 @@ pub mod php;
 pub mod python;
 pub mod ruby;
 pub mod rust;
+pub mod scala;
 pub mod solidity;
 pub mod swift;
 pub mod systemrdl;
@@ -55,7 +56,7 @@ pub fn query_for_extension(ext: &str) -> Option<&'static str> {
         "css" => Some(css::QUERY),
         "html" | "htm" => Some(html::QUERY),
         "ml" | "mli" => Some(ocaml::QUERY),
-        "scala" => Some(lua::QUERY), // Temporarily use Lua query (matches TS behavior)
+        "scala" => Some(scala::QUERY),
         "sol" => Some(solidity::QUERY),
         "toml" => Some(toml::QUERY),
         "vue" => Some(vue::QUERY),

@@ -320,6 +320,27 @@ pub enum TaskEvent {
         approval_count: Option<String>,
     },
 
+    // --- Interactive tool events ---
+    /// A followup question was asked by a tool (ask_followup_question).
+    ///
+    /// Source: TS `AskFollowupQuestionTool.ts` → `task.ask("followup", question, suggest)`
+    /// The tool needs a text response from the user.
+    FollowupQuestion {
+        task_id: String,
+        tool_call_id: String,
+        question_json: String,
+    },
+
+    /// A completion result was presented by a tool (attempt_completion).
+    ///
+    /// Source: TS `AttemptCompletionTool.ts` → `task.ask("completion_result", text)`
+    /// The user can accept (empty response) or provide feedback (non-empty).
+    CompletionResult {
+        task_id: String,
+        tool_call_id: String,
+        completion_text: String,
+    },
+
     // --- Rate limit events ---
     /// Rate limit countdown tick.
     /// Source: TS `maybeWaitForProviderRateLimit()` → `say("api_req_rate_limit_wait")`
@@ -827,6 +848,42 @@ impl TaskEventEmitter {
     pub fn emit_streaming_completed(&self, task_id: &str) {
         self.emit(&TaskEvent::StreamingCompleted {
             task_id: task_id.to_string(),
+        });
+    }
+
+    /// Emit a followup question event.
+    ///
+    /// Source: TS `AskFollowupQuestionTool.ts` → `task.ask("followup", question, suggest)`
+    /// Emitted when the `ask_followup_question` tool needs a text response
+    /// from the user. The response is provided via `set_followup_response()`.
+    pub fn emit_followup_question(
+        &self,
+        task_id: &str,
+        tool_call_id: &str,
+        question_json: &str,
+    ) {
+        self.emit(&TaskEvent::FollowupQuestion {
+            task_id: task_id.to_string(),
+            tool_call_id: tool_call_id.to_string(),
+            question_json: question_json.to_string(),
+        });
+    }
+
+    /// Emit a completion result event.
+    ///
+    /// Source: TS `AttemptCompletionTool.ts` → `task.ask("completion_result", text)`
+    /// Emitted when the `attempt_completion` tool presents its result.
+    /// The user can accept (empty response) or provide feedback.
+    pub fn emit_completion_result(
+        &self,
+        task_id: &str,
+        tool_call_id: &str,
+        completion_text: &str,
+    ) {
+        self.emit(&TaskEvent::CompletionResult {
+            task_id: task_id.to_string(),
+            tool_call_id: tool_call_id.to_string(),
+            completion_text: completion_text.to_string(),
         });
     }
 

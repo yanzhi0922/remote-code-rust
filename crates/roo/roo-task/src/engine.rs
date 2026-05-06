@@ -1,4 +1,4 @@
-﻿//! Task engine core logic.
+//! Task engine core logic.
 //!
 //! Provides [`TaskEngine`] which orchestrates the task lifecycle including
 //! state management, loop control, event emission, streaming state, and
@@ -397,8 +397,28 @@ impl TaskEngine {
 
     /// Add a message to the API conversation history.
     ///
+    /// For user messages containing tool_result blocks, validates and fixes
+    /// tool_result IDs against the previous assistant message's tool_use IDs
+    /// to prevent API 400 errors from orphaned or mismatched tool_results.
+    ///
     /// Source: `src/core/task/Task.ts` — `addToApiConversationHistory`
     pub fn add_api_message(&mut self, message: roo_types::api::ApiMessage) {
+        // Validate tool_result IDs for user messages with tool_result content.
+        // Source: `src/core/task/validateToolResultIds.ts` — `validateAndFixToolResultIds()`
+        if message.role == roo_types::api::MessageRole::User {
+            let has_tool_results = message.content.iter().any(|b| {
+                matches!(b, roo_types::api::ContentBlock::ToolResult { .. })
+            });
+            if has_tool_results {
+                // Push the message first, then validate the entire history
+                self.api_conversation_history.push(message);
+                let validated = crate::message_builder::validate_and_fix_tool_result_ids(
+                    &self.api_conversation_history,
+                );
+                self.api_conversation_history = validated;
+                return;
+            }
+        }
         self.api_conversation_history.push(message);
     }
 

@@ -34,10 +34,15 @@ pub fn validate_mcp_arguments(args: &serde_json::Value) -> Result<(), McpToolErr
 
 /// Format resource content for display.
 ///
-/// Handles text and image content types.
+/// Handles text and image content types. For images, constructs a data URI
+/// from the base64 text so the AI can actually see the image.
 pub fn format_resource_content(content: &str, content_type: &str) -> String {
     if content_type.starts_with("image/") {
-        format!("(Image content: {}, {} bytes)", content_type, content.len())
+        if content.is_empty() {
+            format!("[Empty image resource: {}]", content_type)
+        } else {
+            format!("data:{};base64,{}", content_type, content)
+        }
     } else {
         content.to_string()
     }
@@ -135,8 +140,7 @@ mod tests {
     #[test]
     fn test_image_content() {
         let result = format_resource_content("base64data", "image/png");
-        assert!(result.contains("Image content"));
-        assert!(result.contains("image/png"));
+        assert!(result.contains("data:image/png;base64,base64data"));
     }
 
     #[test]

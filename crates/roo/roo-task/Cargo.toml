@@ -2,8 +2,8 @@
 name = "roo-task"
 version.workspace = true
 edition.workspace = true
-license.workspace = true
-repository.workspace = true
+license = "Apache-2.0"
+repository = "https://github.com/roo-code/rust"
 description = "Task engine for Roo Code Rust"
 
 [dependencies]
@@ -51,6 +51,7 @@ regex = { workspace = true }
 uuid = { workspace = true }
 dirs = "6"
 tokio-util = "0.7"
+reqwest = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"

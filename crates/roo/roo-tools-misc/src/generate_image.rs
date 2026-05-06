@@ -138,7 +138,7 @@ pub struct ImageProviderResponse {
 /// Implementations call the actual API (OpenRouter, Roo Cloud, etc.).
 /// This mirrors the TS pattern where `RooHandler` and `OpenRouterHandler`
 /// each have a `generateImage` method.
-#[allow(async_fn_in_trait)]
+#[async_trait::async_trait]
 pub trait ImageGenerationProvider: Send + Sync {
     /// Generate an image from a prompt.
     ///
@@ -196,6 +196,7 @@ impl Default for OpenRouterImageProvider {
     }
 }
 
+#[async_trait::async_trait]
 impl ImageGenerationProvider for OpenRouterImageProvider {
     async fn generate_image(
         &self,
@@ -358,6 +359,7 @@ impl Default for RooImageProvider {
     }
 }
 
+#[async_trait::async_trait]
 impl ImageGenerationProvider for RooImageProvider {
     async fn generate_image(
         &self,

@@ -11,6 +11,7 @@ pub mod message;
 pub mod events;
 pub mod task;
 pub mod mcp;
+pub mod profile_validator;
 pub mod provider_settings;
 pub mod global_settings;
 pub mod model;
@@ -39,6 +40,7 @@ pub mod roomodes_schema;
 pub mod vscode;
 pub mod vscode_extension_host;
 pub mod type_fu;
+pub mod openai_codex_rate_limits;
 
 pub mod error;
 pub mod utils_error;

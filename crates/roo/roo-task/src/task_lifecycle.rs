@@ -1,4 +1,4 @@
-﻿//! Task lifecycle management.
+//! Task lifecycle management.
 //!
 //! Faithfully replicates the lifecycle methods from
 //! `src/core/task/Task.ts` (lines 1579–2470, 4454–4632).
@@ -1247,12 +1247,15 @@ impl TaskLifecycle {
         // For the manual trigger path, we emit the event and let the
         // agent loop handle it. If we have an API handler available,
         // we can perform the condensation directly.
-        if self.engine.api_handler().is_some() {
-            // Direct condensation path — requires API handler
-            // TODO: Implement direct condensation when API handler is available
-            // This would call summarize_conversation() with the proper options.
-            warn!("Direct condensation not yet implemented, falling back to event-based");
-        }
+        // The actual condensation requires an API handler (Arc<dyn Provider>) and
+        // system prompt, which are owned by the agent loop. The TaskLifecycle emits
+        // a condensation request event and the agent loop performs the actual
+        // condensation via roo_condense::summarize_conversation(). This matches the
+        // TS architecture where condenseContext() calls summarizeConversation().
+        //
+        // Direct in-place condensation is not performed here because the engine
+        // stores the handler as Box<dyn Provider> while summarize_conversation
+        // requires Arc<dyn Provider>. The event-based path handles this correctly.
 
         // Emit condensation request event for the agent loop to handle
         self.engine
@@ -1280,8 +1283,49 @@ impl TaskLifecycle {
             return Ok(false);
         }
         // Check if the last message is an assistant message with tool_use
-        // Source: TS — checks for pending userMessageContent
-        Ok(false) // No pending results in this simplified implementation
+        // and if there are pending tool results that haven't been added yet.
+        // Source: TS `flushPendingToolResultsToHistory()` — iterates pending
+        // userMessageContent and appends tool_result blocks to the history.
+        let history = self.engine.api_conversation_history();
+        if let Some(last_msg) = history.last() {
+            if last_msg.role == roo_types::api::MessageRole::Assistant {
+                let has_tool_use = last_msg.content.iter().any(|b| {
+                    matches!(b, roo_types::api::ContentBlock::ToolUse { .. })
+                });
+                if has_tool_use {
+                    // Check if the history already has a matching tool_result message
+                    let tool_use_ids: Vec<String> = last_msg.content.iter()
+                        .filter_map(|b| {
+                            if let roo_types::api::ContentBlock::ToolUse { id, .. } = b {
+                                Some(id.clone())
+                            } else {
+                                None
+                            }
+                        })
+                        .collect();
+
+                    let mut covered = std::collections::HashSet::new();
+                    for msg in history.iter().rev().take(2) {
+                        if msg.role == roo_types::api::MessageRole::User {
+                            for b in &msg.content {
+                                if let roo_types::api::ContentBlock::ToolResult { tool_use_id, .. } = b {
+                                    covered.insert(tool_use_id.clone());
+                                }
+                            }
+                        }
+                    }
+
+                    let missing: Vec<_> = tool_use_ids.iter()
+                        .filter(|id| !covered.contains(*id))
+                        .collect();
+
+                    if !missing.is_empty() {
+                        return Ok(true);
+                    }
+                }
+            }
+        }
+        Ok(false)
     }
 
     /// Safely get files read by Roo, returning None on error.
@@ -1633,6 +1677,7 @@ impl TaskLifecycle {
                 text: result.to_string(),
                 images: None,
                 is_error,
+                action: crate::tool_dispatcher::ToolExecutionAction::None,
             },
         );
         self.engine.add_api_message(result_msg);
