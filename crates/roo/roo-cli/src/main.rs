@@ -1,4 +1,4 @@
-﻿//! Roo CLI — command-line interface for Roo Code Rust.
+//! Roo CLI — command-line interface for Roo Code Rust.
 //!
 //! Supports sending messages to AI providers and streaming responses.
 //! Implements a full tool-call execution loop: user input → API call →
@@ -397,6 +397,7 @@ fn build_handler(
                 use_extended_thinking: config.thinking,
                 max_thinking_tokens: config.max_thinking_tokens,
                 request_timeout: config.timeout,
+                enable_1m_context: false,
             };
             Ok(Box::new(AnthropicHandler::new(cfg)
                 .context("Failed to create Anthropic handler")?))
@@ -446,6 +447,16 @@ fn build_handler(
                 endpoint_url: None,
                 request_timeout: config.timeout,
                 temperature: None,
+                service_tier: None,
+                enable_1m_context: false,
+                use_global_inference: false,
+                use_profile: false,
+                profile_name: None,
+                use_api_key: false,
+                api_key: None,
+                vpc_endpoint: None,
+                vpc_endpoint_enabled: false,
+                use_prompt_cache: true,
             };
             Ok(Box::new(AwsBedrockHandler::new(cfg)
                 .context("Failed to create Bedrock handler")?))
@@ -464,6 +475,12 @@ fn build_handler(
                 temperature: config.temperature,
                 reasoning_effort: None,
                 request_timeout: config.timeout,
+                use_azure: false,
+                azure_api_version: None,
+                streaming_enabled: true,
+                headers: std::collections::HashMap::new(),
+                r1_format_enabled: false,
+                custom_model_info: None,
             };
             Ok(Box::new(OpenAiHandler::new(cfg)
                 .context("Failed to create OpenAI handler")?))
@@ -592,6 +609,7 @@ fn build_handler(
                 temperature: config.temperature,
                 request_timeout: config.timeout,
                 api_options: None,
+                num_ctx: None,
             };
             Ok(Box::new(OllamaHandler::new(cfg)
                 .context("Failed to create Ollama handler")?))
@@ -701,6 +719,7 @@ fn build_handler(
                 .ok_or_else(|| anyhow::anyhow!("--api-key is required for unbound"))?;
             let cfg = UnboundConfig {
                 api_key: api_key.to_string(),
+                base_url: None,
                 model_id: config.model.clone(),
                 temperature: config.temperature,
                 request_timeout: config.timeout,

@@ -115,6 +115,8 @@ mod tests {
             description: "A test tool".to_string(),
             parameters_schema: json!({"type": "object"}),
             handler_type: HandlerType::Builtin,
+            path: None,
+            url: None,
         }
     }
 

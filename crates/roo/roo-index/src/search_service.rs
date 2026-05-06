@@ -67,7 +67,7 @@ impl CodeIndexSearchService {
     /// Searches the code index for relevant content.
     ///
     /// Corresponds to `searchIndex` in `search-service.ts`.
-    pub fn search_index(
+    pub async fn search_index(
         &self,
         query: &str,
         directory_prefix: Option<&str>,
@@ -90,7 +90,7 @@ impl CodeIndexSearchService {
         }
 
         // Generate embedding for query
-        let embedding_response = self.embedder.create_embeddings(&[query])?;
+        let embedding_response = self.embedder.create_embeddings(&[query]).await?;
         let vector = embedding_response
             .embeddings
             .into_iter()

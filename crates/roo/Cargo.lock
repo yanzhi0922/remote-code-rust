@@ -2733,12 +2733,14 @@ name = "roo-tools-misc"
 version = "0.1.0"
 dependencies = [
  "regex",
+ "reqwest",
  "roo-skills",
  "roo-telemetry",
  "roo-types",
  "serde",
  "serde_json",
  "thiserror",
+ "tokio",
 ]
 
 [[package]]

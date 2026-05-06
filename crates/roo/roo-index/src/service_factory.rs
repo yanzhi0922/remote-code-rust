@@ -9,6 +9,7 @@ use crate::cache_manager::CacheManager;
 use crate::config_manager::{CodeIndexConfigManager, EmbedderProvider};
 use crate::embedder::{self, Embedder, EmbedderConfig};
 use crate::processor::{CodeParser, FileProcessor};
+use crate::qdrant_store::QdrantVectorStore;
 use crate::search_service::{CodeIndexSearchService, InMemoryVectorStore, VectorStore};
 use crate::state_manager::CodeIndexStateManager;
 use crate::types::IndexError;
@@ -129,9 +130,25 @@ impl CodeIndexServiceFactory {
     }
 
     /// Creates a vector store instance.
+    ///
+    /// When a Qdrant URL is configured, returns a [`QdrantVectorStore`] backed
+    /// by a Qdrant server.  Otherwise falls back to an in-memory store for
+    /// testing / local-only use.
     pub fn create_vector_store(&self) -> Result<Box<dyn VectorStore>, IndexError> {
         let config = self.config_manager.get_config();
         let dimension = config.model_dimension.unwrap_or(1536) as usize;
+
+        if let Some(ref qdrant_url) = config.qdrant_url {
+            if !qdrant_url.is_empty() {
+                return Ok(Box::new(QdrantVectorStore::new(
+                    &self.workspace_path,
+                    qdrant_url,
+                    dimension,
+                    config.qdrant_api_key.clone(),
+                )));
+            }
+        }
+
         Ok(Box::new(InMemoryVectorStore::new(dimension)))
     }
 
@@ -176,6 +193,9 @@ mod tests {
     fn create_test_factory() -> CodeIndexServiceFactory {
         let mut raw_config = CodeIndexFullConfig::default();
         raw_config.codebase_index_enabled = true;
+        // Use empty Qdrant URL so the factory falls back to the in-memory store
+        // (avoids needing a live Qdrant server for unit tests).
+        raw_config.codebase_index_qdrant_url = String::new();
         let mut secrets = SecretsStore::default();
         secrets.open_ai_key = "test-key".to_string();
 
