@@ -18,6 +18,6 @@ chrono = { workspace = true, features = ["serde"] }
 codex-api = { workspace = true }
 codex-backend-client = { workspace = true }
 codex-git-utils = { workspace = true }
-serde = { workspace = true, features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

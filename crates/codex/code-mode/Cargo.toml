@@ -12,18 +12,17 @@ path = "src/lib.rs"
 [lints]
 workspace = true
 
-# NOTE: This is a stub version of codex-code-mode without V8/deno dependencies.
-# The real implementation requires V8 (~100MB). When V8 is available,
-# replace this stub with the original source from agents/codex/codex-rs/code-mode/.
-
 [dependencies]
+async-channel = { workspace = true }
+async-trait = { workspace = true }
 codex-protocol = { workspace = true }
+deno_core_icudata = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
-async-trait = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
 tokio-util = { workspace = true, features = ["rt"] }
 tracing = { workspace = true }
+v8 = { workspace = true }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }
