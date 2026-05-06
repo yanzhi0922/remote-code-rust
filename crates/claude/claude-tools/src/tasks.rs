@@ -734,6 +734,90 @@ pub fn task_update(input: &Value) -> Result<String> {
     Ok(result)
 }
 
+/// Get the output of a background task by ID.
+pub fn task_output(input: &Value) -> Result<String> {
+    let task_id = input["task_id"]
+        .as_str()
+        .ok_or_else(|| anyhow!("task_id is required"))?;
+
+    let store = TASK_STORE
+        .lock()
+        .map_err(|_| anyhow!("task store lock poisoned"))?;
+
+    let task = store
+        .get(task_id)
+        .ok_or_else(|| anyhow!("task '{task_id}' not found"))?;
+
+    let status = match task.status {
+        TaskStatus::Pending => "pending",
+        TaskStatus::Running => "running",
+        TaskStatus::Completed => "completed",
+        TaskStatus::Stopped => "stopped",
+        TaskStatus::Failed => "failed",
+    };
+
+    let mut result = format!(
+        "Task ID: {}\nStatus: {}\nTitle: {}",
+        task.id, status, task.title
+    );
+
+    if let Some(ref output_path) = task.output_path {
+        let path = PathBuf::from(output_path);
+        if path.exists()
+            && let Ok(content) = std::fs::read_to_string(&path) {
+                result.push_str(&format!("\n\nOutput:\n{content}"));
+            }
+    }
+
+    Ok(result)
+}
+
+/// Stop a running background task by ID.
+pub fn task_stop(input: &Value) -> Result<String> {
+    let task_id = input["task_id"]
+        .as_str()
+        .ok_or_else(|| anyhow!("task_id is required"))?;
+
+    let output_dir = TASK_OUTPUT_DIR
+        .lock()
+        .map_err(|_| anyhow!("task output dir lock poisoned"))?
+        .clone();
+
+    let mut store = TASK_STORE
+        .lock()
+        .map_err(|_| anyhow!("task store lock poisoned"))?;
+
+    let task = store
+        .get_mut(task_id)
+        .ok_or_else(|| anyhow!("task '{task_id}' not found"))?;
+
+    if matches!(task.status, TaskStatus::Stopped | TaskStatus::Completed | TaskStatus::Failed) {
+        return Ok(format!(
+            "Task '{}' is already {} (no action taken).",
+            task_id,
+            match task.status {
+                TaskStatus::Stopped => "stopped",
+                TaskStatus::Completed => "completed",
+                TaskStatus::Failed => "failed",
+                _ => "finished",
+            }
+        ));
+    }
+
+    task.status = TaskStatus::Stopped;
+    task.updated_at = now_timestamp();
+    if task.summary.trim().is_empty() {
+        task.summary = "Stopped by user".to_owned();
+    }
+
+    if let Some(output_dir) = output_dir.as_ref() {
+        let persisted_path = task_output::persist_task(output_dir, task)?;
+        task.output_path = persisted_path.map(|path| path.display().to_string());
+    }
+
+    Ok(format!("Task '{}' stopped successfully.", task_id))
+}
+
 /// Stop any active tracked tasks and clear the in-memory task store.
 ///
 /// This is used during session reset flows such as `/clear` so stale task

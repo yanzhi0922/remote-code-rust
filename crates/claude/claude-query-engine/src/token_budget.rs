@@ -93,7 +93,7 @@ impl BudgetTracker {
             };
         }
 
-        let budget = budget.unwrap();
+        let budget = budget.expect("budget is Some after early return");
         let turn_tokens = global_turn_tokens;
         let pct = ((turn_tokens as f64 / budget as f64) * 100.0).round() as u32;
         let delta_since_last = global_turn_tokens.saturating_sub(self.last_global_turn_tokens);
@@ -192,8 +192,7 @@ pub struct BudgetCompletionEvent {
 
 fn budget_continuation_message(pct: u32, turn_tokens: u64, budget: u64) -> String {
     format!(
-        "Token budget: {pct}% used ({turn_tokens} / {budget} tokens). \
-         Continue working toward completion."
+        "Stopped at {pct}% of token target ({turn_tokens} / {budget}). Keep working -- do not summarize."
     )
 }
 

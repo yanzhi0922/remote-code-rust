@@ -141,48 +141,155 @@ fn validate_ask_user_questions(questions: &[Value]) -> Result<()> {
 }
 
 pub(crate) async fn lsp_tool(input: &Value, context: &ToolExecutionContext) -> Result<String> {
-    let action = input["action"]
-        .as_str()
-        .ok_or_else(|| anyhow!("action is required"))?;
-    let file_path = input["file_path"]
-        .as_str()
+    // Accept both "operation" (TS parity) and legacy "action" for backward compat.
+    let operation = input
+        .get("operation")
+        .or_else(|| input.get("action"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("operation is required"))?;
+
+    // Accept both "file_path" (Rust convention) and "filePath" (TS parity).
+    let file_path = input
+        .get("file_path")
+        .or_else(|| input.get("filePath"))
+        .and_then(Value::as_str)
         .ok_or_else(|| anyhow!("file_path is required"))?;
+
+    // Accept both "character" (TS parity) and legacy "column".
+    let character = input
+        .get("character")
+        .or_else(|| input.get("column"))
+        .and_then(Value::as_u64)
+        .unwrap_or(1);
+    let line = input.get("line").and_then(Value::as_u64).unwrap_or(1);
 
     let client = super::lsp::LspClient::new(&context.cwd);
 
-    match action {
-        "definitions" => {
-            let symbol = input["symbol"]
-                .as_str()
-                .ok_or_else(|| anyhow!("symbol is required for definitions action"))?;
-            let locations = client.find_definitions(symbol, Some(file_path))?;
-            if locations.is_empty() {
-                Ok(format!("No definitions found for '{symbol}'."))
+    match operation {
+        "goToDefinition" | "definitions" => {
+            let symbol = input
+                .get("symbol")
+                .and_then(Value::as_str)
+                .unwrap_or_else(|| {
+                    // Best-effort: use position-based lookup when no explicit symbol given.
+                    ""
+                });
+            if symbol.is_empty() {
+                // Position-based: try to find a symbol at the given line/character.
+                let locations = client.find_definitions_at(file_path, line as u32, character as u32)?;
+                if locations.is_empty() {
+                    Ok("No definitions found at the given position.".to_owned())
+                } else {
+                    Ok(super::lsp::format_locations(&locations))
+                }
             } else {
-                Ok(super::lsp::format_locations(&locations))
+                let locations = client.find_definitions(symbol, Some(file_path))?;
+                if locations.is_empty() {
+                    Ok(format!("No definitions found for '{symbol}'."))
+                } else {
+                    Ok(super::lsp::format_locations(&locations))
+                }
             }
         }
-        "references" => {
-            let symbol = input["symbol"]
-                .as_str()
-                .ok_or_else(|| anyhow!("symbol is required for references action"))?;
-            let locations = client.find_references(symbol)?;
-            if locations.is_empty() {
-                Ok(format!("No references found for '{symbol}'."))
+        "findReferences" | "references" => {
+            let symbol = input
+                .get("symbol")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            if symbol.is_empty() {
+                let locations = client.find_references_at(file_path, line as u32, character as u32)?;
+                if locations.is_empty() {
+                    Ok("No references found at the given position.".to_owned())
+                } else {
+                    Ok(super::lsp::format_locations(&locations))
+                }
             } else {
-                Ok(super::lsp::format_locations(&locations))
+                let locations = client.find_references(symbol)?;
+                if locations.is_empty() {
+                    Ok(format!("No references found for '{symbol}'."))
+                } else {
+                    Ok(super::lsp::format_locations(&locations))
+                }
             }
         }
         "hover" => {
-            let symbol = input["symbol"]
-                .as_str()
-                .ok_or_else(|| anyhow!("symbol is required for hover action"))?;
-            client.hover(file_path, symbol)
+            let symbol = input
+                .get("symbol")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            if symbol.is_empty() {
+                client.hover_at(file_path, line as u32, character as u32)
+            } else {
+                client.hover(file_path, symbol)
+            }
+        }
+        "documentSymbol" => {
+            let symbols = client.document_symbols(file_path)?;
+            if symbols.is_empty() {
+                Ok("No symbols found in the document.".to_owned())
+            } else {
+                Ok(symbols.join("\n"))
+            }
+        }
+        "workspaceSymbol" => {
+            let query = input
+                .get("symbol")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            let symbols = client.workspace_symbols(query)?;
+            if symbols.is_empty() {
+                Ok("No workspace symbols found.".to_owned())
+            } else {
+                Ok(symbols.join("\n"))
+            }
+        }
+        "goToImplementation" => {
+            let symbol = input
+                .get("symbol")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            if symbol.is_empty() {
+                let locations = client.find_implementations_at(file_path, line as u32, character as u32)?;
+                if locations.is_empty() {
+                    Ok("No implementations found at the given position.".to_owned())
+                } else {
+                    Ok(super::lsp::format_locations(&locations))
+                }
+            } else {
+                let locations = client.find_implementations(symbol)?;
+                if locations.is_empty() {
+                    Ok(format!("No implementations found for '{symbol}'."))
+                } else {
+                    Ok(super::lsp::format_locations(&locations))
+                }
+            }
+        }
+        "prepareCallHierarchy" => {
+            let items = client.prepare_call_hierarchy(file_path, line as u32, character as u32)?;
+            if items.is_empty() {
+                Ok("No call hierarchy item at the given position.".to_owned())
+            } else {
+                Ok(items.join("\n"))
+            }
+        }
+        "incomingCalls" => {
+            let calls = client.incoming_calls(file_path, line as u32, character as u32)?;
+            if calls.is_empty() {
+                Ok("No incoming calls found.".to_owned())
+            } else {
+                Ok(calls.join("\n"))
+            }
+        }
+        "outgoingCalls" => {
+            let calls = client.outgoing_calls(file_path, line as u32, character as u32)?;
+            if calls.is_empty() {
+                Ok("No outgoing calls found.".to_owned())
+            } else {
+                Ok(calls.join("\n"))
+            }
         }
         "completion" => {
-            let line = input.get("line").and_then(Value::as_u64).unwrap_or(1);
-            let column = input.get("column").and_then(Value::as_u64).unwrap_or(1);
-            let suggestions = client.completion(file_path, line as u32, column as u32)?;
+            let suggestions = client.completion(file_path, line as u32, character as u32)?;
             Ok(super::lsp::format_completions(&suggestions))
         }
         "diagnostics" => {
@@ -191,7 +298,7 @@ pub(crate) async fn lsp_tool(input: &Value, context: &ToolExecutionContext) -> R
             // Limit output size.
             Ok(result.chars().take(10_000).collect())
         }
-        _ => Err(anyhow!("Unknown LSP action: {action}")),
+        _ => Err(anyhow!("Unknown LSP operation: {operation}")),
     }
 }
 

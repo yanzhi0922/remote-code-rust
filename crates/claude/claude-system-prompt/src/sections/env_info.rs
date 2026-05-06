@@ -13,7 +13,7 @@ fn get_knowledge_cutoff(model_id: &str) -> Option<&'static str> {
     if lower.contains("claude-sonnet-4-6") {
         Some("August 2025")
     } else if lower.contains("claude-opus-4-7") {
-        Some("March 2025")
+        Some("May 2025")
     } else if lower.contains("claude-opus-4-6") {
         Some("May 2025")
     } else if lower.contains("claude-opus-4-5") {
@@ -116,7 +116,13 @@ impl SystemPromptSection for EnvInfoSection {
     }
 
     fn compute(&self, ctx: &PromptContext) -> Result<Option<String>> {
-        let model_description = if ctx.model.is_empty() {
+        // In undercover mode, suppress model names, model family references,
+        // Claude Code availability info, and fast mode text (TS: isUndercover()).
+        let undercover = ctx.is_undercover;
+
+        let model_description = if undercover {
+            None
+        } else if ctx.model.is_empty() {
             None
         } else if let Some(marketing_name) = get_marketing_name_for_model(&ctx.model) {
             Some(format!(
@@ -179,18 +185,20 @@ impl SystemPromptSection for EnvInfoSection {
         if !cutoff_msg.is_empty() {
             env_items.push(BulletItem::Single(cutoff_msg));
         }
-        env_items.push(BulletItem::Single(
-            "The most recent Claude model family is Claude 4.5/4.7. Model IDs \u{2014} Opus 4.7: 'claude-opus-4-7', Sonnet 4.6: 'claude-sonnet-4-6', Haiku 4.5: 'claude-haiku-4-5'. When building AI applications, default to the latest and most capable Claude models."
-                .to_string(),
-        ));
-        env_items.push(BulletItem::Single(
-            "Claude Code is available as a CLI in the terminal, desktop app (Mac/Windows), web app (claude.ai/code), and IDE extensions (VS Code, JetBrains)."
-                .to_string(),
-        ));
-        env_items.push(BulletItem::Single(
-            "Fast mode for Claude Code uses the same Claude Opus 4.7 model with faster output. It does NOT switch to a different model. It can be toggled with /fast."
-                .to_string(),
-        ));
+        if !undercover {
+            env_items.push(BulletItem::Single(
+                "The most recent Claude model family is Claude 4.5/4.7. Model IDs \u{2014} Opus 4.7: 'claude-opus-4-7', Sonnet 4.6: 'claude-sonnet-4-6', Haiku 4.5: 'claude-haiku-4-5'. When building AI applications, default to the latest and most capable Claude models."
+                    .to_string(),
+            ));
+            env_items.push(BulletItem::Single(
+                "Claude Code is available as a CLI in the terminal, desktop app (Mac/Windows), web app (claude.ai/code), and IDE extensions (VS Code, JetBrains)."
+                    .to_string(),
+            ));
+            env_items.push(BulletItem::Single(
+                "Fast mode for Claude Code uses the same Claude Opus 4.7 model with faster output. It does NOT switch to a different model. It can be toggled with /fast."
+                    .to_string(),
+            ));
+        }
 
         let mut lines = vec![
             "# Environment".to_string(),
@@ -227,6 +235,7 @@ mod tests {
             is_fork_subagent_enabled: false,
             session_start_date: "2025-01-01".to_string(),
             features: crate::PromptFeatures::default(),
+            is_undercover: false,
         }
     }
 

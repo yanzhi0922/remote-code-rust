@@ -32,11 +32,37 @@ pub(crate) async fn web_fetch(input: &Value, _context: &ToolExecutionContext) ->
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow!("web_fetch requires a prompt"))?;
 
+    // Build a client that follows up to 10 redirects (the same limit the
+    // default client uses) so we can compare the final URL's host against
+    // the original and report cross-host redirects to the caller.
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::limited(10))
+        .build()
+        .context("failed to build HTTP client for web_fetch")?;
+
     // Apply a timeout to prevent hanging on unresponsive servers
-    let response = timeout(Duration::from_secs(30), reqwest::get(url))
+    let response = timeout(Duration::from_secs(30), client.get(url).send())
         .await
         .map_err(|_| anyhow!("web_fetch timed out after 30 seconds for {}", url))?
         .context("failed to fetch URL")?;
+
+    // Detect cross-host redirects and report them to the caller so they can
+    // re-issue the request with the new URL, matching TS reference behaviour.
+    let final_url = response.url().to_string();
+    let original_host = reqwest::Url::parse(url)
+        .ok()
+        .and_then(|u| u.host_str().map(|h| h.to_owned()));
+    let final_host = response.url().host_str().map(|h| h.to_owned());
+
+    if let (Some(orig), Some(final_h)) = (&original_host, &final_host)
+        && !orig.eq_ignore_ascii_case(final_h) {
+            return Ok(format!(
+                "The URL redirected to a different host.\n\n\
+                 Original URL: {url}\n\
+                 Redirect URL: {final_url}\n\n\
+                 Please make a new WebFetch request with the redirect URL to fetch the content.",
+            ));
+        }
 
     let status = response.status();
     if !status.is_success() {
@@ -74,10 +100,15 @@ pub(crate) async fn web_fetch(input: &Value, _context: &ToolExecutionContext) ->
         readable_content
     };
 
-    // Build a result that includes the prompt context
+    // Build a result that frames the prompt for the calling model.
+    // Since we don't have an embedded LLM, we return the content with the
+    // prompt clearly stated so the caller (the model) can apply it.
     let result = format!(
-        "URL: {}\nPrompt: {}\n\n{}",
-        url, prompt, truncated
+        "<url>{url}</url>\n\
+         <prompt>{prompt}</prompt>\n\n\
+         The following is the content fetched from the URL above. \
+         Use the prompt above to extract or summarize the relevant information from this content:\n\n\
+         {truncated}",
     );
 
     Ok(result)
@@ -86,18 +117,18 @@ pub(crate) async fn web_fetch(input: &Value, _context: &ToolExecutionContext) ->
 /// Convert HTML to readable plain text by stripping tags and normalizing whitespace.
 fn html_to_readable_text(html: &str) -> String {
     // Remove script and style blocks entirely
-    let re_script = Regex::new(r"(?is)<script[^>]*>.*?</script>").unwrap_or_else(|_| Regex::new(".").unwrap());
-    let re_style = Regex::new(r"(?is)<style[^>]*>.*?</style>").unwrap_or_else(|_| Regex::new(".").unwrap());
+    let re_script = Regex::new(r"(?is)<script[^>]*>.*?</script>").unwrap_or_else(|_| Regex::new(".").expect("fallback regex"));
+    let re_style = Regex::new(r"(?is)<style[^>]*>.*?</style>").unwrap_or_else(|_| Regex::new(".").expect("fallback regex"));
     let no_scripts = re_script.replace_all(html, "");
     let no_style = re_style.replace_all(&no_scripts, "");
 
     // Convert block-level elements to newlines for structure
     let re_block = Regex::new(r"(?i)</?(p|div|br|h[1-6]|li|tr|hr|blockquote|pre|section|article|header|footer|nav|aside|main|figure|figcaption|details|summary)[^>]*>")
-        .unwrap_or_else(|_| Regex::new(".").unwrap());
+        .unwrap_or_else(|_| Regex::new(".").expect("fallback regex"));
     let with_breaks = re_block.replace_all(&no_style, "\n");
 
     // Strip remaining tags
-    let re_tag = Regex::new(r"<[^>]+>").unwrap_or_else(|_| Regex::new(".").unwrap());
+    let re_tag = Regex::new(r"<[^>]+>").unwrap_or_else(|_| Regex::new(".").expect("fallback regex"));
     let stripped = re_tag.replace_all(&with_breaks, "");
 
     // Decode common HTML entities
@@ -142,6 +173,14 @@ pub(crate) async fn web_search(input: &Value, _context: &ToolExecutionContext) -
                 .collect()
         })
         .unwrap_or_default();
+
+    // Mutual exclusion: allowed_domains and blocked_domains cannot both be non-empty.
+    if !allowed_domains.is_empty() && !blocked_domains.is_empty() {
+        return Err(anyhow!(
+            "allowed_domains and blocked_domains are mutually exclusive — \
+             specify one or the other, not both"
+        ));
+    }
 
     // Try multiple search backends for better results.
     let search_backends = get_search_backends();

@@ -106,11 +106,20 @@ async fn mcp_auth_login(
             })
             .to_string());
         }
+        claude_mcp::McpTransportConfig::Sse { url, .. } => url.clone(),
         claude_mcp::McpTransportConfig::Stdio { .. } => {
             return Ok(json!({
                 "server": server_name,
                 "status": "unsupported",
                 "message": format!("Server \"{server_name}\" uses stdio transport, which does not support OAuth from the MCP auth tool. Configure credentials in the MCP server environment or command."),
+            })
+            .to_string());
+        }
+        _ => {
+            return Ok(json!({
+                "server": server_name,
+                "status": "unsupported",
+                "message": format!("Server \"{server_name}\" uses a transport that does not support OAuth from the MCP auth tool."),
             })
             .to_string());
         }
@@ -284,7 +293,12 @@ fn mcp_transport_label(server_config: &claude_mcp::McpServerConfig) -> &'static 
     match server_config.transport {
         claude_mcp::McpTransportConfig::Stdio { .. } => "stdio",
         claude_mcp::McpTransportConfig::Http { .. } => "http",
-        claude_mcp::McpTransportConfig::WebSocket { .. } => "ws",
+        claude_mcp::McpTransportConfig::WebSocket { .. }
+        | claude_mcp::McpTransportConfig::WsIde { .. } => "ws",
+        claude_mcp::McpTransportConfig::Sse { .. }
+        | claude_mcp::McpTransportConfig::SseIde { .. } => "sse",
+        claude_mcp::McpTransportConfig::Sdk { .. } => "sdk",
+        claude_mcp::McpTransportConfig::ClaudeAiProxy { .. } => "claudeai-proxy",
     }
 }
 

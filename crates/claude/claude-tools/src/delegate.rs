@@ -687,6 +687,7 @@ mod tests {
                 content_blocks: Vec::new(),
                 thinking: None,
                 request_id: None,
+                research: None,
             })
         }
     }
@@ -729,6 +730,7 @@ mod tests {
                     content_blocks: Vec::new(),
                     thinking: None,
                     request_id: None,
+                    research: None,
                 })
             }
         }
@@ -776,6 +778,7 @@ mod tests {
                     content_blocks: Vec::new(),
                     thinking: None,
                     request_id: None,
+                    research: None,
                 })
             }
         }
@@ -1009,6 +1012,7 @@ mod tests {
                 ],
                 thinking: None,
                 request_id: None,
+                research: None,
             },
             ProviderResponse {
                 text: "done".to_owned(),
@@ -1019,6 +1023,7 @@ mod tests {
                 content_blocks: vec![json!({"type":"text","text":"done"})],
                 thinking: None,
                 request_id: None,
+                research: None,
             },
         ]));
 

@@ -5,6 +5,44 @@ use serde_json::json;
 use super::ToolSpec;
 use super::tool_prompts;
 
+/// Build the Bash tool input schema, dynamically omitting `run_in_background`
+/// when the `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS` environment variable is set.
+#[must_use]
+fn bash_tool_schema() -> serde_json::Value {
+    let mut properties = serde_json::Map::from_iter([
+        (
+            "command".to_owned(),
+            json!({"type": "string", "description": "The bash command to run."}),
+        ),
+        (
+            "timeout".to_owned(),
+            json!({"type": "number", "description": "Optional maximum execution time in milliseconds. Default is 120000 (2 minutes)."}),
+        ),
+        (
+            "description".to_owned(),
+            json!({"type": "string", "description": "A clear, concise description of what this command does in 5-10 words."}),
+        ),
+        (
+            "dangerouslyDisableSandbox".to_owned(),
+            json!({"type": "boolean", "description": "When set to true, disables the sandbox for this command."}),
+        ),
+    ]);
+
+    if std::env::var("CLAUDE_CODE_DISABLE_BACKGROUND_TASKS").is_err() {
+        properties.insert(
+            "run_in_background".to_owned(),
+            json!({"type": "boolean", "description": "If true, run the command in the background and return a task handle immediately."}),
+        );
+    }
+
+    json!({
+        "type": "object",
+        "properties": properties,
+        "required": ["command"],
+        "additionalProperties": false,
+    })
+}
+
 #[must_use]
 fn builtin_tool_specs_core() -> Vec<ToolSpec> {
     vec![
@@ -117,18 +155,7 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
             permission_tool_name: "Bash".to_owned(),
             description: tool_prompts::bash_tool_prompt(),
             requires_permission: true,
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "command": {"type": "string", "description": "The bash command to run."},
-                    "timeout": {"type": "number", "description": "Optional maximum execution time in milliseconds. Default is 120000 (2 minutes)."},
-                    "description": {"type": "string", "description": "A clear, concise description of what this command does in 5-10 words."},
-                    "run_in_background": {"type": "boolean", "description": "If true, run the command in the background and return a task handle immediately."},
-                    "dangerouslyDisableSandbox": {"type": "boolean", "description": "When set to true, disables the sandbox for this command."}
-                },
-                "required": ["command"],
-                "additionalProperties": false,
-            }),
+            input_schema: bash_tool_schema(),
         },
         ToolSpec {
             name: "glob".to_owned(),
@@ -266,12 +293,6 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
                             "source": {"type": "string"}
                         },
                         "additionalProperties": true
-                    },
-                    "question": {"type": "string", "description": "Deprecated compatibility alias; use questions[].question."},
-                    "suggestions": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "Deprecated compatibility alias; use questions[].options[]."
                     }
                 },
                 "required": ["questions"],
@@ -296,9 +317,9 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
                                 "content": {"type": "string", "description": "Brief description of the task."},
                                 "status": {"type": "string", "enum": ["pending", "in_progress", "completed"]},
                                 "priority": {"type": "string", "enum": ["high", "medium", "low"]},
-                                "activeForm": {"type": "string", "description": "Present continuous form of the task description (e.g., 'Fixing authentication bug'). Shown during in_progress status."}
+                                "activeForm": {"type": "string", "description": "Present continuous form of the task description (e.g., 'Fixing authentication bug'). Shown during in_progress status. Must be at least 1 character."}
                             },
-                            "required": ["content", "status"],
+                            "required": ["content", "status", "activeForm"],
                             "additionalProperties": false
                         }
                     }
@@ -383,13 +404,25 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "action": {"type": "string", "enum": ["definitions", "references", "hover", "completion", "diagnostics"]},
-                    "file_path": {"type": "string"},
-                    "line": {"type": "integer", "minimum": 1},
-                    "column": {"type": "integer", "minimum": 1},
+                    "operation": {"type": "string", "enum": [
+                        "goToDefinition",
+                        "findReferences",
+                        "hover",
+                        "documentSymbol",
+                        "workspaceSymbol",
+                        "goToImplementation",
+                        "prepareCallHierarchy",
+                        "incomingCalls",
+                        "outgoingCalls",
+                        "completion",
+                        "diagnostics"
+                    ]},
+                    "file_path": {"type": "string", "description": "The absolute or relative path to the file"},
+                    "line": {"type": "integer", "minimum": 1, "description": "The line number (1-based, as shown in editors)"},
+                    "character": {"type": "integer", "minimum": 1, "description": "The character offset (1-based, as shown in editors)"},
                     "symbol": {"type": "string"}
                 },
-                "required": ["action", "file_path"],
+                "required": ["operation", "file_path"],
                 "additionalProperties": false,
             }),
         },
@@ -459,6 +492,38 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
                     "metadata": {"type": "object", "description": "Metadata keys to merge into the task. Set a key to null to delete it."}
                 },
                 "required": ["taskId"],
+                "additionalProperties": false,
+            }),
+        },
+        ToolSpec {
+            name: "task_output".to_owned(),
+            protocol_name: "TaskOutput".to_owned(),
+            permission_tool_name: "TaskOutput".to_owned(),
+            description: tool_prompts::TASK_OUTPUT.to_owned(),
+            requires_permission: false,
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "task_id": {"type": "string", "description": "The ID of the task to get output from"},
+                    "block": {"type": "boolean", "description": "Whether to wait for task completion (default true)"},
+                    "timeout": {"type": "number", "description": "Max wait time in ms (default 30000)"}
+                },
+                "required": ["task_id"],
+                "additionalProperties": false,
+            }),
+        },
+        ToolSpec {
+            name: "task_stop".to_owned(),
+            protocol_name: "TaskStop".to_owned(),
+            permission_tool_name: "TaskStop".to_owned(),
+            description: tool_prompts::TASK_STOP.to_owned(),
+            requires_permission: true,
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "task_id": {"type": "string", "description": "The ID of the task to stop"}
+                },
+                "required": ["task_id"],
                 "additionalProperties": false,
             }),
         },
@@ -819,13 +884,30 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "action": {"type": "string", "enum": ["create", "add", "list", "delete", "remove"], "description": "Action to perform (defaults to create)"},
-                    "schedule": {"type": "string", "description": "Cron expression (e.g. '*/5 * * * *')"},
-                    "command": {"type": "string"},
-                    "description": {"type": "string"},
-                    "id": {"type": "string", "description": "Cron job ID for delete"}
+                    "cron": {
+                        "type": "string",
+                        "description": "Standard 5-field cron expression in the user's local timezone: minute hour day-of-month month day-of-week"
+                    },
+                    "prompt": {
+                        "type": "string",
+                        "description": "The prompt to enqueue at each fire time"
+                    },
+                    "recurring": {
+                        "type": "boolean",
+                        "default": true,
+                        "description": "true = fire on every cron match until deleted. false = fire once at the next match, then auto-delete."
+                    },
+                    "durable": {
+                        "type": "boolean",
+                        "default": false,
+                        "description": "true = persist to .claude/scheduled_tasks.json and survive restarts. false = session-only."
+                    },
+                    "name": {
+                        "type": "string",
+                        "description": "Optional human-readable name for the scheduled job"
+                    }
                 },
-                "required": ["schedule", "command"],
+                "required": ["cron", "prompt"],
                 "additionalProperties": false,
             }),
         },

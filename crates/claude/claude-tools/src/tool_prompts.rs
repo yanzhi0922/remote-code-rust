@@ -808,17 +808,32 @@ Notes:
 
 /// Prompt for `skill_execute`.
 pub const SKILL_EXECUTE: &str = "\
-Load and return the instructions of a specific skill by slug. The skill content is injected into the conversation context.
+Execute a skill within the main conversation
 
-Usage:
-- The `slug` parameter identifies the skill to load (e.g., 'react-native-dev').
-- Optionally pass `arguments` to provide context to the skill.
-- The skill's instructions are returned as text for the agent to follow.
+When users ask you to perform tasks, check if any of the available skills match. \
+Skills provide specialized capabilities and domain knowledge.
 
-Notes:
-- Use `skill_discover` first to find available skills and their slugs.
-- Skill content replaces the current context — use judiciously.
-- Follow the skill's instructions precisely after loading.";
+When users reference a \"slash command\" or \"/<something>\" (e.g., \"/commit\", \
+\"/review-pr\"), they are referring to a skill. Use this tool to invoke it.
+
+How to invoke:
+- Use this tool with the skill name and optional arguments
+- Examples:
+  - `skill: \"pdf\"` - invoke the pdf skill
+  - `skill: \"commit\", args: \"-m 'Fix bug'\"` - invoke with arguments
+  - `skill: \"review-pr\", args: \"123\"` - invoke with arguments
+  - `skill: \"ms-office-suite:pdf\"` - invoke using fully qualified name
+
+Important:
+- Available skills are listed in system-reminder messages in the conversation
+- When a skill matches the user's request, this is a BLOCKING REQUIREMENT: \
+invoke the relevant Skill tool BEFORE generating any other response about the task
+- NEVER mention a skill without actually calling this tool
+- Do not invoke a skill that is already running
+- Do not use this tool for built-in CLI commands (like /help, /clear, etc.)
+- If you see a <command-name> tag in the current conversation turn, the skill \
+has ALREADY been loaded - follow the instructions directly instead of calling \
+this tool again";
 
 /// Prompt for `enter_plan_mode`.
 pub const ENTER_PLAN_MODE: &str = "\
@@ -1173,6 +1188,23 @@ Set up task dependencies:
 {\"taskId\": \"2\", \"addBlockedBy\": [\"1\"]}
 ```";
 
+/// Prompt for `task_output`.
+pub const TASK_OUTPUT: &str = "\
+Returns output from a running or completed background task.
+- Takes a task_id parameter identifying the task to get output from
+- Returns the task's current status and any available output
+- Use `block: true` to wait for the task to complete before returning
+- Use `timeout` to set a max wait time (default 30 seconds)
+- For completed tasks, returns the full output immediately
+- For running tasks, returns whatever output is available so far";
+
+/// Prompt for `task_stop`.
+pub const TASK_STOP: &str = "\
+- Stops a running background task by its ID
+- Takes a task_id parameter identifying the task to stop
+- Returns a success or failure status
+- Use this tool when you need to terminate a long-running task";
+
 /// Prompt for `team_create`.
 pub const TEAM_CREATE: &str = "\
 # TeamCreate
@@ -1342,18 +1374,70 @@ Notes:
 
 /// Prompt for `schedule_cron`.
 pub const SCHEDULE_CRON: &str = "\
-Schedule a cron job that runs a command periodically.
+Schedule a prompt to be enqueued at a future time. Use for both recurring \
+schedules and one-shot reminders.
 
-Usage:
-- `schedule` is a cron expression (e.g., '*/5 * * * *' for every 5 minutes).
-- `command` is the shell command to run on each invocation.
-- Optionally provide a `description` for the cron job.
-- Use action 'list' to see all scheduled jobs, 'delete' to remove one by ID.
+Uses standard 5-field cron in the user's local timezone: minute hour \
+day-of-month month day-of-week. \"0 9 * * *\" means 9am local — no timezone \
+conversion needed.
 
-Notes:
-- Cron expressions follow standard 5-field format (minute hour day month weekday).
-- Scheduled jobs persist across sessions.
-- Be cautious with frequency — avoid scheduling resource-intensive commands too often.";
+## One-shot tasks (recurring: false)
+
+For \"remind me at X\" or \"at <time>, do Y\" requests — fire once then auto-delete.
+Pin minute/hour/day-of-month/month to specific values:
+  \"remind me at 2:30pm today to check the deploy\" → cron: \"30 14 <today_dom> \
+<today_month> *\", recurring: false
+  \"tomorrow morning, run the smoke test\" → cron: \"57 8 <tomorrow_dom> \
+<tomorrow_month> *\", recurring: false
+
+## Recurring jobs (recurring: true, the default)
+
+For \"every N minutes\" / \"every hour\" / \"weekdays at 9am\" requests:
+  \"*/5 * * * *\" (every 5 min), \"0 * * * *\" (hourly), \"0 9 * * 1-5\" \
+(weekdays at 9am local)
+
+## Avoid the :00 and :30 minute marks when the task allows it
+
+Every user who asks for \"9am\" gets `0 9`, and every user who asks for \
+\"hourly\" gets `0 *` — which means requests from across the planet land on \
+the API at the same instant. When the user's request is approximate, pick a \
+minute that is NOT 0 or 30:
+  \"every morning around 9\" → \"57 8 * * *\" or \"3 9 * * *\" (not \"0 9 * * *\")
+  \"hourly\" → \"7 * * * *\" (not \"0 * * * *\")
+  \"in an hour or so, remind me to...\" → pick whatever minute you land on, \
+don't round
+
+Only use minute 0 or 30 when the user names that exact time and clearly means \
+it (\"at 9:00 sharp\", \"at half past\", coordinating with a meeting). When in \
+doubt, nudge a few minutes early or late — the user will not notice, and the \
+fleet will.
+
+## Durability
+
+By default (durable: false) the job lives only in this Claude session — \
+nothing is written to disk, and the job is gone when Claude exits. Pass \
+durable: true to write to .claude/scheduled_tasks.json so the job survives \
+restarts. Only use durable: true when the user explicitly asks for the task to \
+persist (\"keep doing this every day\", \"set this up permanently\"). Most \
+\"remind me in 5 minutes\" / \"check back in an hour\" requests should stay \
+session-only.
+
+## Runtime behavior
+
+Jobs only fire while the REPL is idle (not mid-query). Durable jobs persist \
+to .claude/scheduled_tasks.json and survive session restarts — on next launch \
+they resume automatically. One-shot durable tasks that were missed while the \
+REPL was closed are surfaced for catch-up. Session-only jobs die with the \
+process. The scheduler adds a small deterministic jitter on top of whatever \
+you pick: recurring tasks fire up to 10% of their period late (max 15 min); \
+one-shot tasks landing on :00 or :30 fire up to 90 s early. Picking an \
+off-minute is still the bigger lever.
+
+Recurring tasks auto-expire after 7 days — they fire one final time, then are \
+deleted. This bounds session lifetime. Tell the user about the 7-day limit \
+when scheduling recurring jobs.
+
+Returns a job ID you can pass to CronDelete.";
 
 /// Prompt for `workflow`.
 pub const WORKFLOW: &str = "\
@@ -1990,7 +2074,8 @@ Use this tool ONLY when the user explicitly asks to work in a worktree. This too
 
 ## Parameters
 
-- `name` (optional): A name for the worktree. If not provided, a random name is generated."
+- `name` (optional): A name for the worktree. If neither is provided, a random name is generated.
+- `path` (optional): Path to an existing worktree to switch into. Use this instead of `name` to enter an existing worktree."
         .to_owned()
 }
 
@@ -2376,6 +2461,7 @@ user if they specifically request to commit those files
 
 Important notes:
 - NEVER run additional commands to read or explore code, besides git bash commands
+- NEVER use the TodoWrite or Agent tools during git operations
 - DO NOT push to the remote repository unless the user explicitly asks you to do so
 - IMPORTANT: Never use git commands with the -i flag (like git rebase -i or git add -i) since \
 they require interactive input which is not supported.
@@ -2429,6 +2515,7 @@ EOF
 </example>
 
 Important:
+- DO NOT use the TodoWrite or Agent tools during PR operations
 - Return the PR URL when you're done, so the user can see it
 
 # Other common operations
@@ -2436,8 +2523,34 @@ Important:
 
     let sandbox = "# Command sandbox
 By default, your command will be run in a sandbox. This sandbox controls which directories and \
-network hosts commands may access or modify without an explicit override. For temporary files, \
-always use the $TMPDIR environment variable instead of /tmp directly.";
+network hosts commands may access or modify without an explicit override.
+
+You should always default to running commands within the sandbox. Do NOT attempt to set \
+`dangerouslyDisableSandbox: true` unless:
+- The user *explicitly* asks you to bypass sandbox
+- A specific command just failed and you see evidence of sandbox restrictions causing the failure. \
+Note that commands can fail for many reasons unrelated to the sandbox (missing files, wrong \
+arguments, network issues, etc.).
+
+Evidence of sandbox-caused failures includes:
+- \"Operation not permitted\" errors for file/network operations
+- Access denied to specific paths outside allowed directories
+- Network connection failures to non-whitelisted hosts
+- Unix socket connection errors
+
+When you see evidence of sandbox-caused failure:
+- Immediately retry with `dangerouslyDisableSandbox: true` (don't ask, just do it)
+- Briefly explain what sandbox restriction likely caused the failure
+- This will prompt the user for permission
+
+Treat each command you execute with `dangerouslyDisableSandbox: true` individually. Even if you \
+have recently run a command with this setting, you should default to running future commands \
+within the sandbox.
+Do not suggest adding sensitive paths like ~/.bashrc, ~/.zshrc, ~/.ssh/*, or credential files to \
+the sandbox allowlist.
+For temporary files, always use the $TMPDIR environment variable. TMPDIR is automatically set to \
+the correct sandbox-writable directory in sandbox mode. Do NOT use /tmp directly - use $TMPDIR \
+instead.";
 
     format!(
         "Executes a given bash command and returns its output.\n\n\
@@ -2782,6 +2895,8 @@ pub fn get_prompt(tool_name: &str) -> &'static str {
         "task_get" => TASK_GET,
         "task_list" => TASK_LIST,
         "task_update" => TASK_UPDATE,
+        "task_output" => TASK_OUTPUT,
+        "task_stop" => TASK_STOP,
         "notebook_edit" => NOTEBOOK_EDIT,
         "skill_discover" => SKILL_DISCOVER,
         "skill_execute" => SKILL_EXECUTE,

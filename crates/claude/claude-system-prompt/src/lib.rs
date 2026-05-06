@@ -165,6 +165,8 @@ pub struct PromptContext {
     pub session_start_date: String,
     /// Feature flags and mode toggles affecting prompt assembly.
     pub features: PromptFeatures,
+    /// Whether undercover mode is active (suppresses model names/branding).
+    pub is_undercover: bool,
 }
 
 /// Cache scope for a provider-facing system prompt block.
@@ -699,6 +701,7 @@ pub fn test_prompt_context() -> PromptContext {
         is_fork_subagent_enabled: false,
         session_start_date: "2025-01-01".to_string(),
         features: PromptFeatures::default(),
+        is_undercover: false,
     }
 }
 

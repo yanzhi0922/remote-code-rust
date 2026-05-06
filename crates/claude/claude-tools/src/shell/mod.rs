@@ -32,6 +32,19 @@ use self::path_validation::resolve_working_dir;
 use self::readonly::ShellKind;
 use self::semantics::{ShellCommandSemantic, analyze_command};
 
+/// Returns the maximum allowed bash timeout in milliseconds.
+///
+/// Reads `BASH_MAX_TIMEOUT_MS` from the environment to override the
+/// built-in 600 000 ms (10 minutes) hard ceiling.
+fn max_bash_timeout_ms() -> u64 {
+    const BUILTIN_MAX: u64 = 600_000;
+    std::env::var("BASH_MAX_TIMEOUT_MS")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(BUILTIN_MAX)
+        .max(1_000)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ShellExecutionPolicy {
     pub block_inline_cwd: bool,
@@ -110,7 +123,7 @@ pub async fn execute_shell_command(
             .get("timeout")
             .and_then(Value::as_u64)
             .unwrap_or(context.timeout_ms)
-            .clamp(1_000, 600_000),
+            .clamp(1_000, max_bash_timeout_ms()),
         background: input
             .get("run_in_background")
             .and_then(Value::as_bool)
@@ -124,7 +137,7 @@ pub async fn execute_shell_command(
 
     if policy.block_inline_cwd && analysis.changes_directory && input.get("cwd").is_none() {
         return Err(anyhow!(
-            "inline directory changes are blocked; pass the target via the cwd field instead (for example {{\"command\":\"npm test\",\"cwd\":\"apps/remote-code-mobile\"}}) rather than prefixing the command with cd or Set-Location"
+            "inline directory changes are blocked; pass the target via the cwd field instead (for example {{\"command\":\"npm test\",\"cwd\":\"apps/remote-code-gui\"}}) rather than prefixing the command with cd or Set-Location"
         ));
     }
     if policy.block_destructive_git && analysis.destructive_git {

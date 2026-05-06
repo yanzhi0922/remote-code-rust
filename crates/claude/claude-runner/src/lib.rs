@@ -14,7 +14,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result, anyhow};
 use axum::{
     Json, Router,
-    extract::{Path as AxumPath, State},
+    extract::{Path as AxumPath, State, WebSocketUpgrade},
     http::{StatusCode, header},
     middleware::{self, Next},
     response::{IntoResponse, Response},
@@ -22,14 +22,16 @@ use axum::{
 };
 use chrono::{DateTime, Utc};
 use claude_config::AppPaths;
+use futures::SinkExt;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use tokio::sync::{RwLock, mpsc};
+use tokio::sync::{RwLock, broadcast, mpsc};
 use uuid::Uuid;
 
 const DEFAULT_RUNNER_BIND: &str = "127.0.0.1:8788";
 const DEFAULT_HEARTBEAT_INTERVAL_SECS: u64 = 15;
 const DEFAULT_MAX_PARALLEL_SESSIONS: u16 = 4;
+const RUNNER_STREAM_BUFFER: usize = 256;
 const PHASE: &str = "phase5-remote-stable";
 
 /// Overrides applied to runner configuration from CLI flags or environment variables.
@@ -375,6 +377,7 @@ pub struct RunnerApi {
     sessions: Arc<RwLock<BTreeMap<Uuid, RunnerSessionRecord>>>,
     approvals: Arc<RwLock<BTreeMap<Uuid, ApprovalRequestRecord>>>,
     event_tx: Option<mpsc::UnboundedSender<RunnerApiEvent>>,
+    stream_tx: broadcast::Sender<(Uuid, String)>,
 }
 
 impl RunnerApi {
@@ -384,6 +387,7 @@ impl RunnerApi {
         version: impl Into<String>,
     ) -> Self {
         let snapshot = config.snapshot();
+        let (stream_tx, _) = broadcast::channel(RUNNER_STREAM_BUFFER);
         Self {
             meta: RunnerMeta {
                 service: service.into(),
@@ -394,6 +398,7 @@ impl RunnerApi {
             sessions: Arc::new(RwLock::new(BTreeMap::new())),
             approvals: Arc::new(RwLock::new(BTreeMap::new())),
             event_tx: None,
+            stream_tx,
         }
     }
 
@@ -632,6 +637,10 @@ impl RunnerApi {
                 axum::routing::post(post_session_command),
             )
             .route(
+                "/v1/sessions/{session_id}/events/stream",
+                get(subscribe_session_events),
+            )
+            .route(
                 "/v1/sessions/{session_id}/approvals",
                 get(list_session_approvals).post(create_approval),
             )
@@ -652,6 +661,49 @@ impl RunnerApi {
         if let Some(event_tx) = &self.event_tx {
             let _ = event_tx.send(event);
         }
+    }
+
+    /// Broadcast a raw JSON event line to direct-connect WebSocket subscribers.
+    pub fn publish_stream_event(&self, session_id: Uuid, json_line: &str) {
+        let _ = self.stream_tx.send((session_id, json_line.to_owned()));
+    }
+
+    /// Subscribe to broadcast events for direct-connect streaming.
+    pub fn subscribe_stream_events(&self) -> broadcast::Receiver<(Uuid, String)> {
+        self.stream_tx.subscribe()
+    }
+
+    /// Process a [`UnifiedAgentEvent`] natively — converts to
+    /// [`RuntimeEventDetail`] in memory (zero serialization), then broadcasts
+    /// the JSON to direct-connect WebSocket subscribers.  Returns `true` if the
+    /// event produced a timeline-representable detail.
+    pub fn process_agent_event(
+        &self,
+        session_id: Uuid,
+        event: &rc_agent_protocol::UnifiedAgentEvent,
+    ) -> bool {
+        let Some(detail) = rc_agent_protocol::unified_event_to_runtime_detail(event) else {
+            return false;
+        };
+        // Broadcast to direct-connect WebSocket subscribers as JSON.
+        // The caller (e.g. remote-code-runner) is responsible for also
+        // persisting the detail to the control plane via post_runtime_event.
+        let json_line = serde_json::to_string(&detail).unwrap_or_default();
+        self.publish_stream_event(session_id, &json_line);
+        true
+    }
+
+    /// Convert a [`UnifiedAgentEvent`] into a [`RuntimeEventDetail`] for
+    /// control-plane persistence.  Returns `None` for lifecycle events.
+    ///
+    /// Returns the detail as a serializable JSON value so callers can forward
+    /// it to the control plane without depending on the engine-events crate.
+    pub fn agent_event_to_runtime_detail(
+        &self,
+        event: &rc_agent_protocol::UnifiedAgentEvent,
+    ) -> Option<serde_json::Value> {
+        rc_agent_protocol::unified_event_to_runtime_detail(event)
+            .map(|detail| serde_json::to_value(&detail).unwrap_or_default())
     }
 }
 
@@ -901,10 +953,10 @@ pub fn parse_key_value_map(raw: &str) -> BTreeMap<String, String> {
 }
 
 pub async fn register_with_control_plane(
+    client: &Client,
     control_plane_url: &str,
     registration: &RunnerRegistrationRequest,
 ) -> Result<RunnerRegistrationLease> {
-    let client = Client::new();
     let payload = RunnerRegistrationWire {
         runner_id: &registration.runner_id,
         control_plane_url: &registration.control_plane_url,
@@ -932,10 +984,10 @@ pub async fn register_with_control_plane(
 }
 
 pub async fn send_heartbeat(
+    client: &Client,
     control_plane_url: &str,
     heartbeat: &RunnerHeartbeat,
 ) -> Result<RunnerSnapshot> {
-    let client = Client::new();
     let path = format!(
         "/v1/runners/{}/heartbeat",
         encode_path_segment(&heartbeat.runner_id)
@@ -1044,13 +1096,15 @@ async fn get_health(State(api): State<RunnerApi>) -> Json<RunnerHealth> {
 
 async fn require_runner_auth(
     State(api): State<RunnerApi>,
-    request: axum::extract::Request,
+    mut request: axum::extract::Request,
     next: Next,
 ) -> Response {
     let Some(expected) = api.meta.snapshot.registration.auth_token.as_deref() else {
         return next.run(request).await;
     };
-    let authorized = request
+
+    // Check Authorization header first.
+    let header_ok = request
         .headers()
         .get(header::AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
@@ -1058,10 +1112,94 @@ async fn require_runner_auth(
         .map(str::trim)
         .is_some_and(|provided| constant_time_token_eq(provided, expected));
 
-    if authorized {
-        next.run(request).await
+    if header_ok {
+        return next.run(request).await;
+    }
+
+    // For WebSocket upgrade endpoints, also accept ?access_token= or ?token=
+    // query parameters — browsers cannot set custom headers on WS upgrade.
+    let is_stream_path = request.uri().path().ends_with("/stream");
+    let is_ws_upgrade = request
+        .headers()
+        .get("upgrade")
+        .is_some_and(|v| v.to_str().is_ok_and(|v| v.eq_ignore_ascii_case("websocket")));
+    let is_get = request.method() == axum::http::Method::GET;
+
+    if is_stream_path && (is_ws_upgrade || is_get) {
+        if let Some(token) = extract_query_auth_token(request.uri().query()) {
+            if constant_time_token_eq(&token, expected) {
+                strip_auth_from_request_uri(&mut request);
+                return next.run(request).await;
+            }
+        }
+    }
+
+    ApiError::unauthorized("missing or invalid runner bearer token".to_owned()).into_response()
+}
+
+fn extract_query_auth_token(query: Option<&str>) -> Option<String> {
+    let query = query?;
+    for pair in query.split('&') {
+        let mut parts = pair.splitn(2, '=');
+        let key = parts.next()?.trim();
+        let value = parts.next().unwrap_or_default().trim();
+        if matches!(key, "token" | "access_token") && !value.is_empty() {
+            return Some(percent_decode_query_value(value));
+        }
+    }
+    None
+}
+
+fn percent_decode_query_value(raw: &str) -> String {
+    let bytes = raw.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0usize;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'+' => {
+                decoded.push(b' ');
+                index += 1;
+            }
+            b'%' if index + 2 < bytes.len() => {
+                let high = bytes[index + 1] as char;
+                let low = bytes[index + 2] as char;
+                if let (Some(high), Some(low)) = (high.to_digit(16), low.to_digit(16)) {
+                    decoded.push(((high << 4) | low) as u8);
+                    index += 3;
+                } else {
+                    decoded.push(bytes[index]);
+                    index += 1;
+                }
+            }
+            byte => {
+                decoded.push(byte);
+                index += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&decoded).into_owned()
+}
+
+fn strip_auth_from_request_uri(request: &mut axum::extract::Request) {
+    let uri = request.uri().clone();
+    let Some(query) = uri.query() else {
+        return;
+    };
+    let cleaned: String = query
+        .split('&')
+        .filter(|pair| {
+            let key = pair.split('=').next().unwrap_or("").trim();
+            !matches!(key, "token" | "access_token")
+        })
+        .collect::<Vec<_>>()
+        .join("&");
+    let new_uri = if cleaned.is_empty() {
+        format!("{}?", uri.path())
     } else {
-        ApiError::unauthorized("missing or invalid runner bearer token".to_owned()).into_response()
+        format!("{}?{cleaned}", uri.path())
+    };
+    if let Ok(parsed) = new_uri.parse::<axum::http::Uri>() {
+        *request.uri_mut() = parsed;
     }
 }
 
@@ -1307,6 +1445,103 @@ async fn apply_approval_decision(
     api.emit_event(RunnerApiEvent::ApprovalResolved(updated.clone()));
 
     Ok(Json(updated))
+}
+
+// ---------------------------------------------------------------------------
+// WebSocket event streaming (direct-connect)
+// ---------------------------------------------------------------------------
+
+async fn subscribe_session_events(
+    ws: WebSocketUpgrade,
+    State(api): State<RunnerApi>,
+    AxumPath(session_id): AxumPath<Uuid>,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> Response {
+    let after: u64 = params
+        .get("after")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
+    ws.on_upgrade(move |socket| serve_runner_session_stream(socket, api, session_id, after))
+}
+
+async fn serve_runner_session_stream(
+    mut socket: axum::extract::ws::WebSocket,
+    api: RunnerApi,
+    session_id: Uuid,
+    after: u64,
+) {
+    // Replay backlog: drain recent events from the broadcast buffer,
+    // filter by session and sequence, and send those the client hasn't seen.
+    if after > 0 {
+        let mut rx = api.subscribe_stream_events();
+        // The broadcast receiver starts at the tail of the channel buffer.
+        // Try to receive and filter — events with sequence <= after are skipped.
+        let replay_deadline =
+            tokio::time::Instant::now() + tokio::time::Duration::from_millis(500);
+        loop {
+            match tokio::time::timeout(
+                tokio::time::Duration::from_millis(50),
+                rx.recv(),
+            )
+            .await
+            {
+                Ok(Ok((sid, line))) if sid == session_id => {
+                    if let Some(seq) = extract_sequence_from_json(&line) {
+                        if seq <= after {
+                            continue;
+                        }
+                    }
+                    if socket
+                        .send(axum::extract::ws::Message::Text(line.into()))
+                        .await
+                        .is_err()
+                    {
+                        return;
+                    }
+                }
+                Ok(Ok(_)) => continue,
+                Ok(Err(broadcast::error::RecvError::Lagged(_))) => break,
+                Ok(Err(_)) => break,
+                Err(_) => break, // timeout — done replaying
+            }
+            if tokio::time::Instant::now() >= replay_deadline {
+                break;
+            }
+        }
+    }
+
+    // Stream live events.
+    let mut rx = api.subscribe_stream_events();
+    loop {
+        match rx.recv().await {
+            Ok((sid, line)) if sid == session_id => {
+                if socket
+                    .send(axum::extract::ws::Message::Text(line.into()))
+                    .await
+                    .is_err()
+                {
+                    break;
+                }
+            }
+            Ok(_) => continue,
+            Err(broadcast::error::RecvError::Lagged(_)) => {
+                let _ = socket.close().await;
+                break;
+            }
+            Err(_) => break,
+        }
+    }
+}
+
+fn extract_sequence_from_json(line: &str) -> Option<u64> {
+    // Fast path: look for "sequence":<number> without full parse.
+    let needle = "\"sequence\":";
+    let start = line.find(needle)?;
+    let num_start = start + needle.len();
+    let num_str = line[num_start..]
+        .split(|c: char| !c.is_ascii_digit())
+        .next()?;
+    num_str.parse().ok()
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1957,7 +2192,7 @@ mod tests {
             queued_sessions: 1,
             timestamp: Utc::now(),
         };
-        let snapshot = send_heartbeat(&format!("http://{address}"), &heartbeat)
+        let snapshot = send_heartbeat(&Client::new(), &format!("http://{address}"), &heartbeat)
             .await
             .expect("heartbeat request should succeed");
         assert_eq!(snapshot.registration.runner_id, "runner/a b?c");

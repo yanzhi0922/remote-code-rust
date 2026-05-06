@@ -5,11 +5,12 @@ use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
 use anyhow::{Context, Result, anyhow};
+use claude_core::ToolResult;
 use claude_permissions::{FilesystemOperation, assess_filesystem_access};
 use globset::GlobBuilder;
 use ignore::WalkBuilder;
 use regex::Regex;
-use serde_json::Value;
+use serde_json::{Value, json};
 use walkdir::WalkDir;
 
 use super::{FileState, IGNORED_DIRS, ToolExecutionContext};
@@ -17,6 +18,23 @@ use super::{FileState, IGNORED_DIRS, ToolExecutionContext};
 const FILE_UNCHANGED_STUB: &str = "File unchanged since last read. The content from the earlier Read tool_result in this conversation is still current — refer to that instead of re-reading.";
 const FILE_UNEXPECTEDLY_MODIFIED_ERROR: &str =
     "File has been unexpectedly modified. Read it again before attempting to write it.";
+
+/// Maximum dimension (pixels) for the longest side when resizing images.
+/// Matches the TS reference constant `MAX_IMAGE_DIMENSION = 1600`.
+const MAX_IMAGE_DIMENSION: u32 = 1600;
+
+/// Maximum characters per line in grep output before truncation.
+/// Matches the TS reference `max-columns 500` behaviour.
+const MAX_COLUMNS: usize = 500;
+
+/// Maximum total characters for grep results before truncation.
+const MAX_RESULT_SIZE_CHARS: usize = 20_000;
+
+/// VCS directories excluded from grep walks (matches TS ripgrep defaults).
+const VCS_DIRS: &[&str] = &[".git", ".svn", ".hg", ".bzr", ".jj", ".sl"];
+
+/// Image extensions that can be sent as multimodal base64 content blocks.
+const IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "gif", "webp"];
 
 const BLOCKED_DEVICE_PATHS: &[&str] = &[
     "/dev/zero",
@@ -65,11 +83,347 @@ fn filesystem_permission_confirmed_for_dispatch() -> bool {
         .unwrap_or(false)
 }
 
+/// Map common language type names to file extensions (matching ripgrep `--type`).
+fn type_to_extensions(type_name: &str) -> Option<&'static [&'static str]> {
+    match type_name {
+        "rust" => Some(&["*.rs"]),
+        "js" | "javascript" => Some(&["*.js", "*.jsx", "*.mjs", "*.cjs"]),
+        "ts" | "typescript" => Some(&["*.ts", "*.tsx", "*.mts", "*.cts"]),
+        "py" | "python" => Some(&["*.py", "*.pyi"]),
+        "java" => Some(&["*.java"]),
+        "go" => Some(&["*.go"]),
+        "c" => Some(&["*.c", "*.h"]),
+        "cpp" | "c++" => Some(&["*.cpp", "*.cc", "*.cxx", "*.hpp", "*.hh", "*.hxx"]),
+        "ruby" | "rb" => Some(&["*.rb"]),
+        "swift" => Some(&["*.swift"]),
+        "kotlin" | "kt" => Some(&["*.kt", "*.kts"]),
+        "css" => Some(&["*.css", "*.scss", "*.sass", "*.less"]),
+        "html" => Some(&["*.html", "*.htm"]),
+        "json" => Some(&["*.json"]),
+        "yaml" | "yml" => Some(&["*.yaml", "*.yml"]),
+        "markdown" | "md" => Some(&["*.md", "*.markdown"]),
+        "shell" | "sh" => Some(&["*.sh", "*.bash", "*.zsh"]),
+        "sql" => Some(&["*.sql"]),
+        _ => None,
+    }
+}
+
 fn normalize_quotes(s: &str) -> String {
-    s.replace('\u{201C}', "\"")
-        .replace('\u{201D}', "\"")
-        .replace('\u{2018}', "'")
-        .replace('\u{2019}', "'")
+    s.replace(['\u{201C}', '\u{201D}'], "\"")
+        .replace(['\u{2018}', '\u{2019}'], "'")
+}
+
+/// Detect whether the byte slice starts with a UTF-16LE BOM (0xFF 0xFE).
+fn has_utf16le_bom(bytes: &[u8]) -> bool {
+    bytes.len() >= 2 && bytes[0] == 0xFF && bytes[1] == 0xFE
+}
+
+/// Line ending style detected in a file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LineEnding {
+    Lf,
+    Crlf,
+}
+
+/// Detect the dominant line ending style in `content`.
+fn detect_line_ending(content: &str) -> LineEnding {
+    if content.contains("\r\n") {
+        LineEnding::Crlf
+    } else {
+        LineEnding::Lf
+    }
+}
+
+/// Normalize line endings in `text` to match `line_ending`.
+/// Converts any mix of CRLF/LF to the specified style.
+fn normalize_line_endings(text: &str, line_ending: LineEnding) -> String {
+    match line_ending {
+        LineEnding::Crlf => {
+            // First normalize all to LF, then convert to CRLF
+            text.replace("\r\n", "\n").replace('\n', "\r\n")
+        }
+        LineEnding::Lf => text.replace("\r\n", "\n"),
+    }
+}
+
+/// Maximum number of diff output lines before truncation.
+const MAX_DIFF_LINES: usize = 200;
+
+/// Compute a unified diff between `old` and `new` content for the given `path`.
+///
+/// Uses a simple LCS (Longest Common Subsequence) algorithm to identify added/removed
+/// lines and emits hunks in standard unified diff format. Output is capped at
+/// [`MAX_DIFF_LINES`] lines.
+fn compute_unified_diff(old: &str, new: &str, path: &str) -> String {
+    let old_lines: Vec<&str> = old.lines().collect();
+    let new_lines: Vec<&str> = new.lines().collect();
+
+    let lcs = compute_lcs(&old_lines, &new_lines);
+    let ops = diff_ops_from_lcs(&old_lines, &new_lines, &lcs);
+
+    // Gather hunks: groups of changes with 3 lines of context on each side.
+    let hunks = gather_hunks(&ops, &old_lines, &new_lines, 3);
+
+    if hunks.is_empty() {
+        return String::new();
+    }
+
+    let mut out = String::new();
+    out.push_str(&format!("--- {path}\n+++ {path}\n"));
+
+    let mut line_count = 2; // header lines
+
+    for hunk in &hunks {
+        if line_count >= MAX_DIFF_LINES {
+            break;
+        }
+        let header = format!(
+            "@@ -{},{} +{},{} @@\n",
+            hunk.old_start, hunk.old_count, hunk.new_start, hunk.new_count
+        );
+        out.push_str(&header);
+        line_count += 1;
+
+        for diff_line in &hunk.lines {
+            if line_count >= MAX_DIFF_LINES {
+                break;
+            }
+            out.push_str(diff_line);
+            out.push('\n');
+            line_count += 1;
+        }
+
+        if line_count >= MAX_DIFF_LINES {
+            break;
+        }
+    }
+
+    if line_count >= MAX_DIFF_LINES {
+        out.push_str("[diff truncated]\n");
+    }
+
+    out
+}
+
+/// A single diff hunk in unified diff format.
+struct DiffHunk {
+    old_start: usize,
+    old_count: usize,
+    new_start: usize,
+    new_count: usize,
+    lines: Vec<String>,
+}
+
+/// Gather contiguous hunks from the diff operations with `context` lines of context.
+fn gather_hunks(
+    ops: &[DiffOp],
+    old_lines: &[&str],
+    new_lines: &[&str],
+    context: usize,
+) -> Vec<DiffHunk> {
+    // Find indices of non-equal ops (changes)
+    let change_indices: Vec<usize> = ops
+        .iter()
+        .enumerate()
+        .filter(|(_, op)| !matches!(op, DiffOp::Equal { .. }))
+        .map(|(i, _)| i)
+        .collect();
+
+    if change_indices.is_empty() {
+        return Vec::new();
+    }
+
+    // Group change indices into hunks separated by more than 2*context equal lines
+    let mut groups: Vec<Vec<usize>> = Vec::new();
+    let mut current_group = vec![change_indices[0]];
+
+    for &idx in &change_indices[1..] {
+        let prev = *current_group.last().unwrap();
+        // If the gap between changes is more than 2*context, start a new group
+        if idx > prev + 2 * context + 1 {
+            groups.push(std::mem::take(&mut current_group));
+        }
+        current_group.push(idx);
+    }
+    groups.push(current_group);
+
+    let mut hunks = Vec::new();
+
+    for group in &groups {
+        let first_change = group[0];
+        let last_change = *group.last().unwrap();
+
+        // Expand to include context lines
+        let start = if first_change >= context {
+            first_change - context
+        } else {
+            0
+        };
+        let end = (last_change + context + 1).min(ops.len());
+
+        let mut hunk_lines = Vec::new();
+        let mut old_start = 0;
+        let mut new_start = 0;
+        let mut old_count = 0;
+        let mut new_count = 0;
+
+        // Compute the line offsets up to `start`
+        for op in &ops[..start] {
+            match op {
+                DiffOp::Equal { .. } | DiffOp::Remove { .. } => old_start += 1,
+                _ => {}
+            }
+            match op {
+                DiffOp::Equal { .. } | DiffOp::Insert { .. } => new_start += 1,
+                _ => {}
+            }
+        }
+        // Convert to 1-based
+        old_start += 1;
+        new_start += 1;
+
+        for op in &ops[start..end] {
+            match op {
+                DiffOp::Equal { old_idx, new_idx: _ } => {
+                    hunk_lines.push(format!(" {}", old_lines[*old_idx]));
+                    old_count += 1;
+                    new_count += 1;
+                }
+                DiffOp::Remove { old_idx } => {
+                    hunk_lines.push(format!("-{}", old_lines[*old_idx]));
+                    old_count += 1;
+                }
+                DiffOp::Insert { new_idx } => {
+                    hunk_lines.push(format!("+{}", new_lines[*new_idx]));
+                    new_count += 1;
+                }
+            }
+        }
+
+        hunks.push(DiffHunk {
+            old_start,
+            old_count,
+            new_start,
+            new_count,
+            lines: hunk_lines,
+        });
+    }
+
+    hunks
+}
+
+/// Diff operation types.
+#[derive(Debug)]
+#[allow(dead_code)]
+enum DiffOp {
+    Equal { old_idx: usize, new_idx: usize },
+    Remove { old_idx: usize },
+    Insert { new_idx: usize },
+}
+
+/// Convert LCS result into diff operations.
+fn diff_ops_from_lcs(old: &[&str], new: &[&str], lcs: &[(usize, usize)]) -> Vec<DiffOp> {
+    let mut ops = Vec::new();
+    let mut oi = 0;
+    let mut ni = 0;
+
+    for &(lcs_oi, lcs_ni) in lcs {
+        // Emit removals for old lines before this LCS match
+        while oi < lcs_oi {
+            ops.push(DiffOp::Remove { old_idx: oi });
+            oi += 1;
+        }
+        // Emit insertions for new lines before this LCS match
+        while ni < lcs_ni {
+            ops.push(DiffOp::Insert { new_idx: ni });
+            ni += 1;
+        }
+        // Emit the equal line
+        ops.push(DiffOp::Equal {
+            old_idx: oi,
+            new_idx: ni,
+        });
+        oi += 1;
+        ni += 1;
+    }
+    // Remaining lines after last LCS match
+    while oi < old.len() {
+        ops.push(DiffOp::Remove { old_idx: oi });
+        oi += 1;
+    }
+    while ni < new.len() {
+        ops.push(DiffOp::Insert { new_idx: ni });
+        ni += 1;
+    }
+
+    ops
+}
+
+/// Compute the LCS (Longest Common Subsequence) between two slices of lines.
+/// Returns pairs of (old_index, new_index) for matching lines.
+fn compute_lcs(old: &[&str], new: &[&str]) -> Vec<(usize, usize)> {
+    let m = old.len();
+    let n = new.len();
+
+    if m == 0 || n == 0 {
+        return Vec::new();
+    }
+
+    // For very large files, use a simplified approach to avoid excessive memory use.
+    // Cap the DP table at 10000x10000.
+    if m > 10000 || n > 10000 {
+        return compute_lcs_simple(old, new);
+    }
+
+    // Standard LCS dynamic programming
+    let mut dp = vec![vec![0usize; n + 1]; m + 1];
+
+    for i in 1..=m {
+        for j in 1..=n {
+            if old[i - 1] == new[j - 1] {
+                dp[i][j] = dp[i - 1][j - 1] + 1;
+            } else {
+                dp[i][j] = dp[i - 1][j].max(dp[i][j - 1]);
+            }
+        }
+    }
+
+    // Backtrack to recover the LCS
+    let mut result = Vec::new();
+    let mut i = m;
+    let mut j = n;
+    while i > 0 && j > 0 {
+        if old[i - 1] == new[j - 1] {
+            result.push((i - 1, j - 1));
+            i -= 1;
+            j -= 1;
+        } else if dp[i - 1][j] > dp[i][j - 1] {
+            i -= 1;
+        } else {
+            j -= 1;
+        }
+    }
+    result.reverse();
+    result
+}
+
+/// Simplified LCS for large files: matches by line equality scanning forward.
+/// Produces a subset of the true LCS by greedily matching lines from left to right.
+fn compute_lcs_simple(old: &[&str], new: &[&str]) -> Vec<(usize, usize)> {
+    let mut result = Vec::new();
+    let mut last_new = 0;
+
+    for (oi, old_line) in old.iter().enumerate() {
+        for (ni, new_line) in new.iter().enumerate().skip(last_new) {
+            if old_line == new_line {
+                result.push((oi, ni));
+                last_new = ni + 1;
+                break;
+            }
+        }
+    }
+
+    result
 }
 
 fn find_actual_string(file_content: &str, search_string: &str) -> Option<String> {
@@ -318,7 +672,7 @@ pub(crate) fn list_directory(input: &Value, context: &ToolExecutionContext) -> R
     }
 }
 
-pub fn read_file(input: &Value, context: &ToolExecutionContext) -> Result<String> {
+pub fn read_file(input: &Value, context: &ToolExecutionContext) -> Result<ToolResult> {
     let path = file_path_input(input).ok_or_else(|| anyhow!("read_file requires file_path"))?;
     if is_blocked_device_path(path) {
         return Err(anyhow!(
@@ -349,7 +703,17 @@ pub fn read_file(input: &Value, context: &ToolExecutionContext) -> Result<String
     let max_chars = input
         .get("max_chars")
         .and_then(Value::as_u64)
-        .unwrap_or(50_000) as usize;
+        .unwrap_or(100_000) as usize; // ~25K tokens at 4 chars/token
+
+    // File size pre-check: refuse to read files larger than 256 KB without
+    // offset/limit, to avoid excessive token consumption. Matches TS MAX_OUTPUT_SIZE.
+    if let Ok(metadata) = std::fs::metadata(&target)
+        && metadata.len() > 262_144 && limit.is_none() {
+            return Err(anyhow!(
+                "File too large ({} bytes). Use offset/limit to read portions.",
+                metadata.len()
+            ));
+        }
 
     if let Some(read_state) = context.read_file_state.get(&target)
         && !read_state.is_partial_view
@@ -358,7 +722,10 @@ pub fn read_file(input: &Value, context: &ToolExecutionContext) -> Result<String
         && let Ok(mtime) = file_mtime_ms(&target)
         && mtime <= read_state.timestamp
     {
-        return Ok(FILE_UNCHANGED_STUB.to_owned());
+        return Ok(ToolResult {
+            content: FILE_UNCHANGED_STUB.to_owned(),
+            ..ToolResult::default()
+        });
     }
 
     let ext = target
@@ -367,30 +734,28 @@ pub fn read_file(input: &Value, context: &ToolExecutionContext) -> Result<String
         .unwrap_or("")
         .to_ascii_lowercase();
 
-    if matches!(
-        ext.as_str(),
-        "png" | "jpg" | "jpeg" | "gif" | "webp" | "svg"
-    ) {
-        let data = std::fs::read(&target)?;
-        let mime = match ext.as_str() {
-            "png" => "image/png",
-            "jpg" | "jpeg" => "image/jpeg",
-            "gif" => "image/gif",
-            "webp" => "image/webp",
-            "svg" => "image/svg+xml",
-            _ => "application/octet-stream",
-        };
-        let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &data);
-        return Ok(format!(
-            "Image file: {}\nMIME type: {}\nSize: {} bytes\nBase64 data: data:{};base64,{}",
-            target.display(),
-            mime,
-            data.len(),
-            mime,
-            &b64[..b64.len().min(50000)]
-        ));
+    // ── Image files: return as multimodal base64 image blocks ──────────
+    if IMAGE_EXTENSIONS.contains(&ext.as_str()) {
+        return read_image_file(&target, &ext);
     }
 
+    // ── SVG files: read as text (they are XML-based) ───────────────────
+    if ext == "svg" {
+        let contents = std::fs::read_to_string(&target)
+            .with_context(|| format!("failed to read {}", target.display()))?;
+        if let Ok(timestamp) = file_mtime_ms(&target) {
+            context.read_file_state.set(
+                &target,
+                FileState::read(contents.clone(), timestamp, start_line, limit),
+            );
+        }
+        return Ok(ToolResult {
+            content: contents,
+            ..ToolResult::default()
+        });
+    }
+
+    // ── PDF files ──────────────────────────────────────────────────────
     if ext == "pdf" {
         let file_size = std::fs::metadata(&target).map(|m| m.len()).unwrap_or(0);
         let pages_param = input.get("pages").and_then(Value::as_str);
@@ -403,21 +768,26 @@ pub fn read_file(input: &Value, context: &ToolExecutionContext) -> Result<String
                     FileState::read(text.clone(), timestamp, start_line, limit),
                 );
             }
-            return Ok(text);
+            return Ok(ToolResult {
+                content: text,
+                ..ToolResult::default()
+            });
         }
 
         // Try pdftotext without page range as fallback
-        if pages_param.is_some() {
-            if let Ok(text) = extract_pdf_via_pdftotext(&target, None, file_size) {
+        if pages_param.is_some()
+            && let Ok(text) = extract_pdf_via_pdftotext(&target, None, file_size) {
                 if let Ok(timestamp) = file_mtime_ms(&target) {
                     context.read_file_state.set(
                         &target,
                         FileState::read(text.clone(), timestamp, start_line, limit),
                     );
                 }
-                return Ok(text);
+                return Ok(ToolResult {
+                    content: text,
+                    ..ToolResult::default()
+                });
             }
-        }
 
         return Err(anyhow!(
             "PDF reading requires `pdftotext` from poppler-utils. \
@@ -428,7 +798,7 @@ pub fn read_file(input: &Value, context: &ToolExecutionContext) -> Result<String
         ));
     }
 
-    // Notebook (.ipynb) files
+    // ── Notebook (.ipynb) files ────────────────────────────────────────
     if ext == "ipynb" {
         let contents = std::fs::read_to_string(&target)
             .with_context(|| format!("failed to read {}", target.display()))?;
@@ -441,11 +811,31 @@ pub fn read_file(input: &Value, context: &ToolExecutionContext) -> Result<String
                 FileState::read(raw_cells, timestamp, start_line, limit),
             );
         }
-        return Ok(rendered);
+        return Ok(ToolResult {
+            content: rendered,
+            ..ToolResult::default()
+        });
     }
 
-    let contents = std::fs::read_to_string(&target)
-        .with_context(|| format!("failed to read {}", target.display()))?;
+    // ── Binary file detection ──────────────────────────────────────────
+    // Try reading as text first. If that fails (likely binary), check if
+    // the file appears to be binary and return a helpful error.
+    let contents = match std::fs::read_to_string(&target) {
+        Ok(c) => c,
+        Err(err) if err.kind() == std::io::ErrorKind::InvalidData => {
+            // The file is likely binary. Read a small sample to confirm.
+            return Err(anyhow!(
+                "File appears to be a binary file that cannot be displayed as text. \
+                 Only text files, images (PNG, JPG, GIF, WebP), and PDFs are supported.\n\
+                 File: {}",
+                target.display()
+            ));
+        }
+        Err(err) => {
+            return Err(err).with_context(|| format!("failed to read {}", target.display()));
+        }
+    };
+
     let raw_selected = contents
         .lines()
         .enumerate()
@@ -479,7 +869,94 @@ pub fn read_file(input: &Value, context: &ToolExecutionContext) -> Result<String
             FileState::read(raw_selected, timestamp, start_line, limit),
         );
     }
-    Ok(selected)
+    Ok(ToolResult {
+        content: selected,
+        ..ToolResult::default()
+    })
+}
+
+/// Read an image file, optionally resize it, and return it as a multimodal
+/// Anthropic API image content block embedded in a [`ToolResult`].
+///
+/// The image is resized when its longest side exceeds `MAX_IMAGE_DIMENSION`
+/// (1600 px). Resizing decodes the image, scales it down with Lanczos3
+/// filtering, and re-encodes it as PNG for consistent API submission.
+fn read_image_file(target: &Path, ext: &str) -> Result<ToolResult> {
+    let data = std::fs::read(target)
+        .with_context(|| format!("failed to read image {}", target.display()))?;
+
+    let mime = match ext {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        _ => "application/octet-stream",
+    };
+
+    // Try to decode the image and resize if it exceeds the max dimension.
+    let (base64_data, dimensions) = match image::load_from_memory(&data) {
+        Ok(img) => {
+            let (orig_w, orig_h) = (img.width(), img.height());
+            let max_dim = orig_w.max(orig_h);
+
+            let (final_img, (w, h)) = if max_dim > MAX_IMAGE_DIMENSION {
+                let resized = img.resize(MAX_IMAGE_DIMENSION, MAX_IMAGE_DIMENSION, image::imageops::FilterType::Lanczos3);
+                let dims = (resized.width(), resized.height());
+                (resized, dims)
+            } else {
+                (img, (orig_w, orig_h))
+            };
+
+            // Re-encode as PNG for consistent base64 output
+            let mut buf = Vec::new();
+            final_img.write_to(
+                &mut std::io::Cursor::new(&mut buf),
+                image::ImageFormat::Png,
+            )?;
+            let encoded = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &buf);
+            (encoded, (w, h))
+        }
+        Err(_) => {
+            // If the image crate cannot decode it (e.g. animated GIF, unsupported
+            // sub-format), fall back to sending the raw bytes as-is with the
+            // original MIME type.
+            let encoded = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &data);
+            (encoded, (0, 0))
+        }
+    };
+
+    // Build the text summary that accompanies the image block
+    let summary = if dimensions != (0, 0) {
+        format!(
+            "Image file: {} ({}x{}, {} bytes)",
+            target.display(),
+            dimensions.0,
+            dimensions.1,
+            data.len()
+        )
+    } else {
+        format!(
+            "Image file: {} ({} bytes)",
+            target.display(),
+            data.len()
+        )
+    };
+
+    // Build the Anthropic API image content block
+    let image_block = json!({
+        "type": "image",
+        "source": {
+            "type": "base64",
+            "media_type": if dimensions != (0, 0) { "image/png" } else { mime },
+            "data": base64_data,
+        }
+    });
+
+    Ok(ToolResult {
+        content: summary,
+        content_blocks: vec![image_block],
+        ..ToolResult::default()
+    })
 }
 
 pub(crate) fn search_text(input: &Value, context: &ToolExecutionContext) -> Result<String> {
@@ -559,8 +1036,8 @@ pub(crate) fn write_file(input: &Value, context: &ToolExecutionContext) -> Resul
         std::fs::create_dir_all(parent)?;
     }
     if append {
-        let existing = existing.unwrap_or_default();
-        ensure_current_read_state_before_atomic_write(context, &target, &existing).or_else(
+        let existing_str = existing.as_deref().unwrap_or_default();
+        ensure_current_read_state_before_atomic_write(context, &target, existing_str).or_else(
             |error| {
                 if target.exists() { Err(error) } else { Ok(()) }
             },
@@ -582,9 +1059,38 @@ pub(crate) fn write_file(input: &Value, context: &ToolExecutionContext) -> Resul
     } else {
         content.to_owned()
     };
-    update_post_write_state(context, &target, final_content);
+    update_post_write_state(context, &target, final_content.clone());
     maybe_persist_plan_snapshot(&target);
-    Ok(format!("Wrote {}", target.display()))
+
+    // Build structured result with line counts and unified diff.
+    let new_lines = final_content.lines().count();
+    let path_display = target.display().to_string();
+    match existing {
+        Some(old) => {
+            let old_lines = old.lines().count();
+            let added = new_lines.saturating_sub(old_lines);
+            let removed = old_lines.saturating_sub(new_lines);
+            if added > 0 || removed > 0 || old != final_content {
+                let diff = compute_unified_diff(&old, &final_content, &path_display);
+                let mut result = format!(
+                    "Wrote {}\n{} → {} lines (+{}/−{})",
+                    path_display,
+                    old_lines,
+                    new_lines,
+                    added,
+                    removed,
+                );
+                if !diff.is_empty() {
+                    result.push('\n');
+                    result.push_str(&diff);
+                }
+                Ok(result)
+            } else {
+                Ok(format!("Wrote {} (unchanged, {} lines)", path_display, new_lines))
+            }
+        }
+        None => Ok(format!("Created {} ({} lines)", path_display, new_lines)),
+    }
 }
 
 pub(crate) fn replace_in_file(input: &Value, context: &ToolExecutionContext) -> Result<String> {
@@ -607,14 +1113,38 @@ pub(crate) fn replace_in_file(input: &Value, context: &ToolExecutionContext) -> 
         .unwrap_or(false);
     let target =
         resolve_workspace_path_for_operation(context, Some(path), FilesystemOperation::Write)?;
-    let original = std::fs::read_to_string(&target)?;
+    // Read file bytes and handle UTF-16LE BOM encoding.
+    let raw_bytes = std::fs::read(&target)
+        .with_context(|| format!("failed to read {}", target.display()))?;
+    let mut is_utf16le = false;
+    let original = if has_utf16le_bom(&raw_bytes) {
+        is_utf16le = true;
+        let utf16_bytes = &raw_bytes[2..];
+        let u16_vec: Vec<u16> = utf16_bytes
+            .chunks_exact(2)
+            .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
+            .collect();
+        char::decode_utf16(u16_vec)
+            .map(|r| r.unwrap_or('\u{FFFD}'))
+            .collect::<String>()
+    } else {
+        String::from_utf8_lossy(&raw_bytes).into_owned()
+    };
+
     ensure_current_read_state(context, &target, &original)?;
     if search == replace {
         return Err(anyhow!(
             "No changes to make: old_string and new_string are exactly the same."
         ));
     }
-    let actual_search = match find_actual_string(&original, search) {
+
+    // Apply quote normalization: normalize quotes in both the file content and the
+    // search needle before matching, so curly/smart quotes in the file can be
+    // matched by straight quotes from the user. Reuse the same helpers as edit_file.
+    let normalized_original = normalize_quotes(&original);
+    let normalized_search = normalize_quotes(search);
+
+    let actual_search = match find_actual_string(&normalized_original, &normalized_search) {
         Some(s) => s,
         None => {
             return Err(anyhow!(
@@ -622,23 +1152,81 @@ pub(crate) fn replace_in_file(input: &Value, context: &ToolExecutionContext) -> 
             ));
         }
     };
-    let match_count = original.matches(&*actual_search).count();
+
+    // Map the normalized match back to the original content to get the actual text.
+    // We find the actual text from the original file using the same char-offset logic.
+    let actual_original_search =
+        if let Some(byte_index) = normalized_original.find(&actual_search) {
+            let char_offset = normalized_original[..byte_index].chars().count();
+            let char_len = actual_search.chars().count();
+            let start_ok = original.char_indices().nth(char_offset).map(|(b, _)| b);
+            let end_ok = original
+                .char_indices()
+                .nth(char_offset + char_len)
+                .map(|(b, _)| b)
+                .unwrap_or(original.len());
+            if let Some(start) = start_ok {
+                original[start..end_ok].to_owned()
+            } else {
+                actual_search.clone()
+            }
+        } else {
+            actual_search.clone()
+        };
+
+    // Preserve curly quote style in the replacement when the file uses them.
+    let actual_replace = preserve_quote_style(search, &actual_original_search, replace);
+
+    let match_count = original.matches(&*actual_original_search).count();
     if match_count > 1 && !replace_all {
         return Err(anyhow!(
             "Found {match_count} occurrences of the search string. Use 'all: true' to replace all, or provide a more specific search string."
         ));
     }
     let updated = if replace_all {
-        original.replace(&*actual_search, replace)
+        original.replace(&*actual_original_search, &actual_replace)
     } else {
-        original.replacen(&*actual_search, replace, 1)
+        original.replacen(&*actual_original_search, &actual_replace, 1)
     };
     ensure_current_read_state_before_atomic_write(context, &target, &original)?;
-    std::fs::write(&target, updated)?;
-    let updated = std::fs::read_to_string(&target).unwrap_or_default();
-    update_post_write_state(context, &target, updated);
+
+    // Write back in the original encoding (UTF-16LE with BOM, or plain UTF-8).
+    if is_utf16le {
+        let mut out_bytes: Vec<u8> = vec![0xFF, 0xFE]; // UTF-16LE BOM
+        let mut utf16_buf = [0u16; 2];
+        for ch in updated.chars() {
+            let utf16_slice = ch.encode_utf16(&mut utf16_buf);
+            for &code_unit in utf16_slice.iter() {
+                let le = code_unit.to_le_bytes();
+                out_bytes.push(le[0]);
+                out_bytes.push(le[1]);
+            }
+        }
+        std::fs::write(&target, &out_bytes)?;
+    } else {
+        std::fs::write(&target, &updated)?;
+    }
+
+    let written_back = std::fs::read_to_string(&target).unwrap_or_default();
+    update_post_write_state(context, &target, written_back);
     maybe_persist_plan_snapshot(&target);
-    Ok(format!("Updated {}", target.display()))
+
+    // Build structured result with diff
+    let path_display = target.display().to_string();
+    let old_lines = original.lines().count();
+    let new_lines = updated.lines().count();
+    let added = new_lines.saturating_sub(old_lines);
+    let removed = old_lines.saturating_sub(new_lines);
+    let diff = compute_unified_diff(&original, &updated, &path_display);
+    let mut result = format!(
+        "Updated {}\n{} → {} lines (+{}/−{})",
+        path_display, old_lines, new_lines, added, removed,
+    );
+    if !diff.is_empty() {
+        result.push('\n');
+        result.push_str(&diff);
+    }
+    Ok(result)
 }
 
 pub(crate) fn edit_file(input: &Value, context: &ToolExecutionContext) -> Result<String> {
@@ -657,17 +1245,15 @@ pub(crate) fn edit_file(input: &Value, context: &ToolExecutionContext) -> Result
 
     // File size guard: prevent OOM on multi-GB files. 1 GiB matches TS MAX_EDIT_FILE_SIZE.
     const MAX_EDIT_FILE_SIZE: u64 = 1024 * 1024 * 1024; // 1 GiB
-    if target.exists() {
-        if let Ok(metadata) = std::fs::metadata(&target) {
-            if metadata.len() > MAX_EDIT_FILE_SIZE {
+    if target.exists()
+        && let Ok(metadata) = std::fs::metadata(&target)
+            && metadata.len() > MAX_EDIT_FILE_SIZE {
                 return Err(anyhow!(
                     "File is too large to edit ({} bytes). Maximum editable file size is {} GiB.",
                     metadata.len(),
                     MAX_EDIT_FILE_SIZE / (1024 * 1024 * 1024)
                 ));
             }
-        }
-    }
 
     let legacy_edits;
     let edits = if let Some(edits) = input.get("edits").and_then(Value::as_array) {
@@ -700,8 +1286,29 @@ pub(crate) fn edit_file(input: &Value, context: &ToolExecutionContext) -> Result
         .get("create_if_missing")
         .and_then(Value::as_bool)
         .unwrap_or(false);
+    // Track file encoding for round-trip preservation.
+    let mut is_utf16le = false;
+    // Detect and preserve line endings across edits.
+    let mut file_line_ending: Option<LineEnding> = None;
     let mut content = if target.exists() {
-        let content = std::fs::read_to_string(&target)?;
+        let raw_bytes = std::fs::read(&target)?;
+        let content = if has_utf16le_bom(&raw_bytes) {
+            is_utf16le = true;
+            // Strip the BOM (2 bytes) and decode UTF-16LE to UTF-8.
+            let utf16_bytes = &raw_bytes[2..];
+            let u16_vec: Vec<u16> = utf16_bytes
+                .chunks_exact(2)
+                .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
+                .collect();
+            // Use char::decode_utf16 for proper handling of surrogates.
+            char::decode_utf16(u16_vec)
+                .map(|r| r.unwrap_or('\u{FFFD}'))
+                .collect::<String>()
+        } else {
+            String::from_utf8_lossy(&raw_bytes).into_owned()
+        };
+        // Detect the file's line ending style before any edits.
+        file_line_ending = Some(detect_line_ending(&content));
         ensure_current_read_state(context, &target, &content)?;
         content
     } else if create_if_missing
@@ -751,8 +1358,13 @@ pub(crate) fn edit_file(input: &Value, context: &ToolExecutionContext) -> Result
         };
         // Preserve curly quote style in the replacement when the file uses them
         // and the user typed straight quotes. Matches TS preserveQuoteStyle.
-        let actual_replace =
+        let mut actual_replace =
             preserve_quote_style(&original_search, &actual_search, &original_replace);
+        // Preserve line endings: normalize the replacement text to match the
+        // file's detected line ending style (CRLF or LF).
+        if let Some(le) = file_line_ending {
+            actual_replace = normalize_line_endings(&actual_replace, le);
+        }
         let matches = content.matches(&*actual_search).count();
         if matches > 1 && !replace_all {
             return Err(anyhow!(
@@ -760,9 +1372,9 @@ pub(crate) fn edit_file(input: &Value, context: &ToolExecutionContext) -> Result
             ));
         }
         content = if replace_all {
-            content.replace(&*actual_search, &*actual_replace)
+            content.replace(&*actual_search, &actual_replace)
         } else {
-            content.replacen(&*actual_search, &*actual_replace, 1)
+            content.replacen(&*actual_search, &actual_replace, 1)
         };
     }
     if let Some(parent) = target.parent() {
@@ -771,15 +1383,47 @@ pub(crate) fn edit_file(input: &Value, context: &ToolExecutionContext) -> Result
     if target.exists() {
         ensure_current_read_state_before_atomic_write(context, &target, &original_content)?;
     }
-    std::fs::write(&target, content)?;
+    // Write back in the original encoding (UTF-16LE with BOM, or plain UTF-8).
+    if is_utf16le {
+        let mut out_bytes: Vec<u8> = vec![0xFF, 0xFE]; // UTF-16LE BOM
+        let mut utf16_buf = [0u16; 2];
+        for ch in content.chars() {
+            let utf16_slice = ch.encode_utf16(&mut utf16_buf);
+            for &code_unit in utf16_slice.iter() {
+                let le = code_unit.to_le_bytes();
+                out_bytes.push(le[0]);
+                out_bytes.push(le[1]);
+            }
+        }
+        std::fs::write(&target, &out_bytes)?;
+    } else {
+        std::fs::write(&target, &content)?;
+    }
     let updated = std::fs::read_to_string(&target).unwrap_or_default();
-    update_post_write_state(context, &target, updated);
+    update_post_write_state(context, &target, updated.clone());
     maybe_persist_plan_snapshot(&target);
-    Ok(format!(
-        "Applied {} edits to {}",
+    // Compute diff stats and unified diff
+    let old_lines: Vec<&str> = original_content.lines().collect();
+    let new_lines: Vec<&str> = content.lines().collect();
+    let lines_changed = old_lines.len().abs_diff(new_lines.len())
+        + old_lines
+            .iter()
+            .zip(new_lines.iter())
+            .filter(|(a, b)| a != b)
+            .count();
+    let path_display = target.display().to_string();
+    let diff = compute_unified_diff(&original_content, &content, &path_display);
+    let mut result = format!(
+        "Applied {} edit(s) to {} ({} lines affected)",
         edits.len(),
-        target.display()
-    ))
+        path_display,
+        lines_changed
+    );
+    if !diff.is_empty() {
+        result.push('\n');
+        result.push_str(&diff);
+    }
+    Ok(result)
 }
 
 pub(crate) fn glob_files(input: &Value, context: &ToolExecutionContext) -> Result<String> {
@@ -792,8 +1436,9 @@ pub(crate) fn glob_files(input: &Value, context: &ToolExecutionContext) -> Resul
         input.get("path").and_then(Value::as_str),
         FilesystemOperation::Read,
     )?;
+    const GLOB_MAX_RESULTS: usize = 100;
     let full_pattern = format!("{}/{}", base.display(), pattern).replace('\\', "/");
-    let mut results = Vec::new();
+    let mut results: Vec<(String, u128)> = Vec::new(); // (relative_path, mtime_ms)
     let entries = glob::glob(&full_pattern).context("invalid glob pattern")?;
     for entry in entries {
         let path = match entry {
@@ -812,12 +1457,29 @@ pub(crate) fn glob_files(input: &Value, context: &ToolExecutionContext) -> Resul
             continue;
         }
         let relative = path.strip_prefix(&context.cwd).unwrap_or(&path);
-        results.push(relative.display().to_string());
+        let mtime = file_mtime_ms(&path).unwrap_or(0);
+        results.push((relative.display().to_string(), mtime));
     }
     if results.is_empty() {
         Ok("No files matched.".to_owned())
     } else {
-        Ok(results.join("\n"))
+        let total_count = results.len();
+        // Sort by modification time descending (newest first)
+        results.sort_by(|a, b| b.1.cmp(&a.1));
+        let truncated = results.len() > GLOB_MAX_RESULTS;
+        results.truncate(GLOB_MAX_RESULTS);
+        let mut output: String = results
+            .iter()
+            .map(|(p, _)| p.as_str())
+            .collect::<Vec<&str>>()
+            .join("\n");
+        if truncated {
+            output.push_str(&format!(
+                "\n\n[Truncated: showing {} of {} results]",
+                GLOB_MAX_RESULTS, total_count
+            ));
+        }
+        Ok(output)
     }
 }
 
@@ -836,14 +1498,32 @@ pub(crate) fn grep_files(input: &Value, context: &ToolExecutionContext) -> Resul
         .get("glob")
         .or_else(|| input.get("include"))
         .and_then(Value::as_str);
+    // `type` parameter: filter by language (e.g. "js", "py", "rust") → ripgrep --type
+    let type_filter = input.get("type").and_then(Value::as_str);
+    let type_globs: Vec<String> = if let Some(tf) = type_filter {
+        type_to_extensions(tf)
+            .map(|exts| exts.iter().map(|e| e.to_string()).collect())
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    // `multiline` parameter: when true, `.` matches newlines (ripgrep --multiline-dotall)
+    let multiline = input.get("multiline").and_then(Value::as_bool).unwrap_or(false);
     let output_mode = input
         .get("output_mode")
         .and_then(Value::as_str)
         .unwrap_or("files_with_matches");
-    let head_limit = input
+    // head_limit: default 250, pass 0 for unlimited.
+    let raw_head_limit = input
         .get("head_limit")
         .and_then(Value::as_u64)
         .unwrap_or(250) as usize;
+    let head_limit = if raw_head_limit == 0 {
+        usize::MAX
+    } else {
+        raw_head_limit
+    };
+    // offset: skip the first N results (used for pagination).
     let offset = input.get("offset").and_then(Value::as_u64).unwrap_or(0) as usize;
 
     // Context lines: `context` or `-C` overrides `-A` and `-B` (matches TS priority).
@@ -866,9 +1546,9 @@ pub(crate) fn grep_files(input: &Value, context: &ToolExecutionContext) -> Resul
         input.get("-A").and_then(Value::as_u64).unwrap_or(0) as usize
     };
 
-    // Use default 1-line context when no explicit context is given (for content mode)
+    // Default to 0 context lines (matches TS reference behavior)
     let (ctx_before, ctx_after) = if context_before == 0 && context_after == 0 {
-        (1, 1)
+        (0, 0)
     } else {
         (context_before, context_after)
     };
@@ -889,9 +1569,16 @@ pub(crate) fn grep_files(input: &Value, context: &ToolExecutionContext) -> Resul
 
     let re = regex::RegexBuilder::new(pattern)
         .case_insensitive(case_insensitive)
+        .dot_matches_new_line(multiline)
         .build()
-        .or_else(|_| regex::RegexBuilder::new(&regex::escape(pattern)).build())?;
+        .or_else(|_| {
+            regex::RegexBuilder::new(&regex::escape(pattern))
+                .dot_matches_new_line(multiline)
+                .build()
+        })?;
 
+    // Build a combined glob matcher from both the explicit glob pattern and the
+    // type-filter extensions.  If both are present a file must match *both*.
     let file_matcher: Option<globset::GlobMatcher> = match glob_pattern {
         Some(fp) => Some(
             GlobBuilder::new(fp)
@@ -902,19 +1589,57 @@ pub(crate) fn grep_files(input: &Value, context: &ToolExecutionContext) -> Resul
         ),
         None => None,
     };
+    let type_matcher: Option<globset::GlobMatcher> = if type_globs.is_empty() {
+        None
+    } else {
+        // Build a single alternation glob like "*.{rs}" or "*.{js,jsx,mjs,cjs}"
+        let combined = if type_globs.len() == 1 {
+            type_globs[0].clone()
+        } else {
+            let alts: Vec<&str> = type_globs.iter().map(|s| {
+                // Strip the leading "*." — globset alternation expects bare extensions
+                s.strip_prefix("*.").unwrap_or(s)
+            }).collect();
+            format!("*.{{{}}}", alts.join(","))
+        };
+        GlobBuilder::new(&combined)
+            .literal_separator(true)
+            .build()
+            .ok()
+            .map(|g| g.compile_matcher())
+    };
 
     let mut walker = WalkBuilder::new(&target);
     walker.hidden(false).git_ignore(true).git_exclude(true);
 
-    if let Some(matcher) = file_matcher {
+    // Exclude VCS directories from traversal (matches TS ripgrep defaults).
+    walker.filter_entry(move |entry| {
+        if entry.file_type().is_some_and(|ft| ft.is_dir()) {
+            let name = entry.file_name();
+            return !VCS_DIRS.contains(&name.to_string_lossy().as_ref());
+        }
+        true
+    });
+
+    let has_file_matcher = file_matcher.is_some();
+    let has_type_matcher = type_matcher.is_some();
+    if has_file_matcher || has_type_matcher {
+        let fm = file_matcher;
+        let tm = type_matcher;
         walker.filter_entry(move |entry| {
-            if entry.file_type().map_or(false, |ft| ft.is_dir()) {
+            if entry.file_type().is_some_and(|ft| ft.is_dir()) {
                 return true;
             }
-            entry
-                .path()
-                .file_name()
-                .is_some_and(|name| matcher.is_match(name))
+            let name = entry.path().file_name();
+            let matches_file = match &fm {
+                Some(m) => name.is_some_and(|n| m.is_match(n)),
+                None => true,
+            };
+            let matches_type = match &tm {
+                Some(m) => name.is_some_and(|n| m.is_match(n)),
+                None => true,
+            };
+            matches_file && matches_type
         });
     }
 
@@ -922,9 +1647,10 @@ pub(crate) fn grep_files(input: &Value, context: &ToolExecutionContext) -> Resul
     let mut count_per_file: Vec<(PathBuf, usize)> = Vec::new();
     let mut content_matches: Vec<String> = Vec::new();
     let mut total_content_matches = 0usize;
+    let mut skipped_for_offset = 0usize;
 
     for entry in walker.build().filter_map(|e| e.ok()) {
-        if !entry.file_type().map_or(false, |ft| ft.is_file()) {
+        if !entry.file_type().is_some_and(|ft| ft.is_file()) {
             continue;
         }
         let path = entry.path().to_path_buf();
@@ -956,18 +1682,30 @@ pub(crate) fn grep_files(input: &Value, context: &ToolExecutionContext) -> Resul
                 for (index, line) in lines.iter().enumerate() {
                     if re.is_match(line) {
                         total_content_matches += 1;
-                        if total_content_matches <= head_limit {
+                        // Skip matches that fall within the offset range.
+                        if skipped_for_offset < offset {
+                            skipped_for_offset += 1;
+                            continue;
+                        }
+                        let effective_match_idx = total_content_matches - skipped_for_offset;
+                        if effective_match_idx <= head_limit {
                             let start = index.saturating_sub(ctx_before);
                             let end = (index + ctx_after + 1).min(lines.len());
-                            for (offset, context_line) in lines[start..end].iter().enumerate() {
-                                let line_idx = start + offset;
+                            for (ci, context_line) in lines[start..end].iter().enumerate() {
+                                let line_idx = start + ci;
                                 let prefix = if line_idx == index { ">" } else { " " };
+                                let trimmed = context_line.trim_end();
+                                let truncated = if trimmed.len() > MAX_COLUMNS {
+                                    format!("{}...", &trimmed[..trimmed.ceil_char_boundary(MAX_COLUMNS)])
+                                } else {
+                                    trimmed.to_owned()
+                                };
                                 content_matches.push(format!(
                                     "{}:{}{} {}",
                                     relative.display(),
                                     line_idx + 1,
                                     prefix,
-                                    context_line.trim_end()
+                                    truncated
                                 ));
                             }
                             content_matches.push(String::new());
@@ -977,7 +1715,7 @@ pub(crate) fn grep_files(input: &Value, context: &ToolExecutionContext) -> Resul
             }
         }
 
-        if output_mode == "content" && total_content_matches >= head_limit {
+        if output_mode == "content" && total_content_matches >= offset + head_limit {
             break;
         }
     }
@@ -991,6 +1729,7 @@ pub(crate) fn grep_files(input: &Value, context: &ToolExecutionContext) -> Resul
             let skip = offset.min(files_with_matches.len());
             files_with_matches.drain(..skip);
             let truncated = files_with_matches.len() > head_limit;
+            let file_count = files_with_matches.len();
             files_with_matches.truncate(head_limit);
             let mut out: Vec<String> = files_with_matches
                 .iter()
@@ -1002,31 +1741,55 @@ pub(crate) fn grep_files(input: &Value, context: &ToolExecutionContext) -> Resul
                         .to_owned(),
                 );
             }
-            Ok(out.join("\n"))
+            let mut result = format!("Found {} file(s)\n", file_count.min(head_limit));
+            result.push_str(&out.join("\n"));
+            Ok(result)
         }
         "count" => {
             if count_per_file.is_empty() {
                 return Ok("No files matched.".to_owned());
             }
+            let total_matches: usize = count_per_file.iter().map(|(_, c)| c).sum();
+            let total_files = count_per_file.len();
+            let skip = offset.min(count_per_file.len());
+            count_per_file.drain(..skip);
+            let truncated = count_per_file.len() > head_limit;
+            count_per_file.truncate(head_limit);
             let lines: Vec<String> = count_per_file
                 .iter()
                 .map(|(path, count)| format!("{}:{}", path.display(), count))
                 .collect();
-            Ok(lines.join("\n"))
+            let mut result = lines.join("\n");
+            if truncated {
+                result.push_str("\n\nFiles still truncated. Consider using a more specific path or pattern.");
+            }
+            result.push_str(&format!(
+                "\n\nFound {} total occurrences across {} files",
+                total_matches, total_files
+            ));
+            Ok(result)
         }
         _ => {
             if content_matches.is_empty() {
                 return Ok("No files matched.".to_owned());
             }
-            let truncated = total_content_matches > head_limit;
+            let effective_total = total_content_matches.saturating_sub(skipped_for_offset);
+            let truncated = effective_total > head_limit;
             if truncated {
                 content_matches.push(format!(
-                    "\n[Showing first {} of {} results. Use a more specific pattern to narrow results.]",
-                    head_limit.min(total_content_matches),
-                    total_content_matches
+                    "\n[Showing {} of {} results (skipped {} with offset). Use a more specific pattern to narrow results.]",
+                    head_limit.min(effective_total),
+                    effective_total,
+                    skipped_for_offset
                 ));
             }
-            Ok(content_matches.join("\n").trim_end().to_owned())
+            let mut result = content_matches.join("\n").trim_end().to_owned();
+            // Truncate grep output if it exceeds MAX_RESULT_SIZE_CHARS.
+            if result.len() > MAX_RESULT_SIZE_CHARS {
+                result.truncate(result.ceil_char_boundary(MAX_RESULT_SIZE_CHARS));
+                result.push_str("\n\n[Output truncated. Use a more specific pattern or narrower path to reduce results.]");
+            }
+            Ok(result)
         }
     }
 }
@@ -1067,8 +1830,8 @@ fn extract_pdf_via_pdftotext(path: &Path, pages: Option<&str>, file_size: u64) -
         "PDF file: {} ({} bytes)\n{}\n",
         path.display(),
         file_size,
-        if pages.is_some() {
-            format!("Pages: {}", pages.unwrap())
+        if let Some(p) = pages {
+            format!("Pages: {p}")
         } else {
             "Full document".to_owned()
         }
@@ -1129,8 +1892,8 @@ fn parse_pdf_page_range(range: &str) -> Result<(u32, u32)> {
     if pages.is_empty() {
         return Err(anyhow!("Invalid page range: {}", range));
     }
-    let start = *pages.iter().min().unwrap();
-    let end = *pages.iter().max().unwrap();
+    let start = *pages.iter().min().expect("pages is non-empty after check");
+    let end = *pages.iter().max().expect("pages is non-empty after check");
     Ok((start, end))
 }
 
