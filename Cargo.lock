@@ -2357,6 +2357,7 @@ dependencies = [
  "chrono",
  "claude-config",
  "constant_time_eq 0.3.1",
+ "futures",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
@@ -2544,6 +2545,7 @@ dependencies = [
  "glob",
  "globset",
  "ignore",
+ "image",
  "once_cell",
  "regex",
  "reqwest 0.12.28",
@@ -12616,6 +12618,7 @@ dependencies = [
  "codex-state",
  "codex-utils-absolute-path",
  "directories",
+ "futures",
  "serde",
  "serde_json",
  "tokio",
@@ -14018,12 +14021,14 @@ name = "roo-tools-misc"
 version = "0.1.0"
 dependencies = [
  "regex",
+ "reqwest 0.12.28",
  "roo-skills",
  "roo-telemetry",
  "roo-types",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
+ "tokio",
 ]
 
 [[package]]

@@ -163,7 +163,7 @@ Compatibility guarantees:
 
 ## Tools
 
-The Rust rewrite implements 65+ built-in tools across multiple categories:
+The Rust rewrite implements 62 built-in tools across multiple categories:
 
 ### File Operations
 
@@ -371,7 +371,7 @@ The old repository is read-only input for fixture collection. CI validates again
 
 ## Test Coverage
 
-Current test suite: **880+ tests** passing across all crates.
+Current test suite: **14,000+ tests** passing across all crates.
 
 | Category | Test Scope |
 |----------|-----------|
@@ -390,7 +390,7 @@ Current test suite: **880+ tests** passing across all crates.
 | remote-code (CLI) | CLI parsing, remote helpers, MCP/Plugin CLI |
 | remote-code-runner | Heartbeat, retry, control plane sync |
 | Adapters (rc-*) | Permission resolution, event mapping |
-| **Total** | **880+** |
+| **Total** | **14,000+** |
 
 ## Deliberate Non-Compatibility
 

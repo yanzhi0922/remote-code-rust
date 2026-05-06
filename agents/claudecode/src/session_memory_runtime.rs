@@ -483,7 +483,7 @@ fn setup_session_memory_file(
         }),
         &setup_context,
     )
-    .map(|output| parse_numbered_read_file_output(&output))?;
+    .map(|output| parse_numbered_read_file_output(&output.content))?;
     store.append_named_event(
         config.session_id,
         "tengu_session_memory_file_read",
