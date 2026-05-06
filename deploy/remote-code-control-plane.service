@@ -1,0 +1,16 @@
+[Unit]
+Description=Remote Code Control Plane
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/remote-code
+EnvironmentFile=/opt/remote-code/control-plane.env
+ExecStart=/opt/remote-code/bin/remote-code-control-plane serve
+Restart=always
+RestartSec=5
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

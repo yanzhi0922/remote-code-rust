@@ -1,0 +1,54 @@
+```mermaid
+graph LR
+    subgraph Unified["UnifiedAgentEvent variants"]
+        U1[MessageDelta]
+        U2[ToolCallStarted]
+        U3[ToolCallProgress]
+        U4[ToolCallCompleted]
+        U5[SubtaskStarted]
+        U6[SubtaskProgress]
+        U7[SubtaskCompleted]
+        U8[BatchProgress]
+        U9[ContextUsage]
+        U10[ContextOverflow]
+        U11[ContextCompacted]
+        U12[Error]
+    end
+
+    subgraph Runtime["RuntimeEventDetail - 15 variants"]
+        R1[MessageDelta]
+        R2[ToolCallStarted]
+        R3[ToolCallProgress]
+        R4[ToolCallCompleted]
+        R5[SubtaskStarted]
+        R6[SubtaskProgress]
+        R7[SubtaskCompleted]
+        R8[BatchProgress]
+        R9[ContextUsage]
+        R10[ContextOverflow]
+        R11[ContextCompacted]
+        R12[RuntimeError]
+        R13[SessionStarted]
+        R14[SessionReady]
+        R15[SessionCompleted]
+    end
+    
+    U1 --> R1
+    U2 --> R2
+    U3 --> R3
+    U4 --> R4
+    U5 --> R5
+    U6 --> R6
+    U7 --> R7
+    U8 --> R8
+    U9 --> R9
+    U10 --> R10
+    U11 --> R11
+    U12 --> R12
+    
+    classDef unified fill:#27ae60,stroke:#1e8449,color:#fff
+    classDef runtime fill:#8e44ad,stroke:#6c3483,color:#fff
+    
+    class U1,U2,U3,U4,U5,U6,U7,U8,U9,U10,U11,U12 unified
+    class R1,R2,R3,R4,R5,R6,R7,R8,R9,R10,R11,R12,R13,R14,R15 runtime
+```

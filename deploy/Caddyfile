@@ -1,0 +1,19 @@
+remote-code.yz520gzy.top {
+    reverse_proxy 127.0.0.1:8787
+
+    # Security headers
+    header {
+        X-Content-Type-Options nosniff
+        X-Frame-Options DENY
+        Referrer-Policy strict-origin-when-cross-origin
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+    }
+
+    # WebSocket support (handled by Caddy automatically)
+    # QUIC/HTTP3 support (handled by Caddy automatically)
+
+    log {
+        output file /var/log/caddy/remote-code.log
+        format json
+    }
+}
