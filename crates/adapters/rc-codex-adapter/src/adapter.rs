@@ -1,19 +1,20 @@
 //! CodexInProcessAdapter — the main adapter struct, lifecycle, and AgentAdapter impl.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Arc;
 
 use anyhow::Context;
 use async_trait::async_trait;
+use futures::FutureExt;
 use tokio::sync::{Mutex, mpsc};
 use tracing::{info, warn};
 
-use claude_agent_protocol::adapter::AgentAdapter;
-use claude_agent_protocol::events::UnifiedAgentEvent;
-use claude_agent_protocol::permission::PermissionDecision;
-use claude_agent_protocol::types::{AgentCapability, AgentConfig, AgentInfo, AgentStatus, AgentType};
+use rc_agent_protocol::adapter::AgentAdapter;
+use rc_agent_protocol::events::UnifiedAgentEvent;
+use rc_agent_protocol::permission::PermissionDecision;
+use rc_agent_protocol::types::{AgentCapability, AgentConfig, AgentInfo, AgentStatus, AgentType};
 
 use codex_app_server_client::{AppServerClient, AppServerEvent, AppServerRequestHandle};
 use codex_app_server_protocol::{
@@ -55,7 +56,7 @@ use codex_app_server_protocol::{
     ThreadCompactStartParams, ThreadCompactStartResponse, ThreadDecrementElicitationParams,
     ThreadDecrementElicitationResponse, ThreadForkParams, ThreadForkResponse,
     ThreadGoalClearParams, ThreadGoalClearResponse, ThreadGoalGetParams, ThreadGoalGetResponse,
-    ThreadGoalSetParams, ThreadGoalSetResponse, ThreadIncrementElicitationParams,
+    ThreadGoalSetParams, ThreadGoalSetResponse, ThreadGoalStatus, ThreadIncrementElicitationParams,
     ThreadIncrementElicitationResponse, ThreadInjectItemsParams, ThreadInjectItemsResponse,
     ThreadListResponse, ThreadLoadedListParams, ThreadLoadedListResponse,
     ThreadMemoryMode, ThreadMemoryModeSetParams, ThreadMemoryModeSetResponse,
@@ -129,6 +130,8 @@ pub struct CodexInProcessAdapter {
     /// Shared client wrapped in an async mutex so the event pump and
     /// resolve/reject calls can both access it.
     client: Option<Arc<tokio::sync::Mutex<AppServerClient>>>,
+    /// Protocol translator proxy (only set when wire_api = "anthropic_messages").
+    anthropic_proxy: Option<crate::anthropic_proxy::AnthropicProxy>,
 }
 
 impl CodexInProcessAdapter {
@@ -139,11 +142,7 @@ impl CodexInProcessAdapter {
     /// before passing it here. The client will be consumed during [`start()`](AgentAdapter::start)
     /// when the background event pump is spawned.
     pub fn new(client: AppServerClient) -> Self {
-        let mut caps = HashSet::new();
-        caps.insert(AgentCapability::Streaming);
-        caps.insert(AgentCapability::ToolUse);
-        caps.insert(AgentCapability::Subtasks);
-        caps.insert(AgentCapability::Permissions);
+        let caps = rc_agent_protocol::util::standard_capabilities(&[AgentCapability::Subtasks]);
 
         // Extract the request handle immediately — it's cloneable and doesn't
         // need the full client.
@@ -175,6 +174,7 @@ impl CodexInProcessAdapter {
             persist_extended_history: true,
             // Hold the client until start() consumes it for the event pump.
             client: Some(Arc::new(tokio::sync::Mutex::new(client))),
+            anthropic_proxy: None,
         }
     }
 
@@ -183,11 +183,7 @@ impl CodexInProcessAdapter {
     /// The client must be set later via [`Self::set_client`] before calling
     /// [`AgentAdapter::start`].
     pub fn empty() -> Self {
-        let mut caps = HashSet::new();
-        caps.insert(AgentCapability::Streaming);
-        caps.insert(AgentCapability::ToolUse);
-        caps.insert(AgentCapability::Subtasks);
-        caps.insert(AgentCapability::Permissions);
+        let caps = rc_agent_protocol::util::standard_capabilities(&[AgentCapability::Subtasks]);
 
         Self {
             request_handle: None,
@@ -214,6 +210,7 @@ impl CodexInProcessAdapter {
             ephemeral: None,
             persist_extended_history: true,
             client: None,
+            anthropic_proxy: None,
         }
     }
 
@@ -257,13 +254,35 @@ impl CodexInProcessAdapter {
 
     /// Create and start a fully-initialized adapter with native Codex options.
     pub async fn start_in_process_with_options(
-        options: CodexAdapterOptions,
+        mut options: CodexAdapterOptions,
     ) -> anyhow::Result<Self> {
         let cwd = if options.cwd.as_os_str().is_empty() {
             std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
         } else {
             options.cwd.clone()
         };
+
+        // 0. If wire_api is "anthropic_messages", start the protocol translator proxy.
+        let mut anthropic_proxy = None;
+        if options.wire_api.as_deref() == Some("anthropic_messages") {
+            let upstream_url = options.upstream_url.clone().unwrap_or_else(|| {
+                options.base_url.clone().unwrap_or_default()
+            });
+            let api_key = options.api_key.clone().unwrap_or_default();
+            let model = options.model.clone();
+
+            let proxy_config = crate::anthropic_proxy::AnthropicProxyConfig {
+                upstream_url,
+                api_key,
+                model,
+            };
+            let proxy = crate::anthropic_proxy::AnthropicProxy::start(proxy_config).await?;
+            info!(proxy_addr = %proxy.listen_addr, "Anthropic protocol proxy started");
+
+            // Rewrite base_url to point at the local proxy.
+            options.base_url = Some(proxy.proxy_base_url());
+            anthropic_proxy = Some(proxy);
+        }
 
         // 1. Compute isolated codex_home under the OS data directory.
         let codex_home = isolated_codex_home()?;
@@ -345,6 +364,7 @@ impl CodexInProcessAdapter {
         // 5. Wrap in adapter.
         let mut adapter = Self::new(codex_app_server_client::AppServerClient::InProcess(client));
         adapter.apply_options(options, cwd)?;
+        adapter.anthropic_proxy = anthropic_proxy;
 
         Ok(adapter)
     }
@@ -454,7 +474,7 @@ impl CodexInProcessAdapter {
             cwd: Some(self.cwd.to_string_lossy().into_owned()),
             model: self.model.clone(),
             model_provider: self.model_provider.clone(),
-            service_tier: self.service_tier.clone(),
+            service_tier: self.service_tier,
             approval_policy: self.approval_policy,
             sandbox: self.sandbox,
             permissions: self.permissions.clone(),
@@ -470,7 +490,7 @@ impl CodexInProcessAdapter {
             thread_id,
             model: self.model.clone(),
             model_provider: self.model_provider.clone(),
-            service_tier: self.service_tier.clone(),
+            service_tier: self.service_tier,
             cwd: Some(self.cwd.to_string_lossy().into_owned()),
             approval_policy: self.approval_policy,
             sandbox: self.sandbox,
@@ -487,7 +507,7 @@ impl CodexInProcessAdapter {
             thread_id,
             model: self.model.clone(),
             model_provider: self.model_provider.clone(),
-            service_tier: self.service_tier.clone(),
+            service_tier: self.service_tier,
             cwd: Some(self.cwd.to_string_lossy().into_owned()),
             approval_policy: self.approval_policy,
             sandbox: self.sandbox,
@@ -503,48 +523,108 @@ impl CodexInProcessAdapter {
     /// Background task that continuously drains events from the Codex client,
     /// maps them through the event mapper, and forwards them to the current
     /// event sender.
+    ///
+    /// Wrapped in `catch_unwind` so panics inside Codex's `next_event()` or
+    /// the event mapper produce a clean `Error` event instead of silently
+    /// killing the task.
     async fn event_pump(
         client: Arc<tokio::sync::Mutex<AppServerClient>>,
         event_state: Arc<Mutex<EventPumpState>>,
         session_id: String,
     ) {
         info!("Codex event pump started");
-        loop {
-            let event = {
-                let mut locked = client.lock().await;
-                locked.next_event().await
-            };
-            match event {
-                Some(event) => {
-                    if let AppServerEvent::ServerRequest(request) = &event {
-                        let id = request_id_to_string(request.id());
-                        let kind = PendingServerRequestKind::from_request(request);
-                        let mut state = event_state.lock().await;
-                        state.pending_server_requests.insert(id, kind);
-                    }
 
-                    let mapped = event_mapper::map_app_server_event(event, &session_id);
-                    let tx = {
-                        let state = event_state.lock().await;
-                        state.current_tx.clone()
-                    };
-                    if let Some(tx) = tx {
-                        for evt in mapped {
-                            if tx.send(evt).await.is_err() {
-                                // Receiver dropped — clear the sender.
-                                let mut state = event_state.lock().await;
-                                state.current_tx = None;
-                                break;
+        let pump_loop = async {
+            loop {
+                let event = {
+                    let mut locked = client.lock().await;
+                    locked.next_event().await
+                };
+                match event {
+                    Some(event) => {
+                        if let AppServerEvent::ServerRequest(request) = &event {
+                            let id = request_id_to_string(request.id());
+                            let kind = PendingServerRequestKind::from_request(request);
+                            let mut state = event_state.lock().await;
+                            state.pending_server_requests.insert(id, kind);
+                        }
+
+                        // Track token usage from ThreadTokenUsageUpdated notifications
+                        // so we can populate Completed events with real numbers.
+                        if let AppServerEvent::ServerNotification(
+                            codex_app_server_protocol::ServerNotification::ThreadTokenUsageUpdated(ref notification),
+                        ) = event
+                        {
+                            let usage = rc_agent_protocol::events::UsageInfo {
+                                input_tokens: notification.token_usage.total.input_tokens.max(0) as u64,
+                                output_tokens: notification.token_usage.total.output_tokens.max(0) as u64,
+                                cache_read: notification.token_usage.total.cached_input_tokens.max(0) as u64,
+                                cache_write: 0,
+                            };
+                            let mut state = event_state.lock().await;
+                            state.last_usage = Some(usage);
+                        }
+
+                        let mut mapped = event_mapper::map_app_server_event(event, &session_id);
+
+                        // Inject last known token usage into Completed events.
+                        let last_usage = {
+                            let state = event_state.lock().await;
+                            state.last_usage.clone()
+                        };
+                        if let Some(usage) = last_usage {
+                            for evt in &mut mapped {
+                                if let UnifiedAgentEvent::Completed { result, .. } = evt {
+                                    result.usage = usage.clone();
+                                }
+                            }
+                        }
+
+                        let tx = {
+                            let state = event_state.lock().await;
+                            state.current_tx.clone()
+                        };
+                        if let Some(tx) = tx {
+                            for evt in mapped {
+                                if tx.send(evt).await.is_err() {
+                                    let mut state = event_state.lock().await;
+                                    state.current_tx = None;
+                                    break;
+                                }
                             }
                         }
                     }
-                }
-                None => {
-                    info!("Codex event pump: client disconnected");
-                    break;
+                    None => {
+                        info!("Codex event pump: client disconnected");
+                        break;
+                    }
                 }
             }
+        };
+
+        let result = std::panic::AssertUnwindSafe(pump_loop).catch_unwind().await;
+        if let Err(panic_payload) = result {
+            let event = rc_agent_protocol::util::panic_to_error_event(
+                &session_id,
+                "Codex event pump panicked",
+                panic_payload,
+            );
+            tracing::error!("{}", match &event {
+                UnifiedAgentEvent::Error { message, .. } => message.clone(),
+                _ => unreachable!(),
+            });
+
+            // Try to deliver the error to the current consumer so the GUI
+            // shows a clear message instead of silently stalling.
+            let tx = {
+                let mut state = event_state.lock().await;
+                state.current_tx.take()
+            };
+            if let Some(tx) = tx {
+                let _ = tx.send(event).await;
+            }
         }
+
         info!("Codex event pump stopped");
     }
 
@@ -719,16 +799,54 @@ impl CodexInProcessAdapter {
         &self,
         request: CodexThreadGoalSetRequest,
     ) -> anyhow::Result<ThreadGoalSetResponse> {
+        let parsed_status = request.status.as_deref().and_then(|s| match s {
+            "Active" | "active" => Some(ThreadGoalStatus::Active),
+            "Paused" | "paused" => Some(ThreadGoalStatus::Paused),
+            "BudgetLimited" | "budgetLimited" => Some(ThreadGoalStatus::BudgetLimited),
+            "Complete" | "complete" => Some(ThreadGoalStatus::Complete),
+            _ => None,
+        });
+        let token_budget = request.token_budget.map(Some);
         self.request_typed(ClientRequest::ThreadGoalSet {
             request_id: self.next_request_id(),
             params: ThreadGoalSetParams {
                 thread_id: request.thread_id,
-                objective: Some(request.text),
-                status: None,
-                token_budget: None,
+                objective: if request.text.is_empty() { None } else { Some(request.text) },
+                status: parsed_status,
+                token_budget,
             },
         })
         .await
+    }
+
+    pub async fn set_thread_goal_with_options(
+        &self,
+        thread_id: String,
+        objective: Option<String>,
+        status: Option<String>,
+        token_budget: Option<i64>,
+    ) -> anyhow::Result<serde_json::Value> {
+        let parsed_status = status
+            .as_deref()
+            .map(|s| match s {
+                "Active" | "active" => ThreadGoalStatus::Active,
+                "Paused" | "paused" => ThreadGoalStatus::Paused,
+                "BudgetLimited" | "budgetLimited" => ThreadGoalStatus::BudgetLimited,
+                "Complete" | "complete" => ThreadGoalStatus::Complete,
+                _ => ThreadGoalStatus::Active,
+            });
+        let response: ThreadGoalSetResponse = self
+            .request_typed(ClientRequest::ThreadGoalSet {
+                request_id: self.next_request_id(),
+                params: ThreadGoalSetParams {
+                    thread_id,
+                    objective,
+                    status: parsed_status,
+                    token_budget: token_budget.map(Some),
+                },
+            })
+            .await?;
+        serde_json::to_value(response).map_err(anyhow::Error::from)
     }
 
     pub async fn get_thread_goal(
@@ -1725,8 +1843,8 @@ impl AgentAdapter for CodexInProcessAdapter {
             self.model = Some(model.clone());
         }
 
-        self.session_id = Some(uuid::Uuid::new_v4().to_string());
-        let session_id = self.session_id.as_ref().unwrap().clone();
+        let session_id = uuid::Uuid::new_v4().to_string();
+        self.session_id = Some(session_id.clone());
 
         // Clone the Arc<Mutex<client>> for the event pump; keep our reference for resolve/reject.
         let client = self.client.as_ref().ok_or_else(|| {
@@ -1779,8 +1897,12 @@ impl AgentAdapter for CodexInProcessAdapter {
         // events.
         {
             let mut state = self.event_state.lock().await;
-            state.current_tx = Some(tx);
+            state.current_tx = Some(tx.clone());
         }
+
+        // Emit Started so consumers know processing has begun (parity with
+        // Claude and Roo adapters).
+        let _ = tx.send(UnifiedAgentEvent::Started(self.info.clone())).await;
 
         // Send TurnStart via the request handle.
         let request_id = self.next_request_id();
@@ -1800,7 +1922,7 @@ impl AgentAdapter for CodexInProcessAdapter {
                     input: vec![user_input],
                     cwd: Some(cwd.clone()),
                     model: self.model.clone(),
-                    service_tier: self.service_tier.clone(),
+                    service_tier: self.service_tier,
                     approval_policy: self.approval_policy,
                     permissions: self.permissions.clone(),
                     ..Default::default()
@@ -1894,13 +2016,43 @@ impl AgentAdapter for CodexInProcessAdapter {
         // Drop the request handle.
         self.request_handle = None;
 
-        // Abort the background event pump.
+        // Abort the background event pump and yield so the task can drop its
+        // Arc<Mutex<AppServerClient>> clone before we attempt to unwrap.
         if let Some(handle) = self.worker_handle.take() {
             handle.abort();
+            // Wait for the task to finish cleanup so its Arc clone is dropped.
+            let _ = handle.await;
+        }
+
+        // Gracefully shut down the Codex runtime. The client is behind an
+        // Arc<Mutex>, so we can only call shutdown if we hold the last
+        // reference (the event pump was just aborted and awaited above).
+        if let Some(client_arc) = self.client.take() {
+            if let Ok(client_guard) = Arc::try_unwrap(client_arc) {
+                let client = client_guard.into_inner();
+                match tokio::time::timeout(
+                    std::time::Duration::from_secs(5),
+                    client.shutdown(),
+                )
+                .await
+                {
+                    Ok(Ok(())) => info!("Codex client shut down gracefully"),
+                    Ok(Err(e)) => warn!(error = %e, "Codex client shutdown returned error"),
+                    Err(_) => warn!("Codex client shutdown timed out after 5s"),
+                }
+            } else {
+                warn!("Cannot take ownership of Codex client for graceful shutdown — other Arc references still exist");
+            }
         }
 
         self.status = AgentStatus::Stopped;
         self.info.status = AgentStatus::Stopped;
+
+        // Stop the protocol translator proxy if running.
+        if let Some(mut proxy) = self.anthropic_proxy.take() {
+            proxy.stop().await;
+        }
+
         Ok(())
     }
 
@@ -1910,7 +2062,7 @@ impl AgentAdapter for CodexInProcessAdapter {
             && self
                 .worker_handle
                 .as_ref()
-                .map_or(false, |h| !h.is_finished())
+                .is_some_and(|h| !h.is_finished())
     }
 
     fn info(&self) -> &AgentInfo {

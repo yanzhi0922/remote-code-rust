@@ -14,6 +14,14 @@ pub struct UsageAccumulator {
     #[serde(default)]
     pub cache_creation_input_tokens: u64,
     #[serde(default)]
+    pub server_tool_use_web_search_requests: u64,
+    #[serde(default)]
+    pub server_tool_use_web_fetch_requests: u64,
+    #[serde(default)]
+    pub cache_creation_ephemeral_5m_input_tokens: u64,
+    #[serde(default)]
+    pub cache_creation_ephemeral_1h_input_tokens: u64,
+    #[serde(default)]
     pub requests: u64,
 }
 
@@ -33,6 +41,10 @@ impl UsageAccumulator {
         self.output_tokens += summary.output_tokens;
         self.cache_read_input_tokens += summary.cache_read_input_tokens;
         self.cache_creation_input_tokens += summary.cache_creation_input_tokens;
+        self.server_tool_use_web_search_requests += summary.server_tool_use_web_search_requests;
+        self.server_tool_use_web_fetch_requests += summary.server_tool_use_web_fetch_requests;
+        self.cache_creation_ephemeral_5m_input_tokens += summary.cache_creation_ephemeral_5m_input_tokens;
+        self.cache_creation_ephemeral_1h_input_tokens += summary.cache_creation_ephemeral_1h_input_tokens;
         self.requests += 1;
     }
 
@@ -42,6 +54,10 @@ impl UsageAccumulator {
         self.output_tokens += other.output_tokens;
         self.cache_read_input_tokens += other.cache_read_input_tokens;
         self.cache_creation_input_tokens += other.cache_creation_input_tokens;
+        self.server_tool_use_web_search_requests += other.server_tool_use_web_search_requests;
+        self.server_tool_use_web_fetch_requests += other.server_tool_use_web_fetch_requests;
+        self.cache_creation_ephemeral_5m_input_tokens += other.cache_creation_ephemeral_5m_input_tokens;
+        self.cache_creation_ephemeral_1h_input_tokens += other.cache_creation_ephemeral_1h_input_tokens;
         self.requests += other.requests;
     }
 }
@@ -59,6 +75,7 @@ mod tests {
             output_tokens: 20,
             cache_read_input_tokens: 5,
             cache_creation_input_tokens: 1,
+            ..Default::default()
         });
 
         let mut other = UsageAccumulator::default();
@@ -67,6 +84,7 @@ mod tests {
             output_tokens: 3,
             cache_read_input_tokens: 0,
             cache_creation_input_tokens: 0,
+            ..Default::default()
         });
 
         usage.merge(&other);

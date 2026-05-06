@@ -26,6 +26,12 @@ pub struct CodexAdapterOptions {
     pub model_provider: Option<String>,
     pub api_key: Option<String>,
     pub base_url: Option<String>,
+    /// Wire protocol for the provider. When set to "anthropic_messages", an
+    /// in-process protocol translator proxy is started automatically.
+    pub wire_api: Option<String>,
+    /// The *real* upstream URL that the protocol translator forwards to.
+    /// Only used when `wire_api = "anthropic_messages"`.
+    pub upstream_url: Option<String>,
     pub approval_policy: Option<String>,
     pub sandbox_mode: Option<String>,
     pub permission_profile: Option<serde_json::Value>,
@@ -149,9 +155,14 @@ pub(super) fn build_cli_overrides(
             format!("{provider_prefix}.name"),
             TomlValue::String(provider_id.clone()),
         ));
+        let wire_api_value = options
+            .wire_api
+            .as_deref()
+            .unwrap_or("responses")
+            .to_string();
         overrides.push((
             format!("{provider_prefix}.wire_api"),
-            TomlValue::String("responses".to_string()),
+            TomlValue::String(wire_api_value),
         ));
         if let Some(base_url) = trim_opt(options.base_url.clone()) {
             overrides.push((

@@ -70,6 +70,8 @@ pub struct ControlPlaneService {
     /// client keeps TCP connections alive and avoids a TLS handshake
     /// per request.
     pub(crate) http_client: reqwest::Client,
+    /// Directory containing downloadable app binaries (APK, dmg, etc.).
+    pub(crate) downloads_dir: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -116,6 +118,7 @@ impl ControlPlaneService {
             registry: Arc::new(RwLock::new(registry)),
             timeline,
             http_client: reqwest::Client::new(),
+            downloads_dir: config.downloads_dir,
         }
     }
 
@@ -228,6 +231,9 @@ pub fn load_control_plane_config(
         .or_else(|| helpers::read_env("REMOTE_CODE_CONTROL_PLANE_BOOTSTRAP_SECRET"))
         .map(|value| value.trim().to_owned())
         .filter(|value| !value.is_empty());
+    let downloads_dir = overrides
+        .downloads_dir
+        .or_else(|| helpers::read_env("REMOTE_CODE_DOWNLOADS_DIR").map(PathBuf::from));
     let paths = claude_config::AppPaths::discover(profile_dir)?;
     paths.ensure_exists()?;
     let artifact_root_dir = paths.artifacts_dir.join("control-plane");
@@ -244,6 +250,7 @@ pub fn load_control_plane_config(
         artifact_root_dir,
         auth_token,
         bootstrap_secret,
+        downloads_dir,
     })
 }
 

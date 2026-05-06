@@ -15,7 +15,7 @@ claude-context = { path = "../claude-context" }
 claude-compact = { path = "../claude-compact" }
 claude-provider = { path = "../claude-provider" }
 claude-query-engine = { path = "../claude-query-engine" }
-claude-engine-events = { path = "../claude-engine-events" }
+rc-engine-events = { path = "../../shared/rc-engine-events" }
 claude-event-bus = { path = "../claude-event-bus" }
 claude-file-history = { path = "../claude-file-history" }
 claude-session = { path = "../claude-session" }
@@ -25,7 +25,7 @@ claude-system-prompt = { path = "../claude-system-prompt" }
 claude-tools = { path = "../claude-tools" }
 claude-mcp = { path = "../claude-mcp" }
 claude-agents = { path = "../claude-agents" }
-claude-agent-protocol = { path = "../claude-agent-protocol" }
+rc-agent-protocol = { path = "../../shared/rc-agent-protocol" }
 claude-swarm = { path = "../claude-swarm" }
 claude-transcript = { path = "../claude-transcript" }
 claude-config = { path = "../claude-config" }

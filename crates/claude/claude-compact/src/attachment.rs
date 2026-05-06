@@ -86,6 +86,15 @@ impl FileStateCache {
         v
     }
 
+    /// Return the `limit` most recently accessed files, sorted by
+    /// descending timestamp.
+    pub fn most_recent(&self, limit: usize) -> Vec<&FileState> {
+        let mut v: Vec<&FileState> = self.files.iter().collect();
+        v.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+        v.truncate(limit);
+        v
+    }
+
     /// Return the number of tracked files.
     pub fn len(&self) -> usize {
         self.files.len()

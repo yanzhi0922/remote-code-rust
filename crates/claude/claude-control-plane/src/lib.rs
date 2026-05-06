@@ -4,8 +4,10 @@
 //! relay, artifact storage, and real-time event streaming via WebSocket / SSE.
 
 mod auth;
+mod download;
 mod handlers;
 mod helpers;
+pub mod quic;
 mod registry;
 mod router;
 mod state;
@@ -27,7 +29,8 @@ pub use types::{
     PushTokenRegistrationResponse, RunnerCommandPullResponse, RunnerQueuedCommand,
     RunnerQueuedCommandBody, RunnerRegistrationResponse, RuntimeEventCreateRequest,
     RuntimeEventDetail, SessionRecord, SessionState, SessionStateUpdateRequest, TimelineEvent,
-    TimelineEventDetail, TrustedDeviceRecord, runtime_event_detail_from_stream_json_value,
+    TimelineEventDetail, TokenRefreshRequest, TokenRefreshResponse, TrustedDeviceRecord,
+    runtime_event_detail_from_stream_json_value,
 };
 
 // ---------------------------------------------------------------------------
@@ -115,6 +118,7 @@ mod tests {
             profile_dir: Some(profile.path().join("profile")),
             auth_token: None,
             bootstrap_secret: None,
+            downloads_dir: None,
         })
         .expect("config should load");
 

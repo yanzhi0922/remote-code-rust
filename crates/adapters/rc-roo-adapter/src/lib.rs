@@ -34,7 +34,6 @@
 //! └──────────────────────┘
 //! ```
 
-use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -42,10 +41,10 @@ use async_trait::async_trait;
 use tokio::sync::{Mutex, mpsc};
 use tracing::{debug, info, warn};
 
-use claude_agent_protocol::adapter::AgentAdapter;
-use claude_agent_protocol::events::UnifiedAgentEvent;
-use claude_agent_protocol::permission::PermissionDecision;
-use claude_agent_protocol::types::{AgentConfig, AgentInfo, AgentStatus, AgentType};
+use rc_agent_protocol::adapter::AgentAdapter;
+use rc_agent_protocol::events::UnifiedAgentEvent;
+use rc_agent_protocol::permission::PermissionDecision;
+use rc_agent_protocol::types::{AgentConfig, AgentInfo, AgentStatus, AgentType};
 
 use roo_auto_approval::types::AutoApprovalState;
 use roo_prompt::build_system_prompt;
@@ -63,6 +62,9 @@ use roo_ignore::RooIgnoreController;
 use roo_protect::RooProtectedController;
 use roo_context_tracking::{FileContextTracker, InMemoryMetadataStore};
 use roo_editor::diff_view::DiffViewProvider;
+
+/// Type alias for the nested approval channel used by the agent loop.
+type ApprovalSender = Arc<std::sync::Mutex<Option<Arc<std::sync::Mutex<Option<tokio::sync::oneshot::Sender<bool>>>>>>>;
 
 // ---------------------------------------------------------------------------
 // Provider builder — mirrors roo-cli's build_handler()
@@ -88,6 +90,7 @@ fn build_handler(
                 use_extended_thinking: None,
                 max_thinking_tokens: None,
                 request_timeout: None,
+                enable_1m_context: false,
             };
             Ok(Box::new(roo_provider_anthropic::AnthropicHandler::new(cfg)?))
         }
@@ -105,6 +108,12 @@ fn build_handler(
                 temperature: None,
                 reasoning_effort: None,
                 request_timeout: None,
+                use_azure: false,
+                azure_api_version: None,
+                streaming_enabled: true,
+                headers: std::collections::HashMap::new(),
+                r1_format_enabled: false,
+                custom_model_info: None,
             };
             Ok(Box::new(roo_provider_openai::OpenAiHandler::new(cfg)?))
         }
@@ -181,6 +190,7 @@ fn build_handler(
                 temperature: None,
                 request_timeout: None,
                 api_options: None,
+                num_ctx: None,
             };
             Ok(Box::new(roo_provider_ollama::OllamaHandler::new(cfg)?))
         }
@@ -385,6 +395,7 @@ fn build_handler(
                 .ok_or_else(|| anyhow::anyhow!("api_key is required for unbound"))?;
             let cfg = roo_provider_unbound::UnboundConfig {
                 api_key: api_key.to_string(),
+                base_url: None,
                 model_id: model_id.map(|s| s.to_string()),
                 temperature: None,
                 request_timeout: None,
@@ -440,6 +451,16 @@ fn build_handler(
                 endpoint_url: None,
                 request_timeout: None,
                 temperature: None,
+                service_tier: None,
+                enable_1m_context: false,
+                use_global_inference: false,
+                use_profile: false,
+                profile_name: None,
+                use_api_key: false,
+                api_key: None,
+                vpc_endpoint: None,
+                vpc_endpoint_enabled: false,
+                use_prompt_cache: true,
             };
             Ok(Box::new(roo_provider_aws::AwsBedrockHandler::new(cfg)?))
         }
@@ -482,11 +503,19 @@ fn map_task_event(event: &RooTaskEvent, session_id: &str) -> Option<UnifiedAgent
         }
 
         // --- Tool use lifecycle ---
-        RooTaskEvent::StreamingToolUseStarted { tool_name, .. } => {
+        RooTaskEvent::StreamingToolUseStarted { tool_name, tool_id, .. } => {
             Some(UnifiedAgentEvent::ToolCallStarted {
                 session_id: session_id.to_string(),
                 tool_name: tool_name.clone(),
-                tool_input: serde_json::json!({}),
+                tool_input: serde_json::json!({ "tool_id": tool_id }),
+            })
+        }
+
+        RooTaskEvent::StreamingToolUseDelta { tool_id, delta, .. } => {
+            Some(UnifiedAgentEvent::ToolCallProgress {
+                session_id: session_id.to_string(),
+                tool_name: String::new(),
+                progress: format!("[{tool_id}] {delta}"),
             })
         }
 
@@ -502,12 +531,10 @@ fn map_task_event(event: &RooTaskEvent, session_id: &str) -> Option<UnifiedAgent
 
         // --- Task lifecycle ---
         RooTaskEvent::TaskStarted { .. } => {
-            let mut caps = HashSet::new();
-            caps.insert(claude_agent_protocol::types::AgentCapability::Streaming);
-            caps.insert(claude_agent_protocol::types::AgentCapability::ToolUse);
-            caps.insert(claude_agent_protocol::types::AgentCapability::McpSupport);
-            caps.insert(claude_agent_protocol::types::AgentCapability::Subtasks);
-            caps.insert(claude_agent_protocol::types::AgentCapability::Permissions);
+            let caps = rc_agent_protocol::util::standard_capabilities(&[
+                rc_agent_protocol::types::AgentCapability::McpSupport,
+                rc_agent_protocol::types::AgentCapability::Subtasks,
+            ]);
             Some(UnifiedAgentEvent::Started(AgentInfo {
                 name: "Roo In-Process".into(),
                 version: env!("CARGO_PKG_VERSION").into(),
@@ -606,6 +633,39 @@ fn map_task_event(event: &RooTaskEvent, session_id: &str) -> Option<UnifiedAgent
             recoverable: true,
         }),
 
+        RooTaskEvent::TaskToolFailed {
+            tool_name, error, ..
+        } => Some(UnifiedAgentEvent::Error {
+            session_id: session_id.to_string(),
+            message: format!("Tool '{}' failed: {}", tool_name, error),
+            recoverable: true,
+        }),
+
+        RooTaskEvent::ApiRequestRetryDelayed {
+            delay_seconds,
+            retry_attempt,
+            ..
+        } => Some(UnifiedAgentEvent::ToolCallProgress {
+            session_id: session_id.to_string(),
+            tool_name: "api_retry".to_string(),
+            progress: format!("retry delayed: {}s (attempt {})", delay_seconds, retry_attempt),
+        }),
+
+        // --- Streaming completed ---
+        RooTaskEvent::StreamingCompleted { .. } => {
+            debug!("Streaming completed");
+            None
+        }
+
+        // --- Tool execution feedback ---
+        RooTaskEvent::ToolExecuted { tool_name, success } => {
+            Some(UnifiedAgentEvent::ToolCallProgress {
+                session_id: session_id.to_string(),
+                tool_name: tool_name.clone(),
+                progress: if *success { "completed".to_string() } else { "failed".to_string() },
+            })
+        }
+
         // --- State changes ---
         RooTaskEvent::StateChanged { to, .. } => {
             debug!(state = %to, "Task state changed");
@@ -654,17 +714,19 @@ pub struct RooInProcessAdapter {
     worker_handle: Option<std::thread::JoinHandle<()>>,
     conversation_history: Arc<Mutex<Vec<ApiMessage>>>,
     auto_approval_enabled: bool,
+    external_mcp_servers: std::collections::HashMap<String, serde_json::Value>,
+    /// Shared handle to the AgentLoop's pending approval channel.
+    /// When the GUI approves/denies a tool, we send the response through this.
+    approval_handle: Option<Arc<std::sync::Mutex<Option<tokio::sync::oneshot::Sender<bool>>>>>,
 }
 
 impl RooInProcessAdapter {
     #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
-        let mut caps = HashSet::new();
-        caps.insert(claude_agent_protocol::types::AgentCapability::Streaming);
-        caps.insert(claude_agent_protocol::types::AgentCapability::ToolUse);
-        caps.insert(claude_agent_protocol::types::AgentCapability::McpSupport);
-        caps.insert(claude_agent_protocol::types::AgentCapability::Subtasks);
-        caps.insert(claude_agent_protocol::types::AgentCapability::Permissions);
+        let caps = rc_agent_protocol::util::standard_capabilities(&[
+            rc_agent_protocol::types::AgentCapability::McpSupport,
+            rc_agent_protocol::types::AgentCapability::Subtasks,
+        ]);
 
         Self {
             info: AgentInfo {
@@ -681,9 +743,17 @@ impl RooInProcessAdapter {
             base_url: None,
             cancel_token: None,
             worker_handle: None,
+            approval_handle: None,
             conversation_history: Arc::new(Mutex::new(Vec::new())),
             auto_approval_enabled: true,
+            external_mcp_servers: std::collections::HashMap::new(),
         }
+    }
+
+    /// Set MCP servers discovered from the GUI's centralized configuration.
+    /// These are merged with `.roo/mcp.json` servers in `load_mcp_servers()`.
+    pub fn set_external_mcp_servers(&mut self, servers: std::collections::HashMap<String, serde_json::Value>) {
+        self.external_mcp_servers = servers;
     }
 
     fn build_system_prompt(&self) -> String {
@@ -740,7 +810,21 @@ impl RooInProcessAdapter {
         _request_id: &str,
         allowed: bool,
     ) -> anyhow::Result<()> {
-        debug!(allowed, "Roo approval resolution received (auto-approval mode)");
+        if let Some(ref handle) = self.approval_handle {
+            let mut guard = match handle.lock() {
+                Ok(g) => g,
+                Err(e) => {
+                    warn!("Approval mutex poisoned, recovering: {e}");
+                    e.into_inner()
+                }
+            };
+            if let Some(tx) = guard.take() {
+                let _ = tx.send(allowed);
+                debug!(allowed, "Sent approval response to AgentLoop");
+                return Ok(());
+            }
+        }
+        debug!(allowed, "No pending approval in AgentLoop (auto-approval mode or no handle)");
         Ok(())
     }
 
@@ -756,29 +840,43 @@ impl RooInProcessAdapter {
             None,
         );
 
-        // Load project-level MCP config (.roo/mcp.json)
+        // 1. Load GUI-managed MCP servers (from centralized config: mcp.toml, .mcp.json).
+        //    These are "global" scope — project-level config can override them.
+        if !self.external_mcp_servers.is_empty() {
+            let count = self.external_mcp_servers.len();
+            if let Err(e) = hub.update_server_connections(
+                &self.external_mcp_servers,
+                roo_mcp::McpSource::Global,
+                true,
+            ).await {
+                warn!("Failed to load GUI MCP servers: {}", e);
+            } else {
+                info!("Loaded {} GUI-managed MCP servers", count);
+            }
+        }
+
+        // 2. Load project-level MCP config (.roo/mcp.json).
+        //    Project scope overrides global, so same-name servers will be replaced.
         let mcp_path = std::path::Path::new(&cwd_str)
             .join(".roo")
             .join("mcp.json");
 
-        if mcp_path.exists() {
-            if let Ok(content) = std::fs::read_to_string(&mcp_path) {
-                if let Ok(config) = serde_json::from_str::<serde_json::Value>(&content) {
-                    if let Some(servers) = config.get("mcpServers").and_then(|v| v.as_object()) {
-                        let server_map: std::collections::HashMap<String, serde_json::Value> =
-                            servers.into_iter().map(|(k, v)| (k.clone(), v.clone())).collect();
-                        let count = server_map.len();
-                        if let Err(e) = hub.update_server_connections(
-                            &server_map,
-                            roo_mcp::McpSource::Project,
-                            true,
-                        ).await {
-                            warn!("Failed to load project MCP servers: {}", e);
-                        } else {
-                            info!("Loaded {} project MCP servers from {}", count, mcp_path.display());
-                        }
-                    }
-                }
+        if mcp_path.exists()
+            && let Ok(content) = std::fs::read_to_string(&mcp_path)
+            && let Ok(config) = serde_json::from_str::<serde_json::Value>(&content)
+            && let Some(servers) = config.get("mcpServers").and_then(|v| v.as_object())
+        {
+            let server_map: std::collections::HashMap<String, serde_json::Value> =
+                servers.into_iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+            let count = server_map.len();
+            if let Err(e) = hub.update_server_connections(
+                &server_map,
+                roo_mcp::McpSource::Project,
+                true,
+            ).await {
+                warn!("Failed to load project MCP servers: {}", e);
+            } else {
+                info!("Loaded {} project MCP servers from {}", count, mcp_path.display());
             }
         }
 
@@ -811,6 +909,8 @@ impl RooInProcessAdapter {
         dispatcher: ToolDispatcher,
         history: Arc<tokio::sync::Mutex<Vec<ApiMessage>>>,
         mcp_servers: Vec<McpServerConnection>,
+        cancel_token: tokio_util::sync::CancellationToken,
+        approval_out: ApprovalSender,
     ) {
         let config = TaskConfig::new(&task_id, &cwd_str)
             .with_mode("code")
@@ -898,6 +998,36 @@ impl RooInProcessAdapter {
                 .with_diff_view_provider(diff_view_provider)
                 .with_mcp_servers(mcp_servers);
 
+        // Wire the adapter's cancellation token to the AgentLoop's internal token
+        // so that cancel() from the GUI propagates into the running agent loop.
+        let agent_loop_token = agent_loop.cancellation_token().clone();
+
+        // Pass the approval handle back to the adapter so the GUI can respond
+        // to ToolApprovalRequired events via resolve_roo_approval().
+        {
+            let handle = agent_loop.approval_handle();
+            match approval_out.lock() {
+                Ok(mut guard) => *guard = Some(handle),
+                Err(e) => {
+                    warn!("Approval-out mutex poisoned, recovering: {e}");
+                    *e.into_inner() = Some(handle);
+                }
+            }
+        }
+
+        {
+            let adapter_token = cancel_token.clone();
+            // Use a simple polling approach since CancellationToken doesn't have
+            // a synchronous blocking wait. The poll interval is short enough to
+            // provide responsive cancellation without busy-wait overhead.
+            std::thread::spawn(move || {
+                while !adapter_token.is_cancelled() {
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
+                agent_loop_token.cancel();
+            });
+        }
+
         let _ = tx.blocking_send(UnifiedAgentEvent::Ready);
 
         let rt = match tokio::runtime::Builder::new_current_thread()
@@ -926,17 +1056,17 @@ impl RooInProcessAdapter {
                 }
 
                 let final_message = result.final_message.clone().unwrap_or_default();
-                let usage_info = claude_agent_protocol::events::UsageInfo {
+                let usage_info = rc_agent_protocol::events::UsageInfo {
                     input_tokens: result.token_usage.total_tokens_in,
                     output_tokens: result.token_usage.total_tokens_out,
                     cache_read: result.token_usage.total_cache_reads.unwrap_or(0),
                     cache_write: result.token_usage.total_cache_writes.unwrap_or(0),
                 };
 
-                let tool_calls: Vec<claude_agent_protocol::events::ToolCallInfo> = result
+                let tool_calls: Vec<rc_agent_protocol::events::ToolCallInfo> = result
                     .tool_usage
                     .iter()
-                    .map(|(name, count)| claude_agent_protocol::events::ToolCallInfo {
+                    .map(|(name, count)| rc_agent_protocol::events::ToolCallInfo {
                         id: String::new(),
                         name: name.clone(),
                         input: serde_json::json!({}),
@@ -946,7 +1076,7 @@ impl RooInProcessAdapter {
 
                 let _ = tx.blocking_send(UnifiedAgentEvent::Completed {
                     session_id,
-                    result: claude_agent_protocol::events::AgentResult {
+                    result: rc_agent_protocol::events::AgentResult {
                         response_text: final_message,
                         tool_calls,
                         usage: usage_info,
@@ -963,6 +1093,9 @@ impl RooInProcessAdapter {
                 });
             }
         }
+
+        // Cancel the token so the watchdog thread exits cleanly.
+        cancel_token.cancel();
 
         tracing::debug!("Roo native agent loop background task finished");
     }
@@ -1015,6 +1148,7 @@ impl AgentAdapter for RooInProcessAdapter {
         message: &str,
     ) -> anyhow::Result<mpsc::Receiver<UnifiedAgentEvent>> {
         let (tx, rx) = mpsc::channel(256);
+        let panic_tx = tx.clone();
 
         // Build provider
         let provider = build_handler(
@@ -1046,6 +1180,11 @@ impl AgentAdapter for RooInProcessAdapter {
             history.clone()
         };
 
+        // Cancel any previous run's token so its watchdog thread exits.
+        if let Some(ref old_token) = self.cancel_token {
+            old_token.cancel();
+        }
+
         // Create a cancellation token for this run.
         let cancel_token = tokio_util::sync::CancellationToken::new();
         self.cancel_token = Some(cancel_token.clone());
@@ -1053,6 +1192,7 @@ impl AgentAdapter for RooInProcessAdapter {
         // Keep a reference to conversation history for updating after the run.
         let history = Arc::clone(&self.conversation_history);
         let session_id_for_completion = session_id.to_string();
+        let panic_session_id = session_id_for_completion.clone();
 
         // Prepare owned parameters for the worker thread.
         let task_id = uuid::Uuid::now_v7().to_string();
@@ -1060,6 +1200,11 @@ impl AgentAdapter for RooInProcessAdapter {
         let message_owned = message.to_string();
         let auto_approval = self.auto_approval_enabled;
         let mcp_servers_owned = mcp_servers;
+
+        // Shared slot for the AgentLoop's approval handle to be passed back
+        // from the worker thread to this adapter.
+        let approval_out: ApprovalSender = Arc::new(std::sync::Mutex::new(None));
+        let approval_out_clone = Arc::clone(&approval_out);
 
         // Spawn in a dedicated OS thread.
         //
@@ -1087,24 +1232,47 @@ impl AgentAdapter for RooInProcessAdapter {
                     dispatcher,
                     history,
                     mcp_servers_owned,
+                    cancel_token,
+                    approval_out_clone,
                 );
             }));
 
             if let Err(panic_payload) = result {
-                // Best-effort: try to extract a string message from the panic.
-                let msg = if let Some(s) = panic_payload.downcast_ref::<&str>() {
-                    s.to_string()
-                } else if let Some(s) = panic_payload.downcast_ref::<String>() {
-                    s.clone()
-                } else {
-                    "Roo agent loop panicked (unknown cause)".to_string()
-                };
-                tracing::error!(error = %msg, "Roo agent loop panicked — isolated to thread");
+                let event = rc_agent_protocol::util::panic_to_error_event(
+                    &panic_session_id,
+                    "Roo agent panicked",
+                    panic_payload,
+                );
+                tracing::error!(error = match &event {
+                    rc_agent_protocol::events::UnifiedAgentEvent::Error { message, .. } => message.clone(),
+                    _ => unreachable!(),
+                }, "Roo agent loop panicked — isolated to thread");
+                let _ = panic_tx.blocking_send(event);
             }
         });
 
         let _ = cancel_token; // already stored in self.cancel_token
         self.worker_handle = Some(handle);
+        self.status = AgentStatus::Busy;
+        self.info.status = AgentStatus::Busy;
+
+        // Pick up the approval handle that was set by the worker thread.
+        // Busy-wait briefly because the worker may not have constructed
+        // the AgentLoop yet.  In practice this resolves within 1-2 iterations.
+        for _ in 0..50 {
+            let taken = match approval_out.lock() {
+                Ok(mut guard) => guard.take(),
+                Err(e) => {
+                    warn!("Approval-out mutex poisoned during pickup, recovering: {e}");
+                    e.into_inner().take()
+                }
+            };
+            if let Some(ah) = taken {
+                self.approval_handle = Some(ah);
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
 
         Ok(rx)
     }
@@ -1116,9 +1284,11 @@ impl AgentAdapter for RooInProcessAdapter {
             token.cancel();
         }
 
-        // std::thread::JoinHandle has no abort().  The thread will
-        // exit when it observes the cancelled CancellationToken.
-        self.worker_handle = None;
+        // Keep the worker_handle alive so is_alive() stays true until the
+        // thread actually exits.  The next send_message() will replace it.
+        // Reset status to Ready so the adapter can accept new prompts.
+        self.status = AgentStatus::Ready;
+        self.info.status = AgentStatus::Ready;
 
         Ok(())
     }
@@ -1126,16 +1296,11 @@ impl AgentAdapter for RooInProcessAdapter {
     async fn resolve_permission(
         &mut self,
         _session_id: &str,
-        _request_id: &str,
+        request_id: &str,
         decision: PermissionDecision,
     ) -> anyhow::Result<()> {
-        // With the native AgentLoop, permissions are handled via the
-        // ToolApprovalRequired event and set_approval_response().
-        // For auto-approval mode (default), this is not needed.
-        // Log the decision for debugging purposes.
         let approved = matches!(decision, PermissionDecision::Allow | PermissionDecision::AllowAll);
-        debug!(approved, "Permission resolution received (auto-approval mode)");
-        Ok(())
+        self.resolve_roo_approval(request_id, approved).await
     }
 
     async fn stop(&mut self) -> anyhow::Result<()> {
@@ -1147,6 +1312,7 @@ impl AgentAdapter for RooInProcessAdapter {
         // std::thread::JoinHandle has no abort().  The thread will
         // exit when it observes the cancelled CancellationToken.
         self.worker_handle = None;
+        self.approval_handle = None;
 
         self.conversation_history.lock().await.clear();
 
@@ -1160,7 +1326,7 @@ impl AgentAdapter for RooInProcessAdapter {
         matches!(
             self.status,
             AgentStatus::Ready | AgentStatus::Busy
-        )
+        ) && self.worker_handle.as_ref().is_some_and(|h| !h.is_finished())
     }
 
     fn info(&self) -> &AgentInfo {
@@ -1169,5 +1335,660 @@ impl AgentAdapter for RooInProcessAdapter {
 
     fn agent_type(&self) -> AgentType {
         AgentType::RemoteRoo
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use roo_task::TaskEvent as RooTaskEvent;
+    use roo_types::message::TokenUsage;
+
+    const SID: &str = "test-session-roo";
+
+    fn make_token_usage(in_t: u64, out_t: u64, ctx: u64) -> TokenUsage {
+        TokenUsage {
+            total_tokens_in: in_t,
+            total_tokens_out: out_t,
+            total_cache_writes: None,
+            total_cache_reads: None,
+            total_cost: 0.0,
+            context_tokens: ctx,
+        }
+    }
+
+    // ── Streaming events ──────────────────────────────────────────
+
+    #[test]
+    fn streaming_text_delta_maps_to_message_delta() {
+        let event = RooTaskEvent::StreamingTextDelta {
+            task_id: "t1".into(),
+            text: "Hello".into(),
+        };
+        let result = map_task_event(&event, SID).expect("should map");
+        match result {
+            UnifiedAgentEvent::MessageDelta { session_id, delta } => {
+                assert_eq!(session_id, SID);
+                assert_eq!(delta, "Hello");
+            }
+            other => panic!("expected MessageDelta, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn streaming_reasoning_delta_has_thinking_prefix() {
+        let event = RooTaskEvent::StreamingReasoningDelta {
+            task_id: "t1".into(),
+            text: "reasoning".into(),
+        };
+        let result = map_task_event(&event, SID).expect("should map");
+        if let UnifiedAgentEvent::MessageDelta { delta, .. } = &result {
+            assert!(delta.starts_with("[thinking] "), "got: {delta}");
+        } else {
+            panic!("expected MessageDelta");
+        }
+    }
+
+    #[test]
+    fn streaming_tool_use_started_maps_to_tool_call_started() {
+        let event = RooTaskEvent::StreamingToolUseStarted {
+            task_id: "t1".into(),
+            tool_name: "read_file".into(),
+            tool_id: "tc-1".into(),
+        };
+        let result = map_task_event(&event, SID).expect("should map");
+        match result {
+            UnifiedAgentEvent::ToolCallStarted { tool_name, .. } => {
+                assert_eq!(tool_name, "read_file");
+            }
+            other => panic!("expected ToolCallStarted, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn streaming_tool_use_delta_maps_to_progress() {
+        let event = RooTaskEvent::StreamingToolUseDelta {
+            task_id: "t1".into(),
+            tool_id: "tc-1".into(),
+            delta: "partial".into(),
+        };
+        let result = map_task_event(&event, SID).expect("should map");
+        if let UnifiedAgentEvent::ToolCallProgress { tool_name, progress, .. } = &result {
+            assert_eq!(tool_name, "");
+            assert!(progress.contains("tc-1"), "progress should contain tool_id: {progress}");
+            assert!(progress.contains("partial"), "progress should contain delta: {progress}");
+        } else {
+            panic!("expected ToolCallProgress");
+        }
+    }
+
+    #[test]
+    fn streaming_tool_use_completed_maps_to_tool_call_completed() {
+        let event = RooTaskEvent::StreamingToolUseCompleted {
+            task_id: "t1".into(),
+            tool_name: "bash".into(),
+            tool_id: "tc-1".into(),
+            success: true,
+        };
+        let result = map_task_event(&event, SID).expect("should map");
+        if let UnifiedAgentEvent::ToolCallCompleted { tool_name, result, .. } = &result {
+            assert_eq!(tool_name, "bash");
+            assert_eq!(result["success"], true);
+        } else {
+            panic!("expected ToolCallCompleted");
+        }
+    }
+
+    #[test]
+    fn streaming_completed_returns_none() {
+        let event = RooTaskEvent::StreamingCompleted { task_id: "t1".into() };
+        assert!(map_task_event(&event, SID).is_none());
+    }
+
+    // ── Task lifecycle ─────────────────────────────────────────────
+
+    #[test]
+    fn task_started_maps_to_started_with_capabilities() {
+        let event = RooTaskEvent::TaskStarted { task_id: "t1".into() };
+        let result = map_task_event(&event, SID).expect("should map");
+        if let UnifiedAgentEvent::Started(info) = &result {
+            assert!(info.capabilities.len() >= 5);
+        } else {
+            panic!("expected Started");
+        }
+    }
+
+    #[test]
+    fn task_completed_maps_to_ready() {
+        let event = RooTaskEvent::TaskCompleted {
+            task_id: "t1".into(),
+            token_usage: make_token_usage(100, 50, 200),
+            tool_usage: roo_types::tool::ToolUsage::new(),
+            is_subtask: false,
+        };
+        let result = map_task_event(&event, SID).expect("should map");
+        assert!(matches!(result, UnifiedAgentEvent::Ready));
+    }
+
+    #[test]
+    fn task_aborted_maps_to_error_not_recoverable() {
+        let event = RooTaskEvent::TaskAborted {
+            task_id: "t1".into(),
+            reason: Some("user cancelled".into()),
+        };
+        let result = map_task_event(&event, SID).expect("should map");
+        if let UnifiedAgentEvent::Error { message, recoverable, .. } = &result {
+            assert_eq!(message, "user cancelled");
+            assert!(!recoverable);
+        } else {
+            panic!("expected Error");
+        }
+    }
+
+    #[test]
+    fn task_aborted_no_reason_uses_default() {
+        let event = RooTaskEvent::TaskAborted {
+            task_id: "t1".into(),
+            reason: None,
+        };
+        let result = map_task_event(&event, SID).expect("should map");
+        if let UnifiedAgentEvent::Error { message, .. } = &result {
+            assert_eq!(message, "Task aborted");
+        } else {
+            panic!("expected Error");
+        }
+    }
+
+    // ── Context management ─────────────────────────────────────────
+
+    #[test]
+    fn context_condensation_maps_to_compacted() {
+        let event = RooTaskEvent::ContextCondensationCompleted {
+            task_id: "t1".into(),
+            messages_removed: 15,
+        };
+        let result = map_task_event(&event, SID).expect("should map");
+        if let UnifiedAgentEvent::ContextCompacted { entries_removed, .. } = &result {
+            assert_eq!(*entries_removed, 15);
+        } else {
+            panic!("expected ContextCompacted");
+        }
+    }
+
+    #[test]
+    fn context_truncation_maps_to_compacted() {
+        let event = RooTaskEvent::ContextTruncationPerformed {
+            task_id: "t1".into(),
+            messages_removed: 30,
+        };
+        let result = map_task_event(&event, SID).expect("should map");
+        if let UnifiedAgentEvent::ContextCompacted { entries_removed, .. } = &result {
+            assert_eq!(*entries_removed, 30);
+        } else {
+            panic!("expected ContextCompacted");
+        }
+    }
+
+    // ── Token usage ────────────────────────────────────────────────
+
+    #[test]
+    fn token_usage_updated_maps_to_context_usage() {
+        let event = RooTaskEvent::TokenUsageUpdated {
+            usage: make_token_usage(500, 200, 4000),
+        };
+        let result = map_task_event(&event, SID).expect("should map");
+        if let UnifiedAgentEvent::ContextUsage { used, total, .. } = &result {
+            assert_eq!(*used, 700);
+            assert_eq!(*total, 4000);
+        } else {
+            panic!("expected ContextUsage");
+        }
+    }
+
+    #[test]
+    fn task_token_usage_updated_maps_to_context_usage() {
+        let event = RooTaskEvent::TaskTokenUsageUpdated {
+            task_id: "t1".into(),
+            token_usage: make_token_usage(300, 100, 2000),
+            tool_usage: roo_types::tool::ToolUsage::new(),
+        };
+        let result = map_task_event(&event, SID).expect("should map");
+        if let UnifiedAgentEvent::ContextUsage { used, total, .. } = &result {
+            assert_eq!(*used, 400);
+            assert_eq!(*total, 2000);
+        } else {
+            panic!("expected ContextUsage");
+        }
+    }
+
+    // ── Tool approval ──────────────────────────────────────────────
+
+    #[test]
+    fn tool_approval_required_maps_to_permission_request() {
+        let event = RooTaskEvent::ToolApprovalRequired {
+            task_id: "t1".into(),
+            tool_name: "bash".into(),
+            tool_id: "tc-1".into(),
+            reason: "dangerous command".into(),
+        };
+        let result = map_task_event(&event, SID).expect("should map");
+        match result {
+            UnifiedAgentEvent::PermissionRequest { request_id, tool_name, input, .. } => {
+                assert_eq!(request_id, "tc-1");
+                assert_eq!(tool_name, "bash");
+                assert_eq!(input["reason"], "dangerous command");
+            }
+            other => panic!("expected PermissionRequest, got {other:?}"),
+        }
+    }
+
+    // ── Subtask lifecycle ──────────────────────────────────────────
+
+    #[test]
+    fn task_spawned_maps_to_subtask_started() {
+        let event = RooTaskEvent::TaskSpawned {
+            parent_task_id: "p1".into(),
+            child_task_id: "c1".into(),
+        };
+        let result = map_task_event(&event, SID).expect("should map");
+        if let UnifiedAgentEvent::SubtaskStarted { task_id, .. } = &result {
+            assert_eq!(task_id, "c1");
+        } else {
+            panic!("expected SubtaskStarted");
+        }
+    }
+
+    #[test]
+    fn task_delegation_completed_maps_to_subtask_completed() {
+        let event = RooTaskEvent::TaskDelegationCompleted {
+            parent_task_id: "p1".into(),
+            child_task_id: "c1".into(),
+            summary: "done".into(),
+        };
+        let result = map_task_event(&event, SID).expect("should map");
+        if let UnifiedAgentEvent::SubtaskCompleted { result, .. } = &result {
+            assert_eq!(result["summary"], "done");
+        } else {
+            panic!("expected SubtaskCompleted");
+        }
+    }
+
+    // ── Error events ───────────────────────────────────────────────
+
+    #[test]
+    fn error_maps_to_recoverable_error() {
+        let event = RooTaskEvent::Error {
+            task_id: "t1".into(),
+            error: "something broke".into(),
+        };
+        let result = map_task_event(&event, SID).expect("should map");
+        if let UnifiedAgentEvent::Error { message, recoverable, .. } = &result {
+            assert_eq!(message, "something broke");
+            assert!(recoverable);
+        } else {
+            panic!("expected Error");
+        }
+    }
+
+    #[test]
+    fn tool_error_maps_to_recoverable_error() {
+        let event = RooTaskEvent::ToolError {
+            task_id: "t1".into(),
+            tool_name: "bash".into(),
+            error: "exit code 1".into(),
+        };
+        let result = map_task_event(&event, SID).expect("should map");
+        if let UnifiedAgentEvent::Error { message, recoverable, .. } = &result {
+            assert!(message.contains("bash"));
+            assert!(message.contains("exit code 1"));
+            assert!(recoverable);
+        } else {
+            panic!("expected Error");
+        }
+    }
+
+    #[test]
+    fn task_tool_failed_maps_to_recoverable_error() {
+        let event = RooTaskEvent::TaskToolFailed {
+            task_id: "t1".into(),
+            tool_name: "edit_file".into(),
+            error: "file not found".into(),
+        };
+        let result = map_task_event(&event, SID).expect("should map");
+        if let UnifiedAgentEvent::Error { message, recoverable, .. } = &result {
+            assert!(message.contains("edit_file"));
+            assert!(message.contains("file not found"));
+            assert!(recoverable);
+        } else {
+            panic!("expected Error");
+        }
+    }
+
+    // ── API retry ──────────────────────────────────────────────────
+
+    #[test]
+    fn api_retry_delayed_maps_to_progress() {
+        let event = RooTaskEvent::ApiRequestRetryDelayed {
+            task_id: "t1".into(),
+            delay_seconds: 5,
+            retry_attempt: 2,
+        };
+        let result = map_task_event(&event, SID).expect("should map");
+        if let UnifiedAgentEvent::ToolCallProgress { tool_name, progress, .. } = &result {
+            assert_eq!(tool_name, "api_retry");
+            assert!(progress.contains("5s"));
+            assert!(progress.contains("attempt 2"));
+        } else {
+            panic!("expected ToolCallProgress");
+        }
+    }
+
+    // ── Suppressed events ──────────────────────────────────────────
+
+    #[test]
+    fn state_changed_returns_none() {
+        let event = RooTaskEvent::StateChanged {
+            from: roo_task::types::TaskState::Idle,
+            to: roo_task::types::TaskState::Running,
+        };
+        assert!(map_task_event(&event, SID).is_none());
+    }
+
+    #[test]
+    fn api_request_started_returns_none() {
+        let event = RooTaskEvent::ApiRequestStarted { task_id: "t1".into() };
+        assert!(map_task_event(&event, SID).is_none());
+    }
+
+    #[test]
+    fn api_request_finished_returns_none() {
+        let event = RooTaskEvent::ApiRequestFinished {
+            task_id: "t1".into(),
+            cost: Some(0.05),
+            tokens_in: Some(100),
+            tokens_out: Some(50),
+        };
+        assert!(map_task_event(&event, SID).is_none());
+    }
+
+    #[test]
+    fn tool_executed_maps_to_progress() {
+        let event = RooTaskEvent::ToolExecuted {
+            tool_name: "read_file".into(),
+            success: true,
+        };
+        let result = map_task_event(&event, SID).expect("should map");
+        if let UnifiedAgentEvent::ToolCallProgress { progress, .. } = &result {
+            assert_eq!(progress, "completed");
+        } else {
+            panic!("expected ToolCallProgress");
+        }
+    }
+
+    #[test]
+    fn tool_executed_failed_maps_to_failed_progress() {
+        let event = RooTaskEvent::ToolExecuted {
+            tool_name: "bash".into(),
+            success: false,
+        };
+        let result = map_task_event(&event, SID).expect("should map");
+        if let UnifiedAgentEvent::ToolCallProgress { progress, .. } = &result {
+            assert_eq!(progress, "failed");
+        } else {
+            panic!("expected ToolCallProgress");
+        }
+    }
+
+    // ── Catch-all events (fall into _ => None) ────────────────────
+
+    #[test]
+    fn checkpoint_saved_returns_none() {
+        let event = RooTaskEvent::CheckpointSaved {
+            task_id: "t1".into(),
+            commit: Some("abc123".into()),
+        };
+        assert!(map_task_event(&event, SID).is_none());
+    }
+
+    #[test]
+    fn task_created_returns_none() {
+        let event = RooTaskEvent::TaskCreated { task_id: "t1".into() };
+        assert!(map_task_event(&event, SID).is_none());
+    }
+
+    #[test]
+    fn mode_changed_returns_none() {
+        let event = RooTaskEvent::ModeChanged { mode: "architect".into() };
+        assert!(map_task_event(&event, SID).is_none());
+    }
+
+    #[test]
+    fn api_request_failed_returns_none() {
+        let event = RooTaskEvent::ApiRequestFailed {
+            task_id: "t1".into(),
+            error: "timeout".into(),
+        };
+        assert!(map_task_event(&event, SID).is_none());
+    }
+
+    #[test]
+    fn mistake_limit_reached_returns_none() {
+        let event = RooTaskEvent::MistakeLimitReached {
+            task_id: "t1".into(),
+            count: 3,
+            limit: 3,
+        };
+        assert!(map_task_event(&event, SID).is_none());
+    }
+
+    #[test]
+    fn auto_approval_limit_reached_returns_none() {
+        let event = RooTaskEvent::AutoApprovalLimitReached {
+            task_id: "t1".into(),
+            approval_type: "Requests".into(),
+            approval_count: Some("5".into()),
+        };
+        assert!(map_task_event(&event, SID).is_none());
+    }
+
+    #[test]
+    fn api_rate_limit_wait_returns_none() {
+        let event = RooTaskEvent::ApiRateLimitWait {
+            task_id: "t1".into(),
+            seconds: 30,
+        };
+        assert!(map_task_event(&event, SID).is_none());
+    }
+
+    // ── TC-07: resolve_permission mutex recovery ───────────────────
+
+    /// Test that a poisoned mutex in the approval handle is recovered gracefully
+    /// via `unwrap_or_else(|e| e.into_inner())`, matching the pattern used in
+    /// `resolve_roo_approval`.
+    #[test]
+    fn poisoned_approval_mutex_is_recovered() {
+        let (tx, _rx) = tokio::sync::oneshot::channel::<bool>();
+        let handle: Arc<std::sync::Mutex<Option<tokio::sync::oneshot::Sender<bool>>>> =
+            Arc::new(std::sync::Mutex::new(Some(tx)));
+
+        // Poison the mutex by panicking while holding the lock.
+        // We use a separate thread so the panic is caught and does not
+        // abort the test process.
+        let handle_clone = Arc::clone(&handle);
+        let join = std::thread::spawn(move || {
+            let _guard = handle_clone.lock().unwrap();
+            panic!("intentional panic to poison mutex");
+        });
+        // The thread panicked, so the mutex is now poisoned.
+        assert!(join.join().is_err(), "thread should have panicked");
+
+        // Now verify the recovery pattern used in resolve_roo_approval:
+        //   handle.lock().unwrap_or_else(|e| e.into_inner())
+        // This must succeed (not panic) and give access to the inner data.
+        let guard = handle
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        // The sender is still present; we just verify the guard is usable.
+        assert!(guard.is_some(), "sender should still be present after poisoning");
+    }
+
+    // ── TC-06: MCP server loading / merging ─────────────────────────
+
+    /// Test that `set_external_mcp_servers` correctly stores the provided
+    /// servers and that project-level servers can be identified by the
+    /// stored external set.
+    #[test]
+    fn set_external_mcp_servers_stores_servers() {
+        let mut adapter = RooInProcessAdapter::new();
+        assert!(adapter.external_mcp_servers.is_empty());
+
+        let mut servers = std::collections::HashMap::new();
+        servers.insert(
+            "filesystem".to_string(),
+            serde_json::json!({ "command": "npx", "args": ["-y", "@anthropic/mcp-filesystem"] }),
+        );
+        servers.insert(
+            "github".to_string(),
+            serde_json::json!({ "command": "npx", "args": ["-y", "@anthropic/mcp-github"] }),
+        );
+
+        adapter.set_external_mcp_servers(servers.clone());
+        assert_eq!(adapter.external_mcp_servers.len(), 2);
+        assert!(adapter.external_mcp_servers.contains_key("filesystem"));
+        assert!(adapter.external_mcp_servers.contains_key("github"));
+    }
+
+    /// Test that calling `set_external_mcp_servers` replaces the previous set
+    /// entirely (i.e., it is a full replacement, not an incremental merge).
+    #[test]
+    fn set_external_mcp_servers_replaces_previous_set() {
+        let mut adapter = RooInProcessAdapter::new();
+
+        let mut first = std::collections::HashMap::new();
+        first.insert(
+            "old-server".to_string(),
+            serde_json::json!({ "command": "old" }),
+        );
+        adapter.set_external_mcp_servers(first);
+        assert_eq!(adapter.external_mcp_servers.len(), 1);
+
+        let mut second = std::collections::HashMap::new();
+        second.insert(
+            "new-server".to_string(),
+            serde_json::json!({ "command": "new" }),
+        );
+        adapter.set_external_mcp_servers(second);
+        assert_eq!(adapter.external_mcp_servers.len(), 1);
+        assert!(adapter.external_mcp_servers.contains_key("new-server"));
+        assert!(!adapter.external_mcp_servers.contains_key("old-server"));
+    }
+
+    // ── Permission decision mapping ──────────────────────────────────
+
+    /// Test that `PermissionDecision::Allow` is mapped to `approved = true`
+    /// by the `resolve_permission` trait method.
+    #[tokio::test]
+    async fn resolve_permission_allow_resolves_true() {
+        let mut adapter = RooInProcessAdapter::new();
+
+        // Set up an approval handle with a real oneshot channel so we can
+        // observe the value that resolve_roo_approval would send.
+        let (tx, rx) = tokio::sync::oneshot::channel::<bool>();
+        let handle: Arc<std::sync::Mutex<Option<tokio::sync::oneshot::Sender<bool>>>> =
+            Arc::new(std::sync::Mutex::new(Some(tx)));
+        adapter.approval_handle = Some(handle);
+
+        let result = adapter
+            .resolve_permission("sid", "req-1", PermissionDecision::Allow)
+            .await;
+        assert!(result.is_ok(), "resolve_permission should succeed for Allow");
+
+        // The oneshot sender should have been consumed and sent `true`.
+        let approved = rx.await.expect("receiver should get a value");
+        assert!(approved, "Allow decision should resolve as true");
+    }
+
+    /// Test that `PermissionDecision::AllowAll` is also mapped to `approved = true`.
+    #[tokio::test]
+    async fn resolve_permission_allow_all_resolves_true() {
+        let mut adapter = RooInProcessAdapter::new();
+
+        let (tx, rx) = tokio::sync::oneshot::channel::<bool>();
+        let handle: Arc<std::sync::Mutex<Option<tokio::sync::oneshot::Sender<bool>>>> =
+            Arc::new(std::sync::Mutex::new(Some(tx)));
+        adapter.approval_handle = Some(handle);
+
+        let result = adapter
+            .resolve_permission("sid", "req-1", PermissionDecision::AllowAll)
+            .await;
+        assert!(result.is_ok(), "resolve_permission should succeed for AllowAll");
+
+        let approved = rx.await.expect("receiver should get a value");
+        assert!(approved, "AllowAll decision should resolve as true");
+    }
+
+    /// Test that `PermissionDecision::Deny` is mapped to `approved = false`.
+    #[tokio::test]
+    async fn resolve_permission_deny_resolves_false() {
+        let mut adapter = RooInProcessAdapter::new();
+
+        let (tx, rx) = tokio::sync::oneshot::channel::<bool>();
+        let handle: Arc<std::sync::Mutex<Option<tokio::sync::oneshot::Sender<bool>>>> =
+            Arc::new(std::sync::Mutex::new(Some(tx)));
+        adapter.approval_handle = Some(handle);
+
+        let result = adapter
+            .resolve_permission("sid", "req-1", PermissionDecision::Deny)
+            .await;
+        assert!(result.is_ok(), "resolve_permission should succeed for Deny");
+
+        let approved = rx.await.expect("receiver should get a value");
+        assert!(!approved, "Deny decision should resolve as false");
+    }
+
+    /// Test that when no approval handle is set (None), resolve_permission
+    /// still returns Ok (graceful no-op) rather than erroring.
+    #[tokio::test]
+    async fn resolve_permission_no_handle_returns_ok() {
+        let mut adapter = RooInProcessAdapter::new();
+        // approval_handle is None by default — no oneshot sender registered.
+
+        let result = adapter
+            .resolve_permission("sid", "req-1", PermissionDecision::Allow)
+            .await;
+        assert!(
+            result.is_ok(),
+            "resolve_permission should return Ok when no approval handle is set"
+        );
+    }
+
+    /// Test that when the approval handle exists but the inner sender has
+    /// already been consumed (taken), resolve_permission returns Ok gracefully
+    /// instead of panicking or erroring.
+    #[tokio::test]
+    async fn resolve_permission_consumed_sender_returns_ok() {
+        let mut adapter = RooInProcessAdapter::new();
+
+        // Create a sender and immediately consume it by dropping the receiver.
+        let (tx, _rx) = tokio::sync::oneshot::channel::<bool>();
+        let handle: Arc<std::sync::Mutex<Option<tokio::sync::oneshot::Sender<bool>>>> =
+            Arc::new(std::sync::Mutex::new(Some(tx)));
+
+        // Take the sender out, simulating it was already consumed by a prior
+        // approval resolution.
+        {
+            let mut guard = handle.lock().unwrap();
+            guard.take();
+        }
+
+        adapter.approval_handle = Some(handle);
+
+        let result = adapter
+            .resolve_permission("sid", "req-1", PermissionDecision::Deny)
+            .await;
+        assert!(
+            result.is_ok(),
+            "resolve_permission should return Ok even when sender was already consumed"
+        );
     }
 }

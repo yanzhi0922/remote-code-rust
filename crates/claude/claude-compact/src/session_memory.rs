@@ -220,6 +220,7 @@ fn create_compaction_result_from_session_memory(
         "auto",
         pre_compact_token_count,
         messages.last().map(Message::uuid),
+        None,
     );
     let summary_text = build_compact_user_summary_message(session_memory, true, None, true);
     let summary_message = Message::User(UserMessage {

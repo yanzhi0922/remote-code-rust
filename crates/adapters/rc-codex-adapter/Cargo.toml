@@ -10,7 +10,7 @@ rust-version.workspace = true
 
 [dependencies]
 # Our protocol layer
-claude-agent-protocol = { path = "../../claude/claude-agent-protocol" }
+rc-agent-protocol = { path = "../../shared/rc-agent-protocol" }
 
 # Codex crates (all in workspace)
 codex-app-server-client = { workspace = true }
@@ -27,6 +27,11 @@ codex-utils-absolute-path = { workspace = true }
 # Async runtime
 tokio = { workspace = true, features = ["full"] }
 
+# HTTP (for protocol translator proxy)
+axum = { workspace = true }
+reqwest = { workspace = true }
+tokio-stream = { workspace = true }
+
 # Serialization
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
@@ -34,6 +39,7 @@ toml = { workspace = true }
 
 # Error handling
 anyhow = { workspace = true }
+futures = { workspace = true }
 
 # UUID generation
 uuid = { workspace = true, features = ["v4"] }

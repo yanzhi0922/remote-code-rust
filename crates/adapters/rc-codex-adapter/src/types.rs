@@ -10,8 +10,8 @@ use anyhow::Context;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 
-use claude_agent_protocol::events::UnifiedAgentEvent;
-use claude_agent_protocol::permission::PermissionDecision;
+use rc_agent_protocol::events::UnifiedAgentEvent;
+use rc_agent_protocol::permission::PermissionDecision;
 
 use codex_app_server_protocol::{
     CommandExecParams, DynamicToolCallOutputContentItem, DynamicToolCallResponse,
@@ -62,6 +62,10 @@ pub struct CodexThreadGoalRefRequest {
 pub struct CodexThreadGoalSetRequest {
     pub thread_id: String,
     pub text: String,
+    #[serde(default)]
+    pub status: Option<String>,
+    #[serde(default)]
+    pub token_budget: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -94,22 +98,13 @@ pub struct CodexPluginRefRequest {
     pub plugin_name: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CodexServerRequestResolution {
     #[serde(default)]
     pub allow_all: bool,
     #[serde(default)]
     pub response: Option<serde_json::Value>,
-}
-
-impl Default for CodexServerRequestResolution {
-    fn default() -> Self {
-        Self {
-            allow_all: false,
-            response: None,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -265,6 +260,9 @@ pub(crate) struct EventPumpState {
     pub(crate) current_tx: Option<mpsc::Sender<UnifiedAgentEvent>>,
     /// Server request ids and their exact official response shape.
     pub(crate) pending_server_requests: HashMap<String, PendingServerRequestKind>,
+    /// Last known token usage from `ThreadTokenUsageUpdated`, used to populate
+    /// `Completed` events with real numbers instead of zeros.
+    pub(crate) last_usage: Option<rc_agent_protocol::events::UsageInfo>,
 }
 
 impl EventPumpState {
@@ -272,6 +270,7 @@ impl EventPumpState {
         Self {
             current_tx: None,
             pending_server_requests: HashMap::new(),
+            last_usage: None,
         }
     }
 }
@@ -291,10 +290,10 @@ pub(crate) fn typed_server_request_response(
     );
     let allow_all = matches!(decision, PermissionDecision::AllowAll) || resolution.allow_all;
 
-    if let Some(ref response) = resolution.response {
-        if allow {
-            return Ok(Some(response.clone()));
-        }
+    if let Some(ref response) = resolution.response
+        && allow
+    {
+        return Ok(Some(response.clone()));
     }
 
     if !allow

@@ -1,9 +1,12 @@
 //! Post-compaction cleanup and result tracking.
 //!
 //! Provides utilities for cleaning up conversation state after a compaction
-//! operation, including result tracking and warning state management.
+//! operation, including result tracking, warning state management, and
+//! post-compact file re-reads.
 
 use claude_core::Message;
+
+use crate::attachment::FileStateCache;
 
 // ---------------------------------------------------------------------------
 // PostCompactResult
@@ -150,6 +153,99 @@ pub fn run_post_compact_cleanup(
 
     let result = PostCompactResult::new(removed, kept.len(), tokens_saved);
     (kept, result)
+}
+
+// ---------------------------------------------------------------------------
+// Post-compact file re-reads
+// ---------------------------------------------------------------------------
+
+/// Maximum number of recently accessed files to re-read after compaction.
+const POST_COMPACT_RE_READ_LIMIT: usize = 5;
+
+/// Total token budget for post-compact file re-reads.
+const POST_COMPACT_TOKEN_BUDGET: usize = 50_000;
+
+/// Maximum estimated tokens per individual file re-read.
+const POST_COMPACT_MAX_TOKENS_PER_FILE: usize = 5_000;
+
+/// Re-read up to `limit` recently accessed files from the file state cache
+/// and return them as user messages containing the file content.
+///
+/// After compaction, the model loses context about the contents of files it
+/// was working with. Re-reading the most recently accessed files helps the
+/// model maintain continuity. The files are sorted by most recent access
+/// timestamp, and only the top `limit` are included.
+///
+/// # Arguments
+///
+/// * `file_state` - The file state cache tracking recently read files.
+/// * `limit` - Maximum number of files to re-read (defaults to 5).
+/// * `preserved_file_paths` - File paths that are already in the preserved tail;
+///   these are skipped to avoid duplicating context.
+///
+/// # Returns
+///
+/// A vector of `Message::User` messages, each containing the file path and
+/// its content as a text block suitable for LLM consumption.
+pub fn re_read_recent_files(
+    file_state: &FileStateCache,
+    limit: usize,
+    preserved_file_paths: &std::collections::HashSet<String>,
+) -> Vec<Message> {
+    let limit = if limit == 0 {
+        POST_COMPACT_RE_READ_LIMIT
+    } else {
+        limit
+    };
+
+    let recent_files = file_state.most_recent(limit);
+    let mut messages = Vec::new();
+    let mut total_tokens_used: usize = 0;
+
+    for file in recent_files {
+        // Deduplication: skip files already in the preserved tail
+        if preserved_file_paths.contains(&file.filename) {
+            continue;
+        }
+
+        // Token budget: estimate tokens as content.len() / 4
+        let estimated_tokens = file.content.len() / 4;
+
+        // Skip individual files exceeding per-file budget
+        if estimated_tokens > POST_COMPACT_MAX_TOKENS_PER_FILE {
+            continue;
+        }
+
+        // Stop when total budget is exhausted
+        if total_tokens_used + estimated_tokens > POST_COMPACT_TOKEN_BUDGET {
+            break;
+        }
+
+        total_tokens_used += estimated_tokens;
+
+        use claude_core::{MessageBase, MessageOrigin, UserMessage};
+
+        let text = format!(
+            "<file_content path=\"{}\">\n{}\n</file_content>",
+            file.filename, file.content
+        );
+
+        let message = Message::User(UserMessage {
+            base: {
+                let mut base = MessageBase::with_origin(MessageOrigin::Compact);
+                base.is_meta = true;
+                base
+            },
+            text,
+            attachments: Vec::new(),
+            provider_content_blocks: Vec::new(),
+            summarize_metadata: None,
+        });
+
+        messages.push(message);
+    }
+
+    messages
 }
 
 // ---------------------------------------------------------------------------
@@ -485,5 +581,51 @@ mod tests {
         assert!(!mgr.should_warn());
         mgr.record_compaction();
         assert!(mgr.should_warn());
+    }
+
+    // -- re_read_recent_files: token budget & dedup tests ---------------------
+
+    #[test]
+    fn re_read_skips_preserved_files() {
+        let mut cache = FileStateCache::new();
+        cache.insert("file_a.txt".into(), "content a".into(), 100);
+        cache.insert("file_b.txt".into(), "content b".into(), 200);
+        let preserved: std::collections::HashSet<String> =
+            vec!["file_a.txt".to_string()].into_iter().collect();
+        let msgs = re_read_recent_files(&cache, 5, &preserved);
+        // file_b.txt has higher timestamp so is most recent
+        assert_eq!(msgs.len(), 1);
+        match &msgs[0] {
+            Message::User(u) => assert!(u.text.contains("file_b.txt")),
+            _ => panic!("expected User"),
+        }
+    }
+
+    #[test]
+    fn re_read_skips_oversized_files() {
+        let mut cache = FileStateCache::new();
+        // 30,000 chars -> ~7,500 tokens, exceeds 5,000 per-file budget
+        cache.insert("big.txt".into(), "x".repeat(30_000), 100);
+        let preserved = std::collections::HashSet::new();
+        let msgs = re_read_recent_files(&cache, 5, &preserved);
+        assert!(msgs.is_empty(), "oversized file should be skipped");
+    }
+
+    #[test]
+    fn re_read_stops_at_total_budget() {
+        let mut cache = FileStateCache::new();
+        // Each file: 10,000 chars -> ~2,500 tokens. Budget is 50,000 so max ~20 files.
+        for i in 0..25 {
+            cache.insert(
+                format!("file_{i}.txt"),
+                "a".repeat(10_000),
+                100 + i as i64,
+            );
+        }
+        let preserved = std::collections::HashSet::new();
+        let msgs = re_read_recent_files(&cache, 25, &preserved);
+        // Should stop before exhausting all 25 files
+        assert!(msgs.len() < 25, "should stop at token budget");
+        assert!(!msgs.is_empty(), "should include some files");
     }
 }

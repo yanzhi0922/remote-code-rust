@@ -27,9 +27,13 @@ tokio.workspace = true
 tower-http.workspace = true
 tracing.workspace = true
 uuid.workspace = true
+quinn = "0.11"
+rustls = { workspace = true }
+rustls-pemfile = { workspace = true }
 claude-config = { path = "../claude-config" }
-claude-engine-events = { path = "../claude-engine-events" }
+rc-engine-events = { path = "../../shared/rc-engine-events" }
 claude-runner = { path = "../claude-runner" }
+rc-remote-transport = { path = "../../shared/rc-remote-transport", features = ["quic"] }
 
 [dev-dependencies]
 tempfile.workspace = true

@@ -4,13 +4,15 @@
 //! specialized event types. This module translates the subset relevant to
 //! the unified agent protocol into [`UnifiedAgentEvent`] variants.
 
-use claude_agent_protocol::events::{AgentResult, ToolCallInfo, UnifiedAgentEvent, UsageInfo};
+use rc_agent_protocol::events::{AgentResult, ToolCallInfo, UnifiedAgentEvent, UsageInfo};
 
 use codex_app_server_client::AppServerEvent;
 use codex_app_server_protocol::{
     CommandExecutionStatus, DynamicToolCallStatus, McpToolCallStatus, PatchApplyStatus,
     ServerNotification, ServerRequest, ThreadItem,
 };
+
+use crate::types::request_id_to_string;
 
 fn progress_event(
     session_id: &str,
@@ -230,18 +232,24 @@ fn thread_item_tool_call(item: &ThreadItem) -> Option<ToolCallInfo> {
 /// the future.
 pub fn map_app_server_event(event: AppServerEvent, session_id: &str) -> Vec<UnifiedAgentEvent> {
     match event {
-        AppServerEvent::Lagged { skipped: _ } => {
-            // Backpressure signal — silently consumed.
+        AppServerEvent::Lagged { skipped } => {
+            tracing::debug!(session_id, skipped, "Codex event lag — backpressure signal");
             Vec::new()
         }
 
         AppServerEvent::ServerNotification(notification) => {
+            let method = notification.to_string();
+            tracing::debug!(session_id, %method, "Codex server notification");
             let mut events = vec![raw_server_notification(session_id, &notification)];
             events.extend(map_server_notification(notification, session_id));
             events
         }
 
-        AppServerEvent::ServerRequest(request) => map_server_request(request, session_id),
+        AppServerEvent::ServerRequest(request) => {
+            let req_id = request_id_to_string(request.id());
+            tracing::debug!(session_id, %req_id, "Codex server request (permission)");
+            map_server_request(request, session_id)
+        }
 
         AppServerEvent::Disconnected { message } => {
             vec![UnifiedAgentEvent::Error {
@@ -303,21 +311,48 @@ fn map_server_notification(
         ServerNotification::ItemStarted(item) => {
             let tool_name = thread_item_kind(&item.item).to_owned();
             let tool_input = serde_json::to_value(&item.item).unwrap_or(serde_json::Value::Null);
-            vec![UnifiedAgentEvent::ToolCallStarted {
+            let mut events = vec![UnifiedAgentEvent::ToolCallStarted {
                 session_id: session_id.to_owned(),
                 tool_name,
                 tool_input,
-            }]
+            }];
+            // CollabAgentToolCall maps to SubtaskStarted for parity with Claude/Roo.
+            if let ThreadItem::CollabAgentToolCall { id, prompt, receiver_thread_ids, .. } = &item.item {
+                let desc = prompt.clone().unwrap_or_else(|| format!("Agent task {id}"));
+                for rid in receiver_thread_ids {
+                    events.push(UnifiedAgentEvent::SubtaskStarted {
+                        session_id: session_id.to_owned(),
+                        task_id: rid.clone(),
+                        description: desc.clone(),
+                    });
+                }
+            }
+            events
         }
 
         ServerNotification::ItemCompleted(item) => {
             let tool_name = thread_item_kind(&item.item).to_owned();
             let result = serde_json::to_value(&item.item).unwrap_or(serde_json::Value::Null);
-            vec![UnifiedAgentEvent::ToolCallCompleted {
+            let mut events = vec![UnifiedAgentEvent::ToolCallCompleted {
                 session_id: session_id.to_owned(),
                 tool_name,
                 result,
-            }]
+            }];
+            // CollabAgentToolCall completion maps to SubtaskCompleted.
+            if let ThreadItem::CollabAgentToolCall { id, status, agents_states, .. } = &item.item {
+                let task_result = serde_json::json!({
+                    "id": id,
+                    "status": status,
+                    "agentsStates": agents_states,
+                });
+                // Emit SubtaskCompleted for the primary receiver.
+                events.push(UnifiedAgentEvent::SubtaskCompleted {
+                    session_id: session_id.to_owned(),
+                    task_id: id.clone(),
+                    result: task_result,
+                });
+            }
+            events
         }
 
         // ── Command output streaming ──
@@ -414,12 +449,20 @@ fn map_server_notification(
                 })
                 .collect::<Vec<_>>()
                 .join("");
-            let tool_calls = notification
+            let tool_calls: Vec<_> = notification
                 .turn
                 .items
                 .iter()
                 .filter_map(thread_item_tool_call)
                 .collect();
+
+            tracing::debug!(
+                session_id,
+                turn_id = %notification.turn.id,
+                text_len = response_text.len(),
+                tool_call_count = tool_calls.len(),
+                "Codex turn completed"
+            );
 
             vec![UnifiedAgentEvent::Completed {
                 session_id: session_id.to_owned(),
@@ -458,6 +501,10 @@ fn map_server_notification(
         }
 
         ServerNotification::ContextCompacted(_notification) => {
+            // Codex protocol's ContextCompactedNotification only carries
+            // thread_id and turn_id — no count of entries removed or usage
+            // ratio. Emit the event with defaults so consumers know compaction
+            // happened even if details are unavailable.
             vec![UnifiedAgentEvent::ContextCompacted {
                 session_id: session_id.to_owned(),
                 entries_removed: 0,
@@ -654,13 +701,7 @@ fn map_server_request(request: ServerRequest, session_id: &str) -> Vec<UnifiedAg
     }]
 }
 
-/// Convert a [`RequestId`] to a string for the unified protocol.
-fn request_id_to_string(id: &codex_app_server_protocol::RequestId) -> String {
-    match id {
-        codex_app_server_protocol::RequestId::String(s) => s.clone(),
-        codex_app_server_protocol::RequestId::Integer(n) => n.to_string(),
-    }
-}
+// Reuse request_id_to_string from types.rs (pub(crate))
 
 #[cfg(test)]
 mod tests {
@@ -753,5 +794,427 @@ mod tests {
             }
             other => panic!("expected permission request, got {other:?}"),
         }
+    }
+
+    // ── Top-level AppServerEvent branches ──
+
+    #[test]
+    fn lagged_event_produces_no_output() {
+        let events = map_app_server_event(AppServerEvent::Lagged { skipped: 42 }, "s");
+        assert!(events.is_empty());
+    }
+
+    #[test]
+    fn disconnected_produces_unrecoverable_error() {
+        let events = map_app_server_event(
+            AppServerEvent::Disconnected {
+                message: "server gone".to_owned(),
+            },
+            "s",
+        );
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            UnifiedAgentEvent::Error {
+                session_id,
+                message,
+                recoverable,
+            } => {
+                assert_eq!(session_id, "s");
+                assert!(message.contains("server gone"));
+                assert!(!recoverable);
+            }
+            other => panic!("expected error event, got {other:?}"),
+        }
+    }
+
+    // ── ServerNotification: streaming ──
+
+    #[test]
+    fn plan_delta_produces_tool_progress() {
+        use codex_app_server_protocol::PlanDeltaNotification;
+        let notification = ServerNotification::PlanDelta(PlanDeltaNotification {
+            thread_id: "t".to_owned(),
+            turn_id: "t".to_owned(),
+            item_id: "item-1".to_owned(),
+            delta: "step 1".to_owned(),
+        });
+        let events = map_server_notification(notification, "s");
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            UnifiedAgentEvent::ToolCallProgress {
+                session_id,
+                tool_name,
+                progress,
+            } => {
+                assert_eq!(session_id, "s");
+                assert_eq!(tool_name, "plan");
+                assert_eq!(progress, "step 1");
+            }
+            other => panic!("expected tool progress, got {other:?}"),
+        }
+    }
+
+    // ── ServerNotification: item lifecycle ──
+
+    #[test]
+    fn item_started_produces_tool_call_started() {
+        use codex_app_server_protocol::{ItemStartedNotification, ThreadItem};
+        let notification = ServerNotification::ItemStarted(ItemStartedNotification {
+            thread_id: "t".to_owned(),
+            turn_id: "t".to_owned(),
+            item: ThreadItem::AgentMessage {
+                id: "item-1".to_owned(),
+                text: "thinking...".to_owned(),
+                phase: None,
+                memory_citation: None,
+            },
+        });
+        let events = map_server_notification(notification, "s");
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            UnifiedAgentEvent::ToolCallStarted {
+                session_id,
+                tool_name,
+                ..
+            } => {
+                assert_eq!(session_id, "s");
+                assert_eq!(tool_name, "agent_message");
+            }
+            other => panic!("expected tool call started, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn item_completed_produces_tool_call_completed() {
+        use codex_app_server_protocol::{ItemCompletedNotification, ThreadItem};
+        let notification = ServerNotification::ItemCompleted(ItemCompletedNotification {
+            thread_id: "t".to_owned(),
+            turn_id: "t".to_owned(),
+            item: ThreadItem::AgentMessage {
+                id: "item-1".to_owned(),
+                text: "done".to_owned(),
+                phase: None,
+                memory_citation: None,
+            },
+        });
+        let events = map_server_notification(notification, "s");
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            UnifiedAgentEvent::ToolCallCompleted {
+                session_id,
+                tool_name,
+                ..
+            } => {
+                assert_eq!(session_id, "s");
+                assert_eq!(tool_name, "agent_message");
+            }
+            other => panic!("expected tool call completed, got {other:?}"),
+        }
+    }
+
+    // ── ServerNotification: turn completed with text ──
+
+    #[test]
+    fn turn_completed_extracts_agent_message_text() {
+        use codex_app_server_protocol::{
+            ThreadItem, Turn, TurnCompletedNotification, TurnStatus,
+        };
+        let notification = ServerNotification::TurnCompleted(TurnCompletedNotification {
+            thread_id: "t".to_owned(),
+            turn: Turn {
+                id: "turn-1".to_owned(),
+                items: vec![
+                    ThreadItem::AgentMessage {
+                        id: "msg".to_owned(),
+                        text: "hello world".to_owned(),
+                        phase: None,
+                        memory_citation: None,
+                    },
+                    ThreadItem::AgentMessage {
+                        id: "msg-2".to_owned(),
+                        text: " more text".to_owned(),
+                        phase: None,
+                        memory_citation: None,
+                    },
+                ],
+                status: TurnStatus::Completed,
+                error: None,
+                started_at: None,
+                completed_at: None,
+                duration_ms: None,
+            },
+        });
+        let events = map_server_notification(notification, "s");
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            UnifiedAgentEvent::Completed {
+                session_id,
+                result,
+            } => {
+                assert_eq!(session_id, "s");
+                assert_eq!(result.response_text, "hello world more text");
+                assert!(result.tool_calls.is_empty());
+            }
+            other => panic!("expected completed event, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn turn_completed_with_web_search_tool_call() {
+        use codex_app_server_protocol::{
+            ThreadItem, Turn, TurnCompletedNotification, TurnStatus,
+        };
+        let notification = ServerNotification::TurnCompleted(TurnCompletedNotification {
+            thread_id: "t".to_owned(),
+            turn: Turn {
+                id: "turn-1".to_owned(),
+                items: vec![
+                    ThreadItem::AgentMessage {
+                        id: "msg".to_owned(),
+                        text: "results".to_owned(),
+                        phase: None,
+                        memory_citation: None,
+                    },
+                    ThreadItem::WebSearch {
+                        id: "search-1".to_owned(),
+                        query: "rust async".to_owned(),
+                        action: None,
+                    },
+                ],
+                status: TurnStatus::Completed,
+                error: None,
+                started_at: None,
+                completed_at: None,
+                duration_ms: None,
+            },
+        });
+        let events = map_server_notification(notification, "s");
+        match &events[0] {
+            UnifiedAgentEvent::Completed { result, .. } => {
+                assert_eq!(result.tool_calls.len(), 1);
+                assert_eq!(result.tool_calls[0].name, "web_search");
+                assert_eq!(result.tool_calls[0].id, "search-1");
+            }
+            other => panic!("expected completed event, got {other:?}"),
+        }
+    }
+
+    // ── ServerNotification: error ──
+
+    #[test]
+    fn error_notification_recoverable() {
+        use codex_app_server_protocol::{ErrorNotification, TurnError};
+        let notification = ServerNotification::Error(ErrorNotification {
+            error: TurnError {
+                message: "rate limited".to_owned(),
+                codex_error_info: None,
+                additional_details: None,
+            },
+            will_retry: true,
+            thread_id: "t".to_owned(),
+            turn_id: "t".to_owned(),
+        });
+        let events = map_server_notification(notification, "s");
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            UnifiedAgentEvent::Error {
+                session_id,
+                message,
+                recoverable,
+            } => {
+                assert_eq!(session_id, "s");
+                assert_eq!(message, "rate limited");
+                assert!(recoverable);
+            }
+            other => panic!("expected error event, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn error_notification_non_recoverable() {
+        use codex_app_server_protocol::{ErrorNotification, TurnError};
+        let notification = ServerNotification::Error(ErrorNotification {
+            error: TurnError {
+                message: "fatal error".to_owned(),
+                codex_error_info: None,
+                additional_details: None,
+            },
+            will_retry: false,
+            thread_id: "t".to_owned(),
+            turn_id: "t".to_owned(),
+        });
+        let events = map_server_notification(notification, "s");
+        match &events[0] {
+            UnifiedAgentEvent::Error { recoverable, .. } => assert!(!recoverable),
+            other => panic!("expected error event, got {other:?}"),
+        }
+    }
+
+    // ── ServerNotification: context usage ──
+
+    #[test]
+    fn token_usage_produces_context_usage_event() {
+        use codex_app_server_protocol::{
+            ThreadTokenUsage, ThreadTokenUsageUpdatedNotification, TokenUsageBreakdown,
+        };
+        let notification = ServerNotification::ThreadTokenUsageUpdated(
+            ThreadTokenUsageUpdatedNotification {
+                thread_id: "t".to_owned(),
+                turn_id: "t".to_owned(),
+                token_usage: ThreadTokenUsage {
+                    total: TokenUsageBreakdown {
+                        total_tokens: 5000,
+                        input_tokens: 4000,
+                        cached_input_tokens: 1000,
+                        output_tokens: 1000,
+                        reasoning_output_tokens: 0,
+                    },
+                    last: TokenUsageBreakdown {
+                        total_tokens: 100,
+                        input_tokens: 80,
+                        cached_input_tokens: 20,
+                        output_tokens: 20,
+                        reasoning_output_tokens: 0,
+                    },
+                    model_context_window: Some(128000),
+                },
+            },
+        );
+        let events = map_server_notification(notification, "s");
+        // Should produce ContextUsage + codex_token_usage progress
+        assert!(events.len() >= 1);
+        match &events[0] {
+            UnifiedAgentEvent::ContextUsage {
+                session_id,
+                used,
+                total,
+            } => {
+                assert_eq!(session_id, "s");
+                assert_eq!(*used, 5000);
+                assert_eq!(*total, 128000);
+            }
+            other => panic!("expected context usage event, got {other:?}"),
+        }
+    }
+
+    // ── ServerNotification: context compacted ──
+
+    #[test]
+    fn context_compacted_produces_event() {
+        use codex_app_server_protocol::ContextCompactedNotification;
+        let notification =
+            ServerNotification::ContextCompacted(ContextCompactedNotification {
+                thread_id: "t".to_owned(),
+                turn_id: "t".to_owned(),
+            });
+        let events = map_server_notification(notification, "s");
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            UnifiedAgentEvent::ContextCompacted { session_id, .. } => {
+                assert_eq!(session_id, "s");
+            }
+            other => panic!("expected context compacted, got {other:?}"),
+        }
+    }
+
+    // ── ServerRequest: dynamic tool call ──
+
+    #[test]
+    fn dynamic_tool_call_maps_to_permission() {
+        use codex_app_server_protocol::DynamicToolCallParams;
+        let request = ServerRequest::DynamicToolCall {
+            request_id: codex_app_server_protocol::RequestId::Integer(99),
+            params: DynamicToolCallParams {
+                thread_id: "t".to_owned(),
+                turn_id: "t".to_owned(),
+                call_id: "call-1".to_owned(),
+                namespace: None,
+                tool: "my_tool".to_owned(),
+                arguments: serde_json::Value::Null,
+            },
+        };
+        let events = map_server_request(request, "s");
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            UnifiedAgentEvent::PermissionRequest {
+                session_id,
+                request_id,
+                tool_name,
+                ..
+            } => {
+                assert_eq!(session_id, "s");
+                assert_eq!(request_id, "99");
+                assert_eq!(tool_name, "dynamic_tool");
+            }
+            other => panic!("expected permission request, got {other:?}"),
+        }
+    }
+
+    // ── thread_item_tool_call: simple variants ──
+
+    #[test]
+    fn tool_call_web_search() {
+        use codex_app_server_protocol::ThreadItem;
+        let item = ThreadItem::WebSearch {
+            id: "ws-1".to_owned(),
+            query: "rust async".to_owned(),
+            action: None,
+        };
+        let result = thread_item_tool_call(&item);
+        assert!(result.is_some());
+        let tc = result.unwrap();
+        assert_eq!(tc.name, "web_search");
+        assert_eq!(tc.id, "ws-1");
+    }
+
+    #[test]
+    fn tool_call_agent_message_returns_none() {
+        use codex_app_server_protocol::ThreadItem;
+        let item = ThreadItem::AgentMessage {
+            id: "msg".to_owned(),
+            text: "hello".to_owned(),
+            phase: None,
+            memory_citation: None,
+        };
+        assert!(thread_item_tool_call(&item).is_none());
+    }
+
+    #[test]
+    fn tool_call_plan_returns_none() {
+        use codex_app_server_protocol::ThreadItem;
+        let item = ThreadItem::Plan {
+            id: "plan-1".to_owned(),
+            text: "my plan".to_owned(),
+        };
+        assert!(thread_item_tool_call(&item).is_none());
+    }
+
+    #[test]
+    fn tool_call_reasoning_returns_none() {
+        use codex_app_server_protocol::ThreadItem;
+        let item = ThreadItem::Reasoning {
+            id: "r-1".to_owned(),
+            summary: vec![],
+            content: vec![],
+        };
+        assert!(thread_item_tool_call(&item).is_none());
+    }
+
+    // ── request_id_to_string ──
+
+    #[test]
+    fn request_id_string_passthrough() {
+        assert_eq!(
+            request_id_to_string(&codex_app_server_protocol::RequestId::String("abc".to_owned())),
+            "abc",
+        );
+    }
+
+    #[test]
+    fn request_id_integer_to_string() {
+        assert_eq!(
+            request_id_to_string(&codex_app_server_protocol::RequestId::Integer(42)),
+            "42",
+        );
     }
 }

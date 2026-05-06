@@ -26,6 +26,7 @@ fn test_config() -> ControlPlaneConfig {
         artifact_root_dir,
         auth_token: None,
         bootstrap_secret: None,
+        downloads_dir: None,
     }
 }
 

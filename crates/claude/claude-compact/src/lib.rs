@@ -126,7 +126,7 @@ pub(crate) fn estimate_single_message_tokens(msg: &Message) -> u64 {
 // ---------------------------------------------------------------------------
 
 pub use strategy::{
-    CompactOptions, CompactProgressEvent, CompactStrategy, CompactStrategyType,
+    CompactHooks, CompactOptions, CompactProgressEvent, CompactStrategy, CompactStrategyType,
     CompactTelemetryProvider, CompactionResult, FnSummaryProvider, PostCompactAttachmentProvider,
     PreservedSegment, RecompactionInfo, SessionStartHookProvider, SummaryProvider,
 };
@@ -136,9 +136,10 @@ pub use strategy::{
 // ---------------------------------------------------------------------------
 
 pub use engine::{
-    FullCompactStrategy, PartialCompactStrategy, annotate_boundary_with_preserved_segment,
-    build_post_compact_messages, compact_conversation, create_compact_boundary_message,
-    merge_hook_instructions, partial_compact_conversation,
+    CompactSessionState, FullCompactStrategy, PartialCompactStrategy,
+    annotate_boundary_with_preserved_segment, build_post_compact_messages,
+    compact_conversation, create_compact_boundary_message, merge_hook_instructions,
+    partial_compact_conversation,
 };
 
 // ---------------------------------------------------------------------------
@@ -210,6 +211,15 @@ pub use attachment::{
     POST_COMPACT_SKILLS_TOKEN_BUDGET, POST_COMPACT_TOKEN_BUDGET, create_file_attachment_message,
     create_plan_attachment_if_needed, create_post_compact_file_attachments,
     create_skill_attachment_if_needed,
+};
+
+// ---------------------------------------------------------------------------
+// Re-exports: post-compact
+// ---------------------------------------------------------------------------
+
+pub use post_compact::{
+    CompactWarningManager, CompactWarningState, CleanupCriteria, PostCompactResult,
+    run_post_compact_cleanup, re_read_recent_files,
 };
 
 // ---------------------------------------------------------------------------
