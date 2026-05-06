@@ -357,6 +357,7 @@ pub fn calculate_model_params(opts: GetModelParamsOptions) -> ModelParams {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use roo_types::model::{SupportsReasoningEffort, ReasoningEffortExtended};
     use serde_json::json;
 
     /// Helper: basic model with no special capabilities.

@@ -18,10 +18,13 @@ pub mod cost;
 pub mod error;
 pub mod fetcher;
 pub mod handler;
+pub mod image_generation;
 pub mod metrics;
 pub mod openai_compatible;
+pub mod protocol;
 pub mod single_completion;
 pub mod transform;
+pub mod versioned_settings;
 pub mod vertex_auth;
 
 // Re-export key types
@@ -37,3 +40,12 @@ pub use openai_compatible::{
     OpenAiCompatibleProvider,
     process_usage_metrics,
 };
+pub use image_generation::{
+    ImageGenerationResult,
+    ImageGenerationOptions,
+    ImagesApiOptions,
+    generate_image_with_provider,
+    generate_image_with_images_api,
+};
+
+pub use protocol::get_api_protocol;

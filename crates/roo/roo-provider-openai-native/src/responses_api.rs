@@ -1,4 +1,4 @@
-﻿//! Shared Responses API logic for OpenAI Native and Codex providers.
+//! Shared Responses API logic for OpenAI Native and Codex providers.
 //!
 //! This module contains the common functionality used by both
 //! [`crate::handler::OpenAiNativeHandler`] and [`crate::codex_handler::OpenAiCodexHandler`]:
@@ -549,6 +549,19 @@ pub fn parse_sse_event(data: &str, provider_name: &str) -> Result<Option<ApiStre
                 .unwrap_or("Response failed");
             Err(ProviderError::api_error(provider_name, msg))
         }
+
+        // Image generation events (silently consumed, matching TS behavior)
+        "response.image_gen_call.generating"
+        | "response.image_gen_call.in_progress"
+        | "response.image_gen_call.partial_image"
+        | "response.image_gen_call.completed" => Ok(None),
+
+        // Computer use events (silently consumed)
+        "response.computer_tool_call.output_item"
+        | "response.computer_tool_call.output_screenshot" => Ok(None),
+
+        // File search events (silently consumed)
+        "response.file_search_call.completed" => Ok(None),
 
         _ => Ok(None),
     }

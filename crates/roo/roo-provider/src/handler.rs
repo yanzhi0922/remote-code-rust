@@ -91,6 +91,23 @@ pub trait Provider: Send + Sync {
     /// Complete a simple prompt (non-streaming).
     async fn complete_prompt(&self, prompt: &str) -> Result<String>;
 
+    /// Generate an image using this provider.
+    ///
+    /// Default implementation returns an error. Providers that support image
+    /// generation (OpenRouter, Roo) should override this.
+    ///
+    /// Source: `src/api/providers/openrouter.ts` — `generateImage()`
+    async fn generate_image(
+        &self,
+        _prompt: &str,
+        _model: &str,
+        _input_image: Option<&str>,
+    ) -> Result<crate::image_generation::ImageGenerationResult> {
+        Err(ProviderError::Other(
+            "Image generation is not supported by this provider".to_string(),
+        ))
+    }
+
     /// Get the provider name.
     fn provider_name(&self) -> ProviderName;
 }

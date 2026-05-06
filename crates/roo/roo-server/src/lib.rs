@@ -53,6 +53,7 @@ pub mod message_enhancer;
 pub mod router;
 pub mod server;
 pub mod skills_message_handler;
+pub mod support_prompt;
 pub mod transport;
 pub mod webview_message_handler;
 

@@ -21,6 +21,7 @@ use roo_provider::{
     ApiStream, BaseProvider, CreateMessageMetadata, Provider,
     OpenAiCompatibleConfig, OpenAiCompatibleProvider,
     convert_tools_for_openai,
+    generate_image_with_provider, ImageGenerationResult, ImageGenerationOptions,
 };
 use roo_provider::error::{ProviderError, Result};
 use roo_provider::transform::caching::{apply_anthropic_caching, apply_gemini_caching};
@@ -191,6 +192,8 @@ impl OpenRouterHandler {
             request_timeout: config.request_timeout,
             reasoning_effort: None,
             streaming_enabled: None,
+            include_max_tokens: None,
+            extra_body_fields: None,
         };
         let inner = OpenAiCompatibleProvider::new(inner_config)?;
 
@@ -542,6 +545,28 @@ impl Provider for OpenRouterHandler {
 
     fn provider_name(&self) -> ProviderName {
         ProviderName::OpenRouter
+    }
+
+    /// Generate an image using OpenRouter's chat completions API with image modality.
+    ///
+    /// Source: `src/api/providers/openrouter.ts` — `generateImage()`
+    async fn generate_image(
+        &self,
+        prompt: &str,
+        model: &str,
+        input_image: Option<&str>,
+    ) -> Result<ImageGenerationResult> {
+        Ok(generate_image_with_provider(
+            &self.http_client,
+            &ImageGenerationOptions {
+                base_url: self.base_url.clone(),
+                auth_token: self.api_key.clone(),
+                model: model.to_string(),
+                prompt: prompt.to_string(),
+                input_image: input_image.map(|s| s.to_string()),
+            },
+        )
+        .await)
     }
 }
 
