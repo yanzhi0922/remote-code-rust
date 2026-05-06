@@ -93,6 +93,25 @@ pub struct TaskBudget {
     pub max_turns: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_total_tokens: Option<u64>,
+    /// Tokens already consumed by completed sub-agents.
+    /// When a sub-agent finishes, its `usage.output_tokens` are added here.
+    /// The remaining budget for the parent is `max_total_tokens - consumed_tokens`.
+    #[serde(default)]
+    pub consumed_tokens: u64,
+}
+
+impl TaskBudget {
+    /// Returns the remaining token budget, or `None` if no budget was set.
+    #[must_use]
+    pub fn remaining(&self) -> Option<u64> {
+        self.max_total_tokens
+            .map(|total| total.saturating_sub(self.consumed_tokens))
+    }
+
+    /// Record tokens consumed by a completed sub-agent.
+    pub fn record_sub_agent_usage(&mut self, tokens: u64) {
+        self.consumed_tokens = self.consumed_tokens.saturating_add(tokens);
+    }
 }
 
 /// Host-side context passed into a query run.
@@ -181,6 +200,11 @@ pub struct ToolRunResult {
     pub pre_messages: Vec<Message>,
     pub post_messages: Vec<Message>,
     pub permission_denial: Option<Value>,
+    /// Output tokens consumed by this tool invocation (e.g. sub-agent).
+    /// When set, the query engine records these against the task budget
+    /// so the parent's remaining budget is reduced accordingly.
+    #[serde(default)]
+    pub output_tokens_consumed: Option<u64>,
 }
 
 impl From<ToolResult> for ToolRunResult {
@@ -190,6 +214,7 @@ impl From<ToolResult> for ToolRunResult {
             pre_messages: Vec::new(),
             post_messages: Vec::new(),
             permission_denial: None,
+            output_tokens_consumed: None,
         }
     }
 }

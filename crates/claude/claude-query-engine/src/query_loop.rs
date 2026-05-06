@@ -1123,7 +1123,7 @@ fn provider_request_context(context: &ProcessUserInputContext) -> ProviderReques
                 .and_then(|budget| budget.max_total_tokens)
                 .map(|total| ProviderTaskBudget {
                     total,
-                    remaining: None,
+                    remaining: context.task_budget.as_ref().and_then(|b| b.remaining()),
                 }),
         );
     provider_context
@@ -1561,6 +1561,12 @@ async fn commit_tool_result(
         state.permission_denials.push(permission_denial);
     } else {
         record_permission_denial(state, tool_call, &tool_run.result);
+    }
+    // Record sub-agent token consumption against the task budget.
+    if let Some(tokens) = tool_run.output_tokens_consumed {
+        if let Some(ref mut budget) = context.task_budget {
+            budget.record_sub_agent_usage(tokens);
+        }
     }
     let _ = config
         .observer
