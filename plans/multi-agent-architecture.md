@@ -83,7 +83,7 @@ graph TB
 所有三个 Agent 共享同一个适配器实现：
 
 ```rust
-// crates/claude/claude-agent-protocol/src/adapters/in_process.rs
+// crates/claude/rc-agent-protocol/src/adapters/in_process.rs
 
 pub struct InProcessAdapter {
     pub(crate) info: AgentInfo,
@@ -126,20 +126,20 @@ impl InProcessAdapter {
 每个 Agent 类型是 `InProcessAdapter` 的类型别名：
 
 ```rust
-// crates/claude/claude-agent-protocol/src/adapters/remote_claude.rs
+// crates/claude/rc-agent-protocol/src/adapters/remote_claude.rs
 pub type RemoteClaudeAdapter = InProcessAdapter;
 
-// crates/claude/claude-agent-protocol/src/adapters/remote_roo.rs
+// crates/claude/rc-agent-protocol/src/adapters/remote_roo.rs
 pub type RemoteRooAdapter = InProcessAdapter;
 
-// crates/claude/claude-agent-protocol/src/adapters/remote_codex.rs
+// crates/claude/rc-agent-protocol/src/adapters/remote_codex.rs
 pub type RemoteCodexAdapter = InProcessAdapter;
 ```
 
 ### 2.3 AgentAdapter Trait
 
 ```rust
-// crates/claude/claude-agent-protocol/src/adapter.rs
+// crates/claude/rc-agent-protocol/src/adapter.rs
 
 #[async_trait]
 pub trait AgentAdapter: Send + Sync {
@@ -157,7 +157,7 @@ pub trait AgentAdapter: Send + Sync {
 ### 2.4 统一的 Agent 事件
 
 ```rust
-// crates/claude/claude-agent-protocol/src/events.rs
+// crates/claude/rc-agent-protocol/src/events.rs
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum UnifiedAgentEvent {
@@ -231,7 +231,7 @@ let adapter = RemoteClaudeAdapter::new_claude()
 ## 4. AgentRouter
 
 ```rust
-// crates/claude/claude-agent-protocol/src/router.rs
+// crates/claude/rc-agent-protocol/src/router.rs
 
 pub struct AgentRouter {
     adapters: HashMap<String, Box<dyn AgentAdapter>>,
@@ -385,7 +385,7 @@ async fn list_agents(state: State<'_, AppState>) -> Result<Vec<AgentInfoDto>, St
 ### 8.1 健康检查
 
 ```rust
-// crates/claude/claude-agent-protocol/src/health.rs
+// crates/claude/rc-agent-protocol/src/health.rs
 
 pub struct HealthChecker {
     // 健康状态追踪
@@ -400,7 +400,7 @@ impl HealthChecker {
 ### 8.2 重启策略
 
 ```rust
-// crates/claude/claude-agent-protocol/src/restart.rs
+// crates/claude/rc-agent-protocol/src/restart.rs
 
 pub struct RestartTracker {
     max_restarts: usize,
@@ -419,7 +419,7 @@ impl RestartTracker {
 
 ```
 crates/
-├── claude-agent-protocol/
+├── rc-agent-protocol/
 │   ├── Cargo.toml
 │   └── src/
 │       ├── lib.rs                    # 导出核心类型
@@ -458,7 +458,7 @@ apps/remote-code-gui/
 
 ### 10.1 单元测试
 
-- `claude-agent-protocol` crate 有 58 个测试
+- `rc-agent-protocol` crate 有 58 个测试
 - 测试适配器创建、回调注入、事件序列化等
 
 ### 10.2 集成测试
@@ -470,7 +470,7 @@ apps/remote-code-gui/
 ### 10.3 回归测试
 
 - 确保所有现有功能正常工作
-- 860+ 测试全部通过
+- 14,000+ 测试全部通过
 - Clippy 零警告
 
 ---

@@ -40,7 +40,7 @@ ZCode 是智谱 AI (Z.AI) 推出的 Agent-First 开发环境（ADE），其核�
 | **远程执行** | ✅ Runner + Control Plane | ✅ SSH + Docker | 🟢 已有优势 |
 | **MCP 支持** | ✅ stdio/HTTP/WS | ✅ 内置 + 自定义 | 🟢 已有优势 |
 | **Skills 系统** | ✅ SKILL.md + TOML | ✅ Markdown + YAML | 🟢 已有优势 |
-| **工具数量** | ✅ 65+ 内置工具 | ~20 工具 | 🟢 已有优势 |
+| **工具数量** | ✅ 62 内置工具 | ~20 工具 | 🟢 已有优势 |
 
 ---
 
@@ -409,7 +409,7 @@ crates/
 │   ├── src/loader.rs
 │   └── src/builtin/
 │
-└── claude-agent-protocol/    # UPGRADE: 增加 Specialized Agent 支持
+└── rc-agent-protocol/    # UPGRADE: 增加 Specialized Agent 支持
     ├── src/lib.rs
     ├── src/agent_adapter.rs
     ├── src/specialized.rs    # NEW
@@ -475,7 +475,7 @@ apps/remote-code-gui/src/components/
 2. **三引擎独立适配器** — Claude/Codex/Roo 三条独立 in-process 路径
 3. **26 Provider 后端** — 通过 Roo 适配器支持 26 个 Provider
 4. **分布式远程执行** — Runner + Control Plane 完整链路
-5. **65+ 内置工具** — 远超 ZCode 的工具数量
+5. **62 内置工具** — 远超 ZCode 的工具数量
 6. **Circuit Breaker + 故障转移** — 生产级可靠性
 7. **PWA 移动端** — Web 技术栈的移动端方案
 8. **Tauri 轻量桌面** — 比 Electron 更轻量、更安全

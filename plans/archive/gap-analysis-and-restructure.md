@@ -294,7 +294,7 @@ Phase 1: 完全重写的 crate
 
 Phase 2: 新建的 crate
 ├── claude-query-engine/  → 新建查询引擎
-├── claude-engine-events/ → 新建事件系统
+├── rc-engine-events/ → 新建事件系统
 ├── claude-transcript/    → 新建会话记录
 ├── claude-system-prompt/ → 新建 System Prompt
 ├── claude-compact/       → 新建上下文压缩
@@ -321,7 +321,7 @@ Phase 3: 重写的应用入口
 
 **P0（必须首先完成）**:
 1. `claude-core` 类型系统重写 → 所有其他 crate 依赖
-2. `claude-engine-events` 事件系统 → 查询引擎依赖
+2. `rc-engine-events` 事件系统 → 查询引擎依赖
 3. `claude-query-engine` 查询引擎 → 替代 conversation.rs
 4. `claude-provider` API 客户端重写 → 流式 + 缓存
 5. `claude-system-prompt` System Prompt → 对话质量依赖
