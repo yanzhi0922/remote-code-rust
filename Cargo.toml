@@ -148,7 +148,6 @@ members = [
 ]
 exclude = [
     "apps/remote-code-gui",
-    "apps/remote-code-mobile",
     "crates/roo",
 ]
 resolver = "2"

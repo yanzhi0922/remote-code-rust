@@ -7,11 +7,11 @@
 | 指标 | 数值 |
 |------|------|
 | 应用程序 | 5 个（CLI、GUI、Control Plane、Runner、Migrate） |
-| Workspace Crates | 154 个（Claude 40 + Codex 80 + Adapters 3 + Apps 5 + Roo 26） |
-| 内置工具 | 65+ |
-| 单元测试 | 880+ |
+| Workspace Crates | 154 个（Claude 41 + Codex 105 + Adapters 3 + Apps 5）+ Roo 67（独立） |
+| 内置工具 | 62 |
+| 单元测试 | 14,000+（Workspace 范围） |
 | Clippy 警告 | 0 |
-| `unsafe` 代码 | 禁止（`forbid`） |
+| `unsafe` 代码 | 警告（`warn`） |
 | Rust 版本 | 1.93 (Edition 2024) |
 | 许可证 | Proprietary |
 
@@ -20,7 +20,7 @@
 - 🦀 **Rust 核心引擎** — 内存安全、零成本抽象、高性能异步运行时（Tokio），GUI 前端使用 TypeScript + React 19
 - 🤖 **多 Provider 支持** — OpenAI、Anthropic、GLM/ZhipuAI、AWS Bedrock、Google Vertex AI
 - 🔄 **自动故障转移** — 多 Provider 健康追踪 + 熔断器 + 指数退避重试
-- 🔧 **65+ 内置工具** — 文件操作、代码搜索（Grep 14+ 参数）、Web 搜索、LSP、后台任务、代理系统
+- 🔧 **62 内置工具** — 文件操作、代码搜索（Grep 14+ 参数）、Web 搜索、LSP、后台任务、代理系统
 - 🧠 **智能上下文管理** — 自动 Token 估算、5 种压缩策略、Anthropic Prompt Cache 优化
 - 🛡️ **消息规范化管道** — 6 步 API 契约保证（角色交替、工具配对、思维块清理）
 - ⏱️ **流式看门狗** — 90s 可配置空闲超时，防止 SSE 连接挂起
@@ -41,7 +41,7 @@
 - 📡 **SSH 模式** — 远程主机安全执行
 - ⌨️ **Vim 模式** — Normal / Insert / Visual / Buffer 四种模式
 - 🖥️ **桌面 GUI** — Tauri v2 + React 19，内置 Provider/Model/Runtime 管理
-- 📱 **移动端** — Tauri v2 移动构建目标（iOS / Android），Capacitor 版已废弃
+- 📱 **移动端** — Tauri v2 移动构建目标（iOS / Android），Rust 原生后端 + React 前端
 - 🔐 **OAuth2 认证** — PKCE 流程 + 自动 Token 刷新
 - 📈 **遥测与分析** — Datadog / 自有端点 / 文件导出三种方式
 - 🎤 **语音输入** — Web Speech API + 音频级别实时反馈
@@ -58,11 +58,10 @@ remote-code-rust/
 │   └── roo-code/                  # Roo Code 源码（独立 Git 仓库）
 ├── apps/                          # 应用程序
 │   ├── remote-code-gui/           # 桌面 GUI（Tauri v2 + React 19）
-│   ├── remote-code-mobile/        # 移动端（已废弃，迁移至 Tauri v2 移动构建）
 │   ├── remote-code-control-plane/ # 控制平面
 │   ├── remote-code-runner/        # 远程 Runner
 │   └── remote-code-migrate/       # 数据迁移
-├── crates/                        # 库 Crates（Claude 40 + Codex 80 + Adapters 3）
+├── crates/                        # 库 Crates（Claude 41 + Codex 105 + Adapters 3）
 │   ├── adapters/                  # 三 Agent 独立适配器
 │   │   ├── rc-claude-adapter/     # Claude 适配器（QueryEngine）
 │   │   ├── rc-codex-adapter/      # Codex 适配器（AppServer + event_mapper）
@@ -74,7 +73,7 @@ remote-code-rust/
 │   │   ├── claude-provider/           # Provider 标准化与流式
 │   │   └── ...                    # 其他 Claude 核心 crate
 │   ├── codex/                     # Codex 核心 crate（core, exec, protocol 等）
-│   └── roo/                       # Roo 核心 crate（71 个，provider, task, tools 等）
+│   └── roo/                       # Roo 核心 crate（67 个，provider, task, tools 等）
 ├── plans/                         # 设计文档
 │   ├── multi-agent-architecture.md  # 多 Agent 架构设计
 │   ├── PROJECT_STATUS.md            # 项目状态
@@ -92,7 +91,7 @@ remote-code-rust/
 |------|------|
 | `remote-code` (claudecode) | Claude Code Rust 重写 — 交互式 / 无头 / 远程模式 |
 | `remote-code-gui` | 桌面 GUI（Tauri v2 + React 19） |
-| `remote-code-mobile` | 移动端（已废弃，迁移至 Tauri v2 移动构建） |
+| `remote-code-mobile` | 移动端（Tauri v2 iOS/Android，Rust 原生后端 + 响应式 React 前端） |
 | `remote-code-control-plane` | 控制平面服务器（HTTP + WebSocket） |
 | `remote-code-runner` | 远程 Runner 代理 |
 | `remote-code-migrate` | 数据迁移工具 |
@@ -104,7 +103,7 @@ remote-code-rust/
 | `claude-core` | 共享运行时类型、错误、会话模型、Hook 类型 |
 | `claude-config` | CLI 解析、环境变量、配置优先级、Provider 配置、遗留导入 |
 | `claude-provider` | Provider 标准化、请求构建、传输、重试、SSE 流、故障转移、成本追踪、消息规范化、流式看门狗、思维预算限制 |
-| `claude-tools` | 65+ 内置工具、工具注册、权限检查、BM25 搜索、延迟加载 |
+| `claude-tools` | 62 内置工具、工具注册、权限检查、BM25 搜索、延迟加载 |
 | `claude-permissions` | 5 种权限模式、审批请求、规则引擎、审计记录 |
 | `claude-session` | 会话持久化（SQLite + NDJSON）、索引、导出、恢复、重放 |
 | `claude-mcp` | MCP 客户端/服务器生命周期、JSON-RPC 传输、工具投影 |
@@ -158,7 +157,7 @@ Provider 响应 → 解析工具调用
 重复直到 Provider 发出纯文本响应（无工具调用）
 ```
 
-## 内置工具（65+）
+## 内置工具（62）
 
 ### 文件操作
 `read_file` · `write_file` · `edit_file` · `replace_in_file` · `list_directory`
@@ -182,7 +181,7 @@ Provider 响应 → 解析工具调用
 `memory_read` · `memory_write`
 
 ### 其他
-`ask_user` · `config_read` · `sleep` · `snip` · `skill_discover` · `tool_search` · `verify_plan` · `terminal_capture` · `notebook_edit` · `enter_plan_mode` · `exit_plan_mode` · `brief` · `review_artifact` · `send_user_file` · `discover_skills`
+`ask_user` · `config_read` · `sleep` · `snip` · `skill_discover` · `tool_search` · `verify_plan` · `terminal_capture` · `notebook_edit` · `enter_plan_mode` · `exit_plan_mode` · `brief` · `review_artifact` · `send_user_file` · `discover_skills` · `enter_worktree` · `exit_worktree` · `list_worktrees` · `ctx_inspect` · `schedule_cron` · `mcp_call` · `list_mcp_resources` · `read_mcp_resource` · `mcp_auth` · `voice_input` · `workflow` · `suggest_pr` · `synthetic_output` · `overflow_test` · `remote_trigger` · `tungsten` · `daemon` · `broadcast_message` · `list_peers`
 
 ## 快速开始
 
@@ -266,7 +265,7 @@ npm run tauri dev
 
 | 规则 | 级别 |
 |------|------|
-| `unsafe_code` | `forbid` — 完全禁止 |
+| `unsafe_code` | `warn` — 编译器警告 |
 | `dbg_macro` | `deny` — 禁止调试宏 |
 | `todo!` / `unimplemented!` | `deny` — 禁止未实现代码 |
 | `unwrap_used` | `warn` — 不建议直接 unwrap |
@@ -278,7 +277,7 @@ npm run tauri dev
 # 编译检查
 cargo check --workspace
 
-# 运行全部测试（880+）
+# 运行全部测试（14,000+）
 cargo test --workspace
 
 # Clippy 静态分析（0 警告）

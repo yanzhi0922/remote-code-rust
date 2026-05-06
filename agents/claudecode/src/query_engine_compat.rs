@@ -1839,7 +1839,22 @@ impl QueryObserver for CompatObserver {
             | QueryObserverEvent::MessagesAppended { .. }
             | QueryObserverEvent::QueryFailed { .. }
             | QueryObserverEvent::QueryStarted { .. }
-            | QueryObserverEvent::StreamingThinkingDelta { .. } => {}
+            | QueryObserverEvent::StreamingThinkingDelta { .. }
+            | QueryObserverEvent::QueryResult { .. }
+            | QueryObserverEvent::TokenBudgetContinuation { .. }
+            | QueryObserverEvent::ReactiveCompactApplied { .. }
+            | QueryObserverEvent::ToolUseSummary { .. }
+            | QueryObserverEvent::Progress { .. }
+            | QueryObserverEvent::Attachment { .. }
+            | QueryObserverEvent::ApiRetry { .. }
+            | QueryObserverEvent::StopHookBlocking { .. }
+            | QueryObserverEvent::StopHookPrevented { .. }
+            | QueryObserverEvent::MaxTokensEscalate { .. }
+            | QueryObserverEvent::MaxTokensRecovery { .. }
+            | QueryObserverEvent::ModelFallbackTriggered { .. }
+            | QueryObserverEvent::CollapseDrainRetry { .. }
+            | QueryObserverEvent::ReactiveCompactRetry { .. }
+            | QueryObserverEvent::MaxTokensRecoveryExhausted { .. } => {}
             QueryObserverEvent::QueryFinished { .. } => {}
             QueryObserverEvent::CheckpointCleared { .. } => {}
         }

@@ -24,6 +24,7 @@ The codex and roo-code directories are excluded from the main repo via `.gitigno
 - `apps/remote-code-runner`: remote runner process that connects workspaces to the control plane
 - `apps/remote-code-control-plane`: HTTP and WebSocket backend for sessions, approvals, artifacts, and runner coordination
 - `apps/remote-code-migrate`: explicit migration and import tool
+- `apps/remote-code-gui`: desktop GUI (Tauri v2 + React 19) — also serves as the Tauri v2 mobile target (iOS / Android); `mobile.rs` provides 20 native Tauri commands for haptics, biometrics, secure storage, file download/share, push notifications, and deep linking; `RemoteApp.tsx` provides the responsive remote-control UI reused in both desktop and mobile WebView contexts
 
 ### Library Crates
 
@@ -32,7 +33,7 @@ The codex and roo-code directories are excluded from the main repo via `.gitigno
 - `claude-protocol`: typed runtime events plus compatibility serializers for `stream-json`
 - `claude-provider`: provider normalization, request shaping, transport, retries, streaming (SSE), failover, cost tracking, context management, **message normalization** (role alternation, tool pairing, thinking cleanup), **stream idle watchdog**, **thinking budget clamping**
 - `claude-session`: session persistence (SQLite + NDJSON), indexes, exports, transcript appenders, resume loading, replay, memory system
-- `claude-tools`: typed tool registry, 65+ built-in tools, tool execution with permission checks, BM25 search engine, lazy loading, sandbox execution
+- `claude-tools`: typed tool registry, 62 built-in tools, tool execution with permission checks, BM25 search engine, lazy loading, sandbox execution
 - `claude-permissions`: permission policies (5 modes), approval requests, tool classification, rule engine with wildcard matching, audit records
 - `claude-mcp`: MCP client/server lifecycle, stdio/HTTP/WebSocket JSON-RPC transport, config discovery, tool projection
 - `claude-skills`: `SKILL.md` discovery, TOML frontmatter parsing, indexing, lock file support
@@ -95,6 +96,15 @@ The control plane owns:
 - approval workflows (create, list, show, respond)
 - artifact metadata, upload (base64), and download
 - timeline event fan-out over WebSocket
+
+### Mobile (Tauri v2)
+
+The mobile build target shares the same `remote-code-gui` Tauri v2 application with platform-specific compilation:
+
+- **Backend** (`mobile.rs`, ~400 lines): 20 Tauri commands gated behind `#[cfg(feature = "mobile")]` covering haptics, biometric auth, secure storage (JSON file), artifact download/share, push notifications (permission, display, FCM/APNs token registration), and deep linking (`remotecode://` scheme)
+- **Frontend** (`RemoteApp.tsx`, ~1,300 lines): the existing remote-control UI already has responsive layout (floating FABs, bottom sheets for mobile), making it directly reusable in the mobile WebView
+- **Config**: `Cargo.mobile.toml` overlays 6 Tauri mobile plugins; `capabilities/mobile.json` declares 15 platform permissions scoped to iOS/Android
+- **Status**: Rust backend is fully implemented; native `android/`/`ios/` projects have not been initialized yet (requires `tauri android init` / `tauri ios init`)
 
 ## Data Flow
 
@@ -256,7 +266,7 @@ When extended thinking is enabled, the `budget_tokens` parameter is clamped to p
 
 ## Tool System Architecture
 
-`claude-tools` defines typed capability interfaces with 65+ built-in tools.
+`claude-tools` defines typed capability interfaces with 62 built-in tools.
 
 ### Tool Categories
 

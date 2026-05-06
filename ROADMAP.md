@@ -60,7 +60,7 @@ Deliverables:
 - ✅ isolated plugin process model with JSON-RPC runtime adapters
 - ✅ multi-agent scheduler and mailbox model
 - ✅ hooks and context compaction
-- ✅ 65+ built-in tools (file ops, search, web, agent, tasks, memory, etc.)
+- ✅ 62 built-in tools (file ops, search, web, agent, tasks, memory, etc.)
 - ✅ BM25 tool search engine for intelligent tool discovery
 - ✅ lazy tool loading (eager/lazy split for context optimization)
 - ✅ cross-platform sandbox execution for bash commands
@@ -194,7 +194,7 @@ Deliverables:
 - ✅ Type aliases: `RemoteClaudeAdapter`, `RemoteRooAdapter`, `RemoteCodexAdapter`
 - ✅ Builder-pattern callback injection (`with_send_message`, `with_cancel`, `with_resolve_permission`)
 - ✅ Subprocess management code removed
-- ✅ 860+ tests passing
+- ✅ 860+ tests passing (historical; current: 14,000+)
 
 ## Phase 12: E2E Real Testing — ✅ COMPLETE
 
@@ -240,7 +240,7 @@ Deliverables:
 - ✅ New `rc-claude-adapter` (ClaudeInProcessAdapter = QueryEngine)
 - ✅ Roo adapter upgraded to native `AgentLoop` with 26 provider backends
 - ✅ All three adapters compile and pass tests
-- ✅ 860+ tests passing
+- ✅ 860+ tests passing (historical; current: 14,000+)
 
 ## Phase 16: GUI Redesign — ✅ COMPLETE
 
@@ -300,19 +300,24 @@ Deliverables:
 Exit criteria:
 
 - ✅ `cargo check --workspace` passes with 0 errors
-- ✅ 880+ tests passing (19 new: 11 normalize + 4 watchdog + 4 thinking budget)
+- ✅ 14,000+ tests passing (19 new: 11 normalize + 4 watchdog + 4 thinking budget)
 - ✅ Real API calls to MiniMax provider succeed (simple prompt + file read tool use)
 
-## Phase 19: Enhanced Remote Interaction — 📋 PLANNED
+## Phase 19: Enhanced Remote Interaction + Tauri v2 Mobile — 📋 PLANNED
 
-Objective: improve remote user experience with real-time features.
+Objective: improve remote user experience with real-time features and ship the Tauri v2 mobile app.
 
 Deliverables:
 
-- [ ] Terminal Stream — real-time terminal output viewing
-- [ ] File Preview — remote file content browsing
-- [ ] Diff Viewer — code change visualization
-- [ ] Push Notifications — mobile approval reminders
+- [x] Terminal Stream — local xterm.js terminal with GitHub Dark theme, auto-fit, ResizeObserver (TerminalPane)
+- [x] File Preview — multi-format preview: Markdown, HTML (sandboxed iframe), code, images (PreviewPane)
+- [x] Diff Viewer — unified + side-by-side modes, inline diff algorithm, collapse unchanged regions (DiffPane)
+- [ ] Remote Terminal Stream — real-time terminal output from remote sessions
+- [ ] Remote File Preview — remote file content browsing
+- [ ] Tauri v2 Mobile Init — `tauri android init` / `tauri ios init` to generate native projects
+- [ ] Mobile UI Adaptation — responsive layout tuning for touch/small screens, mobile-specific gestures
+- [ ] Push Notifications — mobile approval reminders via Tauri notification plugin (mobile.rs backend ready)
+- [ ] Mobile Deep Link — `remotecode://` URL scheme for pairing and session links (mobile.rs backend ready)
 
 ## Phase 20: Competitive Advantage — 📋 PLANNED
 
