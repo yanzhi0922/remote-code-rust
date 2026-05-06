@@ -4,8 +4,8 @@ use anyhow::Result;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use rand::RngCore;
-use rand::rngs::SmallRng;
 use rand::SeedableRng;
+use rand::rngs::SmallRng;
 use serde::Serialize;
 use std::ffi::OsStr;
 use std::ffi::c_void;
@@ -362,7 +362,7 @@ pub fn sid_bytes_to_psid(sid: &[u8]) -> Result<*mut c_void> {
 fn random_password() -> String {
     const CHARS: &[u8] =
         b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*()-_=+";
-    let mut rng = SmallRng::from_os_rng();
+    let mut rng = SmallRng::from_entropy();
     let mut buf = [0u8; 24];
     rng.fill_bytes(&mut buf);
     buf.iter()

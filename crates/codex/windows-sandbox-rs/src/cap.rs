@@ -1,8 +1,8 @@
 use anyhow::Context;
 use anyhow::Result;
 use rand::rngs::SmallRng;
-use rand::SeedableRng;
 use rand::RngCore;
+use rand::SeedableRng;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashMap;
@@ -29,7 +29,7 @@ pub fn cap_sid_file(codex_home: &Path) -> PathBuf {
 }
 
 fn make_random_cap_sid_string() -> String {
-    let mut rng = SmallRng::from_os_rng();
+    let mut rng = SmallRng::from_entropy();
     let a = rng.next_u32();
     let b = rng.next_u32();
     let c = rng.next_u32();
