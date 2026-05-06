@@ -5,8 +5,8 @@ use crate::winutil::format_last_error;
 use crate::winutil::to_wide;
 use anyhow::Result;
 use rand::Rng;
-use rand::rngs::SmallRng;
 use rand::SeedableRng;
+use rand::rngs::SmallRng;
 use std::path::Path;
 use std::ffi::c_void;
 use std::ptr;
@@ -88,7 +88,7 @@ struct PrivateDesktop {
 
 impl PrivateDesktop {
     fn create(logs_base_dir: Option<&Path>) -> Result<Self> {
-        let mut rng = SmallRng::from_os_rng();
+        let mut rng = SmallRng::from_entropy();
         let name = format!("CodexSandboxDesktop-{:x}", rng.r#gen::<u128>());
         let name_wide = to_wide(&name);
         let handle = unsafe {
