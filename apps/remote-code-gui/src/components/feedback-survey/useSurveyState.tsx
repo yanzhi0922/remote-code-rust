@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { TranscriptShareResponse } from './TranscriptSharePrompt';
 import type { FeedbackSurveyResponse, SurveyState } from './utils';
 
@@ -39,18 +39,26 @@ export function useSurveyState({
   const [lastResponse, setLastResponse] = useState<FeedbackSurveyResponse | null>(null);
   const appearanceId = useRef(crypto.randomUUID());
   const lastResponseRef = useRef<FeedbackSurveyResponse | null>(null);
+  const timersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
+
+  useEffect(() => {
+    const timers = timersRef.current;
+    return () => timers.forEach((t) => clearTimeout(t));
+  }, []);
 
   const showThanksThenClose = useCallback(() => {
     setState('thanks');
-    setTimeout(() => {
+    const t = setTimeout(() => {
       setState('closed');
       setLastResponse(null);
     }, hideThanksAfterMs);
+    timersRef.current.push(t);
   }, [hideThanksAfterMs]);
 
   const showSubmittedThenClose = useCallback(() => {
     setState('submitted');
-    setTimeout(() => setState('closed'), hideThanksAfterMs);
+    const t = setTimeout(() => setState('closed'), hideThanksAfterMs);
+    timersRef.current.push(t);
   }, [hideThanksAfterMs]);
 
   const open = useCallback(() => {

@@ -2,6 +2,7 @@ import { memo, useRef, useEffect } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import type { ConversationEntry } from '../lib/types';
 import { cn } from '../lib/utils';
+import { estimateEntryHeight } from '../lib/conversationUtils';
 import { MessageRow } from './MessageRow';
 import { MessageResponse } from './MessageResponse';
 import { UserTextMessage } from './messages/UserTextMessage';
@@ -28,20 +29,6 @@ export interface MessagesProps {
   onEdit?: (messageId: string) => void;
   /** 额外的 CSS 类名 */
   className?: string;
-}
-
-/** 估算消息行高度 */
-function estimateEntryHeight(entry: ConversationEntry): number {
-  switch (entry.role) {
-    case 'assistant':
-      return 320;
-    case 'tool':
-      return 180;
-    case 'user':
-      return 120;
-    default:
-      return 64;
-  }
 }
 
 /** 生成消息行唯一 key */
@@ -230,7 +217,7 @@ export const Messages = memo(function Messages({
 
         {/* 发送错误 */}
         {sendError && (
-          <div className="rounded-2xl border border-[#f3cbc6] bg-[#fff6f4] px-5 py-4 text-sm text-[#9c2f2f] dark:border-rose-800 dark:bg-rose-950/30 dark:text-rose-300">
+          <div role="alert" className="rounded-2xl border border-[#f3cbc6] bg-[#fff6f4] px-5 py-4 text-sm text-[#9c2f2f] dark:border-rose-800 dark:bg-rose-950/30 dark:text-rose-300">
             {sendError}
           </div>
         )}

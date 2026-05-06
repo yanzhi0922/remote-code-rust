@@ -18,6 +18,7 @@ const DEFAULT_COMMANDS: HelpCommand[] = [
   { name: '/help', description: '显示帮助信息', shortcut: 'F1', category: '通用' },
   { name: '/clear', description: '清空对话', category: '通用' },
   { name: '/compact', description: '压缩上下文', category: '通用' },
+  { name: '/goal', description: '管理线程目标 (set/clear/pause/resume)', category: '通用' },
   { name: '/model', description: '切换模型', category: '设置' },
   { name: '/config', description: '打开配置', category: '设置' },
   { name: '/status', description: '查看状态', category: '通用' },

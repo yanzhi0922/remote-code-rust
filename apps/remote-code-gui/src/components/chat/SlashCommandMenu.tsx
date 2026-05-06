@@ -84,6 +84,7 @@ export function SlashCommandMenu({ open, filter, commands, onSelect, onClose }: 
 export const DEFAULT_SLASH_COMMANDS: SlashCommand[] = [
   { id: 'compact', label: '/compact', description: '压缩对话上下文以释放 token 空间', icon: '📦' },
   { id: 'clear', label: '/clear', description: '清除当前对话历史', icon: '🧹' },
+  { id: 'goal', label: '/goal', description: '管理线程目标 (set/clear/pause/resume)', icon: '🎯' },
   { id: 'model', label: '/model', description: '切换模型', icon: '🤖' },
   { id: 'mode', label: '/mode', description: '切换权限模式', icon: '🛡️' },
   { id: 'help', label: '/help', description: '显示帮助信息', icon: '❓' },

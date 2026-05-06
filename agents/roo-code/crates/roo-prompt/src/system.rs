@@ -26,35 +26,50 @@ pub fn get_prompt_component(
         })
 }
 
-/// Gets the role definition for a mode, with optional prompt component override.
+/// Gets the mode selection (role definition + base instructions).
 ///
-/// Source: `src/shared/modes.ts` — `getRoleDefinition`
-fn get_role_definition(
+/// Source: `src/shared/modes.ts` — `getModeSelection`
+///
+/// TS has two paths:
+/// 1. Custom mode exists: use custom mode's values directly (ignore prompt component)
+/// 2. Built-in mode: merge prompt component with built-in mode as fallback
+struct ModeSelection {
+    role_definition: String,
+    base_instructions: String,
+}
+
+fn get_mode_selection(
     mode_slug: &str,
     custom_modes: Option<&[ModeConfig]>,
     prompt_component: Option<&PromptComponent>,
-) -> String {
-    let mode = get_mode_by_slug(mode_slug, custom_modes);
-    let base = mode
-        .as_ref()
-        .map(|m| m.role_definition.as_str())
-        .unwrap_or("");
-    prompt_component
-        .and_then(|pc| pc.role_definition.as_deref())
-        .unwrap_or(base)
-        .to_string()
-}
+) -> ModeSelection {
+    // Check for a custom mode first
+    let custom_mode = get_mode_by_slug(mode_slug, custom_modes);
 
-/// Gets the base instructions for a mode.
-///
-/// Source: `src/shared/modes.ts` — `getModeSelection`
-fn get_base_instructions(
-    _mode_slug: &str,
-    prompt_component: Option<&PromptComponent>,
-) -> Option<String> {
-    prompt_component
-        .and_then(|pc| pc.custom_instructions.as_deref())
-        .map(|s| s.to_string())
+    // If we have a custom mode, use it entirely (ignoring prompt component)
+    if let Some(custom) = custom_mode {
+        return ModeSelection {
+            role_definition: custom.role_definition.clone(),
+            base_instructions: custom.custom_instructions.clone().unwrap_or_default(),
+        };
+    }
+
+    // Otherwise, use built-in mode as base and merge with prompt component
+    let built_in = get_mode_by_slug(mode_slug, None);
+    let base_mode = built_in.as_ref();
+
+    ModeSelection {
+        role_definition: prompt_component
+            .and_then(|pc| pc.role_definition.as_deref())
+            .or_else(|| base_mode.map(|m| m.role_definition.as_str()))
+            .unwrap_or("")
+            .to_string(),
+        base_instructions: prompt_component
+            .and_then(|pc| pc.custom_instructions.as_deref())
+            .or_else(|| base_mode.and_then(|m| m.custom_instructions.as_deref()))
+            .unwrap_or("")
+            .to_string(),
+    }
 }
 
 /// Generate the system prompt.
@@ -76,7 +91,7 @@ pub fn generate_system_prompt(params: SystemPromptParams) -> String {
 
 {}{}
 
-\t{}
+\t\t{}
 
 {}
 
@@ -157,8 +172,9 @@ pub fn build_system_prompt(
                 .expect("code mode must exist")
         });
 
-    let role_definition = get_role_definition(mode, custom_modes, prompt_component.as_ref());
-    let base_instructions = get_base_instructions(mode, prompt_component.as_ref());
+    let selection = get_mode_selection(mode, custom_modes, prompt_component.as_ref());
+    let role_definition = selection.role_definition;
+    let base_instructions = Some(selection.base_instructions).filter(|s| !s.is_empty());
 
     // Get all modes for the modes section
     let all_modes = roo_types::mode::get_all_modes(custom_modes);

@@ -130,7 +130,7 @@ describe('ChatInput', () => {
 
     render(<ChatInput />);
 
-    fireEvent.click(screen.getByTitle('为下一次发送选择 Provider'));
+    fireEvent.click(screen.getByText('glm-coding'));
     fireEvent.click(screen.getByText('minimax'));
 
     await waitFor(() => {
@@ -144,7 +144,7 @@ describe('ChatInput', () => {
       expect(updateSettings).toHaveBeenCalledWith({ permission_mode: 'bypassPermissions' });
     });
 
-    const modelInput = screen.getByPlaceholderText('为下一次发送设置模型');
+    const modelInput = screen.getByPlaceholderText('设置模型');
     fireEvent.change(modelInput, { target: { value: 'glm-5v-turbo' } });
     fireEvent.blur(modelInput);
 

@@ -4,6 +4,7 @@ import { PermissionModal } from './components/layout/PermissionModal';
 import { ChatArea } from './components/chat/ChatArea';
 import { ChatInput } from './components/chat/ChatInput';
 import { ThemeProvider } from './components/design/ThemeProvider';
+import { AppErrorBoundary } from './components/layout/AppErrorBoundary';
 import { shouldUseRemoteMode } from './lib/runtime';
 import { isMobileSync, isTouchDevice } from './lib/mobile';
 import {
@@ -23,13 +24,13 @@ type MobileInitPhase = 'loading' | 'biometric' | 'ready' | 'error';
 
 function MobileInitScreen() {
   return (
-    <div className="flex h-screen w-screen items-center justify-center bg-rc-bg-secondary">
+    <div className="flex h-screen w-screen items-center justify-center bg-rc-bg-base">
       <div className="flex flex-col items-center gap-4">
         <div className="h-14 w-14 rounded-2xl bg-rc-bg-user-bubble flex items-center justify-center shadow-lg">
           <span className="text-rc-text-inverse text-xl font-bold">RC</span>
         </div>
         <div className="flex items-center gap-3 text-rc-text-secondary">
-          <div className="h-5 w-5 rounded-full border-2 border-rc-border-primary border-t-rc-text-primary animate-spin" />
+          <div role="status" className="h-5 w-5 rounded-full border-2 border-rc-border-primary border-t-rc-text-primary animate-spin" />
           <span className="text-sm font-medium">正在初始化...</span>
         </div>
       </div>
@@ -39,7 +40,7 @@ function MobileInitScreen() {
 
 function MobileBiometricScreen() {
   return (
-    <div className="flex h-screen w-screen items-center justify-center bg-rc-bg-secondary">
+    <div className="flex h-screen w-screen items-center justify-center bg-rc-bg-base">
       <div className="flex flex-col items-center gap-4">
         <div className="h-14 w-14 rounded-2xl bg-rc-bg-user-bubble flex items-center justify-center shadow-lg">
           <span className="text-2xl">🔒</span>
@@ -52,11 +53,11 @@ function MobileBiometricScreen() {
 
 function MobileErrorScreen({ error, onRetry }: { error: string; onRetry: () => void }) {
   return (
-    <div className="flex h-screen w-screen items-center justify-center bg-rc-bg-secondary px-6">
+    <div className="flex h-screen w-screen items-center justify-center bg-rc-bg-base px-6">
       <div className="max-w-sm text-center space-y-4">
         <div className="text-4xl">⚠️</div>
         <h1 className="text-lg font-bold text-rc-text-primary">初始化失败</h1>
-        <p className="text-sm text-rc-text-secondary break-all">{error}</p>
+        <p role="alert" className="text-sm text-rc-text-secondary break-all">{error}</p>
         <button
           onClick={onRetry}
           className="px-4 py-2 bg-rc-bg-user-bubble text-rc-text-inverse rounded-lg text-sm font-medium hover:opacity-90 transition-colors"
@@ -71,7 +72,7 @@ function MobileErrorScreen({ error, onRetry }: { error: string; onRetry: () => v
 function MobileNetworkBanner({ online, connectionType }: { online: boolean; connectionType: string }) {
   if (online) return null;
   return (
-    <div className="fixed top-0 left-0 right-0 z-50 bg-rc-accent-warning text-rc-text-inverse text-center py-1.5 text-xs font-medium shadow-md">
+    <div role="alert" className="fixed top-0 left-0 right-0 z-50 bg-rc-accent-warning text-rc-text-inverse text-center py-1.5 text-xs font-medium shadow-md">
       网络已断开 — {describeConnectionType(connectionType)}
     </div>
   );
@@ -109,11 +110,12 @@ function MobileGate({ children }: { children: React.ReactNode }) {
   }, []);
 
   useEffect(() => {
-    onNetworkChange((connected, type) => {
+    const unsubscribe = onNetworkChange((connected, type) => {
       setNetworkOnline(connected);
       setConnectionType(type);
       if (!connected) hapticWarning();
     });
+    return unsubscribe;
   }, []);
 
   useEffect(() => {
@@ -145,7 +147,7 @@ function LocalApp() {
 
   if (initError) {
     return (
-      <div className="flex h-screen w-screen items-center justify-center bg-rc-bg-secondary">
+      <div className="flex h-screen w-screen items-center justify-center bg-rc-bg-base">
         <div className="max-w-md text-center space-y-4">
           <div className="text-4xl">⚠️</div>
           <h1 className="text-lg font-bold text-rc-text-primary">初始化失败</h1>
@@ -163,7 +165,7 @@ function LocalApp() {
 
   if (!initialised) {
     return (
-      <div className="flex h-screen w-screen items-center justify-center bg-rc-bg-secondary">
+      <div className="flex h-screen w-screen items-center justify-center bg-rc-bg-base">
         <div className="flex items-center gap-3 text-rc-text-secondary">
           <div className="w-5 h-5 border-2 border-rc-border-primary border-t-rc-text-primary rounded-full animate-spin" />
           <span className="text-sm font-medium">正在初始化...</span>
@@ -191,23 +193,35 @@ function App() {
   if (shouldUseRemoteMode()) {
     if (mobile) {
       return (
-        <MobileGate>
-          <RemoteApp />
-        </MobileGate>
+        <AppErrorBoundary>
+          <MobileGate>
+            <RemoteApp />
+          </MobileGate>
+        </AppErrorBoundary>
       );
     }
-    return <RemoteApp />;
+    return (
+      <AppErrorBoundary>
+        <RemoteApp />
+      </AppErrorBoundary>
+    );
   }
 
   if (mobile) {
     return (
-      <MobileGate>
-        <LocalApp />
-      </MobileGate>
+      <AppErrorBoundary>
+        <MobileGate>
+          <LocalApp />
+        </MobileGate>
+      </AppErrorBoundary>
     );
   }
 
-  return <LocalApp />;
+  return (
+    <AppErrorBoundary>
+      <LocalApp />
+    </AppErrorBoundary>
+  );
 }
 
 export default App;

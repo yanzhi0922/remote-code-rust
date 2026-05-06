@@ -70,7 +70,7 @@ function RuntimeErrorFallback({
   };
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-[#f4efe4] px-6 py-10 text-slate-900">
+    <div role="alert" className="flex min-h-screen items-center justify-center bg-[#f4efe4] px-6 py-10 text-slate-900">
       <div className="w-full max-w-lg rounded-[32px] border border-[#ddd2c1] bg-white px-6 py-6 shadow-[0_24px_60px_rgba(52,45,34,0.1)]">
         <div className="text-xl font-semibold text-slate-900">{copy.errorBoundaryTitle}</div>
         <div className="mt-3 text-sm leading-6 text-slate-600">{copy.errorBoundaryDescription}</div>
@@ -98,7 +98,7 @@ function RuntimeErrorFallback({
             {copy.errorBoundaryDetails}
           </summary>
           <pre className="mt-3 overflow-x-auto whitespace-pre-wrap break-words text-xs leading-6 text-[#8d3f30]">
-            {error.stack ?? error.message}
+            {import.meta.env.PROD ? error.message : (error.stack ?? error.message)}
           </pre>
         </details>
       </div>

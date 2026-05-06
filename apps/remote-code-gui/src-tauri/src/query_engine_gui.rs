@@ -21,7 +21,7 @@ use claude_config::RuntimeConfig;
 use claude_core::{
     ConversationEntry, Message, SessionId, SubAgentCompletion, ToolCall, ToolResult, UsageSummary,
 };
-use claude_engine_events::EventStream;
+use rc_engine_events::EventStream;
 use claude_permissions::PermissionDecision;
 use claude_provider::ConversationBackend;
 use claude_provider::context::ContextWindowManager;

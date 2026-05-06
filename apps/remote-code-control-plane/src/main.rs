@@ -58,6 +58,7 @@ async fn main() -> Result<()> {
         profile_dir: cli.profile_dir,
         auth_token: cli.auth_token,
         bootstrap_secret: cli.bootstrap_secret,
+        downloads_dir: None,
     })?;
 
     match cli.command.unwrap_or(Command::Serve) {

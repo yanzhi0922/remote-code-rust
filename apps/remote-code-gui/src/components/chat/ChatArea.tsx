@@ -15,67 +15,23 @@ import type {
   ToolResultInfo,
 } from '../../lib/types';
 import { truncateMiddle } from '../../lib/utils';
+import {
+  formatToolInput,
+  summarizeToolInput,
+  extractThinkingBlocks,
+  estimateEntryHeight,
+} from '../../lib/conversationUtils';
 import { useAppStore } from '../../stores/useAppStore';
 import CollapsibleBlock from './CollapsibleBlock';
+import { GoalStatusBar } from './GoalStatusBar';
 
 const LazyMarkdownRenderer = lazy(() => import('./MarkdownRenderer'));
 const VIRTUALIZATION_THRESHOLD = 80;
 const VIRTUALIZATION_OVERSCAN = 10;
 
-function formatToolInput(input: unknown): string {
-  try {
-    const normalized = typeof input === 'string' ? JSON.parse(input) : input;
-    return JSON.stringify(normalized, null, 2);
-  } catch {
-    return typeof input === 'string' ? input : JSON.stringify(input, null, 2);
-  }
-}
-
-function summarizeToolInput(toolCall: ToolCallInfo): string {
-  try {
-    const normalized = typeof toolCall.input === 'string' ? JSON.parse(toolCall.input) : toolCall.input;
-    if (normalized && typeof normalized === 'object') {
-      const objectValue = normalized as Record<string, unknown>;
-      const preview =
-        objectValue.path ??
-        objectValue.file_path ??
-        objectValue.command ??
-        objectValue.query ??
-        objectValue.prompt ??
-        Object.values(objectValue)[0];
-      if (typeof preview === 'string') {
-        return truncateMiddle(preview, 84);
-      }
-    }
-  } catch {
-    // Ignore summary parsing failures.
-  }
-  return toolCall.name;
-}
-
 function summarizeToolOutput(text: string): string {
   const compact = text.replace(/\s+/g, ' ').trim();
   return compact ? truncateMiddle(compact, 84) : '展开查看完整输出';
-}
-
-function extractThinkingBlocks(entry: ConversationEntry): string[] {
-  return entry.content_blocks
-    .filter((block): block is Record<string, unknown> => !!block && typeof block === 'object')
-    .filter((block) => block.type === 'thinking' && typeof block.thinking === 'string')
-    .map((block) => block.thinking as string);
-}
-
-function estimateEntryHeight(entry: ConversationEntry): number {
-  switch (entry.role) {
-    case 'assistant':
-      return 320;
-    case 'tool':
-      return 180;
-    case 'user':
-      return 120;
-    default:
-      return 64;
-  }
 }
 
 function conversationRowKey(entry: ConversationEntry, index: number): string {
@@ -90,10 +46,15 @@ function EmptyState({
   description: string;
 }) {
   return (
-    <div className="flex h-full min-h-[320px] items-center justify-center px-6 py-10">
-      <div className="max-w-xl space-y-3 text-center">
-        <h2 className="text-xl font-semibold text-rc-text-primary">{title}</h2>
-        <p className="text-sm leading-6 text-rc-text-secondary">{description}</p>
+    <div className="flex h-full min-h-[400px] items-center justify-center px-6">
+      <div className="max-w-md text-center space-y-4">
+        <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-rc-accent-primary to-purple-500 shadow-lg">
+          <span className="text-2xl font-bold text-white">RC</span>
+        </div>
+        <div>
+          <h2 className="text-xl font-semibold text-rc-text-primary">{title}</h2>
+          <p className="mt-2 text-sm leading-6 text-rc-text-secondary">{description}</p>
+        </div>
       </div>
     </div>
   );
@@ -103,22 +64,22 @@ function AssistantToolCalls({ toolCalls }: { toolCalls: ToolCallInfo[] }) {
   if (toolCalls.length === 0) return null;
 
   return (
-    <div className="mt-4 space-y-2">
+    <div className="mt-5 space-y-3">
       {toolCalls.map((toolCall) => (
         <CollapsibleBlock
           key={toolCall.id}
           summary={
-            <div className="flex min-w-0 items-center gap-2">
-              <span className="text-xs font-semibold uppercase tracking-[0.16em] text-rc-accent-success">
+            <div className="flex min-w-0 items-center gap-2.5">
+              <span className="rounded-md bg-rc-accent-success-bg px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-rc-accent-success">
                 Tool
               </span>
-              <span className="font-medium text-rc-accent-success">{toolCall.name}</span>
-              <span className="truncate text-sm text-rc-text-secondary">{summarizeToolInput(toolCall)}</span>
+              <span className="font-mono text-sm font-medium text-rc-text-primary">{toolCall.name}</span>
+              <span className="truncate text-sm text-rc-text-tertiary">{summarizeToolInput(toolCall)}</span>
             </div>
           }
           iconColor="text-rc-accent-success"
         >
-          <pre className="overflow-x-auto whitespace-pre-wrap rounded-xl bg-rc-bg-secondary p-3 text-xs text-rc-text-primary">
+          <pre className="overflow-x-auto whitespace-pre-wrap rounded-xl bg-rc-bg-code p-4 text-xs font-mono leading-relaxed text-slate-300">
             {formatToolInput(toolCall.input)}
           </pre>
         </CollapsibleBlock>
@@ -133,25 +94,27 @@ function ToolMessage({ entry }: { entry: ConversationEntry }) {
   return (
     <CollapsibleBlock
       summary={
-        <div className="flex min-w-0 items-center gap-2">
-          <span className="text-xs font-semibold uppercase tracking-[0.16em] text-rc-text-tertiary">
-            {entry.is_error ? 'Tool Error' : 'Tool Result'}
-          </span>
+        <div className="flex min-w-0 items-center gap-2.5">
           <span
-            className={`rounded-full px-2 py-0.5 text-[11px] ${
-              entry.is_error ? 'bg-rc-accent-error-bg text-rc-accent-error' : 'bg-rc-bg-tertiary text-rc-text-secondary'
+            className={`rounded-md px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide ${
+              entry.is_error
+                ? 'bg-rc-accent-error-bg text-rc-accent-error'
+                : 'bg-rc-bg-active text-rc-text-tertiary'
             }`}
           >
-            {label}
+            {entry.is_error ? 'Error' : 'Result'}
           </span>
-          <span className="truncate text-sm text-rc-text-secondary">{summarizeToolOutput(entry.text)}</span>
+          <span className="font-mono text-sm font-medium text-rc-text-primary">{label}</span>
+          <span className="truncate text-sm text-rc-text-tertiary">{summarizeToolOutput(entry.text)}</span>
         </div>
       }
       iconColor={entry.is_error ? 'text-rc-accent-error' : 'text-rc-text-tertiary'}
     >
       <pre
-        className={`overflow-x-auto whitespace-pre-wrap rounded-xl p-3 text-xs leading-6 ${
-          entry.is_error ? 'bg-rc-accent-error-bg text-rc-accent-error' : 'bg-rc-bg-secondary text-rc-text-primary'
+        className={`overflow-x-auto whitespace-pre-wrap rounded-xl p-4 text-xs font-mono leading-relaxed ${
+          entry.is_error
+            ? 'bg-rc-accent-error-bg text-rc-accent-error'
+            : 'bg-rc-bg-code text-slate-300'
         }`}
       >
         {entry.text}
@@ -169,16 +132,18 @@ function AssistantThinking({ blocks }: { blocks: string[] }) {
         <CollapsibleBlock
           key={`${index}-${block.slice(0, 20)}`}
           summary={
-            <div className="flex min-w-0 items-center gap-2">
-              <span className="text-xs font-semibold uppercase tracking-[0.16em] text-rc-accent-warning">
+            <div className="flex min-w-0 items-center gap-2.5">
+              <span className="rounded-md bg-rc-accent-warning-bg px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-rc-accent-warning">
                 Thinking
               </span>
-              <span className="truncate text-sm text-rc-text-secondary">{summarizeToolOutput(block)}</span>
+              <span className="truncate text-sm text-rc-text-tertiary">{summarizeToolOutput(block)}</span>
             </div>
           }
           iconColor="text-rc-accent-warning"
         >
-          <div className="whitespace-pre-wrap text-sm leading-7 text-rc-text-primary">{block}</div>
+          <div className="rounded-xl bg-rc-bg-secondary p-4 text-sm leading-7 text-rc-text-secondary">
+            {block}
+          </div>
         </CollapsibleBlock>
       ))}
     </div>
@@ -189,21 +154,26 @@ function AssistantMessage({ entry }: { entry: ConversationEntry }) {
   const thinkingBlocks = extractThinkingBlocks(entry);
 
   return (
-    <div className="rounded-[24px] border border-rc-border-primary bg-rc-bg-assistant-card px-5 py-4 shadow-md">
-      <div className="mb-3 text-xs font-semibold uppercase tracking-[0.22em] text-rc-text-tertiary">
-        Assistant
+    <div className="rounded-2xl border border-rc-border-primary bg-rc-bg-assistant p-6 shadow-sm">
+      <div className="mb-4 flex items-center gap-2">
+        <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-gradient-to-br from-rc-accent-primary to-purple-500">
+          <span className="text-white text-xs font-bold">A</span>
+        </div>
+        <span className="text-xs font-semibold uppercase tracking-wider text-rc-text-tertiary">
+          Assistant
+        </span>
       </div>
 
       <AssistantThinking blocks={thinkingBlocks} />
 
       {entry.text ? (
-        <div className="prose prose-slate max-w-none">
-          <Suspense fallback={<div className="text-sm text-rc-text-secondary">正在渲染回复…</div>}>
+        <div className="prose prose-slate max-w-none prose-p:leading-relaxed prose-code:rounded prose-code:bg-rc-bg-code prose-code:px-1.5 prose-code:py-0.5 prose-code:text-sm">
+          <Suspense fallback={<div className="space-y-2"><div className="h-4 w-3/4 animate-pulse rounded bg-rc-bg-code" /><div className="h-4 w-1/2 animate-pulse rounded bg-rc-bg-code" /></div>}>
             <LazyMarkdownRenderer content={entry.text} />
           </Suspense>
         </div>
       ) : (
-        <div className="text-sm text-rc-text-secondary">模型请求了工具调用。</div>
+        <div className="text-sm text-rc-text-tertiary">模型请求了工具调用。</div>
       )}
 
       <AssistantToolCalls toolCalls={entry.tool_calls} />
@@ -222,7 +192,7 @@ const MessageCard = memo(
     if (entry.role === 'user') {
       return (
         <div className="flex justify-end">
-          <div className="max-w-3xl rounded-[24px] bg-rc-bg-user-bubble px-5 py-4 text-[15px] leading-7 text-rc-text-inverse shadow-lg">
+          <div className="max-w-3xl rounded-2xl bg-gradient-to-br from-rc-accent-primary to-rc-accent-primary-hover px-5 py-4 text-[15px] leading-7 text-white shadow-lg">
             <div className="whitespace-pre-wrap break-words">{entry.text}</div>
           </div>
         </div>
@@ -250,10 +220,12 @@ function StatusCards({
   return (
     <>
       {sending && (
-        <div className="rounded-2xl border border-rc-border-primary bg-rc-bg-assistant-card px-5 py-4 text-sm text-rc-text-secondary shadow-md">
+        <div role="status" className="rounded-2xl border border-rc-border-primary bg-rc-bg-assistant px-5 py-4 text-sm text-rc-text-secondary shadow-sm">
           <div className="flex items-center gap-3">
-            <div className="h-4 w-4 animate-spin rounded-full border-2 border-rc-border-primary border-t-rc-text-primary" />
-            <span>正在处理当前请求…</span>
+            <div className="flex h-5 w-5 items-center justify-center">
+              <div className="h-5 w-5 animate-spin rounded-full border-2 border-rc-border-primary border-t-rc-accent-primary" />
+            </div>
+            <span className="font-medium">正在处理当前请求…</span>
           </div>
 
           {compactProgress.length > 0 && (
@@ -261,11 +233,11 @@ function StatusCards({
               {compactProgress.map((progress, index) => (
                 <div
                   key={`${progress.tool_name}-${progress.tool_call_id}-${index}`}
-                  className="rounded-xl bg-rc-bg-secondary px-3 py-2 text-xs text-rc-text-secondary"
+                  className="flex items-center gap-2 rounded-lg bg-rc-bg-secondary px-3 py-2 text-xs"
                 >
-                  <span className="font-medium text-rc-text-primary">{progress.tool_name || 'tool'}</span>
-                  <span className="mx-2 text-rc-text-tertiary">·</span>
-                  <span>{truncateMiddle(progress.active_form ?? progress.message, 120)}</span>
+                  <span className="font-mono font-medium text-rc-text-primary">{progress.tool_name || 'tool'}</span>
+                  <span className="text-rc-text-tertiary">·</span>
+                  <span className="truncate text-rc-text-secondary">{truncateMiddle(progress.active_form ?? progress.message, 120)}</span>
                 </div>
               ))}
             </div>
@@ -276,13 +248,15 @@ function StatusCards({
               {compactResults.map((result, index) => (
                 <div
                   key={`${result.tool_name}-${result.tool_call_id}-${index}`}
-                  className={`rounded-xl px-3 py-2 text-xs ${
-                    result.is_error ? 'bg-rc-accent-error-bg text-rc-accent-error' : 'bg-rc-accent-success-bg text-rc-accent-success'
+                  className={`flex items-center gap-2 rounded-lg px-3 py-2 text-xs ${
+                    result.is_error
+                      ? 'bg-rc-accent-error-bg text-rc-accent-error'
+                      : 'bg-rc-accent-success-bg text-rc-accent-success'
                   }`}
                 >
-                  <span className="font-medium">{result.tool_name}</span>
-                  <span className="mx-2 opacity-60">·</span>
-                  <span>{truncateMiddle(result.output, 110)}</span>
+                  <span className="font-mono font-medium">{result.tool_name}</span>
+                  <span className="opacity-60">·</span>
+                  <span className="truncate">{truncateMiddle(result.output, 110)}</span>
                 </div>
               ))}
             </div>
@@ -291,7 +265,7 @@ function StatusCards({
       )}
 
       {sendError && (
-        <div className="rounded-2xl border border-rc-accent-error bg-rc-accent-error-bg px-5 py-4 text-sm text-rc-accent-error">
+        <div role="alert" className="rounded-2xl border border-rc-accent-error-border bg-rc-accent-error-bg px-5 py-4 text-sm text-rc-accent-error">
           {sendError}
         </div>
       )}
@@ -327,8 +301,11 @@ function ConversationTimeline({
   });
 
   return (
-    <div ref={scrollContainerRef} className="flex-1 min-h-0 overflow-y-auto bg-rc-bg-chat px-4 py-5 sm:px-6">
-      <div className="mx-auto flex w-full max-w-5xl flex-col gap-4">
+    <div
+      ref={scrollContainerRef}
+      className="flex-1 min-h-0 overflow-y-auto bg-rc-bg-chat px-6 py-6"
+    >
+      <div className="mx-auto flex w-full max-w-chat flex-col gap-5">
         {shouldVirtualize ? (
           <div className="relative w-full" style={{ height: `${rowVirtualizer.getTotalSize()}px` }}>
             {rowVirtualizer.getVirtualItems().map((virtualRow) => {
@@ -338,17 +315,21 @@ function ConversationTimeline({
                   key={virtualRow.key}
                   data-index={virtualRow.index}
                   ref={rowVirtualizer.measureElement}
-                  className="absolute left-0 top-0 w-full pb-4"
+                  className="absolute left-0 top-0 w-full"
                   style={{ transform: `translateY(${virtualRow.start}px)` }}
                 >
-                  <MessageCard entry={entry} />
+                  <div className="pb-5">
+                    <MessageCard entry={entry} />
+                  </div>
                 </div>
               );
             })}
           </div>
         ) : (
           conversation.map((entry, index) => (
-            <MessageCard key={conversationRowKey(entry, index)} entry={entry} />
+            <div key={conversationRowKey(entry, index)} className="pb-5">
+              <MessageCard entry={entry} />
+            </div>
           ))
         )}
 
@@ -413,6 +394,7 @@ export function ChatArea() {
 
   return (
     <div className="flex h-full min-h-0 flex-1 flex-col bg-rc-bg-chat">
+      <GoalStatusBar />
       <ConversationTimeline
         conversation={conversation}
         sending={sending}

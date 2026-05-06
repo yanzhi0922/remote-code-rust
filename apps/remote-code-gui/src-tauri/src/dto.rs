@@ -792,6 +792,7 @@ pub(crate) struct CodexThreadLoadedListRequest {
 pub(crate) struct CodexThreadGoalRequest {
     #[serde(default)]
     pub(crate) session_id: Option<String>,
+    #[serde(default)]
     pub(crate) thread_id: String,
 }
 
@@ -800,8 +801,12 @@ pub(crate) struct CodexThreadGoalRequest {
 pub(crate) struct CodexThreadGoalSetUiRequest {
     #[serde(default)]
     pub(crate) session_id: Option<String>,
+    #[serde(default)]
     pub(crate) thread_id: String,
+    #[serde(default)]
     pub(crate) text: String,
+    pub(crate) status: Option<String>,
+    pub(crate) token_budget: Option<i64>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -931,33 +936,6 @@ pub(crate) struct CodexExecResizeRequest {
     pub(crate) process_id: String,
     pub(crate) rows: u16,
     pub(crate) cols: u16,
-}
-
-#[allow(dead_code)]
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct CodexExecAgentRequest {
-    pub(crate) prompt: String,
-    #[serde(default)]
-    pub(crate) json: bool,
-    #[serde(default)]
-    pub(crate) args: Vec<String>,
-    #[serde(default)]
-    pub(crate) cwd: Option<String>,
-    #[serde(default)]
-    pub(crate) env: BTreeMap<String, String>,
-    #[serde(default)]
-    pub(crate) timeout_ms: Option<u64>,
-}
-
-#[allow(dead_code)]
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct CodexExecAgentResponse {
-    pub(crate) exit_code: Option<i32>,
-    pub(crate) stdout: String,
-    pub(crate) stderr: String,
-    pub(crate) codex_home: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
