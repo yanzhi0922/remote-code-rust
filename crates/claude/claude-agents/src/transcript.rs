@@ -245,10 +245,10 @@ pub fn persist_transcript_from_result(
     }
 
     // Include the final output as an assistant message if available.
-    if let Some(output) = &result.output {
-        if !output.is_empty() {
-            messages.push(TranscriptMessage::assistant(output));
-        }
+    if let Some(output) = &result.output
+        && !output.is_empty()
+    {
+        messages.push(TranscriptMessage::assistant(output));
     }
 
     // Add a status summary as a system message.

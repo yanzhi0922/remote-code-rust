@@ -3,7 +3,7 @@
 //! In-process adapter for the Claude agent.
 //!
 //! [`ClaudeInProcessAdapter`] wraps the [`QueryEngine`](claude_query_engine::QueryEngine)
-//! into a unified [`AgentAdapter`](claude_agent_protocol::adapter::AgentAdapter) interface,
+//! into a unified [`AgentAdapter`](rc_agent_protocol::adapter::AgentAdapter) interface,
 //! consistent with [`CodexInProcessAdapter`](rc_codex_adapter::CodexInProcessAdapter)
 //! and [`RooInProcessAdapter`](rc_roo_adapter::RooInProcessAdapter).
 //!
@@ -42,7 +42,7 @@
 
 mod event_mapper;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use futures::FutureExt;
@@ -55,13 +55,14 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 use uuid::Uuid;
 
-use claude_agent_protocol::adapter::AgentAdapter;
-use claude_agent_protocol::events::UnifiedAgentEvent;
-use claude_agent_protocol::permission::PermissionDecision as ProtocolPermissionDecision;
-use claude_agent_protocol::types::{AgentCapability, AgentConfig, AgentInfo, AgentStatus, AgentType};
+use rc_agent_protocol::adapter::AgentAdapter;
+use rc_agent_protocol::error::AdapterError;
+use rc_agent_protocol::events::UnifiedAgentEvent;
+use rc_agent_protocol::permission::PermissionDecision as ProtocolPermissionDecision;
+use rc_agent_protocol::types::{AgentConfig, AgentInfo, AgentStatus, AgentType};
 use claude_config::RuntimeConfig;
 use claude_core::{ConversationEntry, Message, SessionId, SubAgentCompletion, ToolResult};
-use claude_engine_events::EventStream;
+use rc_engine_events::EventStream;
 use claude_permissions::{
     PermissionBroker, PermissionDecision as PermissionsPermissionDecision,
     PermissionRequest as PermissionsPermissionRequest,
@@ -236,6 +237,7 @@ impl ToolRunner for AdapterToolRunner {
         tool_call: &claude_core::ToolCall,
         _context: &ProcessUserInputContext,
     ) -> Result<ToolRunResult> {
+        debug!(tool = %tool_call.name, "Executing tool");
         // 1. Validate tool spec.
         let _spec = runtime_provider_tool_spec(&tool_call.name)
             .await
@@ -440,6 +442,7 @@ impl AdapterQueryObserver {
 #[async_trait]
 impl QueryObserver for AdapterQueryObserver {
     async fn on_event(&self, event: QueryObserverEvent) -> Result<()> {
+        debug!("Observer event: {:?}", std::mem::discriminant(&event));
         // 1. Persist to SessionStore (matching GuiQueryObserver behavior).
         match &event {
             QueryObserverEvent::AssistantMessageCommitted {
@@ -578,10 +581,7 @@ impl ClaudeInProcessAdapter {
         runtime_config: RuntimeConfig,
         session_store: Arc<SessionStore>,
     ) -> Self {
-        let mut caps = HashSet::new();
-        caps.insert(AgentCapability::Streaming);
-        caps.insert(AgentCapability::ToolUse);
-        caps.insert(AgentCapability::Permissions);
+        let caps = rc_agent_protocol::util::standard_capabilities(&[]);
 
         let session_id = runtime_config.session_id;
 
@@ -655,7 +655,7 @@ impl AgentAdapter for ClaudeInProcessAdapter {
 
         // 1. Get or create provider client.
         let provider_client = self.provider_client.clone()
-            .ok_or_else(|| anyhow!("adapter not started — call start() first"))?;
+            .ok_or_else(|| AdapterError::NotStarted)?;
 
         // 2. Build provider config and create backend.
         let provider_config = self.runtime_config.provider.clone();
@@ -795,21 +795,16 @@ impl AgentAdapter for ClaudeInProcessAdapter {
             // Wrap with AssertUnwindSafe so we can catch panics inside the async block.
             let result = std::panic::AssertUnwindSafe(fut).catch_unwind().await;
             if let Err(panic_payload) = result {
-                let msg = if let Some(s) = panic_payload.downcast_ref::<&str>() {
-                    s.to_string()
-                } else if let Some(s) = panic_payload.downcast_ref::<String>() {
-                    s.clone()
-                } else {
-                    "internal query engine panic".to_owned()
-                };
-                tracing::error!("Query engine task panicked: {msg}");
-                let _ = event_tx_for_completion
-                    .send(UnifiedAgentEvent::Error {
-                        session_id: session_id_for_panic,
-                        message: format!("internal error: {msg}"),
-                        recoverable: false,
-                    })
-                    .await;
+                let event = rc_agent_protocol::util::panic_to_error_event(
+                    &session_id_for_panic,
+                    "Query engine task panicked",
+                    panic_payload,
+                );
+                tracing::error!("{}", match &event {
+                    UnifiedAgentEvent::Error { message, .. } => message.clone(),
+                    _ => unreachable!(),
+                });
+                let _ = event_tx_for_completion.send(event).await;
             }
         });
 
@@ -876,7 +871,7 @@ impl AgentAdapter for ClaudeInProcessAdapter {
     fn is_alive(&self) -> bool {
         self.worker_handle
             .as_ref()
-            .map_or(false, |h| !h.is_finished())
+            .is_some_and(|h| !h.is_finished())
     }
 
     fn info(&self) -> &AgentInfo {

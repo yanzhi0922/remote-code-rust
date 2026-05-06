@@ -646,11 +646,11 @@ impl AgentScheduler {
 
         while let Some(parent_id) = queue.pop_front() {
             for task in self.tasks.values() {
-                if task.parent_task_id == Some(parent_id) {
-                    if !to_cancel.contains(&task.id) {
-                        to_cancel.push(task.id);
-                        queue.push_back(task.id);
-                    }
+                if task.parent_task_id == Some(parent_id)
+                    && !to_cancel.contains(&task.id)
+                {
+                    to_cancel.push(task.id);
+                    queue.push_back(task.id);
                 }
             }
         }
@@ -694,7 +694,7 @@ impl AgentScheduler {
         let (owner, ownership_paths, required_labels, parent_title) = {
             let parent = self.tasks.get(&parent_task_id)?;
             (
-                parent.owner.clone(),
+                parent.owner,
                 parent.ownership_paths.clone(),
                 parent.required_labels.clone(),
                 parent.title.chars().take(60).collect::<String>(),
@@ -726,7 +726,7 @@ impl AgentScheduler {
             "child_task_spawned",
             "scheduler",
             Some(child_id),
-            self.tasks.get(&parent_task_id).map(|p| p.owner.clone()).unwrap_or_default(),
+            self.tasks.get(&parent_task_id).map(|p| p.owner).unwrap_or_default(),
             format!(
                 "spawned child of task {}",
                 parent_title

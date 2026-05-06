@@ -41,6 +41,13 @@ pub(crate) fn event_kind(detail: &TimelineEventDetail) -> TimelineEventKind {
         TimelineEventDetail::DaemonPresenceChanged { .. } => {
             TimelineEventKind::DaemonPresenceChanged
         }
+        TimelineEventDetail::SubtaskStarted { .. } => TimelineEventKind::SubtaskStarted,
+        TimelineEventDetail::SubtaskProgress { .. } => TimelineEventKind::SubtaskProgress,
+        TimelineEventDetail::SubtaskCompleted { .. } => TimelineEventKind::SubtaskCompleted,
+        TimelineEventDetail::BatchProgress { .. } => TimelineEventKind::BatchProgress,
+        TimelineEventDetail::ContextUsage { .. } => TimelineEventKind::ContextUsage,
+        TimelineEventDetail::ContextOverflow { .. } => TimelineEventKind::ContextOverflow,
+        TimelineEventDetail::ContextCompacted { .. } => TimelineEventKind::ContextCompacted,
     }
 }
 
@@ -61,6 +68,13 @@ pub(crate) fn event_kind_name(kind: TimelineEventKind) -> &'static str {
         TimelineEventKind::ArtifactManifest => "artifact_manifest",
         TimelineEventKind::RuntimeError => "runtime_error",
         TimelineEventKind::DaemonPresenceChanged => "daemon_presence_changed",
+        TimelineEventKind::SubtaskStarted => "subtask_started",
+        TimelineEventKind::SubtaskProgress => "subtask_progress",
+        TimelineEventKind::SubtaskCompleted => "subtask_completed",
+        TimelineEventKind::BatchProgress => "batch_progress",
+        TimelineEventKind::ContextUsage => "context_usage",
+        TimelineEventKind::ContextOverflow => "context_overflow",
+        TimelineEventKind::ContextCompacted => "context_compacted",
     }
 }
 

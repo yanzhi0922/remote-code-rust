@@ -45,6 +45,65 @@ const MAX_PTL_RETRIES: u32 = 3;
 /// Marker inserted when truncating for a PTL retry.
 const PTL_RETRY_MARKER: &str = "[earlier conversation truncated for compaction retry]";
 
+/// Maximum consecutive auto-compact failures before the circuit breaker trips.
+/// Mirrors `MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES` from the TS reference.
+const MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES: usize = 3;
+
+// ---------------------------------------------------------------------------
+// Session-level compact state (circuit breaker)
+// ---------------------------------------------------------------------------
+
+/// Mutable session state tracked across compaction attempts.
+///
+/// After each failed compaction, `consecutive_compact_failures` is incremented.
+/// When it reaches [`MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES`], auto-compact is
+/// disabled for the rest of the session (`auto_compact_disabled` is set to
+/// `true`).  The counter is reset to 0 on any successful compaction.
+///
+/// Mirrors the circuit breaker pattern from the TS reference.
+#[derive(Debug, Clone)]
+pub struct CompactSessionState {
+    /// Number of consecutive auto-compact failures.
+    pub consecutive_compact_failures: usize,
+    /// Whether auto-compact has been permanently disabled for this session.
+    pub auto_compact_disabled: bool,
+}
+
+impl Default for CompactSessionState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl CompactSessionState {
+    /// Create a new session state with no failures.
+    pub fn new() -> Self {
+        Self {
+            consecutive_compact_failures: 0,
+            auto_compact_disabled: false,
+        }
+    }
+
+    /// Record a successful compaction — resets the failure counter.
+    pub fn record_success(&mut self) {
+        self.consecutive_compact_failures = 0;
+    }
+
+    /// Record a failed compaction — increments the counter and trips the
+    /// circuit breaker if the threshold is reached.
+    pub fn record_failure(&mut self) {
+        self.consecutive_compact_failures += 1;
+        if self.consecutive_compact_failures >= MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES {
+            self.auto_compact_disabled = true;
+        }
+    }
+
+    /// Whether auto-compact should be allowed, considering the circuit breaker.
+    pub fn is_auto_compact_allowed(&self) -> bool {
+        !self.auto_compact_disabled
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Full compact strategy
 // ---------------------------------------------------------------------------
@@ -129,6 +188,42 @@ pub async fn compact_conversation(
 ) -> Result<CompactionResult, anyhow::Error> {
     if messages.is_empty() {
         return Err(anyhow::anyhow!(ERROR_MESSAGE_NOT_ENOUGH_MESSAGES));
+    }
+
+    // Feature flag: DISABLE_COMPACT disables all compaction (manual and auto).
+    if std::env::var("DISABLE_COMPACT")
+        .ok()
+        .as_deref()
+        .map_or(false, is_env_truthy)
+    {
+        return Err(anyhow::anyhow!(
+            "Compaction is disabled by DISABLE_COMPACT environment variable"
+        ));
+    }
+
+    // Feature flag: DISABLE_AUTO_COMPACT disables automatic compaction only.
+    if options.is_auto_compact
+        && std::env::var("DISABLE_AUTO_COMPACT")
+            .ok()
+            .as_deref()
+            .map_or(false, is_env_truthy)
+    {
+        return Err(anyhow::anyhow!(
+            "Auto-compaction is disabled by DISABLE_AUTO_COMPACT environment variable"
+        ));
+    }
+
+    // Runtime config / env var check for auto-compact enabled.
+    // CLAUDE_CODE_AUTO_COMPACT defaults to "true"; set to "false" to disable.
+    if options.is_auto_compact && !is_auto_compact_runtime_enabled() {
+        return Err(anyhow::anyhow!(
+            "Auto-compaction is disabled by CLAUDE_CODE_AUTO_COMPACT setting"
+        ));
+    }
+
+    // Fire CompactHooks::pre_compact if configured.
+    if let Some(hooks) = &options.compact_hooks {
+        hooks.pre_compact(messages)?;
     }
 
     let pre_compact_token_count = estimate_message_tokens(messages);
@@ -270,6 +365,7 @@ pub async fn compact_conversation(
         trigger,
         pre_compact_token_count,
         last_pre_compact_uuid,
+        None,
     );
 
     // Build the summary user message
@@ -413,6 +509,14 @@ pub async fn compact_conversation(
     );
 
     emit_progress(&progress, CompactProgressEvent::Completed(result.clone()));
+
+    // Fire CompactHooks::post_compact if configured.
+    if let Some(hooks) = &options.compact_hooks {
+        let post_messages = build_post_compact_messages(&result);
+        if let Err(e) = hooks.post_compact(&post_messages, result.messages_removed) {
+            tracing::warn!("post_compact hook failed: {e:#}");
+        }
+    }
 
     Ok(result)
 }
@@ -655,6 +759,7 @@ pub async fn partial_compact_conversation(
         trigger_str,
         pre_compact_token_count,
         last_pre_compact_uuid,
+        None,
     );
     // Enrich boundary with userContext and messagesSummarized
     if let Some(uf) = user_feedback {
@@ -934,10 +1039,18 @@ pub fn truncate_head_for_ptl_retry_with_gap(
 ///
 /// Mirrors `createCompactBoundaryMessage()` from the TS reference.
 /// The boundary stores JSON metadata in the text field.
+///
+/// # Arguments
+///
+/// * `trigger` - "auto" or "manual".
+/// * `pre_compact_token_count` - Token count before compaction.
+/// * `last_message_uuid` - UUID of the last message before compaction.
+/// * `discovered_tools` - Optional list of tool names discovered before compaction.
 pub fn create_compact_boundary_message(
     trigger: &str,
     pre_compact_token_count: u64,
     last_message_uuid: Option<uuid::Uuid>,
+    discovered_tools: Option<&[String]>,
 ) -> Message {
     let mut metadata = serde_json::json!({
         "trigger": trigger,
@@ -945,6 +1058,12 @@ pub fn create_compact_boundary_message(
     });
     if let Some(uuid) = last_message_uuid {
         metadata["lastPreCompactMessageUuid"] = serde_json::Value::String(uuid.to_string());
+    }
+    if let Some(tools) = discovered_tools {
+        if !tools.is_empty() {
+            metadata["preCompactDiscoveredTools"] =
+                serde_json::Value::Array(tools.iter().map(|t| serde_json::Value::String(t.clone())).collect());
+        }
     }
 
     let mut base = MessageBase::with_origin(MessageOrigin::Compact);
@@ -1192,6 +1311,23 @@ fn emit_telemetry(
     }
 }
 
+/// Check whether a string value is truthy (mirrors TS `isEnvTruthy`).
+fn is_env_truthy(val: &str) -> bool {
+    matches!(val.to_lowercase().as_str(), "1" | "true" | "yes")
+}
+
+/// Check whether auto-compact is enabled at runtime.
+///
+/// Reads the `CLAUDE_CODE_AUTO_COMPACT` environment variable (default `"true"`).
+/// When set to `"false"`, `"0"`, or `"no"`, auto-compact is disabled.
+/// This complements the `DISABLE_AUTO_COMPACT` kill-switch.
+fn is_auto_compact_runtime_enabled() -> bool {
+    std::env::var("CLAUDE_CODE_AUTO_COMPACT")
+        .ok()
+        .as_deref()
+        .map_or(true, |v| !matches!(v.to_lowercase().as_str(), "0" | "false" | "no"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1311,7 +1447,7 @@ mod tests {
 
     #[test]
     fn build_post_compact_messages_orders_correctly() {
-        let boundary = create_compact_boundary_message("manual", 1000, None);
+        let boundary = create_compact_boundary_message("manual", 1000, None, None);
         let summary = Message::User(UserMessage {
             base: MessageBase {
                 is_compact_summary: true,
@@ -1560,7 +1696,7 @@ mod tests {
     #[test]
     fn create_compact_boundary_includes_last_pre_compact_uuid() {
         let uuid = uuid::Uuid::new_v4();
-        let boundary = create_compact_boundary_message("manual", 5000, Some(uuid));
+        let boundary = create_compact_boundary_message("manual", 5000, Some(uuid), None);
         match &boundary {
             Message::System(s) => {
                 let meta: serde_json::Value = serde_json::from_str(&s.text).unwrap();
@@ -1574,7 +1710,7 @@ mod tests {
 
     #[test]
     fn create_compact_boundary_without_uuid() {
-        let boundary = create_compact_boundary_message("auto", 1000, None);
+        let boundary = create_compact_boundary_message("auto", 1000, None, None);
         match &boundary {
             Message::System(s) => {
                 let meta: serde_json::Value = serde_json::from_str(&s.text).unwrap();
@@ -1588,7 +1724,7 @@ mod tests {
 
     #[test]
     fn annotate_boundary_adds_preserved_segment() {
-        let boundary = create_compact_boundary_message("manual", 5000, None);
+        let boundary = create_compact_boundary_message("manual", 5000, None, None);
         let head = Message::User(UserMessage {
             base: MessageBase::default(),
             text: "head".into(),
@@ -1623,7 +1759,7 @@ mod tests {
 
     #[test]
     fn annotate_boundary_noop_for_empty_keep() {
-        let boundary = create_compact_boundary_message("manual", 5000, None);
+        let boundary = create_compact_boundary_message("manual", 5000, None, None);
         let annotated = annotate_boundary_with_preserved_segment(
             &boundary,
             uuid::Uuid::new_v4(),
@@ -1637,7 +1773,7 @@ mod tests {
 
     #[test]
     fn enrich_boundary_metadata_adds_fields() {
-        let boundary = create_compact_boundary_message("manual", 5000, None);
+        let boundary = create_compact_boundary_message("manual", 5000, None, None);
         let enriched = enrich_boundary_metadata(&boundary, |meta| {
             meta["userContext"] = serde_json::Value::String("test feedback".into());
             meta["messagesSummarized"] = serde_json::json!(42);
@@ -1648,6 +1784,96 @@ mod tests {
                 assert_eq!(meta["trigger"], "manual");
                 assert_eq!(meta["userContext"], "test feedback");
                 assert_eq!(meta["messagesSummarized"], 42);
+            }
+            other => panic!("expected System, got {other:?}"),
+        }
+    }
+
+    // -- CompactSessionState (circuit breaker) tests ---------------------------
+
+    #[test]
+    fn session_state_new_is_clean() {
+        let state = CompactSessionState::new();
+        assert_eq!(state.consecutive_compact_failures, 0);
+        assert!(!state.auto_compact_disabled);
+        assert!(state.is_auto_compact_allowed());
+    }
+
+    #[test]
+    fn session_state_record_success_resets() {
+        let mut state = CompactSessionState::new();
+        state.record_failure();
+        state.record_failure();
+        assert_eq!(state.consecutive_compact_failures, 2);
+        state.record_success();
+        assert_eq!(state.consecutive_compact_failures, 0);
+        assert!(state.is_auto_compact_allowed());
+    }
+
+    #[test]
+    fn session_state_circuit_breaker_trips_at_three() {
+        let mut state = CompactSessionState::new();
+        state.record_failure();
+        assert!(state.is_auto_compact_allowed());
+        state.record_failure();
+        assert!(state.is_auto_compact_allowed());
+        state.record_failure();
+        assert!(!state.is_auto_compact_allowed());
+        assert!(state.auto_compact_disabled);
+    }
+
+    #[test]
+    fn session_state_circuit_breaker_stays_tripped() {
+        let mut state = CompactSessionState::new();
+        for _ in 0..3 {
+            state.record_failure();
+        }
+        assert!(!state.is_auto_compact_allowed());
+        // Even after success, the disabled flag is still set
+        state.record_success();
+        assert_eq!(state.consecutive_compact_failures, 0);
+        assert!(state.auto_compact_disabled);
+    }
+
+    // -- preCompactDiscoveredTools in boundary marker tests --------------------
+
+    #[test]
+    fn boundary_marker_includes_discovered_tools() {
+        let tools = vec!["Read".to_string(), "Write".to_string(), "Bash".to_string()];
+        let boundary = create_compact_boundary_message("manual", 5000, None, Some(&tools));
+        match &boundary {
+            Message::System(s) => {
+                let meta: serde_json::Value = serde_json::from_str(&s.text).unwrap();
+                let arr = meta["preCompactDiscoveredTools"].as_array().unwrap();
+                assert_eq!(arr.len(), 3);
+                assert_eq!(arr[0], "Read");
+                assert_eq!(arr[1], "Write");
+                assert_eq!(arr[2], "Bash");
+            }
+            other => panic!("expected System, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn boundary_marker_omits_discovered_tools_when_empty() {
+        let tools: Vec<String> = vec![];
+        let boundary = create_compact_boundary_message("manual", 5000, None, Some(&tools));
+        match &boundary {
+            Message::System(s) => {
+                let meta: serde_json::Value = serde_json::from_str(&s.text).unwrap();
+                assert!(meta.get("preCompactDiscoveredTools").is_none());
+            }
+            other => panic!("expected System, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn boundary_marker_omits_discovered_tools_when_none() {
+        let boundary = create_compact_boundary_message("manual", 5000, None, None);
+        match &boundary {
+            Message::System(s) => {
+                let meta: serde_json::Value = serde_json::from_str(&s.text).unwrap();
+                assert!(meta.get("preCompactDiscoveredTools").is_none());
             }
             other => panic!("expected System, got {other:?}"),
         }

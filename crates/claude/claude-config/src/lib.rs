@@ -4,6 +4,7 @@
 //! environment variables and TOML settings files, failover configuration, and
 //! legacy profile import.
 
+pub mod env_vars;
 pub mod settings_layers;
 pub mod tool_filters;
 
@@ -228,6 +229,15 @@ pub struct ProviderConfig {
     /// Must be less than `max_output_tokens`.
     #[serde(default)]
     pub thinking_budget: Option<u32>,
+    /// Sampling temperature (0.0–2.0). When `None`, the provider default is used.
+    #[serde(default)]
+    pub temperature: Option<f64>,
+    /// Nucleus sampling threshold (0.0–1.0). When `None`, the provider default is used.
+    #[serde(default)]
+    pub top_p: Option<f64>,
+    /// Top-K sampling parameter. When `None`, the provider default is used.
+    #[serde(default)]
+    pub top_k: Option<u32>,
 }
 
 /// Configuration for provider failover / load-balancing.
@@ -410,6 +420,7 @@ pub fn load_runtime_config(
     let effort = runtime_overrides
         .effort
         .clone()
+        .or_else(|| crate::env_vars::effort_level())
         .or_else(|| read_env_first(&["REMOTE_CODE_EFFORT"]))
         .or(settings.effort.clone());
     let fallback_model = runtime_overrides
@@ -433,6 +444,10 @@ pub fn load_runtime_config(
         .unwrap_or_else(|| read_env_truthy(&["REMOTE_CODE_PROACTIVE", "CLAUDE_CODE_PROACTIVE"]));
     if provider.model.is_none() {
         provider.model = fallback_model.clone();
+    }
+    // Gap 4: CLAUDE_CODE_MAX_OUTPUT_TOKENS overrides the provider default.
+    if let Some(max_tokens) = crate::env_vars::max_output_tokens() {
+        provider.max_output_tokens = max_tokens;
     }
     if provider.thinking_budget.is_none()
         && let Some(budget) = effort.as_deref().and_then(effort_to_thinking_budget)
@@ -598,6 +613,9 @@ pub fn load_provider_config(
         request_header_overrides,
         request_metadata,
         thinking_budget: settings.thinking_budget,
+        temperature: crate::env_vars::temperature(),
+        top_p: crate::env_vars::top_p(),
+        top_k: crate::env_vars::top_k(),
     };
     let discovered = discover_env_providers();
     let keep_explicit_protocol = explicit_protocol.is_some() || provider.base_url.is_some();
@@ -881,6 +899,7 @@ fn parse_permission_mode_from_settings(mode: &str) -> Option<PermissionMode> {
     match mode {
         "default" | "Default" => Some(PermissionMode::Default),
         "acceptEdits" | "accept-edits" | "accept_edits" => Some(PermissionMode::AcceptEdits),
+        "auto" | "Auto" => Some(PermissionMode::Auto),
         "bypassPermissions" | "bypass-permissions" | "bypass_permissions" => {
             Some(PermissionMode::BypassPermissions)
         }
@@ -1315,6 +1334,9 @@ pub fn discover_env_providers() -> Vec<ProviderConfig> {
             request_header_overrides: BTreeMap::new(),
             request_metadata: BTreeMap::new(),
             thinking_budget: None,
+            temperature: None,
+            top_p: None,
+            top_k: None,
         });
     }
 
@@ -1339,6 +1361,9 @@ pub fn discover_env_providers() -> Vec<ProviderConfig> {
             request_header_overrides: BTreeMap::new(),
             request_metadata: BTreeMap::new(),
             thinking_budget: None,
+            temperature: None,
+            top_p: None,
+            top_k: None,
         });
     }
 
@@ -1363,6 +1388,9 @@ pub fn discover_env_providers() -> Vec<ProviderConfig> {
             request_header_overrides: BTreeMap::new(),
             request_metadata: BTreeMap::new(),
             thinking_budget: None,
+            temperature: None,
+            top_p: None,
+            top_k: None,
         });
     }
 
@@ -1387,6 +1415,9 @@ pub fn discover_env_providers() -> Vec<ProviderConfig> {
             request_header_overrides: BTreeMap::new(),
             request_metadata: BTreeMap::new(),
             thinking_budget: None,
+            temperature: None,
+            top_p: None,
+            top_k: None,
         });
     }
 
@@ -1414,6 +1445,9 @@ pub fn discover_env_providers() -> Vec<ProviderConfig> {
             request_header_overrides: BTreeMap::new(),
             request_metadata: BTreeMap::new(),
             thinking_budget: None,
+            temperature: None,
+            top_p: None,
+            top_k: None,
         });
     }
 
@@ -1449,6 +1483,9 @@ pub fn discover_env_providers() -> Vec<ProviderConfig> {
             request_header_overrides: BTreeMap::new(),
             request_metadata: BTreeMap::new(),
             thinking_budget: None,
+            temperature: None,
+            top_p: None,
+            top_k: None,
         });
     }
 
@@ -1481,6 +1518,9 @@ pub fn discover_env_providers() -> Vec<ProviderConfig> {
             request_header_overrides: BTreeMap::new(),
             request_metadata: BTreeMap::new(),
             thinking_budget: None,
+            temperature: None,
+            top_p: None,
+            top_k: None,
         });
     }
 
@@ -1507,6 +1547,9 @@ pub fn discover_env_providers() -> Vec<ProviderConfig> {
             request_header_overrides: BTreeMap::new(),
             request_metadata: BTreeMap::new(),
             thinking_budget: None,
+            temperature: None,
+            top_p: None,
+            top_k: None,
         });
     }
 
@@ -1534,6 +1577,9 @@ pub fn discover_env_providers() -> Vec<ProviderConfig> {
             request_header_overrides: BTreeMap::new(),
             request_metadata: BTreeMap::new(),
             thinking_budget: None,
+            temperature: None,
+            top_p: None,
+            top_k: None,
         });
     }
 
@@ -1561,6 +1607,9 @@ pub fn discover_env_providers() -> Vec<ProviderConfig> {
             request_header_overrides: BTreeMap::new(),
             request_metadata: BTreeMap::new(),
             thinking_budget: None,
+            temperature: None,
+            top_p: None,
+            top_k: None,
         });
     }
 
@@ -1586,6 +1635,9 @@ pub fn discover_env_providers() -> Vec<ProviderConfig> {
             request_header_overrides: BTreeMap::new(),
             request_metadata: BTreeMap::new(),
             thinking_budget: None,
+            temperature: None,
+            top_p: None,
+            top_k: None,
         });
     }
 
@@ -1610,6 +1662,9 @@ pub fn discover_env_providers() -> Vec<ProviderConfig> {
             request_header_overrides: BTreeMap::new(),
             request_metadata: BTreeMap::new(),
             thinking_budget: None,
+            temperature: None,
+            top_p: None,
+            top_k: None,
         });
     }
 
@@ -1641,6 +1696,9 @@ where
         request_header_overrides: BTreeMap::new(),
         request_metadata: BTreeMap::new(),
         thinking_budget: None,
+        temperature: None,
+        top_p: None,
+        top_k: None,
     })
 }
 
@@ -2026,6 +2084,12 @@ mod tests {
         let profile_dir = temp.path().join("profile");
         fs::create_dir_all(&cwd).expect("workspace dir");
 
+        // Isolate from host environment variables that would add extra setting_sources.
+        let prev_base = std::env::var("ANTHROPIC_BASE_URL").ok();
+        let prev_key = std::env::var("ANTHROPIC_API_KEY").ok();
+        unsafe { std::env::remove_var("ANTHROPIC_BASE_URL"); }
+        unsafe { std::env::remove_var("ANTHROPIC_API_KEY"); }
+
         let config = load_runtime_config(
             Some(cwd),
             Some(profile_dir),
@@ -2049,6 +2113,10 @@ mod tests {
         assert!(config.settings_files.is_empty());
         assert!(config.cli_settings_files.is_empty());
         assert_eq!(config.setting_sources, vec!["cli:provider".to_owned()]);
+
+        // Restore env vars for subsequent tests.
+        if let Some(v) = prev_base { unsafe { std::env::set_var("ANTHROPIC_BASE_URL", v); } }
+        if let Some(v) = prev_key { unsafe { std::env::set_var("ANTHROPIC_API_KEY", v); } }
     }
 
     #[test]
@@ -2208,6 +2276,9 @@ mod tests {
             request_header_overrides: BTreeMap::new(),
             request_metadata: BTreeMap::new(),
             thinking_budget: None,
+            temperature: None,
+            top_p: None,
+            top_k: None,
         };
         let settings = ResolvedRuntimeSettings {
             api_key: Some("settings-secret".to_owned()),
@@ -2246,6 +2317,9 @@ mod tests {
             request_header_overrides: BTreeMap::new(),
             request_metadata: BTreeMap::new(),
             thinking_budget: None,
+            temperature: None,
+            top_p: None,
+            top_k: None,
         };
         let settings = ResolvedRuntimeSettings::default();
         let env_values = HashMap::from([("ANTHROPIC_API_KEY", "env-secret".to_owned())]);
@@ -2277,6 +2351,9 @@ mod tests {
             request_header_overrides: BTreeMap::new(),
             request_metadata: BTreeMap::new(),
             thinking_budget: None,
+            temperature: None,
+            top_p: None,
+            top_k: None,
         };
         let settings = ResolvedRuntimeSettings {
             api_key_helper: Some("echo helper".to_owned()),
@@ -2333,6 +2410,9 @@ mod tests {
             request_header_overrides: BTreeMap::new(),
             request_metadata: BTreeMap::new(),
             thinking_budget: None,
+            temperature: None,
+            top_p: None,
+            top_k: None,
         };
         let discovered = vec![ProviderConfig {
             name: "glm-coding".to_owned(),
@@ -2349,6 +2429,9 @@ mod tests {
             request_header_overrides: BTreeMap::new(),
             request_metadata: BTreeMap::new(),
             thinking_budget: None,
+            temperature: None,
+            top_p: None,
+            top_k: None,
         }];
 
         hydrate_provider_from_discovered(&mut provider, &discovered, false);
@@ -2380,6 +2463,9 @@ mod tests {
             request_header_overrides: BTreeMap::new(),
             request_metadata: BTreeMap::new(),
             thinking_budget: None,
+            temperature: None,
+            top_p: None,
+            top_k: None,
         };
         let discovered = vec![ProviderConfig {
             name: "minimax-token-plan".to_owned(),
@@ -2396,6 +2482,9 @@ mod tests {
             request_header_overrides: BTreeMap::new(),
             request_metadata: BTreeMap::new(),
             thinking_budget: None,
+            temperature: None,
+            top_p: None,
+            top_k: None,
         }];
 
         hydrate_provider_from_discovered(&mut provider, &discovered, false);
@@ -2427,6 +2516,9 @@ mod tests {
             request_header_overrides: BTreeMap::new(),
             request_metadata: BTreeMap::new(),
             thinking_budget: None,
+            temperature: None,
+            top_p: None,
+            top_k: None,
         };
         let discovered = vec![ProviderConfig {
             name: "minimax-token-plan".to_owned(),
@@ -2443,6 +2535,9 @@ mod tests {
             request_header_overrides: BTreeMap::new(),
             request_metadata: BTreeMap::new(),
             thinking_budget: None,
+            temperature: None,
+            top_p: None,
+            top_k: None,
         }];
 
         hydrate_provider_from_discovered(&mut provider, &discovered, true);
@@ -2470,6 +2565,9 @@ mod tests {
             request_header_overrides: BTreeMap::new(),
             request_metadata: BTreeMap::new(),
             thinking_budget: None,
+            temperature: None,
+            top_p: None,
+            top_k: None,
         });
 
         assert!(

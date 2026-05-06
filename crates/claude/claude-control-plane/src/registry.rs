@@ -67,7 +67,14 @@ pub(crate) struct StoredTrustedDevice {
     pub(crate) created_by_device_id: Option<Uuid>,
     pub(crate) created_at: DateTime<Utc>,
     pub(crate) last_seen_at: DateTime<Utc>,
+    /// Hash of the refresh token (long-lived, used to obtain new access tokens).
     pub(crate) token_hash: String,
+    /// Hash of the current access token (short-lived, 15 minutes).
+    #[serde(default)]
+    pub(crate) access_token_hash: Option<String>,
+    /// When the current access token expires.
+    #[serde(default)]
+    pub(crate) access_token_expires_at: Option<DateTime<Utc>>,
 }
 
 impl StoredTrustedDevice {
@@ -269,27 +276,100 @@ impl Registry {
             .collect()
     }
 
+    pub(crate) fn revoke_device(&mut self, device_id: Uuid) -> Result<TrustedDeviceRecord, ApiError> {
+        let removed = self
+            .trusted_devices
+            .remove(&device_id)
+            .ok_or_else(|| ApiError::not_found(format!("device `{device_id}` was not found")))?;
+        if removed.owner {
+            self.owner_device_id = None;
+        }
+        // Also remove any push tokens for this device
+        self.push_tokens.remove(&device_id);
+        Ok(removed.public_record())
+    }
+
+    /// Authenticate using either an access token (short-lived) or a refresh token
+    /// (long-lived). Access tokens are preferred; refresh tokens are accepted as
+    /// a fallback so existing clients aren't locked out during migration.
     pub(crate) fn authenticate_device_token(
         &mut self,
-        access_token: &str,
-    ) -> Option<TrustedDeviceRecord> {
-        let token_hash = sha256_hex(access_token);
+        token: &str,
+    ) -> Option<(TrustedDeviceRecord, bool)> {
+        let hash = sha256_hex(token);
+        let now = Utc::now();
+
+        // Try access token first.
+        for device in self.trusted_devices.values() {
+            if let Some(ref at_hash) = device.access_token_hash {
+                if constant_time_hash_eq(&hash, at_hash) {
+                    let expired = device
+                        .access_token_expires_at
+                        .map_or(true, |exp| now >= exp);
+                    if !expired {
+                        let device_id = device.device_id;
+                        let dev = self.trusted_devices.get_mut(&device_id)?;
+                        dev.last_seen_at = now;
+                        return Some((dev.public_record(), true));
+                    }
+                }
+            }
+        }
+
+        // Fallback: refresh token.
         let device_id = self
             .trusted_devices
             .values()
-            .find(|device| constant_time_hash_eq(&token_hash, &device.token_hash))
+            .find(|device| constant_time_hash_eq(&hash, &device.token_hash))
             .map(|device| device.device_id)?;
-        let now = Utc::now();
         let device = self.trusted_devices.get_mut(&device_id)?;
         device.last_seen_at = now;
-        Some(device.public_record())
+        Some((device.public_record(), false))
     }
+
+    /// Refresh an access token using a valid refresh token.
+    /// Returns `(device_record, new_access_token)` or an error.
+    pub(crate) fn refresh_access_token(
+        &mut self,
+        refresh_token: &str,
+    ) -> Result<(TrustedDeviceRecord, String), ApiError> {
+        let hash = sha256_hex(refresh_token);
+        let now = Utc::now();
+
+        let device_id = self
+            .trusted_devices
+            .values()
+            .find(|device| constant_time_hash_eq(&hash, &device.token_hash))
+            .map(|device| device.device_id)
+            .ok_or_else(|| ApiError::unauthorized("invalid or expired refresh token".to_owned()))?;
+
+        let new_access_token = mint_secret("rcat");
+        let access_hash = sha256_hex(&new_access_token);
+        let expires_at = now + Duration::minutes(15);
+
+        let device = self.trusted_devices.get_mut(&device_id).unwrap();
+        device.access_token_hash = Some(access_hash);
+        device.access_token_expires_at = Some(expires_at);
+        device.last_seen_at = now;
+
+        Ok((device.public_record(), new_access_token))
+    }
+}
+
+/// Dual-token response for bootstrap and pairing.
+pub(crate) struct DualTokenResponse {
+    pub(crate) device: TrustedDeviceRecord,
+    pub(crate) access_token: String,
+    pub(crate) refresh_token: String,
+}
+
+impl Registry {
 
     pub(crate) fn bootstrap_claim(
         &mut self,
         expected_secret_hash: Option<&str>,
         request: BootstrapClaimRequest,
-    ) -> Result<(TrustedDeviceRecord, String), ApiError> {
+    ) -> Result<DualTokenResponse, ApiError> {
         if self.owner_claimed() {
             return Err(ApiError::conflict(
                 "the control plane owner device has already been claimed".to_owned(),
@@ -311,7 +391,8 @@ impl Registry {
         }
 
         let now = Utc::now();
-        let access_token = mint_secret("rcdt");
+        let refresh_token = mint_secret("rcrt");
+        let access_token = mint_secret("rcat");
         let device_id = Uuid::new_v4();
         let record = StoredTrustedDevice {
             device_id,
@@ -321,11 +402,17 @@ impl Registry {
             created_by_device_id: None,
             created_at: now,
             last_seen_at: now,
-            token_hash: sha256_hex(&access_token),
+            token_hash: sha256_hex(&refresh_token),
+            access_token_hash: Some(sha256_hex(&access_token)),
+            access_token_expires_at: Some(now + Duration::minutes(15)),
         };
         self.owner_device_id = Some(device_id);
         self.trusted_devices.insert(device_id, record.clone());
-        Ok((record.public_record(), access_token))
+        Ok(DualTokenResponse {
+            device: record.public_record(),
+            access_token,
+            refresh_token,
+        })
     }
 
     pub(crate) fn create_pairing_offer(
@@ -362,7 +449,7 @@ impl Registry {
     pub(crate) fn accept_pairing_offer(
         &mut self,
         request: PairingAcceptRequest,
-    ) -> Result<(TrustedDeviceRecord, String), ApiError> {
+    ) -> Result<DualTokenResponse, ApiError> {
         self.prune_expired_pairing_offers();
 
         let offer = self
@@ -390,7 +477,8 @@ impl Registry {
         }
 
         let now = Utc::now();
-        let access_token = mint_secret("rcdt");
+        let refresh_token = mint_secret("rcrt");
+        let access_token = mint_secret("rcat");
         let record = StoredTrustedDevice {
             device_id: Uuid::new_v4(),
             name: normalize_device_name(
@@ -404,11 +492,18 @@ impl Registry {
             created_by_device_id: offer.created_by_device_id,
             created_at: now,
             last_seen_at: now,
-            token_hash: sha256_hex(&access_token),
+            token_hash: sha256_hex(&refresh_token),
+            access_token_hash: Some(sha256_hex(&access_token)),
+            access_token_expires_at: Some(now + Duration::minutes(15)),
         };
         let public_record = record.public_record();
-        self.trusted_devices.insert(record.device_id, record);
-        Ok((public_record, access_token))
+        let device_id = record.device_id;
+        self.trusted_devices.insert(device_id, record);
+        Ok(DualTokenResponse {
+            device: public_record,
+            access_token,
+            refresh_token,
+        })
     }
 
     fn prune_expired_pairing_offers(&mut self) {
@@ -627,6 +722,49 @@ impl Registry {
             };
             snapshot.last_seen_at = snapshot.last_seen_at.max(timestamp);
         }
+    }
+
+    /// Reap sessions stuck in `Assigned` whose runner has gone offline.
+    /// Returns a list of (session_id, old_runner_id, previous_state) tuples reverted to `Pending`.
+    pub(crate) fn reap_orphaned_assigned_sessions(
+        &mut self,
+        lease_ttl_secs: u64,
+    ) -> Vec<(Uuid, String, SessionState)> {
+        let now = Utc::now();
+        let cutoff = now - Duration::seconds((lease_ttl_secs * 3) as i64);
+        let mut reaped = Vec::new();
+        let mut runners_needing_refresh: Vec<String> = Vec::new();
+
+        for session in self.sessions.values_mut() {
+            if session.state != SessionState::Assigned {
+                continue;
+            }
+            let Some(runner_id) = session.owner_runner_id.clone() else {
+                continue;
+            };
+            let Some(runner) = self.runners.get(&runner_id) else {
+                let previous_state = session.state;
+                session.state = SessionState::Pending;
+                session.owner_runner_id = None;
+                session.updated_at = now;
+                reaped.push((session.session_id, runner_id, previous_state));
+                continue;
+            };
+            if runner.last_seen_at < cutoff {
+                let previous_state = session.state;
+                session.state = SessionState::Pending;
+                session.owner_runner_id = None;
+                session.updated_at = now;
+                runners_needing_refresh.push(runner_id.clone());
+                reaped.push((session.session_id, runner_id, previous_state));
+            }
+        }
+
+        for rid in runners_needing_refresh {
+            self.refresh_runner_session_counts(&rid, now);
+        }
+
+        reaped
     }
 
     pub(crate) fn list_approvals(&self) -> Vec<ApprovalRequestRecord> {

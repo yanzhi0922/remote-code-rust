@@ -18,7 +18,7 @@ pub(crate) fn shared_feedback(
     }
 
     static FEEDBACK: OnceLock<codex_feedback::CodexFeedback> = OnceLock::new();
-    let feedback = FEEDBACK
+    FEEDBACK
         .get_or_init(|| {
             let feedback = codex_feedback::CodexFeedback::new();
             let log_db_layer = log_db.clone().map(|layer| {
@@ -33,6 +33,5 @@ pub(crate) fn shared_feedback(
                 .try_init();
             feedback
         })
-        .clone();
-    feedback
+        .clone()
 }

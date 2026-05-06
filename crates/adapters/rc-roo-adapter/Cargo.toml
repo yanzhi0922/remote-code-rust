@@ -6,7 +6,7 @@ license.workspace = true
 description = "In-process adapter for Roo Code agent — implements AgentAdapter trait"
 
 [dependencies]
-claude-agent-protocol = { path = "../../claude/claude-agent-protocol" }
+rc-agent-protocol = { path = "../../shared/rc-agent-protocol" }
 roo-app = { path = "../../roo/roo-app" }
 roo-task = { path = "../../roo/roo-task" }
 roo-types = { path = "../../roo/roo-types" }
@@ -55,3 +55,6 @@ async-trait = { workspace = true }
 tracing = { workspace = true }
 uuid = { workspace = true }
 dirs = { workspace = true }
+
+[lints]
+workspace = true

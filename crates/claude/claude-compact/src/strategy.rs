@@ -265,6 +265,23 @@ pub struct CompactOptions {
     /// PTL retry) with an event name and structured metadata.
     /// Mirrors `logEvent('tengu_compact', ...)` from the TS reference.
     pub telemetry_provider: Option<Arc<CompactTelemetryProvider>>,
+    /// Optional compact lifecycle hooks.
+    ///
+    /// When `Some`, `pre_compact` is called before the compaction starts and
+    /// `post_compact` is called after it completes. Hooks can observe or react
+    /// to compaction events for logging, telemetry, or validation.
+    pub compact_hooks: Option<Arc<dyn CompactHooks>>,
+    /// Consecutive auto-compact failure count (circuit breaker).
+    ///
+    /// When this reaches [`MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES`](crate::auto::MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES)
+    /// (default 3), auto-compact is disabled for the rest of the session.
+    /// Reset to 0 on any successful compaction.
+    pub consecutive_compact_failures: u32,
+    /// Whether auto-compact is disabled for the session due to the circuit breaker.
+    ///
+    /// Set to `true` when `consecutive_compact_failures` reaches the max.
+    /// This flag is sticky — once set, auto-compact stays disabled.
+    pub auto_compact_disabled: bool,
 }
 
 impl Default for CompactOptions {
@@ -284,6 +301,9 @@ impl Default for CompactOptions {
             post_compact_cleanup_provider: None,
             recompaction_info: None,
             telemetry_provider: None,
+            compact_hooks: None,
+            consecutive_compact_failures: 0,
+            auto_compact_disabled: false,
         }
     }
 }
@@ -416,4 +436,70 @@ pub trait CompactStrategy: Send + Sync {
         provider: &dyn SummaryProvider,
         progress: Option<&ProgressCallback>,
     ) -> Result<CompactionResult, anyhow::Error>;
+}
+
+// ---------------------------------------------------------------------------
+// Compact hooks trait
+// ---------------------------------------------------------------------------
+
+/// Hook points for the compaction lifecycle.
+///
+/// Implementations can observe or react to compaction events. The hooks are
+/// called at well-defined points in the compaction flow:
+///
+/// 1. `pre_compact` — before the compaction starts
+/// 2. `post_compact` — after the compaction completes
+///
+/// All methods have default no-op implementations so implementors only need
+/// to override the hooks they care about.
+///
+/// # Example
+///
+/// ```ignore
+/// use claude_compact::CompactHooks;
+/// use serde_json::Value;
+///
+/// struct LoggingCompactHooks;
+///
+/// impl CompactHooks for LoggingCompactHooks {
+///     fn pre_compact(&self, conversation: &[Value]) -> anyhow::Result<()> {
+///         println!("About to compact {} messages", conversation.len());
+///         Ok(())
+///     }
+///
+///     fn post_compact(&self, conversation: &[Value], removed_count: usize) -> anyhow::Result<()> {
+///         println!("Compacted: removed {} messages, {} remaining", removed_count, conversation.len());
+///         Ok(())
+///     }
+/// }
+/// ```
+pub trait CompactHooks: Send + Sync {
+    /// Called before compaction begins.
+    ///
+    /// The `conversation` parameter contains the full conversation that is
+    /// about to be compacted. Implementations can use this for logging,
+    /// telemetry, or pre-compaction validation.
+    ///
+    /// Returning an error will abort the compaction.
+    fn pre_compact(&self, conversation: &[Message]) -> Result<(), anyhow::Error> {
+        let _ = conversation;
+        Ok(())
+    }
+
+    /// Called after compaction completes.
+    ///
+    /// The `conversation` parameter contains the post-compaction conversation
+    /// (including the summary and any preserved messages). The `removed_count`
+    /// indicates how many messages were removed during compaction.
+    ///
+    /// Returning an error will be logged but will not undo the compaction.
+    fn post_compact(
+        &self,
+        conversation: &[Message],
+        removed_count: usize,
+    ) -> Result<(), anyhow::Error> {
+        let _ = conversation;
+        let _ = removed_count;
+        Ok(())
+    }
 }

@@ -49,6 +49,7 @@
 //! ```
 
 mod adapter;
+mod anthropic_proxy;
 mod config;
 mod event_mapper;
 mod request_routing;
@@ -56,6 +57,7 @@ mod types;
 
 // Public API re-exports
 pub use adapter::CodexInProcessAdapter;
+pub use anthropic_proxy::{AnthropicProxy, AnthropicProxyConfig};
 pub use config::{CodexAdapterOptions, isolated_codex_home};
 pub use types::{
     CodexExecRequest, CodexFeedbackRequest, CodexPluginRefRequest, CodexServerRequestResolution,
@@ -66,7 +68,7 @@ pub use types::{
 #[cfg(test)]
 mod tests {
     use super::*;
-    use claude_agent_protocol::permission::PermissionDecision;
+    use rc_agent_protocol::permission::PermissionDecision;
     use serde_json::json;
 
     fn response_json(

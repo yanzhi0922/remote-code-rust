@@ -34,8 +34,9 @@ use crate::types::{
     PairingOfferCreateRequest, PairingOfferCreateResponse, PushTokenRegistrationRequest,
     PushTokenRegistrationResponse, RecentEventsQuery, RunnerCommandPullQuery,
     RunnerCommandPullResponse, RunnerQueuedCommandBody, RunnerRegistrationResponse,
-    RuntimeEventCreateRequest, RuntimeEventDetail, SessionRecord, SessionStateUpdateRequest,
-    SessionView, TimelineEvent, TimelineEventDetail, TimelineEventDraft, TrustedDeviceRecord,
+    RuntimeEventCreateRequest, RuntimeEventDetail, SessionRecord, SessionState,
+    SessionStateUpdateRequest, SessionView, TimelineEvent, TimelineEventDetail,
+    TimelineEventDraft, TokenRefreshRequest, TokenRefreshResponse, TrustedDeviceRecord,
 };
 use crate::{AuthPrincipal, ControlPlaneService, PersistedEventQuery};
 
@@ -55,7 +56,7 @@ fn build_session_view(
     registry: &crate::registry::Registry,
     session: SessionRecord,
 ) -> SessionView {
-    let (owner_runner_available, owner_runner_state, owner_runner_last_seen_at) = session
+    let (owner_runner_available, owner_runner_state, owner_runner_last_seen_at, owner_runner_public_base_url) = session
         .owner_runner_id
         .as_deref()
         .and_then(|runner_id| registry.runners.get(runner_id))
@@ -64,15 +65,17 @@ fn build_session_view(
                 runner_is_available(runner, service.runner_lease_ttl_secs),
                 Some(runner.state),
                 Some(runner.last_seen_at),
+                runner.registration.public_base_url.clone(),
             )
         })
-        .unwrap_or((false, None, None));
+        .unwrap_or((false, None, None, None));
 
     SessionView {
         session,
         owner_runner_available,
         owner_runner_state,
         owner_runner_last_seen_at,
+        owner_runner_public_base_url,
     }
 }
 
@@ -133,11 +136,12 @@ pub(crate) async fn claim_bootstrap_device(
 ) -> Result<(StatusCode, Json<BootstrapClaimResponse>), ApiError> {
     let response = {
         let mut registry = service.registry.write().await;
-        let (device, access_token) =
+        let result =
             registry.bootstrap_claim(service.bootstrap_secret_hash.as_deref(), request)?;
         BootstrapClaimResponse {
-            device,
-            access_token,
+            device: result.device,
+            access_token: result.access_token,
+            refresh_token: result.refresh_token,
         }
     };
     persist_state_logged(&service).await;
@@ -152,6 +156,18 @@ pub(crate) async fn list_devices(
         items: registry.list_trusted_devices(),
         latest_sequence: None,
     })
+}
+
+pub(crate) async fn revoke_device(
+    State(service): State<ControlPlaneService>,
+    AxumPath(device_id): AxumPath<Uuid>,
+) -> Result<StatusCode, ApiError> {
+    {
+        let mut registry = service.registry.write().await;
+        registry.revoke_device(device_id)?;
+    }
+    persist_state_logged(&service).await;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 pub(crate) async fn create_pairing_offer(
@@ -187,14 +203,29 @@ pub(crate) async fn accept_pairing_offer(
 ) -> Result<(StatusCode, Json<PairingAcceptResponse>), ApiError> {
     let response = {
         let mut registry = service.registry.write().await;
-        let (device, access_token) = registry.accept_pairing_offer(request)?;
+        let result = registry.accept_pairing_offer(request)?;
         PairingAcceptResponse {
-            device,
-            access_token,
+            device: result.device,
+            access_token: result.access_token,
+            refresh_token: result.refresh_token,
         }
     };
     persist_state_logged(&service).await;
     Ok((StatusCode::CREATED, Json(response)))
+}
+
+pub(crate) async fn refresh_token(
+    State(service): State<ControlPlaneService>,
+    Json(request): Json<TokenRefreshRequest>,
+) -> Result<Json<TokenRefreshResponse>, ApiError> {
+    let response = {
+        let mut registry = service.registry.write().await;
+        let (_device, access_token) =
+            registry.refresh_access_token(&request.refresh_token)?;
+        TokenRefreshResponse { access_token }
+    };
+    persist_state_logged(&service).await;
+    Ok(Json(response))
 }
 
 // ---------------------------------------------------------------------------
@@ -622,6 +653,29 @@ pub(crate) async fn update_runner_heartbeat(
             },
         })
         .await;
+
+    // Reap sessions stuck in Assigned whose runner has gone offline (3x TTL without heartbeat)
+    {
+        let mut registry = service.registry.write().await;
+        let reaped = registry.reap_orphaned_assigned_sessions(service.runner_lease_ttl_secs);
+        if !reaped.is_empty() {
+            for (session_id, old_runner_id, previous_state) in &reaped {
+                let session = registry.sessions.get(session_id);
+                let new_state = session.map(|s| s.state).unwrap_or(SessionState::Pending);
+                let _ = service
+                    .publish_event(TimelineEventDraft {
+                        runner_id: Some(old_runner_id.clone()),
+                        session_id: Some(*session_id),
+                        detail: TimelineEventDetail::SessionStateChanged {
+                            previous_state: *previous_state,
+                            state: new_state,
+                        },
+                    })
+                    .await;
+            }
+        }
+    }
+
     dispatch_pending_sessions_for_runner(&service, &runner_id).await;
     let snapshot = {
         let registry = service.registry.read().await;
@@ -1453,6 +1507,19 @@ fn validate_runtime_event_request(
             require_non_empty_runtime_field("message", message)?;
         }
         RuntimeEventDetail::DaemonPresenceChanged { .. } => {}
+        RuntimeEventDetail::SubtaskStarted { description, .. } => {
+            require_non_empty_runtime_field("description", description)?;
+        }
+        RuntimeEventDetail::SubtaskProgress { task_id, .. } => {
+            require_non_empty_runtime_field("task_id", task_id)?;
+        }
+        RuntimeEventDetail::SubtaskCompleted { task_id, .. } => {
+            require_non_empty_runtime_field("task_id", task_id)?;
+        }
+        RuntimeEventDetail::BatchProgress { .. } => {}
+        RuntimeEventDetail::ContextUsage { .. } => {}
+        RuntimeEventDetail::ContextOverflow { .. } => {}
+        RuntimeEventDetail::ContextCompacted { .. } => {}
     }
     Ok(())
 }

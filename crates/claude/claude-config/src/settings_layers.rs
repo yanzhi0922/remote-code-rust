@@ -1,9 +1,11 @@
 use std::collections::BTreeSet;
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use claude_core::ProviderProtocol;
+use claude_core::HookMatcher;
 use serde::{Deserialize, Serialize};
 
 use crate::tool_filters::{merge_tool_filters, normalize_tool_filters};
@@ -82,6 +84,20 @@ pub struct ResolvedRuntimeSettings {
     pub auto_memory_directory: Option<String>,
     /// Permission mode from settings file (e.g. "bypassPermissions", "acceptEdits").
     pub permission_mode: Option<String>,
+    /// Permission allow-list patterns (tool names with optional glob matchers).
+    pub permissions_allow: Vec<String>,
+    /// Permission deny-list patterns.
+    pub permissions_deny: Vec<String>,
+    /// Permission default behavior for unmatched tools.
+    pub permissions_default: Option<String>,
+    /// Environment variable overrides from settings.
+    pub env: BTreeMap<String, String>,
+    /// Hooks by event name from settings.
+    pub hooks: BTreeMap<String, Vec<HookMatcher>>,
+    /// Sandbox profile from settings (e.g. "none", "docker", "podman").
+    pub sandbox: Option<String>,
+    /// Whether attribution headers are enabled.
+    pub attribution_enabled: Option<bool>,
     pub setting_sources: Vec<String>,
     pub auth_source: Option<String>,
 }
@@ -131,6 +147,19 @@ struct SettingsDocument {
     auto_memory_directory: Option<String>,
     #[serde(default)]
     permissions: Option<SettingsPermissions>,
+    /// Environment variable overrides (key → value).
+    #[serde(default)]
+    env: Option<BTreeMap<String, String>>,
+    /// Hooks keyed by event name.
+    #[serde(default)]
+    hooks: Option<BTreeMap<String, Vec<HookMatcher>>>,
+    /// Sandbox profile name.
+    #[serde(default)]
+    sandbox: Option<String>,
+    /// Whether attribution headers are sent with API requests.
+    #[serde(default)]
+    #[serde(alias = "attributionEnabled")]
+    attribution_enabled: Option<bool>,
 }
 
 /// Permissions section of the settings file.
@@ -144,6 +173,15 @@ struct SettingsPermissions {
     /// Permission mode string (e.g. "bypassPermissions", "acceptEdits", "plan").
     #[serde(default)]
     mode: Option<String>,
+    /// Tool allow-list patterns.
+    #[serde(default)]
+    allow: Option<Vec<String>>,
+    /// Tool deny-list patterns.
+    #[serde(default)]
+    deny: Option<Vec<String>>,
+    /// Default behavior for unmatched tools.
+    #[serde(default)]
+    default: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -326,10 +364,35 @@ pub fn load_runtime_settings(paths: &[PathBuf]) -> Result<ResolvedRuntimeSetting
         if let Some(auto_memory_directory) = document.auto_memory_directory {
             resolved.auto_memory_directory = normalize_optional_string(Some(auto_memory_directory));
         }
-        if let Some(permissions) = document.permissions
-            && let Some(mode) = permissions.mode
+        if let Some(ref permissions) = document.permissions
+            && let Some(ref mode) = permissions.mode
         {
-            resolved.permission_mode = Some(mode);
+            resolved.permission_mode = Some(mode.clone());
+        }
+        if let Some(ref permissions) = document.permissions {
+            if let Some(allow) = &permissions.allow {
+                resolved.permissions_allow = merge_tool_filters(&resolved.permissions_allow, allow);
+            }
+            if let Some(deny) = &permissions.deny {
+                resolved.permissions_deny = merge_tool_filters(&resolved.permissions_deny, deny);
+            }
+            if let Some(default) = &permissions.default {
+                resolved.permissions_default = Some(default.clone());
+            }
+        }
+        if let Some(env) = document.env {
+            resolved.env.extend(env);
+        }
+        if let Some(hooks) = document.hooks {
+            for (event, matchers) in hooks {
+                resolved.hooks.entry(event).or_default().extend(matchers);
+            }
+        }
+        if let Some(sandbox) = document.sandbox {
+            resolved.sandbox = Some(sandbox);
+        }
+        if let Some(attribution_enabled) = document.attribution_enabled {
+            resolved.attribution_enabled = Some(attribution_enabled);
         }
     }
     resolved.allowed_tools = normalize_tool_filters(&resolved.allowed_tools);

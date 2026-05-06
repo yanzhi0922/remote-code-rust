@@ -2,9 +2,10 @@
 
 use axum::Router;
 use axum::middleware;
-use axum::routing::{get, post};
+use axum::routing::{delete, get, post};
 
 use crate::auth::{build_cors_layer, require_api_auth};
+use crate::download::{download_file, download_page};
 use crate::handlers::{
     accept_pairing_offer, apply_approval_decision, claim_bootstrap_device, create_approval,
     create_artifact, create_pairing_offer, create_session, create_session_runtime_event,
@@ -12,10 +13,10 @@ use crate::handlers::{
     list_approvals, list_artifacts, list_devices, list_recent_events, list_runner_approvals,
     list_runner_artifacts, list_runner_events, list_runner_sessions, list_runners,
     list_session_approvals, list_session_artifacts, list_session_events, list_sessions,
-    post_session_command, pull_runner_commands, register_push_token, register_runner,
-    subscribe_approvals, subscribe_events, subscribe_runner_approvals, subscribe_runner_events,
-    subscribe_session_approvals, subscribe_session_events, update_runner_heartbeat,
-    update_session_state,
+    post_session_command, pull_runner_commands, refresh_token, register_push_token, register_runner,
+    revoke_device, subscribe_approvals, subscribe_events, subscribe_runner_approvals,
+    subscribe_runner_events, subscribe_session_approvals, subscribe_session_events,
+    update_runner_heartbeat, update_session_state,
 };
 use crate::state::ControlPlaneService;
 
@@ -24,6 +25,7 @@ impl ControlPlaneService {
         let protected = Router::new()
             .route("/v1/meta", get(get_meta))
             .route("/v1/devices", get(list_devices))
+            .route("/v1/devices/{device_id}", delete(revoke_device))
             .route("/v1/events", get(list_recent_events))
             .route("/v1/events/stream", get(subscribe_events))
             .route(
@@ -103,6 +105,9 @@ impl ControlPlaneService {
                 "/v1/sessions/{session_id}/artifacts",
                 get(list_session_artifacts).post(create_artifact),
             )
+            // App download page and file serving.
+            .route("/download", get(download_page))
+            .route("/downloads/{filename}", get(download_file))
             .route_layer(middleware::from_fn_with_state(
                 self.clone(),
                 require_api_auth,
@@ -112,6 +117,7 @@ impl ControlPlaneService {
             .route("/healthz", get(get_health))
             .route("/v1/bootstrap/claim", post(claim_bootstrap_device))
             .route("/v1/pairing/accept", post(accept_pairing_offer))
+            .route("/v1/auth/refresh", post(refresh_token))
             .merge(protected)
             .layer(build_cors_layer())
             .with_state(self)

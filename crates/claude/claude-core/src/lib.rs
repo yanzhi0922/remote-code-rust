@@ -65,7 +65,8 @@ pub use message_types::{
     ToolUseSummaryMessageType,
 };
 pub use permission_types::{
-    PermissionBehavior, PermissionResult, PermissionRule, PermissionRuleSource,
+    PermissionBehavior, PermissionDecisionMeta, PermissionDecisionReason, PermissionResult,
+    PermissionRule, PermissionRuleSource,
 };
 pub use state::{AppState, FileHistoryState, ToolPermissionContext};
 pub use usage::UsageAccumulator;
@@ -88,6 +89,8 @@ pub enum PermissionMode {
     Default,
     /// Auto-accept file edits, ask for everything else.
     AcceptEdits,
+    /// Model decides which operations to auto-approve based on confidence.
+    Auto,
     /// Skip all permission prompts (dangerous).
     BypassPermissions,
     /// Never prompt; only pre-approved or read-only operations proceed.
@@ -103,6 +106,7 @@ impl PermissionMode {
         match self {
             Self::Default => "default",
             Self::AcceptEdits => "acceptEdits",
+            Self::Auto => "auto",
             Self::BypassPermissions => "bypassPermissions",
             Self::DontAsk => "dontAsk",
             Self::Plan => "plan",
@@ -117,6 +121,7 @@ impl FromStr for PermissionMode {
         match s {
             "default" | "Default" => Ok(Self::Default),
             "acceptEdits" | "accept-edits" | "accept_edits" => Ok(Self::AcceptEdits),
+            "auto" | "Auto" => Ok(Self::Auto),
             "bypassPermissions" | "bypass-permissions" | "bypass_permissions" => {
                 Ok(Self::BypassPermissions)
             }
@@ -520,6 +525,18 @@ pub struct UsageSummary {
     /// Anthropic cache creation tokens (tokens written to cache).
     #[serde(default)]
     pub cache_creation_input_tokens: u64,
+    /// Server-side web search requests (Anthropic server tool use).
+    #[serde(default)]
+    pub server_tool_use_web_search_requests: u64,
+    /// Server-side web fetch requests (Anthropic server tool use).
+    #[serde(default)]
+    pub server_tool_use_web_fetch_requests: u64,
+    /// Cache creation ephemeral 5-minute TTL input tokens.
+    #[serde(default)]
+    pub cache_creation_ephemeral_5m_input_tokens: u64,
+    /// Cache creation ephemeral 1-hour TTL input tokens.
+    #[serde(default)]
+    pub cache_creation_ephemeral_1h_input_tokens: u64,
 }
 
 /// A single entry in the conversation history.
@@ -693,6 +710,9 @@ pub struct ProviderResponse {
     /// Provider stop reason (e.g. `"end_turn"`, `"tool_use"`).
     #[serde(default = "default_stop_reason")]
     pub stop_reason: String,
+    /// Research metadata from the model (Anthropic research mode).
+    #[serde(default)]
+    pub research: Option<Value>,
 }
 
 fn default_stop_reason() -> String {

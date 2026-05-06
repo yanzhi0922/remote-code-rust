@@ -8,7 +8,7 @@ use axum::Json;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use chrono::{DateTime, Utc};
-pub use claude_engine_events::{
+pub use rc_engine_events::{
     DaemonPresenceState, MessageRole, RuntimeEventCreateRequest, RuntimeEventDetail,
 };
 use claude_runner::{
@@ -54,6 +54,8 @@ pub struct ControlPlaneConfigOverrides {
     pub auth_token: Option<String>,
     /// Bootstrap secret used to claim the first trusted device.
     pub bootstrap_secret: Option<String>,
+    /// Directory containing downloadable app binaries (APK, etc.).
+    pub downloads_dir: Option<PathBuf>,
 }
 
 /// Full control plane configuration.
@@ -77,6 +79,8 @@ pub struct ControlPlaneConfig {
     pub auth_token: Option<String>,
     /// Bootstrap secret used to claim the first trusted device.
     pub bootstrap_secret: Option<String>,
+    /// Directory containing downloadable app binaries served at /downloads/.
+    pub downloads_dir: Option<PathBuf>,
 }
 
 /// Metadata returned by the `/meta` endpoint.
@@ -201,6 +205,7 @@ pub struct BootstrapClaimRequest {
 pub struct BootstrapClaimResponse {
     pub device: TrustedDeviceRecord,
     pub access_token: String,
+    pub refresh_token: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -233,6 +238,21 @@ pub struct PairingAcceptRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PairingAcceptResponse {
     pub device: TrustedDeviceRecord,
+    pub access_token: String,
+    pub refresh_token: String,
+}
+
+// ---------------------------------------------------------------------------
+// Token refresh
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TokenRefreshRequest {
+    pub refresh_token: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TokenRefreshResponse {
     pub access_token: String,
 }
 
@@ -357,6 +377,11 @@ pub struct SessionView {
     pub owner_runner_state: Option<RunnerState>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub owner_runner_last_seen_at: Option<DateTime<Utc>>,
+    /// Direct-connect URL for the runner hosting this session.
+    /// When present, clients can stream events and send commands
+    /// directly to the runner instead of relaying through the control plane.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_runner_public_base_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -428,7 +453,7 @@ pub struct TimelineEvent {
     pub detail: TimelineEventDetail,
 }
 
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum SharedRuntimeEventContract {
     MessageDelta {
@@ -467,6 +492,64 @@ enum SharedRuntimeEventContract {
     RuntimeError {
         message: String,
     },
+    SubtaskStarted {
+        task_id: String,
+        #[serde(default)]
+        parent_task_id: Option<String>,
+        description: String,
+        #[serde(default)]
+        depth: u32,
+    },
+    SubtaskProgress {
+        task_id: String,
+        #[serde(default)]
+        status: String,
+        #[serde(default)]
+        summary: String,
+    },
+    SubtaskCompleted {
+        task_id: String,
+        #[serde(default)]
+        status: String,
+        #[serde(default)]
+        summary: String,
+        #[serde(default)]
+        turns_used: Option<u32>,
+    },
+    BatchProgress {
+        #[serde(default)]
+        total: u32,
+        #[serde(default)]
+        completed: u32,
+        #[serde(default)]
+        running: u32,
+    },
+    ContextUsage {
+        #[serde(default)]
+        estimated_tokens: u64,
+        #[serde(default)]
+        max_input_tokens: u64,
+        #[serde(default)]
+        threshold_tokens: u64,
+        #[serde(default)]
+        ratio: f64,
+    },
+    ContextOverflow {
+        #[serde(default)]
+        estimated_tokens: u64,
+        #[serde(default)]
+        max_input_tokens: u64,
+        #[serde(default)]
+        threshold_tokens: u64,
+        #[serde(default)]
+        ratio: f64,
+    },
+    ContextCompacted {
+        #[serde(default)]
+        entries_removed: u32,
+        #[serde(default)]
+        usage_ratio: f64,
+    },
 }
 
 #[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
@@ -481,7 +564,7 @@ struct SharedToolProgressPayload {
     elapsed_time_seconds: Option<u64>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum TimelineEventDetail {
     RunnerRegistered {
@@ -563,6 +646,44 @@ pub enum TimelineEventDetail {
     DaemonPresenceChanged {
         state: DaemonPresenceState,
     },
+    SubtaskStarted {
+        task_id: String,
+        parent_task_id: Option<String>,
+        description: String,
+        depth: u32,
+    },
+    SubtaskProgress {
+        task_id: String,
+        status: String,
+        summary: String,
+    },
+    SubtaskCompleted {
+        task_id: String,
+        status: String,
+        summary: String,
+        turns_used: Option<u32>,
+    },
+    BatchProgress {
+        total: u32,
+        completed: u32,
+        running: u32,
+    },
+    ContextUsage {
+        estimated_tokens: u64,
+        max_input_tokens: u64,
+        threshold_tokens: u64,
+        ratio: f64,
+    },
+    ContextOverflow {
+        estimated_tokens: u64,
+        max_input_tokens: u64,
+        threshold_tokens: u64,
+        ratio: f64,
+    },
+    ContextCompacted {
+        entries_removed: u32,
+        usage_ratio: f64,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -587,6 +708,13 @@ pub(crate) enum TimelineEventKind {
     ArtifactManifest,
     RuntimeError,
     DaemonPresenceChanged,
+    SubtaskStarted,
+    SubtaskProgress,
+    SubtaskCompleted,
+    BatchProgress,
+    ContextUsage,
+    ContextOverflow,
+    ContextCompacted,
 }
 
 #[derive(Debug, Clone)]
@@ -661,6 +789,75 @@ impl From<RuntimeEventDetail> for TimelineEventDetail {
             RuntimeEventDetail::DaemonPresenceChanged { state } => {
                 Self::DaemonPresenceChanged { state }
             }
+            RuntimeEventDetail::SubtaskStarted {
+                task_id,
+                parent_task_id,
+                description,
+                depth,
+            } => Self::SubtaskStarted {
+                task_id,
+                parent_task_id,
+                description,
+                depth,
+            },
+            RuntimeEventDetail::SubtaskProgress {
+                task_id,
+                status,
+                summary,
+            } => Self::SubtaskProgress {
+                task_id,
+                status,
+                summary,
+            },
+            RuntimeEventDetail::SubtaskCompleted {
+                task_id,
+                status,
+                summary,
+                turns_used,
+            } => Self::SubtaskCompleted {
+                task_id,
+                status,
+                summary,
+                turns_used,
+            },
+            RuntimeEventDetail::BatchProgress {
+                total,
+                completed,
+                running,
+            } => Self::BatchProgress {
+                total,
+                completed,
+                running,
+            },
+            RuntimeEventDetail::ContextUsage {
+                estimated_tokens,
+                max_input_tokens,
+                threshold_tokens,
+                ratio,
+            } => Self::ContextUsage {
+                estimated_tokens,
+                max_input_tokens,
+                threshold_tokens,
+                ratio,
+            },
+            RuntimeEventDetail::ContextOverflow {
+                estimated_tokens,
+                max_input_tokens,
+                threshold_tokens,
+                ratio,
+            } => Self::ContextOverflow {
+                estimated_tokens,
+                max_input_tokens,
+                threshold_tokens,
+                ratio,
+            },
+            RuntimeEventDetail::ContextCompacted {
+                entries_removed,
+                usage_ratio,
+            } => Self::ContextCompacted {
+                entries_removed,
+                usage_ratio,
+            },
         }
     }
 }
@@ -716,6 +913,75 @@ impl TryFrom<SharedRuntimeEventContract> for RuntimeEventDetail {
                 Self::ArtifactManifest { artifact_ids }
             }
             SharedRuntimeEventContract::RuntimeError { message } => Self::RuntimeError { message },
+            SharedRuntimeEventContract::SubtaskStarted {
+                task_id,
+                parent_task_id,
+                description,
+                depth,
+            } => Self::SubtaskStarted {
+                task_id,
+                parent_task_id,
+                description,
+                depth,
+            },
+            SharedRuntimeEventContract::SubtaskProgress {
+                task_id,
+                status,
+                summary,
+            } => Self::SubtaskProgress {
+                task_id,
+                status,
+                summary,
+            },
+            SharedRuntimeEventContract::SubtaskCompleted {
+                task_id,
+                status,
+                summary,
+                turns_used,
+            } => Self::SubtaskCompleted {
+                task_id,
+                status,
+                summary,
+                turns_used,
+            },
+            SharedRuntimeEventContract::BatchProgress {
+                total,
+                completed,
+                running,
+            } => Self::BatchProgress {
+                total,
+                completed,
+                running,
+            },
+            SharedRuntimeEventContract::ContextUsage {
+                estimated_tokens,
+                max_input_tokens,
+                threshold_tokens,
+                ratio,
+            } => Self::ContextUsage {
+                estimated_tokens,
+                max_input_tokens,
+                threshold_tokens,
+                ratio,
+            },
+            SharedRuntimeEventContract::ContextOverflow {
+                estimated_tokens,
+                max_input_tokens,
+                threshold_tokens,
+                ratio,
+            } => Self::ContextOverflow {
+                estimated_tokens,
+                max_input_tokens,
+                threshold_tokens,
+                ratio,
+            },
+            SharedRuntimeEventContract::ContextCompacted {
+                entries_removed,
+                usage_ratio,
+            } => Self::ContextCompacted {
+                entries_removed,
+                usage_ratio,
+            },
         };
         Ok(detail)
     }

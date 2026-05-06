@@ -29,6 +29,7 @@ fn test_config() -> ControlPlaneConfig {
         artifact_root_dir,
         auth_token: None,
         bootstrap_secret: Some("bootstrap-secret".to_owned()),
+        downloads_dir: None,
     }
 }
 
@@ -216,7 +217,7 @@ async fn cors_preflight_allows_cross_origin_browser_and_mobile_clients() {
             Request::builder()
                 .method(Method::OPTIONS)
                 .uri("/v1/devices")
-                .header(ORIGIN, "capacitor://localhost")
+                .header(ORIGIN, "tauri://localhost")
                 .header(ACCESS_CONTROL_REQUEST_METHOD, "GET")
                 .body(Body::empty())
                 .expect("request should build"),

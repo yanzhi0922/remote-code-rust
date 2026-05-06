@@ -31,18 +31,18 @@ pub(crate) fn build_cors_layer() -> CorsLayer {
     if any_localhost {
         CorsLayer::new()
             .allow_origin(tower_http::cors::AllowOrigin::any())
-            .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
+            .allow_methods([Method::GET, Method::POST, Method::DELETE, Method::OPTIONS])
             .allow_headers([CONTENT_TYPE, AUTHORIZATION, axum::http::header::ACCEPT])
             .expose_headers([CONTENT_DISPOSITION, CONTENT_TYPE])
     } else if origins.is_empty() {
         CorsLayer::new()
-            .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
+            .allow_methods([Method::GET, Method::POST, Method::DELETE, Method::OPTIONS])
             .allow_headers([CONTENT_TYPE, AUTHORIZATION, axum::http::header::ACCEPT])
             .expose_headers([CONTENT_DISPOSITION, CONTENT_TYPE])
     } else {
         CorsLayer::new()
             .allow_origin(origins)
-            .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
+            .allow_methods([Method::GET, Method::POST, Method::DELETE, Method::OPTIONS])
             .allow_headers([CONTENT_TYPE, AUTHORIZATION, axum::http::header::ACCEPT])
             .expose_headers([CONTENT_DISPOSITION, CONTENT_TYPE])
     }
@@ -75,11 +75,32 @@ pub(crate) async fn require_api_auth(
     mut request: Request,
     next: Next,
 ) -> axum::response::Response {
-    if !service.auth_required().await {
+    // Explicit disable via env var (local dev).
+    if std::env::var("REMOTE_CODE_REQUIRE_AUTH")
+        .as_deref()
+        .is_ok_and(|v| v.eq_ignore_ascii_case("false"))
+    {
         return next.run(request).await;
     }
 
-    let Some(provided) = extract_request_auth_token(&request) else {
+    // Bootstrap mode: no shared token, no bootstrap secret, AND no trusted
+    // devices registered — allow open access.  This covers fresh instances
+    // that have no auth configuration at all (e.g. unit tests).
+    // When a bootstrap_secret IS configured, the instance is in "waiting for
+    // owner claim" mode and protected routes still require auth.
+    // IMPORTANT: drop the read lock before calling next.run() to avoid
+    // deadlocking with handlers that need a write lock on the registry.
+    if service.auth_token.is_none() && service.bootstrap_secret_hash.is_none() {
+        let is_empty = {
+            let registry = service.registry.read().await;
+            registry.trusted_devices.is_empty()
+        };
+        if is_empty {
+            return next.run(request).await;
+        }
+    }
+
+    let Some(provided) = extract_request_auth_token(&mut request) else {
         return ApiError::unauthorized(
             "missing or invalid control plane bearer token".to_owned(),
         )
@@ -99,7 +120,7 @@ pub(crate) async fn require_api_auth(
         let mut registry = service.registry.write().await;
         registry.authenticate_device_token(&provided)
     };
-    if let Some(device) = authenticated_device {
+    if let Some((device, _is_access_token)) = authenticated_device {
         request
             .extensions_mut()
             .insert(AuthPrincipal::Device(device));
@@ -110,7 +131,7 @@ pub(crate) async fn require_api_auth(
         .into_response()
 }
 
-fn extract_request_auth_token(request: &Request) -> Option<String> {
+fn extract_request_auth_token(request: &mut Request) -> Option<String> {
     let bearer = request
         .headers()
         .get(AUTHORIZATION)
@@ -125,14 +146,30 @@ fn extract_request_auth_token(request: &Request) -> Option<String> {
     if !request_allows_query_auth(request) {
         return None;
     }
-    request
+    let token = request
         .uri()
         .query()
-        .and_then(extract_auth_token_from_query)
+        .and_then(extract_auth_token_from_query);
+    // Strip token from URI to prevent it from appearing in access logs
+    if token.is_some() {
+        strip_auth_from_request_uri(request);
+    }
+    token
 }
 
 fn request_allows_query_auth(request: &Request) -> bool {
-    request.uri().path().ends_with("/stream")
+    // Only allow query-string auth for WebSocket upgrade endpoints
+    let is_stream_path = request.uri().path().ends_with("/stream");
+    if !is_stream_path {
+        return false;
+    }
+    // Must be a WebSocket upgrade or a normal GET (for SSE)
+    let is_ws_upgrade = request
+        .headers()
+        .get("upgrade")
+        .is_some_and(|v| v.to_str().is_ok_and(|v| v.eq_ignore_ascii_case("websocket")));
+    let is_get = request.method() == Method::GET;
+    is_ws_upgrade || is_get
 }
 
 fn extract_auth_token_from_query(query: &str) -> Option<String> {
@@ -175,6 +212,31 @@ fn percent_decode_query_value(raw: &str) -> String {
         }
     }
     String::from_utf8_lossy(&decoded).into_owned()
+}
+
+/// Strip access_token and token query parameters from the request URI
+/// so they don't appear in access logs or error messages.
+fn strip_auth_from_request_uri(request: &mut Request) {
+    let uri = request.uri().clone();
+    let Some(query) = uri.query() else {
+        return;
+    };
+    let cleaned: String = query
+        .split('&')
+        .filter(|pair| {
+            let key = pair.split('=').next().unwrap_or("").trim();
+            !matches!(key, "token" | "access_token")
+        })
+        .collect::<Vec<_>>()
+        .join("&");
+    let new_uri = if cleaned.is_empty() {
+        format!("{}?", uri.path())
+    } else {
+        format!("{}?{cleaned}", uri.path())
+    };
+    if let Ok(parsed) = new_uri.parse::<axum::http::Uri>() {
+        *request.uri_mut() = parsed;
+    }
 }
 
 fn constant_time_token_eq(provided: &str, expected: &str) -> bool {
