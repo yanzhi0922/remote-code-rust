@@ -1,6 +1,8 @@
 import type {
   ArtifactTimelineItemVm,
   ApprovalTimelineItemVm,
+  BatchTimelineItemVm,
+  ContextTimelineItemVm,
   DaemonTimelineItemVm,
   MessageTimelineItemVm,
   RunnerTimelineItemVm,
@@ -9,6 +11,7 @@ import type {
   SessionConnectionVm,
   SessionEventTimelineItemVm,
   SessionSummaryVm,
+  SubtaskTimelineItemVm,
   TimelineItemVm,
   ToolTimelineItemVm,
 } from '../contracts';
@@ -302,6 +305,89 @@ export function normalizeRemoteTimelineEvent(event: RemoteTimelineEvent): Timeli
         activeSessions: event.detail.active_sessions,
         queuedSessions: event.detail.queued_sessions,
       } satisfies RunnerTimelineItemVm;
+    case 'subtask_started':
+      return {
+        ...base,
+        kind: 'subtask',
+        taskId: event.detail.task_id,
+        parentTaskId: event.detail.parent_task_id ?? null,
+        description: event.detail.description,
+        depth: event.detail.depth,
+        stage: 'started',
+        status: 'running',
+        summary: '',
+        turnsUsed: null,
+      } satisfies SubtaskTimelineItemVm;
+    case 'subtask_progress':
+      return {
+        ...base,
+        kind: 'subtask',
+        taskId: event.detail.task_id,
+        parentTaskId: null,
+        description: '',
+        depth: 0,
+        stage: 'progress',
+        status: event.detail.status,
+        summary: event.detail.summary,
+        turnsUsed: null,
+      } satisfies SubtaskTimelineItemVm;
+    case 'subtask_completed':
+      return {
+        ...base,
+        kind: 'subtask',
+        taskId: event.detail.task_id,
+        parentTaskId: null,
+        description: '',
+        depth: 0,
+        stage: 'completed',
+        status: event.detail.status,
+        summary: event.detail.summary,
+        turnsUsed: event.detail.turns_used ?? null,
+      } satisfies SubtaskTimelineItemVm;
+    case 'batch_progress':
+      return {
+        ...base,
+        kind: 'batch',
+        total: event.detail.total,
+        completed: event.detail.completed,
+        running: event.detail.running,
+      } satisfies BatchTimelineItemVm;
+    case 'context_usage':
+      return {
+        ...base,
+        kind: 'context',
+        event: 'usage',
+        estimatedTokens: event.detail.estimated_tokens,
+        maxInputTokens: event.detail.max_input_tokens,
+        thresholdTokens: event.detail.threshold_tokens,
+        ratio: event.detail.ratio,
+        entriesRemoved: null,
+        usageRatio: null,
+      } satisfies ContextTimelineItemVm;
+    case 'context_overflow':
+      return {
+        ...base,
+        kind: 'context',
+        event: 'overflow',
+        estimatedTokens: event.detail.estimated_tokens,
+        maxInputTokens: event.detail.max_input_tokens,
+        thresholdTokens: event.detail.threshold_tokens,
+        ratio: event.detail.ratio,
+        entriesRemoved: null,
+        usageRatio: null,
+      } satisfies ContextTimelineItemVm;
+    case 'context_compacted':
+      return {
+        ...base,
+        kind: 'context',
+        event: 'compacted',
+        estimatedTokens: null,
+        maxInputTokens: null,
+        thresholdTokens: null,
+        ratio: null,
+        entriesRemoved: event.detail.entries_removed,
+        usageRatio: event.detail.usage_ratio,
+      } satisfies ContextTimelineItemVm;
   }
 }
 

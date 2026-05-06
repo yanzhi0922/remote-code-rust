@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -55,6 +55,11 @@ struct Cli {
     #[arg(long, env = "REMOTE_CODE_RUNNER_REMOTE_CODE_BIN")]
     remote_code_bin: Option<PathBuf>,
 
+    /// Runner connection mode: "inbound" (default, listens for connections) or
+    /// "outbound" (long-polls control plane for commands — no inbound port needed).
+    #[arg(long, env = "REMOTE_CODE_RUNNER_MODE", default_value = "inbound")]
+    mode: String,
+
     #[command(subcommand)]
     command: Option<Command>,
 }
@@ -88,6 +93,9 @@ async fn wait_for_shutdown_or_timeout(
     }
 }
 
+/// Maximum buffered events per session before dropping oldest to prevent unbounded memory growth.
+const MAX_EVENT_BUFFER_PER_SESSION: usize = 500;
+
 #[derive(Clone)]
 struct HostedSessionManager {
     api: RunnerApi,
@@ -97,6 +105,9 @@ struct HostedSessionManager {
     client: reqwest::Client,
     auth_token: Option<String>,
     sessions: Arc<Mutex<HashMap<Uuid, HostedSessionHandle>>>,
+    /// Buffered runtime events that failed to reach the control plane.
+    /// Keyed by session_id; flushed on next successful post.
+    event_buffer: Arc<Mutex<HashMap<Uuid, VecDeque<RuntimeEventDetail>>>>,
 }
 
 #[derive(Clone)]
@@ -105,6 +116,11 @@ struct HostedSessionHandle {
     request_to_approval: Arc<Mutex<HashMap<String, Uuid>>>,
     approval_to_request: Arc<Mutex<HashMap<Uuid, String>>>,
     task_handles: Arc<Mutex<Vec<tokio::task::JoinHandle<()>>>>,
+    /// Accumulated tool input deltas for file-writing tools, keyed by tool_use_id.
+    /// When tool_finished arrives, the accumulated input is parsed to extract the file path.
+    pending_tool_inputs: Arc<Mutex<HashMap<String, String>>>,
+    /// Workspace root directory for resolving relative file paths.
+    workspace_dir: PathBuf,
 }
 
 impl HostedSessionManager {
@@ -122,6 +138,7 @@ impl HostedSessionManager {
             client: reqwest::Client::new(),
             auth_token: control_plane_auth_token(),
             sessions: Arc::new(Mutex::new(HashMap::new())),
+            event_buffer: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -218,6 +235,8 @@ impl HostedSessionManager {
             request_to_approval: Arc::new(Mutex::new(HashMap::new())),
             approval_to_request: Arc::new(Mutex::new(HashMap::new())),
             task_handles: Arc::new(Mutex::new(Vec::new())),
+            pending_tool_inputs: Arc::new(Mutex::new(HashMap::new())),
+            workspace_dir: workspace.root_dir.clone(),
         };
         self.sessions
             .lock()
@@ -306,6 +325,9 @@ impl HostedSessionManager {
         line: &str,
         handle: &HostedSessionHandle,
     ) -> Result<()> {
+        // Broadcast raw event to any direct-connect WebSocket subscribers
+        self.api.publish_stream_event(session_id, line);
+
         let value: serde_json::Value =
             serde_json::from_str(line).with_context(|| format!("invalid protocol line: {line}"))?;
         let kind = value
@@ -335,6 +357,24 @@ impl HostedSessionManager {
                     self.cancel_pending_approval(session_id, request_id, handle)
                         .await?;
                 }
+            }
+            "tool_started" => {
+                self.handle_tool_started(&value, handle).await;
+                if let Some(detail) = runtime_event_detail_from_stream_json_value(&value) {
+                    self.post_runtime_event(session_id, detail).await?;
+                }
+            }
+            "tool_progress" => {
+                self.handle_tool_progress(&value, handle).await;
+                if let Some(detail) = runtime_event_detail_from_stream_json_value(&value) {
+                    self.post_runtime_event(session_id, detail).await?;
+                }
+            }
+            "tool_finished" => {
+                if let Some(detail) = runtime_event_detail_from_stream_json_value(&value) {
+                    self.post_runtime_event(session_id, detail.clone()).await?;
+                }
+                self.handle_tool_finished(session_id, &value, handle).await?;
             }
             _ => {
                 if let Some(detail) = runtime_event_detail_from_stream_json_value(&value) {
@@ -635,19 +675,65 @@ impl HostedSessionManager {
     }
 
     async fn post_runtime_event(&self, session_id: Uuid, detail: RuntimeEventDetail) -> Result<()> {
-        let response = self
+        // First, try to flush any buffered events for this session
+        self.flush_event_buffer(session_id).await;
+
+        let result = self
             .control_plane_post(format!(
                 "{}/v1/sessions/{session_id}/events",
                 self.control_plane_url.trim_end_matches('/')
             ))
-            .json(&RuntimeEventCreateRequest { detail })
+            .json(&RuntimeEventCreateRequest { detail: detail.clone() })
             .send()
             .await
             .context("control-plane runtime event request failed")?
             .error_for_status()
-            .context("control-plane runtime event request was rejected")?;
-        let _ = response.bytes().await?;
-        Ok(())
+            .context("control-plane runtime event request was rejected");
+        match result {
+            Ok(response) => {
+                let _ = response.bytes().await?;
+                Ok(())
+            }
+            Err(error) => {
+                // Buffer the event instead of killing the session
+                warn!("buffering runtime event for session {session_id}: {error:#}");
+                let mut buffer = self.event_buffer.lock().await;
+                let buf = buffer.entry(session_id).or_default();
+                if buf.len() >= MAX_EVENT_BUFFER_PER_SESSION {
+                    let dropped = buf.drain(..buf.len() / 2).count();
+                    warn!("event buffer cap hit for session {session_id}, dropped {dropped} oldest events");
+                }
+                buf.push_back(detail);
+                Ok(())
+            }
+        }
+    }
+
+    /// Attempt to flush buffered runtime events for a session.
+    /// Caps buffer at [`MAX_EVENT_BUFFER_PER_SESSION`] to prevent unbounded memory growth.
+    async fn flush_event_buffer(&self, session_id: Uuid) {
+        let events: Vec<RuntimeEventDetail> = {
+            let mut buffer = self.event_buffer.lock().await;
+            buffer.remove(&session_id).unwrap_or_default().into_iter().collect()
+        };
+        for detail in events {
+            if self
+                .control_plane_post(format!(
+                    "{}/v1/sessions/{session_id}/events",
+                    self.control_plane_url.trim_end_matches('/')
+                ))
+                .json(&RuntimeEventCreateRequest { detail })
+                .send()
+                .await
+                .is_ok_and(|r| r.status().is_success())
+            {
+                // Flushed one successfully, continue
+            } else {
+                // Control plane still unreachable — re-buffer remaining and stop
+                warn!("control plane still unreachable during flush for session {session_id}");
+                return;
+            }
+        }
     }
 
     async fn create_control_plane_approval(
@@ -695,6 +781,177 @@ impl HostedSessionManager {
     fn control_plane_post(&self, url: String) -> reqwest::RequestBuilder {
         authorize_control_plane_request(self.client.post(url), self.auth_token.as_deref())
     }
+
+    /// File-writing tool names that should trigger automatic artifact upload.
+    const FILE_WRITE_TOOLS: &[&str] = &["Write", "Edit", "write_file", "edit_file", "create_file"];
+
+    /// On tool_started for a file-writing tool, start accumulating input deltas.
+    async fn handle_tool_started(&self, value: &serde_json::Value, handle: &HostedSessionHandle) {
+        let tool_name = value
+            .get("tool_name")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        if !Self::FILE_WRITE_TOOLS.contains(&tool_name) {
+            return;
+        }
+        if let Some(tool_use_id) = value.get("tool_use_id").and_then(serde_json::Value::as_str) {
+            handle
+                .pending_tool_inputs
+                .lock()
+                .await
+                .insert(tool_use_id.to_owned(), String::new());
+        }
+    }
+
+    /// Accumulate input_delta for tracked file-writing tools.
+    async fn handle_tool_progress(&self, value: &serde_json::Value, handle: &HostedSessionHandle) {
+        let tool_use_id = match value.get("tool_use_id").and_then(serde_json::Value::as_str) {
+            Some(id) => id.to_owned(),
+            None => return,
+        };
+        let delta = match value.get("input_delta").and_then(serde_json::Value::as_str) {
+            Some(d) => d,
+            None => return,
+        };
+        let mut inputs = handle.pending_tool_inputs.lock().await;
+        if let Some(acc) = inputs.get_mut(&tool_use_id) {
+            acc.push_str(delta);
+        }
+    }
+
+    /// After tool_finished, extract file path from accumulated input and auto-upload.
+    async fn handle_tool_finished(
+        &self,
+        session_id: Uuid,
+        value: &serde_json::Value,
+        handle: &HostedSessionHandle,
+    ) -> Result<()> {
+        let tool_name = value
+            .get("tool_name")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        let is_error = value
+            .get("is_error")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(true);
+        if is_error || !Self::FILE_WRITE_TOOLS.contains(&tool_name) {
+            // Clean up any accumulated input for this tool.
+            if let Some(id) = value.get("tool_use_id").and_then(serde_json::Value::as_str) {
+                handle.pending_tool_inputs.lock().await.remove(id);
+            }
+            return Ok(());
+        }
+        let tool_use_id = match value.get("tool_use_id").and_then(serde_json::Value::as_str) {
+            Some(id) => id.to_owned(),
+            None => return Ok(()),
+        };
+        let accumulated_input = match handle.pending_tool_inputs.lock().await.remove(&tool_use_id) {
+            Some(input) => input,
+            None => return Ok(()),
+        };
+        // Parse accumulated input as JSON to extract file path.
+        let file_path = extract_file_path_from_tool_input(&accumulated_input);
+        let file_path = match file_path {
+            Some(p) => p,
+            None => return Ok(()),
+        };
+        let absolute = if file_path.is_absolute() {
+            file_path
+        } else {
+            handle.workspace_dir.join(&file_path)
+        };
+        // Upload in background to avoid blocking event processing.
+        let this = self.clone();
+        tokio::spawn(async move {
+            if let Err(error) = this.upload_artifact(session_id, &absolute).await {
+                warn!(
+                    "auto-upload artifact failed for session {session_id} file {}: {error:#}",
+                    absolute.display()
+                );
+            }
+        });
+        Ok(())
+    }
+
+    /// Upload a file as an artifact to the control plane.
+    async fn upload_artifact(&self, session_id: Uuid, file_path: &std::path::Path) -> Result<()> {
+        let bytes = tokio::fs::read(file_path)
+            .await
+            .with_context(|| format!("failed to read artifact file {}", file_path.display()))?;
+        let name = file_path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("artifact")
+            .to_owned();
+        let file_name = file_path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("file")
+            .to_owned();
+        let media_type = guess_media_type(file_path);
+        let request_body = serde_json::json!({
+            "name": name,
+            "file_name": file_name,
+            "media_type": media_type,
+            "content_base64": base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &bytes),
+            "metadata": {
+                "source": "auto-upload",
+                "tool": "hosted-session",
+            }
+        });
+        let url = format!(
+            "{}/v1/sessions/{session_id}/artifacts",
+            self.control_plane_url.trim_end_matches('/')
+        );
+        let response = self
+            .control_plane_post(url)
+            .json(&request_body)
+            .send()
+            .await
+            .context("artifact upload request failed")?;
+        if response.status().is_success() {
+            info!(
+                "auto-uploaded artifact for session {session_id}: {} ({} bytes)",
+                file_path.display(),
+                bytes.len()
+            );
+        } else {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            warn!(
+                "artifact upload rejected for session {session_id}: {status} — {body}"
+            );
+        }
+        Ok(())
+    }
+}
+
+fn guess_media_type(path: &std::path::Path) -> Option<String> {
+    match path.extension().and_then(|ext| ext.to_str()) {
+        Some("rs") => Some("text/rust".to_owned()),
+        Some("ts" | "tsx") => Some("text/typescript".to_owned()),
+        Some("js" | "jsx") => Some("text/javascript".to_owned()),
+        Some("py") => Some("text/x-python".to_owned()),
+        Some("json") => Some("application/json".to_owned()),
+        Some("toml") => Some("text/toml".to_owned()),
+        Some("yaml" | "yml") => Some("text/yaml".to_owned()),
+        Some("md") => Some("text/markdown".to_owned()),
+        Some("html") => Some("text/html".to_owned()),
+        Some("css") => Some("text/css".to_owned()),
+        Some("png") => Some("image/png".to_owned()),
+        Some("jpg" | "jpeg") => Some("image/jpeg".to_owned()),
+        Some("svg") => Some("image/svg+xml".to_owned()),
+        Some("pdf") => Some("application/pdf".to_owned()),
+        _ => Some("application/octet-stream".to_owned()),
+    }
+}
+
+/// Extract file path from accumulated tool input JSON.
+/// Handles both `{"file_path": "..."}` and `{"path": "..."}` formats.
+fn extract_file_path_from_tool_input(input: &str) -> Option<PathBuf> {
+    let parsed: serde_json::Value = serde_json::from_str(input).ok()?;
+    let path_value = parsed.get("file_path").or_else(|| parsed.get("path"))?;
+    path_value.as_str().map(PathBuf::from)
 }
 
 async fn write_session_input(
@@ -781,10 +1038,10 @@ fn encode_path_segment(raw: &str) -> String {
 }
 
 async fn pull_runner_commands_from_control_plane(
+    client: &reqwest::Client,
     control_plane_url: &str,
     runner_id: &str,
 ) -> Result<RunnerCommandPullResponse> {
-    let client = reqwest::Client::new();
     let response = authorize_control_plane_request(
         client.post(format!(
             "{}/v1/runners/{}/commands/pull?limit=16",
@@ -857,14 +1114,19 @@ async fn run_control_plane_sync(
     let registration = config.registration_request();
     let configured_interval_secs = config.heartbeat_interval_secs;
     let mut retry_delay = Duration::from_secs(1);
-    let poll_interval = Duration::from_secs(1);
+    let client = reqwest::Client::new();
+    const IDLE_POLL_SECS: u64 = 5;
+    const ACTIVE_POLL_SECS: u64 = 1;
+    const MAX_IDLE_POLL_SECS: u64 = 15;
+    let mut poll_interval = Duration::from_secs(ACTIVE_POLL_SECS);
+    let mut consecutive_empty_pulls: u32 = 0;
 
     loop {
         if *shutdown.borrow() {
             return;
         }
 
-        match register_with_control_plane(&control_plane_url, &registration).await {
+        match register_with_control_plane(&client, &control_plane_url, &registration).await {
             Ok(lease) => {
                 retry_delay = Duration::from_secs(1);
                 let mut heartbeat_interval = tokio::time::interval(effective_heartbeat_interval(
@@ -882,20 +1144,35 @@ async fn run_control_plane_sync(
                         }
                         _ = heartbeat_interval.tick() => {
                             let heartbeat = api.heartbeat().await;
-                            if let Err(error) = send_heartbeat(&control_plane_url, &heartbeat).await {
+                            if let Err(error) = send_heartbeat(&client, &control_plane_url, &heartbeat).await {
                                 warn!("failed to send heartbeat to control plane: {error}");
                                 break;
                             }
                         }
                         _ = command_poll_interval.tick() => {
                             match pull_runner_commands_from_control_plane(
+                                &client,
                                 &control_plane_url,
                                 &registration.runner_id,
                             ).await {
                                 Ok(response) => {
+                                    let command_count = response.commands.len();
                                     if let Err(error) = apply_pulled_runner_commands(&api, response).await {
                                         warn!("failed to apply pulled runner commands: {error:#}");
                                     }
+                                    if command_count > 0 {
+                                        consecutive_empty_pulls = 0;
+                                        poll_interval = Duration::from_secs(ACTIVE_POLL_SECS);
+                                    } else {
+                                        consecutive_empty_pulls += 1;
+                                        if consecutive_empty_pulls >= 3 {
+                                            let backoff_secs = IDLE_POLL_SECS
+                                                .saturating_mul(1 << (consecutive_empty_pulls - 3).min(2))
+                                                .min(MAX_IDLE_POLL_SECS);
+                                            poll_interval = Duration::from_secs(backoff_secs);
+                                        }
+                                    }
+                                    command_poll_interval = tokio::time::interval(poll_interval);
                                 }
                                 Err(error) => warn!("failed to pull runner commands from control plane: {error}"),
                             }
@@ -910,6 +1187,76 @@ async fn run_control_plane_sync(
             return;
         }
         retry_delay = next_retry_delay(retry_delay);
+    }
+}
+
+/// Outbound polling mode: long-polls the control plane for queued commands.
+/// Works behind any firewall/NAT — no inbound port needed.
+async fn run_outbound_poll_loop(
+    api: RunnerApi,
+    config: RunnerConfig,
+    mut shutdown: watch::Receiver<bool>,
+) {
+    let cp_url = match &config.control_plane_url {
+        Some(url) => url.clone(),
+        None => {
+            tracing::error!("outbound mode requires control_plane_url");
+            return;
+        }
+    };
+    let runner_id = &config.runner_id;
+    let client = reqwest::Client::new();
+    let auth = config.auth_token.as_deref().unwrap_or("");
+    let poll_timeout = Duration::from_secs(30);
+
+    let mut retry_delay = Duration::from_secs(1);
+
+    loop {
+        if shutdown.has_changed().unwrap_or(true) {
+            break;
+        }
+
+        let url = format!(
+            "{cp_url}/v1/runners/{runner_id}/commands/pull?timeout={}",
+            poll_timeout.as_secs(),
+        );
+
+        let result = client
+            .post(&url)
+            .header("authorization", format!("Bearer {auth}"))
+            .timeout(poll_timeout + Duration::from_secs(5))
+            .send()
+            .await;
+
+        match result {
+            Ok(response) => {
+                if response.status().is_success() {
+                    retry_delay = Duration::from_secs(1);
+                    if let Ok(body) = response.text().await {
+                        if !body.is_empty() {
+                            if let Ok(cmd_response) = serde_json::from_str::<RunnerCommandPullResponse>(&body) {
+                                if let Err(e) = apply_pulled_runner_commands(&api, cmd_response).await {
+                                    tracing::warn!("outbound command processing failed: {e:#}");
+                                }
+                            }
+                        }
+                    }
+                } else if response.status().as_u16() == 404 {
+                    tracing::warn!("runner not registered, will retry");
+                } else {
+                    tracing::warn!("poll returned HTTP {}", response.status());
+                }
+            }
+            Err(e) => {
+                tracing::warn!("poll request failed: {e}");
+                tokio::select! {
+                    _ = tokio::time::sleep(retry_delay) => {},
+                    _ = shutdown.changed() => break,
+                }
+                retry_delay = next_retry_delay(retry_delay);
+                continue;
+            }
+        }
     }
 }
 
@@ -956,11 +1303,23 @@ async fn main() -> Result<()> {
                 .unwrap_or(default_remote_code_bin()?);
             let (shutdown_tx, shutdown_rx) = watch::channel(false);
             if config.control_plane_url.is_some() {
-                tokio::spawn(run_control_plane_sync(
+                let cp_sync_task = tokio::spawn(run_control_plane_sync(
                     api.clone(),
                     config.clone(),
                     shutdown_rx,
                 ));
+                // Monitor the control-plane sync task for panics.
+                let mut cp_monitor = shutdown_tx.subscribe();
+                tokio::spawn(async move {
+                    tokio::select! {
+                        result = cp_sync_task => {
+                            if result.is_err() {
+                                tracing::error!("control-plane sync task panicked");
+                            }
+                        }
+                        _ = cp_monitor.changed() => {}
+                    }
+                });
                 let hosted_manager = HostedSessionManager::new(
                     api.clone(),
                     config
@@ -970,11 +1329,41 @@ async fn main() -> Result<()> {
                     remote_code_bin,
                     config.profile_dir.profile_dir.clone(),
                 );
-                tokio::spawn(hosted_manager.run(event_rx, shutdown_tx.subscribe()));
+                let manager_task = tokio::spawn(hosted_manager.run(event_rx, shutdown_tx.subscribe()));
+                // Monitor the manager task for unexpected termination.
+                let mut monitor_shutdown = shutdown_tx.subscribe();
+                tokio::spawn(async move {
+                    tokio::select! {
+                        result = manager_task => {
+                            if result.is_err() {
+                                tracing::error!("hosted session manager task panicked");
+                            }
+                        }
+                        _ = monitor_shutdown.changed() => {}
+                    }
+                });
             }
-            let app = api.router();
-            let listener = tokio::net::TcpListener::bind(bind).await?;
-            axum::serve(listener, app).await?;
+
+            if cli.mode == "outbound" {
+                // Outbound mode: long-poll control plane for commands instead of
+                // listening for inbound connections. Works behind any firewall/NAT.
+                if config.control_plane_url.is_none() {
+                    anyhow::bail!("outbound mode requires --control-plane-url");
+                }
+                let outbound_shutdown = shutdown_tx.subscribe();
+                tokio::spawn(run_outbound_poll_loop(
+                    api.clone(),
+                    config.clone(),
+                    outbound_shutdown,
+                ));
+                // Block until shutdown.
+                let mut wait_shutdown = shutdown_tx.subscribe();
+                let _ = wait_shutdown.changed().await;
+            } else {
+                let app = api.router();
+                let listener = tokio::net::TcpListener::bind(bind).await?;
+                axum::serve(listener, app).await?;
+            }
         }
     }
     Ok(())

@@ -433,6 +433,26 @@ export interface CodexThreadGoalRequest {
 
 export interface CodexThreadGoalSetRequest extends CodexThreadGoalRequest {
   text: string;
+  status?: string | null;
+  tokenBudget?: number | null;
+}
+
+/** ThreadGoal 数据模型 — 与 Rust ThreadGoal (protocol v2) 对齐 */
+export interface CodexThreadGoalInfo {
+  threadId: string;
+  objective: string;
+  status: 'Active' | 'Paused' | 'BudgetLimited' | 'Complete';
+  tokenBudget: number | null;
+  tokensUsed: number;
+  timeUsedSeconds: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
+/** Goal 状态信息 — 用于 useAppStore */
+export interface CodexGoalState {
+  goal: CodexThreadGoalInfo;
+  lastUpdated: number;
 }
 
 export interface CodexThreadRollbackRequest extends CodexThreadGoalRequest {

@@ -51,6 +51,9 @@ export {
   shareFile,
   isFileDownloaded,
   readDownloadedTextFile,
+  deleteDownloadedFile,
+  listDownloadedFiles,
+  getDownloadedFilePath,
 } from './fileDownload';
 
 export {
@@ -65,4 +68,6 @@ export {
   registerPushTokenWithControlPlane,
   getStoredPushToken,
   clearPushToken,
+  showLocalNotification,
+  hasPushPermission,
 } from './pushNotifications';

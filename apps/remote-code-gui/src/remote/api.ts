@@ -14,7 +14,13 @@ import type {
   RemoteTimelineEvent,
   RemoteTrustedDeviceRecord,
 } from './types';
-import { resolveRemoteAccessToken } from '../lib/runtime';
+import {
+  resolveRemoteAccessToken,
+  resolveRemoteRefreshToken,
+  persistRemoteAccessToken,
+  clearRemoteAccessToken,
+  clearRemoteRefreshToken,
+} from '../lib/runtime';
 
 interface RemoteErrorEnvelope {
   error?: {
@@ -118,9 +124,11 @@ export async function sendPrompt(
   baseUrl: string,
   sessionId: string,
   content: string,
+  runnerBaseUrl?: string | null,
 ): Promise<RemoteCommandResponse> {
+  const target = runnerBaseUrl ?? baseUrl;
   return requestJson<RemoteCommandResponse>(
-    baseUrl,
+    target,
     `/v1/sessions/${encodeURIComponent(sessionId)}/commands`,
     {
       method: 'POST',
@@ -135,9 +143,11 @@ export async function sendPrompt(
 export async function interruptSession(
   baseUrl: string,
   sessionId: string,
+  runnerBaseUrl?: string | null,
 ): Promise<RemoteCommandResponse> {
+  const target = runnerBaseUrl ?? baseUrl;
   return requestJson<RemoteCommandResponse>(
-    baseUrl,
+    target,
     `/v1/sessions/${encodeURIComponent(sessionId)}/commands`,
     {
       method: 'POST',
@@ -153,9 +163,11 @@ export async function respondToApproval(
   approvalId: string,
   decision: RemoteApprovalDecision,
   note?: string,
+  runnerBaseUrl?: string | null,
 ): Promise<RemoteApprovalRecord> {
+  const target = runnerBaseUrl ?? baseUrl;
   return requestJson<RemoteApprovalRecord>(
-    baseUrl,
+    target,
     `/v1/approvals/${encodeURIComponent(approvalId)}/decision`,
     {
       method: 'POST',
@@ -203,6 +215,44 @@ export function buildSessionEventsStreamUrl(
   return wsUrl.toString();
 }
 
+let _refreshPromise: Promise<boolean> | null = null;
+
+async function tryRefreshAccessToken(baseUrl: string): Promise<boolean> {
+  if (_refreshPromise) return _refreshPromise;
+
+  _refreshPromise = (async () => {
+    const refreshToken = resolveRemoteRefreshToken();
+    if (!refreshToken) return false;
+
+    try {
+      const response = await fetch(buildHttpUrl(baseUrl, '/v1/auth/refresh'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ refresh_token: refreshToken }),
+        signal: AbortSignal.timeout(5000),
+      });
+
+      if (!response.ok) {
+        if (response.status === 401) {
+          clearRemoteAccessToken();
+          clearRemoteRefreshToken();
+        }
+        return false;
+      }
+
+      const data = await response.json() as { access_token: string };
+      persistRemoteAccessToken(data.access_token);
+      return true;
+    } catch {
+      return false;
+    } finally {
+      _refreshPromise = null;
+    }
+  })();
+
+  return _refreshPromise;
+}
+
 export async function requestJson<T>(
   baseUrl: string,
   path: string,
@@ -221,6 +271,12 @@ export async function requestJson<T>(
       });
 
       const responseText = await response.text();
+
+      if (response.status === 401 && attempt === 0) {
+        const refreshed = await tryRefreshAccessToken(baseUrl);
+        if (refreshed) continue;
+      }
+
       if (!response.ok) {
         throw new Error(extractRemoteError(responseText, response.status));
       }

@@ -2,7 +2,10 @@ import * as Dialog from '@radix-ui/react-dialog';
 import {
   AlertTriangle,
   Bot,
+  Database,
   FileOutput,
+  Layers,
+  GitBranch,
   LoaderCircle,
   MessageSquareText,
   Shield,
@@ -16,18 +19,21 @@ import {
   lazy,
   startTransition,
   useDeferredValue,
+  useCallback,
   useEffect,
   useEffectEvent,
   useMemo,
   useRef,
   useState,
 } from 'react';
+import { Virtuoso } from 'react-virtuoso';
 import {
   clearRemoteActiveSessionId,
   clearRemoteAccessToken,
   clearRemotePairingContext,
-  persistRemoteActiveSessionId,
   persistRemoteAccessToken,
+  persistRemoteActiveSessionId,
+  persistRemoteRefreshToken,
   resolveRemoteActiveSessionId,
   resolveRemoteAccessToken,
   resolveRemoteBaseUrl,
@@ -63,7 +69,9 @@ import {
 } from '../session/normalize/fromRemote';
 import { RemoteAuthGate } from './RemoteAuthGate';
 import { RemoteShell, EmptyCard } from './RemoteShell';
-import { loadRemoteSessionBundle, subscribeToRemoteSessionEvents } from './transport';
+import { loadRemoteSessionBundle } from './transport';
+import { useConnection } from './useConnection';
+import type { TransportConfig } from './connection-manager';
 import type {
   RemoteApprovalDecision,
   RemoteApprovalRecord,
@@ -129,13 +137,13 @@ export default function RemoteApp() {
   const [interrupting, setInterrupting] = useState(false);
   const [approvingId, setApprovingId] = useState<string | null>(null);
   const [downloadingArtifactId, setDownloadingArtifactId] = useState<string | null>(null);
-  const [connectionState, setConnectionState] = useState<ConnectionState>('idle');
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
 
   const activeSessionIdRef = useRef<string | null>(null);
   const latestSequenceRef = useRef(0);
+  const connectedSessionRef = useRef<string | null>(null);
   const sessionRefreshTimerRef = useRef<number | null>(null);
   const statusTimerRef = useRef<number | null>(null);
 
@@ -144,7 +152,9 @@ export default function RemoteApp() {
     [activeSessionId, sessions],
   );
   const selectedSessionId = activeSession?.session_id ?? null;
-  activeSessionIdRef.current = selectedSessionId;
+  useEffect(() => {
+    activeSessionIdRef.current = selectedSessionId;
+  });
   const activeSessionControlStatus = useMemo(
     () => describeSessionControl(activeSession, locale, copy),
     [activeSession, copy, locale],
@@ -227,7 +237,7 @@ export default function RemoteApp() {
       })
       .catch((error) => {
         if (!cancelled) {
-          setAuthErrorMessage(extractErrorMessage(error));
+          reportAsyncError(error);
         }
       });
     return () => {
@@ -237,8 +247,11 @@ export default function RemoteApp() {
 
   // ── Auth handlers ──────────────────────────────────────────────────────
 
-  const completeAuthentication = useEffectEvent((token: string, message: string) => {
+  const completeAuthentication = useEffectEvent((token: string, message: string, refreshToken?: string) => {
     persistRemoteAccessToken(token);
+    if (refreshToken) {
+      persistRemoteRefreshToken(refreshToken);
+    }
     void clearRemotePairingContext();
     stripRemoteSensitiveQueryParams();
     setBootstrapSecret('');
@@ -258,11 +271,11 @@ export default function RemoteApp() {
     setAuthLoading(true);
     try {
       const response = await bootstrapControlPlane(baseUrl, bootstrapSecret, deviceName);
-      completeAuthentication(response.access_token, copy.statusBootstrapClaimSucceeded);
+      completeAuthentication(response.access_token, copy.statusBootstrapClaimSucceeded, response.refresh_token);
       const nextHealth = await getControlPlaneHealth(baseUrl);
       setHealth(nextHealth);
     } catch (error) {
-      setAuthErrorMessage(extractErrorMessage(error));
+      reportAsyncError(error);
     } finally {
       setAuthLoading(false);
     }
@@ -280,11 +293,11 @@ export default function RemoteApp() {
         pairingSecret,
         deviceName,
       );
-      completeAuthentication(response.access_token, copy.statusPairingSucceeded);
+      completeAuthentication(response.access_token, copy.statusPairingSucceeded, response.refresh_token);
       const nextHealth = await getControlPlaneHealth(baseUrl);
       setHealth(nextHealth);
     } catch (error) {
-      setAuthErrorMessage(extractErrorMessage(error));
+      reportAsyncError(error);
     } finally {
       setAuthLoading(false);
     }
@@ -346,12 +359,7 @@ export default function RemoteApp() {
       });
       setErrorMessage(null);
     } catch (error) {
-      const message = extractErrorMessage(error);
-      if (message.includes('HTTP 401')) {
-        setAuthErrorMessage(message);
-      } else {
-        setErrorMessage(message);
-      }
+      reportAsyncError(error);
     } finally {
       setSessionsLoading(false);
     }
@@ -440,6 +448,29 @@ export default function RemoteApp() {
     }
   });
 
+  // ── Unified transport via ConnectionManager ──────────────────────────────
+
+  const handleTransportEvent = useEffectEvent((event: RemoteTimelineEvent) => {
+    const sessionId = connectedSessionRef.current;
+    if (sessionId) {
+      handleLiveEvent(sessionId, event);
+    }
+  });
+
+  const {
+    connectionState: transportConnectionState,
+    connect: transportConnect,
+    disconnect: transportDisconnect,
+    latestSequence: transportSequence,
+  } = useConnection(handleTransportEvent);
+
+  const connectionState: ConnectionState =
+    transportConnectionState === 'probing' ? 'connecting' : transportConnectionState;
+
+  useEffect(() => {
+    latestSequenceRef.current = Math.max(latestSequenceRef.current, transportSequence);
+  }, [transportSequence]);
+
   // ── Periodic + visibility refresh ──────────────────────────────────────
 
   useEffect(() => {
@@ -494,52 +525,41 @@ export default function RemoteApp() {
     };
   }, []);
 
-  // ── WebSocket subscription ─────────────────────────────────────────────
+  // ── Transport subscription ─────────────────────────────────────────────
 
   useEffect(() => {
     if (!baseUrl || !selectedSessionId || !health || (authRequired && !accessToken)) {
       setEvents([]);
       setApprovals([]);
       setArtifacts([]);
-      setConnectionState('idle');
+      connectedSessionRef.current = null;
+      transportDisconnect();
       latestSequenceRef.current = 0;
       return;
     }
 
+    connectedSessionRef.current = selectedSessionId;
+
     let cancelled = false;
-    let subscription: { close(): void } | null = null;
 
     const bootstrap = async () => {
       setEventsLoading(true);
       try {
         await refreshSessionBundle(selectedSessionId);
         if (!cancelled) {
-          subscription = subscribeToRemoteSessionEvents({
+          const config: TransportConfig = {
+            strategy: 'hybrid',
             baseUrl,
+            runnerBaseUrl: activeSession?.owner_runner_public_base_url ?? null,
             sessionId: selectedSessionId,
-            getAfterSequence: () => latestSequenceRef.current,
-            onConnectionStateChange: (state) => {
-              if (!cancelled) {
-                setConnectionState(state);
-              }
-            },
-            onEvent: (event) => {
-              if (!cancelled) {
-                handleLiveEvent(selectedSessionId, event);
-              }
-            },
-          });
+            authToken: accessToken,
+          };
+          await transportConnect(config, latestSequenceRef.current);
           setErrorMessage(null);
         }
       } catch (error) {
         if (!cancelled) {
-          setConnectionState('error');
-          const message = extractErrorMessage(error);
-          if (message.includes('HTTP 401')) {
-            setAuthErrorMessage(message);
-          } else {
-            setErrorMessage(message);
-          }
+          reportAsyncError(error);
         }
       } finally {
         if (!cancelled) {
@@ -552,7 +572,8 @@ export default function RemoteApp() {
 
     return () => {
       cancelled = true;
-      subscription?.close();
+      connectedSessionRef.current = null;
+      transportDisconnect();
     };
   }, [accessToken, authRequired, baseUrl, health, selectedSessionId]);
 
@@ -572,16 +593,11 @@ export default function RemoteApp() {
 
     setSending(true);
     try {
-      await sendPrompt(baseUrl, selectedSessionId, composer.trim());
+      await sendPrompt(baseUrl, selectedSessionId, composer.trim(), activeSession?.owner_runner_public_base_url);
       setComposer('');
       showStatusMessage(copy.statusPromptForwarded);
     } catch (error) {
-      const message = extractErrorMessage(error);
-      if (message.includes('HTTP 401')) {
-        setAuthErrorMessage(message);
-      } else {
-        setErrorMessage(message);
-      }
+      reportAsyncError(error);
     } finally {
       setSending(false);
     }
@@ -600,15 +616,10 @@ export default function RemoteApp() {
 
     setInterrupting(true);
     try {
-      await interruptSession(baseUrl, selectedSessionId);
+      await interruptSession(baseUrl, selectedSessionId, activeSession?.owner_runner_public_base_url);
       showStatusMessage(copy.statusInterruptForwarded);
     } catch (error) {
-      const message = extractErrorMessage(error);
-      if (message.includes('HTTP 401')) {
-        setAuthErrorMessage(message);
-      } else {
-        setErrorMessage(message);
-      }
+      reportAsyncError(error);
     } finally {
       setInterrupting(false);
     }
@@ -624,18 +635,13 @@ export default function RemoteApp() {
 
     setApprovingId(approvalId);
     try {
-      await respondToApproval(baseUrl, approvalId, decision);
+      await respondToApproval(baseUrl, approvalId, decision, undefined, activeSession?.owner_runner_public_base_url);
       showStatusMessage(copy.statusApprovalDecision(copy.approvalDecisionLabels[decision]));
       if (selectedSessionId) {
         await refreshApprovals(selectedSessionId);
       }
     } catch (error) {
-      const message = extractErrorMessage(error);
-      if (message.includes('HTTP 401')) {
-        setAuthErrorMessage(message);
-      } else {
-        setErrorMessage(message);
-      }
+      reportAsyncError(error);
     } finally {
       setApprovingId(null);
     }
@@ -655,12 +661,7 @@ export default function RemoteApp() {
       });
       showStatusMessage(copy.statusArtifactDownloaded(artifact.file_name));
     } catch (error) {
-      const message = extractErrorMessage(error);
-      if (message.includes('HTTP 401')) {
-        setAuthErrorMessage(message);
-      } else {
-        setErrorMessage(message);
-      }
+      reportAsyncError(error);
     } finally {
       setDownloadingArtifactId(null);
     }
@@ -685,7 +686,7 @@ export default function RemoteApp() {
     return (
       <div className="min-h-screen bg-[radial-gradient(circle_at_top_left,#fbf6ec,transparent_28%),linear-gradient(180deg,#f4efe4_0%,#efe8db_100%)] text-slate-900">
         <div className="flex min-h-screen items-center justify-center px-6">
-          <div className="flex items-center gap-3 rounded-2xl border border-[#e2d8c8] bg-white px-5 py-4 text-sm text-slate-600 shadow-[0_18px_45px_rgba(52,45,34,0.08)]">
+          <div role="status" className="flex items-center gap-3 rounded-2xl border border-[#e2d8c8] bg-white px-5 py-4 text-sm text-slate-600 shadow-[0_18px_45px_rgba(52,45,34,0.08)]">
             <LoaderCircle size={16} className="animate-spin" />
             {copy.contactingControlPlane}
           </div>
@@ -756,27 +757,34 @@ export default function RemoteApp() {
         <section className="flex min-h-0 flex-col border-b border-[#e5ddcf] bg-[#f7f2e8] lg:border-b-0 lg:border-r">
           {activeSession ? (
             <div className="flex min-h-0 flex-1 flex-col">
-              <div className="flex-1 overflow-y-auto px-4 py-5 sm:px-6">
+              <div className="flex-1 min-h-0">
                 {eventsLoading ? (
-                  <div className="flex min-h-[280px] items-center justify-center">
-                    <div className="flex items-center gap-3 rounded-2xl bg-white px-4 py-3 text-sm text-slate-500 shadow-[0_12px_28px_rgba(34,32,28,0.06)]">
+                  <div className="flex min-h-[280px] items-center justify-center px-4 py-5 sm:px-6">
+                    <div role="status" className="flex items-center gap-3 rounded-2xl bg-white px-4 py-3 text-sm text-slate-500 shadow-[0_12px_28px_rgba(34,32,28,0.06)]">
                       <LoaderCircle size={16} className="animate-spin" />
                       {copy.loadingSessionTimeline}
                     </div>
                   </div>
                 ) : deferredEvents.length === 0 ? (
-                  <div className="flex min-h-[280px] items-center justify-center">
+                  <div className="flex min-h-[280px] items-center justify-center px-4 py-5 sm:px-6">
                     <EmptyCard
                       title={copy.timelineEmptyTitle}
                       description={copy.timelineEmptyDescription}
                     />
                   </div>
                 ) : (
-                  <div className="mx-auto flex w-full max-w-5xl flex-col gap-4">
-                    {deferredEvents.map((event) => (
-                      <TimelineCard key={event.sequence} copy={copy} locale={locale} event={event} />
-                    ))}
-                  </div>
+                  <Virtuoso
+                    data={deferredEvents}
+                    followOutput="smooth"
+                    className="h-full"
+                    itemContent={(index, event) => (
+                      <div className="px-4 py-2.5 sm:px-6 first:pt-5 last:pb-5">
+                        <div className="mx-auto max-w-5xl">
+                          <TimelineCard copy={copy} locale={locale} event={event} />
+                        </div>
+                      </div>
+                    )}
+                  />
                 )}
               </div>
 
@@ -810,6 +818,7 @@ export default function RemoteApp() {
                   )}
                   <div className="flex items-end gap-3 px-4 py-4">
                     <textarea
+                      aria-label={copy.followUpPlaceholder}
                       value={composer}
                       onChange={(event) => setComposer(event.target.value)}
                       onKeyDown={(event) => {
@@ -1039,7 +1048,7 @@ function TimelineCard({
     return (
       <TimelineMessageCard role={detail.role} header={copy.messageHeaders[detail.role]}>
         {detail.role === 'assistant' ? (
-          <Suspense fallback={<div className="text-sm text-slate-500">{copy.renderResponse}</div>}>
+          <Suspense fallback={<div className="space-y-2"><div className="h-4 w-3/4 animate-pulse rounded bg-slate-200" /><div className="h-4 w-1/2 animate-pulse rounded bg-slate-200" /></div>}>
             <LazyMarkdownRenderer content={detail.text} />
           </Suspense>
         ) : (
@@ -1143,6 +1152,79 @@ function TimelineCard({
         timestampLabel={ts}
       >
         <div className="text-sm text-slate-700">{copy.daemonNow(copy.daemonStates[detail.state])}</div>
+      </TimelineEventCard>
+    );
+  }
+
+  if (detail.kind === 'subtask_started' || detail.kind === 'subtask_progress' || detail.kind === 'subtask_completed') {
+    const stageLabel =
+      detail.kind === 'subtask_started' ? 'started' :
+      detail.kind === 'subtask_completed' ? 'completed' : 'progress';
+    const desc = detail.kind === 'subtask_started' ? detail.description : detail.summary;
+    return (
+      <TimelineEventCard
+        eyebrow={copy.eventEyebrows.subtask}
+        accent={stageLabel === 'completed' ? 'text-emerald-700' : 'text-violet-700'}
+        icon={<GitBranch size={16} />}
+        timestampLabel={ts}
+      >
+        <div className="space-y-1 text-sm text-slate-700">
+          <div className="font-medium text-slate-900">{desc}</div>
+          <div className="text-xs text-slate-400">
+            {detail.task_id} · {stageLabel}
+            {'turns_used' in detail && detail.turns_used != null ? ` · ${detail.turns_used} turns` : ''}
+          </div>
+        </div>
+      </TimelineEventCard>
+    );
+  }
+
+  if (detail.kind === 'batch_progress') {
+    return (
+      <TimelineEventCard
+        eyebrow={copy.eventEyebrows.batch}
+        accent="text-blue-700"
+        icon={<Layers size={16} />}
+        timestampLabel={ts}
+      >
+        <div className="space-y-1 text-sm text-slate-700">
+          <div className="font-medium text-slate-900">{detail.completed}/{detail.total} completed</div>
+          {detail.running > 0 && <div className="text-xs text-slate-400">{detail.running} running</div>}
+        </div>
+      </TimelineEventCard>
+    );
+  }
+
+  if (detail.kind === 'context_usage' || detail.kind === 'context_overflow') {
+    const pct = Math.round(detail.ratio * 100);
+    const isOverflow = detail.kind === 'context_overflow';
+    return (
+      <TimelineEventCard
+        eyebrow={copy.eventEyebrows.context}
+        accent={isOverflow ? 'text-amber-700' : 'text-slate-700'}
+        icon={<Database size={16} />}
+        timestampLabel={ts}
+      >
+        <div className="space-y-1 text-sm text-slate-700">
+          <div className="font-medium text-slate-900">{isOverflow ? 'Context overflow' : 'Context usage'}: {pct}%</div>
+          <div className="text-xs text-slate-400">{detail.estimated_tokens.toLocaleString()} / {detail.max_input_tokens.toLocaleString()} tokens</div>
+        </div>
+      </TimelineEventCard>
+    );
+  }
+
+  if (detail.kind === 'context_compacted') {
+    return (
+      <TimelineEventCard
+        eyebrow={copy.eventEyebrows.context}
+        accent="text-slate-700"
+        icon={<Database size={16} />}
+        timestampLabel={ts}
+      >
+        <div className="space-y-1 text-sm text-slate-700">
+          <div className="font-medium text-slate-900">Context compacted</div>
+          <div className="text-xs text-slate-400">{detail.entries_removed} entries removed · ratio {detail.usage_ratio.toFixed(2)}</div>
+        </div>
       </TimelineEventCard>
     );
   }

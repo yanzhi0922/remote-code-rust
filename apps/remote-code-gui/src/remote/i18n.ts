@@ -75,6 +75,9 @@ export interface RemoteCopy {
     daemon: string;
     session: string;
     runner: string;
+    subtask: string;
+    batch: string;
+    context: string;
   };
   renderResponse: string;
   responderLabel: string;
@@ -228,6 +231,9 @@ const ENGLISH_COPY: RemoteCopy = {
     daemon: 'Daemon',
     session: 'Session',
     runner: 'Runner',
+    subtask: 'Subtask',
+    batch: 'Batch',
+    context: 'Context',
   },
   renderResponse: 'Rendering response...',
   responderLabel: 'Responder',
@@ -378,6 +384,9 @@ const CHINESE_COPY: RemoteCopy = {
     daemon: '守护进程',
     session: '会话',
     runner: 'Runner',
+    subtask: '子任务',
+    batch: '批量',
+    context: '上下文',
   },
   renderResponse: '正在渲染回复...',
   responderLabel: '处理人',

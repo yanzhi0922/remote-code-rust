@@ -1,6 +1,8 @@
 import { create } from 'zustand';
 import type {
   BatchProgressInfo,
+  CodexGoalState,
+  CodexThreadGoalInfo,
   ConversationEntry,
   ContextCompactedInfo,
   ContextOverflowInfo,
@@ -142,6 +144,11 @@ interface AppState {
 
   pendingPermission: PermissionRequestInfo | null;
 
+  /** Current goal state for Codex agent (null when no goal is set). */
+  goalState: CodexGoalState | null;
+  /** Pending objective awaiting /goal confirm after ConfirmIfExists check. */
+  pendingGoalObjective: string | null;
+
   init: () => Promise<void>;
   refreshSessions: () => Promise<void>;
   loadArchivedSessions: () => Promise<void>;
@@ -150,6 +157,9 @@ interface AppState {
   archiveSession: (sessionId: string) => Promise<void>;
   restoreSession: (sessionId: string) => Promise<void>;
   sendMessage: (text: string) => Promise<void>;
+  handleGoalCommand: (sessionId: string, args: string) => Promise<void>;
+  addAssistantMessage: (sessionId: string, text: string) => void;
+  extractGoalFromResponse: (raw: Record<string, unknown> | undefined) => CodexThreadGoalInfo | null;
   cancelPrompt: (sessionId: string) => Promise<void>;
   refreshProviderInfo: () => Promise<void>;
   refreshRuntimeStatus: () => Promise<void>;
@@ -281,6 +291,8 @@ async function registerEventListeners(): Promise<(() => void)[]> {
           if (useAppStore.getState().activeSessionId === session_id) {
             useAppStore.setState({ conversation });
           }
+        }).catch(() => {
+          // Non-fatal: conversation refresh after prompt completion.
         });
       }
 
@@ -386,8 +398,9 @@ async function registerEventListeners(): Promise<(() => void)[]> {
           ? (params as Record<string, unknown>)
           : null;
 
+      // Spread to ensure we create a plain object that satisfies CodexState
       useCodexStore.setState((state) => ({
-        codexNotifications: [...state.codexNotifications.slice(-199), event.payload],
+        codexNotifications: [...state.codexNotifications.slice(-199), { ...event.payload }],
       }));
 
       if (method === 'item/autoApprovalReview/completed' && paramsRecord) {
@@ -419,6 +432,28 @@ async function registerEventListeners(): Promise<(() => void)[]> {
         useCodexStore.setState((state) => ({
           codexMcpStatus: [...state.codexMcpStatus.slice(-49), paramsRecord],
         }));
+      }
+
+      // ── Thread Goal notifications ────────────────────────────
+      if (method === 'thread/goal/updated' && paramsRecord) {
+        const goalRaw = paramsRecord['goal'] as Record<string, unknown> | undefined;
+        if (goalRaw) {
+          const goal: CodexThreadGoalInfo = {
+            threadId: String(goalRaw['threadId'] ?? ''),
+            objective: String(goalRaw['objective'] ?? ''),
+            status: (goalRaw['status'] as CodexThreadGoalInfo['status']) ?? 'Active',
+            tokenBudget: typeof goalRaw['tokenBudget'] === 'number' ? goalRaw['tokenBudget'] : null,
+            tokensUsed: Number(goalRaw['tokensUsed'] ?? 0),
+            timeUsedSeconds: Number(goalRaw['timeUsedSeconds'] ?? 0),
+            createdAt: Number(goalRaw['createdAt'] ?? 0),
+            updatedAt: Number(goalRaw['updatedAt'] ?? 0),
+          };
+          useAppStore.setState({ goalState: { goal, lastUpdated: Date.now() } });
+        }
+      }
+
+      if (method === 'thread/goal/cleared') {
+        useAppStore.setState({ goalState: null });
       }
     }),
     tauri.onCodexRecoverableError((event) => {
@@ -463,6 +498,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   settings: null,
   settingsLoading: false,
   providerConfigs: null,
+  goalState: null,
+  pendingGoalObjective: null,
   pendingPermission: null,
 
   init: async () => {
@@ -491,8 +528,9 @@ export const useAppStore = create<AppState>((set, get) => ({
         useAgentStore.getState().loadAgents(),
       ]);
 
-      if (get().activeSessionId) {
-        await get().selectSession(get().activeSessionId as string);
+      const sid = get().activeSessionId;
+      if (sid) {
+        await get().selectSession(sid);
       }
     } catch (error) {
       set({
@@ -531,14 +569,18 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   selectSession: async (sessionId: string) => {
-    const activeProjectPath = getProjectPathForSession(sessionId, get().sessions, get().projects);
-    // Fix #8: clear tool state when switching sessions to avoid stale data.
+    const state = get();
+    const activeProjectPath = getProjectPathForSession(sessionId, state.sessions, state.projects);
     set({
       activeSessionId: sessionId,
       activeProjectPath,
+      sending: state.runningSessionIds.has(sessionId),
+      sendError: null,
       conversationLoading: true,
       liveToolProgress: [],
       liveToolResults: [],
+      goalState: null,
+      pendingGoalObjective: null,
     });
     try {
       const [conversation, tasks] = await Promise.all([
@@ -611,6 +653,23 @@ export const useAppStore = create<AppState>((set, get) => ({
     const prompt = text.trim();
     if (!prompt) return;
 
+    // ── /goal slash command interception ──────────────────────────
+    const goalSlashMatch = prompt.match(/^\/goal(?:\s+(.*))?$/is);
+    if (goalSlashMatch) {
+      const { activeAgentType } = useAgentStore.getState();
+      if (activeAgentType !== 'remote_codex') {
+        set({ sendError: '/goal 仅在 Codex agent 下可用。' });
+        return;
+      }
+      const sessionId = get().activeSessionId;
+      if (!sessionId) {
+        set({ sendError: '请先创建会话再使用 /goal。' });
+        return;
+      }
+      await get().handleGoalCommand(sessionId, goalSlashMatch[1] ?? '');
+      return;
+    }
+
     let sessionId = get().activeSessionId;
     if (!sessionId) {
       if (!get().activeProjectPath) {
@@ -620,7 +679,12 @@ export const useAppStore = create<AppState>((set, get) => ({
       sessionId = await get().createSession(undefined, undefined);
     }
 
-    const sid = sessionId as string;
+    if (!sessionId) {
+      set({ sendError: 'Failed to create session' });
+      return;
+    }
+
+    const sid = sessionId;
 
     // Add user message to conversation immediately for responsive UI.
     set((state) => ({
@@ -660,6 +724,176 @@ export const useAppStore = create<AppState>((set, get) => ({
         })(),
       });
     }
+  },
+
+  /** Extract a CodexThreadGoalInfo from a raw response object. */
+  extractGoalFromResponse: (raw: Record<string, unknown> | undefined): CodexThreadGoalInfo | null => {
+    if (!raw || !raw['threadId']) return null;
+    return {
+      threadId: String(raw['threadId'] ?? ''),
+      objective: String(raw['objective'] ?? ''),
+      status: (raw['status'] as CodexThreadGoalInfo['status']) ?? 'Active',
+      tokenBudget: typeof raw['tokenBudget'] === 'number' ? raw['tokenBudget'] : null,
+      tokensUsed: Number(raw['tokensUsed'] ?? 0),
+      timeUsedSeconds: Number(raw['timeUsedSeconds'] ?? 0),
+      createdAt: Number(raw['createdAt'] ?? 0),
+      updatedAt: Number(raw['updatedAt'] ?? 0),
+    };
+  },
+
+  handleGoalCommand: async (sessionId: string, args: string) => {
+    const base = { sessionId, threadId: '' };
+    const trimmed = args.trim();
+
+    // /goal (no args) → show current goal
+    if (!trimmed) {
+      try {
+        const result = await tauri.codexThreadGoalGet(base);
+        const { goal } = tauri.asGoalResponse(result);
+        if (!goal) {
+          get().addAssistantMessage(sessionId, 'No goal is currently set.\nUsage: /goal <objective>');
+          set({ goalState: null });
+        } else {
+          const status = goal.status ?? 'unknown';
+          const obj = goal.objective ?? '(none)';
+          get().addAssistantMessage(sessionId, `**Goal (${status})**\n${obj}`);
+          const info = get().extractGoalFromResponse(goal);
+          if (info) set({ goalState: { goal: info, lastUpdated: Date.now() } });
+        }
+      } catch (err) {
+        set({ sendError: `Failed to get goal: ${err}` });
+      }
+      return;
+    }
+
+    // /goal clear
+    if (/^clear$/i.test(trimmed)) {
+      try {
+        const result = await tauri.codexThreadGoalClear(base);
+        const { cleared } = tauri.asClearResponse(result);
+        get().addAssistantMessage(sessionId, cleared ? 'Goal cleared.' : 'No goal to clear.');
+        if (cleared) set({ goalState: null });
+      } catch (err) {
+        set({ sendError: `Failed to clear goal: ${err}` });
+      }
+      return;
+    }
+
+    // /goal pause
+    if (/^pause$/i.test(trimmed)) {
+      try {
+        const result = await tauri.codexThreadGoalSet({ ...base, text: '', status: 'Paused' });
+        const { goal } = tauri.asGoalResponse(result);
+        if (goal) {
+          get().addAssistantMessage(sessionId, `Goal **paused**.\n${goal.objective ?? ''}`);
+          const info = get().extractGoalFromResponse(goal);
+          if (info) set({ goalState: { goal: info, lastUpdated: Date.now() } });
+        }
+      } catch (err) {
+        set({ sendError: `Failed to pause goal: ${err}` });
+      }
+      return;
+    }
+
+    // /goal resume
+    if (/^resume$/i.test(trimmed)) {
+      try {
+        const result = await tauri.codexThreadGoalSet({ ...base, text: '', status: 'Active' });
+        const { goal } = tauri.asGoalResponse(result);
+        if (goal) {
+          get().addAssistantMessage(sessionId, `Goal **resumed**.\n${goal.objective ?? ''}`);
+          const info = get().extractGoalFromResponse(goal);
+          if (info) set({ goalState: { goal: info, lastUpdated: Date.now() } });
+        }
+      } catch (err) {
+        set({ sendError: `Failed to resume goal: ${err}` });
+      }
+      return;
+    }
+
+    // /goal confirm → confirm the pending goal replacement
+    if (/^confirm$/i.test(trimmed)) {
+      const pendingObj = get().pendingGoalObjective;
+      if (!pendingObj) {
+        set({ sendError: 'No pending goal to confirm.' });
+        return;
+      }
+      set({ pendingGoalObjective: null });
+      try {
+        const result = await tauri.codexThreadGoalSet({ ...base, text: pendingObj, status: 'Active' });
+        const { goal } = tauri.asGoalResponse(result);
+        if (goal) {
+          get().addAssistantMessage(sessionId, `Goal replaced (**${goal.status}**).\n${pendingObj}`);
+          const info = get().extractGoalFromResponse(goal);
+          if (info) set({ goalState: { goal: info, lastUpdated: Date.now() } });
+        }
+      } catch (err) {
+        set({ sendError: `Failed to replace goal: ${err}` });
+      }
+      return;
+    }
+
+    // /goal <objective> → ConfirmIfExists, then set goal
+    try {
+      const existing = await tauri.codexThreadGoalGet(base);
+      const { goal: currentGoal } = tauri.asGoalResponse(existing);
+      if (currentGoal) {
+        const currentObj = String(currentGoal.objective ?? '');
+        set({
+          pendingGoalObjective: trimmed,
+          sendError: null,
+        });
+        set((state) => ({
+          conversation: [
+            ...state.conversation,
+            {
+              role: 'assistant' as const,
+              text: `⚠️ **Replace current goal?**\n\nCurrent: ${currentObj}\nNew: ${trimmed}\n\n— Type **/goal confirm** to replace, or ignore to cancel.`,
+              content_blocks: [],
+              tool_calls: [],
+              tool_call_id: null,
+              name: null,
+              is_error: false,
+            },
+          ],
+        }));
+        return;
+      }
+    } catch {
+      // If get fails, proceed with setting anyway.
+    }
+
+    // No existing goal → set directly
+    try {
+      const result = await tauri.codexThreadGoalSet({ ...base, text: trimmed, status: 'Active' });
+      const { goal } = tauri.asGoalResponse(result);
+      if (goal) {
+        get().addAssistantMessage(sessionId, `Goal set (**${goal.status}**).\n${trimmed}`);
+        const info = get().extractGoalFromResponse(goal);
+        if (info) set({ goalState: { goal: info, lastUpdated: Date.now() } });
+      }
+    } catch (err) {
+      set({ sendError: `Failed to set goal: ${err}` });
+    }
+  },
+
+  addAssistantMessage: (sessionId: string, text: string) => {
+    const activeId = get().activeSessionId;
+    if (activeId !== sessionId) return;
+    set((state) => ({
+      conversation: [
+        ...state.conversation,
+        {
+          role: 'assistant' as const,
+          text,
+          content_blocks: [],
+          tool_calls: [],
+          tool_call_id: null,
+          name: null,
+          is_error: false,
+        },
+      ],
+    }));
   },
 
   cancelPrompt: async (sessionId: string) => {
@@ -711,10 +945,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   removeProject: async (path: string) => {
     await tauri.removeProject(path);
     await get().refreshProjects();
-    if (
-      get().activeProjectPath &&
-      normalizePathKey(get().activeProjectPath as string) === normalizePathKey(path)
-    ) {
+    const activePath = get().activeProjectPath;
+    if (activePath && normalizePathKey(activePath) === normalizePathKey(path)) {
       set({ activeProjectPath: null });
     }
   },

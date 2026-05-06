@@ -3,10 +3,10 @@
 @layer components {
   /* ---- Input Fields ---- */
   .input-field {
-    @apply w-full px-3 py-1.5 text-sm border rounded-lg bg-[var(--color-bg-input)] text-[var(--color-text-primary)]
-           border-[var(--color-border-primary)]
-           focus:outline-none focus:ring-1 focus:ring-[var(--color-border-focus)] focus:border-[var(--color-border-focus)]
-           placeholder:text-[var(--color-text-tertiary)] transition-colors;
+    @apply w-full px-3 py-1.5 text-sm border rounded-lg bg-rc-bg-input text-rc-text-primary
+           border-rc-border-primary
+           focus:outline-none focus:ring-1 focus:ring-rc-border-focus focus:border-rc-border-focus
+           placeholder:text-rc-text-tertiary transition-colors duration-200;
   }
 
   /* ---- Markdown Body ---- */
@@ -22,9 +22,9 @@
   .markdown-body h1, .markdown-body h2, .markdown-body h3 {
     @apply font-bold mb-2 mt-4;
   }
-  .markdown-body h1 { @apply text-lg; }
-  .markdown-body h2 { @apply text-base; }
-  .markdown-body h3 { @apply text-sm; }
+  .markdown-body h1 { @apply text-xl; }
+  .markdown-body h2 { @apply text-lg; }
+  .markdown-body h3 { @apply text-base; }
   .markdown-body ul, .markdown-body ol {
     @apply ml-4 mb-3;
   }
@@ -32,64 +32,216 @@
   .markdown-body ol { @apply list-decimal; }
   .markdown-body li { @apply mb-1; }
   .markdown-body code {
-    @apply bg-[var(--color-bg-tertiary)] px-1.5 py-0.5 rounded text-xs font-mono;
+    @apply bg-rc-bg-code text-slate-300 px-1.5 py-0.5 rounded text-xs font-mono;
   }
   .markdown-body pre {
-    @apply bg-[var(--color-bg-code)] text-[var(--color-text-inverse)] rounded-lg p-4 mb-3 overflow-x-auto;
+    @apply bg-rc-bg-code text-slate-300 rounded-xl p-4 mb-3 overflow-x-auto;
   }
   .markdown-body pre code {
     @apply bg-transparent p-0 text-inherit;
   }
   .markdown-body blockquote {
-    @apply border-l-4 border-[var(--color-border-primary)] pl-4 italic text-[var(--color-text-secondary)] mb-3;
+    @apply border-l-4 border-rc-accent-primary pl-4 italic text-rc-text-secondary mb-3;
   }
   .markdown-body a {
-    @apply text-[var(--color-text-link)] underline;
+    @apply text-rc-text-link underline transition-colors;
+    text-decoration-color: var(--color-accent-primary);
+    text-decoration-color: color-mix(in srgb, var(--color-accent-primary) 50%, transparent);
+  }
+  .markdown-body a:hover {
+    text-decoration-color: var(--color-accent-primary);
   }
   .markdown-body table {
     @apply w-full border-collapse mb-3;
   }
   .markdown-body th, .markdown-body td {
-    @apply border border-[var(--color-border-primary)] px-3 py-1.5 text-left;
+    @apply border border-rc-border-primary px-3 py-1.5 text-left;
   }
   .markdown-body th {
-    @apply bg-[var(--color-bg-tertiary)] font-semibold;
+    @apply bg-rc-bg-tertiary font-semibold;
   }
   .markdown-body img {
-    @apply max-w-full rounded;
+    @apply max-w-full rounded-lg;
   }
   .markdown-body .katex-display {
     @apply mb-3 overflow-x-auto;
   }
 }
 
-/* ── Scrollbar ──────────────────────────────────────────── */
+/* ═══════════════════════════════════════════════════════════════
+   Scrollbar — refined
+   ═══════════════════════════════════════════════════════════════ */
 
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
 }
+
 ::-webkit-scrollbar-track {
   background: transparent;
 }
+
 ::-webkit-scrollbar-thumb {
   background: var(--color-border-primary);
   border-radius: var(--radius-full);
+  transition: background var(--transition-normal);
 }
+
 ::-webkit-scrollbar-thumb:hover {
   background: var(--color-text-tertiary);
 }
 
-/* ── Selection ──────────────────────────────────────────── */
+/* ═══════════════════════════════════════════════════════════════
+   Selection — branded
+   ═══════════════════════════════════════════════════════════════ */
 
 ::selection {
   background: var(--color-accent-primary);
   color: var(--color-text-on-accent);
 }
 
-/* ── Focus Ring ─────────────────────────────────────────── */
+/* ═══════════════════════════════════════════════════════════════
+   Focus Ring — accessible & branded
+   ═══════════════════════════════════════════════════════════════ */
 
 :focus-visible {
   outline: 2px solid var(--color-border-focus);
   outline-offset: 2px;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   Animations
+   ═══════════════════════════════════════════════════════════════ */
+
+/* Fade in */
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* Fade in with upward slide */
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Slide in from right */
+@keyframes slideInRight {
+  from {
+    opacity: 0;
+    transform: translateX(-12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+/* Scale in */
+@keyframes scaleIn {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* Subtle pulse for loading states */
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+/* Shimmer for loading skeletons */
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+/* Float animation for decorative elements */
+@keyframes float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-4px); }
+}
+
+/* Animate classes */
+.animate-fade-in {
+  animation: fadeIn var(--transition-normal) ease-out;
+}
+
+.animate-fade-in-up {
+  animation: fadeInUp var(--transition-slow) ease-out;
+}
+
+.animate-slide-in-right {
+  animation: slideInRight var(--transition-normal) ease-out;
+}
+
+.animate-scale-in {
+  animation: scaleIn var(--transition-slow) ease-out;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   Glass effect — for overlays and modals
+   ═══════════════════════════════════════════════════════════════ */
+
+.glass {
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   Skeleton loading
+   ═══════════════════════════════════════════════════════════════ */
+
+.skeleton {
+  background: linear-gradient(
+    90deg,
+    var(--color-bg-secondary) 25%,
+    var(--color-bg-hover) 50%,
+    var(--color-bg-secondary) 75%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+  border-radius: var(--radius-md);
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   Tooltip base
+   ═══════════════════════════════════════════════════════════════ */
+
+[data-tooltip] {
+  position: relative;
+}
+
+[data-tooltip]::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  transform: translateX(-50%) translateY(-4px);
+  padding: 4px 8px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--color-text-inverse);
+  background: var(--color-bg-user-bubble);
+  border-radius: var(--radius-sm);
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--transition-fast);
+  z-index: var(--z-tooltip);
+}
+
+[data-tooltip]:hover::after {
+  opacity: 1;
 }

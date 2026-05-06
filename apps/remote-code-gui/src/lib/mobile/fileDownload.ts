@@ -24,12 +24,31 @@ export async function shareFile(
   return invoke('mobile_share_file', { filePath, title: title ?? null });
 }
 
-// TODO: implement native file download status tracking pending mobile platform support
-export async function isFileDownloaded(_fileName: string): Promise<boolean> {
-  return false;
+export async function isFileDownloaded(fileName: string): Promise<boolean> {
+  if (!hasTauriRuntime()) return false;
+  return invoke<boolean>('mobile_check_file_downloaded', { fileName });
 }
 
-// TODO: implement native downloaded file content reading pending mobile platform support
-export async function readDownloadedTextFile(_fileName: string): Promise<string | null> {
-  return null;
+export async function readDownloadedTextFile(fileName: string): Promise<string | null> {
+  if (!hasTauriRuntime()) return null;
+  return invoke<string | null>('mobile_read_downloaded_text', { fileName });
+}
+
+export async function deleteDownloadedFile(fileName: string): Promise<void> {
+  if (!hasTauriRuntime()) return;
+  return invoke('mobile_delete_downloaded_file', { fileName });
+}
+
+export async function listDownloadedFiles(): Promise<string[]> {
+  if (!hasTauriRuntime()) return [];
+  return invoke<string[]>('mobile_list_downloaded_files');
+}
+
+export async function getDownloadedFilePath(fileName: string): Promise<string | null> {
+  if (!hasTauriRuntime()) return null;
+  const downloaded = await isFileDownloaded(fileName);
+  if (!downloaded) return null;
+  // The file is stored in the download dir under "remote-code" subdirectory
+  // We return just the filename since the actual path is platform-specific
+  return fileName;
 }

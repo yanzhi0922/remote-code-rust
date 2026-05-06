@@ -56,7 +56,7 @@ export function RemoteAuthGate({
           </div>
 
           {authErrorMessage && (
-            <div className="mt-5 flex items-start gap-3 rounded-3xl border border-[#f0d3c8] bg-[#fff2ed] px-4 py-4 text-sm leading-6 text-[#8d3f30]">
+            <div role="alert" className="mt-5 flex items-start gap-3 rounded-3xl border border-[#f0d3c8] bg-[#fff2ed] px-4 py-4 text-sm leading-6 text-[#8d3f30]">
               <AlertTriangle size={18} className="mt-0.5 shrink-0" />
               <div>{authErrorMessage}</div>
             </div>

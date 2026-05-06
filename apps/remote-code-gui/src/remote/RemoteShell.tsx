@@ -120,7 +120,7 @@ export function RemoteShell({
 
           <div className="h-[calc(100vh-181px)] overflow-y-auto px-3 py-4">
             {sessionsLoading ? (
-              <div className="flex items-center gap-2 rounded-2xl bg-white/80 px-4 py-3 text-sm text-slate-500">
+              <div role="status" className="flex items-center gap-2 rounded-2xl bg-white/80 px-4 py-3 text-sm text-slate-500">
                 <LoaderCircle size={16} className="animate-spin" />
                 {copy.loadingRemoteSessions}
               </div>
@@ -158,6 +158,14 @@ export function RemoteShell({
                       </div>
                       <div className="mt-3 flex items-center gap-2 text-[11px] text-slate-500">
                         <span>{formatRelativeTime(session.updated_at, locale, copy)}</span>
+                        {session.metadata.agent_type && (
+                          <>
+                            <span>•</span>
+                            <span className="rounded bg-slate-200 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wider text-slate-600">
+                              {session.metadata.agent_type}
+                            </span>
+                          </>
+                        )}
                         <span>•</span>
                         <span>
                           {session.owner_runner_id ?? copy.runnerUnassigned}
@@ -211,13 +219,13 @@ export function RemoteShell({
           </header>
 
           {errorMessage && (
-            <div className="border-b border-[#f1d2c9] bg-[#fff4f1] px-4 py-3 text-sm text-[#9b3b32] sm:px-6">
+            <div role="alert" className="border-b border-[#f1d2c9] bg-[#fff4f1] px-4 py-3 text-sm text-[#9b3b32] sm:px-6">
               {errorMessage}
             </div>
           )}
 
           {statusMessage && (
-            <div className="border-b border-[#d9eadf] bg-[#edf7ef] px-4 py-3 text-sm text-[#226140] sm:px-6">
+            <div role="status" className="border-b border-[#d9eadf] bg-[#edf7ef] px-4 py-3 text-sm text-[#226140] sm:px-6">
               {statusMessage}
             </div>
           )}

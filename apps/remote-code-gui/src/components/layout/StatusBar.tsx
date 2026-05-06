@@ -28,40 +28,47 @@ export function StatusBar() {
   const contextPercent = contextUsage ? Math.round(contextUsage.ratio * 100) : null;
 
   return (
-    <div className="flex h-status-bar shrink-0 items-center border-t border-rc-border-primary bg-rc-bg-primary px-3 text-2xs text-rc-text-tertiary select-none">
-      <div className="flex items-center gap-3">
+    <div className="flex h-status-bar shrink-0 items-center border-t border-rc-border-primary bg-rc-bg-surface px-4 text-xs text-rc-text-tertiary select-none">
+      <div className="flex items-center gap-4">
         {/* Agent type */}
-        <span className="flex items-center gap-1">
-          <span className="inline-block h-2 w-2 rounded-full bg-rc-accent-success" />
-          <span>{agentLabel}</span>
+        <span className="flex items-center gap-2">
+          <span className="inline-block h-2 w-2 rounded-full bg-rc-accent-success shadow-sm" />
+          <span className="font-medium text-rc-text-secondary">{agentLabel}</span>
         </span>
 
         {/* Model */}
-        <span className="text-rc-text-secondary">{modelName}</span>
+        <span className="font-mono text-rc-text-tertiary">{modelName}</span>
       </div>
 
       {/* Spacer */}
       <div className="flex-1" />
 
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-4">
         {/* Token usage */}
         {lastPromptResult && (
-          <span>
-            ↑{lastPromptResult.usage.input_tokens} ↓{lastPromptResult.usage.output_tokens}
+          <span className="font-mono text-rc-text-tertiary">
+            ↑ {lastPromptResult.usage.input_tokens.toLocaleString()} &nbsp;
+            ↓ {lastPromptResult.usage.output_tokens.toLocaleString()}
           </span>
         )}
 
         {/* Context usage */}
         {contextPercent !== null && (
-          <span className={contextPercent > 80 ? 'text-rc-accent-warning' : ''}>
-            ctx {contextPercent}%
+          <span className={`font-mono ${contextPercent > 80 ? 'text-rc-accent-warning' : 'text-rc-text-tertiary'}`}>
+            Context {contextPercent}%
           </span>
         )}
 
         {/* Connection status */}
-        <span className="flex items-center gap-1">
-          <span className={`inline-block h-1.5 w-1.5 rounded-full ${runtimeStatus ? 'bg-rc-accent-success' : 'bg-rc-text-tertiary'}`} />
-          {runtimeStatus ? 'Connected' : 'Offline'}
+        <span className="flex items-center gap-2">
+          <span
+            className={`inline-block h-2 w-2 rounded-full ${
+              runtimeStatus ? 'bg-rc-accent-success' : 'bg-rc-text-tertiary'
+            }`}
+          />
+          <span className="text-rc-text-tertiary">
+            {runtimeStatus ? 'Connected' : 'Offline'}
+          </span>
         </span>
       </div>
     </div>

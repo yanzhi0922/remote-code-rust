@@ -6,6 +6,7 @@ declare global {
 }
 
 const REMOTE_ACCESS_TOKEN_STORAGE_KEY = 'remote-code-control-plane-access-token';
+const REMOTE_REFRESH_TOKEN_STORAGE_KEY = 'remote-code-control-plane-refresh-token';
 const REMOTE_ACTIVE_SESSION_STORAGE_KEY_PREFIX = 'remote-code-control-plane-active-session:';
 const REMOTE_PAIRING_OFFER_STORAGE_KEY = 'remote_pairing_offer_id';
 const REMOTE_PAIRING_SECRET_STORAGE_KEY = 'remote_pairing_secret';
@@ -72,6 +73,32 @@ export function persistRemoteAccessToken(token: string): void {
 export function clearRemoteAccessToken(): void {
   try {
     window.localStorage.removeItem(REMOTE_ACCESS_TOKEN_STORAGE_KEY);
+  } catch {
+    // Ignore storage access failures.
+  }
+}
+
+export function resolveRemoteRefreshToken(): string | null {
+  try {
+    return window.localStorage.getItem(REMOTE_REFRESH_TOKEN_STORAGE_KEY)?.trim() ?? null;
+  } catch {
+    return null;
+  }
+}
+
+export function persistRemoteRefreshToken(token: string): void {
+  const normalized = token.trim();
+  if (!normalized) return;
+  try {
+    window.localStorage.setItem(REMOTE_REFRESH_TOKEN_STORAGE_KEY, normalized);
+  } catch {
+    // Ignore storage access failures.
+  }
+}
+
+export function clearRemoteRefreshToken(): void {
+  try {
+    window.localStorage.removeItem(REMOTE_REFRESH_TOKEN_STORAGE_KEY);
   } catch {
     // Ignore storage access failures.
   }
