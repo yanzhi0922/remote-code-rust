@@ -408,7 +408,7 @@ graph TD
 
 - `crates/claude/claude-query-engine`
 - `crates/claude/claude-transcript`
-- `crates/claude/claude-engine-events`
+- `crates/claude/rc-engine-events`
 - 可选：`crates/claude/claude-context-runtime`
 - 可选：`crates/claude/rc-background-tasks`
 
@@ -1007,7 +1007,7 @@ graph TD
 
 - `crates/claude/claude-query-engine/`
 - `crates/claude/claude-transcript/`
-- `crates/claude/claude-engine-events/`
+- `crates/claude/rc-engine-events/`
 - 可选 `crates/claude/rc-background-tasks/`
 
 ### 测试

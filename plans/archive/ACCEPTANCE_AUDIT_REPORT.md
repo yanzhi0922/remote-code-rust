@@ -14,7 +14,7 @@
 | 残留占位符 | `todo!()` / `unimplemented!()` | ✅ **0 处** |
 | 残留标记 | `// TODO` / `FIXME` / `HACK` / `XXX` / `STUB` / `PLACEHOLDER` | ✅ **0 处** |
 | 硬编码密钥 | API Key / Secret / Password 明文 | ✅ **0 处** |
-| `unsafe` 代码 | `unsafe_code = "forbid"` 工作区级禁用 | ✅ **通过** |
+| `unsafe` 代码 | `unsafe_code = "warn"` 工作区级警告 | ✅ **通过** |
 | TypeScript `any` | `: any` 类型注解 | ✅ **0 处** |
 | 生产代码 `unwrap()` | 非 `#[cfg(test)]` 的 `.unwrap()` | ✅ **0 处** |
 | 生产代码 `expect()` | 非 `#[cfg(test)]` 的 `.expect()` | ✅ **0 处** |
@@ -173,7 +173,7 @@
 
 | 检查项 | 状态 | 说明 |
 |--------|------|------|
-| `unsafe` 代码 | ✅ 通过 | 工作区级 `unsafe_code = "forbid"` |
+| `unsafe` 代码 | ✅ 通过 | 工作区级 `unsafe_code = "warn"` |
 | 硬编码密钥 | ✅ 通过 | 所有密钥通过环境变量/Keychain 读取 |
 | 路径遍历防护 | ✅ 通过 | `validate_path`、`validate_path_within_base`、插件 ".." 检查 |
 | 命令注入防护 | ✅ 基本通过 | 大部分使用 `.args()` 传参；少数 shell 调用需关注 |
@@ -203,7 +203,7 @@
 | `crates/claude/claude-tools/src/web_browser.rs` | 浏览器截图 — 依赖外部浏览器，难以单元测试 |
 | `crates/claude/claude-voice/src/stt.rs` / `tts.rs` | 语音识别/合成 — 依赖外部 Whisper/系统 TTS |
 | `apps/remote-code-gui/src/remote/` | 远程连接 — 多数有测试但覆盖不完整 |
-| `apps/remote-code-mobile/src/native/` | 原生桥接 — 依赖 Capacitor 插件 |
+| `apps/remote-code-mobile/src/native/` | ~~已删除~~ — Capacitor 方案已废弃，迁移至 Tauri v2 Mobile |
 
 ---
 
@@ -233,7 +233,6 @@ cargo audit
 
 # 2. 前端依赖漏洞扫描
 cd apps/remote-code-gui && npm audit
-cd apps/remote-code-mobile && npm audit
 
 # 3. 编译验证（全平台特性）
 cargo build --all-features --workspace

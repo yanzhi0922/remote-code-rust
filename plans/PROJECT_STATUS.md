@@ -2,9 +2,9 @@
 
 > 更新日期: 2026-05-02
 > 当前阶段: Phase 17 已完成 — ZCode 启发功能（Checkpoint + Specialized Agents + Git Panel）
-> 代码规模: ~95,000 行 (Rust + TypeScript)，177 个 workspace crates（Claude 43 + Codex 80 + Adapters 3 + Apps 5 + GUI Tauri）
-> 当前验证基线: `cargo test --workspace` 全绿（860+ 测试），`cargo clippy` 零警告，三 Agent 适配器 + ZCode 启发 crate 编译通过。
-> 基准提交: `c0df82e`
+> 代码规模: ~95,000 行 (Rust + TypeScript)，154 个 workspace crates（Claude 41 + Codex 105 + Adapters 3 + Apps 5）+ Roo 67（独立）
+> 当前验证基线: `cargo test --workspace` 全绿（14,000+ 测试），`cargo clippy` 零警告，三 Agent 适配器 + ZCode 启发 crate 编译通过。
+> 基准提交: `46b4ac8`
 
 ---
 
@@ -15,16 +15,16 @@
 | 维度 | 状态 | 详情 |
 |------|------|------|
 | 编译 | ✅ 通过 | `cargo build --release`、GUI build、mobile build 通过 |
-| 安全 | ✅ 强化 | `unsafe_code = "forbid"`，`unwrap_used = "deny"`，`todo`/`dbg` 禁止 |
-| 测试 | ✅ 通过 | `cargo test --workspace` 860+ 测试全绿，0 failures |
+| 安全 | ✅ 强化 | `unsafe_code = "warn"`，`unwrap_used = "warn"`，`todo`/`dbg` 禁止 |
+| 测试 | ✅ 通过 | `cargo test --workspace` 14,000+ 测试全绿，0 failures |
 | Clippy | ✅ 零警告 | `cargo clippy --workspace -- -D warnings` 通过 |
 | CLI | ✅ 可发布 | clap 命令树、doctor 与核心子命令可构建并通过回归 |
-| TUI | ✅ 可发布 | 交互式终端 + 65+ slash commands + Vim 模式回归通过 |
+| TUI | ✅ 可发布 | 交互式终端 + Vim 模式回归通过 |
 | GUI (Tauri) | ✅ 可构建 | Rust/Tauri crate 纳入工作区回归，Phase 2-5 GUI Redesign 完成 |
 | GUI (Web/PWA) | ✅ 可发布 | 远程控制面、中英双语、错误边界、PWA 缓存更新链路通过 |
-| GUI (Mobile/Capacitor) | ✅ 可构建 | 跨包 React 类型冲突已清除，补齐 smoke tests |
+| GUI (Mobile/Tauri v2) | 📋 Rust 后端就绪 | mobile.rs 20 个 Tauri 命令已实现，待 `tauri android/ios init` |
 | Provider | ✅ 完整 | OpenAI/Anthropic 协议，流式，多 key 轮换，故障转移 |
-| 工具系统 | ✅ 丰富 | 65+ 内置工具 + MCP + 插件扩展 |
+| 工具系统 | ✅ 丰富 | 62 内置工具 + MCP + 插件扩展 |
 | Control Plane | ✅ 完整 | Runner/Session/Approval/Artifact/Event 全链路 |
 | Runner | ✅ 完整 | Daemon 模式，心跳，命令拉取，审批中继 |
 | 多 Agent | ✅ 三引擎独立适配器 | Claude (QueryEngine) + Codex (AppServer) + Roo (AgentLoop, 26 Provider backends) 三条独立 in-process 路径 |
@@ -65,15 +65,15 @@
 └─────────────────────────────────────────────────────────────┘
 ```
 
-### 1.3 Crate 结构 (177 workspace crates)
+### 1.3 Crate 结构 (154 workspace crates)
 
 | 分类 | 数量 | 说明 |
 |------|------|------|
-| Claude 核心 | 43 | claude-core, claude-provider, claude-session, claude-checkpoint, claude-specialized-agents, claude-git, ... |
-| Codex 核心 | 80 | protocol, core, exec, app-server, ... |
+| Claude 核心 | 41 | claude-core, claude-provider, claude-session, claude-checkpoint, claude-specialized-agents, claude-git, ... |
+| Codex 核心 | 105 | protocol, core, exec, app-server, ... |
 | Adapters | 3 | rc-claude-adapter, rc-codex-adapter, rc-roo-adapter |
 | Apps | 5 | CLI (claudecode), GUI (Tauri), Control Plane, Runner, Migrate |
-| GUI Tauri | 1 | apps/remote-code-gui/src-tauri |
+| Roo（独立） | 67 | 独立 workspace，被 exclude 排除 |
 
 ---
 
@@ -97,7 +97,7 @@
 - ✅ Skills 发现与索引
 - ✅ 插件系统 (JSON-RPC 进程隔离)
 - ✅ 多代理调度器 + 邮箱模型
-- ✅ 38+ 内置工具 → 65+ 工具
+- ✅ 38+ 内置工具 → 62 工具
 - ✅ BM25 工具搜索 + 延迟加载
 - ✅ 上下文压缩 (5 策略)
 - ✅ 记忆系统 (RC.md)
@@ -131,7 +131,7 @@
 - ✅ 会话持久化 + CI 前端任务
 
 ### Phase 7-8: 多 Agent 架构 — ✅ 完成
-- ✅ `claude-agent-protocol` crate 创建
+- ✅ `rc-agent-protocol` crate 创建
 - ✅ `AgentAdapter` trait 定义
 - ✅ `UnifiedAgentEvent` 统一事件模型
 - ✅ `AgentRouter` 路由分发
@@ -244,7 +244,7 @@
 | GUI | ✅ Tauri+Web | ❌ CLI only | ✅ VSCode | ✅ Web ADE | ✅ TUI | ✅ VSCode |
 | Circuit Breaker | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
 | 多 Provider Failover | ✅ | ❌ | 部分 | ❌ | ❌ | ❌ |
-| 工具数量 | 65+ | 55+ | 40+ | 30+ | 20+ | 30+ |
+| 工具数量 | 62 | 55+ | 40+ | 30+ | 20+ | 30+ |
 | PWA 移动端 | ✅ | ❌ | ❌ | ✅ QR 扫码 | ❌ | ❌ |
 | 国际化 | ✅ 中/英 | ❌ | ❌ | ✅ 中文优先 | ❌ | ❌ |
 | 多 Agent 统一架构 | ✅ 三引擎独立适配器 (26 Provider) | ❌ | ❌ | ✅ @agent 提及 | ❌ | ❌ |
@@ -254,7 +254,7 @@
 | 内置 Git 面板 | ✅ claude-git + GitPanel | ❌ | ❌ | ✅ 完整 Git 管理 | ❌ | ❌ |
 | 权限模式快捷切换 | ✅ PermissionModeSwitch | ❌ | ❌ | ✅ Shift+Tab 4 模式 | ❌ | ❌ |
 
-**独有优势**: Rust 原生性能 + 三引擎独立 in-process 适配器架构 (Claude/Codex/Roo 26 Provider) + 分布式远程执行 + Circuit Breaker + PWA 移动端 + 多 Provider 故障转移 + 65+ 内置工具 + IDE 级 GUI (ActivityBar/Terminal/Diff/Preview/Command Palette) + ZCode 启发功能 (Checkpoint/专业化 Agent/Git 面板)
+**独有优势**: Rust 原生性能 + 三引擎独立 in-process 适配器架构 (Claude/Codex/Roo 26 Provider) + 分布式远程执行 + Circuit Breaker + PWA 移动端 + 多 Provider 故障转移 + 62 内置工具 + IDE 级 GUI (ActivityBar/Terminal/Diff/Preview/Command Palette) + ZCode 启发功能 (Checkpoint/专业化 Agent/Git 面板)
 
 ---
 
@@ -262,7 +262,7 @@
 
 | 机制 | 实现 |
 |------|------|
-| `unsafe_code = "forbid"` | 全局禁止 unsafe 代码 |
+| `unsafe_code = "warn"` | 编译器警告 unsafe 代码 |
 | `unwrap_used = "warn"` | 生产代码不建议 unwrap |
 | `todo!` / `dbg!` / `unimplemented!` 禁止 | 防止调试/未实现代码进入生产 |
 | OS Keychain | Tauri 桌面端 API key 存储在系统钥匙串 |

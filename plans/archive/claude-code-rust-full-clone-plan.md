@@ -17,7 +17,7 @@
 本轮已将计划从“研究态”推进到“可编译、可测试的主干骨架”：
 
 - 已在 [`claude-core`](../crates/claude/claude-core/src/lib.rs) 落地 v2 基础类型层：`SessionId` / `AgentId`、`Message` 联合类型、`AppState`、`ToolPermissionContext`、`FileHistoryState`、`UsageAccumulator`、`CostTracker`、扩展 hook 响应类型。
-- 已在 [`claude-engine-events`](../crates/claude/claude-engine-events/src/lib.rs) 落地 Phase 1 事件层：保留现有 `RuntimeEventDetail` 兼容面，同时新增 `EngineEvent`、`ContentBlockType`、`ContentBlockDelta`、`EventStream`。
+- 已在 [`rc-engine-events`](../crates/claude/rc-engine-events/src/lib.rs) 落地 Phase 1 事件层：保留现有 `RuntimeEventDetail` 兼容面，同时新增 `EngineEvent`、`ContentBlockType`、`ContentBlockDelta`、`EventStream`。
 - 已新增 [`claude-transcript`](../crates/claude/claude-transcript/src/lib.rs) crate，完成 `TranscriptEntry` / `CompactBoundary` / `TranscriptStorage` 的 JSONL 持久化与 round-trip 测试。
 - 已为 [`claude-session`](../crates/claude/claude-session/src/lib.rs) 接入 transcript V2 兼容层：新增 `append_transcript_entry()`、`load_transcript_v2()`、`transcript_storage()`，保持现有 `StoredEvent` 主路径不破坏。
 - 已新增 [`claude-query-engine`](../crates/claude/claude-query-engine/src/lib.rs) compat 内核，先抽出“回合推进 + budget + tool loop + legacy backend seam”，并通过最小闭环测试。
@@ -83,7 +83,7 @@
 - 已有多种上下文压缩策略，不是只有单一截断。
 - 已有 ratatui TUI、slash commands、Vim 输入模式，不是只有 headless 空壳。
 - 已有 SQLite + NDJSON 会话存储，不是简单 JSON 数组会话。
-- 已有 `remote-code`、`remote-code-control-plane`、`remote-code-gui`、`remote-code-mobile`、`remote-code-runner` 多应用面，需要纳入统一升级路线。
+- 已有 `remote-code`、`remote-code-control-plane`、`remote-code-gui`（含 Tauri v2 Mobile）、`remote-code-runner` 多应用面，需要纳入统一升级路线。
 
 这不改变 full clone 的工作量和范围；它只改变执行方法。正确方法应是 **replace-by-extraction / trunk-safe migration**，而不是把现有资产当成“全部作废”。
 
@@ -264,7 +264,7 @@ remote-code-rust/
 │   │
 │   ├── claude-query-engine/      # 🆕 查询引擎 (QueryEngine.ts + query.ts)
 │   ├── claude-transcript/        # 🆕 会话记录 (sessionStorage + compact boundary)
-│   ├── claude-engine-events/     # 🆕 统一事件 (SDKMessage + StreamEvent)
+│   ├── rc-engine-events/     # 🆕 统一事件 (SDKMessage + StreamEvent)
 │   ├── claude-system-prompt/     # 🆕 System prompt (constants/prompts.ts)
 │   ├── claude-compact/           # 🆕 上下文压缩 (services/compact/*)
 │   ├── rc-tool-prompts/      # 🆕 工具 prompt (tools/*/prompt.ts)
@@ -1500,8 +1500,8 @@ claude-skills/src/
 **目标**: 建立所有核心类型定义、统一事件模型和状态管理
 
 **产出文件**:
-- `crates/claude/claude-engine-events/src/lib.rs` - 统一事件类型
-- `crates/claude/claude-engine-events/src/types.rs` - EngineEvent 枚举
+- `crates/claude/rc-engine-events/src/lib.rs` - 统一事件类型
+- `crates/claude/rc-engine-events/src/types.rs` - EngineEvent 枚举
 - `crates/claude/claude-transcript/src/lib.rs` - Transcript 结构
 - `crates/claude/claude-transcript/src/entry.rs` - TranscriptEntry
 - `crates/claude/claude-transcript/src/boundary.rs` - CompactBoundary
@@ -1615,7 +1615,7 @@ SendUserFile, Brief, DiscoverSkills, OverflowTest, Config
 
 | 工作流 | 范围 | 最早启动点 | 依赖 |
 |------|------|-----------|------|
-| A. Core / Transcript | `claude-engine-events`、`claude-transcript`、核心 ID / Message / Event 类型 | 立即 | 无 |
+| A. Core / Transcript | `rc-engine-events`、`claude-transcript`、核心 ID / Message / Event 类型 | 立即 | 无 |
 | B. Provider / Query / Compact | `claude-provider v2`、`claude-query-engine`、`claude-system-prompt`、`claude-compact` | Phase 1 类型冻结后 | A |
 | C. Tools / Permissions / Commands | `claude-tools v2`、`rc-tool-prompts`、权限分类、命令面 | Phase 1 期间即可抽取 prompt 与 tool trait | A，部分依赖 B |
 | D. TUI / State / Bridge | `claude-tui`、`claude-tui-components`、bridge/state/selectors/keybindings | EngineEvent / AppState 冻结后 | A，部分依赖 B |
@@ -1758,11 +1758,11 @@ main (唯一长期交付线)
   └── rc-compat          (conversation/provider/transcript 兼容层)
 
 阶段 1: 新建独立 crate（不影响现有默认路径）
-  ├── claude-engine-events   (纯类型，零依赖)
+  ├── rc-engine-events   (纯类型，零依赖)
   ├── claude-transcript      (纯类型 + 文件 I/O)
   ├── claude-system-prompt   (纯字符串构建)
   ├── rc-tool-prompts    (纯字符串常量)
-  └── claude-compact         (依赖 claude-engine-events)
+  └── claude-compact         (依赖 rc-engine-events)
 
 阶段 2: 并挂接 shadow pipeline（feature flag 控制）
   ├── claude-core v2         (新增 Message/Event 类型)
@@ -2266,7 +2266,7 @@ pub trait PermissionProvider: Send + Sync {
 ### 16.7 Event 类型系统
 
 ```rust
-// claude-engine-events/src/types.rs
+// rc-engine-events/src/types.rs
 
 /// 统一引擎事件（对应 QueryEngine.ts yield 的所有消息类型）
 #[derive(Debug, Clone, Serialize)]
@@ -2530,7 +2530,7 @@ pub enum HookSpecificOutput {
 #### 1.1 新建文件清单
 
 ```
-crates/claude/claude-engine-events/
+crates/claude/rc-engine-events/
 ├── Cargo.toml
 ├── src/
 │   ├── lib.rs              # pub mod types, stream
@@ -2559,7 +2559,7 @@ crates/claude/claude-core/src/          # 增强
 #### 1.2 关键实现细节
 
 ```rust
-// claude-engine-events/src/stream.rs
+// rc-engine-events/src/stream.rs
 pub struct EventStream {
     sender: broadcast::Sender<EngineEvent>,
 }
@@ -2585,7 +2585,7 @@ impl TranscriptStorage {
 
 #### 1.3 Phase 1 验证标准
 
-- [ ] `claude-engine-events` 编译通过，所有 EngineEvent 变体可序列化
+- [ ] `rc-engine-events` 编译通过，所有 EngineEvent 变体可序列化
 - [ ] `claude-transcript` 可正确持久化和恢复 TranscriptEntry
 - [ ] `claude-core` 新增类型与现有类型兼容
 - [ ] 所有新增类型实现 `Serialize + Deserialize + Clone + Debug`
@@ -4976,7 +4976,7 @@ gh api repos/yanzhi0922/remote-code-rust/git/refs/heads/main `
 1. **Rust 原生性能**：编译为单一二进制，启动 <50ms，内存 <30MB
 2. **多 Provider 支持**：OpenAI/Anthropic/MiniMax/Ollama 统一接口
 3. **GUI 桌面应用**：Tauri 跨平台 GUI（claude-code 仅有 TUI）
-4. **移动端应用**：Capacitor 跨平台移动端
+4. **移动端应用**：Tauri v2 Mobile 跨平台移动端（iOS / Android）
 5. **Control Plane**：自托管控制面（多设备管理）
 6. **多语言 TUI**：国际化支持
 7. **插件市场**：比 claude-code 更开放的插件系统

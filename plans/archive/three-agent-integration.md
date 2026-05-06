@@ -17,7 +17,7 @@
 1. **三个独立 Workspace** — 不合并 Cargo workspace，避免依赖冲突
 2. **混合通信模式** — Claude Code Agent 进程内执行；Codex/Roo-code 通过子进程 JSON-RPC over stdio 通信
 3. **统一构建入口** — 顶层脚本/Makefile 一键构建全部 Agent
-4. **最小改动** — 复用现有 `claude-agent-protocol` 中的 JSON-RPC 类型和 `AgentAdapter` trait
+4. **最小改动** — 复用现有 `rc-agent-protocol` 中的 JSON-RPC 类型和 `AgentAdapter` trait
 
 ### 1.3 当前 vs 目标架构
 
@@ -51,7 +51,7 @@ graph LR
 remote-code-rust/
 ├── Cargo.toml                          # 主 workspace（不变）
 ├── crates/                             # 共享 crates（不变）
-│   ├── claude-agent-protocol/              # 新增 SubprocessAdapter
+│   ├── rc-agent-protocol/              # 新增 SubprocessAdapter
 │   ├── claude-core/
 │   ├── claude-provider/
 │   └── ...
@@ -319,7 +319,7 @@ graph TB
 
 ### 5.3 SubprocessAdapter 设计
 
-新增 `crates/claude/claude-agent-protocol/src/adapters/subprocess.rs`：
+新增 `crates/claude/rc-agent-protocol/src/adapters/subprocess.rs`：
 
 ```rust
 //! Subprocess-based Agent adapter using JSON-RPC over stdio.
@@ -346,7 +346,7 @@ pub struct SubprocessAdapter {
 
 ### 5.4 JSON-RPC 协议定义
 
-复用现有 `crates/claude/claude-agent-protocol/src/jsonrpc.rs` 中的类型，定义以下方法：
+复用现有 `crates/claude/rc-agent-protocol/src/jsonrpc.rs` 中的类型，定义以下方法：
 
 #### 5.4.1 Host → Agent 请求
 
@@ -585,7 +585,7 @@ pub struct AppState {
 
 ---
 
-## 7. claude-agent-protocol 变更
+## 7. rc-agent-protocol 变更
 
 ### 7.1 新增文件
 
@@ -635,7 +635,7 @@ impl AgentAdapter for SubprocessAdapter {
 
 ### Phase 2: SubprocessAdapter 实现
 
-- [ ] **Step 2.1**: 在 `claude-agent-protocol` 中创建 `src/adapters/subprocess.rs`
+- [ ] **Step 2.1**: 在 `rc-agent-protocol` 中创建 `src/adapters/subprocess.rs`
 - [ ] **Step 2.2**: 实现子进程启动逻辑（`tokio::process::Command`）
 - [ ] **Step 2.3**: 实现 JSON-RPC 请求/响应管道（stdin/stdout）
 - [ ] **Step 2.4**: 实现 JSON-RPC 通知解析（agent → host 事件流）
@@ -743,6 +743,6 @@ Claude Code Agent 进程内，Codex/Roo-code 子进程。
 2. **Codex / Roo-code Agent** 通过子进程执行（`SubprocessAdapter`），使用 JSON-RPC over stdio 通信
 3. **统一构建** 通过升级后的 `scripts/build-agents.*` 和新增 `Makefile` 实现
 4. **GUI 集成** 通过在 `send_prompt()` 中增加 agent_type 分支路由实现
-5. **协议复用** 现有 `claude-agent-protocol` 中的 JSON-RPC 类型和 `AgentAdapter` trait
+5. **协议复用** 现有 `rc-agent-protocol` 中的 JSON-RPC 类型和 `AgentAdapter` trait
 
 这个方案在**最小改动量**和**最大灵活性**之间取得了平衡，同时保持了 Claude Code Agent 的性能优势。
