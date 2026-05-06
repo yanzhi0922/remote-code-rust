@@ -1,8 +1,8 @@
 #![cfg(not(target_os = "windows"))]
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
-use codex_core_test_support::responses;
-use codex_core_test_support::test_codex_exec::test_codex_exec;
+use core_test_support::responses;
+use core_test_support::test_codex_exec::test_codex_exec;
 
 /// Verify that the --add-dir flag is accepted and the command runs successfully.
 /// This test confirms the CLI argument is properly wired up.

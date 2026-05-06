@@ -2,7 +2,7 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
 use codex_utils_cargo_bin::find_resource;
-use codex_core_test_support::test_codex_exec::test_codex_exec;
+use core_test_support::test_codex_exec::test_codex_exec;
 use walkdir::WalkDir;
 
 fn session_rollout_count(home_path: &std::path::Path) -> usize {
