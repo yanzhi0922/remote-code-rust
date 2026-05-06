@@ -17,7 +17,7 @@ base64 = { workspace = true }
 bytes = { workspace = true }
 codex-app-server-protocol = { workspace = true }
 codex-client = { workspace = true }
-codex-config = { workspace = true }
+codex-file-system = { workspace = true }
 codex-protocol = { workspace = true }
 codex-sandboxing = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
@@ -45,9 +45,9 @@ uuid = { workspace = true, features = ["v4"] }
 
 [dev-dependencies]
 anyhow = { workspace = true }
-# codex-test-binary-support = { workspace = true }  # TODO: uncomment after test-binary-support migration
+codex-test-binary-support = { workspace = true }
 ctor = { workspace = true }
 pretty_assertions = { workspace = true }
 serial_test = { workspace = true }
 tempfile = { workspace = true }
-test-case = { workspace = true }
+test-case = "3.3.1"

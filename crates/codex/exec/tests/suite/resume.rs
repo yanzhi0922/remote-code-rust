@@ -1,7 +1,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 use anyhow::Context;
 use codex_utils_cargo_bin::find_resource;
-use codex_core_test_support::test_codex_exec::test_codex_exec;
+use core_test_support::test_codex_exec::test_codex_exec;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use std::string::ToString;

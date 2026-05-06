@@ -2,8 +2,8 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
 use codex_login::default_client::CODEX_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR;
-use codex_core_test_support::responses;
-use codex_core_test_support::test_codex_exec::test_codex_exec;
+use core_test_support::responses;
+use core_test_support::test_codex_exec::test_codex_exec;
 use wiremock::matchers::header;
 
 /// Verify that when the server reports an error, `codex-exec` exits with a

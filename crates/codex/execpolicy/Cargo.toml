@@ -13,9 +13,8 @@ path = "src/lib.rs"
 name = "codex-execpolicy"
 path = "src/main.rs"
 
-# Override workspace unsafe_code=forbid — starlark derive generates unsafe impl
-[lints.rust]
-unsafe_code = "allow"
+[lints]
+workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
