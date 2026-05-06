@@ -1,7 +1,7 @@
 # Reference Fixtures
 
 This directory holds read-only compatibility fixtures captured from the legacy
-`C:\Users\Yanzh\Desktop\remote-code` workspace.
+TypeScript `remote-code` workspace (external reference, not included in this repo).
 
 Rules:
 

@@ -1,0 +1,32 @@
+sequenceDiagram
+    participant User as User
+    participant GUI as GUI - React
+    participant Runner as Runner
+    participant Adapter as AgentAdapter
+    participant Bridge as bridge.rs
+    participant Broadcast as tokio broadcast
+    participant CP as Control Plane
+
+    User->>GUI: Type prompt
+    GUI->>Runner: POST /v1/sessions/id/commands\nsend_prompt + content
+    Runner->>Adapter: send_message(session_id, prompt)
+
+    Note over Adapter: Adapter calls native engine\nClaude / Roo / Codex in-process
+
+    loop For each agent event
+        Adapter-->>Runner: mpsc Receiver of UnifiedAgentEvent
+
+        Runner->>Bridge: unified_event_to_runtime_detail(event)
+        Bridge-->>Runner: Option of RuntimeEventDetail
+
+        alt Detail is Some
+            Runner->>Broadcast: publish_stream_event(json_line)
+            Runner->>CP: POST /v1/sessions/id/events\nRuntimeEventDetail
+        else Detail is None - lifecycle
+            Note over Runner: Skip broadcast for lifecycle events
+        end
+
+        Broadcast-->>GUI: WebSocket SSE runtime event JSON
+    end
+
+    Note over GUI: RemoteApp.tsx renders\nTimelineCard per event
