@@ -4,8 +4,8 @@ use codex_exec_server::LOCAL_FS;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::protocol::FileChange;
 use codex_protocol::protocol::SandboxPolicy;
-use codex_core_test_support::PathBufExt;
-use codex_core_test_support::PathExt;
+use core_test_support::PathBufExt;
+use core_test_support::PathExt;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::collections::HashMap;
@@ -136,7 +136,7 @@ fn diff_consumer_streams_apply_patch_changes() {
             HashMap::from([(
                 PathBuf::from("hello.txt"),
                 FileChange::Add {
-                    content: "hello\n".to_string(),
+                    content: String::new(),
                 },
             )]),
         )
@@ -147,8 +147,16 @@ fn diff_consumer_streams_apply_patch_changes() {
             .push_delta("call-1".to_string(), "\n+world")
             .is_none()
     );
+    assert!(
+        consumer
+            .push_delta("call-1".to_string(), "\n*** End Patch")
+            .is_none()
+    );
 
-    let event = consumer.flush_update_on_complete().expect("progress event");
+    let event = consumer
+        .finish_update_on_complete()
+        .expect("finish parser")
+        .expect("progress event");
     assert_eq!(
         (event.call_id, event.changes),
         (
@@ -175,7 +183,7 @@ fn diff_consumer_sends_next_update_after_buffer_interval() {
         HashMap::from([(
             PathBuf::from("hello.txt"),
             FileChange::Add {
-                content: "hello\n".to_string(),
+                content: String::new(),
             },
         )])
     );
@@ -190,7 +198,7 @@ fn diff_consumer_sends_next_update_after_buffer_interval() {
         HashMap::from([(
             PathBuf::from("hello.txt"),
             FileChange::Add {
-                content: "hello\nworld\n".to_string(),
+                content: "hello\n".to_string(),
             },
         )])
     );

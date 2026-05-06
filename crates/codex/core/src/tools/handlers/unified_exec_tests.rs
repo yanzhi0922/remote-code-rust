@@ -7,7 +7,7 @@ use codex_protocol::models::FileSystemPermissions;
 use codex_tools::UnifiedExecShellMode;
 use codex_tools::ZshForkConfig;
 use codex_utils_absolute_path::AbsolutePathBuf;
-use codex_core_test_support::PathExt;
+use core_test_support::PathExt;
 use pretty_assertions::assert_eq;
 use std::fs;
 use std::sync::Arc;

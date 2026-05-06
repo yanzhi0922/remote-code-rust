@@ -2,8 +2,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use codex_protocol::models::ShellCommandToolCallParams;
-use codex_core_test_support::PathBufExt;
-use codex_core_test_support::test_path_buf;
+use core_test_support::PathBufExt;
+use core_test_support::test_path_buf;
 use pretty_assertions::assert_eq;
 
 use crate::exec_env::create_env;
