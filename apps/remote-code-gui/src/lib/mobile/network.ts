@@ -9,31 +9,50 @@ type NetworkChangeListener = (connected: boolean, connectionType: string) => voi
 
 const listeners = new Set<NetworkChangeListener>();
 let currentStatus: NetworkStatus = { connected: true, connectionType: 'unknown' };
+let cleanup: (() => void) | null = null;
 
 export function initNetworkMonitoring(): void {
+  // Prevent double-initialisation
+  if (cleanup) return;
+
   if (!hasTauriRuntime()) {
     if (typeof window !== 'undefined') {
-      window.addEventListener('online', () => {
+      const online = () => {
         currentStatus = { connected: true, connectionType: 'wifi' };
         listeners.forEach((fn) => fn(true, 'wifi'));
-      });
-      window.addEventListener('offline', () => {
+      };
+      const offline = () => {
         currentStatus = { connected: false, connectionType: 'none' };
         listeners.forEach((fn) => fn(false, 'none'));
-      });
+      };
+      window.addEventListener('online', online);
+      window.addEventListener('offline', offline);
       currentStatus.connected = navigator.onLine;
+      cleanup = () => {
+        window.removeEventListener('online', online);
+        window.removeEventListener('offline', offline);
+      };
     }
     return;
   }
   // Use variable to avoid Vite static analysis of the import path
   const modName = '@tauri-apps/plugin-network';
   import(/* @vite-ignore */ modName).then((mod: any) => {
-    const stream = mod.onNetworkStatusChange((status: any) => {
+    mod.onNetworkStatusChange((status: any) => {
       currentStatus = { connected: status.connected, connectionType: status.connectionType ?? 'unknown' };
       listeners.forEach((fn) => fn(currentStatus.connected, currentStatus.connectionType));
-    });
-    stream.catch(() => {});
+    }).then((unlisten: () => void) => {
+      cleanup = unlisten;
+    }).catch(() => {});
   }).catch(() => {});
+}
+
+export function destroyNetworkMonitoring(): void {
+  if (cleanup) {
+    cleanup();
+    cleanup = null;
+  }
+  listeners.clear();
 }
 
 export function getNetworkStatus(): NetworkStatus {

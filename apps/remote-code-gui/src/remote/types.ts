@@ -33,6 +33,7 @@ export interface RemoteTrustedDeviceRecord {
 export interface RemoteBootstrapClaimResponse {
   device: RemoteTrustedDeviceRecord;
   access_token: string;
+  refresh_token: string;
 }
 
 export interface RemotePairingOfferCreateResponse {
@@ -48,6 +49,7 @@ export interface RemotePairingOfferCreateResponse {
 export interface RemotePairingAcceptResponse {
   device: RemoteTrustedDeviceRecord;
   access_token: string;
+  refresh_token: string;
 }
 
 export type RemoteSessionState =
@@ -66,6 +68,9 @@ export interface RemoteSessionRecord {
   owner_runner_available?: boolean;
   owner_runner_state?: RemoteRunnerState | null;
   owner_runner_last_seen_at?: string | null;
+  /** Direct-connect URL for the runner hosting this session. When present,
+   *  the GUI can stream events and send commands directly to the runner. */
+  owner_runner_public_base_url?: string | null;
   state: RemoteSessionState;
   metadata: Record<string, string>;
   created_at: string;
@@ -199,6 +204,51 @@ export type RemoteTimelineEventDetail =
   | {
       kind: 'daemon_presence_changed';
       state: RemoteDaemonPresenceState;
+    }
+  | {
+      kind: 'subtask_started';
+      task_id: string;
+      parent_task_id: string | null;
+      description: string;
+      depth: number;
+    }
+  | {
+      kind: 'subtask_progress';
+      task_id: string;
+      status: string;
+      summary: string;
+    }
+  | {
+      kind: 'subtask_completed';
+      task_id: string;
+      status: string;
+      summary: string;
+      turns_used: number | null;
+    }
+  | {
+      kind: 'batch_progress';
+      total: number;
+      completed: number;
+      running: number;
+    }
+  | {
+      kind: 'context_usage';
+      estimated_tokens: number;
+      max_input_tokens: number;
+      threshold_tokens: number;
+      ratio: number;
+    }
+  | {
+      kind: 'context_overflow';
+      estimated_tokens: number;
+      max_input_tokens: number;
+      threshold_tokens: number;
+      ratio: number;
+    }
+  | {
+      kind: 'context_compacted';
+      entries_removed: number;
+      usage_ratio: number;
     };
 
 export interface RemoteTimelineEvent {

@@ -69,6 +69,7 @@ const SLASH_COMMANDS: SlashCommand[] = [
   { name: '/compact', description: '压缩上下文' },
   { name: '/cost', description: '显示费用统计' },
   { name: '/doctor', description: '运行诊断检查' },
+  { name: '/goal', description: '管理线程目标', usage: '/goal <objective> | clear | pause | resume' },
   { name: '/init', description: '初始化项目' },
   { name: '/login', description: '登录账户' },
   { name: '/logout', description: '登出账户' },

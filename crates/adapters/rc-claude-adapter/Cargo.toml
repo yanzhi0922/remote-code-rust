@@ -6,7 +6,7 @@ license.workspace = true
 description = "In-process adapter for Claude agent — wraps QueryEngine into a unified adapter interface"
 
 [dependencies]
-claude-agent-protocol = { path = "../../claude/claude-agent-protocol" }
+rc-agent-protocol = { path = "../../shared/rc-agent-protocol" }
 claude-query-engine = { path = "../../claude/claude-query-engine" }
 claude-core = { path = "../../claude/claude-core" }
 claude-config = { path = "../../claude/claude-config" }
@@ -14,7 +14,7 @@ claude-session = { path = "../../claude/claude-session" }
 claude-permissions = { path = "../../claude/claude-permissions" }
 claude-provider = { path = "../../claude/claude-provider" }
 claude-tools = { path = "../../claude/claude-tools" }
-claude-engine-events = { path = "../../claude/claude-engine-events" }
+rc-engine-events = { path = "../../shared/rc-engine-events" }
 tokio = { workspace = true }
 tokio-util = { workspace = true }
 futures = { workspace = true }

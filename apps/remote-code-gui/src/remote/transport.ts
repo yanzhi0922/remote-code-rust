@@ -45,6 +45,8 @@ export interface RemoteSessionStreamHandle {
 export function subscribeToRemoteSessionEvents(input: {
   baseUrl: string;
   sessionId: string;
+  /** When provided, stream events directly from the runner instead of the control plane. */
+  runnerBaseUrl?: string | null;
   getAfterSequence: () => number;
   onConnectionStateChange: (state: RemoteConnectionState) => void;
   onEvent: (event: RemoteTimelineEvent) => void;
@@ -53,6 +55,8 @@ export function subscribeToRemoteSessionEvents(input: {
   let reconnectTimer: number | null = null;
   let socket: WebSocket | null = null;
   let reconnectAttempt = 0;
+
+  const streamBaseUrl = input.runnerBaseUrl ?? input.baseUrl;
 
   const openSocket = (after: number) => {
     if (cancelled) {
@@ -65,7 +69,7 @@ export function subscribeToRemoteSessionEvents(input: {
     }
 
     input.onConnectionStateChange(after > 0 ? 'reconnecting' : 'connecting');
-    socket = new WebSocket(buildSessionEventsStreamUrl(input.baseUrl, input.sessionId, after));
+    socket = new WebSocket(buildSessionEventsStreamUrl(streamBaseUrl, input.sessionId, after));
 
     socket.onopen = () => {
       if (!cancelled) {

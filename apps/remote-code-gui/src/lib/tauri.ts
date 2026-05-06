@@ -291,6 +291,10 @@ export function codexThreadSetName(request: CodexThreadSetNameRequest): Promise<
   return invoke<CodexJsonValue>('codex_thread_set_name', { request });
 }
 
+export function codexCurrentThreadId(sessionId?: string | null): Promise<string | null> {
+  return invoke<string | null>('codex_current_thread_id', { sessionId: sessionId ?? null });
+}
+
 export function codexThreadGoalSet(request: CodexThreadGoalSetRequest): Promise<CodexJsonValue> {
   return invoke<CodexJsonValue>('codex_thread_goal_set', { request });
 }
@@ -301,6 +305,22 @@ export function codexThreadGoalGet(request: CodexThreadGoalRequest): Promise<Cod
 
 export function codexThreadGoalClear(request: CodexThreadGoalRequest): Promise<CodexJsonValue> {
   return invoke<CodexJsonValue>('codex_thread_goal_clear', { request });
+}
+
+/** Narrow a goal-set/get response to `{ goal }`. */
+export function asGoalResponse(val: CodexJsonValue): { goal: Record<string, unknown> | null } {
+  if (val && typeof val === 'object' && !Array.isArray(val)) {
+    return val as unknown as { goal: Record<string, unknown> | null };
+  }
+  return { goal: null };
+}
+
+/** Narrow a goal-clear response to `{ cleared }`. */
+export function asClearResponse(val: CodexJsonValue): { cleared: boolean } {
+  if (val && typeof val === 'object' && !Array.isArray(val)) {
+    return { cleared: Boolean((val as Record<string, unknown>)['cleared']) };
+  }
+  return { cleared: false };
 }
 
 export function codexThreadCompactStart(request: CodexThreadGoalRequest): Promise<CodexJsonValue> {
