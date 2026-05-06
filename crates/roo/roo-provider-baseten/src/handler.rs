@@ -48,6 +48,8 @@ impl BasetenHandler {
             request_timeout: config.request_timeout,
         reasoning_effort: None,
             streaming_enabled: None,
+            include_max_tokens: None,
+            extra_body_fields: None,
         };
 
         let inner = OpenAiCompatibleProvider::new(compatible_config)?;

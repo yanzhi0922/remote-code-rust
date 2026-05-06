@@ -9,6 +9,7 @@
 use async_trait::async_trait;
 use roo_provider::{
     ApiStream, CreateMessageMetadata, Provider,
+    transform::minimax_format::merge_environment_details_for_minimax,
 };
 use roo_provider_anthropic::AnthropicHandler;
 use roo_types::api::ProviderName;
@@ -59,6 +60,7 @@ impl MiniMaxHandler {
             use_extended_thinking: None,
             max_thinking_tokens: None,
             request_timeout: config.request_timeout,
+            enable_1m_context: false,
         };
 
         let inner = AnthropicHandler::new(anthropic_config)?
@@ -85,10 +87,16 @@ impl Provider for MiniMaxHandler {
     async fn create_message(
         &self,
         system_prompt: &str,
-        messages: Vec<roo_types::api::ApiMessage>,
+        mut messages: Vec<roo_types::api::ApiMessage>,
         tools: Option<Vec<serde_json::Value>>,
         metadata: CreateMessageMetadata,
     ) -> Result<ApiStream, roo_provider::ProviderError> {
+        // MiniMax thinking models error when they receive standalone user messages
+        // after tool_result blocks. Merge environment_details text into the
+        // preceding tool_result to preserve reasoning continuity.
+        // Source: src/api/providers/minimax.ts line 95
+        merge_environment_details_for_minimax(&mut messages);
+
         self.inner
             .create_message(system_prompt, messages, tools, metadata)
             .await
