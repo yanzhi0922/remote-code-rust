@@ -353,7 +353,7 @@ mod tests {
             "mock",
             Arc::new(NoopBackend),
             Arc::new(NoopToolRunner),
-            claude_engine_events::EventStream::new(8),
+            rc_engine_events::EventStream::new(8),
         );
         let query_config = register_repl_runtime_hooks(
             query_config,

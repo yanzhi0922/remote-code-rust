@@ -26,7 +26,14 @@ The codex and roo-code directories are excluded from the main repo via `.gitigno
 - `apps/remote-code-migrate`: explicit migration and import tool
 - `apps/remote-code-gui`: desktop GUI (Tauri v2 + React 19) — also serves as the Tauri v2 mobile target (iOS / Android); `mobile.rs` provides 20 native Tauri commands for haptics, biometrics, secure storage, file download/share, push notifications, and deep linking; `RemoteApp.tsx` provides the responsive remote-control UI reused in both desktop and mobile WebView contexts
 
-### Library Crates
+### Shared Crates (`crates/shared/`)
+
+Agent-agnostic crates shared across all three adapters (Claude, Roo, Codex):
+
+- `rc-agent-protocol`: multi-agent protocol abstraction layer — `AgentAdapter` trait, `UnifiedAgentEvent` enum, `AgentRouter` for routing messages to different agent backends, `AgentType` enum
+- `rc-engine-events`: shared runtime event types — `RuntimeEventDetail` (15 variants), `EventStream`, `EngineEvent`, serialization helpers
+
+### Library Crates (`crates/claude/`)
 
 - `claude-core`: shared runtime types, errors, conversation model, session states, hook types, tool types
 - `claude-config`: CLI parsing, env loading, config precedence, profile resolution, provider config, legacy import
@@ -43,14 +50,37 @@ The codex and roo-code directories are excluded from the main repo via `.gitigno
 - `claude-runner`: runner protocol, HTTP API, workspace registration, heartbeat, session/approval management
 - `claude-control-plane`: API models, runner registry, realtime fan-out (WebSocket), approvals, artifact routes, timeline events
 - `claude-telemetry`: tracing setup, structured logging, JSON output, cost telemetry
-- `claude-agent-protocol`: multi-agent protocol abstraction layer — `AgentAdapter` trait, `UnifiedAgentEvent` enum, `AgentRouter` for routing messages to different agent backends, `AgentType` enum
 - `claude-query-engine`: unified query loop, state machine, streaming executor, token budget — execution path for Claude agent
+- `claude-checkpoint`: conversation-level version control — snapshot scanner (SHA256), SQLite storage, unified diff, restore engine
+- `claude-specialized-agents`: Markdown+YAML agent definitions, 3-layer discovery, `@agent-name` mentions, 5 built-in agents
+- `claude-git`: Git operations facade — `gix` for branch resolution, CLI-based status/staging/commit/diff/log
+- `claude-system-prompt`: Claude-specific system prompt sections, caching, modular paragraphs
+- `claude-runtime-prompt`: runtime prompt assembly — system prompt + memory + MCP + tools + coordinator
+- `claude-swarm`: multi-agent swarm collaboration — Team management, mailbox, permission sync
+- `claude-auth`: API Key, OAuth2 PKCE, subscription verification (Anthropic, Bedrock, Vertex)
+- `claude-compact`: context compaction engine — 7 strategies, `SummaryProvider` trait
+- `claude-context`: effort levels, fast mode, runtime identity
+- `claude-model`: model definitions, capability queries, provider detection, aliases, validation, allowlists
+- `claude-transcript`: session transcripts, boundary markers, storage
+- `claude-event-bus`: generic pub/sub event bus — `EventBus`, `EventTopic`, `BusEvent`
+- `claude-ui-bridge`: abstract `UiFrontend` trait for TUI/GUI/remote-control frontends
+- `claude-file-history`: file checkpoint system — snapshots, backups, diff stats
+- `claude-lsp`: simplified LSP client and service management
+- `claude-ide`: IDE bridge — JSON-RPC 2.0, stdio/HTTP connection
+- `claude-voice`: STT/TTS traits with mock implementations
+- `claude-analytics`: event export (Datadog / custom / file)
+- `claude-settings`: settings schema, validation, layered loading
+- `claude-managed-settings`: remote managed settings with sync cache, MDM support
+- `claude-teleport`: session teleportation between environments
+- `claude-skill-search`: BM25 skill search, remote loading, prefetching
+- `claude-utils`: utilities — git filesystem ops, memory types, cron, image, markdown, diff
+- `claude-integration-tests`: cross-crate integration tests
+
+### Adapter Crates (`crates/adapters/`)
+
+- `rc-claude-adapter`: Claude in-process adapter — `ClaudeInProcessAdapter` wrapping `QueryEngine` with permission broker, tool runner, and query observer
 - `rc-codex-adapter`: Codex in-process adapter — wraps `InProcessAppServerClient` with background event pump and `event_mapper` (753 lines, 50+ notification types)
 - `rc-roo-adapter`: Roo in-process adapter — wraps Roo's native `AgentLoop` with `Provider` + `ToolDispatcher`, supporting 26 provider backends
-- `rc-claude-adapter`: Claude in-process adapter — `ClaudeInProcessAdapter` wrapping `QueryEngine` with permission broker, tool runner, and query observer
-- `claude-checkpoint`: conversation-level version control — snapshot scanner (SHA256), SQLite storage, unified diff (`similar` crate), restore engine (undo/rollback/preview), workspace exclusion patterns
-- `claude-specialized-agents`: specialized agent system — Markdown+YAML frontmatter agent definitions, 3-layer discovery (built-in/user/project), `@agent-name` mention parsing, 5 built-in agents (code-reviewer, bug-analyzer, dev-planner, architect, test-writer)
-- `claude-git`: Git operations facade — `gix` for branch resolution, CLI-based status/staging/commit/diff/log/branch switching, structured types for `GitStatus`/`GitDiff`/`CommitInfo`
 
 ## Process Model
 
@@ -456,7 +486,7 @@ graph TB
 - `AgentAdapter` trait — async interface: `start()`, `send_message()`, `cancel()`, `resolve_permission()`, `stop()`, `is_alive()`
 - `AgentRouter` — routes sessions to the correct adapter based on `agent_type`
 - `UnifiedAgentEvent` — normalized event model for all agent protocols
-- `claude-agent-protocol` — shared trait, event definitions, types (no adapter implementations)
+- `rc-agent-protocol` — shared trait, event definitions, types (no adapter implementations)
 - `rc-claude-adapter` — Claude adapter: `ClaudeInProcessAdapter` wrapping `QueryEngine` with full permission broker, tool runner, and query observer
 - `rc-codex-adapter` — Codex adapter: `CodexInProcessAdapter` with `event_mapper` (AppServerEvent → UnifiedAgentEvent)
 - `rc-roo-adapter` — Roo adapter: `RooInProcessAdapter` with native `AgentLoop` + `Provider` + `ToolDispatcher` (26 backends)
@@ -626,7 +656,7 @@ apps/* → rc-* crates
 UI-facing crates → core crates (not the reverse)
 remote crates → protocol, config, session, telemetry
 compatibility code → internal typed models (not the reverse)
-claude-agent-protocol → claude-core (shared types only)
+rc-agent-protocol → claude-core (shared types only)
 ```
 
 Examples of allowed direction:
@@ -635,7 +665,7 @@ Examples of allowed direction:
 - `claude-control-plane → claude-runner, claude-config`
 - `claude-provider → claude-core, claude-config, claude-tools`
 - `claude-plugins → claude-mcp, claude-skills`
-- `claude-agent-protocol → claude-core` (shared types, events)
+- `rc-agent-protocol → claude-core` (shared types, events)
 - `claude-query-engine → claude-provider, claude-tools, claude-session` (unified execution)
 
 Examples of disallowed direction:
@@ -643,7 +673,7 @@ Examples of disallowed direction:
 - `claude-core → claude-tui`
 - `claude-permissions → apps/remote-code`
 - `claude-session → claude-control-plane`
-- `claude-core → claude-agent-protocol`
+- `claude-core → rc-agent-protocol`
 
 ## CI Expectations
 

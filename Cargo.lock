@@ -197,6 +197,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "aes-gcm"
+version = "0.10.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "831010a0f742e1209b3bcea8fab6a8e149051ba6099432c8cb2cc117dec3ead1"
+dependencies = [
+ "aead",
+ "aes",
+ "cipher",
+ "ctr",
+ "ghash",
+ "subtle",
+]
+
+[[package]]
 name = "age"
 version = "0.11.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1916,21 +1930,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c8d4a3bb8b1e0c1050499d1815f5ab16d04f0959b233085fb31653fbfc9d98f9"
 
 [[package]]
-name = "claude-agent-protocol"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "chrono",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
- "uuid",
-]
-
-[[package]]
 name = "claude-agents"
 version = "0.1.0"
 dependencies = [
@@ -2064,12 +2063,16 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "claude-config",
- "claude-engine-events",
  "claude-runner",
  "constant_time_eq 0.3.1",
  "futures",
+ "quinn",
+ "rc-engine-events",
+ "rc-remote-transport",
  "reqwest 0.12.28",
  "rusqlite",
+ "rustls",
+ "rustls-pemfile",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -2095,16 +2098,6 @@ dependencies = [
  "serde_json",
  "tokio",
  "url",
- "uuid",
-]
-
-[[package]]
-name = "claude-engine-events"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
- "tokio",
  "uuid",
 ]
 
@@ -2168,14 +2161,12 @@ dependencies = [
  "anyhow",
  "async-trait",
  "chrono",
- "claude-agent-protocol",
  "claude-agents",
  "claude-auth",
  "claude-compact",
  "claude-config",
  "claude-context",
  "claude-core",
- "claude-engine-events",
  "claude-event-bus",
  "claude-file-history",
  "claude-mcp",
@@ -2191,6 +2182,8 @@ dependencies = [
  "claude-tools",
  "claude-transcript",
  "claude-utils",
+ "rc-agent-protocol",
+ "rc-engine-events",
  "serde",
  "serde_json",
  "tempfile",
@@ -2227,6 +2220,7 @@ name = "claude-mcp"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
+ "futures",
  "rand 0.9.4",
  "reqwest 0.12.28",
  "serde",
@@ -2235,6 +2229,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
+ "tokio-tungstenite 0.28.0",
  "toml 0.9.12+spec-1.1.0",
  "tracing",
  "walkdir",
@@ -2299,9 +2294,9 @@ dependencies = [
  "anyhow",
  "chrono",
  "claude-core",
- "claude-engine-events",
  "claude-permissions",
  "claude-ui-bridge",
+ "rc-engine-events",
  "serde",
  "serde_json",
  "uuid",
@@ -2322,6 +2317,8 @@ dependencies = [
  "futures",
  "hmac 0.12.1",
  "image",
+ "rand 0.9.4",
+ "regex",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
@@ -2339,8 +2336,8 @@ dependencies = [
  "async-trait",
  "chrono",
  "claude-core",
- "claude-engine-events",
  "claude-provider",
+ "rc-engine-events",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
@@ -2358,6 +2355,7 @@ dependencies = [
  "claude-config",
  "constant_time_eq 0.3.1",
  "futures",
+ "rc-agent-protocol",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
@@ -5481,6 +5479,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "52560adf09603e58c9a7ee1fe1dcb95a16927b17c127f0ac02d6e768a0e25bc1"
 
 [[package]]
+name = "ctr"
+version = "0.9.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0369ee1ad671834580515889b80f2ea915f23b8be8d0daa4bbaf2ac5c7590835"
+dependencies = [
+ "cipher",
+]
+
+[[package]]
 name = "ctutils"
 version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6491,6 +6498,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "fastbloom"
+version = "0.14.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4e7f34442dbe69c60fe8eaf58a8cafff81a1f278816d8ab4db255b3bef4ac3c4"
+dependencies = [
+ "getrandom 0.3.4",
+ "libm",
+ "rand 0.9.4",
+ "siphasher",
+]
+
+[[package]]
 name = "faster-hex"
 version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7127,6 +7146,16 @@ dependencies = [
  "r-efi 6.0.0",
  "wasip2",
  "wasip3",
+]
+
+[[package]]
+name = "ghash"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f0d8a4362ccb29cb0b265253fb0a2728f592895ee6854fd9bc13f2ffda266ff1"
+dependencies = [
+ "opaque-debug",
+ "polyval",
 ]
 
 [[package]]
@@ -11610,6 +11639,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "polyval"
+version = "0.6.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9d1fe60d06143b2430aa532c94cfe9e29783047f06c0d7fd359a9a51b729fa25"
+dependencies = [
+ "cfg-if",
+ "cpufeatures 0.2.17",
+ "opaque-debug",
+ "universal-hash",
+]
+
+[[package]]
 name = "portable-atomic"
 version = "1.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -12074,6 +12115,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "434b42fec591c96ef50e21e886936e66d3cc3f737104fdb9b737c40ffb94c098"
 dependencies = [
  "bytes",
+ "fastbloom",
  "getrandom 0.3.4",
  "lru-slab",
  "rand 0.9.4",
@@ -12081,6 +12123,7 @@ dependencies = [
  "rustc-hash 2.1.2",
  "rustls",
  "rustls-pki-types",
+ "rustls-platform-verifier",
  "slab",
  "thiserror 2.0.18",
  "tinyvec",
@@ -12577,21 +12620,37 @@ dependencies = [
 ]
 
 [[package]]
+name = "rc-agent-protocol"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "rc-engine-events",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "rc-claude-adapter"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
- "claude-agent-protocol",
  "claude-config",
  "claude-core",
- "claude-engine-events",
  "claude-permissions",
  "claude-provider",
  "claude-query-engine",
  "claude-session",
  "claude-tools",
  "futures",
+ "rc-agent-protocol",
+ "rc-engine-events",
  "serde",
  "serde_json",
  "tokio",
@@ -12606,7 +12665,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
- "claude-agent-protocol",
+ "axum",
  "codex-app-server-client",
  "codex-app-server-protocol",
  "codex-arg0",
@@ -12619,13 +12678,50 @@ dependencies = [
  "codex-utils-absolute-path",
  "directories",
  "futures",
+ "rc-agent-protocol",
+ "reqwest 0.12.28",
  "serde",
  "serde_json",
  "tokio",
+ "tokio-stream",
  "toml 0.9.12+spec-1.1.0",
  "tracing",
  "tracing-subscriber",
  "uuid",
+]
+
+[[package]]
+name = "rc-engine-events"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "rc-remote-transport"
+version = "0.1.0"
+dependencies = [
+ "aes-gcm",
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "futures",
+ "quinn",
+ "reqwest 0.12.28",
+ "rustls",
+ "rustls-native-certs",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-tungstenite 0.28.0",
+ "tracing",
+ "uuid",
+ "x25519-dalek",
 ]
 
 [[package]]
@@ -12634,9 +12730,9 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
- "claude-agent-protocol",
  "dirs",
  "futures",
+ "rc-agent-protocol",
  "roo-app",
  "roo-auto-approval",
  "roo-context-tracking",
@@ -12815,7 +12911,6 @@ dependencies = [
  "claude-context",
  "claude-control-plane",
  "claude-core",
- "claude-engine-events",
  "claude-mcp",
  "claude-model",
  "claude-permissions",
@@ -12836,6 +12931,7 @@ dependencies = [
  "claude-ui-bridge",
  "directories",
  "futures",
+ "rc-engine-events",
  "regex",
  "reqwest 0.12.28",
  "serde",
@@ -12869,10 +12965,8 @@ dependencies = [
  "anyhow",
  "async-trait",
  "chrono",
- "claude-agent-protocol",
  "claude-config",
  "claude-core",
- "claude-engine-events",
  "claude-mcp",
  "claude-permissions",
  "claude-plugins",
@@ -12887,8 +12981,11 @@ dependencies = [
  "codex-arg0",
  "directories",
  "keyring",
+ "rc-agent-protocol",
  "rc-claude-adapter",
  "rc-codex-adapter",
+ "rc-engine-events",
+ "rc-remote-transport",
  "rc-roo-adapter",
  "reqwest 0.12.28",
  "serde",
@@ -12923,11 +13020,13 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "axum",
+ "base64 0.22.1",
  "chrono",
  "clap",
  "claude-control-plane",
  "claude-runner",
  "claude-telemetry",
+ "rc-agent-protocol",
  "reqwest 0.12.28",
  "serde_json",
  "tempfile",
@@ -13197,9 +13296,72 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "roo-cli"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "clap",
+ "futures",
+ "roo-app",
+ "roo-context-tracking",
+ "roo-ignore",
+ "roo-index",
+ "roo-modes",
+ "roo-prompt",
+ "roo-protect",
+ "roo-provider",
+ "roo-provider-anthropic",
+ "roo-provider-aws",
+ "roo-provider-baseten",
+ "roo-provider-deepseek",
+ "roo-provider-fireworks",
+ "roo-provider-google",
+ "roo-provider-litellm",
+ "roo-provider-lmstudio",
+ "roo-provider-minimax",
+ "roo-provider-mistral",
+ "roo-provider-moonshot",
+ "roo-provider-ollama",
+ "roo-provider-openai",
+ "roo-provider-openai-native",
+ "roo-provider-openrouter",
+ "roo-provider-poe",
+ "roo-provider-qwen",
+ "roo-provider-requesty",
+ "roo-provider-roo",
+ "roo-provider-sambanova",
+ "roo-provider-unbound",
+ "roo-provider-vercel",
+ "roo-provider-xai",
+ "roo-provider-zai",
+ "roo-task",
+ "roo-terminal",
+ "roo-tools",
+ "roo-types",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "roo-cloud"
+version = "0.1.0"
+dependencies = [
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
 ]
 
 [[package]]
@@ -13209,6 +13371,7 @@ dependencies = [
  "roo-config",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -13243,6 +13406,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -13275,6 +13439,7 @@ dependencies = [
  "chrono",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.18",
 ]
 
@@ -13285,6 +13450,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml",
+ "tempfile",
  "thiserror 2.0.18",
 ]
 
@@ -13307,6 +13473,7 @@ dependencies = [
  "serde",
  "serde_json",
  "similar",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
 ]
@@ -13344,14 +13511,31 @@ dependencies = [
 name = "roo-index"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
+ "base64 0.22.1",
+ "chrono",
+ "hex",
+ "hmac 0.12.1",
  "notify 7.0.0",
  "regex",
+ "reqwest 0.12.28",
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "roo-jsonrpc"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -13362,6 +13546,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
 ]
@@ -13387,6 +13572,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "roo-mdm"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "roo-mentions"
 version = "0.1.0"
 dependencies = [
@@ -13395,6 +13589,7 @@ dependencies = [
  "roo-command",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -13407,6 +13602,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.18",
+ "tokio",
 ]
 
 [[package]]
@@ -13430,6 +13626,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml",
+ "tempfile",
  "thiserror 2.0.18",
  "tracing",
 ]
@@ -13498,6 +13695,7 @@ dependencies = [
  "futures",
  "hex",
  "hmac 0.12.1",
+ "regex",
  "reqwest 0.12.28",
  "roo-provider",
  "roo-types",
@@ -13506,6 +13704,7 @@ dependencies = [
  "sha2 0.10.9",
  "thiserror 2.0.18",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -13538,6 +13737,20 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.18",
  "tokio",
+]
+
+[[package]]
+name = "roo-provider-fake-ai"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "futures",
+ "roo-provider",
+ "roo-types",
+ "serde",
+ "serde_json",
+ "tokio",
+ "uuid",
 ]
 
 [[package]]
@@ -13683,6 +13896,7 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.18",
  "tokio",
+ "url",
 ]
 
 [[package]]
@@ -13831,6 +14045,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "roo-provider-vscode-lm"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "eventsource-stream",
+ "futures",
+ "reqwest 0.12.28",
+ "roo-provider",
+ "roo-types",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
 name = "roo-provider-xai"
 version = "0.1.0"
 dependencies = [
@@ -13863,6 +14093,43 @@ dependencies = [
 ]
 
 [[package]]
+name = "roo-server"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "roo-app",
+ "roo-checkpoint",
+ "roo-command",
+ "roo-condense",
+ "roo-jsonrpc",
+ "roo-mcp",
+ "roo-message-queue",
+ "roo-modes",
+ "roo-provider",
+ "roo-provider-anthropic",
+ "roo-provider-deepseek",
+ "roo-provider-google",
+ "roo-provider-minimax",
+ "roo-provider-ollama",
+ "roo-provider-openai",
+ "roo-provider-openrouter",
+ "roo-skills",
+ "roo-task",
+ "roo-task-persistence",
+ "roo-telemetry",
+ "roo-terminal",
+ "roo-tools-search",
+ "roo-types",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "roo-skills"
 version = "0.1.0"
 dependencies = [
@@ -13884,6 +14151,7 @@ dependencies = [
  "dirs",
  "futures",
  "regex",
+ "reqwest 0.12.28",
  "roo-auto-approval",
  "roo-checkpoint",
  "roo-command",
@@ -13918,6 +14186,7 @@ dependencies = [
  "roo-types",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "tokio-util",
@@ -13934,6 +14203,7 @@ dependencies = [
  "roo-types",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.18",
  "tracing",
  "uuid",
@@ -13956,6 +14226,7 @@ version = "0.1.0"
 dependencies = [
  "rand 0.8.6",
  "roo-types",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -13983,6 +14254,7 @@ dependencies = [
  "roo-types",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
 ]
@@ -14000,6 +14272,7 @@ dependencies = [
  "roo-types",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.18",
 ]
 
@@ -14020,6 +14293,7 @@ dependencies = [
 name = "roo-tools-misc"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "regex",
  "reqwest 0.12.28",
  "roo-skills",
@@ -14035,6 +14309,7 @@ dependencies = [
 name = "roo-tools-mode"
 version = "0.1.0"
 dependencies = [
+ "roo-skills",
  "roo-types",
  "serde",
  "serde_json",
@@ -14051,6 +14326,7 @@ dependencies = [
  "roo-types",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.18",
 ]
 
@@ -14062,6 +14338,7 @@ dependencies = [
  "serde",
  "serde_json",
  "streaming-iterator",
+ "tempfile",
  "thiserror 2.0.18",
  "tree-sitter",
  "tree-sitter-c",
@@ -14281,6 +14558,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "rustls-pemfile"
+version = "2.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dce314e5fee3f39953d46bb63bb8a46d40c2f8fb7cc5a3b6cab2bde9721d6e50"
+dependencies = [
+ "rustls-pki-types",
+]
+
+[[package]]
 name = "rustls-pki-types"
 version = "1.14.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -14289,6 +14575,33 @@ dependencies = [
  "web-time",
  "zeroize",
 ]
+
+[[package]]
+name = "rustls-platform-verifier"
+version = "0.6.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1d99feebc72bae7ab76ba994bb5e121b8d83d910ca40b36e0921f53becc41784"
+dependencies = [
+ "core-foundation 0.10.1",
+ "core-foundation-sys",
+ "jni 0.21.1",
+ "log",
+ "once_cell",
+ "rustls",
+ "rustls-native-certs",
+ "rustls-platform-verifier-android",
+ "rustls-webpki",
+ "security-framework 3.7.0",
+ "security-framework-sys",
+ "webpki-root-certs",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "rustls-platform-verifier-android"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f87165f0995f63a9fbeea62b64d10b4d9d8e78ec6d7d51fb2125fda7bb36788f"
 
 [[package]]
 name = "rustls-webpki"

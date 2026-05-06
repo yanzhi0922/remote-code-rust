@@ -127,11 +127,6 @@ pub struct RuntimeHookDiscovery {
 }
 
 impl RuntimeHookDiscovery {
-    #[must_use]
-    #[allow(dead_code)]
-    pub fn supported_count(&self) -> usize {
-        self.hooks.iter().filter(|hook| hook.supported).count()
-    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -315,38 +310,6 @@ pub async fn run_hooks(config: &RuntimeConfig, command: HooksCommand) -> Result<
     match command {
         HooksCommand::List(args) => run_hooks_list(config, args).await,
     }
-}
-
-#[allow(dead_code)]
-pub fn print_hooks_overview(config: &RuntimeConfig) -> Result<()> {
-    let output = build_hooks_list_output(
-        config,
-        &HooksListArgs {
-            json: false,
-            event: None,
-            include_unsupported: false,
-            sources: Vec::new(),
-            plugin_roots: Vec::new(),
-        },
-    )?;
-    if output.hooks.is_empty() {
-        println!("No supported hooks found.");
-        return Ok(());
-    }
-    for warning in &output.warnings {
-        println!("warning: {warning}");
-    }
-    for hook in &output.hooks {
-        println!(
-            "{}  {}  source={}  matcher={}  {}",
-            hook.event.as_str(),
-            hook.hook_type,
-            format_source(hook),
-            hook.matcher.as_deref().unwrap_or("*"),
-            hook.display
-        );
-    }
-    Ok(())
 }
 
 pub fn discover_runtime_hooks(
@@ -590,47 +553,6 @@ pub async fn ensure_session_start_hooks_with_options(
     Ok(())
 }
 
-#[allow(dead_code)]
-pub async fn apply_user_prompt_hooks(
-    discovery: &RuntimeHookDiscovery,
-    config: &RuntimeConfig,
-    store: &SessionStore,
-    conversation: &mut Vec<ConversationEntry>,
-    state: &mut HookRunState,
-    prompt: &str,
-) -> Result<String> {
-    let input = json!({
-        "event": HookEventName::UserPromptSubmit.as_str(),
-        "session_id": config.session_id,
-        "cwd": config.cwd,
-        "prompt": prompt,
-    });
-    let effects = run_event_hooks(
-        discovery,
-        HookEventName::UserPromptSubmit,
-        config,
-        store,
-        state,
-        prompt.to_owned(),
-        &input,
-        true,
-        HookExecutionOptions::persistent(),
-    )
-    .await?;
-    if let Some(reason) = effects.blocked_reason {
-        return Err(anyhow!(reason));
-    }
-    append_contexts(
-        store,
-        config.session_id,
-        conversation,
-        HookEventName::UserPromptSubmit,
-        &effects.additional_contexts,
-        true,
-    )?;
-    Ok(prompt.to_owned())
-}
-
 pub async fn apply_pre_tool_use_hooks(
     discovery: &RuntimeHookDiscovery,
     config: &RuntimeConfig,
@@ -788,51 +710,6 @@ pub async fn apply_post_tool_hooks_with_options(
     if options.persist && !tool_result.is_error {
         handle_session_file_access_post_tool(config, store, tool_call)?;
     }
-    Ok(())
-}
-
-#[allow(dead_code)]
-pub async fn apply_permission_denied_hooks(
-    discovery: &RuntimeHookDiscovery,
-    config: &RuntimeConfig,
-    store: &SessionStore,
-    conversation: &mut Vec<ConversationEntry>,
-    state: &mut HookRunState,
-    tool_call: &ToolCall,
-    tool_result: &ToolResult,
-) -> Result<()> {
-    let input = json!({
-        "event": HookEventName::PermissionDenied.as_str(),
-        "session_id": config.session_id,
-        "cwd": config.cwd,
-        "tool_name": tool_call.name,
-        "tool_use_id": tool_call.id,
-        "tool_input": tool_call.input,
-        "tool_result": {
-            "content": tool_result.content,
-            "is_error": tool_result.is_error,
-        },
-    });
-    let effects = run_event_hooks(
-        discovery,
-        HookEventName::PermissionDenied,
-        config,
-        store,
-        state,
-        tool_call.name.clone(),
-        &input,
-        false,
-        HookExecutionOptions::persistent(),
-    )
-    .await?;
-    append_contexts(
-        store,
-        config.session_id,
-        conversation,
-        HookEventName::PermissionDenied,
-        &effects.additional_contexts,
-        true,
-    )?;
     Ok(())
 }
 

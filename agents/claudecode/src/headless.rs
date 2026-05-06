@@ -290,6 +290,8 @@ impl From<PersistedUsageSnapshot> for UsagePayload {
         Self {
             input_tokens: value.input_tokens,
             output_tokens: value.output_tokens,
+            cache_read_input_tokens: 0,
+            cache_creation_input_tokens: 0,
         }
     }
 }
@@ -929,6 +931,7 @@ mod tests {
                     output_tokens: 2,
                     cache_read_input_tokens: 0,
                     cache_creation_input_tokens: 0,
+                    ..Default::default()
                 },
                 stop_reason: "end_turn".to_owned(),
             })
@@ -960,6 +963,7 @@ mod tests {
                     output_tokens: 3,
                     cache_read_input_tokens: 0,
                     cache_creation_input_tokens: 0,
+                    ..Default::default()
                 },
                 stop_reason: "end_turn".to_owned(),
             })
@@ -1083,6 +1087,8 @@ mod tests {
             usage: UsagePayload {
                 input_tokens: 3,
                 output_tokens: 4,
+                cache_read_input_tokens: 0,
+                cache_creation_input_tokens: 0,
             },
             model_usage: serde_json::json!({"provider":"mock"}),
             permission_denials: Vec::new(),

@@ -247,6 +247,7 @@ impl SubAgentCompletion for RemoteCodeSubAgentRuntime {
                 output_tokens: result.usage.output_tokens,
                 cache_read_input_tokens: result.usage.cache_read_tokens,
                 cache_creation_input_tokens: result.usage.cache_creation_tokens,
+                ..Default::default()
             },
         })
     }
@@ -461,6 +462,7 @@ impl RemoteCodeAgentExecutor {
                 output_tokens: outcome.usage.output_tokens,
                 cache_read_input_tokens: outcome.cache_read_input_tokens,
                 cache_creation_input_tokens: outcome.cache_creation_input_tokens,
+                ..Default::default()
             },
         })
     }
