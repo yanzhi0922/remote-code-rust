@@ -6,7 +6,7 @@
 //! Faithfully ported from `.research/Roo-Code/src/api/providers/gemini.ts`.
 
 use std::pin::Pin;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use eventsource_stream::Eventsource;
@@ -36,7 +36,7 @@ pub struct GoogleHandler {
     /// The thought signature from the most recent response, used for
     /// round-tripping in subsequent tool-calling turns.
     /// Source: `.research/Roo-Code/src/api/providers/gemini.ts` — `lastThoughtSignature`
-    last_thought_signature: Mutex<Option<String>>,
+    last_thought_signature: Arc<Mutex<Option<String>>>,
 }
 
 impl GoogleHandler {
@@ -104,7 +104,7 @@ impl GoogleHandler {
             model_id,
             model_info,
             temperature,
-            last_thought_signature: Mutex::new(None),
+            last_thought_signature: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -261,7 +261,7 @@ impl GoogleHandler {
     fn parse_sse_stream(
         stream: Pin<Box<dyn Stream<Item = Result<GeminiStreamResponse>> + Send>>,
         model_info: ModelInfo,
-        thought_signature_out: std::sync::Arc<Mutex<Option<String>>>,
+        thought_signature_out: Arc<Mutex<Option<String>>>,
     ) -> ApiStream {
         let mut usage_emitted = false;
         let mut tool_call_counter: u64 = 0;
@@ -482,7 +482,9 @@ impl Provider for GoogleHandler {
         }
 
         let model_info = self.model_info.clone();
-        let thought_signature_out = std::sync::Arc::new(Mutex::new(None::<String>));
+        // Clone the Arc so the stream writes directly into self.last_thought_signature.
+        // This ensures thought signatures are persisted for subsequent tool-calling turns.
+        let thought_signature_out = self.last_thought_signature.clone();
 
         let sse_stream = response
             .bytes_stream()
@@ -737,6 +739,7 @@ impl VertexHandler {
         system_prompt: &str,
         messages: &[ApiMessage],
         tools: Option<&Vec<Value>>,
+        metadata: &CreateMessageMetadata,
     ) -> Value {
         let tool_id_to_name = build_tool_id_to_name_map(messages);
         let conversion_opts = GeminiConversionOptions {
@@ -791,6 +794,43 @@ impl VertexHandler {
             }
         }
 
+        // Handle tool_choice / allowed_function_names -> Gemini functionCallingConfig.
+        // Mirrors the same logic as GoogleHandler::build_request_body.
+        if let Some(ref allowed) = metadata.allowed_function_names {
+            if !allowed.is_empty() {
+                body["toolConfig"] = json!({
+                    "functionCallingConfig": {
+                        "mode": "ANY",
+                        "allowedFunctionNames": allowed,
+                    }
+                });
+            }
+        } else if let Some(ref tool_choice) = metadata.tool_choice {
+            let (mode, allowed_fn_names) = match tool_choice {
+                v if v.as_str() == Some("auto") => ("AUTO", None),
+                v if v.as_str() == Some("none") => ("NONE", None),
+                v if v.as_str() == Some("required") => ("ANY", None),
+                v if v.is_object() && v.get("type").and_then(|t| t.as_str()) == Some("function") => {
+                    let name = v.get("function")
+                        .and_then(|f| f.get("name"))
+                        .and_then(|n| n.as_str())
+                        .map(|s| vec![s.to_string()]);
+                    ("ANY", name)
+                }
+                _ => ("AUTO", None),
+            };
+
+            let mut config = json!({
+                "functionCallingConfig": {
+                    "mode": mode,
+                }
+            });
+            if let Some(names) = allowed_fn_names {
+                config["functionCallingConfig"]["allowedFunctionNames"] = json!(names);
+            }
+            body["toolConfig"] = config;
+        }
+
         body
     }
 }
@@ -804,8 +844,7 @@ impl Provider for VertexHandler {
         tools: Option<Vec<Value>>,
         metadata: CreateMessageMetadata,
     ) -> Result<ApiStream> {
-        let _ = &metadata; // Vertex handler does not use tool_choice metadata yet
-        let body = self.build_request_body(system_prompt, &messages, tools.as_ref());
+        let body = self.build_request_body(system_prompt, &messages, tools.as_ref(), &metadata);
         let url = self.build_stream_url();
         let access_token = self.get_access_token().await?;
 
@@ -826,7 +865,7 @@ impl Provider for VertexHandler {
         }
 
         let model_info = self.model_info.clone();
-        let thought_signature_out = std::sync::Arc::new(Mutex::new(None::<String>));
+        let thought_signature_out = Arc::new(Mutex::new(None::<String>));
 
         let sse_stream = response
             .bytes_stream()
@@ -1133,6 +1172,8 @@ mod tests {
             model_id: None,
             temperature: None,
             request_timeout: None,
+            enable_1m_context: false,
+            max_thinking_tokens: None,
         };
         let handler = VertexHandler::new(config);
         assert!(handler.is_ok());
@@ -1177,6 +1218,8 @@ mod tests {
             model_id: None,
             temperature: None,
             request_timeout: None,
+            enable_1m_context: false,
+            max_thinking_tokens: None,
         };
         let handler = VertexHandler::new(config).unwrap();
         assert_eq!(handler.provider_name(), ProviderName::Vertex);
@@ -1191,6 +1234,8 @@ mod tests {
             model_id: None,
             temperature: None,
             request_timeout: None,
+            enable_1m_context: false,
+            max_thinking_tokens: None,
         };
         let handler = VertexHandler::new(config).unwrap();
         let (_, info) = handler.get_model();
@@ -1240,6 +1285,8 @@ mod tests {
             model_id: None,
             temperature: None,
             request_timeout: None,
+            enable_1m_context: false,
+            max_thinking_tokens: None,
         };
         assert_eq!(config.base_url(), "https://us-central1-aiplatform.googleapis.com/v1");
     }
@@ -1259,6 +1306,8 @@ mod tests {
             model_id: Some("claude-3-7-sonnet@20250219:thinking".to_string()),
             temperature: None,
             request_timeout: None,
+            enable_1m_context: false,
+            max_thinking_tokens: None,
         };
         let handler = VertexHandler::new(config).unwrap();
         let (model_id, _) = handler.get_model();

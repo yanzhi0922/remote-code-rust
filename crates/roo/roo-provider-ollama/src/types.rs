@@ -15,6 +15,9 @@ pub struct OllamaConfig {
     pub request_timeout: Option<u64>,
     /// Additional Ollama API options.
     pub api_options: Option<serde_json::Value>,
+    /// Context window size to pass to Ollama as `num_ctx`.
+    /// Source: `src/api/providers/ollama.ts` — `num_ctx` option
+    pub num_ctx: Option<u64>,
 }
 
 impl OllamaConfig {
@@ -35,6 +38,7 @@ impl OllamaConfig {
             temperature: settings.model_temperature.flatten(),
             request_timeout: settings.request_timeout,
             api_options: settings.ollama_api_options.clone(),
+            num_ctx: settings.ollama_num_ctx,
         }
     }
 }

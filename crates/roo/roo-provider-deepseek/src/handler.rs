@@ -1,4 +1,4 @@
-﻿//! DeepSeek provider handler.
+//! DeepSeek provider handler.
 //!
 //! Uses the OpenAI-compatible chat completions API.
 //! Supports extended thinking mode via `deepseek-reasoner`.
@@ -59,6 +59,8 @@ impl DeepSeekHandler {
             request_timeout: config.request_timeout,
             reasoning_effort: None,
             streaming_enabled: Some(true),
+            include_max_tokens: None,
+            extra_body_fields: None,
         };
 
         let inner = OpenAiCompatibleProvider::new(compatible_config)?;

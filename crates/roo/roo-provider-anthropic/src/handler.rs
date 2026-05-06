@@ -1,4 +1,4 @@
-﻿//! Anthropic provider handler.
+//! Anthropic provider handler.
 //!
 //! Implements the Provider trait for the Anthropic Messages API.
 //! Handles SSE streaming with Anthropic-specific event types:
@@ -28,6 +28,7 @@ use crate::models;
 use crate::types::{
     AnthropicConfig, AnthropicDelta, AnthropicSseEvent, AnthropicUsage,
     AnthropicVertexConfig, anthropic_vertex_models, anthropic_vertex_default_model_id,
+    ANTHROPIC_1M_CONTEXT_MODEL_IDS,
 };
 use roo_provider::vertex_auth::VertexTokenProvider;
 
@@ -122,7 +123,7 @@ impl AnthropicHandler {
     /// Create a new Anthropic handler from configuration.
     pub fn new(config: AnthropicConfig) -> Result<Self> {
         let model_id = config.model_id.unwrap_or_else(|| models::default_model_id());
-        let model_info = models::models()
+        let mut model_info = models::models()
             .get(&model_id)
             .cloned()
             .unwrap_or_else(|| ModelInfo {
@@ -137,6 +138,27 @@ impl AnthropicHandler {
                 description: Some("Anthropic Claude model (unknown variant)".to_string()),
                 ..Default::default()
             });
+
+        // If 1M context beta is enabled for supported models, update the model info
+        // Source: `src/api/providers/anthropic.ts` — `getModel()` lines 340-354
+        let supports_1m = ANTHROPIC_1M_CONTEXT_MODEL_IDS.contains(&model_id.as_str());
+        if config.enable_1m_context && supports_1m {
+            if let Some(tier) = model_info.tiers.as_ref().and_then(|t| t.first()) {
+                model_info.context_window = tier.context_window;
+                if let Some(p) = tier.input_price {
+                    model_info.input_price = Some(p);
+                }
+                if let Some(p) = tier.output_price {
+                    model_info.output_price = Some(p);
+                }
+                if let Some(p) = tier.cache_writes_price {
+                    model_info.cache_writes_price = Some(p);
+                }
+                if let Some(p) = tier.cache_reads_price {
+                    model_info.cache_reads_price = Some(p);
+                }
+            }
+        }
 
         let mut client_builder = reqwest::Client::builder();
         if let Some(timeout) = config.request_timeout {
@@ -169,6 +191,12 @@ impl AnthropicHandler {
         // `anthropic-beta: prompt-caching-2024-07-31,extended-context-2025-06-01`
         if model_info.context_window > 200_000 {
             betas.push("extended-context-2025-06-01".to_string());
+        }
+
+        // Add 1M context beta if enabled for supported models.
+        // Source: `src/api/providers/anthropic.ts` — lines 67-76
+        if config.enable_1m_context && supports_1m {
+            betas.push("context-1m-2025-08-07".to_string());
         }
 
         Ok(Self {
@@ -1393,6 +1421,7 @@ mod tests {
             use_extended_thinking: None,
             max_thinking_tokens: None,
             request_timeout: None,
+            enable_1m_context: false,
         };
         let handler = AnthropicHandler::new(config);
         assert!(handler.is_ok());
@@ -1408,6 +1437,7 @@ mod tests {
             use_extended_thinking: None,
             max_thinking_tokens: None,
             request_timeout: None,
+            enable_1m_context: false,
         };
         let handler = AnthropicHandler::new(config).unwrap();
         let (model_id, _) = handler.get_model();
@@ -1424,6 +1454,7 @@ mod tests {
             use_extended_thinking: None,
             max_thinking_tokens: None,
             request_timeout: None,
+            enable_1m_context: false,
         };
         let handler = AnthropicHandler::new(config).unwrap();
         let (model_id, _) = handler.get_model();
@@ -1440,6 +1471,7 @@ mod tests {
             use_extended_thinking: None,
             max_thinking_tokens: None,
             request_timeout: None,
+            enable_1m_context: false,
         };
         let handler = AnthropicHandler::new(config).unwrap();
         assert_eq!(handler.provider_name(), ProviderName::Anthropic);
@@ -1507,9 +1539,45 @@ mod tests {
             use_extended_thinking: Some(true),
             max_thinking_tokens: Some(5000),
             request_timeout: None,
+            enable_1m_context: false,
         };
         let handler = AnthropicHandler::new(config).unwrap();
         assert!(handler.use_extended_thinking);
+    }
+
+    #[test]
+    fn test_anthropic_1m_context_beta() {
+        let config = AnthropicConfig {
+            api_key: "sk-ant-test".to_string(),
+            base_url: AnthropicConfig::DEFAULT_BASE_URL.to_string(),
+            model_id: Some("claude-sonnet-4-6".to_string()),
+            temperature: None,
+            use_extended_thinking: None,
+            max_thinking_tokens: None,
+            request_timeout: None,
+            enable_1m_context: true,
+        };
+        let handler = AnthropicHandler::new(config).unwrap();
+        assert!(handler.betas.contains(&"context-1m-2025-08-07".to_string()));
+        assert_eq!(handler.model_info.context_window, 1_000_000);
+        assert_eq!(handler.model_info.input_price, Some(6.0));
+    }
+
+    #[test]
+    fn test_anthropic_1m_context_unsupported_model() {
+        let config = AnthropicConfig {
+            api_key: "sk-ant-test".to_string(),
+            base_url: AnthropicConfig::DEFAULT_BASE_URL.to_string(),
+            model_id: Some("claude-3-opus-20240229".to_string()),
+            temperature: None,
+            use_extended_thinking: None,
+            max_thinking_tokens: None,
+            request_timeout: None,
+            enable_1m_context: true,
+        };
+        let handler = AnthropicHandler::new(config).unwrap();
+        assert!(!handler.betas.contains(&"context-1m-2025-08-07".to_string()));
+        assert_eq!(handler.model_info.context_window, 200_000);
     }
 
     #[test]
@@ -1588,6 +1656,7 @@ mod tests {
             use_extended_thinking: None,
             max_thinking_tokens: None,
             request_timeout: None,
+            enable_1m_context: false,
         };
         let handler = AnthropicHandler::new(config).unwrap();
 
@@ -1630,6 +1699,7 @@ mod tests {
             use_extended_thinking: None,
             max_thinking_tokens: None,
             request_timeout: None,
+            enable_1m_context: false,
         };
         let handler = AnthropicHandler::new(config).unwrap();
         let (model_id, _) = handler.get_model();

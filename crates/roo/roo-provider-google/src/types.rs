@@ -203,6 +203,10 @@ pub struct VertexConfig {
     pub temperature: Option<f64>,
     /// Request timeout in milliseconds.
     pub request_timeout: Option<u64>,
+    /// Whether 1M context is enabled for supported models.
+    pub enable_1m_context: bool,
+    /// Max thinking tokens for reasoning models.
+    pub max_thinking_tokens: Option<u64>,
 }
 
 impl VertexConfig {
@@ -240,6 +244,8 @@ impl VertexConfig {
             model_id: settings.api_model_id.clone(),
             temperature: settings.model_temperature.flatten(),
             request_timeout: settings.request_timeout,
+            enable_1m_context: settings.vertex_1m_context.unwrap_or(false),
+            max_thinking_tokens: settings.model_max_thinking_tokens,
         })
     }
 

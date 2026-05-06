@@ -2,8 +2,8 @@
 name = "roo-provider-aws"
 version.workspace = true
 edition.workspace = true
-license.workspace = true
-repository.workspace = true
+license = "Apache-2.0"
+repository = "https://github.com/roo-code/rust"
 description = "AWS Bedrock provider for Roo Code Rust"
 
 [dependencies]
@@ -21,3 +21,5 @@ sha2 = { workspace = true }
 hmac = "0.12"
 chrono = { workspace = true }
 hex = "0.4"
+tracing = { workspace = true }
+regex = { workspace = true }

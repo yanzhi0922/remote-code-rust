@@ -69,6 +69,12 @@ pub enum BedrockEvent {
     ValidationException {
         message: String,
     },
+    /// Prompt router trace event.
+    /// Source: TS bedrock.ts — `streamEvent?.trace?.promptRouter?.invokedModelId`
+    PromptRouter {
+        invoked_model_id: Option<String>,
+        usage: Option<BedrockUsage>,
+    },
     /// Unknown event type (graceful degradation).
     Unknown {
         event_type: String,
@@ -393,6 +399,22 @@ fn parse_event(event_type: &str, payload: &[u8]) -> Option<BedrockEvent> {
                 .unwrap_or("Validation error")
                 .to_string();
             Some(BedrockEvent::ValidationException { message })
+        }
+        "trace" => {
+            // Prompt router trace event.
+            // Source: TS bedrock.ts — `streamEvent?.trace?.promptRouter?.invokedModelId`
+            let prompt_router = payload_json.get("promptRouter");
+            let invoked_model_id = prompt_router
+                .and_then(|pr| pr.get("invokedModelId"))
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            let usage = prompt_router
+                .and_then(|pr| pr.get("usage"))
+                .and_then(|u| serde_json::from_value(u.clone()).ok());
+            Some(BedrockEvent::PromptRouter {
+                invoked_model_id,
+                usage,
+            })
         }
         _ => Some(BedrockEvent::Unknown {
             event_type: event_type.to_string(),

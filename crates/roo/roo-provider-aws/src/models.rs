@@ -682,6 +682,126 @@ pub fn models() -> HashMap<String, ModelInfo> {
     m
 }
 
+/// Default prompt router model ID.
+pub const DEFAULT_PROMPT_ROUTER_MODEL_ID: &str = "anthropic.claude-3-sonnet-20240229-v1:0";
+
+/// Default Bedrock temperature.
+pub const DEFAULT_TEMPERATURE: f64 = 0.3;
+
+/// Default Bedrock max tokens.
+pub const DEFAULT_MAX_TOKENS: u32 = 4096;
+
+/// Default Bedrock context window.
+pub const DEFAULT_CONTEXT_WINDOW: u32 = 128_000;
+
+/// Bedrock inference profile mapping: region prefix → inference profile prefix.
+/// Pre-ordered by pattern length (descending) to ensure more specific patterns match first.
+pub const INFERENCE_PROFILE_MAPPING: &[(&str, &str)] = &[
+    // Australia regions (Sydney and Melbourne) → au. inference profile
+    ("ap-southeast-2", "au."),
+    ("ap-southeast-4", "au."),
+    // Japan regions (Tokyo and Osaka) → jp. inference profile
+    ("ap-northeast-", "jp."),
+    // US Government Cloud → ug. inference profile
+    ("us-gov-", "ug."),
+    // Americas regions → us. inference profile
+    ("us-", "us."),
+    // Europe regions → eu. inference profile
+    ("eu-", "eu."),
+    // Asia Pacific regions → apac. inference profile
+    ("ap-", "apac."),
+    // Canada regions → ca. inference profile
+    ("ca-", "ca."),
+    // South America regions → sa. inference profile
+    ("sa-", "sa."),
+];
+
+/// Supported Bedrock regions.
+pub const REGIONS: &[&str] = &[
+    "ap-east-1",
+    "ap-northeast-1",
+    "ap-northeast-2",
+    "ap-northeast-3",
+    "ap-south-1",
+    "ap-south-2",
+    "ap-southeast-1",
+    "ap-southeast-2",
+    "ca-central-1",
+    "eu-central-1",
+    "eu-central-2",
+    "eu-north-1",
+    "eu-south-1",
+    "eu-south-2",
+    "eu-west-1",
+    "eu-west-2",
+    "eu-west-3",
+    "sa-east-1",
+    "us-east-1",
+    "us-east-2",
+    "us-gov-east-1",
+    "us-gov-west-1",
+    "us-west-1",
+    "us-west-2",
+];
+
+/// Bedrock models that support 1M context with beta flag 'context-1m-2025-08-07'.
+pub const CONTEXT_1M_MODEL_IDS: &[&str] = &[
+    "anthropic.claude-sonnet-4-20250514-v1:0",
+    "anthropic.claude-sonnet-4-5-20250929-v1:0",
+    "anthropic.claude-sonnet-4-6",
+    "anthropic.claude-opus-4-6-v1",
+];
+
+/// Bedrock models that support Global Inference profiles.
+pub const GLOBAL_INFERENCE_MODEL_IDS: &[&str] = &[
+    "anthropic.claude-sonnet-4-20250514-v1:0",
+    "anthropic.claude-sonnet-4-5-20250929-v1:0",
+    "anthropic.claude-sonnet-4-6",
+    "anthropic.claude-haiku-4-5-20251001-v1:0",
+    "anthropic.claude-opus-4-5-20251101-v1:0",
+    "anthropic.claude-opus-4-6-v1",
+];
+
+/// Bedrock service tier pricing multipliers.
+pub const SERVICE_TIER_PRICING: &[(&str, f64)] = &[
+    ("STANDARD", 1.0),
+    ("FLEX", 0.5),
+    ("PRIORITY", 1.75),
+];
+
+/// Bedrock models that support service tiers.
+pub const SERVICE_TIER_MODEL_IDS: &[&str] = &[
+    "amazon.nova-lite-v1:0",
+    "amazon.nova-2-lite-v1:0",
+    "amazon.nova-pro-v1:0",
+    "amazon.nova-pro-latency-optimized-v1:0",
+    "deepseek.r1-v1:0",
+    "qwen.qwen3-next-80b-a3b",
+    "qwen.qwen3-coder-480b-a35b-v1:0",
+    "openai.gpt-oss-20b-1:0",
+    "openai.gpt-oss-120b-1:0",
+];
+
+/// Resolves the inference profile prefix for a given region.
+pub fn inference_profile_prefix(region: &str) -> Option<&'static str> {
+    for (pattern, prefix) in INFERENCE_PROFILE_MAPPING {
+        if region.starts_with(pattern) {
+            return Some(prefix);
+        }
+    }
+    None
+}
+
+/// Returns the service tier price multiplier for a given tier name.
+pub fn service_tier_multiplier(tier: &str) -> f64 {
+    for &(name, mult) in SERVICE_TIER_PRICING {
+        if name == tier {
+            return mult;
+        }
+    }
+    1.0 // Default to STANDARD
+}
+
 /// Returns the default model ID.
 pub fn default_model_id() -> String {
     DEFAULT_MODEL_ID.to_string()

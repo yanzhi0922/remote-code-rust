@@ -55,6 +55,8 @@ impl OllamaHandler {
             request_timeout: config.request_timeout,
         reasoning_effort: None,
             streaming_enabled: None,
+            include_max_tokens: None,
+            extra_body_fields: config.num_ctx.map(|n| serde_json::json!({"num_ctx": n})),
         };
 
         let inner = OpenAiCompatibleProvider::new(compatible_config)?;
@@ -253,6 +255,7 @@ mod tests {
             temperature: None,
             request_timeout: None,
             api_options: None,
+            num_ctx: None,
         };
         let handler = OllamaHandler::new(config);
         assert!(handler.is_ok());
@@ -266,6 +269,7 @@ mod tests {
             temperature: None,
             request_timeout: None,
             api_options: None,
+            num_ctx: None,
         };
         let handler = OllamaHandler::new(config).unwrap();
         let (model_id, _) = handler.get_model();
@@ -280,6 +284,7 @@ mod tests {
             temperature: None,
             request_timeout: None,
             api_options: None,
+            num_ctx: None,
         };
         let handler = OllamaHandler::new(config).unwrap();
         let (model_id, _) = handler.get_model();
@@ -294,6 +299,7 @@ mod tests {
             temperature: None,
             request_timeout: None,
             api_options: None,
+            num_ctx: None,
         };
         let handler = OllamaHandler::new(config).unwrap();
         assert_eq!(handler.provider_name(), ProviderName::Ollama);
@@ -328,6 +334,7 @@ mod tests {
             temperature: None,
             request_timeout: None,
             api_options: None,
+            num_ctx: None,
         };
         let handler = OllamaHandler::new(config).unwrap();
         let cache = handler.dynamic_models.read().unwrap();
@@ -342,6 +349,7 @@ mod tests {
             temperature: None,
             request_timeout: None,
             api_options: None,
+            num_ctx: None,
         };
         let handler = OllamaHandler::new(config).unwrap();
 
@@ -372,6 +380,7 @@ mod tests {
             temperature: None,
             request_timeout: None,
             api_options: None,
+            num_ctx: None,
         };
         let handler = OllamaHandler::new(config).unwrap();
 
@@ -402,6 +411,7 @@ mod tests {
             temperature: None,
             request_timeout: None,
             api_options: None,
+            num_ctx: None,
         };
         let handler = OllamaHandler::new(config).unwrap();
 

@@ -21,6 +21,8 @@ pub struct AnthropicConfig {
     pub max_thinking_tokens: Option<u64>,
     /// Request timeout in milliseconds.
     pub request_timeout: Option<u64>,
+    /// Whether to enable 1M context beta for supported models.
+    pub enable_1m_context: bool,
 }
 
 impl AnthropicConfig {
@@ -43,6 +45,7 @@ impl AnthropicConfig {
             use_extended_thinking: settings.anthropic_use_extended_thinking,
             max_thinking_tokens: settings.model_max_thinking_tokens,
             request_timeout: settings.request_timeout,
+            enable_1m_context: settings.anthropic_beta_1m_context.unwrap_or(false),
         })
     }
 }
@@ -170,6 +173,14 @@ pub const VERTEX_1M_CONTEXT_MODEL_IDS: &[&str] = &[
 
 /// Default Anthropic Vertex model ID.
 pub const ANTHROPIC_VERTEX_DEFAULT_MODEL_ID: &str = "claude-sonnet-4-5@20250929";
+
+/// Model IDs that support the 1M context beta for direct Anthropic API.
+pub const ANTHROPIC_1M_CONTEXT_MODEL_IDS: &[&str] = &[
+    "claude-sonnet-4-20250514",
+    "claude-sonnet-4-5",
+    "claude-sonnet-4-6",
+    "claude-opus-4-6",
+];
 
 /// Configuration for the Anthropic Vertex AI provider.
 ///
