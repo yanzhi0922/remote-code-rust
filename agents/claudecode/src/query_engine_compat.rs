@@ -1722,6 +1722,8 @@ impl QueryObserver for CompatObserver {
                 let usage = UsagePayload {
                     input_tokens: usage.input_tokens,
                     output_tokens: usage.output_tokens,
+                    cache_read_input_tokens: usage.cache_read_input_tokens,
+                    cache_creation_input_tokens: usage.cache_creation_input_tokens,
                 };
                 {
                     let mut latest_usage = self.shared.latest_streaming_usage.lock().await;
@@ -1854,7 +1856,10 @@ impl QueryObserver for CompatObserver {
             | QueryObserverEvent::ModelFallbackTriggered { .. }
             | QueryObserverEvent::CollapseDrainRetry { .. }
             | QueryObserverEvent::ReactiveCompactRetry { .. }
-            | QueryObserverEvent::MaxTokensRecoveryExhausted { .. } => {}
+            | QueryObserverEvent::MaxTokensRecoveryExhausted { .. }
+            | QueryObserverEvent::ImageErrorRecovery { .. }
+            | QueryObserverEvent::MediaSizeErrorRecovery { .. }
+            | QueryObserverEvent::ContextCollapseRecovery { .. } => {}
             QueryObserverEvent::QueryFinished { .. } => {}
             QueryObserverEvent::CheckpointCleared { .. } => {}
         }
@@ -2366,7 +2371,7 @@ pub(crate) async fn run_prompt_with_query_engine_compat_overrides(
         &model_name,
         backend.clone(),
         tool_runner,
-        claude_engine_events::EventStream::new(64),
+        rc_engine_events::EventStream::new(64),
     )
     .with_observer(observer);
     if let Some(schema) = config.structured_output_schema.clone() {
@@ -2473,6 +2478,8 @@ pub(crate) async fn run_prompt_with_query_engine_compat_overrides(
         UsagePayload {
             input_tokens: engine.state().usage.input_tokens,
             output_tokens: engine.state().usage.output_tokens,
+            cache_read_input_tokens: engine.state().usage.cache_read_input_tokens,
+            cache_creation_input_tokens: engine.state().usage.cache_creation_input_tokens,
         },
         shared.latest_streaming_usage.lock().await.clone(),
     );

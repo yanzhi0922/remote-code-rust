@@ -7,6 +7,8 @@ members = [
     "crates/claude/*",
     # Adapter crates
     "crates/adapters/*",
+    # Shared crates (agent-protocol, engine-events — used by all 3 agents)
+    "crates/shared/*",
     "apps/remote-code-gui/src-tauri",
     "agents/claudecode",
     # Codex leaf crates (Stage 1) — listed explicitly to avoid glob issues
@@ -145,10 +147,80 @@ members = [
     "crates/codex/cloud-tasks",
     "crates/codex/tui",
     "crates/codex/cli",
+    # Roo crates (merged from crates/roo workspace)
+    "crates/roo/roo-types",
+    "crates/roo/roo-jsonrpc",
+    "crates/roo/roo-provider",
+    "crates/roo/roo-provider-anthropic",
+    "crates/roo/roo-provider-aws",
+    "crates/roo/roo-provider-baseten",
+    "crates/roo/roo-provider-deepseek",
+    "crates/roo/roo-provider-fireworks",
+    "crates/roo/roo-provider-google",
+    "crates/roo/roo-provider-litellm",
+    "crates/roo/roo-provider-lmstudio",
+    "crates/roo/roo-provider-minimax",
+    "crates/roo/roo-provider-mistral",
+    "crates/roo/roo-provider-moonshot",
+    "crates/roo/roo-provider-ollama",
+    "crates/roo/roo-provider-openai",
+    "crates/roo/roo-provider-openai-native",
+    "crates/roo/roo-provider-openrouter",
+    "crates/roo/roo-provider-poe",
+    "crates/roo/roo-provider-qwen",
+    "crates/roo/roo-provider-requesty",
+    "crates/roo/roo-provider-roo",
+    "crates/roo/roo-provider-sambanova",
+    "crates/roo/roo-provider-unbound",
+    "crates/roo/roo-provider-vercel",
+    "crates/roo/roo-provider-fake-ai",
+    "crates/roo/roo-provider-vscode-lm",
+    "crates/roo/roo-provider-xai",
+    "crates/roo/roo-provider-zai",
+    "crates/roo/roo-tools",
+    "crates/roo/roo-tools-command",
+    "crates/roo/roo-tools-fs",
+    "crates/roo/roo-tools-mcp",
+    "crates/roo/roo-tools-misc",
+    "crates/roo/roo-tools-mode",
+    "crates/roo/roo-tools-search",
+    "crates/roo/roo-mcp",
+    "crates/roo/roo-task",
+    "crates/roo/roo-prompt",
+    "crates/roo/roo-context",
+    "crates/roo/roo-condense",
+    "crates/roo/roo-checkpoint",
+    "crates/roo/roo-diff",
+    "crates/roo/roo-index",
+    "crates/roo/roo-skills",
+    "crates/roo/roo-modes",
+    "crates/roo/roo-config",
+    "crates/roo/roo-telemetry",
+    "crates/roo/roo-cloud",
+    "crates/roo/roo-i18n",
+    "crates/roo/roo-ignore",
+    "crates/roo/roo-protect",
+    "crates/roo/roo-terminal",
+    "crates/roo/roo-editor",
+    "crates/roo/roo-marketplace",
+    "crates/roo/roo-mdm",
+    "crates/roo/roo-command",
+    "crates/roo/roo-worktree",
+    "crates/roo/roo-custom-tools",
+    "crates/roo/roo-mentions",
+    "crates/roo/roo-environment",
+    "crates/roo/roo-message-manager",
+    "crates/roo/roo-message-queue",
+    "crates/roo/roo-task-persistence",
+    "crates/roo/roo-context-tracking",
+    "crates/roo/roo-auto-approval",
+    "crates/roo/roo-app",
+    "crates/roo/roo-server",
+    "crates/roo/roo-cli",
+    "crates/roo/roo-tree-sitter",
 ]
 exclude = [
     "apps/remote-code-gui",
-    "crates/roo",
 ]
 resolver = "2"
 
@@ -201,7 +273,7 @@ toml = "0.9"
 tower-http = { version = "0.6", features = ["cors"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
-uuid = { version = "1", features = ["serde", "v4"] }
+uuid = { version = "1", features = ["serde", "v4", "v5", "v7"] }
 os_info = "3.12.0"
 schemars = "0.8.22"
 shlex = "1.3.0"
@@ -243,12 +315,13 @@ strum_macros = "0.28.0"
 supports-color = "3.0.2"
 sys-locale = "0.3.2"
 eventsource-stream = "0.2.3"
-image = { version = "0.25", default-features = false }
+image = { version = "0.25", default-features = false, features = ["png"] }
 mime_guess = "2.0.5"
 opentelemetry = "0.31.0"
 opentelemetry_sdk = "0.31.0"
 rustls-native-certs = "0.8.3"
 rustls-pki-types = "1.14.0"
+rustls-pemfile = "2"
 tracing-opentelemetry = "0.32.0"
 zstd = "0.13"
 flate2 = "1.1.8"
@@ -316,6 +389,7 @@ unicode-segmentation = "1.12.0"
 unicode-width = "0.2"
 vt100 = "0.16.2"
 http = "1"
+http-body-util = "0.1"
 keyring = { version = "3.6", default-features = false }
 lazy_static = "1"
 libc = "0.2"
@@ -363,7 +437,8 @@ rama-tls-rustls = { version = "=0.3.0-alpha.4", features = ["http"] }
 rama-unix = "=0.3.0-alpha.4"
 
 # ── Internal crate path dependencies (rc-*) ────────────────────
-claude-agent-protocol = { path = "crates/claude/claude-agent-protocol" }
+rc-agent-protocol = { path = "crates/shared/rc-agent-protocol" }
+rc-engine-events = { path = "crates/shared/rc-engine-events" }
 
 # ── Internal crate path dependencies (codex leaf crates) ────────
 codex-ansi-escape = { path = "crates/codex/ansi-escape" }
@@ -491,6 +566,26 @@ codex-memories-write = { path = "crates/codex/memories/write" }
 app_test_support = { path = "crates/codex/app-server/tests/common" }
 core_test_support = { path = "crates/codex/core/tests/common" }
 mcp_test_support = { path = "crates/codex/mcp-server/tests/common" }
+
+	# ── Internal crate path dependencies (roo) ──────────────────────
+	roo-types = { path = "crates/roo/roo-types" }
+	roo-provider = { path = "crates/roo/roo-provider" }
+	roo-tools = { path = "crates/roo/roo-tools" }
+	roo-condense = { path = "crates/roo/roo-condense" }
+	roo-tree-sitter = { path = "crates/roo/roo-tree-sitter" }
+
+	# ── Roo-specific external deps ──────────────────────────────────
+	fluent = "0.16"
+	fluent-bundle = "0.15"
+	git2 = { version = "0.20", default-features = false }
+	gray_matter = "0.2"
+	instant-distance = "0.2"
+	jsonrpsee = { version = "0.24", features = ["server", "client", "macros"] }
+	jsonschema = "0.26"
+	pin-project-lite = "0.2"
+	strsim = "0.11"
+	tiktoken-rs = "0.7"
+	unic-langid = "0.9"
 
 [patch.crates-io]
 # Codex patches — needed for tungstenite features (deflate, proxy) and tokio-tungstenite compat

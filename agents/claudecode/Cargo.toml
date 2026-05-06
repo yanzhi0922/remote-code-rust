@@ -32,7 +32,7 @@ claude-compact = { path = "../../crates/claude/claude-compact" }
 claude-context = { path = "../../crates/claude/claude-context" }
 claude-control-plane = { path = "../../crates/claude/claude-control-plane" }
 claude-core = { path = "../../crates/claude/claude-core" }
-claude-engine-events = { path = "../../crates/claude/claude-engine-events" }
+rc-engine-events = { path = "../../crates/shared/rc-engine-events" }
 claude-agents = { path = "../../crates/claude/claude-agents" }
 claude-auth = { path = "../../crates/claude/claude-auth" }
 claude-mcp = { path = "../../crates/claude/claude-mcp" }

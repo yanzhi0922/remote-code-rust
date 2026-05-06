@@ -10,7 +10,7 @@ use claude_config::{
     validate_provider_config,
 };
 use claude_core::{ConversationEntry, ConversationRole};
-use claude_permissions::{PermissionBroker, load_layered_rules, rules::summarize_rule_sources};
+use claude_permissions::PermissionBroker;
 use claude_protocol::{MessageRole, RuntimeEventDetail, UsagePayload};
 use claude_provider::context::ContextWindowManager;
 use claude_provider::query_source::ProviderRequestContext;
@@ -996,6 +996,19 @@ async fn run_prompt_legacy(
         normalize_exit_plan_mode_tool_calls(&mut response.tool_calls);
         usage.input_tokens += response.usage.input_tokens;
         usage.output_tokens += response.usage.output_tokens;
+        usage.cache_read_input_tokens += response.usage.cache_read_input_tokens;
+        usage.cache_creation_input_tokens += response.usage.cache_creation_input_tokens;
+        // Handle max_tokens stop reason — log warning and annotate response.
+        let lowered_stop = response.stop_reason.to_ascii_lowercase();
+        if lowered_stop == "max_tokens" || lowered_stop == "max_tokens_reached" || lowered_stop == "length" {
+            tracing::warn!(
+                "Legacy prompt loop: response truncated (stop_reason={}), output may be incomplete",
+                response.stop_reason
+            );
+            if !response.text.is_empty() {
+                response.text.push_str("\n\n[Output truncated — max output token limit reached.]");
+            }
+        }
         total_tool_calls += response.tool_calls.len();
         let assistant_entry = ConversationEntry {
             uuid: uuid::Uuid::new_v4(),
@@ -1328,156 +1341,6 @@ pub(crate) async fn run_oneshot_text(
     Ok(())
 }
 
-#[allow(dead_code)]
-pub(crate) fn run_doctor(config: &RuntimeConfig) -> Result<()> {
-    let report = validate_provider_config(&config.provider);
-    let discovery = discover_runtime_extensions(config);
-    let hooks = crate::runtime_hooks::HookRuntime::discover(config);
-    let layered_rules = load_layered_rules(
-        &config.cwd,
-        &config.paths.profile_dir,
-        &config.settings_files,
-        &config.cli_settings_files,
-    );
-    let api_key_state = if config.provider.api_key.is_some() {
-        "present"
-    } else {
-        "missing"
-    };
-
-    // Gather additional diagnostic information.
-    let tool_count = claude_tools::runtime_builtin_tool_specs().len();
-    let model_info = claude_provider::model_info::get_model_info(
-        config.provider.model.as_deref().unwrap_or("unknown"),
-    );
-    let profile_dir = config.paths.profile_dir.display();
-
-    let lines = [
-        "=== Remote Code Rust — Doctor Report ===".to_owned(),
-        String::new(),
-        "[Runtime]".to_owned(),
-        format!("  version:        {}", env!("CARGO_PKG_VERSION")),
-        format!("  cwd:            {}", config.cwd.display()),
-        format!("  profile dir:    {profile_dir}"),
-        format!("  session id:     {}", config.session_id),
-        format!(
-            "  session name:   {}",
-            config.session_name.as_deref().unwrap_or("(auto)")
-        ),
-        format!("  permission mode: {:?}", config.permission_mode),
-        String::new(),
-        "[Provider]".to_owned(),
-        format!("  name:           {}", config.provider.name),
-        format!("  protocol:       {}", config.provider.protocol.as_str()),
-        format!(
-            "  base URL:       {}",
-            config.provider.base_url.as_deref().unwrap_or("(missing)")
-        ),
-        format!(
-            "  model:          {}",
-            config.provider.model.as_deref().unwrap_or("(missing)")
-        ),
-        format!("  api key:        {api_key_state}"),
-        format!(
-            "  auth source:    {}",
-            config.auth_source.as_deref().unwrap_or("(missing)")
-        ),
-        format!(
-            "  context window: {} tokens (output reserve: {})",
-            model_info.max_context, model_info.max_output
-        ),
-        format!(
-            "  capabilities:   multimodal={}, reasoning={}",
-            model_info.multimodal,
-            model_info
-                .capabilities
-                .contains(&claude_provider::model_info::ModelCapability::Reasoning)
-        ),
-        String::new(),
-        "[Tools]".to_owned(),
-        format!("  builtin tools:  {tool_count}"),
-        format!(
-            "  allow-list:     {}",
-            if config.allowed_tools.is_empty() {
-                "(all)".to_owned()
-            } else {
-                config.allowed_tools.join(", ")
-            }
-        ),
-        format!(
-            "  deny-list:      {}",
-            if config.disallowed_tools.is_empty() {
-                "(none)".to_owned()
-            } else {
-                config.disallowed_tools.join(", ")
-            }
-        ),
-        format!("  input format:   {:?}", config.input_format),
-        format!("  output format:  {:?}", config.output_format),
-        String::new(),
-        "[Permissions]".to_owned(),
-        format!("  layered rules:  {}", layered_rules.len()),
-        format!(
-            "  settings files: {}",
-            if config.settings_files.is_empty() {
-                "(auto discovery only)".to_owned()
-            } else {
-                config
-                    .settings_files
-                    .iter()
-                    .map(|path| path.display().to_string())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            }
-        ),
-        String::new(),
-        "[Extensions]".to_owned(),
-        format!("  skills:         {}", discovery.skills.len()),
-        format!("  plugins:        {}", discovery.plugins.len()),
-        format!("  plugin runtimes: {}", discovery.plugin_runtimes.len()),
-        format!("  mcp servers:    {}", discovery.mcp_servers.len()),
-        format!("  disabled mcp:   {}", discovery.disabled_mcp_servers.len()),
-        format!("  hooks:          {}", hooks.list(None).len()),
-        String::new(),
-        "[Readiness]".to_owned(),
-        format!(
-            "  status:         {}",
-            if report.ok {
-                "✓ READY"
-            } else {
-                "✗ NOT READY"
-            }
-        ),
-    ];
-    for line in lines {
-        println!("{line}");
-    }
-    if !layered_rules.is_empty() {
-        for (source, count) in summarize_rule_sources(&layered_rules) {
-            println!("  - {}: {} rule(s)", source.as_str(), count);
-        }
-    }
-    if !report.issues.is_empty() {
-        println!();
-        println!("[Issues]");
-        for issue in report.issues {
-            println!("  ✗ {issue}");
-        }
-    }
-    if !discovery.warnings.is_empty() {
-        println!();
-        println!("[Warnings]");
-        for warning in discovery.warnings {
-            println!("  ⚠ {warning}");
-        }
-    }
-    if !hooks.warnings().is_empty() {
-        for warning in hooks.warnings() {
-            println!("  ⚠ {warning}");
-        }
-    }
-    Ok(())
-}
 
 pub(crate) fn run_migrate(
     config: &RuntimeConfig,

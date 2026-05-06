@@ -735,6 +735,13 @@ fn remote_event_kind(detail: &RemoteTimelineEventDetail) -> &'static str {
         RemoteTimelineEventDetail::ArtifactManifest { .. } => "artifact_manifest",
         RemoteTimelineEventDetail::RuntimeError { .. } => "runtime_error",
         RemoteTimelineEventDetail::DaemonPresenceChanged { .. } => "daemon_presence_changed",
+        RemoteTimelineEventDetail::SubtaskStarted { .. } => "subtask_started",
+        RemoteTimelineEventDetail::SubtaskProgress { .. } => "subtask_progress",
+        RemoteTimelineEventDetail::SubtaskCompleted { .. } => "subtask_completed",
+        RemoteTimelineEventDetail::BatchProgress { .. } => "batch_progress",
+        RemoteTimelineEventDetail::ContextUsage { .. } => "context_usage",
+        RemoteTimelineEventDetail::ContextOverflow { .. } => "context_overflow",
+        RemoteTimelineEventDetail::ContextCompacted { .. } => "context_compacted",
     }
 }
 
@@ -851,6 +858,27 @@ fn remote_event_summary(detail: &RemoteTimelineEventDetail) -> String {
         }
         RemoteTimelineEventDetail::DaemonPresenceChanged { state } => {
             format!("state={state:?}")
+        }
+        RemoteTimelineEventDetail::SubtaskStarted { task_id, parent_task_id, description, depth } => {
+            format!("task_id={task_id} parent={:?} depth={depth} desc={}", parent_task_id.as_deref().unwrap_or("(none)"), truncate_remote_preview(description, 60))
+        }
+        RemoteTimelineEventDetail::SubtaskProgress { task_id, status, summary } => {
+            format!("task_id={task_id} status={status} summary={}", truncate_remote_preview(summary, 60))
+        }
+        RemoteTimelineEventDetail::SubtaskCompleted { task_id, status, summary, turns_used } => {
+            format!("task_id={task_id} status={status} turns={:?} summary={}", turns_used, truncate_remote_preview(summary, 60))
+        }
+        RemoteTimelineEventDetail::BatchProgress { total, completed, running } => {
+            format!("total={total} completed={completed} running={running}")
+        }
+        RemoteTimelineEventDetail::ContextUsage { estimated_tokens, max_input_tokens, threshold_tokens, ratio } => {
+            format!("tokens={estimated_tokens}/{max_input_tokens} threshold={threshold_tokens} ratio={ratio:.2}")
+        }
+        RemoteTimelineEventDetail::ContextOverflow { estimated_tokens, max_input_tokens, threshold_tokens, ratio } => {
+            format!("OVERFLOW tokens={estimated_tokens}/{max_input_tokens} threshold={threshold_tokens} ratio={ratio:.2}")
+        }
+        RemoteTimelineEventDetail::ContextCompacted { entries_removed, usage_ratio } => {
+            format!("removed={entries_removed} ratio={usage_ratio:.2}")
         }
     }
 }

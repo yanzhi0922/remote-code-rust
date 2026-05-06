@@ -4,11 +4,7 @@ use claude_config::RuntimeConfig;
 use claude_runtime_prompt::{
     AutoMemoryScope, MemoryPromptFeatures, RuntimePromptSettings, SessionMemoryFileType,
     detect_memory_session_file_type, detect_memory_session_pattern_type,
-    is_auto_managed_memory_file_with_features as runtime_is_auto_managed_memory_file,
-    is_auto_managed_memory_pattern as runtime_is_auto_managed_memory_pattern,
     is_auto_memory_path as runtime_is_auto_memory_path,
-    is_memory_directory_with_features as runtime_is_memory_directory,
-    is_shell_command_targeting_memory_with_features as runtime_is_shell_command_targeting_memory,
     is_team_memory_file_with_features as runtime_is_team_memory_file,
     memory_scope_for_path_with_features as runtime_memory_scope_for_path,
 };
@@ -70,26 +66,6 @@ pub(crate) fn memory_scope_for_path(
     runtime_memory_scope_for_path(config, &features(config), file_path).map(Into::into)
 }
 
-#[allow(dead_code)]
-pub(crate) fn is_auto_managed_memory_file(config: &RuntimeConfig, file_path: &Path) -> bool {
-    runtime_is_auto_managed_memory_file(config, &features(config), file_path)
-}
-
-#[allow(dead_code)]
-pub(crate) fn is_memory_directory(config: &RuntimeConfig, dir_path: &Path) -> bool {
-    runtime_is_memory_directory(config, &features(config), dir_path)
-}
-
-#[allow(dead_code)]
-pub(crate) fn is_shell_command_targeting_memory(config: &RuntimeConfig, command: &str) -> bool {
-    runtime_is_shell_command_targeting_memory(config, &features(config), command)
-}
-
-#[allow(dead_code)]
-pub(crate) fn is_auto_managed_memory_pattern(config: &RuntimeConfig, pattern: &str) -> bool {
-    runtime_is_auto_managed_memory_pattern(config, pattern)
-}
-
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -98,7 +74,7 @@ mod tests {
 
     use super::{
         MemoryScope, SessionFileType, detect_session_file_type, detect_session_pattern_type,
-        is_auto_managed_memory_pattern, memory_scope_for_path,
+        memory_scope_for_path,
     };
     use claude_runtime_prompt::RuntimePromptSettings;
 
@@ -138,19 +114,6 @@ mod tests {
             Some(SessionFileType::SessionTranscript)
         );
         assert_eq!(detect_session_pattern_type("C:/x/sessions/*.ndjson"), None);
-    }
-
-    #[test]
-    fn auto_managed_pattern_matches_research_rules() {
-        let (_temp, config) = test_config();
-        assert!(is_auto_managed_memory_pattern(
-            &config,
-            ".claude/agent-memory/**/*.md"
-        ));
-        assert!(is_auto_managed_memory_pattern(
-            &config,
-            ".claude/agent-memory-local/**/*.md"
-        ));
     }
 
     #[test]

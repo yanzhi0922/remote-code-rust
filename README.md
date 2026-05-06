@@ -61,13 +61,15 @@ remote-code-rust/
 │   ├── remote-code-control-plane/ # 控制平面
 │   ├── remote-code-runner/        # 远程 Runner
 │   └── remote-code-migrate/       # 数据迁移
-├── crates/                        # 库 Crates（Claude 41 + Codex 105 + Adapters 3）
+├── crates/                        # 库 Crates（Shared 2 + Claude 39 + Codex 105 + Adapters 3）
+│   ├── shared/                    # 三 Agent 共享 crate
+│   │   ├── rc-agent-protocol/     # 多 Agent 协议抽象层（trait + events + types）
+│   │   └── rc-engine-events/      # 共享运行时事件类型（RuntimeEventDetail 15 variants）
 │   ├── adapters/                  # 三 Agent 独立适配器
 │   │   ├── rc-claude-adapter/     # Claude 适配器（QueryEngine）
 │   │   ├── rc-codex-adapter/      # Codex 适配器（AppServer + event_mapper）
 │   │   └── rc-roo-adapter/        # Roo 适配器（Provider + ToolDispatcher）
 │   ├── claude/
-│   │   ├── claude-agent-protocol/     # 多 Agent 协议抽象层（trait + events + types）
 │   │   ├── claude-query-engine/       # QueryEngine 执行路径
 │   │   ├── claude-core/               # 核心运行时类型
 │   │   ├── claude-provider/           # Provider 标准化与流式
@@ -117,7 +119,7 @@ remote-code-rust/
 | `claude-query-engine` | 统一查询循环、状态机、流式执行器、Token 预算 |
 | `claude-system-prompt` | 系统提示词构建、缓存、各段落模块化 |
 | `claude-runtime-prompt` | 运行时提示词、自动记忆注入 |
-| `claude-engine-events` | 引擎事件类型、流处理 |
+| `rc-engine-events` | 引擎事件类型、流处理 |
 | `claude-event-bus` | 进程内事件总线 |
 | `claude-file-history` | 文件备份、差异统计、快照 |
 | `claude-ide` | IDE 桥接（JSON-RPC 2.0）、stdio/HTTP 连接 |
@@ -138,10 +140,13 @@ remote-code-rust/
 | `claude-runner` | Runner 协议、HTTP API、心跳 |
 | `claude-control-plane` | API 模型、Runner 注册、WebSocket 扇出 |
 | `claude-utils` | 工具函数（Git、Diff、Markdown、图片、Cron 等） |
-| `claude-agent-protocol` | 多 Agent 协议抽象层：`AgentAdapter` trait、`UnifiedAgentEvent`、`AgentRouter` |
+| `rc-agent-protocol` | 多 Agent 协议抽象层：`AgentAdapter` trait、`UnifiedAgentEvent`、`AgentRouter` |
 | `rc-claude-adapter` | Claude 适配器：`ClaudeInProcessAdapter` = `QueryEngine` |
 | `rc-codex-adapter` | Codex 适配器：`CodexInProcessAdapter` + `event_mapper` (753 行) |
 | `rc-roo-adapter` | Roo 适配器：`RooInProcessAdapter` + 26 Provider 后端 |
+| `claude-checkpoint` | 对话级版本控制 — SHA256 快照、SQLite 存储、undo/rollback |
+| `claude-specialized-agents` | 专用 Agent 系统 — Markdown+YAML 定义、@agent 提及、5 个内置 Agent |
+| `claude-git` | Git 操作 — gix 分支解析、CLI status/staging/commit/diff/log |
 
 ### 数据流
 

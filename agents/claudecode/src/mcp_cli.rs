@@ -259,11 +259,13 @@ fn run_mcp_add(config: &RuntimeConfig, args: McpAddArgs) -> Result<()> {
                 claude_mcp::McpTransportConfig::WebSocket {
                     url: url.clone(),
                     headers,
+                    headers_helper: None,
                 }
             } else {
                 claude_mcp::McpTransportConfig::Http {
                     url: url.clone(),
                     headers,
+                    headers_helper: None,
                 }
             }
         }
