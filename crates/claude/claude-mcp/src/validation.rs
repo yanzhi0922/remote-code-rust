@@ -105,7 +105,10 @@ impl McpConfigValidator {
                 }
             }
             crate::transport::McpTransportConfig::Http { url, .. }
-            | crate::transport::McpTransportConfig::WebSocket { url, .. } => {
+            | crate::transport::McpTransportConfig::WebSocket { url, .. }
+            | crate::transport::McpTransportConfig::Sse { url, .. }
+            | crate::transport::McpTransportConfig::SseIde { url, .. }
+            | crate::transport::McpTransportConfig::WsIde { url, .. } => {
                 if url.is_empty() {
                     warnings.push(ValidationWarning {
                         server_name: name.to_owned(),
@@ -120,6 +123,8 @@ impl McpConfigValidator {
                     });
                 }
             }
+            crate::transport::McpTransportConfig::Sdk { .. }
+            | crate::transport::McpTransportConfig::ClaudeAiProxy { .. } => {}
         }
 
         warnings
@@ -325,6 +330,7 @@ mod tests {
             transport: McpTransportConfig::Http {
                 url: url.to_owned(),
                 headers: BTreeMap::new(),
+                headers_helper: None,
             },
             capabilities: Default::default(),
             startup_timeout_secs: None,

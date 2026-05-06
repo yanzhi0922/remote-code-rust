@@ -6,6 +6,7 @@ pub mod failure_tracker;
 pub mod max_tokens_recovery;
 pub mod message_utils;
 pub mod model_switch;
+pub mod normalize;
 pub mod observer;
 pub mod preprocessing;
 pub mod prompt_suggestion;

@@ -48,16 +48,37 @@ pub fn get_cache_control(scope: Option<CacheScope>, use_1h_ttl: bool) -> Value {
 /// Determine whether the 1-hour cache TTL should be used.
 ///
 /// The 1-hour TTL is applied when:
-/// 1. The user is eligible (subscriber within rate limits), AND
-/// 2. The query source matches a pattern in the allowlist.
+/// 1. The `ENABLE_PROMPT_CACHING_1H` environment variable is set to a truthy
+///    value, OR
+/// 2. The session has accumulated enough context to benefit (estimated tokens
+///    > 10 000 and more than 2 turns).
 ///
-/// In this implementation, we use a simpler heuristic: the 1-hour TTL is
-/// enabled via the `ENABLE_PROMPT_CACHING_1H` environment variable.
+/// Auto-enabling avoids the overhead of 1h cache breakpoints for new or very
+/// short sessions where the KV prefix would be too small to reuse.
 #[must_use]
 pub fn should_1h_cache_ttl() -> bool {
     std::env::var("ENABLE_PROMPT_CACHING_1H")
         .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
         .unwrap_or(false)
+}
+
+/// Determine whether the 1-hour cache TTL should be used based on session
+/// characteristics.
+///
+/// This is an enhanced version of [`should_1h_cache_ttl`] that also considers
+/// the estimated prompt token count and session turn depth.  It auto-enables
+/// 1h TTL for sessions that are large enough to benefit from longer-lived
+/// cache entries.
+#[must_use]
+pub fn should_use_1h_cache(estimated_tokens: u64, session_turns: u32) -> bool {
+    if std::env::var("ENABLE_PROMPT_CACHING_1H")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+    {
+        return true;
+    }
+    // Auto-enable for sessions with enough context to benefit.
+    estimated_tokens > 10_000 && session_turns > 2
 }
 
 // ---------------------------------------------------------------------------

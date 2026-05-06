@@ -65,8 +65,10 @@ fn provider_response_round_trips_via_json() {
             output_tokens: 50,
             cache_read_input_tokens: 10,
             cache_creation_input_tokens: 5,
+            ..Default::default()
         },
         stop_reason: "tool_use".to_owned(),
+        research: None,
     };
     let json = serde_json::to_string(&response).expect("serialize provider response");
     let decoded: claude_core::ProviderResponse =
@@ -416,15 +418,15 @@ fn agent_definition_round_trips_via_json() {
 #[test]
 fn engine_event_types_are_serializable() {
     let session_id = uuid::Uuid::new_v4();
-    let event = claude_engine_events::EngineEvent::QueryStarted { session_id };
+    let event = rc_engine_events::EngineEvent::QueryStarted { session_id };
     let json = serde_json::to_string(&event).expect("serialize engine event");
     assert!(json.contains("query_started"));
 
-    let decoded: claude_engine_events::EngineEvent =
+    let decoded: rc_engine_events::EngineEvent =
         serde_json::from_str(&json).expect("deserialize engine event");
     assert!(matches!(
         decoded,
-        claude_engine_events::EngineEvent::QueryStarted { .. }
+        rc_engine_events::EngineEvent::QueryStarted { .. }
     ));
 }
 

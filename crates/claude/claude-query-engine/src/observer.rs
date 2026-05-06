@@ -1,7 +1,7 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use claude_core::{ConversationEntry, Message, SessionId, ToolCall, ToolResult};
-use claude_engine_events::Usage;
+use rc_engine_events::Usage;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use uuid::Uuid;
@@ -372,6 +372,22 @@ pub enum QueryObserverEvent {
     MaxTokensRecoveryExhausted {
         turn: u32,
     },
+    /// Image error recovery — problematic image blocks stripped.
+    ImageErrorRecovery {
+        turn: u32,
+        images_stripped: usize,
+    },
+    /// Media size error recovery — oversized media blocks stripped.
+    MediaSizeErrorRecovery {
+        turn: u32,
+        media_blocks_stripped: usize,
+    },
+    /// Context collapse recovery for HTTP 413 "request too large".
+    ContextCollapseRecovery {
+        turn: u32,
+        before_messages: usize,
+        after_messages: usize,
+    },
 }
 
 impl QueryObserverEvent {
@@ -411,6 +427,9 @@ impl QueryObserverEvent {
             Self::CollapseDrainRetry { .. } => "collapse_drain_retry",
             Self::ReactiveCompactRetry { .. } => "reactive_compact_retry",
             Self::MaxTokensRecoveryExhausted { .. } => "max_tokens_recovery_exhausted",
+            Self::ImageErrorRecovery { .. } => "image_error_recovery",
+            Self::MediaSizeErrorRecovery { .. } => "media_size_error_recovery",
+            Self::ContextCollapseRecovery { .. } => "context_collapse_recovery",
         }
     }
 }

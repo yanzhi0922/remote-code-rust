@@ -98,6 +98,33 @@ impl McpDiscovery {
         self.instructions.insert(name.to_owned(), instructions);
     }
 
+    /// Standalone discovery function that can be called from a spawned task.
+    ///
+    /// This is a free-function version of [`Self::discover_for_server`] that
+    /// does not require `&mut self`, making it suitable for concurrent use
+    /// via `tokio::task::JoinSet`. The caller is responsible for caching the
+    /// results via [`Self::store`].
+    pub async fn discover_for_server_standalone(
+        _name: &str,
+        config: &McpServerConfig,
+        client_info: &McpClientInfo,
+    ) -> Result<McpDiscoveryResult, McpRuntimeError> {
+        let inspection = crate::session::inspect_server(config, client_info).await?;
+
+        // Apply tool policy filtering.
+        let tools = config.tool_policy.filter_tools(&inspection.tools);
+        let resources = inspection.resources;
+        let prompts = inspection.prompts;
+        let instructions = inspection.instructions;
+
+        Ok(McpDiscoveryResult {
+            tools,
+            resources,
+            prompts,
+            instructions,
+        })
+    }
+
     /// Get the tools for a specific server.
     #[must_use]
     pub fn tools(&self, server_name: &str) -> Option<&[McpToolDescriptor]> {

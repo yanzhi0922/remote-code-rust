@@ -7,7 +7,7 @@ use std::io::Write;
 
 use anyhow::Result;
 use claude_core::SessionState;
-pub use claude_engine_events::{
+pub use rc_engine_events::{
     DaemonPresenceState, MessageRole, RuntimeEventCreateRequest, RuntimeEventDetail,
 };
 use claude_permissions::PermissionUpdate;
@@ -448,8 +448,8 @@ pub fn result_event_value(session_id: Uuid, payload: &ResultPayload) -> Value {
         "usage": {
             "input_tokens": payload.usage.input_tokens,
             "output_tokens": payload.usage.output_tokens,
-            "cache_creation_input_tokens": 0,
-            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": payload.usage.cache_creation_input_tokens,
+            "cache_read_input_tokens": payload.usage.cache_read_input_tokens,
             "service_tier": "standard",
         },
         "modelUsage": payload.model_usage,
@@ -497,6 +497,10 @@ pub struct UsagePayload {
     pub input_tokens: u64,
     /// Output (completion) tokens.
     pub output_tokens: u64,
+    /// Anthropic cache read tokens (tokens served from cache).
+    pub cache_read_input_tokens: u64,
+    /// Anthropic cache creation tokens (tokens written to cache).
+    pub cache_creation_input_tokens: u64,
 }
 
 /// Payload for the `control_request` permission event.
@@ -606,6 +610,44 @@ enum ProtocolRuntimeEventRef<'a> {
     DaemonPresenceChanged {
         state: &'a DaemonPresenceState,
     },
+    SubtaskStarted {
+        task_id: &'a str,
+        parent_task_id: Option<&'a str>,
+        description: &'a str,
+        depth: u32,
+    },
+    SubtaskProgress {
+        task_id: &'a str,
+        status: &'a str,
+        summary: &'a str,
+    },
+    SubtaskCompleted {
+        task_id: &'a str,
+        status: &'a str,
+        summary: &'a str,
+        turns_used: Option<u32>,
+    },
+    BatchProgress {
+        total: u32,
+        completed: u32,
+        running: u32,
+    },
+    ContextUsage {
+        estimated_tokens: u64,
+        max_input_tokens: u64,
+        threshold_tokens: u64,
+        ratio: f64,
+    },
+    ContextOverflow {
+        estimated_tokens: u64,
+        max_input_tokens: u64,
+        threshold_tokens: u64,
+        ratio: f64,
+    },
+    ContextCompacted {
+        entries_removed: u32,
+        usage_ratio: f64,
+    },
 }
 
 impl<'a> From<&'a RuntimeEventDetail> for ProtocolRuntimeEventRef<'a> {
@@ -665,6 +707,44 @@ impl<'a> From<&'a RuntimeEventDetail> for ProtocolRuntimeEventRef<'a> {
             RuntimeEventDetail::DaemonPresenceChanged { state } => {
                 Self::DaemonPresenceChanged { state }
             }
+            RuntimeEventDetail::SubtaskStarted { task_id, parent_task_id, description, depth } => Self::SubtaskStarted {
+                task_id,
+                parent_task_id: parent_task_id.as_deref(),
+                description,
+                depth: *depth,
+            },
+            RuntimeEventDetail::SubtaskProgress { task_id, status, summary } => Self::SubtaskProgress {
+                task_id,
+                status,
+                summary,
+            },
+            RuntimeEventDetail::SubtaskCompleted { task_id, status, summary, turns_used } => Self::SubtaskCompleted {
+                task_id,
+                status,
+                summary,
+                turns_used: *turns_used,
+            },
+            RuntimeEventDetail::BatchProgress { total, completed, running } => Self::BatchProgress {
+                total: *total,
+                completed: *completed,
+                running: *running,
+            },
+            RuntimeEventDetail::ContextUsage { estimated_tokens, max_input_tokens, threshold_tokens, ratio } => Self::ContextUsage {
+                estimated_tokens: *estimated_tokens,
+                max_input_tokens: *max_input_tokens,
+                threshold_tokens: *threshold_tokens,
+                ratio: *ratio,
+            },
+            RuntimeEventDetail::ContextOverflow { estimated_tokens, max_input_tokens, threshold_tokens, ratio } => Self::ContextOverflow {
+                estimated_tokens: *estimated_tokens,
+                max_input_tokens: *max_input_tokens,
+                threshold_tokens: *threshold_tokens,
+                ratio: *ratio,
+            },
+            RuntimeEventDetail::ContextCompacted { entries_removed, usage_ratio } => Self::ContextCompacted {
+                entries_removed: *entries_removed,
+                usage_ratio: *usage_ratio,
+            },
         }
     }
 }
@@ -1078,6 +1158,8 @@ mod tests {
                 usage: UsagePayload {
                     input_tokens: 100,
                     output_tokens: 50,
+                    cache_read_input_tokens: 0,
+                    cache_creation_input_tokens: 0,
                 },
                 model_usage: json!({}),
                 permission_denials: vec![],

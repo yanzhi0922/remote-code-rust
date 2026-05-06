@@ -56,6 +56,16 @@ pub enum ContentBlock {
         /// The thinking content.
         thinking: String,
     },
+    /// Server-side tool use (e.g. web search, web fetch).
+    #[serde(rename = "server_tool_use")]
+    ServerToolUse {
+        /// Tool call identifier.
+        id: String,
+        /// Tool name.
+        name: String,
+        /// Tool input as JSON.
+        input: Value,
+    },
 }
 
 /// Usage statistics from an API response.
@@ -73,6 +83,18 @@ pub struct UsageStats {
     /// Cache read input tokens.
     #[serde(default)]
     pub cache_read_input_tokens: u64,
+    /// Server-side web search requests (Anthropic server tool use).
+    #[serde(default)]
+    pub server_tool_use_web_search_requests: u64,
+    /// Server-side web fetch requests (Anthropic server tool use).
+    #[serde(default)]
+    pub server_tool_use_web_fetch_requests: u64,
+    /// Cache creation ephemeral 5-minute TTL input tokens.
+    #[serde(default)]
+    pub cache_creation_ephemeral_5m_input_tokens: u64,
+    /// Cache creation ephemeral 1-hour TTL input tokens.
+    #[serde(default)]
+    pub cache_creation_ephemeral_1h_input_tokens: u64,
 }
 
 /// Result of an API query.
@@ -148,6 +170,26 @@ pub fn update_usage(current: &UsageStats, partial: &UsageStats) -> UsageStats {
         } else {
             current.cache_read_input_tokens
         },
+        server_tool_use_web_search_requests: if partial.server_tool_use_web_search_requests > 0 {
+            partial.server_tool_use_web_search_requests
+        } else {
+            current.server_tool_use_web_search_requests
+        },
+        server_tool_use_web_fetch_requests: if partial.server_tool_use_web_fetch_requests > 0 {
+            partial.server_tool_use_web_fetch_requests
+        } else {
+            current.server_tool_use_web_fetch_requests
+        },
+        cache_creation_ephemeral_5m_input_tokens: if partial.cache_creation_ephemeral_5m_input_tokens > 0 {
+            partial.cache_creation_ephemeral_5m_input_tokens
+        } else {
+            current.cache_creation_ephemeral_5m_input_tokens
+        },
+        cache_creation_ephemeral_1h_input_tokens: if partial.cache_creation_ephemeral_1h_input_tokens > 0 {
+            partial.cache_creation_ephemeral_1h_input_tokens
+        } else {
+            current.cache_creation_ephemeral_1h_input_tokens
+        },
     }
 }
 
@@ -161,6 +203,14 @@ pub fn accumulate_usage(total: &UsageStats, message: &UsageStats) -> UsageStats 
         cache_creation_input_tokens: total.cache_creation_input_tokens
             + message.cache_creation_input_tokens,
         cache_read_input_tokens: total.cache_read_input_tokens + message.cache_read_input_tokens,
+        server_tool_use_web_search_requests: total.server_tool_use_web_search_requests
+            + message.server_tool_use_web_search_requests,
+        server_tool_use_web_fetch_requests: total.server_tool_use_web_fetch_requests
+            + message.server_tool_use_web_fetch_requests,
+        cache_creation_ephemeral_5m_input_tokens: total.cache_creation_ephemeral_5m_input_tokens
+            + message.cache_creation_ephemeral_5m_input_tokens,
+        cache_creation_ephemeral_1h_input_tokens: total.cache_creation_ephemeral_1h_input_tokens
+            + message.cache_creation_ephemeral_1h_input_tokens,
     }
 }
 
@@ -685,6 +735,11 @@ fn parse_query_result(raw: &str) -> Result<QueryResult> {
                 "thinking" => Some(ContentBlock::Thinking {
                     thinking: block.get("thinking").and_then(Value::as_str)?.to_owned(),
                 }),
+                "server_tool_use" => Some(ContentBlock::ServerToolUse {
+                    id: block.get("id").and_then(Value::as_str)?.to_owned(),
+                    name: block.get("name").and_then(Value::as_str)?.to_owned(),
+                    input: block.get("input").cloned().unwrap_or(json!({})),
+                }),
                 _ => None,
             }
         })
@@ -706,6 +761,26 @@ fn parse_query_result(raw: &str) -> Result<QueryResult> {
             .unwrap_or_default(),
         cache_read_input_tokens: usage_value
             .get("cache_read_input_tokens")
+            .and_then(Value::as_u64)
+            .unwrap_or_default(),
+        server_tool_use_web_search_requests: usage_value
+            .get("server_tool_use")
+            .and_then(|stu| stu.get("web_search_requests"))
+            .and_then(Value::as_u64)
+            .unwrap_or_default(),
+        server_tool_use_web_fetch_requests: usage_value
+            .get("server_tool_use")
+            .and_then(|stu| stu.get("web_fetch_requests"))
+            .and_then(Value::as_u64)
+            .unwrap_or_default(),
+        cache_creation_ephemeral_5m_input_tokens: usage_value
+            .get("cache_creation")
+            .and_then(|cc| cc.get("ephemeral_5m_input_tokens"))
+            .and_then(Value::as_u64)
+            .unwrap_or_default(),
+        cache_creation_ephemeral_1h_input_tokens: usage_value
+            .get("cache_creation")
+            .and_then(|cc| cc.get("ephemeral_1h_input_tokens"))
             .and_then(Value::as_u64)
             .unwrap_or_default(),
     };
@@ -799,6 +874,11 @@ impl From<QueryResult> for ProviderResponse {
                     name: name.clone(),
                     input: input.clone(),
                 }),
+                ContentBlock::ServerToolUse { id, name, input } => Some(claude_core::ToolCall {
+                    id: id.clone(),
+                    name: name.clone(),
+                    input: input.clone(),
+                }),
                 _ => None,
             })
             .collect();
@@ -825,8 +905,13 @@ impl From<QueryResult> for ProviderResponse {
                 output_tokens: result.usage.output_tokens,
                 cache_read_input_tokens: result.usage.cache_read_input_tokens,
                 cache_creation_input_tokens: result.usage.cache_creation_input_tokens,
+                server_tool_use_web_search_requests: result.usage.server_tool_use_web_search_requests,
+                server_tool_use_web_fetch_requests: result.usage.server_tool_use_web_fetch_requests,
+                cache_creation_ephemeral_5m_input_tokens: result.usage.cache_creation_ephemeral_5m_input_tokens,
+                cache_creation_ephemeral_1h_input_tokens: result.usage.cache_creation_ephemeral_1h_input_tokens,
             },
             stop_reason: result.stop_reason.unwrap_or_else(|| "end_turn".to_owned()),
+            research: None,
         }
     }
 }
@@ -842,12 +927,14 @@ mod tests {
             output_tokens: 50,
             cache_creation_input_tokens: 10,
             cache_read_input_tokens: 20,
+            ..Default::default()
         };
         let partial = UsageStats {
             input_tokens: 0, // Should NOT overwrite.
             output_tokens: 60,
             cache_creation_input_tokens: 0,
             cache_read_input_tokens: 0,
+            ..Default::default()
         };
         let updated = update_usage(&current, &partial);
         assert_eq!(updated.input_tokens, 100); // Preserved.
@@ -861,12 +948,14 @@ mod tests {
             output_tokens: 50,
             cache_creation_input_tokens: 10,
             cache_read_input_tokens: 20,
+            ..Default::default()
         };
         let message = UsageStats {
             input_tokens: 200,
             output_tokens: 30,
             cache_creation_input_tokens: 5,
             cache_read_input_tokens: 15,
+            ..Default::default()
         };
         let accumulated = accumulate_usage(&total, &message);
         assert_eq!(accumulated.input_tokens, 300);
@@ -941,6 +1030,7 @@ mod tests {
                 output_tokens: 50,
                 cache_creation_input_tokens: 0,
                 cache_read_input_tokens: 0,
+                ..Default::default()
             },
             model: "test-model".to_owned(),
             stop_reason: Some("tool_use".to_owned()),
@@ -992,6 +1082,9 @@ mod tests {
             request_header_overrides: Default::default(),
             request_metadata: Default::default(),
             thinking_budget: None,
+            temperature: None,
+            top_p: None,
+            top_k: None,
         }
     }
 }

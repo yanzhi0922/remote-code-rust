@@ -236,14 +236,22 @@ fn streaming_callbacks_usage_callback() {
         on_text_delta: None,
         on_tool_call_start: None,
         on_tool_call_delta: None,
-        on_usage: Some(Box::new(move |_input, _output| {
+        on_usage: Some(Box::new(move |_update| {
             uc.fetch_add(1, Ordering::Relaxed);
         })),
     };
 
     if let Some(ref cb) = callbacks.on_usage {
-        cb(100, 50);
-        cb(200, 100);
+        cb(claude_provider::streaming::StreamingUsageUpdate {
+            input_tokens: 100,
+            output_tokens: 50,
+            ..Default::default()
+        });
+        cb(claude_provider::streaming::StreamingUsageUpdate {
+            input_tokens: 200,
+            output_tokens: 100,
+            ..Default::default()
+        });
     }
 
     assert_eq!(usage_calls.load(Ordering::Relaxed), 2);
@@ -305,8 +313,10 @@ fn provider_response_with_tool_calls() {
             output_tokens: 200,
             cache_read_input_tokens: 50,
             cache_creation_input_tokens: 25,
+            ..Default::default()
         },
         stop_reason: "tool_use".to_owned(),
+        research: None,
     };
 
     let json = serde_json::to_string(&response).expect("should serialize");

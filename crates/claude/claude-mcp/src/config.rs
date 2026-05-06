@@ -117,6 +117,22 @@ pub(crate) struct RawMcpServer {
     pub(crate) oauth: Option<McpOAuthConfig>,
     #[serde(default)]
     pub(crate) tool_policy: McpToolPolicy,
+    // --- IDE transport fields ---
+    /// IDE name for sse-ide and ws-ide transports.
+    #[serde(default, rename = "ideName", alias = "ide_name")]
+    pub(crate) ide_name: Option<String>,
+    /// Auth token for ws-ide transport.
+    #[serde(default, rename = "authToken", alias = "auth_token")]
+    pub(crate) auth_token: Option<String>,
+    /// Whether the IDE is running in a Windows environment (sse-ide, ws-ide).
+    #[serde(default, rename = "ideRunningInWindows", alias = "ide_running_in_windows")]
+    pub(crate) ide_running_in_windows: Option<bool>,
+    /// SDK server name for the `sdk` transport.
+    #[serde(default)]
+    pub(crate) sdk_name: Option<String>,
+    /// Proxy session ID for the `claudeai-proxy` transport.
+    #[serde(default, rename = "proxyId", alias = "proxy_id", alias = "id")]
+    pub(crate) proxy_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -234,40 +250,83 @@ impl McpConfig {
         let mut servers = BTreeMap::new();
 
         for (name, raw_server) in raw.servers {
-            let transport = match (&raw_server.command, &raw_server.url) {
-                (Some(_), Some(_)) => {
-                    return Err(McpConfigError::AmbiguousTransport { name });
-                }
-                (None, None) => return Err(McpConfigError::MissingTransport { name }),
-                (Some(command), None) => McpTransportConfig::Stdio {
-                    command: command.clone(),
-                    args: raw_server.args,
-                    cwd: raw_server.cwd,
-                    env: expand_env_map(&raw_server.env),
+            let transport = match raw_server.transport_kind.as_deref().map(str::trim).map(str::to_ascii_lowercase).as_deref() {
+                // Explicit sdk transport — no command or url needed.
+                Some("sdk") => McpTransportConfig::Sdk {
+                    name: raw_server.sdk_name,
                 },
-                (None, Some(url)) => {
-                    let headers = raw_server.http_headers;
-                    match infer_transport_kind_with_override(
-                        url,
-                        raw_server.transport_kind.as_deref(),
-                    ) {
-                        McpTransport::Http => McpTransportConfig::Http {
-                            url: url.clone(),
-                            headers,
-                        },
-                        McpTransport::WebSocket => McpTransportConfig::WebSocket {
-                            url: url.clone(),
-                            headers,
-                        },
-                        McpTransport::Stdio => {
-                            let scheme = url
-                                .split(':')
-                                .next()
-                                .map_or_else(String::new, str::to_owned);
-                            return Err(McpConfigError::UnsupportedUrlScheme { name, scheme });
-                        }
+                // Explicit claudeai-proxy transport.
+                Some("claudeai-proxy") => McpTransportConfig::ClaudeAiProxy {
+                    url: raw_server.url,
+                    id: raw_server.proxy_id,
+                },
+                // Explicit sse-ide transport.
+                Some("sse-ide") => {
+                    let url = raw_server.url.as_deref().ok_or_else(|| McpConfigError::MissingTransport { name: name.clone() })?;
+                    McpTransportConfig::SseIde {
+                        url: url.to_owned(),
+                        ide_name: raw_server.ide_name,
+                        ide_running_in_windows: raw_server.ide_running_in_windows,
                     }
                 }
+                // Explicit ws-ide transport.
+                Some("ws-ide") => {
+                    let url = raw_server.url.as_deref().ok_or_else(|| McpConfigError::MissingTransport { name: name.clone() })?;
+                    McpTransportConfig::WsIde {
+                        url: url.to_owned(),
+                        ide_name: raw_server.ide_name,
+                        auth_token: raw_server.auth_token,
+                        ide_running_in_windows: raw_server.ide_running_in_windows,
+                    }
+                }
+                // Other explicit or inferred transports.
+                _ => match (&raw_server.command, &raw_server.url) {
+                    (Some(_), Some(_)) => {
+                        return Err(McpConfigError::AmbiguousTransport { name });
+                    }
+                    (None, None) => return Err(McpConfigError::MissingTransport { name }),
+                    (Some(command), None) => McpTransportConfig::Stdio {
+                        command: command.clone(),
+                        args: raw_server.args,
+                        cwd: raw_server.cwd,
+                        env: expand_env_map(&raw_server.env),
+                    },
+                    (None, Some(url)) => {
+                        let headers = raw_server.http_headers;
+                        // If the transport kind was explicitly "sse", use SSE config.
+                        match raw_server.transport_kind.as_deref() {
+                            Some(t) if t.trim().eq_ignore_ascii_case("sse") => {
+                                McpTransportConfig::Sse {
+                                    url: url.clone(),
+                                    headers,
+                                    headers_helper: None,
+                                }
+                            }
+                            _ => match infer_transport_kind_with_override(
+                                url,
+                                raw_server.transport_kind.as_deref(),
+                            ) {
+                                McpTransport::Http => McpTransportConfig::Http {
+                                    url: url.clone(),
+                                    headers,
+                                    headers_helper: None,
+                                },
+                                McpTransport::WebSocket => McpTransportConfig::WebSocket {
+                                    url: url.clone(),
+                                    headers,
+                                    headers_helper: None,
+                                },
+                                McpTransport::Stdio => {
+                                    let scheme = url
+                                        .split(':')
+                                        .next()
+                                        .map_or_else(String::new, str::to_owned);
+                                    return Err(McpConfigError::UnsupportedUrlScheme { name, scheme });
+                                }
+                            },
+                        }
+                    }
+                },
             };
 
             let server_name = name.clone();
@@ -319,63 +378,73 @@ impl From<&McpConfig> for RawMcpConfig {
             .servers
             .iter()
             .map(|(name, server)| {
-                let (command, args, cwd, env, url, http_headers) = match &server.transport {
+                let mut raw = RawMcpServer {
+                    enabled: Some(server.enabled),
+                    startup_timeout_secs: server.startup_timeout_secs,
+                    request_timeout_secs: server.request_timeout_secs,
+                    capabilities: RawMcpCapabilities {
+                        supports_tools: server.capabilities.supports_tools,
+                        supports_prompts: server.capabilities.supports_prompts,
+                        supports_resources: server.capabilities.supports_resources,
+                        supports_sampling: server.capabilities.supports_sampling,
+                        supports_roots: server.capabilities.supports_roots,
+                    },
+                    metadata: server.metadata.clone(),
+                    oauth: server.oauth.clone(),
+                    tool_policy: server.tool_policy.clone(),
+                    ..Default::default()
+                };
+
+                match &server.transport {
                     McpTransportConfig::Stdio {
                         command,
                         args,
                         cwd,
                         env,
-                    } => (
-                        Some(command.clone()),
-                        args.clone(),
-                        cwd.clone(),
-                        env.clone(),
-                        None,
-                        BTreeMap::new(),
-                    ),
-                    McpTransportConfig::Http { url, headers } => (
-                        None,
-                        Vec::new(),
-                        None,
-                        BTreeMap::new(),
-                        Some(url.clone()),
-                        headers.clone(),
-                    ),
-                    McpTransportConfig::WebSocket { url, headers } => (
-                        None,
-                        Vec::new(),
-                        None,
-                        BTreeMap::new(),
-                        Some(url.clone()),
-                        headers.clone(),
-                    ),
-                };
+                    } => {
+                        raw.command = Some(command.clone());
+                        raw.args = args.clone();
+                        raw.cwd = cwd.clone();
+                        raw.env = env.clone();
+                    }
+                    McpTransportConfig::Sse { url, headers, .. } => {
+                        raw.transport_kind = Some("sse".to_owned());
+                        raw.url = Some(url.clone());
+                        raw.http_headers = headers.clone();
+                    }
+                    McpTransportConfig::SseIde { url, ide_name, ide_running_in_windows } => {
+                        raw.transport_kind = Some("sse-ide".to_owned());
+                        raw.url = Some(url.clone());
+                        raw.ide_name = ide_name.clone();
+                        raw.ide_running_in_windows = *ide_running_in_windows;
+                    }
+                    McpTransportConfig::Http { url, headers, .. } => {
+                        raw.url = Some(url.clone());
+                        raw.http_headers = headers.clone();
+                    }
+                    McpTransportConfig::WebSocket { url, headers, .. } => {
+                        raw.url = Some(url.clone());
+                        raw.http_headers = headers.clone();
+                    }
+                    McpTransportConfig::WsIde { url, ide_name, auth_token, ide_running_in_windows } => {
+                        raw.transport_kind = Some("ws-ide".to_owned());
+                        raw.url = Some(url.clone());
+                        raw.ide_name = ide_name.clone();
+                        raw.auth_token = auth_token.clone();
+                        raw.ide_running_in_windows = *ide_running_in_windows;
+                    }
+                    McpTransportConfig::Sdk { name: sdk_name } => {
+                        raw.transport_kind = Some("sdk".to_owned());
+                        raw.sdk_name = sdk_name.clone();
+                    }
+                    McpTransportConfig::ClaudeAiProxy { url, id } => {
+                        raw.transport_kind = Some("claudeai-proxy".to_owned());
+                        raw.url = url.clone();
+                        raw.proxy_id = id.clone();
+                    }
+                }
 
-                (
-                    name.clone(),
-                    RawMcpServer {
-                        transport_kind: None,
-                        command,
-                        args,
-                        cwd,
-                        env,
-                        url,
-                        http_headers,
-                        enabled: Some(server.enabled),
-                        startup_timeout_secs: server.startup_timeout_secs,
-                        request_timeout_secs: server.request_timeout_secs,
-                        capabilities: RawMcpCapabilities {
-                            supports_tools: server.capabilities.supports_tools,
-                            supports_prompts: server.capabilities.supports_prompts,
-                            supports_resources: server.capabilities.supports_resources,
-                            supports_sampling: server.capabilities.supports_sampling,
-                            supports_roots: server.capabilities.supports_roots,
-                        },
-                        metadata: server.metadata.clone(),
-                        oauth: server.oauth.clone(),
-                        tool_policy: server.tool_policy.clone(),
-                    },
-                )
+                (name.clone(), raw)
             })
             .collect();
         Self { servers }

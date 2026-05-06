@@ -41,11 +41,19 @@ pub use api_client::{ApiClient, ContentBlock, QueryOptions, QueryResult, UsageSt
 pub use circuit_breaker::{CircuitBreaker, CircuitBreakerConfig, CircuitState};
 pub use context::{TokenEstimator, dual_ratio_estimate};
 pub use conversation_backend::{ConversationBackend, DiscoveredToolScope, ProviderCompatBackend};
-pub use retry::{RetryConfig, RetryContext};
+pub use retry::{
+    ApiErrorKind, FastModeState, OAuthRefreshCallback, ResponseHints, RetryConfig,
+    RetryContext, RetryOptions, SubscriberTier, classify_api_error, get_subscriber_tier,
+    is_enterprise_subscriber, is_fast_mode_enabled, is_persistent_retry_enabled, is_subscriber,
+    should_retry_529, with_retry_ext,
+};
 pub use streaming::StreamingCallbacks;
 
 use crate::model_info::get_model_info;
-use crate::retry::{is_retryable_http_status, is_retryable_transport_error};
+use crate::retry::{
+    get_rate_limit_wait_duration, is_overloaded_error_body, is_retryable_http_status,
+    is_retryable_transport_error, should_retry_from_header,
+};
 use anyhow::{Context, Result, anyhow};
 use claude_config::ProviderConfig;
 use claude_core::{
@@ -61,7 +69,7 @@ use reqwest::header::{
 };
 use serde_json::{Value, json};
 use std::borrow::Cow;
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::env;
 use std::sync::Mutex;
 use std::time::Duration;
@@ -700,13 +708,38 @@ impl ProviderClient {
             match response {
                 Ok(response) => {
                     let status = response.status().as_u16();
-                    let retry_after = parse_retry_after(response.headers(), provider);
+                    let headers = response.headers().clone();
+                    let retry_after = parse_retry_after(&headers, provider);
                     let text = response
                         .text()
                         .await
                         .with_context(|| format!("failed to read {label} response body"))?;
-                    if is_retryable_http_status(status) && attempt < provider.max_retries {
-                        tokio::time::sleep(compute_retry_delay(provider, attempt, retry_after))
+
+                    // Check x-should-retry header: if explicitly "false", don't
+                    // retry (unless overloaded_error in body for 5xx).
+                    if let Some(false) = should_retry_from_header(&headers) {
+                        let is_5xx = status >= 500;
+                        let overloaded_body = is_overloaded_error_body(text.as_bytes());
+                        let is_ant = std::env::var("USER_TYPE").as_deref() == Ok("ant");
+                        if !(is_ant && is_5xx) && !overloaded_body {
+                            return Ok((status, text));
+                        }
+                    }
+
+                    // Check if retryable via status code or overloaded body fallback.
+                    let is_retryable = is_retryable_http_status(status)
+                        || is_overloaded_error_body(text.as_bytes())
+                        || should_retry_from_header(&headers) == Some(true);
+
+                    if is_retryable && attempt < provider.max_retries {
+                        // For 429, prefer the rate-limit reset header over
+                        // exponential back-off.
+                        let effective_retry_after = if status == 429 {
+                            get_rate_limit_wait_duration(&headers).or(retry_after)
+                        } else {
+                            retry_after
+                        };
+                        tokio::time::sleep(compute_retry_delay(provider, attempt, effective_retry_after))
                             .await;
                         attempt += 1;
                         continue;
@@ -778,6 +811,9 @@ async fn build_openai_request_body(
         || model_name.starts_with("o4");
     let tools = current_openai_tool_schemas(provider, conversation, carried_discovered_tools).await;
 
+    let default_temperature = 0.1;
+    let effective_temperature = provider.temperature.unwrap_or(default_temperature);
+
     let mut body = if is_reasoning_model {
         // Reasoning models (o1/o3/o4-mini) do not support temperature
         // and use max_completion_tokens instead of max_tokens.
@@ -795,11 +831,20 @@ async fn build_openai_request_body(
             "messages": to_openai_messages(conversation),
             "tools": tools,
             "tool_choice": "auto",
-            "temperature": 0.1,
+            "temperature": effective_temperature,
             "max_tokens": provider.max_output_tokens,
             "stream": stream,
         })
     };
+
+    // Pass through top_p / top_k if configured.
+    if let Some(top_p) = provider.top_p {
+        body["top_p"] = json!(top_p);
+    }
+    // OpenAI does not support top_k directly, but some compatible providers do.
+    if let Some(top_k) = provider.top_k {
+        body["top_k"] = json!(top_k);
+    }
 
     // If thinking_budget is set and the model supports it, add reasoning_effort.
     if is_reasoning_model && let Some(budget) = provider.thinking_budget {
@@ -1921,7 +1966,14 @@ async fn prepare_anthropic_request_surface(
     };
     // Normalize messages for API: role alternation, tool pairing, thinking cleanup
     let mut messages = messages;
-    normalize::normalize_messages_for_api(&mut messages);
+    let tool_search = tool_search_enabled_from_tool_schemas(&tools);
+    let available_tool_names_hashset: HashSet<String> =
+        available_tool_names.into_iter().collect();
+    let config = normalize::NormalizeConfig {
+        tool_search_enabled: tool_search,
+        available_tool_names: Some(&available_tool_names_hashset),
+    };
+    normalize::normalize_messages_for_api_with_config(&mut messages, config);
     (system, messages, tools)
 }
 
@@ -1959,9 +2011,11 @@ async fn build_anthropic_request_body(
     merge_anthropic_extra_body_params(&mut body);
     apply_anthropic_request_metadata(&mut body, provider, request_context);
     apply_anthropic_thinking_options(&mut body, provider);
+    apply_anthropic_sampling_params(&mut body, provider);
     apply_anthropic_output_config(&mut body, provider, request_context);
     apply_anthropic_fast_mode(&mut body, provider, request_context);
     apply_anthropic_context_management(&mut body, provider);
+    apply_anthropic_interleaved_thinking(&mut body, provider);
 
     // Detect resume: if there are tool-role entries, this is a continued conversation.
     let is_resume = conversation
@@ -1997,11 +2051,7 @@ fn merge_anthropic_extra_body_params(body: &mut Value) {
 }
 
 fn apply_anthropic_thinking_options(body: &mut Value, provider: &ProviderConfig) {
-    if env::var("CLAUDE_CODE_DISABLE_THINKING")
-        .ok()
-        .as_deref()
-        .is_some_and(is_env_truthy)
-    {
+    if claude_config::env_vars::disable_thinking() {
         body["temperature"] = json!(1.0);
         return;
     }
@@ -2031,6 +2081,58 @@ fn apply_anthropic_thinking_options(body: &mut Value, provider: &ProviderConfig)
     let current_max = body.get("max_tokens").and_then(Value::as_u64).unwrap_or(0);
     if current_max <= u64::from(budget) {
         body["max_tokens"] = json!(u64::from(budget) + 4096);
+    }
+}
+
+/// Apply configurable sampling parameters (temperature, top_p, top_k) to the
+/// Anthropic request body.
+///
+/// When extended thinking is enabled, the Anthropic API requires
+/// `temperature` to be exactly 1.0 — in that case we do not override it.
+/// When thinking is disabled, the configured temperature (or a default of
+/// 1.0) is used.
+fn apply_anthropic_sampling_params(body: &mut Value, provider: &ProviderConfig) {
+    // When thinking is enabled, Anthropic requires temperature=1.0 — skip override.
+    let thinking_enabled = body
+        .get("thinking")
+        .and_then(|t| t.get("type"))
+        .and_then(Value::as_str)
+        .is_some_and(|t| t == "enabled");
+
+    if !thinking_enabled {
+        // Use configured temperature, or default to 1.0 (already set by
+        // apply_anthropic_thinking_options when thinking is disabled).
+        if let Some(temp) = provider.temperature {
+            body["temperature"] = json!(temp);
+        }
+    }
+
+    if let Some(top_p) = provider.top_p {
+        body["top_p"] = json!(top_p);
+    }
+    if let Some(top_k) = provider.top_k {
+        body["top_k"] = json!(top_k);
+    }
+}
+
+/// Apply interleaved thinking mode based on the `DISABLE_INTERLEAVED_THINKING`
+/// env var.
+///
+/// When thinking is enabled and interleaved thinking is NOT disabled, we set
+/// `thinking.interleaved` to true.  When `DISABLE_INTERLEAVED_THINKING` is
+/// set, we explicitly set it to false (or omit it, which defaults to false).
+fn apply_anthropic_interleaved_thinking(body: &mut Value, _provider: &ProviderConfig) {
+    let Some(thinking) = body.get_mut("thinking") else {
+        return;
+    };
+    // Only applies when thinking is enabled.
+    if thinking
+        .get("type")
+        .and_then(Value::as_str)
+        .is_some_and(|t| t == "enabled")
+    {
+        let interleaved = !claude_config::env_vars::disable_interleaved_thinking();
+        thinking["interleaved"] = json!(interleaved);
     }
 }
 
@@ -2210,6 +2312,7 @@ fn parse_openai_response(status: u16, raw_text: String) -> Result<ProviderRespon
                 .and_then(|d| d.get("all_cached_tokens"))
                 .and_then(Value::as_u64)
                 .unwrap_or_default(),
+            ..Default::default()
         },
         stop_reason: payload
             .get("choices")
@@ -2219,6 +2322,7 @@ fn parse_openai_response(status: u16, raw_text: String) -> Result<ProviderRespon
             .and_then(Value::as_str)
             .unwrap_or("stop")
             .to_owned(),
+        research: None,
     })
 }
 
@@ -2290,12 +2394,14 @@ fn parse_anthropic_response(status: u16, raw_text: String) -> Result<ProviderRes
                 .get("cache_creation_input_tokens")
                 .and_then(Value::as_u64)
                 .unwrap_or_default(),
+            ..Default::default()
         },
         stop_reason: payload
             .get("stop_reason")
             .and_then(Value::as_str)
             .unwrap_or("stop")
             .to_owned(),
+        research: None,
     })
 }
 
@@ -2395,8 +2501,10 @@ fn mock_response(conversation: &[ConversationEntry]) -> ProviderResponse {
             output_tokens: 12,
             cache_read_input_tokens: 0,
             cache_creation_input_tokens: 0,
+            ..Default::default()
         },
         stop_reason: "end_turn".to_owned(),
+        research: None,
     }
 }
 
@@ -2690,6 +2798,9 @@ mod tests {
             request_header_overrides: Default::default(),
             request_metadata: Default::default(),
             thinking_budget: None,
+            temperature: None,
+            top_p: None,
+            top_k: None,
         }
     }
 

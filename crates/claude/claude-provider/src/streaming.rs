@@ -22,8 +22,9 @@ use std::sync::{
 use std::time::Duration;
 
 use crate::retry::{
-    RetryConfig, compute_retry_delay as retry_compute_retry_delay, is_retryable_http_status,
-    is_retryable_transport_error, parse_retry_after as retry_parse_retry_after,
+    RetryConfig, compute_retry_delay as retry_compute_retry_delay, is_overloaded_error_body,
+    is_retryable_http_status, is_retryable_transport_error,
+    parse_retry_after as retry_parse_retry_after,
 };
 use crate::{
     ProviderClient, build_anthropic_request_body, build_headers, build_openai_request_body,
@@ -55,7 +56,7 @@ fn stream_idle_timeout() -> Duration {
 /// `CLAUDE_ENABLE_STREAM_WATCHDOG`.  Defaults to `true` (enabled).
 fn is_stream_watchdog_enabled() -> bool {
     std::env::var("CLAUDE_ENABLE_STREAM_WATCHDOG")
-        .map(|v| v != "0" && v.to_ascii_lowercase() != "false")
+        .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
         .unwrap_or(true)
 }
 
@@ -78,8 +79,21 @@ type TextCallback = Box<dyn Fn(&str) + Send + Sync>;
 /// Type alias for a two-argument streaming callback (id, name/delta).
 type PairCallback = Box<dyn Fn(&str, &str) + Send + Sync>;
 
-/// Type alias for a usage callback (input tokens, output tokens).
-type UsageCallback = Box<dyn Fn(u64, u64) + Send + Sync>;
+/// Usage snapshot delivered by streaming callbacks.
+#[derive(Debug, Clone, Default)]
+pub struct StreamingUsageUpdate {
+    /// Input (prompt) tokens.
+    pub input_tokens: u64,
+    /// Output (completion) tokens.
+    pub output_tokens: u64,
+    /// Anthropic cache read tokens.
+    pub cache_read_input_tokens: u64,
+    /// Anthropic cache creation tokens.
+    pub cache_creation_input_tokens: u64,
+}
+
+/// Type alias for a usage callback.
+type UsageCallback = Box<dyn Fn(StreamingUsageUpdate) + Send + Sync>;
 
 /// Optional callbacks for observing streaming events in real time.
 ///
@@ -437,7 +451,12 @@ impl ProviderClient {
                         usage.output_tokens = out;
                         // Fire on_usage callback.
                         if let Some(cb) = callbacks.as_ref().and_then(|c| c.on_usage.as_ref()) {
-                            cb(inp, out);
+                            cb(StreamingUsageUpdate {
+                                input_tokens: inp,
+                                output_tokens: out,
+                                cache_read_input_tokens: 0,
+                                cache_creation_input_tokens: 0,
+                            });
                         }
                     }
                 }
@@ -466,6 +485,7 @@ impl ProviderClient {
             request_id,
             usage,
             stop_reason: finish_reason,
+            research: None,
         })
     }
 
@@ -506,6 +526,7 @@ impl ProviderClient {
         let mut usage = UsageSummary::default();
         let mut stop_reason = "end_turn".to_owned();
         let mut request_id: Option<String> = None;
+        let mut research: Option<Value> = None;
 
         let mut stream = response.bytes_stream();
         let mut sse_buffer = String::new();
@@ -545,9 +566,10 @@ impl ProviderClient {
                     &mut usage,
                     &mut stop_reason,
                     &mut request_id,
+                    &mut research,
                     callbacks,
                     /* extract_cache_tokens */ true,
-                );
+                )?;
             }
         }
 
@@ -562,6 +584,7 @@ impl ProviderClient {
             request_id,
             usage,
             stop_reason,
+            research,
         })
     }
 
@@ -694,6 +717,7 @@ impl ProviderClient {
         let mut usage = UsageSummary::default();
         let mut stop_reason = "end_turn".to_owned();
         let mut request_id: Option<String> = None;
+        let mut research: Option<Value> = None;
 
         let mut stream = response.bytes_stream();
         let mut buffer: Vec<u8> = Vec::new();
@@ -764,9 +788,10 @@ impl ProviderClient {
                         &mut usage,
                         &mut stop_reason,
                         &mut request_id,
+                        &mut research,
                         callbacks,
                         /* extract_cache_tokens */ false,
-                    );
+                    )?;
                 }
 
                 buffer.drain(..total_len);
@@ -784,6 +809,7 @@ impl ProviderClient {
             request_id,
             usage,
             stop_reason,
+            research,
         })
     }
 
@@ -893,6 +919,7 @@ impl ProviderClient {
         let mut usage = UsageSummary::default();
         let mut stop_reason = "end_turn".to_owned();
         let mut request_id: Option<String> = None;
+        let mut research: Option<Value> = None;
 
         let mut stream = response.bytes_stream();
         let mut sse_buffer = String::new();
@@ -932,9 +959,10 @@ impl ProviderClient {
                     &mut usage,
                     &mut stop_reason,
                     &mut request_id,
+                    &mut research,
                     callbacks,
                     /* extract_cache_tokens */ false,
-                );
+                )?;
             }
         }
 
@@ -949,6 +977,7 @@ impl ProviderClient {
             request_id,
             usage,
             stop_reason,
+            research,
         })
     }
 
@@ -990,6 +1019,23 @@ impl ProviderClient {
                         let text = response.text().await.with_context(|| {
                             format!("failed to read {label} error response body")
                         })?;
+
+                        // Check for overloaded_error in body (the SDK sometimes
+                        // drops 529 status during streaming).
+                        if is_overloaded_error_body(text.as_bytes())
+                            && attempt < provider.max_retries
+                        {
+                            tracing::warn!(
+                                attempt = attempt + 1,
+                                status_code,
+                                "overloaded_error detected in response body, retrying"
+                            );
+                            tokio::time::sleep(compute_retry_delay(provider, attempt, None))
+                                .await;
+                            attempt += 1;
+                            continue;
+                        }
+
                         let error_message = serde_json::from_str::<Value>(&text)
                             .ok()
                             .and_then(|v| {
@@ -1069,9 +1115,10 @@ fn process_anthropic_event(
     usage: &mut UsageSummary,
     stop_reason: &mut String,
     request_id: &mut Option<String>,
+    research: &mut Option<Value>,
     callbacks: Option<&StreamingCallbacks>,
     extract_cache_tokens: bool,
-) {
+) -> Result<()> {
     let event_type = event.get("type").and_then(Value::as_str).unwrap_or("");
 
     match event_type {
@@ -1079,6 +1126,12 @@ fn process_anthropic_event(
             if let Some(msg) = event.get("message") {
                 if request_id.is_none() {
                     *request_id = msg.get("id").and_then(Value::as_str).map(ToOwned::to_owned);
+                }
+                // Extract the `research` field from the message if present.
+                if research.is_none() {
+                    if let Some(r) = msg.get("research").cloned() {
+                        *research = Some(r);
+                    }
                 }
                 if let Some(u) = msg.get("usage") {
                     let inp = u.get("input_tokens").and_then(Value::as_u64).unwrap_or(0);
@@ -1093,8 +1146,35 @@ fn process_anthropic_event(
                             .and_then(Value::as_u64)
                             .unwrap_or(0);
                     }
+                    // Extract server_tool_use sub-fields.
+                    if let Some(stu) = u.get("server_tool_use") {
+                        usage.server_tool_use_web_search_requests = stu
+                            .get("web_search_requests")
+                            .and_then(Value::as_u64)
+                            .unwrap_or(0);
+                        usage.server_tool_use_web_fetch_requests = stu
+                            .get("web_fetch_requests")
+                            .and_then(Value::as_u64)
+                            .unwrap_or(0);
+                    }
+                    // Extract cache_creation sub-fields for ephemeral TTL breakdown.
+                    if let Some(cc) = u.get("cache_creation") {
+                        usage.cache_creation_ephemeral_5m_input_tokens = cc
+                            .get("ephemeral_5m_input_tokens")
+                            .and_then(Value::as_u64)
+                            .unwrap_or(0);
+                        usage.cache_creation_ephemeral_1h_input_tokens = cc
+                            .get("ephemeral_1h_input_tokens")
+                            .and_then(Value::as_u64)
+                            .unwrap_or(0);
+                    }
                     if let Some(cb) = callbacks.and_then(|c| c.on_usage.as_ref()) {
-                        cb(inp, 0);
+                        cb(StreamingUsageUpdate {
+                            input_tokens: inp,
+                            output_tokens: 0,
+                            cache_read_input_tokens: usage.cache_read_input_tokens,
+                            cache_creation_input_tokens: usage.cache_creation_input_tokens,
+                        });
                     }
                 }
             }
@@ -1116,7 +1196,7 @@ fn process_anthropic_event(
                         .unwrap_or("")
                         .to_owned();
                     content_block_accumulators
-                        .insert(index, AnthropicContentAccumulator::Text { text });
+                        .insert(index, AnthropicContentAccumulator::Text { text, citations: Vec::new() });
                 }
                 "thinking" => {
                     let thinking = content_block
@@ -1162,6 +1242,65 @@ fn process_anthropic_event(
                         }),
                     );
                 }
+                "redacted_thinking" => {
+                    // Redacted thinking blocks contain opaque data, not readable text.
+                    // We record their presence to preserve token accounting.
+                    let data = content_block
+                        .and_then(|b| b.get("data"))
+                        .and_then(|d| d.as_str())
+                        .unwrap_or("")
+                        .to_owned();
+                    content_block_accumulators.insert(
+                        index,
+                        AnthropicContentAccumulator::RedactedThinking { data },
+                    );
+                }
+                "image" => {
+                    // Image blocks in responses contain a source with base64 data.
+                    content_block_accumulators.insert(
+                        index,
+                        AnthropicContentAccumulator::Image {
+                            block: content_block
+                                .cloned()
+                                .unwrap_or_else(|| json!({"type": "image"})),
+                        },
+                    );
+                }
+                "document" => {
+                    // Document blocks contain source.type, source.media_type,
+                    // source.data / source.url fields.
+                    content_block_accumulators.insert(
+                        index,
+                        AnthropicContentAccumulator::Document {
+                            block: content_block
+                                .cloned()
+                                .unwrap_or_else(|| json!({"type": "document"})),
+                        },
+                    );
+                }
+                "connector_text" => {
+                    // Connector text blocks are text-like blocks from connector tools.
+                    let text = content_block
+                        .and_then(|b| b.get("text"))
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .to_owned();
+                    content_block_accumulators.insert(
+                        index,
+                        AnthropicContentAccumulator::ConnectorText { text },
+                    );
+                }
+                "web_search_tool_result" => {
+                    // Web search tool result blocks contain tool_use_id, content, status.
+                    content_block_accumulators.insert(
+                        index,
+                        AnthropicContentAccumulator::WebSearchToolResult {
+                            block: content_block
+                                .cloned()
+                                .unwrap_or_else(|| json!({"type": "web_search_tool_result"})),
+                        },
+                    );
+                }
                 _ => {}
             }
         }
@@ -1200,7 +1339,7 @@ fn process_anthropic_event(
                 *existing = Some(signature.to_owned());
             } else if delta_type == "text_delta"
                 && let Some(text) = delta.and_then(|d| d.get("text")).and_then(Value::as_str)
-                && let Some(AnthropicContentAccumulator::Text { text: existing }) =
+                && let Some(AnthropicContentAccumulator::Text { text: existing, .. }) =
                     content_block_accumulators.get_mut(&index)
             {
                 // Fire on_text_delta callback.
@@ -1208,6 +1347,24 @@ fn process_anthropic_event(
                     cb(text);
                 }
                 existing.push_str(text);
+            } else if delta_type == "connector_text_delta"
+                && let Some(text) = delta.and_then(|d| d.get("text")).and_then(Value::as_str)
+                && let Some(AnthropicContentAccumulator::ConnectorText { text: existing }) =
+                    content_block_accumulators.get_mut(&index)
+            {
+                existing.push_str(text);
+            } else if delta_type == "citations_delta" {
+                // Citations delta provides citation metadata (cited_text,
+                // document_index, document_title, url) for a text block.
+                // We accumulate citations into the text accumulator so they
+                // can be emitted in the finalised content block.
+                if let Some(citation) = delta.and_then(|d| d.get("citation")).cloned() {
+                    if let Some(AnthropicContentAccumulator::Text { citations, .. }) =
+                        content_block_accumulators.get_mut(&index)
+                    {
+                        citations.push(citation);
+                    }
+                }
             }
 
             if (delta_type == "input_json_delta"
@@ -1240,12 +1397,35 @@ fn process_anthropic_event(
                 usage.output_tokens = out;
                 // Fire on_usage callback with final output token count.
                 if let Some(cb) = callbacks.and_then(|c| c.on_usage.as_ref()) {
-                    cb(usage.input_tokens, out);
+                    cb(StreamingUsageUpdate {
+                        input_tokens: usage.input_tokens,
+                        output_tokens: out,
+                        cache_read_input_tokens: usage.cache_read_input_tokens,
+                        cache_creation_input_tokens: usage.cache_creation_input_tokens,
+                    });
                 }
             }
         }
+        "error" => {
+            let error_msg = event
+                .get("error")
+                .and_then(|e| e.get("message"))
+                .and_then(|m| m.as_str())
+                .unwrap_or("Unknown streaming error");
+            let error_type = event
+                .get("error")
+                .and_then(|e| e.get("type"))
+                .and_then(|t| t.as_str())
+                .unwrap_or("unknown");
+            return Err(anyhow!("API streaming error ({}): {}", error_type, error_msg));
+        }
+        "ping" => {
+            // Heartbeat from the server, no action needed.
+        }
         _ => {}
     }
+
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -1406,12 +1586,33 @@ struct AnthropicToolUseAccumulator {
 enum AnthropicContentAccumulator {
     Text {
         text: String,
+        /// Accumulated citations received via `citations_delta` events.
+        citations: Vec<Value>,
     },
     Thinking {
         thinking: String,
         signature: Option<String>,
     },
     ToolUse(AnthropicToolUseAccumulator),
+    RedactedThinking {
+        data: String,
+    },
+    Image {
+        block: Value,
+    },
+    /// Document content block — contains `source.type`, `source.media_type`,
+    /// `source.data` / `source.url`, etc.
+    Document {
+        block: Value,
+    },
+    /// Connector text block — a text-like block from connector tools.
+    ConnectorText {
+        text: String,
+    },
+    /// Web search tool result block.
+    WebSearchToolResult {
+        block: Value,
+    },
 }
 
 fn finalize_anthropic_content_blocks(
@@ -1424,15 +1625,19 @@ fn finalize_anthropic_content_blocks(
 
     for accumulator in accumulators.into_values() {
         match accumulator {
-            AnthropicContentAccumulator::Text { text } => {
+            AnthropicContentAccumulator::Text { text, citations } => {
                 if text.is_empty() {
                     continue;
                 }
                 raw_text_parts.push(text.clone());
-                content_blocks.push(json!({
+                let mut block = json!({
                     "type": "text",
                     "text": text,
-                }));
+                });
+                if !citations.is_empty() {
+                    block["citations"] = Value::Array(citations);
+                }
+                content_blocks.push(block);
             }
             AnthropicContentAccumulator::Thinking {
                 thinking,
@@ -1476,6 +1681,30 @@ fn finalize_anthropic_content_blocks(
                     "input": input,
                 }));
             }
+            AnthropicContentAccumulator::RedactedThinking { data } => {
+                content_blocks.push(json!({
+                    "type": "redacted_thinking",
+                    "data": data,
+                }));
+            }
+            AnthropicContentAccumulator::Image { block } => {
+                content_blocks.push(block);
+            }
+            AnthropicContentAccumulator::Document { block } => {
+                content_blocks.push(block);
+            }
+            AnthropicContentAccumulator::ConnectorText { text } => {
+                if text.is_empty() {
+                    continue;
+                }
+                content_blocks.push(json!({
+                    "type": "connector_text",
+                    "text": text,
+                }));
+            }
+            AnthropicContentAccumulator::WebSearchToolResult { block } => {
+                content_blocks.push(block);
+            }
         }
     }
 
@@ -1492,7 +1721,7 @@ fn finalize_anthropic_content_blocks(
 #[cfg(test)]
 mod tests {
     use anyhow::anyhow;
-    use serde_json::json;
+    use serde_json::{Value, json};
     use std::collections::BTreeMap;
 
     use super::{
@@ -1545,6 +1774,7 @@ mod tests {
             1,
             AnthropicContentAccumulator::Text {
                 text: "reply".to_owned(),
+                citations: Vec::new(),
             },
         );
         accumulators.insert(
@@ -1674,11 +1904,13 @@ mod tests {
             0,
             AnthropicContentAccumulator::Text {
                 text: String::new(),
+                citations: Vec::new(),
             },
         );
         let mut usage = UsageSummary::default();
         let mut stop_reason = "end_turn".to_owned();
         let mut request_id: Option<String> = None;
+        let mut research: Option<Value> = None;
 
         let event = json!({
             "type": "content_block_delta",
@@ -1692,11 +1924,12 @@ mod tests {
             &mut usage,
             &mut stop_reason,
             &mut request_id,
+            &mut research,
             None::<&StreamingCallbacks>,
             false,
         );
 
-        if let Some(AnthropicContentAccumulator::Text { text }) = accumulators.get(&0) {
+        if let Some(AnthropicContentAccumulator::Text { text, .. }) = accumulators.get(&0) {
             assert_eq!(text, "hello");
         } else {
             panic!("expected Text accumulator");
@@ -1709,6 +1942,7 @@ mod tests {
         let mut usage = UsageSummary::default();
         let mut stop_reason = "end_turn".to_owned();
         let mut request_id: Option<String> = None;
+        let mut research: Option<Value> = None;
 
         let event = json!({
             "type": "message_start",
@@ -1728,6 +1962,7 @@ mod tests {
             &mut usage,
             &mut stop_reason,
             &mut request_id,
+            &mut research,
             None::<&StreamingCallbacks>,
             true,
         );
@@ -1744,6 +1979,7 @@ mod tests {
         let mut usage = UsageSummary::default();
         let mut stop_reason = "end_turn".to_owned();
         let mut request_id: Option<String> = None;
+        let mut research: Option<Value> = None;
 
         let event = json!({
             "type": "message_start",
@@ -1763,6 +1999,7 @@ mod tests {
             &mut usage,
             &mut stop_reason,
             &mut request_id,
+            &mut research,
             None::<&StreamingCallbacks>,
             false,
         );
@@ -1779,6 +2016,7 @@ mod tests {
         usage.input_tokens = 100;
         let mut stop_reason = "end_turn".to_owned();
         let mut request_id: Option<String> = None;
+        let mut research: Option<Value> = None;
 
         let event = json!({
             "type": "message_delta",
@@ -1792,6 +2030,7 @@ mod tests {
             &mut usage,
             &mut stop_reason,
             &mut request_id,
+            &mut research,
             None::<&StreamingCallbacks>,
             false,
         );
@@ -1927,6 +2166,7 @@ mod tests {
         let mut usage = UsageSummary::default();
         let mut stop_reason = "end_turn".to_owned();
         let mut request_id: Option<String> = None;
+        let mut research: Option<Value> = None;
 
         let event = json!({
             "type": "message_start",
@@ -1942,6 +2182,7 @@ mod tests {
             &mut usage,
             &mut stop_reason,
             &mut request_id,
+            &mut research,
             None::<&StreamingCallbacks>,
             false,
         );
@@ -1956,6 +2197,7 @@ mod tests {
         let mut usage = UsageSummary::default();
         let mut stop_reason = "end_turn".to_owned();
         let mut request_id: Option<String> = Some("msg-original".to_owned());
+        let mut research: Option<Value> = None;
 
         let event = json!({
             "type": "message_start",
@@ -1971,6 +2213,7 @@ mod tests {
             &mut usage,
             &mut stop_reason,
             &mut request_id,
+            &mut research,
             None::<&StreamingCallbacks>,
             false,
         );
@@ -1985,6 +2228,7 @@ mod tests {
         let mut usage = UsageSummary::default();
         let mut stop_reason = "end_turn".to_owned();
         let mut request_id: Option<String> = None;
+        let mut research: Option<Value> = None;
 
         let event = json!({
             "type": "content_block_start",
@@ -1998,13 +2242,14 @@ mod tests {
             &mut usage,
             &mut stop_reason,
             &mut request_id,
+            &mut research,
             None::<&StreamingCallbacks>,
             false,
         );
 
         assert!(matches!(
             accumulators.get(&0),
-            Some(AnthropicContentAccumulator::Text { text }) if text == "Hello"
+            Some(AnthropicContentAccumulator::Text { text, .. }) if text == "Hello"
         ));
     }
 
@@ -2014,6 +2259,7 @@ mod tests {
         let mut usage = UsageSummary::default();
         let mut stop_reason = "end_turn".to_owned();
         let mut request_id: Option<String> = None;
+        let mut research: Option<Value> = None;
 
         let event = json!({
             "type": "content_block_start",
@@ -2031,6 +2277,7 @@ mod tests {
             &mut usage,
             &mut stop_reason,
             &mut request_id,
+            &mut research,
             None::<&StreamingCallbacks>,
             false,
         );
@@ -2048,6 +2295,7 @@ mod tests {
         let mut usage = UsageSummary::default();
         let mut stop_reason = "end_turn".to_owned();
         let mut request_id: Option<String> = None;
+        let mut research: Option<Value> = None;
 
         let event = json!({
             "type": "content_block_start",
@@ -2065,6 +2313,7 @@ mod tests {
             &mut usage,
             &mut stop_reason,
             &mut request_id,
+            &mut research,
             None::<&StreamingCallbacks>,
             false,
         );
@@ -2083,11 +2332,13 @@ mod tests {
             0,
             AnthropicContentAccumulator::Text {
                 text: "Hello ".to_owned(),
+                citations: Vec::new(),
             },
         );
         let mut usage = UsageSummary::default();
         let mut stop_reason = "end_turn".to_owned();
         let mut request_id: Option<String> = None;
+        let mut research: Option<Value> = None;
 
         let event = json!({
             "type": "content_block_delta",
@@ -2101,13 +2352,14 @@ mod tests {
             &mut usage,
             &mut stop_reason,
             &mut request_id,
+            &mut research,
             None::<&StreamingCallbacks>,
             false,
         );
 
         assert!(matches!(
             accumulators.get(&0),
-            Some(AnthropicContentAccumulator::Text { text }) if text == "Hello world!"
+            Some(AnthropicContentAccumulator::Text { text, .. }) if text == "Hello world!"
         ));
     }
 
@@ -2124,6 +2376,7 @@ mod tests {
         let mut usage = UsageSummary::default();
         let mut stop_reason = "end_turn".to_owned();
         let mut request_id: Option<String> = None;
+        let mut research: Option<Value> = None;
 
         let event = json!({
             "type": "content_block_delta",
@@ -2137,6 +2390,7 @@ mod tests {
             &mut usage,
             &mut stop_reason,
             &mut request_id,
+            &mut research,
             None::<&StreamingCallbacks>,
             false,
         );
@@ -2161,6 +2415,7 @@ mod tests {
         let mut usage = UsageSummary::default();
         let mut stop_reason = "end_turn".to_owned();
         let mut request_id: Option<String> = None;
+        let mut research: Option<Value> = None;
 
         let event = json!({
             "type": "content_block_delta",
@@ -2174,6 +2429,7 @@ mod tests {
             &mut usage,
             &mut stop_reason,
             &mut request_id,
+            &mut research,
             None::<&StreamingCallbacks>,
             false,
         );
@@ -2200,6 +2456,7 @@ mod tests {
         let mut usage = UsageSummary::default();
         let mut stop_reason = "end_turn".to_owned();
         let mut request_id: Option<String> = None;
+        let mut research: Option<Value> = None;
 
         let event = json!({
             "type": "content_block_delta",
@@ -2213,6 +2470,7 @@ mod tests {
             &mut usage,
             &mut stop_reason,
             &mut request_id,
+            &mut research,
             None::<&StreamingCallbacks>,
             false,
         );
@@ -2230,6 +2488,7 @@ mod tests {
         let mut usage = UsageSummary::default();
         let mut stop_reason = "end_turn".to_owned();
         let mut request_id: Option<String> = None;
+        let mut research: Option<Value> = None;
 
         let event = json!({ "type": "content_block_stop", "index": 0 });
 
@@ -2239,6 +2498,7 @@ mod tests {
             &mut usage,
             &mut stop_reason,
             &mut request_id,
+            &mut research,
             None::<&StreamingCallbacks>,
             false,
         );
@@ -2254,6 +2514,7 @@ mod tests {
         let mut usage = UsageSummary::default();
         let mut stop_reason = "end_turn".to_owned();
         let mut request_id: Option<String> = None;
+        let mut research: Option<Value> = None;
 
         let event = json!({ "type": "message_stop" });
 
@@ -2263,6 +2524,7 @@ mod tests {
             &mut usage,
             &mut stop_reason,
             &mut request_id,
+            &mut research,
             None::<&StreamingCallbacks>,
             false,
         );
@@ -2277,6 +2539,7 @@ mod tests {
         let mut usage = UsageSummary::default();
         let mut stop_reason = "end_turn".to_owned();
         let mut request_id: Option<String> = None;
+        let mut research: Option<Value> = None;
 
         let event = json!({ "type": "ping" });
 
@@ -2286,6 +2549,7 @@ mod tests {
             &mut usage,
             &mut stop_reason,
             &mut request_id,
+            &mut research,
             None::<&StreamingCallbacks>,
             false,
         );
@@ -2301,6 +2565,7 @@ mod tests {
         let mut usage = UsageSummary::default();
         let mut stop_reason = "tool_use".to_owned();
         let mut request_id: Option<String> = None;
+        let mut research: Option<Value> = None;
 
         let event = json!({
             "type": "message_delta",
@@ -2314,6 +2579,7 @@ mod tests {
             &mut usage,
             &mut stop_reason,
             &mut request_id,
+            &mut research,
             None::<&StreamingCallbacks>,
             false,
         );
@@ -2328,6 +2594,7 @@ mod tests {
         let mut usage = UsageSummary::default();
         let mut stop_reason = "end_turn".to_owned();
         let mut request_id: Option<String> = None;
+        let mut research: Option<Value> = None;
 
         let event = json!({
             "type": "message_start",
@@ -2347,6 +2614,7 @@ mod tests {
             &mut usage,
             &mut stop_reason,
             &mut request_id,
+            &mut research,
             None::<&StreamingCallbacks>,
             true,
         );
@@ -2437,6 +2705,7 @@ mod tests {
             0,
             AnthropicContentAccumulator::Text {
                 text: "Hello".to_owned(),
+                citations: Vec::new(),
             },
         );
 
@@ -2457,6 +2726,7 @@ mod tests {
             0,
             AnthropicContentAccumulator::Text {
                 text: String::new(),
+                citations: Vec::new(),
             },
         );
 
@@ -2652,5 +2922,497 @@ mod tests {
         //  helper returns a reasonable Duration.)
         let timeout = super::stream_idle_timeout();
         assert!(timeout.as_millis() > 0);
+    }
+
+    // -----------------------------------------------------------------------
+    // model_context_window_exceeded stop reason test
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn process_anthropic_event_message_delta_with_model_context_window_exceeded() {
+        let mut accumulators = BTreeMap::new();
+        let mut usage = UsageSummary::default();
+        usage.input_tokens = 100;
+        let mut stop_reason = "end_turn".to_owned();
+        let mut request_id: Option<String> = None;
+        let mut research: Option<Value> = None;
+
+        let event = json!({
+            "type": "message_delta",
+            "delta": { "stop_reason": "model_context_window_exceeded" },
+            "usage": { "output_tokens": 500 }
+        });
+
+        process_anthropic_event(
+            &event,
+            &mut accumulators,
+            &mut usage,
+            &mut stop_reason,
+            &mut request_id,
+            &mut research,
+            None::<&StreamingCallbacks>,
+            false,
+        );
+
+        assert_eq!(stop_reason, "model_context_window_exceeded");
+        assert_eq!(usage.output_tokens, 500);
+    }
+
+    // -----------------------------------------------------------------------
+    // Tests for new content block types (document, connector_text,
+    // web_search_tool_result, citations_delta, research)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn process_anthropic_event_content_block_start_document() {
+        let mut accumulators = BTreeMap::new();
+        let mut usage = UsageSummary::default();
+        let mut stop_reason = "end_turn".to_owned();
+        let mut request_id: Option<String> = None;
+        let mut research: Option<Value> = None;
+
+        let event = json!({
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {
+                "type": "document",
+                "source": {
+                    "type": "base64",
+                    "media_type": "application/pdf",
+                    "data": "SGVsbG8gV29ybGQ="
+                }
+            }
+        });
+
+        process_anthropic_event(
+            &event,
+            &mut accumulators,
+            &mut usage,
+            &mut stop_reason,
+            &mut request_id,
+            &mut research,
+            None::<&StreamingCallbacks>,
+            false,
+        ).unwrap();
+
+        assert!(matches!(
+            accumulators.get(&0),
+            Some(AnthropicContentAccumulator::Document { block }) if block["type"] == "document"
+        ));
+        if let Some(AnthropicContentAccumulator::Document { block }) = accumulators.get(&0) {
+            assert_eq!(block["source"]["type"], "base64");
+            assert_eq!(block["source"]["media_type"], "application/pdf");
+            assert_eq!(block["source"]["data"], "SGVsbG8gV29ybGQ=");
+        }
+    }
+
+    #[test]
+    fn finalize_document_block_preserves_fields() {
+        let mut accumulators = BTreeMap::new();
+        accumulators.insert(
+            0,
+            AnthropicContentAccumulator::Document {
+                block: json!({
+                    "type": "document",
+                    "source": {
+                        "type": "url",
+                        "url": "https://example.com/doc.pdf"
+                    }
+                }),
+            },
+        );
+
+        let (raw_text, thinking_text, content_blocks, tool_calls) =
+            finalize_anthropic_content_blocks(accumulators);
+
+        assert_eq!(raw_text, "");
+        assert!(thinking_text.is_none());
+        assert_eq!(content_blocks.len(), 1);
+        assert_eq!(content_blocks[0]["type"], "document");
+        assert_eq!(content_blocks[0]["source"]["type"], "url");
+        assert!(tool_calls.is_empty());
+    }
+
+    #[test]
+    fn process_anthropic_event_content_block_start_connector_text() {
+        let mut accumulators = BTreeMap::new();
+        let mut usage = UsageSummary::default();
+        let mut stop_reason = "end_turn".to_owned();
+        let mut request_id: Option<String> = None;
+        let mut research: Option<Value> = None;
+
+        let event = json!({
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {
+                "type": "connector_text",
+                "text": "Initial"
+            }
+        });
+
+        process_anthropic_event(
+            &event,
+            &mut accumulators,
+            &mut usage,
+            &mut stop_reason,
+            &mut request_id,
+            &mut research,
+            None::<&StreamingCallbacks>,
+            false,
+        ).unwrap();
+
+        assert!(matches!(
+            accumulators.get(&0),
+            Some(AnthropicContentAccumulator::ConnectorText { text }) if text == "Initial"
+        ));
+    }
+
+    #[test]
+    fn process_anthropic_event_connector_text_delta_accumulates() {
+        let mut accumulators = BTreeMap::new();
+        accumulators.insert(
+            0,
+            AnthropicContentAccumulator::ConnectorText {
+                text: "Part 1. ".to_owned(),
+            },
+        );
+        let mut usage = UsageSummary::default();
+        let mut stop_reason = "end_turn".to_owned();
+        let mut request_id: Option<String> = None;
+        let mut research: Option<Value> = None;
+
+        let event = json!({
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": { "type": "connector_text_delta", "text": "Part 2." }
+        });
+
+        process_anthropic_event(
+            &event,
+            &mut accumulators,
+            &mut usage,
+            &mut stop_reason,
+            &mut request_id,
+            &mut research,
+            None::<&StreamingCallbacks>,
+            false,
+        ).unwrap();
+
+        assert!(matches!(
+            accumulators.get(&0),
+            Some(AnthropicContentAccumulator::ConnectorText { text }) if text == "Part 1. Part 2."
+        ));
+    }
+
+    #[test]
+    fn finalize_connector_text_block() {
+        let mut accumulators = BTreeMap::new();
+        accumulators.insert(
+            0,
+            AnthropicContentAccumulator::ConnectorText {
+                text: "connector result".to_owned(),
+            },
+        );
+
+        let (raw_text, thinking_text, content_blocks, tool_calls) =
+            finalize_anthropic_content_blocks(accumulators);
+
+        assert_eq!(raw_text, "");
+        assert!(thinking_text.is_none());
+        assert_eq!(content_blocks.len(), 1);
+        assert_eq!(content_blocks[0]["type"], "connector_text");
+        assert_eq!(content_blocks[0]["text"], "connector result");
+        assert!(tool_calls.is_empty());
+    }
+
+    #[test]
+    fn finalize_empty_connector_text_block_is_skipped() {
+        let mut accumulators = BTreeMap::new();
+        accumulators.insert(
+            0,
+            AnthropicContentAccumulator::ConnectorText {
+                text: String::new(),
+            },
+        );
+
+        let (_, _, content_blocks, _) = finalize_anthropic_content_blocks(accumulators);
+        assert!(content_blocks.is_empty());
+    }
+
+    #[test]
+    fn process_anthropic_event_content_block_start_web_search_tool_result() {
+        let mut accumulators = BTreeMap::new();
+        let mut usage = UsageSummary::default();
+        let mut stop_reason = "end_turn".to_owned();
+        let mut request_id: Option<String> = None;
+        let mut research: Option<Value> = None;
+
+        let event = json!({
+            "type": "content_block_start",
+            "index": 2,
+            "content_block": {
+                "type": "web_search_tool_result",
+                "tool_use_id": "srvtoolu_01ABC",
+                "content": [
+                    { "type": "web_search_result", "url": "https://example.com", "title": "Example" }
+                ],
+                "status": "completed"
+            }
+        });
+
+        process_anthropic_event(
+            &event,
+            &mut accumulators,
+            &mut usage,
+            &mut stop_reason,
+            &mut request_id,
+            &mut research,
+            None::<&StreamingCallbacks>,
+            false,
+        ).unwrap();
+
+        assert!(matches!(
+            accumulators.get(&2),
+            Some(AnthropicContentAccumulator::WebSearchToolResult { block })
+                if block["type"] == "web_search_tool_result"
+        ));
+        if let Some(AnthropicContentAccumulator::WebSearchToolResult { block }) =
+            accumulators.get(&2)
+        {
+            assert_eq!(block["tool_use_id"], "srvtoolu_01ABC");
+            assert_eq!(block["status"], "completed");
+        }
+    }
+
+    #[test]
+    fn finalize_web_search_tool_result_block() {
+        let mut accumulators = BTreeMap::new();
+        accumulators.insert(
+            0,
+            AnthropicContentAccumulator::WebSearchToolResult {
+                block: json!({
+                    "type": "web_search_tool_result",
+                    "tool_use_id": "srvtoolu_01XYZ",
+                    "content": [{ "type": "web_search_result", "url": "https://example.com" }],
+                    "status": "completed"
+                }),
+            },
+        );
+
+        let (raw_text, thinking_text, content_blocks, tool_calls) =
+            finalize_anthropic_content_blocks(accumulators);
+
+        assert_eq!(raw_text, "");
+        assert!(thinking_text.is_none());
+        assert_eq!(content_blocks.len(), 1);
+        assert_eq!(content_blocks[0]["type"], "web_search_tool_result");
+        assert_eq!(content_blocks[0]["tool_use_id"], "srvtoolu_01XYZ");
+        assert!(tool_calls.is_empty());
+    }
+
+    #[test]
+    fn process_anthropic_event_citations_delta_accumulates() {
+        let mut accumulators = BTreeMap::new();
+        accumulators.insert(
+            0,
+            AnthropicContentAccumulator::Text {
+                text: "According to ".to_owned(),
+                citations: Vec::new(),
+            },
+        );
+        let mut usage = UsageSummary::default();
+        let mut stop_reason = "end_turn".to_owned();
+        let mut request_id: Option<String> = None;
+        let mut research: Option<Value> = None;
+
+        let event = json!({
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {
+                "type": "citations_delta",
+                "citation": {
+                    "type": "web_search_result",
+                    "cited_text": "the sky is blue",
+                    "document_index": 0,
+                    "document_title": "Science Facts",
+                    "url": "https://example.com/science"
+                }
+            }
+        });
+
+        process_anthropic_event(
+            &event,
+            &mut accumulators,
+            &mut usage,
+            &mut stop_reason,
+            &mut request_id,
+            &mut research,
+            None::<&StreamingCallbacks>,
+            false,
+        ).unwrap();
+
+        if let Some(AnthropicContentAccumulator::Text { text, citations }) =
+            accumulators.get(&0)
+        {
+            assert_eq!(text, "According to ");
+            assert_eq!(citations.len(), 1);
+            assert_eq!(citations[0]["type"], "web_search_result");
+            assert_eq!(citations[0]["cited_text"], "the sky is blue");
+            assert_eq!(citations[0]["url"], "https://example.com/science");
+        } else {
+            panic!("expected Text accumulator");
+        }
+    }
+
+    #[test]
+    fn finalize_text_block_with_citations() {
+        let mut accumulators = BTreeMap::new();
+        accumulators.insert(
+            0,
+            AnthropicContentAccumulator::Text {
+                text: "Cited text".to_owned(),
+                citations: vec![
+                    json!({
+                        "type": "web_search_result",
+                        "cited_text": "source A",
+                        "document_index": 0,
+                        "url": "https://example.com/a"
+                    }),
+                    json!({
+                        "type": "web_search_result",
+                        "cited_text": "source B",
+                        "document_index": 1,
+                        "url": "https://example.com/b"
+                    }),
+                ],
+            },
+        );
+
+        let (raw_text, _, content_blocks, _) =
+            finalize_anthropic_content_blocks(accumulators);
+
+        assert_eq!(raw_text, "Cited text");
+        assert_eq!(content_blocks.len(), 1);
+        assert_eq!(content_blocks[0]["type"], "text");
+        let citations = content_blocks[0]["citations"].as_array().unwrap();
+        assert_eq!(citations.len(), 2);
+        assert_eq!(citations[0]["cited_text"], "source A");
+        assert_eq!(citations[1]["cited_text"], "source B");
+    }
+
+    #[test]
+    fn finalize_text_block_without_citations_omits_field() {
+        let mut accumulators = BTreeMap::new();
+        accumulators.insert(
+            0,
+            AnthropicContentAccumulator::Text {
+                text: "No citations".to_owned(),
+                citations: Vec::new(),
+            },
+        );
+
+        let (_, _, content_blocks, _) = finalize_anthropic_content_blocks(accumulators);
+
+        assert_eq!(content_blocks.len(), 1);
+        // When citations are empty, the field should not be present.
+        assert!(content_blocks[0].get("citations").is_none());
+    }
+
+    #[test]
+    fn process_anthropic_event_message_start_extracts_research() {
+        let mut accumulators = BTreeMap::new();
+        let mut usage = UsageSummary::default();
+        let mut stop_reason = "end_turn".to_owned();
+        let mut request_id: Option<String> = None;
+        let mut research: Option<Value> = None;
+
+        let event = json!({
+            "type": "message_start",
+            "message": {
+                "id": "msg-research-1",
+                "research": {
+                    "status": "in_progress",
+                    "query": "latest AI breakthroughs"
+                },
+                "usage": { "input_tokens": 50 }
+            }
+        });
+
+        process_anthropic_event(
+            &event,
+            &mut accumulators,
+            &mut usage,
+            &mut stop_reason,
+            &mut request_id,
+            &mut research,
+            None::<&StreamingCallbacks>,
+            false,
+        ).unwrap();
+
+        let r = research.expect("research should be extracted");
+        assert_eq!(r["status"], "in_progress");
+        assert_eq!(r["query"], "latest AI breakthroughs");
+    }
+
+    #[test]
+    fn process_anthropic_event_message_start_research_not_overwritten() {
+        let mut accumulators = BTreeMap::new();
+        let mut usage = UsageSummary::default();
+        let mut stop_reason = "end_turn".to_owned();
+        let mut request_id: Option<String> = None;
+        let mut research: Option<Value> = Some(json!({"status": "original"}));
+
+        let event = json!({
+            "type": "message_start",
+            "message": {
+                "id": "msg-research-2",
+                "research": { "status": "new" },
+                "usage": { "input_tokens": 50 }
+            }
+        });
+
+        process_anthropic_event(
+            &event,
+            &mut accumulators,
+            &mut usage,
+            &mut stop_reason,
+            &mut request_id,
+            &mut research,
+            None::<&StreamingCallbacks>,
+            false,
+        ).unwrap();
+
+        // Should keep the original research value.
+        assert_eq!(research.unwrap()["status"], "original");
+    }
+
+    #[test]
+    fn process_anthropic_event_message_start_no_research() {
+        let mut accumulators = BTreeMap::new();
+        let mut usage = UsageSummary::default();
+        let mut stop_reason = "end_turn".to_owned();
+        let mut request_id: Option<String> = None;
+        let mut research: Option<Value> = None;
+
+        let event = json!({
+            "type": "message_start",
+            "message": {
+                "id": "msg-no-research",
+                "usage": { "input_tokens": 50 }
+            }
+        });
+
+        process_anthropic_event(
+            &event,
+            &mut accumulators,
+            &mut usage,
+            &mut stop_reason,
+            &mut request_id,
+            &mut research,
+            None::<&StreamingCallbacks>,
+            false,
+        ).unwrap();
+
+        assert!(research.is_none());
     }
 }

@@ -63,7 +63,12 @@ impl EnginePhase {
                 Self::Failed,
                 Self::Cancelled,
             ],
-            Self::ExecutingTools => &[Self::Finalizing, Self::Failed, Self::Cancelled],
+            Self::ExecutingTools => &[
+                Self::BuildingPrompt,
+                Self::Finalizing,
+                Self::Failed,
+                Self::Cancelled,
+            ],
             Self::Compacting => &[Self::BuildingPrompt, Self::Failed, Self::Cancelled],
             Self::Finalizing => &[Self::Idle],
             Self::Failed => &[Self::Idle],
@@ -90,12 +95,53 @@ impl std::fmt::Display for EnginePhase {
     }
 }
 
+/// Reason for a phase transition, matching TS `State.transition.reason`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum TransitionReason {
+    /// Normal continuation to the next turn.
+    NextTurn,
+    /// Retrying after a collapse-drain recovery attempt.
+    CollapseDrainRetry,
+    /// Retrying after a reactive compaction.
+    ReactiveCompactRetry,
+    /// Escalating max_output_tokens to a higher value.
+    MaxOutputTokensEscalate,
+    /// Recovering from max_output_tokens by adjusting the limit.
+    MaxOutputTokensRecovery,
+    /// A stop hook is blocking continuation.
+    StopHookBlocking,
+    /// Continuing because the token budget has remaining capacity.
+    TokenBudgetContinuation,
+    /// No specific reason provided.
+    #[default]
+    Unspecified,
+}
+
+impl std::fmt::Display for TransitionReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let name = match self {
+            Self::NextTurn => "next_turn",
+            Self::CollapseDrainRetry => "collapse_drain_retry",
+            Self::ReactiveCompactRetry => "reactive_compact_retry",
+            Self::MaxOutputTokensEscalate => "max_output_tokens_escalate",
+            Self::MaxOutputTokensRecovery => "max_output_tokens_recovery",
+            Self::StopHookBlocking => "stop_hook_blocking",
+            Self::TokenBudgetContinuation => "token_budget_continuation",
+            Self::Unspecified => "unspecified",
+        };
+        f.write_str(name)
+    }
+}
+
 /// A recorded phase transition for audit/debugging.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PhaseTransition {
     pub from: EnginePhase,
     pub to: EnginePhase,
     pub timestamp: chrono::DateTime<chrono::Utc>,
+    /// Why this transition happened. Matches TS `State.transition.reason`.
+    pub reason: TransitionReason,
 }
 
 /// Error returned when an invalid transition is attempted.
@@ -138,6 +184,15 @@ impl StateMachine {
     /// Attempt to transition to a new phase. Returns an error if the
     /// transition is not valid from the current phase.
     pub fn transition(&mut self, target: EnginePhase) -> Result<(), InvalidTransition> {
+        self.transition_with_reason(target, TransitionReason::Unspecified)
+    }
+
+    /// Attempt to transition to a new phase with an explicit reason.
+    pub fn transition_with_reason(
+        &mut self,
+        target: EnginePhase,
+        reason: TransitionReason,
+    ) -> Result<(), InvalidTransition> {
         let valid = self.phase.valid_transitions();
         if !valid.contains(&target) {
             return Err(InvalidTransition {
@@ -149,6 +204,7 @@ impl StateMachine {
             from: self.phase,
             to: target,
             timestamp: chrono::Utc::now(),
+            reason,
         };
         self.phase = target;
         self.transitions.push(record);
@@ -157,11 +213,17 @@ impl StateMachine {
 
     /// Force-set the phase without validation. Used for error recovery.
     pub fn force_set(&mut self, phase: EnginePhase) {
+        self.force_set_with_reason(phase, TransitionReason::Unspecified);
+    }
+
+    /// Force-set the phase with an explicit reason.
+    pub fn force_set_with_reason(&mut self, phase: EnginePhase, reason: TransitionReason) {
         if self.phase != phase {
             let record = PhaseTransition {
                 from: self.phase,
                 to: phase,
                 timestamp: chrono::Utc::now(),
+                reason,
             };
             self.phase = phase;
             self.transitions.push(record);
@@ -230,6 +292,27 @@ mod tests {
         sm.transition(EnginePhase::Idle)
             .expect("finalizing -> idle");
         assert_eq!(sm.transition_count(), 7);
+    }
+
+    #[test]
+    fn state_machine_multi_turn_loop_back() {
+        let mut sm = StateMachine::new();
+        sm.transition(EnginePhase::Initializing)
+            .expect("transition");
+        sm.transition(EnginePhase::BuildingPrompt)
+            .expect("transition");
+        sm.transition(EnginePhase::CallingProvider)
+            .expect("transition");
+        sm.transition(EnginePhase::ProcessingResponse)
+            .expect("transition");
+        sm.transition(EnginePhase::ExecutingTools)
+            .expect("transition");
+        // Loop back for next turn
+        sm.transition(EnginePhase::BuildingPrompt)
+            .expect("executing_tools -> building_prompt loop-back");
+        sm.transition(EnginePhase::CallingProvider)
+            .expect("transition");
+        assert_eq!(sm.phase(), EnginePhase::CallingProvider);
     }
 
     #[test]

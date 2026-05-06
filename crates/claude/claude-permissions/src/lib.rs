@@ -419,7 +419,8 @@ impl<B: PermissionBroker + std::fmt::Debug> PermissionBroker for LayeredPermissi
             return match session_mode {
                 claude_core::PermissionMode::BypassPermissions
                 | claude_core::PermissionMode::AcceptEdits
-                | claude_core::PermissionMode::Default => {
+                | claude_core::PermissionMode::Default
+                | claude_core::PermissionMode::Auto => {
                     self.fallback.decide_forced_prompt(request).await
                 }
                 claude_core::PermissionMode::DontAsk => {
@@ -708,7 +709,10 @@ fn extended_permission_mode_to_core_mode(
             claude_core::PermissionMode::BypassPermissions
         }
         crate::mode::ExtendedPermissionMode::DontAsk => claude_core::PermissionMode::DontAsk,
-        crate::mode::ExtendedPermissionMode::Auto | crate::mode::ExtendedPermissionMode::Bubble => {
+        crate::mode::ExtendedPermissionMode::Auto => {
+            claude_core::PermissionMode::Auto
+        }
+        crate::mode::ExtendedPermissionMode::Bubble => {
             claude_core::PermissionMode::Default
         }
     }
@@ -833,6 +837,9 @@ pub fn auto_allows(mode: claude_core::PermissionMode, class: PermissionClass) ->
         }
         PermissionMode::Default | PermissionMode::Plan | PermissionMode::DontAsk => {
             matches!(class, PermissionClass::Read)
+        }
+        PermissionMode::Auto => {
+            matches!(class, PermissionClass::Read | PermissionClass::Edit)
         }
     }
 }

@@ -24,6 +24,10 @@ pub enum McpTransport {
 }
 
 /// Configuration for a specific MCP transport.
+///
+/// Supports all 8 transport variants defined by the upstream Claude Code
+/// specification: Stdio, Sse, SseIde, Http, WebSocket, WsIde, Sdk, and
+/// ClaudeAiProxy.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "transport", rename_all = "snake_case")]
 pub enum McpTransportConfig {
@@ -41,6 +45,37 @@ pub enum McpTransportConfig {
         #[serde(default)]
         env: BTreeMap<String, String>,
     },
+    /// Connect via Server-Sent Events (SSE).
+    ///
+    /// Receives JSON-RPC responses as SSE `data:` events on a persistent GET
+    /// connection and sends JSON-RPC requests via HTTP POST to the same endpoint.
+    Sse {
+        /// SSE endpoint URL.
+        url: String,
+        /// Additional HTTP headers.
+        #[serde(default)]
+        headers: BTreeMap<String, String>,
+        /// Optional path to a helper script that returns dynamic headers as JSON.
+        /// The script is called with (server_name, url) and should print a JSON
+        /// object of `{"key": "value"}` to stdout.
+        #[serde(default)]
+        headers_helper: Option<String>,
+    },
+    /// SSE via IDE integration.
+    ///
+    /// Like [`Sse`](McpTransportConfig::Sse) but configured by an IDE plugin
+    /// (e.g. VS Code, JetBrains) that manages the SSE connection lifecycle.
+    #[serde(rename = "sse-ide")]
+    SseIde {
+        /// SSE endpoint URL provided by the IDE.
+        url: String,
+        /// Name of the IDE that started this server (e.g. "vscode", "cursor").
+        #[serde(default)]
+        ide_name: Option<String>,
+        /// Whether the IDE is running inside a Windows environment.
+        #[serde(default)]
+        ide_running_in_windows: Option<bool>,
+    },
     /// Connect to an HTTP endpoint.
     Http {
         /// Server URL.
@@ -48,6 +83,9 @@ pub enum McpTransportConfig {
         /// Additional HTTP headers.
         #[serde(default)]
         headers: BTreeMap<String, String>,
+        /// Optional path to a helper script that returns dynamic headers as JSON.
+        #[serde(default)]
+        headers_helper: Option<String>,
     },
     /// Connect via WebSocket.
     WebSocket {
@@ -56,6 +94,49 @@ pub enum McpTransportConfig {
         /// Additional HTTP headers.
         #[serde(default)]
         headers: BTreeMap<String, String>,
+        /// Optional path to a helper script that returns dynamic headers as JSON.
+        #[serde(default)]
+        headers_helper: Option<String>,
+    },
+    /// WebSocket via IDE integration.
+    ///
+    /// Like [`WebSocket`](McpTransportConfig::WebSocket) but configured by an
+    /// IDE plugin that provides additional auth and environment metadata.
+    #[serde(rename = "ws-ide")]
+    WsIde {
+        /// WebSocket URL provided by the IDE.
+        url: String,
+        /// Name of the IDE that started this server.
+        #[serde(default)]
+        ide_name: Option<String>,
+        /// Authentication token for the WebSocket handshake.
+        #[serde(default)]
+        auth_token: Option<String>,
+        /// Whether the IDE is running inside a Windows environment.
+        #[serde(default)]
+        ide_running_in_windows: Option<bool>,
+    },
+    /// In-process SDK transport.
+    ///
+    /// Represents an MCP server that runs in the same process via an SDK
+    /// integration.  No network or child-process I/O is involved.
+    Sdk {
+        /// Logical name of the in-process SDK server.
+        #[serde(default)]
+        name: Option<String>,
+    },
+    /// Claude.ai proxy transport.
+    ///
+    /// Routes requests through the Claude.ai web proxy so that API calls are
+    /// made on behalf of the user's claude.ai session.
+    #[serde(rename = "claudeai-proxy")]
+    ClaudeAiProxy {
+        /// Proxy endpoint URL.
+        #[serde(default)]
+        url: Option<String>,
+        /// Identifier for the claude.ai proxy session.
+        #[serde(default)]
+        id: Option<String>,
     },
 }
 
@@ -65,8 +146,70 @@ impl McpTransportConfig {
     pub fn kind(&self) -> McpTransport {
         match self {
             Self::Stdio { .. } => McpTransport::Stdio,
-            Self::Http { .. } => McpTransport::Http,
-            Self::WebSocket { .. } => McpTransport::WebSocket,
+            Self::Sse { .. } | Self::SseIde { .. } | Self::Http { .. } => McpTransport::Http,
+            Self::WebSocket { .. } | Self::WsIde { .. } => McpTransport::WebSocket,
+            Self::Sdk { .. } | Self::ClaudeAiProxy { .. } => McpTransport::Stdio,
+        }
+    }
+
+    /// Return the extended transport kind for this configuration.
+    #[must_use]
+    pub fn extended_kind(&self) -> McpTransportKind {
+        match self {
+            Self::Stdio { .. } => McpTransportKind::Stdio,
+            Self::Sse { .. } => McpTransportKind::Sse,
+            Self::SseIde { .. } => McpTransportKind::SseIde,
+            Self::Http { .. } => McpTransportKind::Http,
+            Self::WebSocket { .. } => McpTransportKind::WebSocket,
+            Self::WsIde { .. } => McpTransportKind::WsIde,
+            Self::Sdk { .. } => McpTransportKind::Sdk,
+            Self::ClaudeAiProxy { .. } => McpTransportKind::ClaudeAiProxy,
+        }
+    }
+
+    /// Return the URL if this is a remote transport (SSE/HTTP/WebSocket/IDE variants).
+    #[must_use]
+    pub fn url(&self) -> Option<&str> {
+        match self {
+            Self::Sse { url, .. }
+            | Self::SseIde { url, .. }
+            | Self::Http { url, .. }
+            | Self::WebSocket { url, .. }
+            | Self::WsIde { url, .. } => Some(url),
+            Self::Stdio { .. } | Self::Sdk { .. } => None,
+            Self::ClaudeAiProxy { url, .. } => url.as_deref(),
+        }
+    }
+
+    /// Return the headers if this is a remote transport with headers (SSE/HTTP/WebSocket).
+    #[must_use]
+    pub fn headers(&self) -> Option<&BTreeMap<String, String>> {
+        match self {
+            Self::Sse { headers, .. }
+            | Self::Http { headers, .. }
+            | Self::WebSocket { headers, .. } => Some(headers),
+            Self::Stdio { .. }
+            | Self::SseIde { .. }
+            | Self::WsIde { .. }
+            | Self::Sdk { .. }
+            | Self::ClaudeAiProxy { .. } => None,
+        }
+    }
+
+    /// Return the headers_helper path if this is a remote transport with one set.
+    #[must_use]
+    pub fn headers_helper(&self) -> Option<&str> {
+        match self {
+            Self::Sse { headers_helper, .. }
+            | Self::Http { headers_helper, .. }
+            | Self::WebSocket { headers_helper, .. } => {
+                headers_helper.as_deref()
+            }
+            Self::Stdio { .. }
+            | Self::SseIde { .. }
+            | Self::WsIde { .. }
+            | Self::Sdk { .. }
+            | Self::ClaudeAiProxy { .. } => None,
         }
     }
 }
@@ -269,6 +412,7 @@ mod tests {
         let http = McpTransportConfig::Http {
             url: "https://example.com".to_owned(),
             headers: BTreeMap::new(),
+            headers_helper: None,
         };
         assert_eq!(http.kind(), McpTransport::Http);
     }

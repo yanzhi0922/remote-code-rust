@@ -11,12 +11,14 @@ use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
+use futures::{SinkExt, StreamExt};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 use tokio::time::timeout;
+use tokio_tungstenite::{connect_async, tungstenite};
 use walkdir::WalkDir;
 
 use crate::config::{McpConfig, McpServerConfig};
@@ -67,11 +69,36 @@ pub async fn inspect_server(
             cwd,
             env,
         } => inspect_stdio_server(server, command, args, cwd.as_deref(), env, client_info).await,
-        McpTransportConfig::Http { url, headers }
-        | McpTransportConfig::WebSocket { url, headers } => {
+        McpTransportConfig::Sse { url, headers, .. } => {
+            let mut session =
+                RemoteMcpSession::connect_sse(server, url, headers, client_info).await?;
+            session.inspect_server().await
+        }
+        McpTransportConfig::Http { url, headers, .. } => {
             let mut session =
                 RemoteMcpSession::connect_http(server, url, headers, client_info).await?;
             session.inspect_server().await
+        }
+        McpTransportConfig::WebSocket { url, headers, .. } => {
+            let mut session =
+                WebSocketMcpSession::connect(server, url, headers, client_info).await?;
+            session.inspect_server().await
+        }
+        McpTransportConfig::SseIde { url, .. } => {
+            let mut session =
+                RemoteMcpSession::connect_sse(server, url, &BTreeMap::new(), client_info).await?;
+            session.inspect_server().await
+        }
+        McpTransportConfig::WsIde { url, .. } => {
+            let mut session =
+                WebSocketMcpSession::connect(server, url, &BTreeMap::new(), client_info).await?;
+            session.inspect_server().await
+        }
+        McpTransportConfig::Sdk { .. } | McpTransportConfig::ClaudeAiProxy { .. } => {
+            Err(McpRuntimeError::UnsupportedTransport {
+                server: server.name.clone(),
+                transport: server.transport.kind(),
+            })
         }
     }
 }
@@ -97,11 +124,36 @@ pub async fn call_tool(
             session.shutdown().await;
             result
         }
-        McpTransportConfig::Http { url, headers }
-        | McpTransportConfig::WebSocket { url, headers } => {
+        McpTransportConfig::Sse { url, headers, .. } => {
+            let mut session =
+                RemoteMcpSession::connect_sse(server, url, headers, client_info).await?;
+            session.call_tool(tool_name, arguments).await
+        }
+        McpTransportConfig::Http { url, headers, .. } => {
             let mut session =
                 RemoteMcpSession::connect_http(server, url, headers, client_info).await?;
             session.call_tool(tool_name, arguments).await
+        }
+        McpTransportConfig::WebSocket { url, headers, .. } => {
+            let mut session =
+                WebSocketMcpSession::connect(server, url, headers, client_info).await?;
+            session.call_tool(tool_name, arguments).await
+        }
+        McpTransportConfig::SseIde { url, .. } => {
+            let mut session =
+                RemoteMcpSession::connect_sse(server, url, &BTreeMap::new(), client_info).await?;
+            session.call_tool(tool_name, arguments).await
+        }
+        McpTransportConfig::WsIde { url, .. } => {
+            let mut session =
+                WebSocketMcpSession::connect(server, url, &BTreeMap::new(), client_info).await?;
+            session.call_tool(tool_name, arguments).await
+        }
+        McpTransportConfig::Sdk { .. } | McpTransportConfig::ClaudeAiProxy { .. } => {
+            Err(McpRuntimeError::UnsupportedTransport {
+                server: server.name.clone(),
+                transport: server.transport.kind(),
+            })
         }
     }
 }
@@ -128,11 +180,36 @@ pub async fn list_resources(
             session.shutdown().await;
             result
         }
-        McpTransportConfig::Http { url, headers }
-        | McpTransportConfig::WebSocket { url, headers } => {
+        McpTransportConfig::Sse { url, headers, .. } => {
+            let mut session =
+                RemoteMcpSession::connect_sse(server, url, headers, client_info).await?;
+            session.list_resources().await
+        }
+        McpTransportConfig::Http { url, headers, .. } => {
             let mut session =
                 RemoteMcpSession::connect_http(server, url, headers, client_info).await?;
             session.list_resources().await
+        }
+        McpTransportConfig::WebSocket { url, headers, .. } => {
+            let mut session =
+                WebSocketMcpSession::connect(server, url, headers, client_info).await?;
+            session.list_resources().await
+        }
+        McpTransportConfig::SseIde { url, .. } => {
+            let mut session =
+                RemoteMcpSession::connect_sse(server, url, &BTreeMap::new(), client_info).await?;
+            session.list_resources().await
+        }
+        McpTransportConfig::WsIde { url, .. } => {
+            let mut session =
+                WebSocketMcpSession::connect(server, url, &BTreeMap::new(), client_info).await?;
+            session.list_resources().await
+        }
+        McpTransportConfig::Sdk { .. } | McpTransportConfig::ClaudeAiProxy { .. } => {
+            Err(McpRuntimeError::UnsupportedTransport {
+                server: server.name.clone(),
+                transport: server.transport.kind(),
+            })
         }
     }
 }
@@ -156,11 +233,36 @@ pub async fn list_prompts(
             session.shutdown().await;
             result
         }
-        McpTransportConfig::Http { url, headers }
-        | McpTransportConfig::WebSocket { url, headers } => {
+        McpTransportConfig::Sse { url, headers, .. } => {
+            let mut session =
+                RemoteMcpSession::connect_sse(server, url, headers, client_info).await?;
+            session.list_prompts().await
+        }
+        McpTransportConfig::Http { url, headers, .. } => {
             let mut session =
                 RemoteMcpSession::connect_http(server, url, headers, client_info).await?;
             session.list_prompts().await
+        }
+        McpTransportConfig::WebSocket { url, headers, .. } => {
+            let mut session =
+                WebSocketMcpSession::connect(server, url, headers, client_info).await?;
+            session.list_prompts().await
+        }
+        McpTransportConfig::SseIde { url, .. } => {
+            let mut session =
+                RemoteMcpSession::connect_sse(server, url, &BTreeMap::new(), client_info).await?;
+            session.list_prompts().await
+        }
+        McpTransportConfig::WsIde { url, .. } => {
+            let mut session =
+                WebSocketMcpSession::connect(server, url, &BTreeMap::new(), client_info).await?;
+            session.list_prompts().await
+        }
+        McpTransportConfig::Sdk { .. } | McpTransportConfig::ClaudeAiProxy { .. } => {
+            Err(McpRuntimeError::UnsupportedTransport {
+                server: server.name.clone(),
+                transport: server.transport.kind(),
+            })
         }
     }
 }
@@ -186,11 +288,36 @@ pub async fn get_prompt(
             session.shutdown().await;
             result
         }
-        McpTransportConfig::Http { url, headers }
-        | McpTransportConfig::WebSocket { url, headers } => {
+        McpTransportConfig::Sse { url, headers, .. } => {
+            let mut session =
+                RemoteMcpSession::connect_sse(server, url, headers, client_info).await?;
+            session.get_prompt(prompt_name, arguments).await
+        }
+        McpTransportConfig::Http { url, headers, .. } => {
             let mut session =
                 RemoteMcpSession::connect_http(server, url, headers, client_info).await?;
             session.get_prompt(prompt_name, arguments).await
+        }
+        McpTransportConfig::WebSocket { url, headers, .. } => {
+            let mut session =
+                WebSocketMcpSession::connect(server, url, headers, client_info).await?;
+            session.get_prompt(prompt_name, arguments).await
+        }
+        McpTransportConfig::SseIde { url, .. } => {
+            let mut session =
+                RemoteMcpSession::connect_sse(server, url, &BTreeMap::new(), client_info).await?;
+            session.get_prompt(prompt_name, arguments).await
+        }
+        McpTransportConfig::WsIde { url, .. } => {
+            let mut session =
+                WebSocketMcpSession::connect(server, url, &BTreeMap::new(), client_info).await?;
+            session.get_prompt(prompt_name, arguments).await
+        }
+        McpTransportConfig::Sdk { .. } | McpTransportConfig::ClaudeAiProxy { .. } => {
+            Err(McpRuntimeError::UnsupportedTransport {
+                server: server.name.clone(),
+                transport: server.transport.kind(),
+            })
         }
     }
 }
@@ -218,11 +345,36 @@ pub async fn read_resource(
             session.shutdown().await;
             result
         }
-        McpTransportConfig::Http { url, headers }
-        | McpTransportConfig::WebSocket { url, headers } => {
+        McpTransportConfig::Sse { url, headers, .. } => {
+            let mut session =
+                RemoteMcpSession::connect_sse(server, url, headers, client_info).await?;
+            session.read_resource(uri).await
+        }
+        McpTransportConfig::Http { url, headers, .. } => {
             let mut session =
                 RemoteMcpSession::connect_http(server, url, headers, client_info).await?;
             session.read_resource(uri).await
+        }
+        McpTransportConfig::WebSocket { url, headers, .. } => {
+            let mut session =
+                WebSocketMcpSession::connect(server, url, headers, client_info).await?;
+            session.read_resource(uri).await
+        }
+        McpTransportConfig::SseIde { url, .. } => {
+            let mut session =
+                RemoteMcpSession::connect_sse(server, url, &BTreeMap::new(), client_info).await?;
+            session.read_resource(uri).await
+        }
+        McpTransportConfig::WsIde { url, .. } => {
+            let mut session =
+                WebSocketMcpSession::connect(server, url, &BTreeMap::new(), client_info).await?;
+            session.read_resource(uri).await
+        }
+        McpTransportConfig::Sdk { .. } | McpTransportConfig::ClaudeAiProxy { .. } => {
+            Err(McpRuntimeError::UnsupportedTransport {
+                server: server.name.clone(),
+                transport: server.transport.kind(),
+            })
         }
     }
 }
@@ -481,7 +633,7 @@ impl StdioMcpSession {
             &request,
         )
         .await?;
-        let result: McpToolCallResult = wait_for_response(
+        let mut result: McpToolCallResult = wait_for_response(
             &mut self.lines,
             &self.server_name,
             2,
@@ -489,6 +641,9 @@ impl StdioMcpSession {
             self.request_timeout_secs,
         )
         .await?;
+
+        // Truncate oversized tool results.
+        crate::types::truncate_tool_call_result(&mut result);
 
         Ok(McpToolCallResponse {
             server_name: self.server_name.clone(),
@@ -757,6 +912,7 @@ async fn shutdown_child(child: &mut Child) {
     let _ = child.wait().await;
 }
 
+
 // ---------------------------------------------------------------------------
 // Persistent MCP client (session reuse)
 // ---------------------------------------------------------------------------
@@ -765,8 +921,10 @@ async fn shutdown_child(child: &mut Child) {
 enum McpClientSession {
     /// An active stdio session (child process kept alive between calls).
     Stdio(Box<StdioMcpSession>),
-    /// An active HTTP/WebSocket session (HTTP client reused between calls).
+    /// An active HTTP/SSE session (HTTP client reused between calls).
     Http(Box<RemoteMcpSession>),
+    /// An active WebSocket session (persistent WebSocket connection).
+    WebSocket(Box<WebSocketMcpSession>),
 }
 
 /// A persistent MCP client that reuses connections across multiple calls.
@@ -828,11 +986,36 @@ impl McpClient {
                 .await?;
                 McpClientSession::Stdio(Box::new(session))
             }
-            McpTransportConfig::Http { url, headers }
-            | McpTransportConfig::WebSocket { url, headers } => {
+            McpTransportConfig::Sse { url, headers, .. } => {
+                let session =
+                    RemoteMcpSession::connect_sse(config, url, headers, client_info).await?;
+                McpClientSession::Http(Box::new(session))
+            }
+            McpTransportConfig::Http { url, headers, .. } => {
                 let session =
                     RemoteMcpSession::connect_http(config, url, headers, client_info).await?;
                 McpClientSession::Http(Box::new(session))
+            }
+            McpTransportConfig::WebSocket { url, headers, .. } => {
+                let session =
+                    WebSocketMcpSession::connect(config, url, headers, client_info).await?;
+                McpClientSession::WebSocket(Box::new(session))
+            }
+            McpTransportConfig::SseIde { url, .. } => {
+                let session =
+                    RemoteMcpSession::connect_sse(config, url, &BTreeMap::new(), client_info).await?;
+                McpClientSession::Http(Box::new(session))
+            }
+            McpTransportConfig::WsIde { url, .. } => {
+                let session =
+                    WebSocketMcpSession::connect(config, url, &BTreeMap::new(), client_info).await?;
+                McpClientSession::WebSocket(Box::new(session))
+            }
+            McpTransportConfig::Sdk { .. } | McpTransportConfig::ClaudeAiProxy { .. } => {
+                return Err(McpRuntimeError::UnsupportedTransport {
+                    server: config.name.clone(),
+                    transport: config.transport.kind(),
+                });
             }
         };
 
@@ -844,20 +1027,54 @@ impl McpClient {
     }
 
     /// Call a tool on the MCP server using the persistent connection.
+    ///
+    /// If the session has expired (HTTP 404 or JSON-RPC error code -32001),
+    /// automatically reconnects and retries the call once.
     pub async fn call_tool(
         &mut self,
         tool_name: &str,
         arguments: Value,
     ) -> Result<McpToolCallResponse, McpRuntimeError> {
-        match self.session.as_mut() {
+        let arguments_clone = arguments.clone();
+        let result = match self.session.as_mut() {
             Some(McpClientSession::Stdio(session)) => session.call_tool(tool_name, arguments).await,
             Some(McpClientSession::Http(session)) => session.call_tool(tool_name, arguments).await,
+            Some(McpClientSession::WebSocket(session)) => session.call_tool(tool_name, arguments).await,
             None => Err(McpRuntimeError::Protocol {
                 server: self.config.name.clone(),
                 phase: "call_tool",
                 message: "session is not connected".to_owned(),
             }),
+        };
+
+        // If the session has expired, reconnect and retry once.
+        if let Err(ref error) = result
+            && crate::error::is_session_expired_error(error)
+        {
+            tracing::info!(
+                server = %self.config.name,
+                "MCP session expired, reconnecting"
+            );
+            self.reconnect().await?;
+            return match self.session.as_mut() {
+                Some(McpClientSession::Stdio(session)) => {
+                    session.call_tool(tool_name, arguments_clone).await
+                }
+                Some(McpClientSession::Http(session)) => {
+                    session.call_tool(tool_name, arguments_clone).await
+                }
+                Some(McpClientSession::WebSocket(session)) => {
+                    session.call_tool(tool_name, arguments_clone).await
+                }
+                None => Err(McpRuntimeError::Protocol {
+                    server: self.config.name.clone(),
+                    phase: "call_tool",
+                    message: "session is not connected after reconnection".to_owned(),
+                }),
+            };
         }
+
+        result
     }
 
     /// List tools available on the MCP server.
@@ -889,8 +1106,8 @@ impl McpClient {
                 .await?;
                 Ok(result.tools)
             }
-            Some(McpClientSession::Http(_)) => {
-                // For HTTP, we can do a fresh tools/list request
+            Some(McpClientSession::Http(_)) | Some(McpClientSession::WebSocket(_)) => {
+                // For HTTP/WebSocket, we can do a fresh tools/list request
                 let rpc_id = REMOTE_RPC_ID.fetch_add(1, Ordering::Relaxed);
                 let request = JsonRpcRequest {
                     jsonrpc: "2.0",
@@ -934,6 +1151,7 @@ impl McpClient {
         match self.session.as_mut() {
             Some(McpClientSession::Stdio(session)) => session.list_resources().await,
             Some(McpClientSession::Http(session)) => session.list_resources().await,
+            Some(McpClientSession::WebSocket(session)) => session.list_resources().await,
             None => Err(McpRuntimeError::Protocol {
                 server: self.config.name.clone(),
                 phase: "list_resources",
@@ -947,6 +1165,7 @@ impl McpClient {
         match self.session.as_mut() {
             Some(McpClientSession::Stdio(session)) => session.list_prompts().await,
             Some(McpClientSession::Http(session)) => session.list_prompts().await,
+            Some(McpClientSession::WebSocket(session)) => session.list_prompts().await,
             None => Err(McpRuntimeError::Protocol {
                 server: self.config.name.clone(),
                 phase: "list_prompts",
@@ -960,12 +1179,22 @@ impl McpClient {
         match self.session.as_mut() {
             Some(McpClientSession::Stdio(session)) => session.inspect_server().await,
             Some(McpClientSession::Http(session)) => session.inspect_server().await,
+            Some(McpClientSession::WebSocket(session)) => session.inspect_server().await,
             None => Err(McpRuntimeError::Protocol {
                 server: self.config.name.clone(),
                 phase: "inspect",
                 message: "session is not connected".to_owned(),
             }),
         }
+    }
+
+    /// Reconnect to the MCP server by shutting down the current session
+    /// and establishing a new one.
+    pub async fn reconnect(&mut self) -> Result<(), McpRuntimeError> {
+        self.shutdown().await;
+        let mut new_client = McpClient::connect(&self.config, &self.client_info).await?;
+        self.session = std::mem::take(&mut new_client.session);
+        Ok(())
     }
 
     /// Check if the client has an active session.
@@ -983,8 +1212,8 @@ impl McpClient {
                 McpClientSession::Stdio(mut s) => {
                     s.shutdown().await;
                 }
-                McpClientSession::Http(_) => {
-                    // HTTP client is dropped automatically
+                McpClientSession::Http(_) | McpClientSession::WebSocket(_) => {
+                    // HTTP/WebSocket clients are dropped automatically
                 }
             }
         }
@@ -1045,6 +1274,14 @@ impl RemoteMcpSession {
             .request_timeout_secs
             .unwrap_or(DEFAULT_REQUEST_TIMEOUT_SECS);
 
+        // Resolve headers dynamically if a headers_helper is configured.
+        let resolved_headers = match &server.transport {
+            McpTransportConfig::Http { headers_helper: Some(helper), .. } => {
+                resolve_headers_with_helper(&server.name, None, headers).await
+            }
+            _ => headers.clone(),
+        };
+
         // Build the initialization request using the generic JsonRpcRequest<T>.
         let rpc_id = REMOTE_RPC_ID.fetch_add(1, Ordering::Relaxed);
         let init_params = InitializeParams {
@@ -1060,6 +1297,71 @@ impl RemoteMcpSession {
         };
 
         let response = send_http_request(
+            &http,
+            url,
+            headers,
+            &init_request,
+            request_timeout_secs,
+            &server.name,
+            "initialize",
+        )
+        .await?;
+
+        let init_result: McpInitializeResult =
+            parse_jsonrpc_result(&response, &server.name, "initialize")?;
+
+        // Send initialized notification (fire-and-forget).
+        let initialized_notification = JsonRpcNotification {
+            jsonrpc: "2.0",
+            method: "notifications/initialized",
+            params: serde_json::json!({}),
+        };
+        let _ =
+            send_http_notification(&http, url, headers, &initialized_notification, &server.name)
+                .await;
+
+        Ok(Self {
+            server_name: server.name.clone(),
+            url: url.to_owned(),
+            headers: headers.clone(),
+            http,
+            initialized: init_result,
+            request_timeout_secs,
+        })
+    }
+
+    /// Connect to a remote MCP server via SSE (Server-Sent Events) transport.
+    ///
+    /// SSE transport connects to an HTTP endpoint, receives JSON-RPC responses
+    /// as SSE `data:` events on a persistent GET connection, and sends
+    /// JSON-RPC requests via HTTP POST to the same endpoint.
+    pub async fn connect_sse(
+        server: &McpServerConfig,
+        url: &str,
+        headers: &BTreeMap<String, String>,
+        client_info: &McpClientInfo,
+    ) -> Result<Self, McpRuntimeError> {
+        let http = reqwest::Client::new();
+        let request_timeout_secs = server
+            .request_timeout_secs
+            .unwrap_or(DEFAULT_REQUEST_TIMEOUT_SECS);
+
+        // Build the initialization request.
+        let rpc_id = REMOTE_RPC_ID.fetch_add(1, Ordering::Relaxed);
+        let init_params = InitializeParams {
+            protocol_version: DEFAULT_MCP_PROTOCOL_VERSION,
+            capabilities: serde_json::json!({}),
+            client_info,
+        };
+        let init_request = JsonRpcRequest {
+            jsonrpc: "2.0",
+            id: rpc_id,
+            method: "initialize",
+            params: init_params,
+        };
+
+        // Send initialize via POST and parse the SSE response.
+        let response = send_sse_request(
             &http,
             url,
             headers,
@@ -1180,8 +1482,11 @@ impl RemoteMcpSession {
         )
         .await?;
 
-        let result: McpToolCallResult =
+        let mut result: McpToolCallResult =
             parse_jsonrpc_result(&response, &self.server_name, "tools/call")?;
+
+        // Truncate oversized tool results.
+        crate::types::truncate_tool_call_result(&mut result);
 
         Ok(McpToolCallResponse {
             server_name: self.server_name.clone(),
@@ -1440,6 +1745,116 @@ async fn send_http_notification<T: Serialize>(
     Ok(())
 }
 
+/// Send a JSON-RPC request via SSE transport (HTTP POST) and parse the SSE
+/// response, extracting the JSON-RPC payload from `data:` lines.
+///
+/// SSE transport sends requests via HTTP POST and receives responses as
+/// Server-Sent Events. Each SSE event has a `data:` line containing the
+/// JSON-RPC response. This function:
+/// 1. POSTs the JSON-RPC request to the endpoint
+/// 2. Reads the response body as an SSE stream
+/// 3. Extracts the first `data:` line that parses as a JSON-RPC response
+async fn send_sse_request<T: Serialize>(
+    http: &reqwest::Client,
+    url: &str,
+    headers: &BTreeMap<String, String>,
+    request: &T,
+    timeout_secs: u64,
+    server_name: &str,
+    phase: &'static str,
+) -> Result<String, McpRuntimeError> {
+    // Send the JSON-RPC request via HTTP POST.
+    let response = send_http_request(http, url, headers, request, timeout_secs, server_name, phase)
+        .await?;
+
+    // Check if the response is SSE (text/event-stream) or plain JSON.
+    // If the response contains SSE `data:` lines, extract the first one.
+    // Otherwise treat it as a plain JSON-RPC response.
+    let payload = if response.contains("data:") {
+        // Parse SSE events — extract the first data line with valid JSON-RPC content.
+        let mut found = None;
+        for line in response.lines() {
+            let line = line.trim();
+            if let Some(data) = line.strip_prefix("data:") {
+                let data = data.trim();
+                if !data.is_empty() && data.starts_with('{') {
+                    found = Some(data.to_owned());
+                    break;
+                }
+            }
+        }
+        match found {
+            Some(data) => data,
+            None => {
+                return Err(McpRuntimeError::Protocol {
+                    server: server_name.to_owned(),
+                    phase,
+                    message: "SSE response did not contain a valid data event".to_owned(),
+                });
+            }
+        }
+    } else {
+        // Plain JSON response — return as-is.
+        response
+    };
+
+    // Check for session-expiry-indicating error codes in the response.
+    // -32000 covers ConnectionClosed and RequestTimeout in MCP SSE transport.
+    check_sse_session_errors(&payload, server_name, phase)?;
+
+    Ok(payload)
+}
+
+/// JSON-RPC error code used by MCP SSE transport for connection-closed and
+/// request-timeout conditions. When the server returns this code the client
+/// should treat the session as expired and reconnect.
+const MCP_SSE_CONNECTION_ERROR_CODE: i64 = -32000;
+
+/// Inspect a raw SSE JSON-RPC payload for error codes that indicate the
+/// session should be expired. Returns `Ok(())` if no such error is found.
+fn check_sse_session_errors(
+    payload: &str,
+    server_name: &str,
+    phase: &'static str,
+) -> Result<(), McpRuntimeError> {
+    let envelope: JsonRpcEnvelope = match serde_json::from_str(payload) {
+        Ok(e) => e,
+        // Not valid JSON — nothing to check.
+        Err(_) => return Ok(()),
+    };
+    if let Some(error) = &envelope.error {
+        if error.code == MCP_SSE_CONNECTION_ERROR_CODE {
+            let msg = error.message.to_lowercase();
+            // Distinguish between connection-closed and request-timeout.
+            if msg.contains("connection closed") || msg.contains("connectionclosed") {
+                tracing::warn!(
+                    server = %server_name,
+                    "MCP SSE connection closed by server (code {})", error.code
+                );
+                return Err(McpRuntimeError::JsonRpc {
+                    server: server_name.to_owned(),
+                    phase,
+                    code: error.code,
+                    message: error.message.clone(),
+                });
+            }
+            if msg.contains("request timeout") || msg.contains("requesttimeout") {
+                tracing::warn!(
+                    server = %server_name,
+                    "MCP SSE request timeout from server (code {})", error.code
+                );
+                return Err(McpRuntimeError::JsonRpc {
+                    server: server_name.to_owned(),
+                    phase,
+                    code: error.code,
+                    message: error.message.clone(),
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Parse a JSON-RPC response body into the expected result type.
 fn parse_jsonrpc_result<T: DeserializeOwned>(
     body: &str,
@@ -1471,6 +1886,531 @@ fn parse_jsonrpc_result<T: DeserializeOwned>(
     })
 }
 
+// ---------------------------------------------------------------------------
+// WebSocket MCP session
+// ---------------------------------------------------------------------------
+
+/// Type alias for the WebSocket stream used by MCP sessions.
+type WsStream =
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
+
+/// An MCP session over a persistent WebSocket connection.
+///
+/// Connects via WebSocket to the MCP server endpoint, sends the MCP initialize
+/// message as JSON, reads the response, and then uses the same connection for
+/// all subsequent JSON-RPC requests.
+pub(crate) struct WebSocketMcpSession {
+    /// Server name (for error messages).
+    server_name: String,
+    /// WebSocket URL.
+    url: String,
+    /// Additional HTTP headers.
+    headers: BTreeMap<String, String>,
+    /// The WebSocket stream (split sink + stream combined).
+    ws: WsStream,
+    /// Result of the initialization handshake.
+    initialized: McpInitializeResult,
+    /// Request timeout in seconds.
+    request_timeout_secs: u64,
+}
+
+impl WebSocketMcpSession {
+    /// Connect to a remote MCP server via WebSocket transport.
+    ///
+    /// Performs the initialization handshake and returns a ready-to-use
+    /// session with the persistent WebSocket connection.
+    pub async fn connect(
+        server: &McpServerConfig,
+        url: &str,
+        headers: &BTreeMap<String, String>,
+        client_info: &McpClientInfo,
+    ) -> Result<Self, McpRuntimeError> {
+        let request_timeout_secs = server
+            .request_timeout_secs
+            .unwrap_or(DEFAULT_REQUEST_TIMEOUT_SECS);
+
+        // Build the WebSocket request with optional extra headers.
+        let mut request = tungstenite::http::Request::builder()
+            .uri(url)
+            .header("Sec-WebSocket-Protocol", "mcp");
+        for (key, value) in headers {
+            request = request.header(key.as_str(), value.as_str());
+        }
+        let request = request
+            .body(())
+            .map_err(|source| McpRuntimeError::Protocol {
+                server: server.name.clone(),
+                phase: "ws-connect",
+                message: format!("invalid WebSocket request: {source}"),
+            })?;
+
+        // Connect to the WebSocket server.
+        let (mut ws, _response) = timeout(
+            Duration::from_secs(request_timeout_secs),
+            connect_async(request),
+        )
+        .await
+        .map_err(|_| McpRuntimeError::Timeout {
+            server: server.name.clone(),
+            phase: "ws-connect",
+            timeout_secs: request_timeout_secs,
+        })?
+        .map_err(|source| McpRuntimeError::Protocol {
+            server: server.name.clone(),
+            phase: "ws-connect",
+            message: format!("WebSocket connection failed: {source}"),
+        })?;
+
+        // Build and send the initialize request.
+        let rpc_id = REMOTE_RPC_ID.fetch_add(1, Ordering::Relaxed);
+        let init_params = InitializeParams {
+            protocol_version: DEFAULT_MCP_PROTOCOL_VERSION,
+            capabilities: serde_json::json!({}),
+            client_info,
+        };
+        let init_request = JsonRpcRequest {
+            jsonrpc: "2.0",
+            id: rpc_id,
+            method: "initialize",
+            params: init_params,
+        };
+
+        let init_result: McpInitializeResult =
+            send_websocket_request_inner(&mut ws, &init_request, &server.name, "initialize", request_timeout_secs)
+                .await?;
+
+        // Send the initialized notification (fire-and-forget).
+        let initialized_notification = JsonRpcNotification {
+            jsonrpc: "2.0",
+            method: "notifications/initialized",
+            params: serde_json::json!({}),
+        };
+        let notification_str = serde_json::to_string(&initialized_notification).map_err(
+            |source| McpRuntimeError::Serialize {
+                server: server.name.clone(),
+                phase: "ws-initialized-notification",
+                source,
+            },
+        )?;
+        let _ = ws
+            .send(tungstenite::Message::Text(notification_str.into()))
+            .await;
+
+        Ok(Self {
+            server_name: server.name.clone(),
+            url: url.to_owned(),
+            headers: headers.clone(),
+            ws,
+            initialized: init_result,
+            request_timeout_secs,
+        })
+    }
+
+    /// Inspect the server: return initialization result, tool list, and
+    /// optionally prompts and resources.
+    async fn inspect_server(&mut self) -> Result<McpServerInspection, McpRuntimeError> {
+        let rpc_id = REMOTE_RPC_ID.fetch_add(1, Ordering::Relaxed);
+        let tools_request = JsonRpcRequest {
+            jsonrpc: "2.0",
+            id: rpc_id,
+            method: "tools/list",
+            params: serde_json::json!({}),
+        };
+
+        let tools_result: McpToolsListResult =
+            send_websocket_request_inner(
+                &mut self.ws,
+                &tools_request,
+                &self.server_name,
+                "tools/list",
+                self.request_timeout_secs,
+            )
+            .await?;
+
+        let resources = if self.supports_resources() {
+            match self.list_resources().await {
+                Ok(resources) => resources,
+                Err(error) if is_unsupported_method_error(&error) => Vec::new(),
+                Err(error) => return Err(error),
+            }
+        } else {
+            Vec::new()
+        };
+
+        let prompts = if self.supports_prompts() {
+            match self.list_prompts().await {
+                Ok(prompts) => prompts,
+                Err(error) if is_unsupported_method_error(&error) => Vec::new(),
+                Err(error) => return Err(error),
+            }
+        } else {
+            Vec::new()
+        };
+
+        Ok(McpServerInspection {
+            server_name: self.server_name.clone(),
+            protocol_version: self.initialized.protocol_version.clone(),
+            server_info: self.initialized.server_info.clone(),
+            capabilities: self.initialized.capabilities.clone(),
+            instructions: self.initialized.instructions.clone(),
+            tools: tools_result.tools,
+            prompts,
+            resources,
+        })
+    }
+
+    /// Call a tool on the remote MCP server via WebSocket.
+    async fn call_tool(
+        &mut self,
+        tool_name: &str,
+        arguments: Value,
+    ) -> Result<McpToolCallResponse, McpRuntimeError> {
+        let rpc_id = REMOTE_RPC_ID.fetch_add(1, Ordering::Relaxed);
+        let request = JsonRpcRequest {
+            jsonrpc: "2.0",
+            id: rpc_id,
+            method: "tools/call",
+            params: ToolCallParams {
+                name: tool_name,
+                arguments,
+            },
+        };
+
+        let mut result: McpToolCallResult =
+            send_websocket_request_inner(
+                &mut self.ws,
+                &request,
+                &self.server_name,
+                "tools/call",
+                self.request_timeout_secs,
+            )
+            .await?;
+
+        // Truncate oversized tool results.
+        crate::types::truncate_tool_call_result(&mut result);
+
+        Ok(McpToolCallResponse {
+            server_name: self.server_name.clone(),
+            tool_name: tool_name.to_owned(),
+            protocol_version: self.initialized.protocol_version.clone(),
+            server_info: self.initialized.server_info.clone(),
+            result,
+        })
+    }
+
+    /// List resources from the remote MCP server via WebSocket.
+    async fn list_resources(&mut self) -> Result<Vec<ServerResource>, McpRuntimeError> {
+        let rpc_id = REMOTE_RPC_ID.fetch_add(1, Ordering::Relaxed);
+        let request = JsonRpcRequest {
+            jsonrpc: "2.0",
+            id: rpc_id,
+            method: "resources/list",
+            params: serde_json::json!({}),
+        };
+
+        let result: McpResourcesListResult =
+            send_websocket_request_inner(
+                &mut self.ws,
+                &request,
+                &self.server_name,
+                "resources/list",
+                self.request_timeout_secs,
+            )
+            .await?;
+
+        Ok(result
+            .resources
+            .into_iter()
+            .map(|r| ServerResource {
+                uri: r.uri,
+                name: r.name,
+                description: r.description,
+                mime_type: r.mime_type,
+                server: self.server_name.clone(),
+            })
+            .collect())
+    }
+
+    /// List prompts from the remote MCP server via WebSocket.
+    async fn list_prompts(&mut self) -> Result<Vec<McpPromptDescriptor>, McpRuntimeError> {
+        let rpc_id = REMOTE_RPC_ID.fetch_add(1, Ordering::Relaxed);
+        let request = JsonRpcRequest {
+            jsonrpc: "2.0",
+            id: rpc_id,
+            method: "prompts/list",
+            params: serde_json::json!({}),
+        };
+
+        let result: McpPromptsListResult =
+            send_websocket_request_inner(
+                &mut self.ws,
+                &request,
+                &self.server_name,
+                "prompts/list",
+                self.request_timeout_secs,
+            )
+            .await?;
+
+        Ok(result
+            .prompts
+            .into_iter()
+            .map(|p| McpPromptDescriptor {
+                name: p.name,
+                title: p.title,
+                description: p.description,
+                arguments: p.arguments,
+            })
+            .collect())
+    }
+
+    /// Get a prompt from the remote MCP server via WebSocket.
+    async fn get_prompt(
+        &mut self,
+        prompt_name: &str,
+        arguments: Value,
+    ) -> Result<McpPromptGetResponse, McpRuntimeError> {
+        let rpc_id = REMOTE_RPC_ID.fetch_add(1, Ordering::Relaxed);
+        let request = JsonRpcRequest {
+            jsonrpc: "2.0",
+            id: rpc_id,
+            method: "prompts/get",
+            params: PromptGetParams {
+                name: prompt_name.to_owned(),
+                arguments,
+            },
+        };
+
+        let result: McpPromptGetRpcResult =
+            send_websocket_request_inner(
+                &mut self.ws,
+                &request,
+                &self.server_name,
+                "prompts/get",
+                self.request_timeout_secs,
+            )
+            .await?;
+
+        Ok(McpPromptGetResponse {
+            server_name: self.server_name.clone(),
+            prompt_name: prompt_name.to_owned(),
+            protocol_version: self.initialized.protocol_version.clone(),
+            server_info: self.initialized.server_info.clone(),
+            result,
+        })
+    }
+
+    /// Read a resource from the remote MCP server via WebSocket.
+    async fn read_resource(
+        &mut self,
+        uri: &str,
+    ) -> Result<Vec<McpResourceContent>, McpRuntimeError> {
+        let rpc_id = REMOTE_RPC_ID.fetch_add(1, Ordering::Relaxed);
+        let request = JsonRpcRequest {
+            jsonrpc: "2.0",
+            id: rpc_id,
+            method: "resources/read",
+            params: ResourceReadParams {
+                uri: uri.to_owned(),
+            },
+        };
+
+        let result: McpResourceReadResult =
+            send_websocket_request_inner(
+                &mut self.ws,
+                &request,
+                &self.server_name,
+                "resources/read",
+                self.request_timeout_secs,
+            )
+            .await?;
+
+        Ok(result.contents)
+    }
+
+    fn supports_resources(&self) -> bool {
+        self.initialized
+            .capabilities
+            .get("resources")
+            .is_some_and(|resources| !resources.is_null() && resources != false)
+    }
+
+    fn supports_prompts(&self) -> bool {
+        self.initialized
+            .capabilities
+            .get("prompts")
+            .is_some_and(|prompts| !prompts.is_null() && prompts != false)
+    }
+}
+
+/// Send a JSON-RPC request over a WebSocket and read the response.
+///
+/// Serializes the request as JSON, sends it as a WebSocket text message,
+/// then waits for a response message matching the request ID.
+async fn send_websocket_request_inner<T: Serialize, R: DeserializeOwned>(
+    ws: &mut WsStream,
+    request: &T,
+    server_name: &str,
+    phase: &'static str,
+    timeout_secs: u64,
+) -> Result<R, McpRuntimeError> {
+    // Serialize the request.
+    let payload = serde_json::to_string(request).map_err(|source| McpRuntimeError::Serialize {
+        server: server_name.to_owned(),
+        phase,
+        source,
+    })?;
+
+    // Extract the request ID for response matching.
+    let request_value: Value = serde_json::from_str(&payload).map_err(|source| {
+        McpRuntimeError::Decode {
+            server: server_name.to_owned(),
+            phase,
+            source,
+        }
+    })?;
+    let request_id = request_value.get("id").cloned();
+
+    // Send the message.
+    ws.send(tungstenite::Message::Text(payload.into()))
+        .await
+        .map_err(|source| McpRuntimeError::Write {
+            server: server_name.to_owned(),
+            phase,
+            source: std::io::Error::new(std::io::ErrorKind::BrokenPipe, source.to_string()),
+        })?;
+
+    // Read response, matching on the request ID.
+    timeout(Duration::from_secs(timeout_secs), async {
+        loop {
+            let msg = ws
+                .next()
+                .await
+                .ok_or_else(|| McpRuntimeError::Closed {
+                    server: server_name.to_owned(),
+                    phase,
+                })?
+                .map_err(|source| McpRuntimeError::Read {
+                    server: server_name.to_owned(),
+                    phase,
+                    source: std::io::Error::new(std::io::ErrorKind::UnexpectedEof, source.to_string()),
+                })?;
+
+            let text = match msg {
+                tungstenite::Message::Text(text) => text,
+                tungstenite::Message::Ping(data) => {
+                    // Respond to pings with pong to keep the connection alive.
+                    let _ = ws.send(tungstenite::Message::Pong(data)).await;
+                    continue;
+                }
+                tungstenite::Message::Close(_) => {
+                    return Err(McpRuntimeError::Closed {
+                        server: server_name.to_owned(),
+                        phase,
+                    });
+                }
+                // Ignore binary, pong, and frame messages.
+                _ => continue,
+            };
+
+            let text = text.trim();
+            if text.is_empty() {
+                continue;
+            }
+
+            let envelope: JsonRpcEnvelope =
+                serde_json::from_str(text).map_err(|source| McpRuntimeError::Decode {
+                    server: server_name.to_owned(),
+                    phase,
+                    source,
+                })?;
+
+            // Skip notifications (no id) and messages for other requests.
+            if let Some(ref req_id) = request_id {
+                if let Some(ref resp_id) = envelope.id {
+                    if resp_id != req_id {
+                        continue;
+                    }
+                } else {
+                    continue;
+                }
+            } else if envelope.id.is_some() {
+                continue;
+            }
+
+            if let Some(error) = envelope.error {
+                return Err(McpRuntimeError::Rpc {
+                    server: server_name.to_owned(),
+                    code: error.code,
+                    message: error.message,
+                });
+            }
+
+            let result = envelope.result.ok_or_else(|| McpRuntimeError::Protocol {
+                server: server_name.to_owned(),
+                phase,
+                message: "response did not include a result payload".to_owned(),
+            })?;
+
+            return serde_json::from_value(result).map_err(|source| McpRuntimeError::Decode {
+                server: server_name.to_owned(),
+                phase,
+                source,
+            });
+        }
+    })
+    .await
+    .map_err(|_| McpRuntimeError::Timeout {
+        server: server_name.to_owned(),
+        phase,
+        timeout_secs,
+    })?
+}
+
+// ---------------------------------------------------------------------------
+// Headers helper resolution
+// ---------------------------------------------------------------------------
+
+/// Resolve headers dynamically using a `headers_helper` callback from
+/// [`TransportConfig`], falling back to the static headers from
+/// [`McpTransportConfig`].
+///
+/// This is used by `connect_http`, `connect_sse`, and the WebSocket session
+/// to inject fresh headers (e.g. short-lived auth tokens) before each request.
+async fn resolve_headers_with_helper(
+    server_name: &str,
+    transport_config: Option<&crate::transport::TransportConfig>,
+    static_headers: &BTreeMap<String, String>,
+) -> BTreeMap<String, String> {
+    let mut resolved = static_headers.clone();
+
+    if let Some(config) = transport_config {
+        // Try to get a headers_helper from the extended TransportConfig.
+        let helper_result = crate::headers::McpHeadersResolver::resolve_headers(
+            server_name,
+            config,
+            |key| std::env::var(key).ok(),
+        )
+        .await;
+
+        match helper_result {
+            Ok(dynamic_headers) => {
+                // Merge: static headers win on conflict.
+                for (k, v) in dynamic_headers {
+                    resolved.entry(k).or_insert(v);
+                }
+            }
+            Err(err) => {
+                tracing::warn!(
+                    server = %server_name,
+                    "Failed to resolve dynamic headers: {err}"
+                );
+            }
+        }
+    }
+
+    resolved
+}
+
 #[cfg(test)]
 mod tests {
     use super::resolve_stdio_command;
@@ -1498,5 +2438,43 @@ mod tests {
                 || resolved.to_ascii_lowercase().ends_with("npx.exe"),
             "unexpected resolved command: {resolved}"
         );
+    }
+
+    #[test]
+    fn check_sse_session_errors_no_error() {
+        let payload = r#"{"id":1,"result":{"protocolVersion":"2025-03-26"}}"#;
+        assert!(super::check_sse_session_errors(payload, "test", "init").is_ok());
+    }
+
+    #[test]
+    fn check_sse_session_errors_connection_closed() {
+        let payload = r#"{"id":1,"error":{"code":-32000,"message":"Connection closed"}}"#;
+        let result = super::check_sse_session_errors(payload, "test", "init");
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        match err {
+            super::McpRuntimeError::JsonRpc { code, .. } => assert_eq!(code, -32000),
+            other => panic!("expected JsonRpc error, got: {other}"),
+        }
+    }
+
+    #[test]
+    fn check_sse_session_errors_request_timeout() {
+        let payload = r#"{"id":1,"error":{"code":-32000,"message":"Request timeout"}}"#;
+        let result = super::check_sse_session_errors(payload, "test", "init");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn check_sse_session_errors_other_code_ignored() {
+        // -32000 but with a different message — should not trigger.
+        let payload = r#"{"id":1,"error":{"code":-32000,"message":"Some other error"}}"#;
+        assert!(super::check_sse_session_errors(payload, "test", "init").is_ok());
+    }
+
+    #[test]
+    fn check_sse_session_errors_invalid_json_ignored() {
+        let payload = "not json";
+        assert!(super::check_sse_session_errors(payload, "test", "init").is_ok());
     }
 }

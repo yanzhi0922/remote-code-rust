@@ -216,6 +216,9 @@ mod tests {
             request_header_overrides: BTreeMap::new(),
             request_metadata: BTreeMap::new(),
             thinking_budget: None,
+            temperature: None,
+            top_p: None,
+            top_k: None,
         }
     }
 

@@ -61,21 +61,12 @@ pub enum MaxTokensRecoveryAction {
 /// The escalation ladder is: undefined/8k → 64k (single jump, TS parity).
 /// After escalation is exhausted, multi-turn continuation with a
 /// "Resume directly" meta message is used.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct MaxTokensRecovery {
     /// Number of recovery attempts already made in the current query.
     pub recovery_count: usize,
     /// Whether the 64k single-shot escalation has been attempted.
     pub escalation_attempted: bool,
-}
-
-impl Default for MaxTokensRecovery {
-    fn default() -> Self {
-        Self {
-            recovery_count: 0,
-            escalation_attempted: false,
-        }
-    }
 }
 
 impl MaxTokensRecovery {
@@ -258,8 +249,7 @@ mod tests {
     fn reset_allows_new_recoveries() {
         let mut recovery = MaxTokensRecovery::new();
         let _ = recovery.handle_truncation(8192, false);
-        assert!(!recovery.escalation_attempted); // Wait, it should be! The test expectation is wrong.
-        // Actually: first truncation does escalate.
+        // First truncation does escalate (8k → 64k single jump).
         assert!(recovery.escalation_attempted);
         assert_eq!(recovery.recovery_count(), 1);
 
@@ -313,4 +303,3 @@ mod tests {
         assert!(recovery.can_recover());
     }
 }
-

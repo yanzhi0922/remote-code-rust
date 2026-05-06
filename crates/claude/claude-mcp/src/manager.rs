@@ -10,6 +10,7 @@ use serde_json::Value;
 
 use crate::auth_cache::McpAuthCache;
 use crate::batch::BatchedUpdateQueue;
+use crate::config::McpServerConfig;
 use crate::connection::{
     ConnectedServer, DisabledServer, FailedServer, McpServerConnection, NeedsAuthServer,
     PendingServer,
@@ -23,6 +24,7 @@ use crate::reconnect::ReconnectScheduler;
 use crate::resources::ServerResource;
 use crate::scope::ScopedMcpServerConfig;
 use crate::serialization::McpCliState;
+use crate::transport::McpTransportConfig;
 use crate::types::{McpClientInfo, McpToolCallResponse, McpToolDescriptor};
 
 /// Default batch size for local (stdio) server connections.
@@ -166,8 +168,10 @@ impl McpConnectionManager {
 
     /// Connect all registered and enabled servers.
     ///
-    /// Local (stdio) servers are connected in batches of `local_batch_size`,
-    /// remote servers in batches of `remote_batch_size`.
+    /// Servers are connected concurrently using `tokio::JoinSet`. Local (stdio)
+    /// servers are connected in batches of `local_batch_size`, remote servers
+    /// in batches of `remote_batch_size`. Within each batch, connections run
+    /// concurrently.
     ///
     /// Returns the final connection states for all servers that were attempted.
     pub async fn connect_all(&mut self) -> Vec<McpServerConnection> {
@@ -182,18 +186,157 @@ impl McpConnectionManager {
             self.emit_event(McpLifecycleEvent::Connecting { name: name.clone() });
         }
 
-        // Connect servers sequentially in batches.
-        // A full production implementation would use tokio::JoinSet for
-        // true concurrent batching; here we connect sequentially to keep
-        // the borrow checker happy and avoid complex async state management.
+        // Separate local (stdio) and remote (HTTP/SSE/WS) servers.
+        let mut local_names: Vec<String> = Vec::new();
+        let mut remote_names: Vec<String> = Vec::new();
         for name in &names {
-            let _ = self.connect_server_inner(name).await;
+            let is_local = self
+                .configs
+                .get(name)
+                .map(|c| matches!(c.inner.transport, McpTransportConfig::Stdio { .. }))
+                .unwrap_or(false);
+            if is_local {
+                local_names.push(name.clone());
+            } else {
+                remote_names.push(name.clone());
+            }
         }
+
+        // Connect local servers in concurrent batches.
+        self.connect_batch_concurrent(&local_names, self.local_batch_size)
+            .await;
+
+        // Connect remote servers in concurrent batches.
+        self.connect_batch_concurrent(&remote_names, self.remote_batch_size)
+            .await;
 
         names
             .iter()
             .filter_map(|name| self.connections.get(name).cloned())
             .collect()
+    }
+
+    /// Connect a batch of servers concurrently, processing at most `batch_size`
+    /// servers at a time.
+    ///
+    /// This extracts the necessary config data from `self` before spawning
+    /// concurrent tasks to avoid borrow-checker conflicts. Each task runs
+    /// discovery independently and the results are written back afterwards.
+    async fn connect_batch_concurrent(&mut self, names: &[String], batch_size: usize) {
+        if names.is_empty() {
+            return;
+        }
+
+        // Process in chunks of batch_size.
+        for chunk in names.chunks(batch_size.max(1)) {
+            // Collect the data needed for concurrent connection.
+            let tasks: Vec<(String, McpServerConfig, bool)> = chunk
+                .iter()
+                .filter_map(|name| {
+                    let config = self.configs.get(name)?;
+                    // Check auth cache — skip if recently needed auth.
+                    if self.auth_cache.is_cached(name) {
+                        // Handle auth-needed immediately (no spawn needed).
+                        self.emit_event(McpLifecycleEvent::NeedsAuth {
+                            name: name.clone(),
+                        });
+                        self.connections.insert(
+                            name.clone(),
+                            McpServerConnection::NeedsAuth(NeedsAuthServer {
+                                name: name.clone(),
+                                config: config.clone(),
+                            }),
+                        );
+                        None
+                    } else {
+                        Some((name.clone(), config.inner.clone(), true))
+                    }
+                })
+                .map(|(name, config, _)| (name, config, false))
+                .collect();
+
+            if tasks.is_empty() {
+                continue;
+            }
+
+            // Spawn concurrent discovery tasks.
+            let client_info = self.client_info.clone();
+            let mut join_set = tokio::task::JoinSet::new();
+
+            for (name, config, _auth_needed) in tasks {
+                let ci = client_info.clone();
+                join_set.spawn(async move {
+                    let result = crate::discovery::McpDiscovery::discover_for_server_standalone(
+                        &name,
+                        &config,
+                        &ci,
+                    )
+                    .await;
+                    (name, config, result)
+                });
+            }
+
+            // Collect results and update connection states.
+            while let Some(join_result) = join_set.join_next().await {
+                match join_result {
+                    Ok((name, _config, Ok(result))) => {
+                        let tool_count = result.tools.len();
+                        let resource_count = result.resources.len();
+                        let instructions = result.instructions.clone();
+
+                        let scoped_config = self.configs.get(&name).cloned();
+                        let conn = if let Some(sc) = scoped_config {
+                            McpServerConnection::Connected(ConnectedServer {
+                                name: name.clone(),
+                                capabilities: sc.inner.capabilities.clone(),
+                                server_info: None,
+                                instructions,
+                                config: sc,
+                            })
+                        } else {
+                            continue;
+                        };
+
+                        self.connections.insert(name.clone(), conn.clone());
+                        self.reconnect_scheduler.report_success(&name);
+                        self.discovery.store(
+                            &name,
+                            result.tools,
+                            result.resources,
+                            result.prompts,
+                            result.instructions,
+                        );
+
+                        if tool_count > 0 {
+                            self.emit_event(McpLifecycleEvent::ToolsDiscovered {
+                                name: name.clone(),
+                                count: tool_count,
+                            });
+                        }
+                        if resource_count > 0 {
+                            self.emit_event(McpLifecycleEvent::ResourcesDiscovered {
+                                name: name.clone(),
+                                count: resource_count,
+                            });
+                        }
+                    }
+                    Ok((name, _config, Err(_))) => {
+                        let scoped_config = self.configs.get(&name).cloned();
+                        if let Some(sc) = scoped_config {
+                            let conn = McpServerConnection::Failed(FailedServer {
+                                name: name.clone(),
+                                config: sc,
+                                error: None,
+                            });
+                            self.connections.insert(name, conn);
+                        }
+                    }
+                    Err(_) => {
+                        // JoinSet task panicked; skip.
+                    }
+                }
+            }
+        }
     }
 
     /// Connect a single server by name.

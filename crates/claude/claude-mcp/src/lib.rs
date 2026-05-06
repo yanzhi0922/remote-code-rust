@@ -82,11 +82,12 @@ pub use transport::{McpTransport, McpTransportConfig};
 pub use types::{
     McpClientInfo, McpPeerInfo, McpPromptArgument, McpPromptDescriptor, McpPromptGetResponse,
     McpPromptGetResult, McpPromptMessage, McpServerInspection, McpToolCallContent,
-    McpToolCallResponse, McpToolCallResult, McpToolDescriptor,
+    McpToolCallResponse, McpToolCallResult, McpToolDescriptor, MCP_TOOL_RESULT_MAX_CHARS,
+    MCP_TOOL_RESULT_TRUNCATION_NOTICE, truncate_tool_call_result, truncate_tool_result_content,
 };
 
 // Error types
-pub use error::{McpConfigError, McpRuntimeError};
+pub use error::{McpConfigError, McpRuntimeError, is_session_expired_error, MCP_SESSION_EXPIRED_CODE};
 
 // Session functions and persistent client
 pub use session::{
