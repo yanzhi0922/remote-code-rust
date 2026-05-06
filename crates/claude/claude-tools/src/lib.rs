@@ -469,6 +469,8 @@ fn canonical_builtin_tool_name(internal_name: &str) -> Option<&'static str> {
         "task_get" => Some("TaskGet"),
         "task_list" => Some("TaskList"),
         "task_update" => Some("TaskUpdate"),
+        "task_output" => Some("TaskOutput"),
+        "task_stop" => Some("TaskStop"),
         "notebook_edit" => Some("NotebookEdit"),
         "skill_discover" => Some("DiscoverSkills"),
         "skill_execute" => Some("Skill"),
@@ -585,6 +587,7 @@ fn builtin_tool_search_hints(name: &str) -> &'static [&'static str] {
         "task_list" => &["list all tasks"],
         "task_output" => &["read output logs from a background task"],
         "task_update" => &["update a task"],
+        "task_stop" => &["stop a running background task"],
         "team_create" => &["create a multi-agent swarm team"],
         "team_delete" => &["disband a swarm team and clean up"],
         "todo_write" => &["manage the session task checklist"],
@@ -998,13 +1001,32 @@ pub struct ToolExecutionContext {
     pub read_file_state: FileStateCache,
 }
 
+/// Returns the default bash timeout in milliseconds.
+///
+/// Reads `BASH_DEFAULT_TIMEOUT_MS` from the environment to override the
+/// built-in 120 000 ms (2 minutes) default, and clamps the result against
+/// `BASH_MAX_TIMEOUT_MS` (env) or the 600 000 ms (10 minutes) hard ceiling.
+fn default_bash_timeout_ms() -> u64 {
+    const BUILTIN_DEFAULT: u64 = 120_000;
+    const BUILTIN_MAX: u64 = 600_000;
+    let val = std::env::var("BASH_DEFAULT_TIMEOUT_MS")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(BUILTIN_DEFAULT);
+    let max = std::env::var("BASH_MAX_TIMEOUT_MS")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(BUILTIN_MAX);
+    val.clamp(1_000, max)
+}
+
 impl Default for ToolExecutionContext {
     fn default() -> Self {
         Self {
             cwd: PathBuf::new(),
             original_cwd: PathBuf::new(),
             active_worktree_session: None,
-            timeout_ms: 30_000,
+            timeout_ms: default_bash_timeout_ms(),
             sub_agent: None,
             progress_cb: None,
             task_stack: Arc::new(std::sync::Mutex::new(TaskStack::default())),
@@ -1729,9 +1751,26 @@ pub async fn execute_tool_call(
             };
         }
 
+        // read_file returns Result<ToolResult> directly (for multimodal image support)
+        // so handle it separately before the String-returning match.
+        if spec.name == "read_file" {
+            let result = file_ops::read_file(&effective_call.input, context);
+            return match result {
+                Ok(tool_result) => Ok(append_follow_up_user_blocks(
+                    tool_result,
+                    &follow_up_user_blocks,
+                )),
+                Err(error) => Ok(ToolResult {
+                    content: error.to_string(),
+                    is_error: true,
+                    content_blocks: Vec::new(),
+                    follow_up_user_blocks: follow_up_user_blocks.clone(),
+                }),
+            };
+        }
+
         let result = match spec.name.as_str() {
             "list_directory" => file_ops::list_directory(&effective_call.input, context),
-            "read_file" => file_ops::read_file(&effective_call.input, context),
             "search_text" => file_ops::search_text(&effective_call.input, context),
             "write_file" => file_ops::write_file(&effective_call.input, context),
             "replace_in_file" => file_ops::replace_in_file(&effective_call.input, context),
@@ -1751,6 +1790,8 @@ pub async fn execute_tool_call(
             "task_get" => tasks::task_get(&effective_call.input),
             "task_list" => tasks::task_list(&effective_call.input),
             "task_update" => tasks::task_update(&effective_call.input),
+            "task_output" => tasks::task_output(&effective_call.input),
+            "task_stop" => tasks::task_stop(&effective_call.input),
             "notebook_edit" => misc::notebook_edit(&effective_call.input, context),
             "skill_discover" => misc::skill_discover(&effective_call.input, context),
             "send_message" => send_message::send_message(&effective_call.input, context).await,

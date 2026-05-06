@@ -7,6 +7,9 @@
 //! - Hover information (context around symbol usage)
 //! - Diagnostics (runs linters like `cargo check`, `tsc --noEmit`, etc.)
 //! - Completion suggestions (text-based heuristics)
+//! - Document symbols, workspace symbols
+//! - Go-to-implementation search
+//! - Call hierarchy (incoming/outgoing calls)
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -326,6 +329,463 @@ impl LspClient {
         }
 
         Ok(suggestions)
+    }
+
+    // -----------------------------------------------------------------------
+    // Position-based lookups (used by TS-parity operations)
+    // -----------------------------------------------------------------------
+
+    /// Find definitions at a given position in a file.
+    ///
+    /// Extracts the symbol at the given line/character and delegates to
+    /// [`find_definitions`].
+    pub fn find_definitions_at(
+        &self,
+        file_path: &str,
+        line: u32,
+        character: u32,
+    ) -> Result<Vec<Location>> {
+        let symbol = self.extract_symbol_at(file_path, line, character)?;
+        match symbol {
+            Some(sym) => self.find_definitions(&sym, Some(file_path)),
+            None => Ok(vec![]),
+        }
+    }
+
+    /// Find references at a given position in a file.
+    pub fn find_references_at(
+        &self,
+        file_path: &str,
+        line: u32,
+        character: u32,
+    ) -> Result<Vec<Location>> {
+        let symbol = self.extract_symbol_at(file_path, line, character)?;
+        match symbol {
+            Some(sym) => self.find_references(&sym),
+            None => Ok(vec![]),
+        }
+    }
+
+    /// Get hover information at a given position in a file.
+    pub fn hover_at(&self, file_path: &str, line: u32, character: u32) -> Result<String> {
+        let symbol = self.extract_symbol_at(file_path, line, character)?;
+        match symbol {
+            Some(sym) => self.hover(file_path, &sym),
+            None => Ok("No symbol found at the given position.".to_owned()),
+        }
+    }
+
+    /// Get all symbols (functions, structs, enums, etc.) in a document.
+    ///
+    /// Returns a list of formatted symbol strings with kind, name, and line.
+    pub fn document_symbols(&self, file_path: &str) -> Result<Vec<String>> {
+        let target = self.workspace_root.join(file_path);
+        if !target.exists() {
+            return Ok(vec![]);
+        }
+        let contents = std::fs::read_to_string(&target)
+            .with_context(|| format!("failed to read {file_path}"))?;
+
+        let patterns = [
+            (r"(?:pub\s+)?(?:async\s+)?fn\s+(\w+)", "function"),
+            (r"(?:pub\s+)?struct\s+(\w+)", "struct"),
+            (r"(?:pub\s+)?enum\s+(\w+)", "enum"),
+            (r"impl\s+(?:<[^>]*>\s+)?(\w+)", "impl"),
+            (r"(?:pub\s+)?trait\s+(\w+)", "trait"),
+            (r"(?:pub\s+)?type\s+(\w+)", "type alias"),
+            (r"(?:pub\s+)?const\s+(\w+)", "constant"),
+            (r"(?:pub\s+)?static\s+(\w+)", "static"),
+            (r"(?:pub\s+)?mod\s+(\w+)", "module"),
+        ];
+
+        let mut results = Vec::new();
+        for (idx, line) in contents.lines().enumerate() {
+            let trimmed = line.trim();
+            for (pattern, kind) in &patterns {
+                let re = regex::Regex::new(pattern).unwrap();
+                if let Some(cap) = re.captures(trimmed) {
+                    if let Some(name) = cap.get(1) {
+                        results.push(format!(
+                            "[{}] {} (line {})",
+                            kind,
+                            name.as_str(),
+                            idx + 1
+                        ));
+                    }
+                }
+            }
+            if results.len() >= 100 {
+                break;
+            }
+        }
+
+        Ok(results)
+    }
+
+    /// Search for symbols across the workspace matching the given query.
+    ///
+    /// Uses a text-based search similar to `find_definitions` but returns
+    /// formatted strings with kind, name, file, and line.
+    pub fn workspace_symbols(&self, query: &str) -> Result<Vec<String>> {
+        if query.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let escaped = regex::escape(query);
+        let patterns = [
+            (format!(r"(?:pub\s+)?(?:async\s+)?fn\s+({escaped})\b"), "function"),
+            (format!(r"(?:pub\s+)?struct\s+({escaped})\b"), "struct"),
+            (format!(r"(?:pub\s+)?enum\s+({escaped})\b"), "enum"),
+            (format!(r"impl\s+(?:<[^>]*>\s+)?({escaped})\b"), "impl"),
+            (format!(r"(?:pub\s+)?trait\s+({escaped})\b"), "trait"),
+            (
+                format!(r"\b({escaped}\w*)\b"),
+                "identifier",
+            ),
+        ];
+
+        let mut results = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for entry in WalkDir::new(&self.workspace_root)
+            .into_iter()
+            .filter_map(Result::ok)
+        {
+            if !entry.file_type().is_file() {
+                continue;
+            }
+            if is_ignored_path(entry.path()) {
+                continue;
+            }
+            let Ok(file_contents) = std::fs::read_to_string(entry.path()) else {
+                continue;
+            };
+            let relative = entry
+                .path()
+                .strip_prefix(&self.workspace_root)
+                .unwrap_or(entry.path())
+                .display()
+                .to_string();
+
+            for (idx, line) in file_contents.lines().enumerate() {
+                for (pattern, kind) in &patterns {
+                    let re = regex::Regex::new(pattern).unwrap();
+                    if let Some(cap) = re.captures(line) {
+                        if let Some(name) = cap.get(1) {
+                            let key = format!("{kind}:{}", name.as_str());
+                            if seen.insert(key) {
+                                results.push(format!(
+                                    "[{}] {} ({}:{})",
+                                    kind,
+                                    name.as_str(),
+                                    relative,
+                                    idx + 1
+                                ));
+                                if results.len() >= 50 {
+                                    return Ok(results);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(results)
+    }
+
+    /// Find implementations of a symbol (trait impls, interface impls).
+    pub fn find_implementations(&self, symbol: &str) -> Result<Vec<Location>> {
+        let escaped = regex::escape(symbol);
+        let patterns = [
+            format!(r"impl\s+(?:<[^>]*>\s+)?{escaped}\s+for\s+(\w+)"),
+            format!(r"impl\s+(?:<[^>]*>\s+)?{escaped}\b"),
+        ];
+
+        let combined = patterns.join("|");
+        let re = regex::Regex::new(&format!("(?:{combined})"))
+            .context("invalid pattern for implementations")?;
+
+        let mut results = Vec::new();
+        for entry in WalkDir::new(&self.workspace_root)
+            .into_iter()
+            .filter_map(Result::ok)
+        {
+            if !entry.file_type().is_file() {
+                continue;
+            }
+            if is_ignored_path(entry.path()) {
+                continue;
+            }
+            let Ok(contents) = std::fs::read_to_string(entry.path()) else {
+                continue;
+            };
+            for (idx, line) in contents.lines().enumerate() {
+                if re.is_match(line) {
+                    let relative = entry
+                        .path()
+                        .strip_prefix(&self.workspace_root)
+                        .unwrap_or(entry.path());
+                    results.push(Location {
+                        file: relative.display().to_string(),
+                        line: (idx + 1) as u32,
+                        column: find_column(line, symbol) as u32,
+                        context: line.trim().to_owned(),
+                    });
+                    if results.len() >= 50 {
+                        return Ok(results);
+                    }
+                }
+            }
+        }
+
+        Ok(results)
+    }
+
+    /// Find implementations at a given position.
+    pub fn find_implementations_at(
+        &self,
+        file_path: &str,
+        line: u32,
+        character: u32,
+    ) -> Result<Vec<Location>> {
+        let symbol = self.extract_symbol_at(file_path, line, character)?;
+        match symbol {
+            Some(sym) => self.find_implementations(&sym),
+            None => Ok(vec![]),
+        }
+    }
+
+    /// Prepare call hierarchy items at a given position.
+    ///
+    /// Returns the function/method at the position, if any, formatted for
+    /// display.
+    pub fn prepare_call_hierarchy(
+        &self,
+        file_path: &str,
+        line: u32,
+        _character: u32,
+    ) -> Result<Vec<String>> {
+        let target = self.workspace_root.join(file_path);
+        if !target.exists() {
+            return Ok(vec![]);
+        }
+        let contents = std::fs::read_to_string(&target)
+            .with_context(|| format!("failed to read {file_path}"))?;
+
+        let line_index = line.saturating_sub(1) as usize;
+        let target_line = contents.lines().nth(line_index).unwrap_or("");
+
+        // Look for a function/method definition on or near this line.
+        let fn_re = regex::Regex::new(r"(?:pub\s+)?(?:async\s+)?fn\s+(\w+)").unwrap();
+        if let Some(cap) = fn_re.captures(target_line) {
+            return Ok(vec![format!(
+                "[function] {} ({}:{})",
+                cap.get(1).unwrap().as_str(),
+                file_path,
+                line
+            )]);
+        }
+
+        // Check a few lines above in case the fn keyword is on a preceding line.
+        let lines: Vec<&str> = contents.lines().collect();
+        let start = line_index.saturating_sub(3);
+        for i in start..line_index.min(lines.len()) {
+            if let Some(cap) = fn_re.captures(lines[i]) {
+                return Ok(vec![format!(
+                    "[function] {} ({}:{})",
+                    cap.get(1).unwrap().as_str(),
+                    file_path,
+                    i + 1
+                )]);
+            }
+        }
+
+        Ok(vec![])
+    }
+
+    /// Find incoming calls (callers) for the function at the given position.
+    ///
+    /// Searches the workspace for call sites of the function at the position.
+    pub fn incoming_calls(
+        &self,
+        file_path: &str,
+        line: u32,
+        character: u32,
+    ) -> Result<Vec<String>> {
+        let symbol = self.extract_symbol_at(file_path, line, character)?;
+        let symbol = match symbol {
+            Some(s) => s,
+            None => return Ok(vec![]),
+        };
+
+        // Find the definition first to get the canonical name, then search for
+        // call sites.
+        let escaped = regex::escape(&symbol);
+        let call_pattern = format!(r"\b{escaped}\s*\(");
+        let re = regex::Regex::new(&call_pattern)
+            .context("invalid call pattern for incoming_calls")?;
+
+        let mut results = Vec::new();
+        for entry in WalkDir::new(&self.workspace_root)
+            .into_iter()
+            .filter_map(Result::ok)
+        {
+            if !entry.file_type().is_file() {
+                continue;
+            }
+            if is_ignored_path(entry.path()) {
+                continue;
+            }
+            let Ok(contents) = std::fs::read_to_string(entry.path()) else {
+                continue;
+            };
+            let relative = entry
+                .path()
+                .strip_prefix(&self.workspace_root)
+                .unwrap_or(entry.path())
+                .display()
+                .to_string();
+            for (idx, l) in contents.lines().enumerate() {
+                if re.is_match(l) {
+                    results.push(format!(
+                        "{}:{}: {}",
+                        relative,
+                        idx + 1,
+                        l.trim()
+                    ));
+                    if results.len() >= 50 {
+                        return Ok(results);
+                    }
+                }
+            }
+        }
+
+        Ok(results)
+    }
+
+    /// Find outgoing calls (callees) for the function at the given position.
+    ///
+    /// Parses the function body at the position and extracts called functions.
+    pub fn outgoing_calls(
+        &self,
+        file_path: &str,
+        line: u32,
+        _character: u32,
+    ) -> Result<Vec<String>> {
+        let target = self.workspace_root.join(file_path);
+        if !target.exists() {
+            return Ok(vec![]);
+        }
+        let contents = std::fs::read_to_string(&target)
+            .with_context(|| format!("failed to read {file_path}"))?;
+
+        let lines: Vec<&str> = contents.lines().collect();
+        let line_index = line.saturating_sub(1) as usize;
+
+        // Find the function body starting from the given line.
+        // Collect lines until the brace count returns to zero or we hit another fn.
+        let mut brace_count = 0i32;
+        let mut started = false;
+        let mut body_lines = Vec::new();
+
+        for i in line_index..lines.len() {
+            let l = lines[i];
+            for ch in l.chars() {
+                match ch {
+                    '{' => {
+                        brace_count += 1;
+                        started = true;
+                    }
+                    '}' => {
+                        brace_count -= 1;
+                    }
+                    _ => {}
+                }
+            }
+            body_lines.push(l);
+            if started && brace_count <= 0 {
+                break;
+            }
+        }
+
+        // Extract call identifiers from the body.
+        let call_re =
+            regex::Regex::new(r"\b([a-z_]\w*)\s*\(").context("invalid call extraction pattern")?;
+
+        // Filter out control flow keywords and the function's own name.
+        let keywords = [
+            "if", "else", "match", "while", "for", "loop", "return", "let",
+            "fn", "pub", "async", "unsafe", "impl", "struct", "enum", "trait",
+            "use", "mod", "where", "as", "super", "self", "Self", "crate",
+        ];
+
+        let mut seen = std::collections::HashSet::new();
+        let mut results = Vec::new();
+        for l in &body_lines {
+            for cap in call_re.captures_iter(l) {
+                if let Some(name) = cap.get(1) {
+                    let n = name.as_str();
+                    if !keywords.contains(&n) && seen.insert(n.to_owned()) {
+                        results.push(format!("[call] {n}"));
+                        if results.len() >= 30 {
+                            return Ok(results);
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(results)
+    }
+
+    // -----------------------------------------------------------------------
+    // Internal helpers
+    // -----------------------------------------------------------------------
+
+    /// Extract the identifier at the given line/character position in a file.
+    fn extract_symbol_at(
+        &self,
+        file_path: &str,
+        line: u32,
+        character: u32,
+    ) -> Result<Option<String>> {
+        let target = self.workspace_root.join(file_path);
+        if !target.exists() {
+            return Ok(None);
+        }
+        let contents = std::fs::read_to_string(&target)
+            .with_context(|| format!("failed to read {file_path}"))?;
+
+        let line_index = line.saturating_sub(1) as usize;
+        let target_line = match contents.lines().nth(line_index) {
+            Some(l) => l,
+            None => return Ok(None),
+        };
+
+        let char_idx = (character as usize).saturating_sub(1);
+        if char_idx >= target_line.len() {
+            return Ok(None);
+        }
+
+        // Walk backwards and forwards from the cursor to find the full identifier.
+        let chars: Vec<char> = target_line.chars().collect();
+        let start = chars[..char_idx]
+            .iter()
+            .rposition(|c| !c.is_alphanumeric() && *c != '_')
+            .map(|p| p + 1)
+            .unwrap_or(0);
+        let end = chars[char_idx..]
+            .iter()
+            .position(|c| !c.is_alphanumeric() && *c != '_')
+            .map(|p| char_idx + p)
+            .unwrap_or(chars.len());
+
+        let symbol: String = chars[start..end].iter().collect();
+        if symbol.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(symbol))
+        }
     }
 
     // -----------------------------------------------------------------------

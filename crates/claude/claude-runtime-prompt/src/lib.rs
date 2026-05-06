@@ -544,6 +544,7 @@ pub async fn build_runtime_system_prompt(
             function_result_keep_recent: None,
             include_token_budget_prompt: settings.include_token_budget_prompt,
         },
+        is_undercover: false,
     };
 
     let default_prompt_blocks = if use_default_system_prompt {

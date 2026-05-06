@@ -63,6 +63,7 @@ mod tests {
             is_fork_subagent_enabled: fork,
             session_start_date: "2025-01-01".to_string(),
             features: crate::PromptFeatures::default(),
+            is_undercover: false,
         }
     }
 
@@ -108,6 +109,7 @@ mod tests {
             is_fork_subagent_enabled: false,
             session_start_date: "2025-01-01".to_string(),
             features: crate::PromptFeatures::default(),
+            is_undercover: false,
         };
         let section = AgentSection;
         let result = section.compute(&ctx).expect("compute ok");
