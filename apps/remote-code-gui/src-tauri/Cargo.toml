@@ -36,13 +36,14 @@ claude-permissions = { path = "../../../crates/claude/claude-permissions" }
 claude-mcp = { path = "../../../crates/claude/claude-mcp" }
 claude-plugins = { path = "../../../crates/claude/claude-plugins" }
 claude-skills = { path = "../../../crates/claude/claude-skills" }
-claude-agent-protocol = { path = "../../../crates/claude/claude-agent-protocol" }
+rc-agent-protocol = { path = "../../../crates/shared/rc-agent-protocol" }
 rc-codex-adapter = { path = "../../../crates/adapters/rc-codex-adapter" }
 rc-roo-adapter = { path = "../../../crates/adapters/rc-roo-adapter" }
 rc-claude-adapter = { path = "../../../crates/adapters/rc-claude-adapter" }
 claude-voice = { path = "../../../crates/claude/claude-voice" }
 claude-query-engine = { path = "../../../crates/claude/claude-query-engine" }
-claude-engine-events = { path = "../../../crates/claude/claude-engine-events" }
+rc-engine-events = { path = "../../../crates/shared/rc-engine-events" }
+rc-remote-transport = { path = "../../../crates/shared/rc-remote-transport", features = ["quic"] }
 codex-app-server-protocol = { workspace = true }
 codex-arg0 = { workspace = true }
 reqwest = { workspace = true }

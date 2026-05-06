@@ -2,6 +2,11 @@ import { lazy, memo, Suspense, useMemo } from 'react';
 import { ChevronRight, Wrench, Brain, FileText } from 'lucide-react';
 import type { ConversationEntry, ToolCallInfo } from '../lib/types';
 import { cn, truncateMiddle } from '../lib/utils';
+import {
+  formatToolInput,
+  summarizeToolInput,
+  extractThinkingBlocks,
+} from '../lib/conversationUtils';
 import CollapsibleBlock from './chat/CollapsibleBlock';
 
 const LazyMarkdownRenderer = lazy(() => import('./chat/MarkdownRenderer'));
@@ -16,48 +21,6 @@ export interface MessageResponseProps {
   compact?: boolean;
   /** 额外的 CSS 类名 */
   className?: string;
-}
-
-/** 从 content_blocks 中提取 thinking 块 */
-function extractThinkingBlocks(entry: ConversationEntry): string[] {
-  return entry.content_blocks
-    .filter((block): block is Record<string, unknown> => !!block && typeof block === 'object')
-    .filter((block) => block.type === 'thinking' && typeof block.thinking === 'string')
-    .map((block) => block.thinking as string);
-}
-
-/** 格式化工具输入为可读字符串 */
-function formatToolInput(input: unknown): string {
-  try {
-    const normalized = typeof input === 'string' ? JSON.parse(input) : input;
-    return JSON.stringify(normalized, null, 2);
-  } catch {
-    return typeof input === 'string' ? input : JSON.stringify(input, null, 2);
-  }
-}
-
-/** 摘要工具输入 */
-function summarizeToolInput(toolCall: ToolCallInfo): string {
-  try {
-    const normalized =
-      typeof toolCall.input === 'string' ? JSON.parse(toolCall.input) : toolCall.input;
-    if (normalized && typeof normalized === 'object') {
-      const objectValue = normalized as Record<string, unknown>;
-      const preview =
-        objectValue.path ??
-        objectValue.file_path ??
-        objectValue.command ??
-        objectValue.query ??
-        objectValue.prompt ??
-        Object.values(objectValue)[0];
-      if (typeof preview === 'string') {
-        return truncateMiddle(preview, 84);
-      }
-    }
-  } catch {
-    // 忽略摘要解析失败
-  }
-  return toolCall.name;
 }
 
 /** Thinking 块渲染 */
@@ -173,7 +136,10 @@ export const MessageResponse = memo(function MessageResponse({
         <div className="prose prose-slate max-w-none dark:prose-invert">
           <Suspense
             fallback={
-              <div className="text-sm text-slate-500 dark:text-slate-400">正在渲染回复…</div>
+              <div className="space-y-2">
+                <div className="h-4 w-3/4 animate-pulse rounded bg-rc-bg-code" />
+                <div className="h-4 w-1/2 animate-pulse rounded bg-rc-bg-code" />
+              </div>
             }
           >
             <LazyMarkdownRenderer content={entry.text} />

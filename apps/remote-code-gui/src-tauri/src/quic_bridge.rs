@@ -1,0 +1,99 @@
+//! Tauri QUIC bridge — connects to QUIC server and forwards events to the frontend.
+
+use std::sync::Arc;
+use tauri::{AppHandle, Emitter, State};
+use tokio::sync::Mutex;
+
+use rc_remote_transport::QuicTransport;
+use rc_remote_transport::{RemoteTransport, TransportCommand, TransportConfig, TransportStrategy};
+
+type SharedQuicState = Arc<Mutex<Option<QuicBridge>>>;
+
+struct QuicBridge {
+    transport: QuicTransport,
+}
+
+pub struct QuicBridgeState(pub SharedQuicState);
+
+impl QuicBridgeState {
+    pub fn new() -> Self {
+        Self(Arc::new(Mutex::new(None)))
+    }
+}
+
+#[tauri::command]
+pub async fn quic_connect(
+    app: AppHandle,
+    state: State<'_, QuicBridgeState>,
+    url: String,
+    token: String,
+    session_id: String,
+) -> std::result::Result<(), String> {
+    let config = TransportConfig {
+        strategy: TransportStrategy::Quic {
+            server_url: url,
+            server_cert_fingerprint: None,
+        },
+        auth_token: token,
+        session_id,
+        after_sequence: 0,
+        tls: rc_remote_transport::TlsConfig::default(),
+        reconnect: rc_remote_transport::ReconnectPolicy::default(),
+    };
+
+    let mut transport = QuicTransport::new(rc_remote_transport::ReconnectPolicy::default());
+    transport.connect(config).await.map_err(|e| format!("{e:#}"))?;
+
+    // Take the event receiver and forward events to the Tauri frontend.
+    if let Some(mut event_rx) = transport.take_event_receiver() {
+        let app_handle = app.clone();
+        tokio::spawn(async move {
+            while let Some(event) = event_rx.recv().await {
+                let payload = serde_json::to_value(&event).unwrap_or_default();
+                let _ = app_handle.emit("quic-event", payload);
+            }
+        });
+    }
+
+    *state.0.lock().await = Some(QuicBridge { transport });
+
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn quic_send_command(
+    state: State<'_, QuicBridgeState>,
+    command: String,
+) -> std::result::Result<String, String> {
+    let guard = state.0.lock().await;
+    let bridge = guard.as_ref().ok_or("QUIC not connected")?;
+
+    let cmd: TransportCommand = serde_json::from_str(&command).map_err(|e| format!("{e}"))?;
+    let ack = bridge.transport.send_command(cmd).await.map_err(|e| format!("{e}"))?;
+    serde_json::to_string(&ack).map_err(|e| format!("{e}"))
+}
+
+#[tauri::command]
+pub async fn quic_disconnect(
+    state: State<'_, QuicBridgeState>,
+) -> std::result::Result<(), String> {
+    let mut guard = state.0.lock().await;
+    if let Some(mut bridge) = guard.take() {
+        bridge.transport.disconnect().await.map_err(|e| format!("{e}"))?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn quic_state(
+    state: State<'_, QuicBridgeState>,
+) -> std::result::Result<String, String> {
+    let guard = state.0.lock().await;
+    match guard.as_ref() {
+        Some(bridge) => {
+            let s = bridge.transport.state();
+            serde_json::to_string(&s).map_err(|e| format!("{e}"))
+        }
+        None => Ok("\"disconnected\"".to_owned()),
+    }
+}
