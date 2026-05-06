@@ -1,5 +1,3 @@
-#![allow(unsafe_code)]
-
 use anyhow::Context;
 use anyhow::Result;
 use base64::Engine;
@@ -13,7 +11,7 @@ use codex_login::logout_with_revoke;
 use codex_login::save_auth;
 use codex_login::token_data::IdTokenInfo;
 use codex_login::token_data::TokenData;
-use codex_core_test_support::skip_if_no_network;
+use core_test_support::skip_if_no_network;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
@@ -145,7 +143,8 @@ async fn auth_manager_logout_with_revoke_uses_cached_auth() -> Result<()> {
         /*enable_codex_api_key_env*/ false,
         AuthCredentialsStoreMode::File,
         /*chatgpt_base_url*/ None,
-    );
+    )
+    .await;
     save_auth(
         codex_home.path(),
         &chatgpt_auth_with_refresh_token("newer-disk-refresh-token"),

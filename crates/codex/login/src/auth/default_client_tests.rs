@@ -1,6 +1,6 @@
 use super::sanitize_user_agent;
 use super::*;
-use codex_core_test_support::skip_if_no_network;
+use core_test_support::skip_if_no_network;
 use pretty_assertions::assert_eq;
 
 #[test]
