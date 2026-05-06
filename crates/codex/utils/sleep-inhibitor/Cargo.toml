@@ -4,9 +4,8 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
-# Override workspace unsafe_code=forbid — this crate needs Win32 FFI
-[lints.rust]
-unsafe_code = "allow"
+[lints]
+workspace = true
 
 [dependencies]
 tracing = { workspace = true }
