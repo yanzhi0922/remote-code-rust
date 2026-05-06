@@ -129,17 +129,17 @@ pub fn legacy_windows_sandbox_mode_from_entries(
     }
 }
 
-#[cfg(all(target_os = "windows", feature = "codex-windows-sandbox"))]
+#[cfg(target_os = "windows")]
 pub fn sandbox_setup_is_complete(codex_home: &Path) -> bool {
     codex_windows_sandbox::sandbox_setup_is_complete(codex_home)
 }
 
-#[cfg(not(all(target_os = "windows", feature = "codex-windows-sandbox")))]
+#[cfg(not(target_os = "windows"))]
 pub fn sandbox_setup_is_complete(_codex_home: &Path) -> bool {
     false
 }
 
-#[cfg(all(target_os = "windows", feature = "codex-windows-sandbox"))]
+#[cfg(target_os = "windows")]
 pub fn elevated_setup_failure_details(err: &anyhow::Error) -> Option<(String, String)> {
     let failure = codex_windows_sandbox::extract_setup_failure(err)?;
     let code = failure.code.as_str().to_string();
@@ -147,12 +147,12 @@ pub fn elevated_setup_failure_details(err: &anyhow::Error) -> Option<(String, St
     Some((code, message))
 }
 
-#[cfg(not(all(target_os = "windows", feature = "codex-windows-sandbox")))]
+#[cfg(not(target_os = "windows"))]
 pub fn elevated_setup_failure_details(_err: &anyhow::Error) -> Option<(String, String)> {
     None
 }
 
-#[cfg(all(target_os = "windows", feature = "codex-windows-sandbox"))]
+#[cfg(target_os = "windows")]
 pub fn elevated_setup_failure_metric_name(err: &anyhow::Error) -> &'static str {
     if codex_windows_sandbox::extract_setup_failure(err).is_some_and(|failure| {
         matches!(
@@ -166,12 +166,12 @@ pub fn elevated_setup_failure_metric_name(err: &anyhow::Error) -> &'static str {
     }
 }
 
-#[cfg(not(all(target_os = "windows", feature = "codex-windows-sandbox")))]
+#[cfg(not(target_os = "windows"))]
 pub fn elevated_setup_failure_metric_name(_err: &anyhow::Error) -> &'static str {
     panic!("elevated_setup_failure_metric_name is only supported on Windows")
 }
 
-#[cfg(all(target_os = "windows", feature = "codex-windows-sandbox"))]
+#[cfg(target_os = "windows")]
 pub fn run_elevated_setup(
     policy: &SandboxPolicy,
     policy_cwd: &Path,
@@ -192,7 +192,7 @@ pub fn run_elevated_setup(
     )
 }
 
-#[cfg(not(all(target_os = "windows", feature = "codex-windows-sandbox")))]
+#[cfg(not(target_os = "windows"))]
 pub fn run_elevated_setup(
     _policy: &SandboxPolicy,
     _policy_cwd: &Path,
@@ -203,7 +203,7 @@ pub fn run_elevated_setup(
     anyhow::bail!("elevated Windows sandbox setup is only supported on Windows")
 }
 
-#[cfg(all(target_os = "windows", feature = "codex-windows-sandbox"))]
+#[cfg(target_os = "windows")]
 pub fn run_legacy_setup_preflight(
     policy: &SandboxPolicy,
     policy_cwd: &Path,
@@ -220,7 +220,7 @@ pub fn run_legacy_setup_preflight(
     )
 }
 
-#[cfg(all(target_os = "windows", feature = "codex-windows-sandbox"))]
+#[cfg(target_os = "windows")]
 pub fn run_setup_refresh_with_extra_read_roots(
     policy: &SandboxPolicy,
     policy_cwd: &Path,
@@ -240,7 +240,7 @@ pub fn run_setup_refresh_with_extra_read_roots(
     )
 }
 
-#[cfg(not(all(target_os = "windows", feature = "codex-windows-sandbox")))]
+#[cfg(not(target_os = "windows"))]
 pub fn run_legacy_setup_preflight(
     _policy: &SandboxPolicy,
     _policy_cwd: &Path,
@@ -251,7 +251,7 @@ pub fn run_legacy_setup_preflight(
     anyhow::bail!("legacy Windows sandbox setup is only supported on Windows")
 }
 
-#[cfg(not(all(target_os = "windows", feature = "codex-windows-sandbox")))]
+#[cfg(not(target_os = "windows"))]
 pub fn run_setup_refresh_with_extra_read_roots(
     _policy: &SandboxPolicy,
     _policy_cwd: &Path,
@@ -409,7 +409,7 @@ fn emit_windows_sandbox_setup_failure_metrics(
     );
 
     if matches!(mode, WindowsSandboxSetupMode::Elevated) {
-        #[cfg(all(target_os = "windows", feature = "codex-windows-sandbox"))]
+        #[cfg(target_os = "windows")]
         {
             let mut failure_tags: Vec<(&str, &str)> = vec![("originator", originator_tag)];
             let mut code_tag: Option<String> = None;
