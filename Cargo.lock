@@ -1930,6 +1930,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c8d4a3bb8b1e0c1050499d1815f5ab16d04f0959b233085fb31653fbfc9d98f9"
 
 [[package]]
+name = "claude-agent-protocol"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "claude-agents"
 version = "0.1.0"
 dependencies = [
@@ -2098,6 +2113,16 @@ dependencies = [
  "serde_json",
  "tokio",
  "url",
+ "uuid",
+]
+
+[[package]]
+name = "claude-engine-events"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tokio",
  "uuid",
 ]
 
@@ -14104,6 +14129,7 @@ dependencies = [
  "roo-condense",
  "roo-jsonrpc",
  "roo-mcp",
+ "roo-mentions",
  "roo-message-queue",
  "roo-modes",
  "roo-provider",
@@ -14121,6 +14147,7 @@ dependencies = [
  "roo-terminal",
  "roo-tools-search",
  "roo-types",
+ "roo-worktree",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
@@ -14374,6 +14401,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.18",
+ "tracing",
 ]
 
 [[package]]

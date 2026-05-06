@@ -232,13 +232,11 @@ pub struct TaskEngine {
     /// Source: `src/core/task/Task.ts` line 172 — `todoList?: TodoItem[]`
     todo_list: Option<Vec<TodoItem>>,
 
-    /// Provider reference (weak reference to the ClineProvider).
-    ///
-    /// Source: `src/core/task/Task.ts` line 266 — `providerRef: WeakRef<ClineProvider>`
-    /// TODO: Replace with actual provider weak reference when ClineProvider is ported.
-    /// Using a placeholder `()` type for now.
-    #[allow(dead_code)]
-    provider_ref: Option<()>,
+    // NOTE: The TS `providerRef: WeakRef<ClineProvider>` (Task.ts L266) is NOT
+    // ported as a field here. In the Rust decomposition the ClineProvider
+    // responsibilities (webview state, MCP hub, etc.) are handled through the
+    // [`TaskEventEmitter`] event system and by the `AgentLoop` which owns the
+    // `Arc<dyn Provider>`. No weak reference is needed at the engine layer.
 
     /// Global storage path for task persistence.
     ///
@@ -316,8 +314,7 @@ impl TaskEngine {
             api_handler: None,
             // TS L172: todoList
             todo_list: None,
-            // TS L266: providerRef — placeholder
-            provider_ref: None,
+            // TS L266: providerRef — intentionally omitted (see struct comment)
             // TS L267: globalStoragePath
             global_storage_path,
             // TS L287: autoApprovalHandler

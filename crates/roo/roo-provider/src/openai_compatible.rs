@@ -1009,7 +1009,7 @@ impl Provider for OpenAiCompatibleProvider {
         let mut active_tool_call_ids: HashSet<String> = HashSet::new();
         let model_info = model_info.clone();
         let tag_matcher = std::sync::Arc::new(std::sync::Mutex::new(ThinkTagMatcher::new()));
-        let reasoning_accumulator = std::sync::Arc::new(std::sync::Mutex::new(ReasoningDetailsAccumulator::default()));
+        let _reasoning_accumulator = std::sync::Arc::new(std::sync::Mutex::new(ReasoningDetailsAccumulator::default()));
 
         let processed = stream.flat_map(move |chunk_result| {
             let results: Vec<Result<ApiStreamChunk>> = match chunk_result {
