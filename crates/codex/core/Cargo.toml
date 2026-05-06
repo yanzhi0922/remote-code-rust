@@ -9,19 +9,12 @@ doctest = false
 name = "codex_core"
 path = "src/lib.rs"
 
-# NOTE: The [[bin]] for config_schema is disabled because it depends on
-# the full codex-core which requires codex-write-config-schema.
-# [[bin]]
-# name = "codex-write-config-schema"
-# path = "src/bin/config_schema.rs"
+[[bin]]
+name = "codex-write-config-schema"
+path = "src/bin/config_schema.rs"
 
-# Core uses unsafe blocks in process_manager.rs and other places
-[lints.rust]
-unsafe_code = "allow"
-
-[features]
-default = []
-codex-windows-sandbox = []
+[lints]
+workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
@@ -46,6 +39,7 @@ codex-exec-server = { workspace = true }
 codex-features = { workspace = true }
 codex-feedback = { workspace = true }
 codex-login = { workspace = true }
+codex-memories-read = { workspace = true }
 codex-mcp = { workspace = true }
 codex-model-provider-info = { workspace = true }
 codex-models-manager = { workspace = true }
@@ -76,12 +70,10 @@ codex-utils-path = { workspace = true }
 codex-utils-plugins = { workspace = true }
 codex-utils-pty = { workspace = true }
 codex-utils-readiness = { workspace = true }
-codex-secrets = { workspace = true }
 codex-utils-string = { workspace = true }
 codex-utils-stream-parser = { workspace = true }
 codex-utils-template = { workspace = true }
-# TODO: codex-windows-sandbox is not available in source (path = "../windows-sandbox-rs")
-# codex-windows-sandbox = { package = "codex-windows-sandbox", path = "../windows-sandbox-rs" }
+codex-windows-sandbox = { package = "codex-windows-sandbox", path = "../windows-sandbox-rs" }
 csv = { workspace = true }
 dirs = { workspace = true }
 dunce = { workspace = true }
@@ -128,9 +120,6 @@ uuid = { workspace = true, features = ["serde", "v4", "v5"] }
 which = { workspace = true }
 whoami = { workspace = true }
 
-[target.'cfg(target_os = "macos")'.dependencies]
-core-foundation = "0.9"
-
 # Build OpenSSL from source for musl builds.
 [target.x86_64-unknown-linux-musl.dependencies]
 openssl-sys = { workspace = true, features = ["vendored"] }
@@ -139,13 +128,6 @@ openssl-sys = { workspace = true, features = ["vendored"] }
 [target.aarch64-unknown-linux-musl.dependencies]
 openssl-sys = { workspace = true, features = ["vendored"] }
 
-[target.'cfg(target_os = "windows")'.dependencies]
-windows-sys = { version = "0.52", features = [
-    "Win32_Foundation",
-    "Win32_System_Com",
-    "Win32_UI_Shell",
-] }
-
 [target.'cfg(unix)'.dependencies]
 codex-shell-escalation = { workspace = true }
 
@@ -153,17 +135,16 @@ codex-shell-escalation = { workspace = true }
 assert_cmd = { workspace = true }
 assert_matches = { workspace = true }
 codex-otel = { workspace = true }
-# TODO: codex-test-binary-support has circular dependency (needs arg0 → linux-sandbox → core)
-# codex-test-binary-support = { workspace = true }
-codex-core-test-support = { workspace = true }
+codex-test-binary-support = { workspace = true }
 codex-utils-cargo-bin = { workspace = true }
+core_test_support = { workspace = true }
 ctor = { workspace = true }
 insta = { workspace = true }
 maplit = { workspace = true }
 opentelemetry = { workspace = true }
 predicates = { workspace = true }
 pretty_assertions = { workspace = true }
-test-case = { workspace = true }
+test-case = "3.3.1"
 opentelemetry_sdk = { workspace = true, features = [
     "experimental_metrics_custom_reader",
     "metrics",
