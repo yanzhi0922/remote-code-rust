@@ -12,10 +12,10 @@ expression: sanitized
 │                                                                       │
 │  Model:            gpt-5.1-codex-max (reasoning none, summaries auto) │
 │  Directory: [[workspace]]                                             │
-│  Permissions:      Custom (workspace with network access, on-request) │
+│  Permissions:      Workspace (auto-review)                            │
 │  Agents.md:        <none>                                             │
 │                                                                       │
-│  Token usage:      750 total  (500 input + 250 output)                │
-│  Context window:   100% left (750 used / 272K)                        │
+│  Token usage:      0 total  (0 input + 0 output)                      │
+│  Context window:   100% left (0 used / 272K)                          │
 │  Limits:           data not available yet                             │
 ╰───────────────────────────────────────────────────────────────────────╯
