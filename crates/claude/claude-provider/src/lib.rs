@@ -792,6 +792,13 @@ fn provider_for_request<'a>(
     let mut effective = provider.clone();
     if let Some(model) = context.model_override.as_ref() {
         effective.model = Some(model.clone());
+        // Strip thinking config when falling back to a model that doesn't support it.
+        // TS reference: when the target model is not Claude-family, the thinking
+        // budget and extended-thinking beta headers must be removed from the request.
+        let model_lower = model.to_ascii_lowercase();
+        if !model_lower.contains("claude") {
+            effective.thinking_budget = None;
+        }
     }
     if let Some(max_output_tokens) = context.max_output_tokens {
         effective.max_output_tokens = max_output_tokens;
