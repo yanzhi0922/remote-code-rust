@@ -7,6 +7,92 @@ use serde_json::Value;
 
 use crate::resources::ServerResource;
 
+// ---------------------------------------------------------------------------
+// Tool result truncation
+// ---------------------------------------------------------------------------
+
+/// Default maximum number of characters allowed in MCP tool result content
+/// before truncation is applied.
+const DEFAULT_MCP_TOOL_RESULT_MAX_CHARS: usize = 50_000;
+
+/// Environment variable name for configuring the maximum MCP output size in
+/// tokens. When set, the value is multiplied by 4 to estimate a character
+/// budget (matching the TS `mcpValidation.ts:77-79` approach).
+const MAX_MCP_OUTPUT_TOKENS_ENV: &str = "MAX_MCP_OUTPUT_TOKENS";
+
+/// Return the effective maximum character budget for MCP tool results.
+///
+/// If the `MAX_MCP_OUTPUT_TOKENS` environment variable is set, its value is
+/// parsed as a `usize` and multiplied by 4 to produce a character budget.
+/// Otherwise the default of 50,000 characters is used.
+#[must_use]
+pub fn mcp_tool_result_max_chars() -> usize {
+    if let Ok(val) = std::env::var(MAX_MCP_OUTPUT_TOKENS_ENV) {
+        if let Ok(tokens) = val.parse::<usize>() {
+            return tokens.saturating_mul(4);
+        }
+    }
+    DEFAULT_MCP_TOOL_RESULT_MAX_CHARS
+}
+
+/// Maximum number of characters allowed in MCP tool result content before
+/// truncation is applied. Large results are truncated to prevent context
+/// window overflow and excessive memory usage.
+///
+/// NOTE: Prefer using [`mcp_tool_result_max_chars()`] which respects the
+/// `MAX_MCP_OUTPUT_TOKENS` environment variable. This constant is kept for
+/// backward compatibility.
+pub const MCP_TOOL_RESULT_MAX_CHARS: usize = 50_000;
+
+/// Truncation notice appended to tool results that exceed the character limit.
+pub const MCP_TOOL_RESULT_TRUNCATION_NOTICE: &str =
+    "\n\n[Output truncated: exceeded 50,000 character limit]";
+
+/// Truncate a tool result string if it exceeds the configured character budget.
+///
+/// Uses [`mcp_tool_result_max_chars()`] to determine the effective limit, which
+/// respects the `MAX_MCP_OUTPUT_TOKENS` environment variable.
+///
+/// If the content exceeds the limit, it is sliced to the budget minus the
+/// notice length, then the truncation notice is appended.
+#[must_use]
+pub fn truncate_tool_result_content(content: &str) -> String {
+    let max_chars = mcp_tool_result_max_chars();
+    if content.len() <= max_chars {
+        return content.to_owned();
+    }
+    let truncate_at = max_chars.saturating_sub(MCP_TOOL_RESULT_TRUNCATION_NOTICE.len());
+    let mut truncated = content.chars().take(truncate_at).collect::<String>();
+    truncated.push_str(MCP_TOOL_RESULT_TRUNCATION_NOTICE);
+    truncated
+}
+
+/// Truncate all text content blocks in a [`McpToolCallResult`] that exceed
+/// the character limit.
+///
+/// This modifies the result in-place by replacing oversized text content
+/// with a truncated version plus the notice.
+pub fn truncate_tool_call_result(result: &mut McpToolCallResult) {
+    let max_chars = mcp_tool_result_max_chars();
+
+    // Truncate the legacy tool_result field.
+    if let Some(Value::String(s)) = &result.tool_result
+        && s.len() > max_chars
+    {
+        result.tool_result = Some(Value::String(truncate_tool_result_content(s)));
+    }
+
+    // Truncate text content blocks.
+    for content in &mut result.content {
+        if content.kind == "text"
+            && let Some(Value::String(s)) = content.fields.get_mut("text")
+            && s.len() > max_chars
+        {
+            *s = truncate_tool_result_content(s);
+        }
+    }
+}
+
 /// Client identification sent during MCP initialisation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct McpClientInfo {
@@ -297,5 +383,31 @@ mod tests {
         let inspection: McpServerInspection = serde_json::from_str(json).expect("deserialize");
         assert!(inspection.resources.is_empty());
         assert!(inspection.prompts.is_empty());
+    }
+
+    #[test]
+    fn mcp_tool_result_max_chars_default() {
+        // Ensure the env var is not set for this test.
+        unsafe { std::env::remove_var("MAX_MCP_OUTPUT_TOKENS"); }
+        assert_eq!(super::mcp_tool_result_max_chars(), 50_000);
+    }
+
+    #[test]
+    fn truncate_tool_result_content_uses_env_var() {
+        // Set the env var to 100 tokens => 400 chars budget.
+        unsafe { std::env::set_var("MAX_MCP_OUTPUT_TOKENS", "100"); }
+        let long = "a".repeat(500);
+        let truncated = super::truncate_tool_result_content(&long);
+        assert!(truncated.len() <= 500);
+        assert!(truncated.contains("[Output truncated"));
+        // Clean up.
+        unsafe { std::env::remove_var("MAX_MCP_OUTPUT_TOKENS"); }
+    }
+
+    #[test]
+    fn truncate_tool_result_content_short_passthrough() {
+        unsafe { std::env::remove_var("MAX_MCP_OUTPUT_TOKENS"); }
+        let short = "hello";
+        assert_eq!(super::truncate_tool_result_content(short), short);
     }
 }

@@ -32,8 +32,48 @@ pub enum DecisionReason {
     },
     /// Decision from an async agent.
     AsyncAgent { reason: String },
+    /// Decision due to sandbox override (excluded command or disabled sandbox).
+    SandboxOverride {
+        reason: SandboxOverrideReason,
+    },
+    /// Decision from a bash classifier.
+    Classifier {
+        classifier: String,
+        reason: String,
+    },
+    /// Decision based on working directory scope.
+    WorkingDir { reason: String },
+    /// Decision from a safety check (sensitive paths, Windows bypass, bridge).
+    SafetyCheck {
+        reason: String,
+        classifier_approvable: bool,
+    },
+    /// Other / uncategorized reason.
+    Other { reason: String },
     /// Default fallback reason.
     Default,
+}
+
+/// Reason for a sandbox override decision.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SandboxOverrideReason {
+    ExcludedCommand,
+    DangerouslyDisableSandbox,
+}
+
+/// Metadata for a permission command.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PermissionCommandMetadata {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
+
+/// Metadata attached to permission decisions.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PermissionMetadata {
+    pub command: PermissionCommandMetadata,
 }
 
 /// Result when permission is granted.
@@ -50,6 +90,8 @@ pub struct AllowDecision {
     pub tool_use_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub accept_feedback: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_blocks: Option<Vec<serde_json::Value>>,
 }
 
 /// Metadata for a pending classifier check.
@@ -74,9 +116,13 @@ pub struct AskDecision {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub blocked_path: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub pending_classifier_check: Option<PendingClassifierCheck>,
+    pub metadata: Option<PermissionMetadata>,
     #[serde(default)]
     pub is_bash_security_check_for_misparsing: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_classifier_check: Option<PendingClassifierCheck>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_blocks: Option<Vec<serde_json::Value>>,
 }
 
 /// Result when permission is denied.
@@ -123,6 +169,7 @@ impl PermissionDecisionV2 {
             decision_reason: reason,
             tool_use_id: None,
             accept_feedback: None,
+            content_blocks: None,
         })
     }
 
@@ -145,8 +192,10 @@ impl PermissionDecisionV2 {
             decision_reason: reason,
             suggestions: None,
             blocked_path: None,
-            pending_classifier_check: None,
+            metadata: None,
             is_bash_security_check_for_misparsing: false,
+            pending_classifier_check: None,
+            content_blocks: None,
         })
     }
 

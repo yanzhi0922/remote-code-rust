@@ -5,7 +5,7 @@ use claude_core::{
     MessageOrigin, SessionId, SystemMessage, SystemMessageSubtype, ToolCall, ToolUseSummaryMessage,
     UsageAccumulator,
 };
-use claude_engine_events::{EngineEvent, Usage};
+use rc_engine_events::{EngineEvent, Usage};
 use serde_json::{Value, json};
 use thiserror::Error;
 use uuid::Uuid;
@@ -259,9 +259,14 @@ pub(crate) fn usage_from_accumulator(accumulator: &UsageAccumulator) -> Usage {
         cache_creation_input_tokens: accumulator.cache_creation_input_tokens,
         cache_read_input_tokens: accumulator.cache_read_input_tokens,
         total_tokens: accumulator.total_tokens(),
+        server_tool_use_web_search_requests: accumulator.server_tool_use_web_search_requests,
+        server_tool_use_web_fetch_requests: accumulator.server_tool_use_web_fetch_requests,
+        cache_creation_ephemeral_5m_input_tokens: accumulator.cache_creation_ephemeral_5m_input_tokens,
+        cache_creation_ephemeral_1h_input_tokens: accumulator.cache_creation_ephemeral_1h_input_tokens,
     }
 }
 
+#[allow(dead_code)]
 pub(crate) fn assistant_message_from_response(response: &claude_core::ProviderResponse) -> Message {
     assistant_message_from_response_with_parent(response, None)
 }
@@ -342,6 +347,7 @@ pub(crate) fn assistant_message_from_response_with_parent(
     })
 }
 
+#[allow(dead_code)]
 pub(crate) fn tool_result_message(tool_call: &ToolCall, result: &claude_core::ToolResult) -> Message {
     tool_result_message_with_parent(tool_call, result, None)
 }
@@ -384,7 +390,7 @@ mod tests {
         ConversationEntry, PermissionMode, ProviderResponse, SessionId, SubAgentCompletion,
         ToolCall, ToolResult, UsageSummary,
     };
-    use claude_engine_events::EngineEvent;
+    use rc_engine_events::EngineEvent;
     use claude_provider::context::ContextWindowManager;
     use claude_provider::{ConversationBackend, StreamingCallbacks};
     use serde_json::json;
@@ -492,6 +498,7 @@ mod tests {
             request_id: None,
             usage: UsageSummary::default(),
             stop_reason: "tool_use".to_owned(),
+            research: None,
         };
 
         let message = assistant_message_from_response(&response);
@@ -569,7 +576,11 @@ mod tests {
                         }
                         MockStreamingEvent::Usage(input_tokens, output_tokens) => {
                             if let Some(callback) = callbacks.on_usage.as_ref() {
-                                callback(input_tokens, output_tokens);
+                                callback(claude_provider::streaming::StreamingUsageUpdate {
+                                    input_tokens,
+                                    output_tokens,
+                                    ..Default::default()
+                                });
                             }
                         }
                     }
@@ -672,8 +683,10 @@ mod tests {
                     output_tokens: 5,
                     cache_read_input_tokens: 0,
                     cache_creation_input_tokens: 0,
+                    ..Default::default()
                 },
                 stop_reason: "tool_use".to_owned(),
+                research: None,
             },
             ProviderResponse {
                 text: "done".to_owned(),
@@ -687,8 +700,10 @@ mod tests {
                     output_tokens: 7,
                     cache_read_input_tokens: 0,
                     cache_creation_input_tokens: 0,
+                    ..Default::default()
                 },
                 stop_reason: "end_turn".to_owned(),
+                research: None,
             },
         ]));
         let config = QueryEngineConfig::new(
@@ -696,7 +711,7 @@ mod tests {
             "mock-model",
             backend,
             Arc::new(MockToolRunner),
-            claude_engine_events::EventStream::new(64),
+            rc_engine_events::EventStream::new(64),
         )
         .with_observer(observer.clone());
         let mut engine_events = config.event_stream.subscribe();
@@ -791,7 +806,7 @@ mod tests {
             "mock-model",
             backend,
             Arc::new(MockToolRunner),
-            claude_engine_events::EventStream::new(16),
+            rc_engine_events::EventStream::new(16),
         )
         .with_observer(observer.clone());
         let mut engine_events = config.event_stream.subscribe();
@@ -863,8 +878,10 @@ mod tests {
                         output_tokens: 5,
                         cache_read_input_tokens: 0,
                         cache_creation_input_tokens: 0,
+                    ..Default::default()
                     },
                     stop_reason: "tool_use".to_owned(),
+                    research: None,
                 },
                 ProviderResponse {
                     text: "done".to_owned(),
@@ -878,8 +895,10 @@ mod tests {
                         output_tokens: 4,
                         cache_read_input_tokens: 0,
                         cache_creation_input_tokens: 0,
+                    ..Default::default()
                     },
                     stop_reason: "end_turn".to_owned(),
+                    research: None,
                 },
             ],
             vec![
@@ -901,7 +920,7 @@ mod tests {
             "mock-model",
             Arc::clone(&backend) as Arc<dyn ConversationBackend>,
             Arc::new(MockToolRunner),
-            claude_engine_events::EventStream::new(32),
+            rc_engine_events::EventStream::new(32),
         )
         .with_observer(observer.clone())
         .with_provider_invocation_mode(ProviderInvocationMode::Streaming);
@@ -970,6 +989,7 @@ mod tests {
                 request_id: None,
                 usage: UsageSummary::default(),
                 stop_reason: "end_turn".to_owned(),
+                research: None,
             }],
         ));
         let config = QueryEngineConfig::new(
@@ -977,7 +997,7 @@ mod tests {
             "primary-model",
             Arc::clone(&backend) as Arc<dyn ConversationBackend>,
             Arc::new(MockToolRunner),
-            claude_engine_events::EventStream::new(8),
+            rc_engine_events::EventStream::new(8),
         )
         .with_fallback_model("fallback-model");
         let mut engine = QueryEngine::new(
@@ -1021,8 +1041,10 @@ mod tests {
                     output_tokens: 8_192,
                     cache_read_input_tokens: 0,
                     cache_creation_input_tokens: 0,
+                    ..Default::default()
                 },
                 stop_reason: "max_tokens".to_owned(),
+                research: None,
             },
             ProviderResponse {
                 text: "full".to_owned(),
@@ -1036,8 +1058,10 @@ mod tests {
                     output_tokens: 10,
                     cache_read_input_tokens: 0,
                     cache_creation_input_tokens: 0,
+                    ..Default::default()
                 },
                 stop_reason: "end_turn".to_owned(),
+                research: None,
             },
         ]));
         let config = QueryEngineConfig::new(
@@ -1045,7 +1069,7 @@ mod tests {
             "primary-model",
             Arc::clone(&backend) as Arc<dyn ConversationBackend>,
             Arc::new(MockToolRunner),
-            claude_engine_events::EventStream::new(8),
+            rc_engine_events::EventStream::new(8),
         );
         let mut engine = QueryEngine::new(
             config,
@@ -1066,7 +1090,7 @@ mod tests {
         let contexts = backend.contexts();
         assert_eq!(contexts.len(), 2);
         assert_eq!(contexts[0].max_output_tokens, None);
-        assert_eq!(contexts[1].max_output_tokens, Some(16_384));
+        assert_eq!(contexts[1].max_output_tokens, Some(64_000));
     }
 
     #[tokio::test]
@@ -1085,15 +1109,17 @@ mod tests {
                 output_tokens: 1,
                 cache_read_input_tokens: 0,
                 cache_creation_input_tokens: 0,
+                    ..Default::default()
             },
             stop_reason: "end_turn".to_owned(),
+            research: None,
         }]));
         let mut config = QueryEngineConfig::new(
             session_id.clone(),
             "mock-model",
             backend,
             Arc::new(MockToolRunner),
-            claude_engine_events::EventStream::new(16),
+            rc_engine_events::EventStream::new(16),
         )
         .with_observer(observer.clone());
         config.context_manager = ContextWindowManager::new(100, 20);
@@ -1166,15 +1192,17 @@ mod tests {
                 output_tokens: 1,
                 cache_read_input_tokens: 0,
                 cache_creation_input_tokens: 0,
+                    ..Default::default()
             },
             stop_reason: "end_turn".to_owned(),
+            research: None,
         }]));
         let mut config = QueryEngineConfig::new(
             session_id.clone(),
             "mock-model",
             backend,
             Arc::new(MockToolRunner),
-            claude_engine_events::EventStream::new(8),
+            rc_engine_events::EventStream::new(8),
         );
         config.context_manager = ContextWindowManager::new(100, 20);
         config = config.with_post_compact_transform(Arc::new(|mut conversation| {
@@ -1235,15 +1263,17 @@ mod tests {
                 output_tokens: 1,
                 cache_read_input_tokens: 0,
                 cache_creation_input_tokens: 0,
+                    ..Default::default()
             },
             stop_reason: "end_turn".to_owned(),
+            research: None,
         }]));
         let mut config = QueryEngineConfig::new(
             session_id.clone(),
             "mock-model",
             backend,
             Arc::new(MockToolRunner),
-            claude_engine_events::EventStream::new(8),
+            rc_engine_events::EventStream::new(8),
         );
         config.context_manager = ContextWindowManager::new(100, 20);
         config = config.with_compact_conversation_handler(Arc::new(|conversation, _manager| {
@@ -1314,8 +1344,10 @@ mod tests {
                 output_tokens: 1,
                 cache_read_input_tokens: 0,
                 cache_creation_input_tokens: 0,
+                    ..Default::default()
             },
             stop_reason: "end_turn".to_owned(),
+            research: None,
         }]));
         let sequence = Arc::new(Mutex::new(Vec::<String>::new()));
         let post_sampling_sequence = Arc::clone(&sequence);
@@ -1326,7 +1358,7 @@ mod tests {
             "mock-model",
             backend,
             Arc::new(MockToolRunner),
-            claude_engine_events::EventStream::new(8),
+            rc_engine_events::EventStream::new(8),
         )
         .with_post_sampling_hook(Arc::new(move |context: ReplHookContext| {
             let post_sampling_sequence = Arc::clone(&post_sampling_sequence);
@@ -1403,8 +1435,10 @@ mod tests {
                     output_tokens: 1,
                     cache_read_input_tokens: 0,
                     cache_creation_input_tokens: 0,
+                    ..Default::default()
                 },
                 stop_reason: "end_turn".to_owned(),
+                research: None,
             },
             ProviderResponse {
                 text: "second".to_owned(),
@@ -1418,8 +1452,10 @@ mod tests {
                     output_tokens: 1,
                     cache_read_input_tokens: 0,
                     cache_creation_input_tokens: 0,
+                    ..Default::default()
                 },
                 stop_reason: "end_turn".to_owned(),
+                research: None,
             },
         ]));
         let stop_count = Arc::new(AtomicUsize::new(0));
@@ -1430,7 +1466,7 @@ mod tests {
             "mock-model",
             backend,
             Arc::new(MockToolRunner),
-            claude_engine_events::EventStream::new(8),
+            rc_engine_events::EventStream::new(8),
         )
         .with_stop_hook(Arc::new(
             move |_context: ReplHookContext, _request: StopHookRequest| {

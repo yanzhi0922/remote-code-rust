@@ -18,6 +18,6 @@ serde.workspace = true
 serde_json.workspace = true
 uuid.workspace = true
 claude-core = { path = "../claude-core" }
-claude-engine-events = { path = "../claude-engine-events" }
+rc-engine-events = { path = "../../shared/rc-engine-events" }
 claude-permissions = { path = "../claude-permissions" }
 claude-ui-bridge = { path = "../claude-ui-bridge" }

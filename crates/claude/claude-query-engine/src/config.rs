@@ -211,7 +211,7 @@ pub struct QueryEngineConfig {
     pub backend: Arc<dyn ConversationBackend>,
     pub tool_runner: Arc<dyn ToolRunner>,
     pub observer: Arc<dyn QueryObserver>,
-    pub event_stream: claude_engine_events::EventStream,
+    pub event_stream: rc_engine_events::EventStream,
     pub provider_invocation_mode: ProviderInvocationMode,
     pub max_turns: u32,
     pub context_manager: ContextWindowManager,
@@ -245,7 +245,7 @@ impl QueryEngineConfig {
         model: impl Into<String>,
         backend: Arc<dyn ConversationBackend>,
         tool_runner: Arc<dyn ToolRunner>,
-        event_stream: claude_engine_events::EventStream,
+        event_stream: rc_engine_events::EventStream,
     ) -> Self {
         let model = model.into();
         Self {

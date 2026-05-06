@@ -75,17 +75,23 @@ pub fn mcp_oauth_server_key(server_name: &str, server_config: &McpServerConfig) 
 
 fn remote_transport_identity(server_config: &McpServerConfig) -> Option<serde_json::Value> {
     match &server_config.transport {
-        McpTransportConfig::Http { url, headers } => Some(json!({
+        McpTransportConfig::Http { url, headers, .. } => Some(json!({
             "type": "http",
             "url": url,
             "headers": headers,
         })),
-        McpTransportConfig::WebSocket { url, headers } => Some(json!({
+        McpTransportConfig::WebSocket { url, headers, .. } => Some(json!({
             "type": "ws",
             "url": url,
             "headers": headers,
         })),
+        McpTransportConfig::Sse { url, headers, .. } => Some(json!({
+            "type": "sse",
+            "url": url,
+            "headers": headers,
+        })),
         McpTransportConfig::Stdio { .. } => None,
+        _ => None,
     }
 }
 
@@ -991,6 +997,7 @@ mod tests {
             transport: McpTransportConfig::Http {
                 url: url.to_owned(),
                 headers: Default::default(),
+                headers_helper: None,
             },
             capabilities: Default::default(),
             startup_timeout_secs: None,

@@ -1,4 +1,4 @@
-﻿//! Agent system integration tests.
+//! Agent system integration tests.
 //!
 //! Validates that rc-agents types flow correctly through the agent pipeline:
 //! definition 鈫?runner 鈫?execution config, fork, coordinator/worker,
@@ -574,11 +574,11 @@ fn context_slice_default_and_serialization() {
 // Phase 6.1 鈥?rc-agent-protocol integration tests
 // 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺?
 
-use claude_agent_protocol::adapters::RemoteClaudeAdapter;
-use claude_agent_protocol::health::{HealthCheckConfig, HealthChecker, HealthStatus};
-use claude_agent_protocol::restart::{RestartPolicy, RestartTracker};
-use claude_agent_protocol::types::{AgentCapability, AgentConfig, AgentInfo, AgentStatus};
-use claude_agent_protocol::{
+use rc_agent_protocol::adapters::RemoteClaudeAdapter;
+use rc_agent_protocol::health::{HealthCheckConfig, HealthChecker, HealthStatus};
+use rc_agent_protocol::restart::{RestartPolicy, RestartTracker};
+use rc_agent_protocol::types::{AgentCapability, AgentConfig, AgentInfo, AgentStatus};
+use rc_agent_protocol::{
     AgentAdapter, AgentResult, AgentRouter, AgentType, PermissionDecision, ToolCallInfo,
     UnifiedAgentEvent, UsageInfo,
 };
@@ -1144,7 +1144,7 @@ fn restart_tracker_zero_max_never_allows() {
 
 #[tokio::test]
 async fn remote_roo_adapter_lifecycle_and_routing() {
-    let adapter = claude_agent_protocol::adapters::RemoteRooAdapter::new_roo().with_send_message(
+    let adapter = rc_agent_protocol::adapters::RemoteRooAdapter::new_roo().with_send_message(
         |_sid, msg| {
             Ok(vec![
                 UnifiedAgentEvent::MessageDelta {
@@ -1190,7 +1190,7 @@ async fn remote_roo_adapter_lifecycle_and_routing() {
 
 #[tokio::test]
 async fn remote_codex_adapter_lifecycle_and_routing() {
-    let adapter = claude_agent_protocol::adapters::RemoteCodexAdapter::new_codex().with_send_message(
+    let adapter = rc_agent_protocol::adapters::RemoteCodexAdapter::new_codex().with_send_message(
         |_sid, msg| {
             Ok(vec![
                 UnifiedAgentEvent::MessageDelta {
@@ -1246,7 +1246,7 @@ async fn three_agents_route_through_same_router() {
     boxed_c.start(&protocol_test_config()).await.unwrap();
     router.register("s-claude".into(), boxed_c).await;
 
-    let roo = claude_agent_protocol::adapters::RemoteRooAdapter::new_roo()
+    let roo = rc_agent_protocol::adapters::RemoteRooAdapter::new_roo()
         .with_send_message(|_sid, msg| {
             Ok(vec![UnifiedAgentEvent::MessageDelta {
                 session_id: "s-roo".into(),
@@ -1267,7 +1267,7 @@ async fn three_agents_route_through_same_router() {
     }).await.unwrap();
     router.register("s-roo".into(), boxed_r).await;
 
-    let codex = claude_agent_protocol::adapters::RemoteCodexAdapter::new_codex()
+    let codex = rc_agent_protocol::adapters::RemoteCodexAdapter::new_codex()
         .with_send_message(|_sid, msg| {
             Ok(vec![UnifiedAgentEvent::MessageDelta {
                 session_id: "s-codex".into(),

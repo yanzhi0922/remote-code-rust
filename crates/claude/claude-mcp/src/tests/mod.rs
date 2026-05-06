@@ -175,6 +175,7 @@ fn saves_config_in_round_trip_format() {
                             "Authorization".to_owned(),
                             "Bearer token".to_owned(),
                         )]),
+                        headers_helper: None,
                     },
                     capabilities: McpCapabilityMatrix::default(),
                     startup_timeout_secs: None,
@@ -640,6 +641,7 @@ async fn http_transport_attempts_connection() {
         transport: McpTransportConfig::Http {
             url: "https://example.com/mcp".to_owned(),
             headers: BTreeMap::new(),
+            headers_helper: None,
         },
         capabilities: McpCapabilityMatrix::default(),
         startup_timeout_secs: None,

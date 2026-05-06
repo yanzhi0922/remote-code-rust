@@ -21,7 +21,7 @@ thiserror.workspace = true
 tokio.workspace = true
 uuid.workspace = true
 claude-core = { path = "../claude-core" }
-claude-engine-events = { path = "../claude-engine-events" }
+rc-engine-events = { path = "../../shared/rc-engine-events" }
 claude-provider = { path = "../claude-provider" }
 
 [dev-dependencies]

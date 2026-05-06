@@ -54,6 +54,8 @@ pub enum McpRuntimeError {
         server: String,
         transport: McpTransport,
     },
+    #[error("{0}")]
+    Transport(String),
     #[error("failed to spawn MCP server `{server}` using `{command}`")]
     Spawn {
         server: String,
@@ -149,6 +151,30 @@ pub enum McpRuntimeError {
     // ── Proxy errors ───────────────────────────────────────────────────────
     #[error("proxy error: {message}")]
     Proxy { message: String },
+}
+
+// ── Session expiry detection ─────────────────────────────────────────────────
+
+/// JSON-RPC error code indicating the MCP session has expired.
+///
+/// When the server returns this code (typically accompanied by HTTP 404),
+/// the client should tear down the current session and reconnect.
+pub const MCP_SESSION_EXPIRED_CODE: i64 = -32001;
+
+/// Check whether an error indicates that the MCP session has expired and
+/// the client should reconnect.
+///
+/// Session expiry is detected by either:
+/// - An HTTP 404 response
+/// - A JSON-RPC error with code `-32001`
+pub fn is_session_expired_error(error: &McpRuntimeError) -> bool {
+    match error {
+        McpRuntimeError::HttpError { status, .. } => *status == 404,
+        McpRuntimeError::Rpc { code, .. } | McpRuntimeError::JsonRpc { code, .. } => {
+            *code == MCP_SESSION_EXPIRED_CODE
+        }
+        _ => false,
+    }
 }
 
 #[cfg(test)]

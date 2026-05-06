@@ -330,7 +330,7 @@ fn query_checkpoint_serialization() {
 
 #[test]
 fn engine_event_stream_started() {
-    let event = claude_engine_events::EngineEvent::StreamStarted {
+    let event = rc_engine_events::EngineEvent::StreamStarted {
         request_id: "req-001".to_owned(),
     };
     let json = serde_json::to_string(&event).expect("serialize");
@@ -340,7 +340,7 @@ fn engine_event_stream_started() {
 #[test]
 fn engine_event_tool_use_lifecycle() {
     // Tool use started
-    let started = claude_engine_events::EngineEvent::ToolUseStarted {
+    let started = rc_engine_events::EngineEvent::ToolUseStarted {
         tool_use_id: "tu-1".to_owned(),
         tool_name: "read_file".to_owned(),
         input: serde_json::json!({"path": "/tmp/test.rs"}),
@@ -349,9 +349,9 @@ fn engine_event_tool_use_lifecycle() {
     assert!(json.contains("tool_use_started"));
 
     // Tool use completed
-    let completed = claude_engine_events::EngineEvent::ToolUseCompleted {
+    let completed = rc_engine_events::EngineEvent::ToolUseCompleted {
         tool_use_id: "tu-1".to_owned(),
-        result: claude_engine_events::types::ToolResult {
+        result: rc_engine_events::types::ToolResult {
             content: "file contents".to_owned(),
             is_error: false,
             mime_type: None,
@@ -363,14 +363,14 @@ fn engine_event_tool_use_lifecycle() {
 
 #[test]
 fn engine_event_compact_lifecycle() {
-    let started = claude_engine_events::EngineEvent::CompactStarted {
+    let started = rc_engine_events::EngineEvent::CompactStarted {
         strategy: "full".to_owned(),
     };
     let json = serde_json::to_string(&started).expect("serialize");
     assert!(json.contains("compact_started"));
 
-    let completed = claude_engine_events::EngineEvent::CompactCompleted {
-        result: claude_engine_events::CompactionResult {
+    let completed = rc_engine_events::EngineEvent::CompactCompleted {
+        result: rc_engine_events::CompactionResult {
             strategy: "full".to_owned(),
             before_messages: 50,
             after_messages: 25,

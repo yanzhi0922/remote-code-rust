@@ -239,8 +239,10 @@ fn stress_large_provider_response() {
             output_tokens: 50000,
             cache_read_input_tokens: 10000,
             cache_creation_input_tokens: 5000,
+            ..Default::default()
         },
         stop_reason: "tool_use".to_owned(),
+        research: None,
     };
 
     let json = serde_json::to_string(&response).expect("should serialize");

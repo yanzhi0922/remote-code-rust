@@ -32,6 +32,7 @@ impl From<PermissionMode> for ExtendedPermissionMode {
             PermissionMode::AcceptEdits => Self::AcceptEdits,
             PermissionMode::BypassPermissions => Self::BypassPermissions,
             PermissionMode::DontAsk => Self::DontAsk,
+            PermissionMode::Auto => Self::Auto,
         }
     }
 }

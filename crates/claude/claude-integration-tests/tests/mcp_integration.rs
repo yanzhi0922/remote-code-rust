@@ -93,6 +93,7 @@ fn transport_config_http() {
     let config = claude_mcp::McpTransportConfig::Http {
         url: "https://mcp.example.com/sse".to_owned(),
         headers: BTreeMap::new(),
+        headers_helper: None,
     };
     assert_eq!(config.kind(), claude_mcp::transport::McpTransport::Http);
 }
@@ -102,6 +103,7 @@ fn transport_config_websocket() {
     let config = claude_mcp::McpTransportConfig::WebSocket {
         url: "wss://mcp.example.com/ws".to_owned(),
         headers: BTreeMap::new(),
+        headers_helper: None,
     };
     assert_eq!(config.kind(), claude_mcp::transport::McpTransport::WebSocket);
 }
