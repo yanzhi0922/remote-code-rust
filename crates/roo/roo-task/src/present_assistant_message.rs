@@ -85,7 +85,7 @@ impl Default for PresentAssistantMessageState {
             assistant_message_content: Vec::new(),
             user_message_content: Vec::new(),
             consecutive_mistake_count: 0,
-            consecutive_mistake_limit: 5,
+            consecutive_mistake_limit: crate::config::DEFAULT_MAX_MISTAKES,
         }
     }
 }

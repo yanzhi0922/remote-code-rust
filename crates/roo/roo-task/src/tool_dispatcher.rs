@@ -16,6 +16,7 @@ use serde_json::Value;
 
 use roo_index::CodeIndexManager;
 use roo_tools::ToolRepetitionDetector;
+use roo_tools_misc::generate_image::ImageGenerationProvider;
 
 // ---------------------------------------------------------------------------
 // FileContextTrackerOps — erased trait for file-context tracking
@@ -48,6 +49,44 @@ pub struct ToolExecutionResult {
     pub images: Option<Vec<String>>,
     /// Whether the tool execution resulted in an error.
     pub is_error: bool,
+    /// Action the agent loop should take after receiving this result.
+    pub action: ToolExecutionAction,
+}
+
+/// Signals what the agent loop should do after a tool returns.
+///
+/// In the TS source, tools like `ask_followup_question` and `attempt_completion`
+/// call `task.ask()` which blocks until the user responds. In our architecture,
+/// tools return a result with an action, and the agent loop handles the interaction.
+#[derive(Debug, Clone)]
+pub enum ToolExecutionAction {
+    /// No special action — tool result is appended as a tool_result message.
+    None,
+    /// `ask_followup_question` — the agent loop should present the question,
+    /// wait for user input, and feed the response back as a tool_result.
+    AskFollowup {
+        question: String,
+        suggestions: Vec<String>,
+    },
+    /// `attempt_completion` — the agent loop should present the completion result
+    /// and wait for user acceptance or feedback.
+    AttemptCompletion {
+        result: String,
+        command: Option<String>,
+    },
+    /// `new_task` — the agent loop should spawn a nested agent loop in the
+    /// specified mode, wait for it to complete, and return the subtask output.
+    SpawnSubtask {
+        mode: String,
+        message: String,
+        todos: Option<String>,
+    },
+}
+
+impl Default for ToolExecutionAction {
+    fn default() -> Self {
+        Self::None
+    }
 }
 
 impl ToolExecutionResult {
@@ -57,6 +96,7 @@ impl ToolExecutionResult {
             text: text.into(),
             images: None,
             is_error: false,
+            action: ToolExecutionAction::None,
         }
     }
 
@@ -66,6 +106,7 @@ impl ToolExecutionResult {
             text: text.into(),
             images: Some(images),
             is_error: false,
+            action: ToolExecutionAction::None,
         }
     }
 
@@ -75,6 +116,7 @@ impl ToolExecutionResult {
             text: text.into(),
             images: None,
             is_error: true,
+            action: ToolExecutionAction::None,
         }
     }
 }
@@ -569,9 +611,12 @@ impl ToolHandler for ApplyDiffHandler {
             None => return ToolExecutionResult::error("Missing required parameter: diff"),
         };
 
+        // Unescape HTML entities for non-Claude models (matches TS ApplyDiffTool.ts line 31-33)
+        let cleaned_diff = roo_tools_fs::clean_diff_content(&diff, context.model_id.as_deref());
+
         let diff_params = roo_types::tool::ApplyDiffParams {
             path: path.clone(),
-            diff,
+            diff: cleaned_diff,
         };
 
         // Validate
@@ -1530,18 +1575,15 @@ impl ToolHandler for AskFollowupQuestionHandler {
 
         match roo_tools_misc::process_followup(&ask_params) {
             Ok(result) => {
-                let output = format!(
-                    "Question: {}\nSuggestions:\n{}",
-                    result.question,
-                    result
-                        .suggestions
-                        .iter()
-                        .enumerate()
-                        .map(|(i, s)| format!("  {}. {}", i + 1, s))
-                        .collect::<Vec<_>>()
-                        .join("\n")
-                );
-                ToolExecutionResult::success(output)
+                ToolExecutionResult {
+                    text: result.question.clone(),
+                    images: None,
+                    is_error: false,
+                    action: ToolExecutionAction::AskFollowup {
+                        question: result.question,
+                        suggestions: result.suggestions,
+                    },
+                }
             }
             Err(e) => ToolExecutionResult::error(format!("ask_followup_question error: {}", e)),
         }
@@ -1579,7 +1621,15 @@ impl ToolHandler for AttemptCompletionHandler {
                 if let Some(warning) = &result.todo_warning {
                     output = format!("{}\n\n{}", warning, output);
                 }
-                ToolExecutionResult::success(output)
+                ToolExecutionResult {
+                    text: output.clone(),
+                    images: None,
+                    is_error: false,
+                    action: ToolExecutionAction::AttemptCompletion {
+                        result: output,
+                        command: completion_params.command,
+                    },
+                }
             }
             Err(e) => ToolExecutionResult::error(format!("attempt_completion error: {}", e)),
         }
@@ -1728,7 +1778,16 @@ impl ToolHandler for NewTaskHandler {
                 if let Some(todos) = &result.todos {
                     output.push_str(&format!("\n\nTodos:\n{}", todos));
                 }
-                ToolExecutionResult::success(output)
+                ToolExecutionResult {
+                    text: output.clone(),
+                    images: None,
+                    is_error: false,
+                    action: ToolExecutionAction::SpawnSubtask {
+                        mode: result.mode,
+                        message: result.message,
+                        todos: result.todos,
+                    },
+                }
             }
             Err(e) => ToolExecutionResult::error(format!("new_task error: {}", e)),
         }
@@ -2105,17 +2164,111 @@ impl ToolHandler for SlashCommandHandler {
 // ---------------------------------------------------------------------------
 // Source: `src/core/tools/GenerateImageTool.ts`
 
+/// Enum erasing the concrete image generation provider.
+///
+/// Needed because `ImageGenerationProvider` uses `async fn` which is not
+/// dyn-compatible.  Each variant dispatches to the concrete implementation.
+enum ImageProvider {
+    OpenRouter(roo_tools_misc::generate_image::OpenRouterImageProvider),
+    Roo(roo_tools_misc::generate_image::RooImageProvider),
+}
+
+impl ImageProvider {
+    async fn generate_image(
+        &self,
+        prompt: &str,
+        model: &str,
+        input_image_data: Option<&str>,
+        api_key: Option<&str>,
+    ) -> Result<roo_tools_misc::generate_image::ImageProviderResponse, roo_tools_misc::generate_image::ImageGenerationError> {
+        match self {
+            ImageProvider::OpenRouter(p) => {
+                p.generate_image(prompt, model, input_image_data, api_key).await
+            }
+            ImageProvider::Roo(p) => {
+                p.generate_image(prompt, model, input_image_data, api_key).await
+            }
+        }
+    }
+}
+
 /// Handler for the `generate_image` tool.
 ///
-/// Validates parameters and returns a placeholder result.
-/// Actual image generation requires an external API provider.
+/// Validates parameters, calls an image generation provider, and saves the
+/// result to disk.
 ///
 /// Source: `src/core/tools/GenerateImageTool.ts`
-pub struct GenerateImageHandler;
+pub struct GenerateImageHandler {
+    /// The image generation provider (e.g. OpenRouter, Roo Cloud).
+    provider: Option<ImageProvider>,
+    /// API key for the provider.
+    api_key: Option<String>,
+    /// Model ID to use for image generation.
+    model: String,
+}
+
+impl GenerateImageHandler {
+    /// Create a new handler with no provider (will return an error on execution).
+    pub fn new() -> Self {
+        Self {
+            provider: None,
+            api_key: None,
+            model: "openai/dall-e-3".to_string(),
+        }
+    }
+
+    /// Create a handler with an OpenRouter provider and API key.
+    pub fn with_open_router(
+        api_key: String,
+        model: String,
+        base_url: Option<String>,
+    ) -> Self {
+        let provider = match base_url {
+            Some(url) => ImageProvider::OpenRouter(
+                roo_tools_misc::generate_image::OpenRouterImageProvider::with_base_url(&url)
+            ),
+            None => ImageProvider::OpenRouter(
+                roo_tools_misc::generate_image::OpenRouterImageProvider::new()
+            ),
+        };
+        Self {
+            provider: Some(provider),
+            api_key: Some(api_key),
+            model,
+        }
+    }
+
+    /// Create a handler with a Roo Cloud provider and API key.
+    pub fn with_roo(
+        api_key: String,
+        model: String,
+        base_url: Option<String>,
+    ) -> Self {
+        let provider = match base_url {
+            Some(url) => ImageProvider::Roo(
+                roo_tools_misc::generate_image::RooImageProvider::with_base_url(&url)
+            ),
+            None => ImageProvider::Roo(
+                roo_tools_misc::generate_image::RooImageProvider::new()
+            ),
+        };
+        Self {
+            provider: Some(provider),
+            api_key: Some(api_key),
+            model,
+        }
+    }
+}
+
+impl Default for GenerateImageHandler {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 #[async_trait]
 impl ToolHandler for GenerateImageHandler {
-    async fn execute(&self, params: Value, _context: &ToolContext) -> ToolExecutionResult {
+    async fn execute(&self, params: Value, context: &ToolContext) -> ToolExecutionResult {
         let prompt = match params.get("prompt").and_then(|v| v.as_str()) {
             Some(p) => p.to_string(),
             None => return ToolExecutionResult::error("Missing required parameter: prompt"),
@@ -2126,8 +2279,8 @@ impl ToolHandler for GenerateImageHandler {
         };
 
         let image_params = roo_tools_misc::GenerateImageParams {
-            prompt,
-            path,
+            prompt: prompt.clone(),
+            path: path.clone(),
             image: params.get("image").and_then(|v| v.as_str()).map(String::from),
         };
 
@@ -2136,12 +2289,107 @@ impl ToolHandler for GenerateImageHandler {
             return ToolExecutionResult::error(format!("generate_image validation error: {}", e));
         }
 
-        // Actual image generation requires an external provider.
-        // Return a placeholder indicating the tool was called successfully.
-        ToolExecutionResult::success(format!(
-            "Image generation requested for '{}' at '{}' (provider not configured)",
-            image_params.prompt, image_params.path
-        ))
+        // Resolve the provider
+        let provider = match &self.provider {
+            Some(p) => p,
+            None => {
+                // No provider configured — return an informative error
+                return ToolExecutionResult::error(format!(
+                    "Image generation requested for '{}' at '{}' but no image generation provider is configured. \
+                     Configure an OpenRouter API key or another image provider to enable image generation.",
+                    prompt, path
+                ));
+            }
+        };
+
+        // Handle optional input image
+        let input_image_data = match &image_params.image {
+            Some(img_path) => {
+                let full_path = std::path::Path::new(&context.cwd).join(img_path);
+                if !full_path.exists() {
+                    return ToolExecutionResult::error(format!(
+                        "Input image not found: {}", img_path
+                    ));
+                }
+                match std::fs::read(&full_path) {
+                    Ok(data) => {
+                        let ext = full_path.extension()
+                            .and_then(|e| e.to_str())
+                            .unwrap_or("png");
+                        Some(roo_tools_misc::generate_image::encode_image_to_data_uri(&data, ext))
+                    }
+                    Err(e) => {
+                        return ToolExecutionResult::error(format!(
+                            "Failed to read input image '{}': {}", img_path, e
+                        ));
+                    }
+                }
+            }
+            None => None,
+        };
+
+        // Call the provider
+        let result = provider.generate_image(
+            &prompt,
+            &self.model,
+            input_image_data.as_deref(),
+            self.api_key.as_deref(),
+        ).await;
+
+        match result {
+            Ok(response) => {
+                if !response.success {
+                    return ToolExecutionResult::error(format!(
+                        "Image generation failed: {}",
+                        response.error.unwrap_or_else(|| "Unknown error".to_string())
+                    ));
+                }
+
+                let image_data_uri = match &response.image_data {
+                    Some(data) => data,
+                    None => return ToolExecutionResult::error(
+                        "Image generation succeeded but no image data was returned".to_string()
+                    ),
+                };
+
+                // Parse the data URI and save to disk
+                match roo_tools_misc::generate_image::parse_image_data_uri(image_data_uri) {
+                    Some((format, raw_bytes)) => {
+                        let final_path = roo_tools_misc::generate_image::determine_final_path(
+                            &path, &format,
+                        );
+                        let full_save_path = std::path::Path::new(&context.cwd).join(&final_path);
+
+                        // Create parent directories if needed
+                        if let Some(parent) = full_save_path.parent() {
+                            if !parent.exists() {
+                                if let Err(e) = std::fs::create_dir_all(parent) {
+                                    return ToolExecutionResult::error(format!(
+                                        "Failed to create directory for '{}': {}", final_path, e
+                                    ));
+                                }
+                            }
+                        }
+
+                        match std::fs::write(&full_save_path, &raw_bytes) {
+                            Ok(()) => ToolExecutionResult::success(format!(
+                                "Image generated and saved to '{}' (format: {}, size: {} bytes)",
+                                final_path, format, raw_bytes.len()
+                            )),
+                            Err(e) => ToolExecutionResult::error(format!(
+                                "Failed to save image to '{}': {}", final_path, e
+                            )),
+                        }
+                    }
+                    None => ToolExecutionResult::error(
+                        "Failed to parse image data URI from provider response".to_string()
+                    ),
+                }
+            }
+            Err(e) => ToolExecutionResult::error(format!(
+                "Image generation error: {}", e
+            )),
+        }
     }
 
     fn tool_name(&self) -> &str {
@@ -2291,22 +2539,150 @@ impl ToolHandler for CustomToolHandler {
                         ToolExecutionResult::success(msg)
                     }
                     roo_custom_tools::HandlerType::Script => {
-                        // Script handler: would execute the script
-                        // For now, return info about the tool
-                        let msg = format!(
-                            "Custom tool '{}' (script): {} — script execution not yet implemented",
-                            definition.name, definition.description
-                        );
-                        ToolExecutionResult::success(msg)
+                        // Script handler: execute the script defined in definition.path
+                        let script_path = match &definition.path {
+                            Some(p) if !p.is_empty() => p.clone(),
+                            _ => {
+                                return ToolExecutionResult::error(format!(
+                                    "Custom tool '{}' (script): no script path defined",
+                                    definition.name
+                                ));
+                            }
+                        };
+
+                        // Check if the script file exists
+                        let script = std::path::Path::new(&script_path);
+                        if !script.exists() {
+                            return ToolExecutionResult::error(format!(
+                                "Custom tool '{}' (script): script not found: {}",
+                                definition.name, script_path
+                            ));
+                        }
+
+                        // Build the command. If the script has a shebang or is a
+                        // known extension, run it directly; otherwise use `sh`.
+                        let (program, args): (String, Vec<String>) = {
+                            let ext = script.extension()
+                                .and_then(|e| e.to_str())
+                                .unwrap_or("")
+                                .to_lowercase();
+                            match ext.as_str() {
+                                "py" => ("python3".to_string(), vec![script_path.clone()]),
+                                "rb" => ("ruby".to_string(), vec![script_path.clone()]),
+                                "js" => ("node".to_string(), vec![script_path.clone()]),
+                                "ts" => ("npx".to_string(), vec!["ts-node".to_string(), script_path.clone()]),
+                                _ => ("sh".to_string(), vec![script_path.clone()]),
+                            }
+                        };
+
+                        // Collect parameter values to pass as arguments
+                        let param_args: Vec<String> = params
+                            .as_object()
+                            .map(|obj| {
+                                obj.iter()
+                                    .filter(|(k, _)| *k != "_custom_tool_name")
+                                    .flat_map(|(k, v)| {
+                                        let val = if v.is_string() {
+                                            v.as_str().unwrap_or("").to_string()
+                                        } else {
+                                            v.to_string()
+                                        };
+                                        vec![format!("--{}", k), val]
+                                    })
+                                    .collect()
+                            })
+                            .unwrap_or_default();
+
+                        let mut all_args: Vec<String> = args;
+                        all_args.extend(param_args);
+
+                        match std::process::Command::new(program)
+                            .args(&all_args)
+                            .output()
+                        {
+                            Ok(output) => {
+                                let stdout = String::from_utf8_lossy(&output.stdout);
+                                let stderr = String::from_utf8_lossy(&output.stderr);
+                                if output.status.success() {
+                                    let result = if stderr.is_empty() {
+                                        stdout.to_string()
+                                    } else {
+                                        format!("{}\n{}", stdout, stderr)
+                                    };
+                                    ToolExecutionResult::success(result)
+                                } else {
+                                    ToolExecutionResult::error(format!(
+                                        "Script '{}' exited with code {:?}\nstdout: {}\nstderr: {}",
+                                        script_path,
+                                        output.status.code(),
+                                        stdout.trim(),
+                                        stderr.trim()
+                                    ))
+                                }
+                            }
+                            Err(e) => ToolExecutionResult::error(format!(
+                                "Failed to execute script '{}': {}",
+                                script_path, e
+                            )),
+                        }
                     }
                     roo_custom_tools::HandlerType::Http => {
-                        // HTTP handler: would make an HTTP request
-                        // For now, return info about the tool
-                        let msg = format!(
-                            "Custom tool '{}' (http): {} — HTTP execution not yet implemented",
-                            definition.name, definition.description
-                        );
-                        ToolExecutionResult::success(msg)
+                        // HTTP handler: make an HTTP request to definition.url
+                        let url = match &definition.url {
+                            Some(u) if !u.is_empty() => u.clone(),
+                            _ => {
+                                return ToolExecutionResult::error(format!(
+                                    "Custom tool '{}' (http): no URL defined",
+                                    definition.name
+                                ));
+                            }
+                        };
+
+                        // Build the HTTP client and make a POST with tool params as JSON body
+                        let client = reqwest::Client::new();
+
+                        // Strip internal parameter before sending
+                        let mut body_params = params.clone();
+                        if let Some(obj) = body_params.as_object_mut() {
+                            obj.remove("_custom_tool_name");
+                        }
+
+                        let response = tokio::task::block_in_place(|| {
+                            tokio::runtime::Handle::current().block_on(async {
+                                client
+                                    .post(&url)
+                                    .header("Content-Type", "application/json")
+                                    .json(&body_params)
+                                    .send()
+                                    .await
+                            })
+                        });
+
+                        match response {
+                            Ok(resp) => {
+                                let status = resp.status();
+                                match tokio::task::block_in_place(|| {
+                                    tokio::runtime::Handle::current().block_on(resp.text())
+                                }) {
+                                    Ok(body) => {
+                                        if status.is_success() {
+                                            ToolExecutionResult::success(body)
+                                        } else {
+                                            ToolExecutionResult::error(format!(
+                                                "HTTP {} from {}: {}",
+                                                status, url, body
+                                            ))
+                                        }
+                                    }
+                                    Err(e) => ToolExecutionResult::error(format!(
+                                        "Failed to read HTTP response body: {}", e
+                                    )),
+                                }
+                            }
+                            Err(e) => ToolExecutionResult::error(format!(
+                                "HTTP request to '{}' failed: {}", url, e
+                            )),
+                        }
                     }
                 }
             }
@@ -2414,7 +2790,7 @@ pub fn default_dispatcher_with_terminal(
     dispatcher.register("run_slash_command", Box::new(SlashCommandHandler));
 
     // Image generation tool
-    dispatcher.register("generate_image", Box::new(GenerateImageHandler));
+    dispatcher.register("generate_image", Box::new(GenerateImageHandler::new()));
 
     // Custom tool handler — load tools from .roo/tools/ and ~/.roo/tools/
     // Use cwd as the project directory (output_dir may be a temp directory).
@@ -3701,7 +4077,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_generate_image_handler_missing_prompt() {
-        let handler = GenerateImageHandler;
+        let handler = GenerateImageHandler::new();
         let ctx = make_context();
         let result = handler
             .execute(serde_json::json!({"path": "output.png"}), &ctx)
@@ -3712,7 +4088,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_generate_image_handler_missing_path() {
-        let handler = GenerateImageHandler;
+        let handler = GenerateImageHandler::new();
         let ctx = make_context();
         let result = handler
             .execute(serde_json::json!({"prompt": "a cat"}), &ctx)
@@ -3722,8 +4098,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_generate_image_handler_valid() {
-        let handler = GenerateImageHandler;
+    async fn test_generate_image_handler_no_provider() {
+        let handler = GenerateImageHandler::new();
         let ctx = make_context();
         let result = handler
             .execute(
@@ -3731,8 +4107,9 @@ mod tests {
                 &ctx,
             )
             .await;
-        assert!(!result.is_error, "unexpected error: {}", result.text);
-        assert!(result.text.contains("sunset"));
+        // Without a provider configured, should return an error
+        assert!(result.is_error, "expected error without provider, got: {}", result.text);
+        assert!(result.text.contains("provider"));
     }
 
     // ---- Custom Tool handler tests ----

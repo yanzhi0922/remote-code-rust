@@ -46,6 +46,7 @@ pub mod metadata;
 pub mod storage;
 pub mod history;
 pub mod task_history_store;
+pub mod consolidate_commands;
 pub mod consolidate_token_usage;
 pub mod safe_json_parse;
 
@@ -73,6 +74,10 @@ pub use task_history_store::{TaskHistoryStore, TaskHistoryStoreOptions};
 pub use consolidate_token_usage::{
     consolidate_token_usage, has_token_usage_changed, TokenUsage, ClineMessageRef,
     ParsedApiReqStartedText,
+};
+
+pub use consolidate_commands::{
+    combine_messages, consolidate_api_requests, consolidate_commands,
 };
 
 pub use safe_json_parse::{safe_json_parse, safe_json_parse_or};

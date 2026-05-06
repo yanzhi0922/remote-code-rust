@@ -1,4 +1,4 @@
-﻿#![allow(unused_assignments)]
+#![allow(unused_assignments)]
 //! Core agent loop implementation — rewritten to faithfully replicate
 //! `.research/Roo-Code/src/core/task/Task.ts`.
 //!
@@ -377,7 +377,7 @@ impl Default for AgentLoopConfig {
             request_delay_seconds: 5,
             auto_approval_enabled: false,
             auto_condense_context_percent: 100,
-            consecutive_mistake_limit: 10,
+            consecutive_mistake_limit: crate::config::DEFAULT_MAX_MISTAKES as u32,
             language: None,
             custom_instructions: None,
             has_mcp: false,
@@ -834,6 +834,16 @@ pub struct AgentLoop {
     ///
     /// Source: TS `recursivelyMakeClineRequests()` → `ask("mistake_limit_reached")`
     pending_mistake_limit_tx: Arc<std::sync::Mutex<Option<oneshot::Sender<MistakeLimitAction>>>>,
+
+    /// Pending oneshot sender for followup question text responses.
+    ///
+    /// Source: TS `AskFollowupQuestionTool.ts` → `task.ask("followup", ...)` → user text response
+    pending_followup_tx: Arc<std::sync::Mutex<Option<oneshot::Sender<String>>>>,
+
+    /// Pending oneshot sender for completion result text responses.
+    ///
+    /// Source: TS `AttemptCompletionTool.ts` → `task.ask("completion_result", ...)` → user feedback
+    pending_completion_tx: Arc<std::sync::Mutex<Option<oneshot::Sender<String>>>>,
 }
 
 impl AgentLoop {
@@ -919,6 +929,8 @@ impl AgentLoop {
             pending_approval_tx: Arc::new(std::sync::Mutex::new(None)),
             pending_api_retry_tx: Arc::new(std::sync::Mutex::new(None)),
             pending_mistake_limit_tx: Arc::new(std::sync::Mutex::new(None)),
+            pending_followup_tx: Arc::new(std::sync::Mutex::new(None)),
+            pending_completion_tx: Arc::new(std::sync::Mutex::new(None)),
         }
     }
 
@@ -1039,6 +1051,29 @@ impl AgentLoop {
         }
     }
 
+    /// Respond to a pending followup question with the user's text answer.
+    ///
+    /// Source: TS `AskFollowupQuestionTool.ts` → `task.ask("followup", ...)` → user response
+    pub fn set_followup_response(&self, response: String) -> bool {
+        if let Some(tx) = self.pending_followup_tx.lock().unwrap().take() {
+            tx.send(response).is_ok()
+        } else {
+            false
+        }
+    }
+
+    /// Respond to a pending completion result with the user's feedback.
+    ///
+    /// Source: TS `AttemptCompletionTool.ts` → `task.ask("completion_result", ...)` → feedback
+    /// Empty string means acceptance, non-empty means feedback to continue.
+    pub fn set_completion_response(&self, feedback: String) -> bool {
+        if let Some(tx) = self.pending_completion_tx.lock().unwrap().take() {
+            tx.send(feedback).is_ok()
+        } else {
+            false
+        }
+    }
+
     /// Get a reference to the task engine.
     pub fn engine(&self) -> &TaskEngine {
         &self.engine
@@ -1055,6 +1090,15 @@ impl AgentLoop {
     /// mid-stream API request.
     pub fn cancellation_token(&self) -> &CancellationToken {
         &self.cancellation_token
+    }
+
+    /// Get a shared handle to the pending approval sender.
+    ///
+    /// This allows external code to call `set_approval_response()` without
+    /// needing a direct reference to the `AgentLoop`. The returned `Arc` can
+    /// be cloned and sent across thread boundaries.
+    pub fn approval_handle(&self) -> Arc<std::sync::Mutex<Option<oneshot::Sender<bool>>>> {
+        Arc::clone(&self.pending_approval_tx)
     }
 
     /// Get a mutable reference to the present-assistant-message state machine.
@@ -3885,15 +3929,130 @@ impl AgentLoop {
             }
 
             // Add tool result to conversation history
-            let result_msg =
-                MessageBuilder::create_tool_result_message(&tool_call.id, &result);
+            // Handle special actions from interactive tools.
+            // Source: TS tools call `task.ask()` which blocks for user input.
+            // Our tools return structured actions so the loop can handle interaction.
+            let result_msg = match &result.action {
+                crate::tool_dispatcher::ToolExecutionAction::AskFollowup { question, suggestions } => {
+                    // Emit a followup question event and wait for user response
+                    // via the followup channel pattern.
+                    let followup_json = serde_json::json!({
+                        "question": question,
+                        "suggest": suggestions.iter().map(|s| serde_json::json!({"answer": s})).collect::<Vec<_>>(),
+                    });
+                    let (tx, rx) = oneshot::channel();
+                    *self.pending_followup_tx.lock().unwrap() = Some(tx);
+                    self.engine.emitter().emit_followup_question(
+                        &self.engine.config().task_id,
+                        &tool_call.id,
+                        &followup_json.to_string(),
+                    );
+                    match rx.await {
+                        Ok(response_text) => {
+                            let feedback = format!("<user_message>\n{}\n</user_message>", response_text);
+                            MessageBuilder::create_tool_result_message(&tool_call.id, &ToolExecutionResult::success(feedback))
+                        }
+                        Err(_) => {
+                            MessageBuilder::create_tool_result_message(&tool_call.id, &ToolExecutionResult::error("Followup cancelled"))
+                        }
+                    }
+                }
+                crate::tool_dispatcher::ToolExecutionAction::AttemptCompletion { result: completion_text, .. } => {
+                    // Emit completion result and wait for user acceptance or feedback.
+                    let (tx, rx) = oneshot::channel();
+                    *self.pending_completion_tx.lock().unwrap() = Some(tx);
+                    self.engine.emitter().emit_completion_result(
+                        &self.engine.config().task_id,
+                        &tool_call.id,
+                        completion_text,
+                    );
+                    match rx.await {
+                        Ok(feedback_text) => {
+                            if feedback_text.is_empty() {
+                                // User accepted — empty tool result ends the conversation
+                                MessageBuilder::create_tool_result_message(&tool_call.id, &ToolExecutionResult::success(""))
+                            } else {
+                                // User gave feedback — feed it back as a tool result
+                                let msg = format!("<user_message>\n{}\n</user_message>", feedback_text);
+                                MessageBuilder::create_tool_result_message(&tool_call.id, &ToolExecutionResult::success(msg))
+                            }
+                        }
+                        Err(_) => {
+                            MessageBuilder::create_tool_result_message(&tool_call.id, &ToolExecutionResult::success(""))
+                        }
+                    }
+                }
+                crate::tool_dispatcher::ToolExecutionAction::SpawnSubtask { mode, message, todos } => {
+                    // Execute the subtask by spawning a nested agent loop.
+                    debug!(mode = %mode, "Executing subtask");
+                    let subtask_result = self.execute_subtask(mode.clone(), message.clone(), todos.as_deref()).await;
+                    match subtask_result {
+                        Ok(output) => {
+                            MessageBuilder::create_tool_result_message(
+                                &tool_call.id,
+                                &ToolExecutionResult::success(output),
+                            )
+                        }
+                        Err(e) => {
+                            MessageBuilder::create_tool_result_message(
+                                &tool_call.id,
+                                &ToolExecutionResult::error(format!("Subtask failed: {}", e)),
+                            )
+                        }
+                    }
+                }
+                crate::tool_dispatcher::ToolExecutionAction::None => {
+                    MessageBuilder::create_tool_result_message(&tool_call.id, &result)
+                }
+            };
             self.engine.add_api_message(result_msg);
         }
 
         // Persist cline messages after all tool results have been processed
         let _ = self.engine.save_cline_messages().await;
 
+        // Final validation pass: ensure all tool_results have matching tool_use IDs.
+        // This catches any edge cases that per-message validation in add_api_message
+        // might miss (e.g., missing tool_results for tool_uses that were not executed).
+        // Source: `src/core/task/Task.ts` — `flushPendingToolResultsToHistory` calls
+        // `validateAndFixToolResultIds` before saving.
+        let validated = crate::message_builder::validate_and_fix_tool_result_ids(
+            self.engine.api_conversation_history(),
+        );
+        self.engine.set_api_conversation_history(validated);
+
+        // Persist the validated API conversation history
+        let _ = self.engine.save_api_conversation_history().await;
+
         Ok(all_succeeded)
+    }
+
+    /// Execute a subtask by spawning a nested agent loop.
+    ///
+    /// Source: TS `NewTaskTool.ts` — creates a new `Task` instance and delegates.
+    /// The parent blocks until the child completes, collecting the
+    /// `attempt_completion` result.
+    async fn execute_subtask(
+        &self,
+        mode: String,
+        message: String,
+        todos: Option<&str>,
+    ) -> Result<String, String> {
+        let config = crate::tool_dispatcher::SubtaskConfig {
+            mode,
+            message,
+            todos: todos.map(String::from),
+            cwd: self.engine.config().cwd.clone().into(),
+            parent_task_id: self.engine.config().task_id.clone(),
+            root_task_id: None,
+            task_number: 0,
+        };
+        let result = crate::tool_dispatcher::execute_subtask(config).await;
+        if result.success {
+            Ok(result.completion_text)
+        } else {
+            Err(result.completion_text)
+        }
     }
 
     /// Dispatch a single tool call.
@@ -4510,20 +4669,43 @@ impl AgentLoop {
             None
         };
 
+        // Collect recently modified files from the file context tracker.
+        let recently_modified_files: Vec<String> = self
+            .file_context_tracker
+            .as_ref()
+            .map(|t| t.recently_modified_files().iter().cloned().collect())
+            .unwrap_or_default();
+
+        // Accumulated cost from token usage tracking.
+        let total_cost = {
+            let cost = self.engine.result().token_usage.total_cost;
+            if cost > 0.0 { Some(cost) } else { None }
+        };
+
+        // Convert the engine's todo list into the environment format.
+        let todo_list: Option<Vec<_>> = self.engine.todo_list().map(|items| {
+            items.iter().map(|item| TodoItemInput {
+                content: item.content.clone(),
+                status: format!("{:?}", item.status).to_lowercase(),
+            }).collect()
+        });
+
         let input = EnvironmentInput {
             cwd: cwd.clone(),
-            // TODO: Wire up from editor integration (CLI mode: not available)
+            // Intentionally empty: visible_files requires a GUI editor integration;
+            // in headless/CLI mode there is no concept of "visible files".
             visible_files: Vec::new(),
-            // TODO: Wire up from editor integration (CLI mode: not available)
+            // Intentionally empty: open_tabs requires a GUI editor integration;
+            // in headless/CLI mode there is no concept of "open tabs".
             open_tabs: Vec::new(),
-            // TODO: Wire up from terminal registry
+            // Intentionally empty: terminal registry is owned by TaskLifecycle,
+            // not by AgentLoop. Terminal info would need to be plumbed through
+            // the service layer; left empty until that wiring is added.
             active_terminals: Vec::new(),
             inactive_terminals: Vec::new(),
-            // TODO: Track recently modified files via fileContextTracker
-            recently_modified_files: Vec::new(),
+            recently_modified_files,
             git_status,
-            // TODO: Wire up from cost tracking service
-            total_cost: None,
+            total_cost,
             mode_info: ModeDisplayInfo {
                 slug: mode.clone(),
                 name: mode_name,
@@ -4531,14 +4713,13 @@ impl AgentLoop {
             },
             settings: EnvironmentSettings {
                 include_current_time: true,
-                include_current_cost: false, // cost not yet tracked
+                include_current_cost: total_cost.is_some(),
                 max_git_status_files: 50,
                 todo_list_enabled: true,
                 max_workspace_files: 200,
                 max_open_tabs: 20,
             },
-            // TODO: Wire up from todo list manager
-            todo_list: None,
+            todo_list,
             workspace_files,
             is_desktop,
         };

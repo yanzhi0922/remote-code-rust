@@ -170,14 +170,17 @@ fn format_resource_response(
         let mime = content.mime_type.as_deref().unwrap_or("text/plain");
 
         if mime.starts_with("image/") {
-            // For image content, show a placeholder since the text field
-            // may contain base64 data
-            parts.push(format!(
-                "[Image resource: {} ({}, {} bytes)]",
-                content.uri,
-                mime,
-                content.text.len()
-            ));
+            // Construct a proper data URI so the AI can see the image,
+            // matching the TS reference behavior.
+            if !content.text.is_empty() {
+                let data_uri = format!("data:{};base64,{}", mime, content.text);
+                parts.push(data_uri);
+            } else {
+                parts.push(format!(
+                    "[Empty image resource: {} ({})]",
+                    content.uri, mime
+                ));
+            }
         } else {
             if !parts.is_empty() {
                 parts.push(String::new()); // blank line separator
@@ -250,7 +253,7 @@ mod tests {
             uri: "file:///image.png".to_string(),
         };
         let result = process_resource_content(&params, "base64data", "image/png");
-        assert!(result.content.contains("Image content"));
+        assert!(result.content.contains("data:image/png;base64,base64data"));
     }
 
     // ---- Execution tests ----
@@ -328,7 +331,7 @@ mod tests {
         };
         let result = format_resource_response("server", "file:///image.png", response);
         assert!(!result.is_error);
-        assert!(result.text.contains("[Image resource:"));
+        assert!(result.text.contains("data:image/png;base64,base64data"));
     }
 
     #[test]
