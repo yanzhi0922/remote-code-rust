@@ -87,7 +87,7 @@ pub struct ThinkingConfig {
 }
 
 /// Optional task budget limits injected per query.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct TaskBudget {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_turns: Option<u32>,
@@ -98,6 +98,11 @@ pub struct TaskBudget {
     /// The remaining budget for the parent is `max_total_tokens - consumed_tokens`.
     #[serde(default)]
     pub consumed_tokens: u64,
+    /// Maximum USD budget for this query.
+    /// Mirrors TS `maxBudgetUsd`. When set, the query loop calculates
+    /// accumulated cost after each provider response and stops if exceeded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_budget_usd: Option<f64>,
 }
 
 impl TaskBudget {
@@ -111,6 +116,12 @@ impl TaskBudget {
     /// Record tokens consumed by a completed sub-agent.
     pub fn record_sub_agent_usage(&mut self, tokens: u64) {
         self.consumed_tokens = self.consumed_tokens.saturating_add(tokens);
+    }
+
+    /// Returns `true` if a USD budget cap is configured.
+    #[must_use]
+    pub fn has_usd_budget(&self) -> bool {
+        self.max_budget_usd.is_some()
     }
 }
 
@@ -145,8 +156,7 @@ pub struct ProcessUserInputContext {
     /// Per-request provider output token limit override used by truncation recovery.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_output_tokens_override: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[serde(default, skip)]
+    #[serde(skip)]
     pub task_budget: Arc<std::sync::Mutex<Option<TaskBudget>>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub memory_content: Option<String>,
@@ -204,7 +214,6 @@ pub struct ToolRunResult {
     /// Output tokens consumed by this tool invocation (e.g. sub-agent).
     /// When set, the query engine records these against the task budget
     /// so the parent's remaining budget is reduced accordingly.
-    #[serde(default)]
     pub output_tokens_consumed: Option<u64>,
 }
 

@@ -1,3 +1,4 @@
+pub mod auto_dream;
 pub mod backfill;
 pub mod chain;
 pub mod config;

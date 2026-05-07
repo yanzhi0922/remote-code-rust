@@ -534,6 +534,51 @@ pub async fn run_query_loop(
         state.usage.record_summary(&response.usage);
         state.stop_reason = Some(response.stop_reason.clone());
 
+        // ---- USD budget check (TS: maxBudgetUsd) ----
+        let max_budget_usd = context
+            .task_budget
+            .lock().unwrap()
+            .as_ref()
+            .and_then(|b| b.max_budget_usd);
+        if let Some(budget_usd) = max_budget_usd {
+            let turn_cost = claude_core::model_cost::calculate_usd_cost(
+                &context.model,
+                &response.usage,
+            );
+            state.accumulated_usd_cost += turn_cost;
+            if state.accumulated_usd_cost >= budget_usd {
+                let reason = format!(
+                    "USD budget exceeded (${:.4} >= ${:.4})",
+                    state.accumulated_usd_cost, budget_usd
+                );
+                state.stop_reason = Some("max_budget_usd_exceeded".to_owned());
+                let stop_message = budget_stop_message(&reason);
+                state.messages.push(stop_message.clone());
+                let _ = config
+                    .observer
+                    .on_event(QueryObserverEvent::BudgetExceeded {
+                        budget: QueryBudgetState {
+                            turn: state.turn,
+                            total_tokens: state.usage.total_tokens(),
+                            max_turns: state.budget_tracker.max_turns,
+                            max_total_tokens: state.budget_tracker.max_total_tokens,
+                        },
+                        reason: reason.clone(),
+                    })
+                    .await;
+                let _ = config
+                    .observer
+                    .on_event(QueryObserverEvent::MessagesAppended {
+                        session_id: context.session_id.clone(),
+                        appended: vec![stop_message],
+                        total_messages: state.messages.len(),
+                    })
+                    .await;
+                state.state_machine.force_set(EnginePhase::Failed);
+                return Err(EngineError::Stopped(reason));
+            }
+        }
+
         // Transition: ProcessingResponse
         let _ = state
             .state_machine

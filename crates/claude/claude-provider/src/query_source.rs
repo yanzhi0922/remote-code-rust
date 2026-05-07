@@ -29,6 +29,8 @@ pub enum QuerySource {
     Agent,
     /// Issued by extract-memories background fork.
     ExtractMemories,
+    /// Issued by the auto-dream background consolidation agent.
+    AutoDream,
     /// Issued by the advisor system.
     Advisor,
     /// Issued by a background task.
@@ -47,6 +49,7 @@ impl QuerySource {
             Self::SessionMemory => "session_memory",
             Self::Agent => "agent",
             Self::ExtractMemories => "extract_memories",
+            Self::AutoDream => "auto_dream",
             Self::Advisor => "advisor",
             Self::BackgroundTask => "background_task",
         }
@@ -63,6 +66,7 @@ impl QuerySource {
             QuerySource::SessionMemory,
             QuerySource::Agent,
             QuerySource::ExtractMemories,
+            QuerySource::AutoDream,
             QuerySource::Advisor,
             QuerySource::BackgroundTask,
         ]
@@ -284,6 +288,7 @@ pub fn parse_query_source_header(header: &str) -> Option<QuerySourceContext> {
                         "session_memory" => Some(QuerySource::SessionMemory),
                         "agent" => Some(QuerySource::Agent),
                         "extract_memories" => Some(QuerySource::ExtractMemories),
+                        "auto_dream" => Some(QuerySource::AutoDream),
                         "advisor" => Some(QuerySource::Advisor),
                         "background_task" => Some(QuerySource::BackgroundTask),
                         _ => None,
@@ -364,7 +369,7 @@ mod tests {
     #[test]
     fn query_source_all_values() {
         let values = QuerySource::all_values();
-        assert_eq!(values.len(), 9);
+        assert_eq!(values.len(), 10);
         assert!(values.contains(&QuerySource::ReplMainThread));
         assert!(values.contains(&QuerySource::Sdk));
         assert!(values.contains(&QuerySource::ExtractMemories));
