@@ -274,25 +274,56 @@ fn merge_consecutive_same_role(messages: &mut Vec<Value>) {
 // ---------------------------------------------------------------------------
 
 /// Remove assistant messages that contain *only* thinking blocks and no
-/// other content.  These are typically artifacts from compaction slicing or
-/// failed streaming retries.
+/// other content, **unless** they share a `message.id` with a sibling
+/// assistant message that has non-thinking content (these will be merged
+/// later by `normalizeMessagesForAPI`).
+///
+/// Mirrors `filterOrphanedThinking()` in `messages.ts` (two-pass algorithm).
 fn filter_orphaned_thinking_only(messages: &mut Vec<Value>) {
+    // Pass 1: collect message IDs from assistant messages that have non-thinking content.
+    let mut non_thinking_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for msg in messages.iter() {
+        if msg["role"].as_str() != Some("assistant") {
+            continue;
+        }
+        let Some(blocks) = msg["content"].as_array() else {
+            continue;
+        };
+        let has_non_thinking = blocks.iter().any(|b| {
+            let btype = b["type"].as_str().unwrap_or("");
+            btype != "thinking" && btype != "redacted_thinking"
+        });
+        if has_non_thinking {
+            if let Some(id) = msg.get("id").and_then(|v| v.as_str()) {
+                non_thinking_ids.insert(id.to_string());
+            }
+        }
+    }
+
+    // Pass 2: remove thinking-only messages that don't have a sibling with non-thinking content.
     messages.retain(|msg| {
         if msg["role"].as_str() != Some("assistant") {
             return true;
         }
         let Some(blocks) = msg["content"].as_array() else {
-            // String content is not thinking-only
             return true;
         };
         if blocks.is_empty() {
             return false;
         }
-        // Keep if there's any non-thinking block
-        blocks.iter().any(|b| {
+        // Check if there's any non-thinking block
+        let has_non_thinking = blocks.iter().any(|b| {
             let btype = b["type"].as_str().unwrap_or("");
             btype != "thinking" && btype != "redacted_thinking"
-        })
+        });
+        if has_non_thinking {
+            return true;
+        }
+        // Thinking-only: keep if there's a sibling message with the same ID
+        if let Some(id) = msg.get("id").and_then(|v| v.as_str()) {
+            return non_thinking_ids.contains(id);
+        }
+        false
     });
 }
 
@@ -371,10 +402,21 @@ fn is_whitespace_only_assistant(msg: &Value) -> bool {
 // 6. Ensure non-empty assistant content
 // ---------------------------------------------------------------------------
 
-/// Guarantee every assistant message has at least one content block.
+/// Guarantee every assistant message has at least one content block,
+/// **except** the last assistant message which may be empty for API prefill.
+///
+/// Mirrors `ensureNonEmptyAssistantContent()` in `messages.ts`.
+const NO_CONTENT_MESSAGE: &str = "No content.";
+
 fn ensure_non_empty_assistant_content(messages: &mut [Value]) {
-    for msg in messages.iter_mut() {
+    let len = messages.len();
+    for (idx, msg) in messages.iter_mut().enumerate() {
         if msg["role"].as_str() != Some("assistant") {
+            continue;
+        }
+
+        // Skip the last message — it may be empty for prefill
+        if idx == len - 1 {
             continue;
         }
 
@@ -382,11 +424,11 @@ fn ensure_non_empty_assistant_content(messages: &mut [Value]) {
             Value::String(s) if s.is_empty() => {
                 *msg = json!({
                     "role": "assistant",
-                    "content": [{"type": "text", "text": ""}]
+                    "content": [{"type": "text", "text": NO_CONTENT_MESSAGE}]
                 });
             }
             Value::Array(blocks) if blocks.is_empty() => {
-                blocks.push(json!({"type": "text", "text": ""}));
+                blocks.push(json!({"type": "text", "text": NO_CONTENT_MESSAGE}));
             }
             _ => {}
         }
@@ -1027,12 +1069,13 @@ fn filter_unavailable_tool_use_blocks(messages: &mut [Value], available_tool_nam
 // 12. Validate images for API (size check)
 // ---------------------------------------------------------------------------
 
-/// Approximate maximum decoded image size accepted by the Anthropic API (~20 MB).
-const MAX_IMAGE_BYTES: usize = 20 * 1024 * 1024;
+/// Maximum base64 string length for images accepted by the Anthropic API (5 MB).
+/// Mirrors `API_IMAGE_MAX_BASE64_SIZE` from `imageValidation.ts`.
+const API_IMAGE_MAX_BASE64_SIZE: usize = 5 * 1024 * 1024;
 
-/// Check all image content blocks.  If the base64 `source.data` exceeds ~20 MB
-/// when decoded (estimated as `base64_len * 3 / 4`), replace the block with a
-/// text placeholder so the API does not reject the request.
+/// Check all image content blocks.  If the base64 `source.data` exceeds 5 MB
+/// in base64 string length, replace the block with a text placeholder so the
+/// API does not reject the request.
 fn validate_images_for_api(messages: &mut [Value]) {
     for msg in messages.iter_mut() {
         if let Some(content) = msg.get_mut("content").and_then(|c| c.as_array_mut()) {
@@ -1043,9 +1086,8 @@ fn validate_images_for_api(messages: &mut [Value]) {
                         .and_then(|s| s.get("data"))
                         .and_then(|d| d.as_str())
                     {
-                        // Rough decoded size: base64_len * 3 / 4
-                        let estimated_bytes = data.len() * 3 / 4;
-                        if estimated_bytes > MAX_IMAGE_BYTES {
+                        // Check base64 string length directly (matches TS behavior)
+                        if data.len() > API_IMAGE_MAX_BASE64_SIZE {
                             *block = json!({
                                 "type": "text",
                                 "text": "[Image too large for API]"
@@ -1196,13 +1238,29 @@ mod tests {
 
     #[test]
     fn test_ensure_non_empty_assistant() {
+        // Empty assistant in the middle of the array should be filled.
+        // The last message is always skipped (API prefill support).
+        let mut messages = vec![
+            json!({"role": "assistant", "content": []}),
+            json!({"role": "user", "content": "next"}),
+        ];
+        ensure_non_empty_assistant_content(&mut messages);
+        let content = messages[0]["content"].as_array().unwrap();
+        assert!(!content.is_empty());
+        // Verify filler text matches TS
+        assert_eq!(content[0]["text"].as_str(), Some("No content."));
+    }
+
+    #[test]
+    fn test_ensure_non_empty_assistant_skips_last() {
+        // Empty assistant as the very last message should be left alone (prefill).
         let mut messages = vec![json!({
             "role": "assistant",
             "content": []
         })];
         ensure_non_empty_assistant_content(&mut messages);
         let content = messages[0]["content"].as_array().unwrap();
-        assert!(!content.is_empty());
+        assert!(content.is_empty());
     }
 
     #[test]
@@ -2194,6 +2252,16 @@ fn smoosh_system_reminder_siblings(messages: &mut [Value]) {
             *content = kept;
             continue;
         };
+
+        // Guard: don't smoosh into tool_results that contain tool_reference blocks.
+        // Mixing text with tool_reference inside a tool_result is a server ValueError.
+        if let Some(tr_content) = kept[tr_idx].get("content").and_then(|c| c.as_array()) {
+            if tr_content.iter().any(|b| b["type"].as_str() == Some("tool_reference")) {
+                kept.extend(sr_texts);
+                *content = kept;
+                continue;
+            }
+        }
 
         if kept[tr_idx].get("is_error").and_then(|v| v.as_bool()) == Some(true) {
             kept.extend(sr_texts);
