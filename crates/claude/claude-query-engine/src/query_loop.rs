@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Result, anyhow};
@@ -48,6 +49,7 @@ pub async fn run_query_loop(
     state: &mut EngineState,
     user_input: Vec<Message>,
     context: &ProcessUserInputContext,
+    interrupted: Arc<AtomicBool>,
 ) -> Result<QueryResult, EngineError> {
     let mut context = context.clone();
     let appended_messages = user_input;
@@ -94,6 +96,13 @@ pub async fn run_query_loop(
     let mut has_attempted_reactive_compact = false;
 
     loop {
+        // ---- Abort signal check (TS: abortController.signal.aborted) ----
+        if interrupted.load(Ordering::SeqCst) {
+            state.stop_reason = Some("interrupted".to_owned());
+            state.state_machine.force_set(EnginePhase::Idle);
+            return Err(EngineError::Stopped("query interrupted by user".to_owned()));
+        }
+
         // Transition: BuildingPrompt
         let _ = state.state_machine.transition(EnginePhase::BuildingPrompt);
 
@@ -648,9 +657,9 @@ pub async fn run_query_loop(
 
             // ---- Token budget continuation check (TS lines 1308–1355) ----
             // Only on main thread (no agent_id). Uses per-turn output tokens.
+            let budget_total = context.task_budget.lock().unwrap().as_ref().and_then(|b| b.max_total_tokens);
             if context.agent_id.is_none()
-                && let Some(task_budget) = context.task_budget.lock().unwrap().as_ref()
-                && let Some(budget_total) = task_budget.max_total_tokens
+                && let Some(budget_total) = budget_total
             {
                 let per_turn_output_tokens = response.usage.output_tokens;
                 let decision = state.budget_tracker.check_continuation(
@@ -849,6 +858,13 @@ pub async fn run_query_loop(
                     global_index += 1;
                 }
             }
+        }
+
+        // ---- Post-tool abort check (TS line 1485) ----
+        if interrupted.load(Ordering::SeqCst) {
+            state.stop_reason = Some("interrupted".to_owned());
+            state.state_machine.force_set(EnginePhase::Idle);
+            return Err(EngineError::Stopped("query interrupted by user after tool execution".to_owned()));
         }
 
         // Clear checkpoints after tool execution

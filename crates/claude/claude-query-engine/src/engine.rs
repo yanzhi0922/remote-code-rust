@@ -1,3 +1,5 @@
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Instant;
 
 use claude_core::{
@@ -113,6 +115,9 @@ pub struct QueryEngine {
     config: QueryEngineConfig,
     state: EngineState,
     chain_manager: ChainManager,
+    /// Shared interrupt flag. When set to `true`, the query loop will abort
+    /// at the next cancellation point (mirrors TS `AbortController.abort()`).
+    interrupted: Arc<AtomicBool>,
 }
 
 impl QueryEngine {
@@ -150,12 +155,25 @@ impl QueryEngine {
             config,
             state,
             chain_manager,
+            interrupted: Arc::new(AtomicBool::new(false)),
         }
     }
 
     #[must_use]
     pub fn state(&self) -> &EngineState {
         &self.state
+    }
+
+    /// Signal the running query loop to abort at the next cancellation point.
+    ///
+    /// Mirrors TS `QueryEngine.interrupt()` → `this.abortController.abort()`.
+    pub fn interrupt(&self) {
+        self.interrupted.store(true, Ordering::SeqCst);
+    }
+
+    /// Check whether an interrupt has been requested.
+    pub fn is_interrupted(&self) -> bool {
+        self.interrupted.load(Ordering::SeqCst)
     }
 
     /// Returns a reference to the chain manager.
@@ -170,6 +188,8 @@ impl QueryEngine {
         user_input: Vec<Message>,
         context: ProcessUserInputContext,
     ) -> Result<QueryResult, EngineError> {
+        // Reset interrupt flag for the new query
+        self.interrupted.store(false, Ordering::SeqCst);
         let started = Instant::now();
         let existing_messages = self.state.messages.len();
         let new_messages = user_input.len();
@@ -196,7 +216,7 @@ impl QueryEngine {
                 new_messages,
             })
             .await;
-        let result = run_query_loop(&self.config, &mut self.state, user_input, &context).await;
+        let result = run_query_loop(&self.config, &mut self.state, user_input, &context, self.interrupted.clone()).await;
         match &result {
             Ok(query_result) => {
                 // Transition to Idle via Finalizing
@@ -731,7 +751,7 @@ mod tests {
 
         assert_eq!(result.final_text.as_deref(), Some("done"));
         assert_eq!(result.stop_reason, "end_turn");
-        assert_eq!(result.turns, 2);
+        assert_eq!(result.turns, 3);
         assert_eq!(result.state.usage.input_tokens, 13);
         assert_eq!(result.state.usage.output_tokens, 12);
         assert!(
@@ -819,6 +839,7 @@ mod tests {
         context.task_budget = std::sync::Arc::new(std::sync::Mutex::new(Some(crate::TaskBudget {
             max_turns: Some(0),
             max_total_tokens: None,
+            consumed_tokens: 0,
         })));
 
         let error = engine

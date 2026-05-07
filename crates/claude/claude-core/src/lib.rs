@@ -15,8 +15,10 @@ pub mod hooks;
 pub mod ids;
 pub mod message;
 pub mod message_types;
+pub mod model_cost;
 pub mod permission_types;
 pub mod state;
+pub mod subprocess_env;
 pub mod task_stack;
 pub mod usage;
 

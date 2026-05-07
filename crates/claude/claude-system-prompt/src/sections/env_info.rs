@@ -187,7 +187,7 @@ impl SystemPromptSection for EnvInfoSection {
         }
         if !undercover {
             env_items.push(BulletItem::Single(
-                "The most recent Claude model family is Claude 4.5/4.7. Model IDs \u{2014} Opus 4.7: 'claude-opus-4-7', Sonnet 4.6: 'claude-sonnet-4-6', Haiku 4.5: 'claude-haiku-4-5'. When building AI applications, default to the latest and most capable Claude models."
+                "The most recent Claude model family is Claude 4.5/4.6. Model IDs \u{2014} Opus 4.7: 'claude-opus-4-7', Sonnet 4.6: 'claude-sonnet-4-6', Haiku 4.5: 'claude-haiku-4-5'. When building AI applications, default to the latest and most capable Claude models."
                     .to_string(),
             ));
             env_items.push(BulletItem::Single(
