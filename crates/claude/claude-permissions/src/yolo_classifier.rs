@@ -3,6 +3,15 @@
 //! Corresponds to `.research/cc-haha/src/utils/permissions/yoloClassifier.ts`.
 //! Provides rule-based classification for tool use in auto-permission mode,
 //! allowing known-safe operations and soft-denying dangerous ones.
+//!
+//! Also includes a 2-stage LLM-based classification pipeline matching TS:
+//! - Stage 1 ("fast"): max_tokens=64, stop_sequences=['</block>'], parses XML
+//! - Stage 2 ("thinking"): max_tokens=4096, full chain-of-thought reasoning
+//! - Fail-closed: any ambiguity → block
+//! - Safe tools allowlist bypasses the classifier entirely
+
+use std::future::Future;
+use std::pin::Pin;
 
 use serde::{Deserialize, Serialize};
 
@@ -393,6 +402,202 @@ fn is_safe_write_path(path: &str) -> bool {
     true
 }
 
+// ---------------------------------------------------------------------------
+// 2-Stage LLM-based YOLO Classifier
+// ---------------------------------------------------------------------------
+
+/// System prompt for the 2-stage LLM classifier.
+/// Mirrors TS `yoloClassifier.ts` system prompt.
+pub const YOLO_CLASSIFIER_SYSTEM_PROMPT: &str = r#"You are a security classifier for tool use in an AI coding assistant. Your job is to determine whether a tool invocation is safe to auto-approve.
+
+Respond with an XML block:
+<block>yes</block> — if the operation is safe to auto-approve
+<block>no</block> — if the operation should be blocked or requires user confirmation
+
+Guidelines:
+- Reading files, searching code, and listing directories are always safe
+- Writing to files within the project directory is generally safe
+- Running build commands, tests, and linters is generally safe
+- Commands that delete files, force-push, modify system configs, or access credentials are unsafe
+- When in doubt, err on the side of blocking (fail-closed)
+- Never execute the command yourself — you are only classifying it"#;
+
+/// Request for a single LLM classification call.
+#[derive(Debug, Clone)]
+pub struct YoloLlmRequest {
+    /// The tool name being classified.
+    pub tool_name: String,
+    /// The JSON input of the tool call.
+    pub tool_input: serde_json::Value,
+    /// Conversation context (recent messages for the classifier to consider).
+    pub context: String,
+    /// Maximum tokens for the response.
+    pub max_tokens: u32,
+    /// Optional stop sequences.
+    pub stop_sequences: Vec<String>,
+    /// Suffix hint appended to the prompt.
+    pub suffix_hint: Option<String>,
+}
+
+/// Response from a single LLM classification call.
+#[derive(Debug, Clone)]
+pub struct YoloLlmResponse {
+    /// The raw text output from the LLM.
+    pub text: String,
+}
+
+/// Trait for LLM-backed classification. Implemented by the query engine layer.
+pub trait YoloLlmClient: Send + Sync {
+    fn classify(
+        &self,
+        request: YoloLlmRequest,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<YoloLlmResponse>> + Send + '_>>;
+}
+
+/// 2-stage LLM-based YOLO classifier.
+///
+/// Stage 1 ("fast"): max_tokens=64, stop_sequences=['</block>'], parses `<block>yes|no</block>`.
+/// If allow, returns immediately. If block/unparseable, escalates to Stage 2.
+///
+/// Stage 2 ("thinking"): max_tokens=4096, no stop sequences, full chain-of-thought.
+/// Both share the same system prompt with XML output format.
+pub struct YoloLlmClassifier {
+    client: Option<Box<dyn YoloLlmClient>>,
+}
+
+impl YoloLlmClassifier {
+    /// Create a new LLM classifier with an optional client.
+    /// When no client is provided, classification falls back to rule-based only.
+    pub fn new(client: Option<Box<dyn YoloLlmClient>>) -> Self {
+        Self { client }
+    }
+
+    /// Classify a tool use through the 2-stage LLM pipeline.
+    ///
+    /// First checks rule-based bypasses (safe tools allowlist), then
+    /// invokes the 2-stage LLM classifier if a client is available.
+    /// Returns `None` if no LLM client is configured (caller should
+    /// fall back to rule-based classification).
+    pub async fn classify(
+        &self,
+        tool_name: &str,
+        tool_input: &serde_json::Value,
+        context: &str,
+    ) -> Option<YoloClassifierResult> {
+        let client = self.client.as_ref()?;
+
+        // Safe tools bypass the classifier entirely
+        if is_read_only_tool(tool_name) {
+            return Some(YoloClassifierResult::Allow);
+        }
+
+        let input_str = serde_json::to_string_pretty(tool_input)
+            .unwrap_or_else(|_| tool_input.to_string());
+
+        // Stage 1: Fast classification
+        let stage1_request = YoloLlmRequest {
+            tool_name: tool_name.to_owned(),
+            tool_input: tool_input.clone(),
+            context: context.to_owned(),
+            max_tokens: 64,
+            stop_sequences: vec!["</block>".to_owned()],
+            suffix_hint: Some("Err on the side of blocking.".to_owned()),
+        };
+
+        let stage1_response = client.classify(stage1_request).await.ok()?;
+
+        if let Some(decision) = parse_block_xml(&stage1_response.text) {
+            match decision {
+                BlockDecision::Allow => return Some(YoloClassifierResult::Allow),
+                BlockDecision::Block => {
+                    // Escalate to stage 2 for reasoning
+                }
+            }
+        }
+
+        // Stage 2: Thinking classification (full chain-of-thought)
+        let stage2_request = YoloLlmRequest {
+            tool_name: tool_name.to_owned(),
+            tool_input: tool_input.clone(),
+            context: context.to_owned(),
+            max_tokens: 4096,
+            stop_sequences: vec![],
+            suffix_hint: None,
+        };
+
+        let stage2_response = match client.classify(stage2_request).await {
+            Ok(resp) => resp,
+            Err(_) => {
+                // Fail-closed: if stage 2 fails, block
+                return Some(YoloClassifierResult::Deny(
+                    "LLM classifier stage 2 failed — fail-closed".to_owned(),
+                ));
+            }
+        };
+
+        // Parse stage 2 response
+        if let Some(decision) = parse_block_xml(&stage2_response.text) {
+            match decision {
+                BlockDecision::Allow => return Some(YoloClassifierResult::Allow),
+                BlockDecision::Block => {
+                    return Some(YoloClassifierResult::Deny(
+                        "LLM classifier blocked the operation".to_owned(),
+                    ));
+                }
+            }
+        }
+
+        // Fail-closed: unparseable response → block
+        Some(YoloClassifierResult::Deny(
+            "LLM classifier returned unparseable response — fail-closed".to_owned(),
+        ))
+    }
+}
+
+/// Parsed decision from XML block output.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BlockDecision {
+    Allow,
+    Block,
+}
+
+/// Parse `<block>yes</block>` or `<block>no</block>` from LLM output.
+fn parse_block_xml(text: &str) -> Option<BlockDecision> {
+    // Try to find the last <block>...</block> in the text
+    let lower = text.to_ascii_lowercase();
+
+    // Find the last occurrence of <block>
+    if let Some(idx) = lower.rfind("<block>") {
+        let after_open = &lower[idx + 7..];
+        if let Some(close_idx) = after_open.find("</block>") {
+            let content = after_open[..close_idx].trim();
+            return match content {
+                "yes" | "allow" | "safe" => Some(BlockDecision::Allow),
+                "no" | "block" | "deny" | "unsafe" => Some(BlockDecision::Block),
+                _ => None,
+            };
+        }
+    }
+
+    None
+}
+
+/// Resolve the model to use for the YOLO classifier.
+///
+/// Mirrors TS model selection: env var → GrowthBook → main loop model.
+pub fn resolve_yolo_model(main_model: &str) -> String {
+    // 1. Check env var override
+    if let Ok(model) = std::env::var("CLAUDE_CODE_AUTO_MODE_MODEL") {
+        if !model.is_empty() {
+            return model;
+        }
+    }
+
+    // 2. Fall back to main loop model
+    // (GrowthBook feature flag would be checked here in the full impl)
+    main_model.to_owned()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -582,5 +787,168 @@ mod tests {
         let default = AutoModeRules::default();
         let external = AutoModeRules::external();
         assert_eq!(default.allow.len(), external.allow.len());
+    }
+
+    // ---- XML block parsing tests ----
+
+    #[test]
+    fn parse_block_xml_yes() {
+        assert_eq!(parse_block_xml("<block>yes</block>"), Some(BlockDecision::Allow));
+    }
+
+    #[test]
+    fn parse_block_xml_no() {
+        assert_eq!(parse_block_xml("<block>no</block>"), Some(BlockDecision::Block));
+    }
+
+    #[test]
+    fn parse_block_xml_with_reasoning() {
+        let text = "Let me analyze this...\n<block>no</block>";
+        assert_eq!(parse_block_xml(text), Some(BlockDecision::Block));
+    }
+
+    #[test]
+    fn parse_block_xml_case_insensitive() {
+        assert_eq!(parse_block_xml("<Block>YES</Block>"), Some(BlockDecision::Allow));
+    }
+
+    #[test]
+    fn parse_block_xml_invalid() {
+        assert_eq!(parse_block_xml("no xml here"), None);
+    }
+
+    #[test]
+    fn parse_block_xml_empty() {
+        assert_eq!(parse_block_xml("<block></block>"), None);
+    }
+
+    #[test]
+    fn parse_block_xml_trailing() {
+        // Only last <block> matters
+        let text = "<block>yes</block> actually wait <block>no</block>";
+        assert_eq!(parse_block_xml(text), Some(BlockDecision::Block));
+    }
+
+    #[test]
+    fn parse_block_xml_allow_aliases() {
+        assert_eq!(parse_block_xml("<block>allow</block>"), Some(BlockDecision::Allow));
+        assert_eq!(parse_block_xml("<block>safe</block>"), Some(BlockDecision::Allow));
+    }
+
+    #[test]
+    fn parse_block_xml_block_aliases() {
+        assert_eq!(parse_block_xml("<block>block</block>"), Some(BlockDecision::Block));
+        assert_eq!(parse_block_xml("<block>deny</block>"), Some(BlockDecision::Block));
+        assert_eq!(parse_block_xml("<block>unsafe</block>"), Some(BlockDecision::Block));
+    }
+
+    #[test]
+    fn resolve_yolo_model_defaults_to_main() {
+        // Clear env var to ensure no override
+        #[allow(unsafe_code)]
+        unsafe { std::env::remove_var("CLAUDE_CODE_AUTO_MODE_MODEL"); }
+        assert_eq!(resolve_yolo_model("claude-sonnet-4-6"), "claude-sonnet-4-6");
+    }
+
+    #[test]
+    fn yolo_llm_classifier_no_client_returns_none() {
+        let classifier = YoloLlmClassifier::new(None);
+        let rt = tokio::runtime::Runtime::new().expect("runtime");
+        let result = rt.block_on(classifier.classify("Bash", &json!({"command": "echo hi"}), ""));
+        assert!(result.is_none(), "without client, should return None");
+    }
+
+    #[test]
+    fn yolo_llm_classifier_read_only_bypasses_llm() {
+        struct MockClient;
+        impl YoloLlmClient for MockClient {
+            fn classify(
+                &self,
+                _request: YoloLlmRequest,
+            ) -> Pin<Box<dyn Future<Output = anyhow::Result<YoloLlmResponse>> + Send + '_>> {
+                // Should never be called for read-only tools
+                Box::pin(async { panic!("should not call LLM for read-only tools") })
+            }
+        }
+
+        let classifier = YoloLlmClassifier::new(Some(Box::new(MockClient)));
+        let rt = tokio::runtime::Runtime::new().expect("runtime");
+        let result = rt.block_on(classifier.classify("Read", &json!({"path": "/tmp/test"}), ""));
+        assert!(matches!(result, Some(YoloClassifierResult::Allow)));
+    }
+
+    #[test]
+    fn yolo_llm_classifier_stage1_allow() {
+        struct AllowClient;
+        impl YoloLlmClient for AllowClient {
+            fn classify(
+                &self,
+                request: YoloLlmRequest,
+            ) -> Pin<Box<dyn Future<Output = anyhow::Result<YoloLlmResponse>> + Send + '_>> {
+                let max_tokens = request.max_tokens;
+                Box::pin(async move {
+                    // Stage 1 (max_tokens=64) returns allow
+                    if max_tokens == 64 {
+                        Ok(YoloLlmResponse { text: "<block>yes</block>".to_owned() })
+                    } else {
+                        panic!("stage 2 should not be called when stage 1 allows")
+                    }
+                })
+            }
+        }
+
+        let classifier = YoloLlmClassifier::new(Some(Box::new(AllowClient)));
+        let rt = tokio::runtime::Runtime::new().expect("runtime");
+        let result = rt.block_on(classifier.classify("Bash", &json!({"command": "echo hi"}), ""));
+        assert!(matches!(result, Some(YoloClassifierResult::Allow)));
+    }
+
+    #[test]
+    fn yolo_llm_classifier_stage2_block() {
+        struct BlockClient;
+        impl YoloLlmClient for BlockClient {
+            fn classify(
+                &self,
+                request: YoloLlmRequest,
+            ) -> Pin<Box<dyn Future<Output = anyhow::Result<YoloLlmResponse>> + Send + '_>> {
+                let max_tokens = request.max_tokens;
+                Box::pin(async move {
+                    if max_tokens == 64 {
+                        // Stage 1 returns block → escalate to stage 2
+                        Ok(YoloLlmResponse { text: "<block>no</block>".to_owned() })
+                    } else {
+                        // Stage 2 confirms block with reasoning
+                        Ok(YoloLlmResponse {
+                            text: "This command is dangerous because...\n<block>no</block>".to_owned(),
+                        })
+                    }
+                })
+            }
+        }
+
+        let classifier = YoloLlmClassifier::new(Some(Box::new(BlockClient)));
+        let rt = tokio::runtime::Runtime::new().expect("runtime");
+        let result = rt.block_on(classifier.classify("Bash", &json!({"command": "rm -rf /"}), ""));
+        assert!(matches!(result, Some(YoloClassifierResult::Deny(_))));
+    }
+
+    #[test]
+    fn yolo_llm_classifier_fail_closed_on_unparseable() {
+        struct UnparseableClient;
+        impl YoloLlmClient for UnparseableClient {
+            fn classify(
+                &self,
+                _request: YoloLlmRequest,
+            ) -> Pin<Box<dyn Future<Output = anyhow::Result<YoloLlmResponse>> + Send + '_>> {
+                Box::pin(async {
+                    Ok(YoloLlmResponse { text: "I cannot determine...".to_owned() })
+                })
+            }
+        }
+
+        let classifier = YoloLlmClassifier::new(Some(Box::new(UnparseableClient)));
+        let rt = tokio::runtime::Runtime::new().expect("runtime");
+        let result = rt.block_on(classifier.classify("Bash", &json!({"command": "unknown"}), ""));
+        assert!(matches!(result, Some(YoloClassifierResult::Deny(_))));
     }
 }

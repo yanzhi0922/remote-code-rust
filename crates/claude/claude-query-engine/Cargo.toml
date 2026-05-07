@@ -19,9 +19,13 @@ serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
+tracing.workspace = true
+filetime = "0.2"
 uuid.workspace = true
 claude-core = { path = "../claude-core" }
 rc-engine-events = { path = "../../shared/rc-engine-events" }
 claude-provider = { path = "../claude-provider" }
 
 [dev-dependencies]
+tempfile.workspace = true
+filetime = "0.2"

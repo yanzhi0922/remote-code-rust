@@ -57,6 +57,9 @@ pub struct EngineState {
     pub structured_output: StructuredOutputEnforcer,
     /// Tool result summarizer.
     pub tool_summarizer: ToolResultSummarizer,
+    /// Accumulated USD cost across all turns.
+    /// Mirrors TS `costUsd` tracking in the query loop.
+    pub accumulated_usd_cost: f64,
 }
 
 impl EngineState {
@@ -77,6 +80,7 @@ impl EngineState {
             stop_hook_manager: StopHookManager::default(),
             structured_output: StructuredOutputEnforcer::new(),
             tool_summarizer: ToolResultSummarizer::default(),
+            accumulated_usd_cost: 0.0,
         }
     }
 
@@ -840,6 +844,7 @@ mod tests {
             max_turns: Some(0),
             max_total_tokens: None,
             consumed_tokens: 0,
+            max_budget_usd: None,
         })));
 
         let error = engine

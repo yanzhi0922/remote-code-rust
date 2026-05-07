@@ -1,8 +1,13 @@
 //! Runtime stop-hook types plus retry logic for graceful query termination.
 //!
-//! The compat query engine uses these types to expose a real terminal
-//! assistant-response hook seam to the host runtime. This is the engine-side
-//! equivalent of Claude Code's stop-hook stage.
+//! Mirrors TS `stopHooks.ts` with a 7-phase execution pipeline:
+//! 1. saveCacheSafeParams — persist cache parameters
+//! 2. Job classification — determine if blocking
+//! 3. Fire-and-forget background — prompt suggestion, memory extraction, auto-dream
+//! 4. Computer-use cleanup — release resources
+//! 5. User-configured Stop/SubagentStop hooks (streaming)
+//! 6. TeammateIdle/TaskCompleted — teammate-only hooks
+//! 7. Return — final decision
 
 use std::collections::BTreeMap;
 
@@ -171,6 +176,182 @@ impl StopHookManager {
 impl Default for StopHookManager {
     fn default() -> Self {
         Self::new(3)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 7-Phase Stop Hook Pipeline
+// ---------------------------------------------------------------------------
+
+/// Base input for all stop hook phases.
+/// Mirrors TS `BaseHookInput`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StopHookBaseInput {
+    pub session_id: SessionId,
+    pub turn: u32,
+    pub stop_reason: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub final_text: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_id: Option<AgentId>,
+    pub query_source: QuerySource,
+    pub messages: Vec<Message>,
+}
+
+/// Result of the full stop hook pipeline.
+#[derive(Debug, Clone)]
+pub struct StopHookPipelineResult {
+    /// Whether the stop is allowed to proceed.
+    pub should_stop: bool,
+    /// Messages to inject if retrying.
+    pub injected_messages: Vec<Message>,
+    /// Blocking errors from phase 2 (job classification).
+    pub blocking_errors: Vec<String>,
+    /// Whether continuation should be prevented.
+    pub prevent_continuation: bool,
+    /// Which phases were executed.
+    pub phases_executed: Vec<StopHookPhase>,
+}
+
+impl Default for StopHookPipelineResult {
+    fn default() -> Self {
+        Self {
+            should_stop: true,
+            injected_messages: Vec::new(),
+            blocking_errors: Vec::new(),
+            prevent_continuation: false,
+            phases_executed: Vec::new(),
+        }
+    }
+}
+
+/// Phases in the stop hook pipeline.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum StopHookPhase {
+    /// Phase 1: Save cache safe parameters.
+    SaveCacheSafeParams,
+    /// Phase 2: Job classification (blocking).
+    JobClassification,
+    /// Phase 3: Fire-and-forget background hooks.
+    BackgroundFireAndForget,
+    /// Phase 4: Computer-use cleanup.
+    ComputerUseCleanup,
+    /// Phase 5: User-configured Stop/SubagentStop hooks.
+    UserConfiguredStopHooks,
+    /// Phase 6: TeammateIdle/TaskCompleted hooks.
+    TeammateHooks,
+    /// Phase 7: Return.
+    Return,
+}
+
+impl std::fmt::Display for StopHookPhase {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::SaveCacheSafeParams => write!(f, "saveCacheSafeParams"),
+            Self::JobClassification => write!(f, "jobClassification"),
+            Self::BackgroundFireAndForget => write!(f, "backgroundFireAndForget"),
+            Self::ComputerUseCleanup => write!(f, "computerUseCleanup"),
+            Self::UserConfiguredStopHooks => write!(f, "userConfiguredStopHooks"),
+            Self::TeammateHooks => write!(f, "teammateHooks"),
+            Self::Return => write!(f, "return"),
+        }
+    }
+}
+
+/// Trait for individual phase handlers in the pipeline.
+/// Each phase receives the base input and can modify the pipeline result.
+#[async_trait::async_trait]
+pub trait StopHookPhaseHandler: Send + Sync {
+    /// Execute this phase. Returns Ok(()) to continue, Err to block.
+    async fn execute(
+        &self,
+        input: &StopHookBaseInput,
+        result: &mut StopHookPipelineResult,
+    ) -> anyhow::Result<()>;
+}
+
+/// Orchestrates the 7-phase stop hook pipeline.
+pub struct StopHookPipeline {
+    /// Phase handlers indexed by phase.
+    handlers: Vec<(StopHookPhase, Box<dyn StopHookPhaseHandler>)>,
+}
+
+impl StopHookPipeline {
+    /// Create a new empty pipeline.
+    pub fn new() -> Self {
+        Self {
+            handlers: Vec::new(),
+        }
+    }
+
+    /// Register a handler for a phase.
+    pub fn register_phase(
+        &mut self,
+        phase: StopHookPhase,
+        handler: Box<dyn StopHookPhaseHandler>,
+    ) {
+        self.handlers.push((phase, handler));
+    }
+
+    /// Execute all registered phases in order.
+    /// Phases 1-2 are blocking. Phases 3-4 are fire-and-forget.
+    /// Phases 5-6 are user-configured hooks.
+    pub async fn execute(
+        &self,
+        input: &StopHookBaseInput,
+    ) -> StopHookPipelineResult {
+        let mut result = StopHookPipelineResult::default();
+
+        for (phase, handler) in &self.handlers {
+            result.phases_executed.push(*phase);
+
+            match phase {
+                // Phases 1-2: Blocking — errors stop the pipeline
+                StopHookPhase::SaveCacheSafeParams
+                | StopHookPhase::JobClassification => {
+                    if let Err(err) = handler.execute(input, &mut result).await {
+                        result.blocking_errors.push(err.to_string());
+                        if *phase == StopHookPhase::JobClassification {
+                            result.prevent_continuation = true;
+                        }
+                    }
+                }
+
+                // Phase 3: Fire-and-forget — errors are logged but don't block
+                StopHookPhase::BackgroundFireAndForget => {
+                    if let Err(err) = handler.execute(input, &mut result).await {
+                        tracing::warn!("Background stop hook failed: {err:#}");
+                    }
+                }
+
+                // Phase 4: Computer-use cleanup — errors are logged
+                StopHookPhase::ComputerUseCleanup => {
+                    if let Err(err) = handler.execute(input, &mut result).await {
+                        tracing::warn!("Computer-use cleanup hook failed: {err:#}");
+                    }
+                }
+
+                // Phases 5-6: User-configured hooks — can inject messages
+                StopHookPhase::UserConfiguredStopHooks
+                | StopHookPhase::TeammateHooks => {
+                    if let Err(err) = handler.execute(input, &mut result).await {
+                        tracing::warn!("Stop hook phase {phase} failed: {err:#}");
+                    }
+                }
+
+                StopHookPhase::Return => {
+                    // Terminal phase — no action
+                }
+            }
+        }
+
+        result
+    }
+}
+
+impl Default for StopHookPipeline {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
