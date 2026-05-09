@@ -318,10 +318,8 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
                         "items": {
                             "type": "object",
                             "properties": {
-                                "id": {"type": "string", "description": "Optional unique identifier for the todo item."},
                                 "content": {"type": "string", "description": "Brief description of the task."},
                                 "status": {"type": "string", "enum": ["pending", "in_progress", "completed"]},
-                                "priority": {"type": "string", "enum": ["high", "medium", "low"]},
                                 "activeForm": {"type": "string", "description": "Present continuous form of the task description (e.g., 'Fixing authentication bug'). Shown during in_progress status. Must be at least 1 character."}
                             },
                             "required": ["content", "status", "activeForm"],
@@ -543,7 +541,7 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
                 "type": "object",
                 "properties": {
                     "notebook_path": {"type": "string", "description": "The absolute path to the Jupyter notebook file to edit (must be absolute, not relative)"},
-                    "cell_number": {"type": "integer", "description": "The cell number (0-indexed) to edit. When inserting a new cell, the new cell will be inserted at this index."},
+                    "cell_id": {"type": "string", "description": "The ID of the cell to edit"},
                     "new_source": {"type": "string", "description": "The new source for the cell"},
                     "cell_type": {"type": "string", "enum": ["code", "markdown"], "description": "The type of the cell (code or markdown). If not specified, it defaults to the current cell type. If using edit_mode=insert, this is required."},
                     "edit_mode": {"type": "string", "enum": ["replace", "insert", "delete"], "description": "The type of edit to make (replace, insert, delete). Defaults to replace."}
@@ -552,32 +550,19 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
                 "additionalProperties": false,
             }),
         },
-        // ── Skill discovery tool ───────────────────────────────────────────
-        ToolSpec {
-            name: "skill_discover".to_owned(),
-            protocol_name: "DiscoverSkills".to_owned(),
-            permission_tool_name: "Read".to_owned(),
-            description: tool_prompts::SKILL_DISCOVER.to_owned(),
-            requires_permission: false,
-            input_schema: json!({
-                "type": "object",
-                "properties": {},
-                "additionalProperties": false,
-            }),
-        },
         ToolSpec {
             name: "skill_execute".to_owned(),
-            protocol_name: "ExecuteSkill".to_owned(),
-            permission_tool_name: "ExecuteSkill".to_owned(),
+            protocol_name: "Skill".to_owned(),
+            permission_tool_name: "Skill".to_owned(),
             description: tool_prompts::SKILL_EXECUTE.to_owned(),
             requires_permission: false,
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "slug": {"type": "string", "description": "The skill slug to load"},
-                    "arguments": {"type": "object", "description": "Optional arguments to pass to the skill"}
+                    "skill": {"type": "string", "description": "The skill name. E.g., \"commit\", \"review-pr\", or \"pdf\""},
+                    "args": {"type": "string", "description": "Optional arguments for the skill"}
                 },
-                "required": ["slug"],
+                "required": ["skill"],
                 "additionalProperties": false,
             }),
         },
@@ -882,7 +867,7 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "schedule_cron".to_owned(),
-            protocol_name: "ScheduleCron".to_owned(),
+            protocol_name: "CronCreate".to_owned(),
             permission_tool_name: "Edit".to_owned(),
             description: tool_prompts::SCHEDULE_CRON.to_owned(),
             requires_permission: true,
@@ -891,7 +876,7 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
                 "properties": {
                     "cron": {
                         "type": "string",
-                        "description": "Standard 5-field cron expression in the user's local timezone: minute hour day-of-month month day-of-week"
+                        "description": "Standard 5-field cron expression in local time: \"M H DoM Mon DoW\" (e.g. \"*/5 * * * *\" = every 5 minutes, \"30 14 28 2 *\" = Feb 28 at 2:30pm local once)."
                     },
                     "prompt": {
                         "type": "string",
@@ -900,19 +885,41 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
                     "recurring": {
                         "type": "boolean",
                         "default": true,
-                        "description": "true = fire on every cron match until deleted. false = fire once at the next match, then auto-delete."
+                        "description": "true = fire on every cron match until deleted or auto-expired after 7 days. false = fire once at the next match, then auto-delete. Use false for \"remind me at X\" one-shot requests with pinned minute/hour/dom/month."
                     },
                     "durable": {
                         "type": "boolean",
                         "default": false,
-                        "description": "true = persist to .claude/scheduled_tasks.json and survive restarts. false = session-only."
-                    },
-                    "name": {
-                        "type": "string",
-                        "description": "Optional human-readable name for the scheduled job"
+                        "description": "true = persist to .claude/scheduled_tasks.json and survive restarts. false (default) = in-memory only, dies when this Claude session ends. Use true only when the user asks the task to survive across sessions."
                     }
                 },
                 "required": ["cron", "prompt"],
+                "additionalProperties": false,
+            }),
+        },
+        ToolSpec {
+            name: "cron_update".to_owned(),
+            protocol_name: "CronUpdate".to_owned(),
+            permission_tool_name: "CronUpdate".to_owned(),
+            description: "Update a scheduled cron job by ID — change its cron expression, prompt, name, description, folder, model, permission mode, worktree, or recurring setting.".to_owned(),
+            requires_permission: false,
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string", "description": "Job ID returned by CronCreate."},
+                    "cron": {"type": "string", "description": "New 5-field cron expression in local time."},
+                    "prompt": {"type": "string", "description": "New prompt to enqueue at each fire time."},
+                    "name": {"type": "string", "description": "New task name."},
+                    "description": {"type": "string", "description": "New task description."},
+                    "folder": {"type": "string", "description": "New working directory path."},
+                    "model": {"type": "string", "description": "New model to use."},
+                    "permissionMode": {"type": "string", "description": "New permission mode: \"ask\" | \"auto-accept\" | \"plan\" | \"bypass\"."},
+                    "worktree": {"type": "boolean", "description": "New worktree setting."},
+                    "recurring": {"type": "boolean", "description": "New recurring setting."},
+                    "frequency": {"type": "string", "description": "New frequency: \"manual\" | \"hourly\" | \"daily\" | \"weekdays\" | \"weekly\"."},
+                    "scheduledTime": {"type": "string", "description": "New time string (e.g. \"09:00\")."}
+                },
+                "required": ["id"],
                 "additionalProperties": false,
             }),
         },
@@ -1047,10 +1054,11 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "content": {"type": "string"},
-                    "max_length": {"type": "integer", "minimum": 10, "maximum": 100000}
+                    "message": {"type": "string", "description": "The message to send to the user. Supports markdown."},
+                    "attachments": {"type": "array", "items": {"type": "string"}, "description": "File paths (absolute or cwd-relative) for images, diffs, logs."},
+                    "status": {"type": "string", "enum": ["normal", "proactive"], "description": "Intent label: 'normal' when replying, 'proactive' when initiating."}
                 },
-                "required": ["content"],
+                "required": ["message"],
                 "additionalProperties": false,
             }),
         },
@@ -1515,7 +1523,7 @@ mod tests {
         let notebook = properties_for("notebook_edit");
         for field in [
             "notebook_path",
-            "cell_number",
+            "cell_id",
             "new_source",
             "cell_type",
             "edit_mode",

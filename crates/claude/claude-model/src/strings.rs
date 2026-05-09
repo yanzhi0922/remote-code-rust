@@ -112,7 +112,7 @@ mod tests {
         let strings = get_builtin_model_strings(&ModelProvider::Anthropic);
         assert_eq!(
             strings.get(&ModelKey::Opus46),
-            Some(&"claude-opus-4-6".to_string())
+            Some(&"claude-opus-4-7".to_string())
         );
         assert_eq!(
             strings.get(&ModelKey::Sonnet46),
@@ -125,7 +125,7 @@ mod tests {
         let strings = get_builtin_model_strings(&ModelProvider::AwsBedrock { region: None });
         assert_eq!(
             strings.get(&ModelKey::Opus46),
-            Some(&"us.anthropic.claude-opus-4-6-v1".to_string())
+            Some(&"us.anthropic.claude-opus-4-7-v1".to_string())
         );
     }
 
@@ -140,7 +140,7 @@ mod tests {
 
     #[test]
     fn model_string_lookup() {
-        assert_eq!(get_model_string(ModelKey::Opus46), Some("claude-opus-4-6"));
+        assert_eq!(get_model_string(ModelKey::Opus46), Some("claude-opus-4-7"));
         assert_eq!(
             get_model_string(ModelKey::Haiku45),
             Some("claude-haiku-4-5-20251001")
@@ -152,7 +152,7 @@ mod tests {
         let strings = get_builtin_model_strings(&ModelProvider::AwsBedrock { region: None });
         let mut overrides = HashMap::new();
         overrides.insert(
-            "claude-opus-4-6".into(),
+            "claude-opus-4-7".into(),
             "arn:aws:bedrock:us-east-1:123:inference-profile/custom-opus".into(),
         );
         let result = apply_model_overrides(&strings, &overrides);
@@ -168,7 +168,7 @@ mod tests {
     fn resolve_overridden() {
         let mut overrides = HashMap::new();
         overrides.insert(
-            "claude-opus-4-6".into(),
+            "claude-opus-4-7".into(),
             "arn:aws:bedrock:us-east-1:123:inference-profile/custom-opus".into(),
         );
         assert_eq!(
@@ -176,7 +176,7 @@ mod tests {
                 "arn:aws:bedrock:us-east-1:123:inference-profile/custom-opus",
                 &overrides
             ),
-            "claude-opus-4-6"
+            "claude-opus-4-7"
         );
         // Non-overridden model returned unchanged.
         assert_eq!(
@@ -189,8 +189,8 @@ mod tests {
     fn resolve_overridden_empty() {
         let overrides = HashMap::new();
         assert_eq!(
-            resolve_overridden_model("claude-opus-4-6", &overrides),
-            "claude-opus-4-6"
+            resolve_overridden_model("claude-opus-4-7", &overrides),
+            "claude-opus-4-7"
         );
     }
 
@@ -200,7 +200,7 @@ mod tests {
             sonnet46_string(&ModelProvider::Anthropic),
             "claude-sonnet-4-6"
         );
-        assert_eq!(opus46_string(&ModelProvider::Anthropic), "claude-opus-4-6");
+        assert_eq!(opus46_string(&ModelProvider::Anthropic), "claude-opus-4-7");
         assert_eq!(
             haiku45_string(&ModelProvider::Anthropic),
             "claude-haiku-4-5-20251001"

@@ -35,6 +35,16 @@ pub enum QuerySource {
     Advisor,
     /// Issued by a background task.
     BackgroundTask,
+    /// Issued by a hook-triggered agent.
+    HookAgent,
+    /// Issued by a hook-triggered prompt evaluation.
+    HookPrompt,
+    /// Issued by the verification agent.
+    VerificationAgent,
+    /// Issued by a side-question (follow-up) query.
+    SideQuestion,
+    /// Issued by the auto-mode security classifier.
+    AutoMode,
 }
 
 impl QuerySource {
@@ -52,6 +62,11 @@ impl QuerySource {
             Self::AutoDream => "auto_dream",
             Self::Advisor => "advisor",
             Self::BackgroundTask => "background_task",
+            Self::HookAgent => "hook_agent",
+            Self::HookPrompt => "hook_prompt",
+            Self::VerificationAgent => "verification_agent",
+            Self::SideQuestion => "side_question",
+            Self::AutoMode => "auto_mode",
         }
     }
 
@@ -69,6 +84,11 @@ impl QuerySource {
             QuerySource::AutoDream,
             QuerySource::Advisor,
             QuerySource::BackgroundTask,
+            QuerySource::HookAgent,
+            QuerySource::HookPrompt,
+            QuerySource::VerificationAgent,
+            QuerySource::SideQuestion,
+            QuerySource::AutoMode,
         ]
     }
 }
@@ -291,6 +311,11 @@ pub fn parse_query_source_header(header: &str) -> Option<QuerySourceContext> {
                         "auto_dream" => Some(QuerySource::AutoDream),
                         "advisor" => Some(QuerySource::Advisor),
                         "background_task" => Some(QuerySource::BackgroundTask),
+                        "hook_agent" => Some(QuerySource::HookAgent),
+                        "hook_prompt" => Some(QuerySource::HookPrompt),
+                        "verification_agent" => Some(QuerySource::VerificationAgent),
+                        "side_question" => Some(QuerySource::SideQuestion),
+                        "auto_mode" => Some(QuerySource::AutoMode),
                         _ => None,
                     };
                 }
@@ -369,7 +394,7 @@ mod tests {
     #[test]
     fn query_source_all_values() {
         let values = QuerySource::all_values();
-        assert_eq!(values.len(), 10);
+        assert_eq!(values.len(), 15);
         assert!(values.contains(&QuerySource::ReplMainThread));
         assert!(values.contains(&QuerySource::Sdk));
         assert!(values.contains(&QuerySource::ExtractMemories));
