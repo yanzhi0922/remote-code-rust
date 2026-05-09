@@ -38,8 +38,8 @@ const DEFAULT_MAX_RETRIES: u32 = 10;
 /// Base delay in milliseconds for the first retry back-off.
 const BASE_DELAY_MS: u64 = 500;
 
-/// Maximum delay cap for standard retries (5 minutes).
-const MAX_BACKOFF_MS: u64 = 5 * 60 * 1000;
+/// Maximum delay cap for standard retries (32 seconds, matching TS).
+const MAX_BACKOFF_MS: u64 = 32_000;
 
 /// Maximum number of consecutive 529 (overloaded) errors before giving up.
 const MAX_529_RETRIES: u32 = 3;
@@ -359,12 +359,22 @@ impl RetryOptions {
 /// Background sources (title generation, summaries, suggestions, classifiers)
 /// bail immediately on 529 to avoid amplifying during capacity cascades.
 /// The user never sees those fail anyway.
+///
+/// TS reference also includes fine-grained variants: `repl_main_thread:outputStyle:*`,
+/// `agent:custom`, `agent:default`, `agent:builtin`, `bash_classifier`.
+/// In Rust these map to the coarser variants below (`Agent` covers all agent subtypes,
+/// `ReplMainThread` covers all output-style variants).
 const FOREGROUND_529_RETRY_SOURCES: &[QuerySource] = &[
     QuerySource::ReplMainThread,
     QuerySource::Sdk,
     QuerySource::Agent,
     QuerySource::Compact,
     QuerySource::User,
+    QuerySource::HookAgent,
+    QuerySource::HookPrompt,
+    QuerySource::VerificationAgent,
+    QuerySource::SideQuestion,
+    QuerySource::AutoMode,
 ];
 
 /// Check whether a query source should retry on 529 errors.

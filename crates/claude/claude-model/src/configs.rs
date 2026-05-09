@@ -92,10 +92,10 @@ pub static CLAUDE_OPUS_4_5_CONFIG: LazyLock<ModelConfig> = LazyLock::new(|| Mode
 });
 
 pub static CLAUDE_OPUS_4_6_CONFIG: LazyLock<ModelConfig> = LazyLock::new(|| ModelConfig {
-    first_party: "claude-opus-4-6",
-    bedrock: "us.anthropic.claude-opus-4-6-v1",
-    vertex: "claude-opus-4-6",
-    foundry: "claude-opus-4-6",
+    first_party: "claude-opus-4-7",
+    bedrock: "us.anthropic.claude-opus-4-7-v1",
+    vertex: "claude-opus-4-7",
+    foundry: "claude-opus-4-7",
 });
 
 pub static CLAUDE_SONNET_4_6_CONFIG: LazyLock<ModelConfig> = LazyLock::new(|| ModelConfig {
@@ -234,7 +234,7 @@ mod tests {
     #[test]
     fn canonical_ids_match_keys() {
         assert_eq!(
-            key_for_canonical_id("claude-opus-4-6"),
+            key_for_canonical_id("claude-opus-4-7"),
             Some(ModelKey::Opus46)
         );
         assert_eq!(
@@ -253,18 +253,18 @@ mod tests {
         let provider = ModelProvider::Anthropic;
         assert_eq!(
             model_id_for_provider(ModelKey::Opus46, &provider),
-            Some("claude-opus-4-6")
+            Some("claude-opus-4-7")
         );
         let bedrock = ModelProvider::AwsBedrock { region: None };
         assert_eq!(
             model_id_for_provider(ModelKey::Opus46, &bedrock),
-            Some("us.anthropic.claude-opus-4-6-v1")
+            Some("us.anthropic.claude-opus-4-7-v1")
         );
     }
 
     #[test]
     fn canonical_ids_populated() {
-        assert!(CANONICAL_MODEL_IDS.contains(&"claude-opus-4-6"));
+        assert!(CANONICAL_MODEL_IDS.contains(&"claude-opus-4-7"));
         assert!(CANONICAL_MODEL_IDS.contains(&"claude-sonnet-4-6"));
         assert!(CANONICAL_MODEL_IDS.contains(&"claude-haiku-4-5-20251001"));
     }

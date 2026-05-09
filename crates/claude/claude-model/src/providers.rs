@@ -145,11 +145,11 @@ pub fn is_first_party_base_url(base_url: &str) -> bool {
 /// Third-party providers may lag behind first-party availability.
 pub fn default_opus_model(provider: &ModelProvider) -> &'static str {
     match provider {
-        ModelProvider::Anthropic => "claude-opus-4-6",
-        // 3P providers may not have 4.6 yet — keep on latest confirmed.
-        ModelProvider::AwsBedrock { .. } => "claude-opus-4-6",
-        ModelProvider::GcpVertex { .. } => "claude-opus-4-6",
-        ModelProvider::OpenAiCompatible { .. } => "claude-opus-4-6",
+        ModelProvider::Anthropic => "claude-opus-4-7",
+        // 3P providers may not have 4.7 yet — keep on latest confirmed.
+        ModelProvider::AwsBedrock { .. } => "claude-opus-4-7",
+        ModelProvider::GcpVertex { .. } => "claude-opus-4-7",
+        ModelProvider::OpenAiCompatible { .. } => "claude-opus-4-7",
     }
 }
 

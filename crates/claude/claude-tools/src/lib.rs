@@ -472,7 +472,7 @@ fn canonical_builtin_tool_name(internal_name: &str) -> Option<&'static str> {
         "task_output" => Some("TaskOutput"),
         "task_stop" => Some("TaskStop"),
         "notebook_edit" => Some("NotebookEdit"),
-        "skill_discover" => Some("DiscoverSkills"),
+        "discover_skills" => Some("DiscoverSkills"),
         "skill_execute" => Some("Skill"),
         "send_message" => Some("SendMessage"),
         "enter_plan_mode" => Some("EnterPlanMode"),
@@ -1798,7 +1798,7 @@ pub async fn execute_tool_call(
             "task_output" => tasks::task_output(&effective_call.input),
             "task_stop" => tasks::task_stop(&effective_call.input),
             "notebook_edit" => misc::notebook_edit(&effective_call.input, context),
-            "skill_discover" => misc::skill_discover(&effective_call.input, context),
+            "discover_skills" => misc::skill_discover(&effective_call.input, context),
             "send_message" => send_message::send_message(&effective_call.input, context).await,
             "enter_plan_mode" => plan_mode::enter_plan_mode(&effective_call.input, context),
             "exit_plan_mode" => plan_mode::exit_plan_mode(&effective_call.input, context),
@@ -4944,7 +4944,7 @@ while True:
     }
 
     #[tokio::test]
-    async fn skill_discover_returns_result() {
+    async fn discover_skills_returns_result() {
         let tempdir = match tempdir() {
             Ok(dir) => dir,
             Err(error) => panic!("failed to create tempdir: {error}"),
@@ -4965,16 +4965,16 @@ while True:
         let result = execute_tool_call(
             &ToolCall {
                 id: "1".to_owned(),
-                name: "skill_discover".to_owned(),
-                input: json!({}),
+                name: "discover_skills".to_owned(),
+                input: json!({"query": "test"}),
             },
             &context,
             &broker,
         )
         .await
-        .expect("skill_discover should work");
+        .expect("discover_skills should work");
 
-        assert!(!result.is_error, "skill_discover error: {}", result.content);
+        assert!(!result.is_error, "discover_skills error: {}", result.content);
         // Empty workspace should return "No skills found"
         assert!(
             result.content.contains("No skills found"),
@@ -5007,8 +5007,8 @@ while True:
             "notebook_edit should be registered"
         );
         assert!(
-            names.contains(&"skill_discover"),
-            "skill_discover should be registered"
+            names.contains(&"discover_skills"),
+            "discover_skills should be registered"
         );
         assert!(
             names.contains(&"send_message"),
