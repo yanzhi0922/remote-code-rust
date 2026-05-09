@@ -32,7 +32,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
 use roo_checkpoint::service::ShadowCheckpointService;
-use roo_checkpoint::types::GetDiffParams;
+use roo_checkpoint::types::{GetDiffParams, SaveCheckpointOptions};
 use roo_provider::handler::Provider;
 use roo_types::message::{ClineAsk, ClineMessage, ClineSay, MessageType};
 
@@ -555,6 +555,7 @@ impl TaskLifecycle {
         let roo_protected = self.roo_protected_controller.take();
         let file_context_tracker = self.file_context_tracker.take();
         let diff_view = self.diff_view_provider.take();
+        let terminal_registry = self.services.terminal_registry.clone();
 
         info!(task_id = %task_id, "Spawning AgentLoop on background thread");
 
@@ -581,6 +582,9 @@ impl TaskLifecycle {
                 }
                 if let Some(dv) = diff_view {
                     agent_loop = agent_loop.with_diff_view_provider(dv);
+                }
+                if let Some(reg) = terminal_registry {
+                    agent_loop = agent_loop.with_terminal_registry(reg);
                 }
 
                 // Create a minimal tokio runtime on this thread
@@ -1231,46 +1235,86 @@ impl TaskLifecycle {
         self.flush_pending_tool_results().await?;
 
         // Source: TS line 1660 — get previous context tokens
-        let _prev_context_tokens = self.engine.result().token_usage.context_tokens;
+        let prev_context_tokens = self.engine.result().token_usage.context_tokens;
 
         // Source: TS lines 1696–1697 — get files read by Roo safely
-        let _files_read_by_roo = self.get_files_read_by_roo_safely("condenseContext");
+        let files_read_by_roo = self.get_files_read_by_roo_safely("condenseContext");
 
         // Source: TS lines 1698–1718 — call summarizeConversation
         //
-        // The actual condensation requires an API handler and system prompt,
-        // which are owned by the agent loop. The TaskLifecycle emits a
-        // condensation request event and the agent loop performs the actual
-        // condensation. This matches the TS architecture where condenseContext()
-        // calls summarizeConversation() which needs the API handler.
-        //
-        // For the manual trigger path, we emit the event and let the
-        // agent loop handle it. If we have an API handler available,
-        // we can perform the condensation directly.
-        // The actual condensation requires an API handler (Arc<dyn Provider>) and
-        // system prompt, which are owned by the agent loop. The TaskLifecycle emits
-        // a condensation request event and the agent loop performs the actual
-        // condensation via roo_condense::summarize_conversation(). This matches the
-        // TS architecture where condenseContext() calls summarizeConversation().
-        //
-        // Direct in-place condensation is not performed here because the engine
-        // stores the handler as Box<dyn Provider> while summarize_conversation
-        // requires Arc<dyn Provider>. The event-based path handles this correctly.
+        // If we have a provider available, perform condensation directly.
+        // Otherwise, emit an event for the agent loop to handle.
+        if let Some(ref provider) = self.provider {
+            // Build a condensation prompt
+            let history = self.engine.api_conversation_history();
+            let history_len = history.len();
 
-        // Emit condensation request event for the agent loop to handle
-        self.engine
-            .emitter()
-            .emit(&TaskEvent::ContextCondensationRequested {
-                task_id: self.task_id().to_string(),
-            });
+            // Create a summary of the conversation for condensation
+            let summary_prompt = format!(
+                "Summarize the following conversation concisely, preserving key decisions, \
+                 file paths, and action items. The conversation has {} messages.\n\n\
+                 Files read: {}\n\n\
+                 Previous context tokens: {}\n\n\
+                 Provide a concise summary that captures the essential context.",
+                history_len,
+                files_read_by_roo.as_ref().map(|f| f.join(", ")).unwrap_or_default(),
+                prev_context_tokens,
+            );
 
-        // Source: TS lines 1733–1749 — emit condense_context say message
-        // (This is done by the agent loop after successful condensation)
+            match provider.complete_prompt(&summary_prompt).await {
+                Ok(summary) => {
+                    // Truncate API conversation history to just the summary
+                    // This mirrors TS: `overwriteApiConversationHistory(messages)`
+                    let condensed_message = roo_types::api::ApiMessage {
+                        role: roo_types::api::MessageRole::User,
+                        content: vec![roo_types::api::ContentBlock::Text {
+                            text: format!("[Context Condensed]\n\n{}", summary),
+                        }],
+                        reasoning: None,
+                        ts: None,
+                        truncation_parent: None,
+                        is_truncation_marker: None,
+                        truncation_id: None,
+                        condense_parent: None,
+                        is_summary: Some(true),
+                        condense_id: Some(uuid::Uuid::new_v4().to_string()),
+                        reasoning_details: None,
+                    };
+
+                    self.engine.api_conversation_history_mut().clear();
+                    self.engine.api_conversation_history_mut().push(condensed_message);
+
+                    // Emit condensation completed event
+                    self.engine.emitter().emit(&TaskEvent::ContextCondensationCompleted {
+                        task_id: self.task_id().to_string(),
+                        messages_removed: history_len.saturating_sub(1),
+                    });
+
+                    info!(task_id = %self.task_id(), "Context condensed successfully");
+                }
+                Err(e) => {
+                    warn!(error = %e, "Failed to condense context via API");
+                    // Fall back to event-based path
+                    self.engine
+                        .emitter()
+                        .emit(&TaskEvent::ContextCondensationRequested {
+                            task_id: self.task_id().to_string(),
+                        });
+                }
+            }
+        } else {
+            // No provider — emit condensation request event for the agent loop
+            self.engine
+                .emitter()
+                .emit(&TaskEvent::ContextCondensationRequested {
+                    task_id: self.task_id().to_string(),
+                });
+        }
 
         // Source: TS line 1752 — process queued messages
         self.process_queued_messages().await;
 
-        info!(task_id = %self.task_id(), "Context condensation requested");
+        info!(task_id = %self.task_id(), "Context condensation completed");
         Ok(())
     }
 
@@ -1447,19 +1491,62 @@ impl TaskLifecycle {
     /// If `suppress_message` is true, doesn't emit a checkpoint_saved message.
     pub async fn checkpoint_save(
         &mut self,
-        _allow_empty: bool,
-        _suppress_message: bool,
+        allow_empty: bool,
+        suppress_message: bool,
     ) -> Result<Option<String>, TaskError> {
         // Source: TS lines 4454–4565
-        // The actual checkpoint logic requires the ShadowCheckpointService
-        // which is initialized during the agent loop.
-        //
-        // For now, emit the event and return None.
-        self.engine
-            .emitter()
-            .emit_checkpoint_saved(self.task_id(), None);
-        debug!(task_id = %self.task_id(), "Checkpoint save requested");
-        Ok(None)
+        let task_id = self.task_id().to_string();
+        let message = format!("Task: {}, Time: {}", task_id, chrono::Utc::now().timestamp());
+
+        if let Some(ref mut service) = self.checkpoint_service {
+            // Initialize shadow git if not already done
+            if let Err(e) = service.init_shadow_git().await {
+                warn!(error = %e, "Failed to init shadow git for checkpoint");
+                self.engine
+                    .emitter()
+                    .emit_checkpoint_saved(&task_id, None);
+                return Ok(None);
+            }
+
+            let options = SaveCheckpointOptions {
+                allow_empty,
+                suppress_message,
+            };
+
+            match service.save_checkpoint(&message, options).await {
+                Ok(Some(result)) => {
+                    let commit_hash = result.commit.clone();
+                    if !suppress_message {
+                        self.engine
+                            .emitter()
+                            .emit_checkpoint_saved(&task_id, Some(commit_hash.clone()));
+                    }
+                    debug!(task_id = %task_id, commit = %commit_hash, "Checkpoint saved");
+                    Ok(Some(commit_hash))
+                }
+                Ok(None) => {
+                    debug!(task_id = %task_id, "No changes to checkpoint");
+                    self.engine
+                        .emitter()
+                        .emit_checkpoint_saved(&task_id, None);
+                    Ok(None)
+                }
+                Err(e) => {
+                    warn!(error = %e, "Checkpoint save failed, disabling checkpoints");
+                    self.engine
+                        .emitter()
+                        .emit_checkpoint_saved(&task_id, None);
+                    Ok(None)
+                }
+            }
+        } else {
+            // No checkpoint service available — emit event and return None
+            self.engine
+                .emitter()
+                .emit_checkpoint_saved(&task_id, None);
+            debug!(task_id = %task_id, "Checkpoint save requested (no service)");
+            Ok(None)
+        }
     }
 
     /// Restore the task to a previous checkpoint.

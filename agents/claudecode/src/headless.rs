@@ -905,6 +905,7 @@ mod tests {
                 request_id: None,
                 usage: UsageSummary::default(),
                 stop_reason: "end_turn".to_owned(),
+            research: None,
             })
         }
     }
@@ -934,6 +935,7 @@ mod tests {
                     ..Default::default()
                 },
                 stop_reason: "end_turn".to_owned(),
+            research: None,
             })
         }
 
@@ -948,7 +950,7 @@ mod tests {
                     on_text_delta("streaming-backend");
                 }
                 if let Some(on_usage) = callbacks.on_usage.as_ref() {
-                    on_usage(12, 3);
+                    on_usage(claude_provider::streaming::StreamingUsageUpdate { input_tokens: 12, output_tokens: 3, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 });
                 }
             }
             Ok(ProviderResponse {
@@ -966,6 +968,7 @@ mod tests {
                     ..Default::default()
                 },
                 stop_reason: "end_turn".to_owned(),
+            research: None,
             })
         }
 
@@ -1034,6 +1037,7 @@ mod tests {
                     request_id: None,
                     usage: UsageSummary::default(),
                     stop_reason: "tool_use".to_owned(),
+                research: None,
                 })
             } else {
                 Ok(ProviderResponse {
@@ -1045,6 +1049,7 @@ mod tests {
                     request_id: None,
                     usage: UsageSummary::default(),
                     stop_reason: "end_turn".to_owned(),
+                research: None,
                 })
             }
         }

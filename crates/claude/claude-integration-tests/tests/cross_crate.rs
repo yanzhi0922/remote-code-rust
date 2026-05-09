@@ -290,6 +290,7 @@ fn mcp_config_round_trips_via_json() {
         request_timeout_secs: None,
         oauth: None,
         metadata: std::collections::BTreeMap::new(),
+        tool_policy: Default::default(),
     };
     let json = serde_json::to_string(&config).expect("serialize mcp config");
     let decoded: claude_mcp::McpServerConfig =
@@ -342,6 +343,7 @@ fn mcp_server_connection_states_serialize() {
                 request_timeout_secs: None,
                 oauth: None,
                 metadata: std::collections::BTreeMap::new(),
+            tool_policy: Default::default(),
             },
             claude_mcp::scope::ConfigScope::Local,
         ),

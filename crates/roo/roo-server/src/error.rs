@@ -45,6 +45,16 @@ pub enum ServerError {
     /// Internal server error.
     #[error("Internal error: {0}")]
     Internal(String),
+
+    /// Settings persistence error.
+    #[error("Settings error: {0}")]
+    Settings(String),
+}
+
+impl From<String> for ServerError {
+    fn from(s: String) -> Self {
+        ServerError::Settings(s)
+    }
 }
 
 /// Convenience result type for server operations.

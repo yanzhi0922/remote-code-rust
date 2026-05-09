@@ -10,17 +10,22 @@ interface RemoteAuthGateProps {
   deviceName: string;
   health: RemoteControlPlaneHealth;
   manualAccessToken: string;
+  pairingOfferId: string;
+  pairingSecret: string;
+  username: string;
+  password: string;
   onBootstrapClaim: () => void;
   onClearSavedToken: () => void;
   onManualTokenSave: () => void;
   onPairingAccept: () => void;
-  pairingOfferId: string;
-  pairingSecret: string;
+  onUserSignIn: () => void;
   setBootstrapSecret: (value: string) => void;
   setDeviceName: (value: string) => void;
   setManualAccessToken: (value: string) => void;
   setPairingOfferId: (value: string) => void;
   setPairingSecret: (value: string) => void;
+  setUsername: (value: string) => void;
+  setPassword: (value: string) => void;
 }
 
 export function RemoteAuthGate({
@@ -31,17 +36,22 @@ export function RemoteAuthGate({
   deviceName,
   health,
   manualAccessToken,
+  pairingOfferId,
+  pairingSecret,
+  username,
+  password,
   onBootstrapClaim,
   onClearSavedToken,
   onManualTokenSave,
   onPairingAccept,
-  pairingOfferId,
-  pairingSecret,
+  onUserSignIn,
   setBootstrapSecret,
   setDeviceName,
   setManualAccessToken,
   setPairingOfferId,
   setPairingSecret,
+  setUsername,
+  setPassword,
 }: RemoteAuthGateProps) {
   return (
     <div className="mx-auto flex min-h-screen max-w-5xl items-center px-6 py-10">
@@ -74,6 +84,38 @@ export function RemoteAuthGate({
                 className="w-full rounded-2xl border border-[#dfd5c6] bg-[#fcfaf6] px-4 py-3 text-sm text-slate-800 outline-none transition-colors focus:border-[#a58a5e]"
               />
             </label>
+
+            {/* ── Multi-user sign-in ── */}
+            <div className="rounded-[28px] border border-[#e7dccd] bg-[#faf6ef] px-5 py-5">
+              <div className="text-sm font-semibold text-slate-900">{copy.multiUserTitle}</div>
+              <div className="mt-2 text-sm leading-6 text-slate-500">{copy.multiUserDescription}</div>
+              <div className="mt-4 grid gap-3">
+                <input
+                  value={username}
+                  onChange={(event) => setUsername(event.target.value)}
+                  placeholder={copy.usernamePlaceholder}
+                  autoComplete="username"
+                  className="w-full rounded-2xl border border-[#dfd5c6] bg-white px-4 py-3 text-sm text-slate-800 outline-none transition-colors focus:border-[#a58a5e]"
+                />
+                <input
+                  value={password}
+                  onChange={(event) => setPassword(event.target.value)}
+                  type="password"
+                  placeholder={copy.passwordPlaceholder}
+                  autoComplete="current-password"
+                  className="w-full rounded-2xl border border-[#dfd5c6] bg-white px-4 py-3 text-sm text-slate-800 outline-none transition-colors focus:border-[#a58a5e]"
+                />
+              </div>
+              <button
+                type="button"
+                onClick={onUserSignIn}
+                disabled={authLoading || !username.trim() || !password.trim()}
+                className="mt-4 inline-flex items-center gap-2 rounded-full bg-[#1d6b45] px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-[#145033] disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {authLoading ? <LoaderCircle size={15} className="animate-spin" /> : <Shield size={15} />}
+                {copy.signInAction}
+              </button>
+            </div>
 
             {bootstrapEnabled && (
               <div className="rounded-[28px] border border-[#e7dccd] bg-[#faf6ef] px-5 py-5">

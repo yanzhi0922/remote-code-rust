@@ -1,6 +1,7 @@
 use tauri::{AppHandle, Manager, Runtime};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
+use rc_remote_transport::RemoteTransport;
 
 /// Reject file names that could escape the download directory.
 fn validate_download_name(file_name: &str) -> Result<std::path::PathBuf, String> {
@@ -20,15 +21,12 @@ fn validate_download_name(file_name: &str) -> Result<std::path::PathBuf, String>
 
 /// Reject URLs that target internal/private networks (SSRF mitigation).
 fn validate_download_url(url: &str) -> Result<(), String> {
-    // Basic scheme check
     let lowered = url.to_ascii_lowercase();
     if !lowered.starts_with("https://") && !lowered.starts_with("http://") {
         return Err("only http:// and https:// URLs are allowed".to_string());
     }
-    // Extract host part: after "://" up to first '/' or end
     let after_scheme = &url[url.find("://").map(|i| i + 3).unwrap_or(0)..];
     let host_port = after_scheme.split('/').next().unwrap_or("");
-    // Strip port
     let host = host_port.split(':').next().unwrap_or("");
     if host == "localhost"
         || host == "127.0.0.1"
@@ -39,7 +37,6 @@ fn validate_download_url(url: &str) -> Result<(), String> {
     {
         return Err("URLs targeting internal addresses are not allowed".to_string());
     }
-    // 172.16.0.0/12 private range
     if let Some(rest) = host.strip_prefix("172.")
         && let Some(octet) = rest.split('.').next()
         && let Ok(n) = octet.parse::<u8>()
@@ -81,42 +78,48 @@ pub async fn mobile_is_mobile() -> bool {
 }
 
 #[tauri::command]
-pub async fn mobile_haptic_impact(style: String) -> Result<(), String> {
-    #[cfg(feature = "mobile")]
+pub async fn mobile_haptic_impact(app: AppHandle<impl Runtime>, style: String) -> Result<(), String> {
+    #[cfg(any(target_os = "android", target_os = "ios"))]
     {
+        use tauri_plugin_haptics::HapticsExt;
         let impact_style = match style.as_str() {
-            "heavy" => tauri_plugin_haptics::ImpactStyle::Heavy,
-            "medium" => tauri_plugin_haptics::ImpactStyle::Medium,
-            _ => tauri_plugin_haptics::ImpactStyle::Light,
+            "heavy" => tauri_plugin_haptics::ImpactFeedbackStyle::Heavy,
+            "medium" => tauri_plugin_haptics::ImpactFeedbackStyle::Medium,
+            _ => tauri_plugin_haptics::ImpactFeedbackStyle::Light,
         };
-        tauri_plugin_haptics::impact(impact_style);
+        app.haptics().impact_feedback(impact_style).map_err(|e| e.to_string())?;
     }
     let _ = style;
+    let _ = &app;
     Ok(())
 }
 
 #[tauri::command]
-pub async fn mobile_haptic_notification(kind: String) -> Result<(), String> {
-    #[cfg(feature = "mobile")]
+pub async fn mobile_haptic_notification(app: AppHandle<impl Runtime>, kind: String) -> Result<(), String> {
+    #[cfg(any(target_os = "android", target_os = "ios"))]
     {
+        use tauri_plugin_haptics::HapticsExt;
         let notif_type = match kind.as_str() {
-            "success" => tauri_plugin_haptics::NotificationType::Success,
-            "warning" => tauri_plugin_haptics::NotificationType::Warning,
-            "error" => tauri_plugin_haptics::NotificationType::Error,
-            _ => tauri_plugin_haptics::NotificationType::Success,
+            "success" => tauri_plugin_haptics::NotificationFeedbackType::Success,
+            "warning" => tauri_plugin_haptics::NotificationFeedbackType::Warning,
+            "error" => tauri_plugin_haptics::NotificationFeedbackType::Error,
+            _ => tauri_plugin_haptics::NotificationFeedbackType::Success,
         };
-        tauri_plugin_haptics::notification(notif_type);
+        app.haptics().notification_feedback(notif_type).map_err(|e| e.to_string())?;
     }
     let _ = kind;
+    let _ = &app;
     Ok(())
 }
 
 #[tauri::command]
-pub async fn mobile_haptic_selection() -> Result<(), String> {
-    #[cfg(feature = "mobile")]
+pub async fn mobile_haptic_selection(app: AppHandle<impl Runtime>) -> Result<(), String> {
+    #[cfg(any(target_os = "android", target_os = "ios"))]
     {
-        tauri_plugin_haptics::selection();
+        use tauri_plugin_haptics::HapticsExt;
+        app.haptics().selection_feedback().map_err(|e| e.to_string())?;
     }
+    let _ = &app;
     Ok(())
 }
 
@@ -124,17 +127,21 @@ pub async fn mobile_haptic_selection() -> Result<(), String> {
 pub async fn mobile_biometric_check_availability(
     app: AppHandle<impl Runtime>,
 ) -> Result<BiometricAvailability, String> {
-    #[cfg(feature = "mobile")]
+    #[cfg(any(target_os = "android", target_os = "ios"))]
     {
-        let result = tauri_plugin_biometric::check_availability(&app, None)
-            .await
-            .map_err(|e| e.to_string())?;
+        use tauri_plugin_biometric::BiometricExt;
+        let status = app.biometric().status().map_err(|e| e.to_string())?;
+        let biometry_type = match status.biometry_type {
+            tauri_plugin_biometric::BiometryType::TouchID => "touchid",
+            tauri_plugin_biometric::BiometryType::FaceID => "faceid",
+            _ => "none",
+        };
         Ok(BiometricAvailability {
-            available: true,
-            biometry_type: result,
+            available: status.is_available,
+            biometry_type: biometry_type.to_string(),
         })
     }
-    #[cfg(not(feature = "mobile"))]
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
     {
         let _ = app;
         Ok(BiometricAvailability {
@@ -149,18 +156,18 @@ pub async fn mobile_biometric_authenticate(
     app: AppHandle<impl Runtime>,
     reason: String,
 ) -> Result<bool, String> {
-    #[cfg(feature = "mobile")]
+    #[cfg(any(target_os = "android", target_os = "ios"))]
     {
-        let options = tauri_plugin_biometric::BiometricOptions {
-            reason,
+        use tauri_plugin_biometric::BiometricExt;
+        let options = tauri_plugin_biometric::AuthOptions {
+            title: Some(reason.clone()),
             ..Default::default()
         };
-        tauri_plugin_biometric::authenticate(&app, options)
-            .await
+        app.biometric().authenticate(reason, options)
             .map(|_| true)
             .map_err(|e| e.to_string())
     }
-    #[cfg(not(feature = "mobile"))]
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
     {
         let _ = (app, reason);
         Ok(false)
@@ -169,19 +176,32 @@ pub async fn mobile_biometric_authenticate(
 
 #[tauri::command]
 pub async fn mobile_secure_store_get(
-    _app: AppHandle<impl Runtime>,
+    app: AppHandle<impl Runtime>,
     key: String,
 ) -> Result<Option<String>, String> {
     let entry = keyring::Entry::new("remote-code-secure-store", &key)
         .map_err(|e| e.to_string())?;
     match entry.get_password() {
         Ok(value) => Ok(Some(value)),
-        Err(keyring::Error::NoEntry) => Ok(None),
-        Err(e) => {
-            // Fallback: try legacy JSON store for migration
-            let _ = &_app;
-            Err(e.to_string())
+        Err(keyring::Error::NoEntry) => {
+            if let Some(dir) = app.path().app_config_dir().ok() {
+                let legacy_path = dir.join("secure_store.json");
+                if legacy_path.exists() {
+                    if let Ok(data) = std::fs::read_to_string(&legacy_path) {
+                        if let Ok(map) = serde_json::from_str::<std::collections::HashMap<String, String>>(&data) {
+                            if let Some(value) = map.get(&key).cloned() {
+                                if entry.set_password(&value).is_ok() {
+                                    tracing::info!("Migrated key '{key}' from legacy JSON to keyring");
+                                }
+                                return Ok(Some(value));
+                            }
+                        }
+                    }
+                }
+            }
+            Ok(None)
         }
+        Err(e) => Err(e.to_string()),
     }
 }
 
@@ -334,7 +354,6 @@ pub async fn mobile_share_file(
     file_path: String,
     _title: Option<String>,
 ) -> Result<(), String> {
-    // Only allow sharing files from the download directory.
     let download_dir = app
         .path()
         .download_dir()
@@ -347,32 +366,28 @@ pub async fn mobile_share_file(
     if !canonical_path.starts_with(&canonical_dir) {
         return Err("file is outside the allowed download directory".to_string());
     }
-    #[cfg(feature = "mobile")]
+    #[cfg(any(target_os = "android", target_os = "ios"))]
     {
-        tauri_plugin_share::share_file(
-            &app,
-            tauri_plugin_share::ShareFileRequest {
-                path: file_path.clone(),
-                mime_type: mime_guess::from_path(&file_path)
-                    .first()
-                    .map(|m| m.to_string())
-                    .unwrap_or_else(|| "application/octet-stream".to_string()),
-                title: _title.unwrap_or_default(),
-            },
-        )
-        .await
-        .map_err(|e| e.to_string())?;
+        use tauri_plugin_share::ShareExt;
+        let mime = mime_guess::from_path(&file_path)
+            .first()
+            .map(|m| m.to_string())
+            .unwrap_or_else(|| "application/octet-stream".to_string());
+        let request = tauri_plugin_share::ShareRequest {
+            path: Some(file_path.clone()),
+            mime: Some(mime),
+            group: _title.clone(),
+        };
+        app.share_file().share_file(request)
+            .map_err(|e: tauri_plugin_share::Error| e.to_string())?;
     }
-    #[cfg(not(feature = "mobile"))]
-    {
-        let _ = (app, file_path, _title);
-    }
+    let _ = (app, file_path, _title);
     Ok(())
 }
 
 #[tauri::command]
 pub async fn mobile_push_request_permission(app: AppHandle<impl Runtime>) -> Result<bool, String> {
-    #[cfg(feature = "mobile")]
+    #[cfg(any(target_os = "android", target_os = "ios"))]
     {
         use tauri_plugin_notification::NotificationExt;
         let permission = app
@@ -388,11 +403,10 @@ pub async fn mobile_push_request_permission(app: AppHandle<impl Runtime>) -> Res
         let result = app
             .notification()
             .request_permission()
-            .await
             .map_err(|e| e.to_string())?;
         Ok(result == tauri_plugin_notification::PermissionState::Granted)
     }
-    #[cfg(not(feature = "mobile"))]
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
     {
         let _ = app;
         Ok(false)
@@ -406,109 +420,84 @@ pub async fn mobile_push_show(
     body: String,
     data: Option<String>,
 ) -> Result<(), String> {
-    #[cfg(feature = "mobile")]
+    #[cfg(any(target_os = "android", target_os = "ios"))]
     {
         use tauri_plugin_notification::NotificationExt;
-        let notification = tauri_plugin_notification::Notification::new(&app)
+        let mut builder = app.notification().builder()
             .title(&title)
             .body(&body);
-        if let Some(d) = data {
-            let _ = notification.data(&d);
+        if let Some(ref d) = data {
+            builder = builder.extra("data", d);
         }
-        notification.show().map_err(|e| e.to_string())?;
+        builder.show().map_err(|e| e.to_string())?;
     }
-    #[cfg(not(feature = "mobile"))]
-    {
-        let _ = (app, title, body, data);
-    }
+    let _ = (app, title, body, data);
     Ok(())
 }
 
 #[tauri::command]
 pub async fn mobile_push_get_token(app: AppHandle<impl Runtime>) -> Result<Option<String>, String> {
-    #[cfg(feature = "mobile")]
-    {
-        use tauri_plugin_notification::NotificationExt;
-        let token = app
-            .notification()
-            .get_token()
-            .map_err(|e| e.to_string())?;
-        Ok(token)
-    }
-    #[cfg(not(feature = "mobile"))]
-    {
-        let _ = app;
-        Ok(None)
-    }
+    // Push token retrieval requires platform-specific FCM/APNs integration.
+    // Return None for now — will be implemented with a dedicated push plugin.
+    let _ = app;
+    Ok(None)
 }
 
 #[tauri::command]
 pub async fn mobile_push_register_token(
-    app: AppHandle<impl Runtime>,
+    _app: AppHandle<impl Runtime>,
     _base_url: String,
     _access_token: String,
 ) -> Result<(), String> {
-    #[cfg(feature = "mobile")]
-    {
-        use tauri_plugin_notification::NotificationExt;
-        let token = app
-            .notification()
-            .get_token()
-            .map_err(|e| e.to_string())?;
-        if let Some(t) = token {
-            let client = reqwest::Client::new();
-            let result = client
-                .post(format!("{}/api/mobile/push-token", _base_url))
-                .header("Authorization", format!("Bearer {}", _access_token))
-                .json(&serde_json::json!({ "token": t }))
-                .send()
-                .await;
-            if let Err(e) = result {
-                tracing::warn!(error = %e, "Failed to register push token with server");
-            }
-        }
-    }
-    #[cfg(not(feature = "mobile"))]
-    {
-        let _ = (app, _base_url, _access_token);
-    }
+    // Push token registration requires platform-specific FCM/APNs integration.
+    // Will be implemented with a dedicated push plugin.
     Ok(())
 }
 
+/// Get the current QUIC connection state (idle, connecting, open, etc.).
+#[tauri::command]
+pub async fn mobile_quic_status(
+    state: tauri::State<'_, crate::quic_bridge::QuicBridgeState>,
+) -> std::result::Result<String, String> {
+    let guard = state.0.lock().await;
+    match guard.as_ref() {
+        Some(bridge) => {
+            let s = bridge.transport.state();
+            serde_json::to_string(&s).map_err(|e| format!("{e}"))
+        }
+        None => Ok("\"disconnected\"".to_owned()),
+    }
+}
+
+/// Get the current connection strategy (direct_ws, server_relay, quic, etc.).
+#[tauri::command]
+pub async fn mobile_connection_strategy(
+    state: tauri::State<'_, crate::quic_bridge::QuicBridgeState>,
+) -> std::result::Result<String, String> {
+    let guard = state.0.lock().await;
+    match guard.as_ref() {
+        Some(bridge) => Ok(bridge.transport.active_strategy().to_owned()),
+        None => Ok("none".to_owned()),
+    }
+}
+
 pub fn register_mobile_plugins<R: Runtime>(app: &tauri::AppHandle<R>) {
-    #[cfg(feature = "mobile")]
+    #[cfg(any(target_os = "android", target_os = "ios"))]
     {
         for (name, result) in [
-            ("haptics", app.handle().plugin(tauri_plugin_haptics::init())),
-            ("biometric", app.handle().plugin(tauri_plugin_biometric::init())),
-            ("network", app.handle().plugin(tauri_plugin_network::init())),
-            ("deep_link", app.handle().plugin(tauri_plugin_deep_link::init())),
-            ("notification", app.handle().plugin(tauri_plugin_notification::init())),
-            ("share", app.handle().plugin(tauri_plugin_share::init())),
+            ("haptics", app.plugin(tauri_plugin_haptics::init())),
+            ("biometric", app.plugin(tauri_plugin_biometric::init())),
+            ("deep_link", app.plugin(tauri_plugin_deep_link::init())),
+            ("notification", app.plugin(tauri_plugin_notification::init())),
+            ("share", app.plugin(tauri_plugin_share::init())),
         ] {
             if let Err(e) = result {
                 tracing::warn!(plugin = name, "Failed to initialize mobile plugin: {e}");
             }
         }
-        register_deep_link_listener(&app.handle().clone());
     }
-    #[cfg(not(feature = "mobile"))]
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
     {
         let _ = app;
-    }
-}
-
-#[cfg(feature = "mobile")]
-fn register_deep_link_listener<R: Runtime>(app: &AppHandle<R>) {
-    let handle = app.clone();
-    if let Err(e) = tauri_plugin_deep_link::register(
-        "remotecode",
-        move |urls| {
-            for url in urls {
-                let _ = handle.emit("mobile://deep-link", &url);
-            }
-        },
-    ) {
-        tracing::warn!("deep link registration failed: {e}");
     }
 }

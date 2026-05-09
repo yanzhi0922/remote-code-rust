@@ -27,6 +27,9 @@ fn test_config() -> ControlPlaneConfig {
         auth_token: None,
         bootstrap_secret: None,
         downloads_dir: None,
+        quic_bind: None,
+        quic_cert_pem: None,
+        quic_key_pem: None,
     }
 }
 

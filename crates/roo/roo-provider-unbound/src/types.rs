@@ -36,3 +36,15 @@ impl UnboundConfig {
         })
     }
 }
+
+impl Default for UnboundConfig {
+    fn default() -> Self {
+        Self {
+            api_key: String::new(),
+            base_url: None,
+            model_id: None,
+            temperature: None,
+            request_timeout: None,
+        }
+    }
+}

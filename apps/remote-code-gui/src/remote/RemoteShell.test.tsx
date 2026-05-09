@@ -67,6 +67,9 @@ describe('RemoteShell', () => {
         onToggleSidebar={() => {}}
         onSelectSession={onSelect}
         onRefreshSessions={() => {}}
+        onSignOut={() => {}}
+        transportStrategy={null}
+        transportLatencyMs={null}
       >
         <div data-testid="child">main content</div>
       </RemoteShell>,
@@ -99,6 +102,9 @@ describe('RemoteShell', () => {
         onToggleSidebar={() => {}}
         onSelectSession={() => {}}
         onRefreshSessions={() => {}}
+        onSignOut={() => {}}
+        transportStrategy={null}
+        transportLatencyMs={null}
       >
         <div />
       </RemoteShell>,
@@ -122,6 +128,9 @@ describe('RemoteShell', () => {
         onToggleSidebar={() => {}}
         onSelectSession={() => {}}
         onRefreshSessions={() => {}}
+        onSignOut={() => {}}
+        transportStrategy={null}
+        transportLatencyMs={null}
       >
         <div />
       </RemoteShell>,
@@ -147,6 +156,9 @@ describe('RemoteShell', () => {
         onToggleSidebar={() => {}}
         onSelectSession={() => {}}
         onRefreshSessions={() => {}}
+        onSignOut={() => {}}
+        transportStrategy={null}
+        transportLatencyMs={null}
       >
         <div />
       </RemoteShell>,
@@ -174,6 +186,9 @@ describe('RemoteShell', () => {
         onToggleSidebar={() => {}}
         onSelectSession={() => {}}
         onRefreshSessions={onRefresh}
+        onSignOut={vi.fn()}
+        transportStrategy={null}
+        transportLatencyMs={null}
       >
         <div />
       </RemoteShell>,

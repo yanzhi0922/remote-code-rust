@@ -233,8 +233,12 @@ impl ApiClient {
     ///
     /// Returns an error if the underlying HTTP client cannot be constructed.
     pub fn new() -> Result<Self> {
+        let timeout_secs = std::env::var("CLAUDE_CODE_API_TIMEOUT_SECS")
+            .ok()
+            .and_then(|s| s.parse::<u64>().ok())
+            .unwrap_or(600);
         let http = Client::builder()
-            .timeout(Duration::from_secs(300))
+            .timeout(Duration::from_secs(timeout_secs))
             .build()
             .context("failed to build API HTTP client")?;
         Ok(Self { http })

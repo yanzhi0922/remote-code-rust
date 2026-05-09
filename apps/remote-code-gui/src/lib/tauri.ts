@@ -961,3 +961,33 @@ export function transcribeAudio(
     audioFormat: audioFormat || 'webm',
   });
 }
+
+// ─── Remote Control ──────────────────────────────────────────────────────────
+
+export function remoteGetStatus(): Promise<string> {
+  return invoke<string>('remote_get_status');
+}
+
+export function remoteSetPassword(password: string): Promise<void> {
+  return invoke<void>('remote_set_password', { password });
+}
+
+export function remoteSetUsername(username: string): Promise<void> {
+  return invoke<void>('remote_set_username', { username });
+}
+
+export function remoteSetCredentials(username: string, password: string): Promise<void> {
+  return invoke<void>('remote_set_credentials', { username, password });
+}
+
+export function remoteGetUsername(): Promise<string | null> {
+  return invoke<string | null>('remote_get_username');
+}
+
+export function remoteGetConnectionInfo(): Promise<Record<string, string>> {
+  return invoke<Record<string, string>>('remote_get_connection_info');
+}
+
+export function remoteHasPassword(): Promise<boolean> {
+  return invoke<boolean>('remote_has_password');
+}

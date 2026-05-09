@@ -39,15 +39,32 @@ pub(crate) struct PersistedEventQuery {
 
 #[derive(Debug, Clone)]
 pub(crate) enum AuthPrincipal {
+    /// Legacy shared bearer token — admin access, sees all tenants.
     SharedToken,
+    /// Legacy device token from pairing flow.
     Device(TrustedDeviceRecord),
+    /// User-derived tenant identity.  `user_id` is `sha256(username:password)`,
+    /// computed client-side.  The server never stores the password — it only
+    /// uses `user_id` as a tenant key for data isolation.
+    User { user_id: String },
 }
 
 impl AuthPrincipal {
     pub(crate) fn created_by_device_id(&self) -> Option<Uuid> {
         match self {
-            Self::SharedToken => None,
+            Self::SharedToken | Self::User { .. } => None,
             Self::Device(device) => Some(device.device_id),
+        }
+    }
+
+    /// Return the tenant-scoping user_id, if any.
+    ///
+    /// Returns `None` for `SharedToken` (admin — sees everything) and for
+    /// `Device` (legacy — no tenant isolation).
+    pub(crate) fn user_id(&self) -> Option<&str> {
+        match self {
+            Self::User { user_id } => Some(user_id.as_str()),
+            Self::SharedToken | Self::Device(_) => None,
         }
     }
 }
@@ -234,6 +251,18 @@ pub fn load_control_plane_config(
     let downloads_dir = overrides
         .downloads_dir
         .or_else(|| helpers::read_env("REMOTE_CODE_DOWNLOADS_DIR").map(PathBuf::from));
+    let quic_bind = overrides
+        .quic_bind
+        .or_else(|| {
+            helpers::read_env("REMOTE_CODE_CONTROL_PLANE_QUIC_BIND")
+                .and_then(|s| helpers::parse_socket_addr(&s).ok())
+        });
+    let quic_cert_pem = overrides
+        .quic_cert_pem
+        .or_else(|| helpers::read_env("REMOTE_CODE_CONTROL_PLANE_QUIC_CERT").map(PathBuf::from));
+    let quic_key_pem = overrides
+        .quic_key_pem
+        .or_else(|| helpers::read_env("REMOTE_CODE_CONTROL_PLANE_QUIC_KEY").map(PathBuf::from));
     let paths = claude_config::AppPaths::discover(profile_dir)?;
     paths.ensure_exists()?;
     let artifact_root_dir = paths.artifacts_dir.join("control-plane");
@@ -251,6 +280,9 @@ pub fn load_control_plane_config(
         auth_token,
         bootstrap_secret,
         downloads_dir,
+        quic_bind,
+        quic_cert_pem,
+        quic_key_pem,
     })
 }
 

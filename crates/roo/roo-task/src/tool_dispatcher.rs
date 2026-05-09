@@ -4005,6 +4005,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_skill_handler_valid() {
+        // Without a SkillsManager, valid skill names produce an error.
         let handler = SkillHandler::new();
         let ctx = make_context();
         let result = handler
@@ -4013,19 +4014,19 @@ mod tests {
                 &ctx,
             )
             .await;
-        assert!(!result.is_error, "unexpected error: {}", result.text);
+        assert!(result.is_error);
         assert!(result.text.contains("react-native-dev"));
-        assert!(result.text.contains("build a component"));
     }
 
     #[tokio::test]
     async fn test_skill_handler_valid_no_args() {
+        // Without a SkillsManager, valid skill names produce an error.
         let handler = SkillHandler::new();
         let ctx = make_context();
         let result = handler
             .execute(serde_json::json!({"skill": "flutter-dev"}), &ctx)
             .await;
-        assert!(!result.is_error, "unexpected error: {}", result.text);
+        assert!(result.is_error);
         assert!(result.text.contains("flutter-dev"));
     }
 

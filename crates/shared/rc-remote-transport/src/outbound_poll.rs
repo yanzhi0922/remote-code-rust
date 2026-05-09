@@ -76,10 +76,6 @@ impl RemoteTransport for OutboundPollTransport {
         Ok(())
     }
 
-    async fn subscribe_events(&self, _after: u64) -> anyhow::Result<mpsc::Receiver<TransportEvent>> {
-        anyhow::bail!("use the event_rx from connect()")
-    }
-
     async fn send_command(&self, command: TransportCommand) -> anyhow::Result<CommandAck> {
         let config = self.config.as_ref().ok_or_else(|| anyhow::anyhow!("not connected"))?;
         let cp_url = match &config.strategy {

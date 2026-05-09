@@ -7,7 +7,7 @@
 use std::path::Path;
 use std::process::Command;
 
-use tracing::{debug, warn};
+use tracing::debug;
 
 // ---------------------------------------------------------------------------
 // Helpers

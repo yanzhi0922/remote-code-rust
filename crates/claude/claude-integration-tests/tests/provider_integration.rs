@@ -216,6 +216,7 @@ fn streaming_callbacks_can_be_created() {
         on_tool_call_start: None,
         on_tool_call_delta: None,
         on_usage: None,
+        on_thinking_delta: None,
     };
 
     // Invoke the callback
@@ -239,6 +240,7 @@ fn streaming_callbacks_usage_callback() {
         on_usage: Some(Box::new(move |_update| {
             uc.fetch_add(1, Ordering::Relaxed);
         })),
+        on_thinking_delta: None,
     };
 
     if let Some(ref cb) = callbacks.on_usage {

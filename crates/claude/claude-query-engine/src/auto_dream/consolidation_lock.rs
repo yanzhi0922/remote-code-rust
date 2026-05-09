@@ -6,7 +6,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, UNIX_EPOCH};
 
 /// Name of the lock file within the memory directory.
 const LOCK_FILENAME: &str = ".consolidate-lock";

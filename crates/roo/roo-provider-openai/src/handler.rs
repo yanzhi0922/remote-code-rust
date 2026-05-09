@@ -222,6 +222,7 @@ mod tests {
             reasoning_effort: None,
 
             request_timeout: None,
+            ..Default::default()
         };
         let handler = OpenAiHandler::new(config);
         assert!(handler.is_ok());
@@ -238,6 +239,7 @@ mod tests {
             reasoning_effort: None,
 
             request_timeout: None,
+            ..Default::default()
         };
         let handler = OpenAiHandler::new(config).unwrap();
         let (model_id, _) = handler.get_model();
@@ -255,6 +257,7 @@ mod tests {
             reasoning_effort: None,
 
             request_timeout: None,
+            ..Default::default()
         };
         let handler = OpenAiHandler::new(config).unwrap();
         let (model_id, _) = handler.get_model();
@@ -272,6 +275,7 @@ mod tests {
             reasoning_effort: None,
 
             request_timeout: None,
+            ..Default::default()
         };
         let handler = OpenAiHandler::new(config).unwrap();
         assert_eq!(handler.provider_name(), ProviderName::Openai);
@@ -338,6 +342,7 @@ mod tests {
             temperature: None,
             reasoning_effort: Some("low".to_string()),
             request_timeout: None,
+            ..Default::default()
         };
         let handler = OpenAiHandler::new(config).unwrap();
         assert_eq!(handler.reasoning_effort, Some("low".to_string()));
@@ -354,6 +359,7 @@ mod tests {
             reasoning_effort: None,
 
             request_timeout: None,
+            ..Default::default()
         };
         let handler = OpenAiHandler::new(config).unwrap();
         let (model_id, info) = handler.get_model();
@@ -430,6 +436,7 @@ mod tests {
             temperature: None,
             reasoning_effort: Some("high".to_string()),
             request_timeout: None,
+            ..Default::default()
         };
         let handler = OpenAiHandler::new(config).unwrap();
         let (model_id, _) = handler.get_model();
@@ -446,6 +453,7 @@ mod tests {
             temperature: None,
             reasoning_effort: None,
             request_timeout: None,
+            ..Default::default()
         };
         let handler = OpenAiHandler::new(config).unwrap();
         let (model_id, _) = handler.get_model();

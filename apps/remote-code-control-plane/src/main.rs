@@ -1,10 +1,11 @@
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
 use claude_control_plane::{
     ControlPlaneConfigOverrides, ControlPlaneService, describe_status, load_control_plane_config,
+    quic::{QuicServerConfig, start_quic_listener},
 };
 use claude_telemetry::install_tracing;
 
@@ -36,6 +37,15 @@ struct Cli {
     #[arg(long, env = "REMOTE_CODE_CONTROL_PLANE_BOOTSTRAP_SECRET")]
     bootstrap_secret: Option<String>,
 
+    #[arg(long, env = "REMOTE_CODE_CONTROL_PLANE_QUIC_BIND")]
+    quic_bind: Option<SocketAddr>,
+
+    #[arg(long, env = "REMOTE_CODE_CONTROL_PLANE_QUIC_CERT")]
+    quic_cert_pem: Option<PathBuf>,
+
+    #[arg(long, env = "REMOTE_CODE_CONTROL_PLANE_QUIC_KEY")]
+    quic_key_pem: Option<PathBuf>,
+
     #[command(subcommand)]
     command: Option<Command>,
 }
@@ -59,6 +69,9 @@ async fn main() -> Result<()> {
         auth_token: cli.auth_token,
         bootstrap_secret: cli.bootstrap_secret,
         downloads_dir: None,
+        quic_bind: cli.quic_bind,
+        quic_cert_pem: cli.quic_cert_pem,
+        quic_key_pem: cli.quic_key_pem,
     })?;
 
     match cli.command.unwrap_or(Command::Serve) {
@@ -72,7 +85,30 @@ async fn main() -> Result<()> {
                 bail!(status.issues.join("; "));
             }
             let bind = config.bind;
-            let app = ControlPlaneService::new(config, env!("CARGO_PKG_VERSION")).router();
+            let service = ControlPlaneService::new(config.clone(), env!("CARGO_PKG_VERSION"));
+
+            // Optionally start the QUIC listener alongside HTTP.
+            if let (Some(quic_bind), Some(cert_path), Some(key_path)) =
+                (&config.quic_bind, &config.quic_cert_pem, &config.quic_key_pem)
+            {
+                let cert_pem = std::fs::read(cert_path)
+                    .with_context(|| format!("reading QUIC cert from {}", cert_path.display()))?;
+                let key_pem = std::fs::read(key_path)
+                    .with_context(|| format!("reading QUIC key from {}", key_path.display()))?;
+                let quic_config = QuicServerConfig {
+                    listen_addr: *quic_bind,
+                    cert_pem,
+                    key_pem,
+                };
+                let quic_service = std::sync::Arc::new(service.clone());
+                tokio::spawn(async move {
+                    if let Err(e) = start_quic_listener(quic_service, quic_config).await {
+                        eprintln!("QUIC listener failed: {e:#}");
+                    }
+                });
+            }
+
+            let app = service.router();
             let listener = tokio::net::TcpListener::bind(bind).await?;
             axum::serve(listener, app).await?;
         }

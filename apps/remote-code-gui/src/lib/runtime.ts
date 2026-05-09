@@ -78,6 +78,23 @@ export function clearRemoteAccessToken(): void {
   }
 }
 
+/**
+ * Derive a tenant-scoping user key from username and password.
+ * Uses SHA-256(username:password) — the server never sees the plaintext,
+ * only the irreversible hash which serves as both auth token and tenant ID.
+ */
+export async function deriveUserKey(username: string, password: string): Promise<string> {
+  const raw = `${username}:${password}`;
+  const encoded = new TextEncoder().encode(raw);
+  const digest = await crypto.subtle.digest('SHA-256', encoded);
+  const bytes = new Uint8Array(digest);
+  let hex = '';
+  for (const byte of bytes) {
+    hex += byte.toString(16).padStart(2, '0');
+  }
+  return hex;
+}
+
 export function resolveRemoteRefreshToken(): string | null {
   try {
     return window.localStorage.getItem(REMOTE_REFRESH_TOKEN_STORAGE_KEY)?.trim() ?? null;

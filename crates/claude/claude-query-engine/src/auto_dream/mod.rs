@@ -190,6 +190,130 @@ impl AutoDreamExecutor {
         let lock = ConsolidationLock::new(&self.memory_dir);
         lock.record_consolidation()
     }
+
+    /// Launch the auto-dream forked sub-agent.
+    ///
+    /// This spawns a child `claude` process with the dream system prompt
+    /// and user prompt. The child runs asynchronously (fire-and-forget)
+    /// as part of Phase 3 (BackgroundFireAndForget) of the stop-hook pipeline.
+    ///
+    /// # Arguments
+    /// * `claude_bin` — path to the claude binary (or "claude" for PATH lookup)
+    /// * `model` — model to use for the dream agent (e.g. "claude-haiku-4-5")
+    /// * `timeout_secs` — max seconds the dream agent may run (default: 300)
+    ///
+    /// # Returns
+    /// The child process PID on success, or an error if spawning fails.
+    /// Lock rollback happens internally if the child exits with failure.
+    pub fn run(
+        &self,
+        claude_bin: &str,
+        model: &str,
+        timeout_secs: u64,
+    ) -> anyhow::Result<u32> {
+        let prior_ms = {
+            let lock = ConsolidationLock::new(&self.memory_dir);
+            lock.read_last_consolidated_at()
+        };
+
+        let user_prompt = self.build_prompt();
+        let system_prompt = self.system_prompt().to_owned();
+        let memory_dir = self.memory_dir.clone();
+
+        // Spawn the claude child process with dream prompts
+        let mut child = std::process::Command::new(claude_bin)
+            .arg("--print")
+            .arg("--model")
+            .arg(model)
+            .arg("--system-prompt")
+            .arg(&system_prompt)
+            .arg("--max-turns")
+            .arg("30")
+            .arg("--output-format")
+            .arg("text")
+            .arg("--dangerously-skip-permissions")
+            .arg("--verbose")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .current_dir(&memory_dir)
+            .env("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1")
+            .spawn()
+            .map_err(|e| anyhow::anyhow!("failed to spawn claude dream agent: {e}"))?;
+
+        let pid = child.id();
+
+        // Write the dream prompt to stdin
+        if let Some(mut stdin) = child.stdin.take() {
+            use std::io::Write;
+            let _ = stdin.write_all(user_prompt.as_bytes());
+            let _ = stdin.flush();
+            // stdin is dropped here, closing it
+        }
+
+        // Spawn a background thread to wait for the child with timeout
+        let memory_dir_bg = memory_dir.clone();
+        std::thread::spawn(move || {
+            let result = child.wait_timeout(std::time::Duration::from_secs(timeout_secs));
+
+            match result {
+                Ok(Some(status)) if status.success() => {
+                    // Success — record consolidation
+                    let lock = ConsolidationLock::new(&memory_dir_bg);
+                    if let Err(e) = lock.record_consolidation() {
+                        eprintln!("[auto-dream] failed to record consolidation: {e}");
+                    }
+                }
+                Ok(Some(status)) => {
+                    // Child exited with error — rollback
+                    eprintln!(
+                        "[auto-dream] child exited with status {}, rolling back lock",
+                        status.code().unwrap_or(-1)
+                    );
+                    let lock = ConsolidationLock::new(&memory_dir_bg);
+                    lock.rollback(prior_ms);
+                }
+                Ok(None) => {
+                    // Timeout — kill and rollback
+                    eprintln!("[auto-dream] child timed out after {timeout_secs}s, killing");
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    let lock = ConsolidationLock::new(&memory_dir_bg);
+                    lock.rollback(prior_ms);
+                }
+                Err(e) => {
+                    eprintln!("[auto-dream] failed to wait for child: {e}");
+                    let lock = ConsolidationLock::new(&memory_dir_bg);
+                    lock.rollback(prior_ms);
+                }
+            }
+        });
+
+        Ok(pid)
+    }
+}
+
+/// Extension trait for `std::process::Child` to support timeout on wait.
+trait ChildWaitTimeout {
+    fn wait_timeout(&mut self, timeout: std::time::Duration) -> std::io::Result<Option<std::process::ExitStatus>>;
+}
+
+impl ChildWaitTimeout for std::process::Child {
+    fn wait_timeout(&mut self, timeout: std::time::Duration) -> std::io::Result<Option<std::process::ExitStatus>> {
+        // Poll-based timeout: check status every 100ms up to timeout
+        let start = std::time::Instant::now();
+        loop {
+            match self.try_wait()? {
+                Some(status) => return Ok(Some(status)),
+                None => {
+                    if start.elapsed() >= timeout {
+                        return Ok(None);
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                }
+            }
+        }
+    }
 }
 
 #[cfg(test)]

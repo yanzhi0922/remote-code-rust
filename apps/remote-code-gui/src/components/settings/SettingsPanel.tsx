@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Bot, Info, Palette, Settings, Shield, Terminal, X } from 'lucide-react';
+import { Bot, Info, Palette, Radio, Settings, Shield, Terminal, X } from 'lucide-react';
 import type { FullSettings } from '../../lib/types';
 import { useAppStore } from '../../stores/useAppStore';
 import { AboutPanel } from './AboutPanel';
@@ -8,6 +8,7 @@ import { GeneralSettings } from './GeneralSettings';
 import { HooksSettings, type HookConfig } from './HooksSettings';
 import { OutputStylePicker } from './OutputStylePicker';
 import { PermissionSettings } from './PermissionSettings';
+import { RemoteSettings } from './RemoteSettings';
 import { ProviderSettings } from './ProviderSettings';
 import { ThemePicker } from './ThemePicker';
 
@@ -15,13 +16,14 @@ export interface SettingsPanelProps {
   onClose: () => void;
 }
 
-type SettingsTab = 'general' | 'provider' | 'codex' | 'permissions' | 'appearance' | 'hooks' | 'about';
+type SettingsTab = 'general' | 'provider' | 'codex' | 'permissions' | 'remote' | 'appearance' | 'hooks' | 'about';
 
 const TABS: Array<{ key: SettingsTab; label: string; icon: typeof Settings }> = [
   { key: 'general', label: '通用', icon: Settings },
   { key: 'provider', label: '提供商', icon: Terminal },
   { key: 'codex', label: 'Codex', icon: Bot },
   { key: 'permissions', label: '权限', icon: Shield },
+  { key: 'remote', label: '远程控制', icon: Radio },
   { key: 'appearance', label: '外观', icon: Palette },
   { key: 'hooks', label: 'Hooks', icon: Terminal },
   { key: 'about', label: '关于', icon: Info },
@@ -145,6 +147,9 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
                 )}
                 {activeTab === 'permissions' && (
                   <PermissionSettings settings={current} onUpdate={handleUpdate} />
+                )}
+                {activeTab === 'remote' && (
+                  <RemoteSettings />
                 )}
                 {activeTab === 'appearance' && (
                   <div className="space-y-8">

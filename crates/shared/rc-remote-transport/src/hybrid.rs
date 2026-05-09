@@ -1,12 +1,10 @@
 //! Strategy 4: Hybrid — direct preferred, server relay fallback with auto-switching.
 
 use async_trait::async_trait;
-use tokio::sync::mpsc;
-
 use crate::transport::{CommandAck, HealthStatus, RemoteTransport, TransportCommand};
 use crate::reconnect::ReconnectPolicy;
 use crate::{
-    ConnectionState, TransportConfig, TransportEvent, TransportMetrics,
+    ConnectionState, TransportConfig, TransportMetrics,
 };
 
 /// Active sub-strategy in hybrid mode.
@@ -103,11 +101,6 @@ impl RemoteTransport for HybridTransport {
         self.relay.connect(relay_config).await?;
         self.mode = HybridMode::Relay;
         Ok(())
-    }
-
-    async fn subscribe_events(&self, after: u64) -> anyhow::Result<mpsc::Receiver<TransportEvent>> {
-        let _ = after;
-        anyhow::bail!("use the event_rx from connect()")
     }
 
     async fn send_command(&self, command: TransportCommand) -> anyhow::Result<CommandAck> {

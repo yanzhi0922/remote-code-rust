@@ -116,6 +116,38 @@ export interface RemoteCopy {
   errorBoundaryClearingCache: string;
   errorBoundaryDetails: string;
   openSessionDrawer: string;
+  multiUserTitle: string;
+  multiUserDescription: string;
+  usernameLabel: string;
+  usernamePlaceholder: string;
+  passwordLabel: string;
+  passwordPlaceholder: string;
+  signInAction: string;
+  statusSignInSucceeded: string;
+  statusSignInFailed: string;
+  signOutAction: string;
+  passwordChangeWarning: string;
+  strategyDirect: string;
+  strategyRelay: string;
+  strategyPolling: string;
+  strategyHybrid: string;
+  strategyQuic: string;
+  latencyLabel: string;
+  pushNotificationApprovalTitle: string;
+  pushNotificationApprovalBody: (title: string) => string;
+  pushNotificationSessionTitle: string;
+  pushNotificationSessionBody: (sessionId: string) => string;
+  shareArtifact: string;
+  shareArtifactTitle: string;
+  deepLinkPairingReceived: string;
+  mobileNotificationsEnabled: string;
+  mobileNotificationsDenied: string;
+  mobileTabSessions: string;
+  mobileTabTimeline: string;
+  mobileTabApprovals: string;
+  mobileAuthSubtitle: string;
+  mobileExpandOptions: string;
+  mobileCollapseOptions: string;
 }
 
 const ENGLISH_COPY: RemoteCopy = {
@@ -275,6 +307,40 @@ const ENGLISH_COPY: RemoteCopy = {
   errorBoundaryClearingCache: 'Clearing cache...',
   errorBoundaryDetails: 'Error details',
   openSessionDrawer: 'Open session drawer',
+  multiUserTitle: 'Sign in with credentials',
+  multiUserDescription:
+    'Enter the same username and password you set on the desktop app. The server never stores your password — only a one-way hash.',
+  usernameLabel: 'Username',
+  usernamePlaceholder: 'your-name',
+  passwordLabel: 'Password',
+  passwordPlaceholder: 'your-password',
+  signInAction: 'Sign In',
+  statusSignInSucceeded: 'Signed in successfully.',
+  statusSignInFailed: 'Sign in failed. Please check your credentials.',
+  signOutAction: 'Sign Out',
+  passwordChangeWarning:
+    'Changing your username or password will create a new identity. All previous sessions and data will become inaccessible.',
+  strategyDirect: 'Direct',
+  strategyRelay: 'Relay',
+  strategyPolling: 'Polling',
+  strategyHybrid: 'Hybrid',
+  strategyQuic: 'QUIC',
+  latencyLabel: 'Latency',
+  pushNotificationApprovalTitle: 'Approval Required',
+  pushNotificationApprovalBody: (title) => `${title} needs your decision.`,
+  pushNotificationSessionTitle: 'Session Update',
+  pushNotificationSessionBody: (sessionId) => `Session ${sessionId} was updated.`,
+  shareArtifact: 'Share',
+  shareArtifactTitle: 'Share Artifact',
+  deepLinkPairingReceived: 'Pairing details received from link.',
+  mobileNotificationsEnabled: 'Push notifications enabled.',
+  mobileNotificationsDenied: 'Push notification permission denied.',
+  mobileTabSessions: 'Sessions',
+  mobileTabTimeline: 'Timeline',
+  mobileTabApprovals: 'Approvals',
+  mobileAuthSubtitle: 'Connect to your desktop runner',
+  mobileExpandOptions: 'Other sign-in methods',
+  mobileCollapseOptions: 'Hide options',
 };
 
 const CHINESE_COPY: RemoteCopy = {
@@ -427,6 +493,40 @@ const CHINESE_COPY: RemoteCopy = {
   errorBoundaryClearingCache: '正在清理缓存...',
   errorBoundaryDetails: '错误详情',
   openSessionDrawer: '打开会话抽屉',
+  multiUserTitle: '使用账户登录',
+  multiUserDescription:
+    '输入与桌面端相同的用户名和密码。服务器不会存储你的密码，只会保存一个不可逆的哈希值。',
+  usernameLabel: '用户名',
+  usernamePlaceholder: '你的用户名',
+  passwordLabel: '密码',
+  passwordPlaceholder: '你的密码',
+  signInAction: '登录',
+  statusSignInSucceeded: '登录成功。',
+  statusSignInFailed: '登录失败，请检查用户名和密码。',
+  signOutAction: '退出登录',
+  passwordChangeWarning:
+    '更改用户名或密码会创建新的身份，之前的所有会话和数据将无法访问。',
+  strategyDirect: '直连',
+  strategyRelay: '中继',
+  strategyPolling: '轮询',
+  strategyHybrid: '混合',
+  strategyQuic: 'QUIC',
+  latencyLabel: '延迟',
+  pushNotificationApprovalTitle: '需要审批',
+  pushNotificationApprovalBody: (title) => `${title} 需要你的决定。`,
+  pushNotificationSessionTitle: '会话更新',
+  pushNotificationSessionBody: (sessionId) => `会话 ${sessionId} 已更新。`,
+  shareArtifact: '分享',
+  shareArtifactTitle: '分享产物',
+  deepLinkPairingReceived: '已从链接获取配对信息。',
+  mobileNotificationsEnabled: '推送通知已启用。',
+  mobileNotificationsDenied: '推送通知权限被拒绝。',
+  mobileTabSessions: '会话',
+  mobileTabTimeline: '时间线',
+  mobileTabApprovals: '审批',
+  mobileAuthSubtitle: '连接到你的桌面 Runner',
+  mobileExpandOptions: '其他登录方式',
+  mobileCollapseOptions: '收起',
 };
 
 export function resolveRemoteLocale(): RemoteLocale {

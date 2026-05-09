@@ -1188,6 +1188,8 @@ mod tests {
             model_id: None,
             temperature: None,
             request_timeout: None,
+            enable_1m_context: false,
+            max_thinking_tokens: None,
         };
         let handler = VertexHandler::new(config).unwrap();
         let (model_id, _) = handler.get_model();
@@ -1203,6 +1205,8 @@ mod tests {
             model_id: Some("gemini-2.5-flash".to_string()),
             temperature: None,
             request_timeout: None,
+            enable_1m_context: false,
+            max_thinking_tokens: None,
         };
         let handler = VertexHandler::new(config).unwrap();
         let (model_id, _) = handler.get_model();

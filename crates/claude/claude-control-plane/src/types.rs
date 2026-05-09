@@ -56,6 +56,12 @@ pub struct ControlPlaneConfigOverrides {
     pub bootstrap_secret: Option<String>,
     /// Directory containing downloadable app binaries (APK, etc.).
     pub downloads_dir: Option<PathBuf>,
+    /// UDP bind address for QUIC transport (optional — requires TLS certs).
+    pub quic_bind: Option<SocketAddr>,
+    /// Path to PEM-encoded TLS certificate for QUIC.
+    pub quic_cert_pem: Option<PathBuf>,
+    /// Path to PEM-encoded TLS private key for QUIC.
+    pub quic_key_pem: Option<PathBuf>,
 }
 
 /// Full control plane configuration.
@@ -81,6 +87,12 @@ pub struct ControlPlaneConfig {
     pub bootstrap_secret: Option<String>,
     /// Directory containing downloadable app binaries served at /downloads/.
     pub downloads_dir: Option<PathBuf>,
+    /// UDP bind address for QUIC transport.
+    pub quic_bind: Option<SocketAddr>,
+    /// Path to PEM-encoded TLS certificate for QUIC.
+    pub quic_cert_pem: Option<PathBuf>,
+    /// Path to PEM-encoded TLS private key for QUIC.
+    pub quic_key_pem: Option<PathBuf>,
 }
 
 /// Metadata returned by the `/meta` endpoint.
@@ -364,6 +376,11 @@ pub struct SessionRecord {
     pub metadata: BTreeMap<String, String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    /// Tenant-scoping user identity.  Set to `sha256(username:password)` when
+    /// the session is created by an `AuthPrincipal::User`.  `None` for legacy
+    /// sessions or admin-created sessions (visible to all).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_user_id: Option<String>,
 }
 
 /// Session payload exposed by the HTTP API with dynamic runner availability metadata.

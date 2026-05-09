@@ -63,6 +63,7 @@ fn mcp_config_save_and_load() {
                     request_timeout_secs: None,
                     oauth: None,
                     metadata: BTreeMap::new(),
+                    tool_policy: Default::default(),
                 },
             );
             map
@@ -292,6 +293,7 @@ fn connection_state_transitions() {
         request_timeout_secs: None,
         oauth: None,
         metadata: BTreeMap::new(),
+    tool_policy: Default::default(),
     };
     let scoped =
         claude_mcp::scope::ScopedMcpServerConfig::new(config, claude_mcp::scope::ConfigScope::Local);
@@ -398,6 +400,7 @@ fn batch_queue_operations() {
         request_timeout_secs: None,
         oauth: None,
         metadata: BTreeMap::new(),
+    tool_policy: Default::default(),
     };
     let scoped =
         claude_mcp::scope::ScopedMcpServerConfig::new(config, claude_mcp::scope::ConfigScope::User);

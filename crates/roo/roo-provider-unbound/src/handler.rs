@@ -226,6 +226,7 @@ mod tests {
     fn test_handler_creation_with_config() {
         let config = UnboundConfig {
             api_key: "test-key".to_string(),
+            base_url: None,
             model_id: None,
             temperature: None,
             request_timeout: None,
@@ -238,6 +239,7 @@ mod tests {
     fn test_handler_uses_default_model() {
         let config = UnboundConfig {
             api_key: "test-key".to_string(),
+            base_url: None,
             model_id: None,
             temperature: None,
             request_timeout: None,
@@ -251,6 +253,7 @@ mod tests {
     fn test_handler_custom_model() {
         let config = UnboundConfig {
             api_key: "test-key".to_string(),
+            base_url: None,
             model_id: Some("claude-3-5-sonnet".to_string()),
             temperature: None,
             request_timeout: None,
@@ -264,6 +267,7 @@ mod tests {
     fn test_provider_name() {
         let config = UnboundConfig {
             api_key: "test-key".to_string(),
+            base_url: None,
             model_id: None,
             temperature: None,
             request_timeout: None,
@@ -276,6 +280,7 @@ mod tests {
     fn test_fallback_model_info() {
         let config = UnboundConfig {
             api_key: "test-key".to_string(),
+            base_url: None,
             model_id: Some("unknown-model".to_string()),
             temperature: None,
             request_timeout: None,
@@ -289,6 +294,7 @@ mod tests {
     fn test_temperature_config() {
         let config = UnboundConfig {
             api_key: "test-key".to_string(),
+            base_url: None,
             model_id: None,
             temperature: Some(0.5),
             request_timeout: None,
@@ -303,6 +309,7 @@ mod tests {
     fn test_dynamic_models_cache_initially_empty() {
         let config = UnboundConfig {
             api_key: "test-key".to_string(),
+            base_url: None,
             model_id: None,
             temperature: None,
             request_timeout: None,
@@ -316,6 +323,7 @@ mod tests {
     fn test_resolve_model_uses_dynamic_when_not_in_static() {
         let config = UnboundConfig {
             api_key: "test-key".to_string(),
+            base_url: None,
             model_id: Some("dynamic-model-y".to_string()),
             temperature: None,
             request_timeout: None,
@@ -345,6 +353,7 @@ mod tests {
     fn test_resolve_model_prefers_static_over_dynamic() {
         let config = UnboundConfig {
             api_key: "test-key".to_string(),
+            base_url: None,
             model_id: Some(models::DEFAULT_MODEL_ID.to_string()),
             temperature: None,
             request_timeout: None,

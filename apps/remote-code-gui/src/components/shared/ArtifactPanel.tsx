@@ -12,7 +12,7 @@
  * - buildDownloadUrl: 构建下载 URL 的回调
  */
 
-import { Download, LoaderCircle } from 'lucide-react';
+import { Download, LoaderCircle, Share2 } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { formatBytes } from './formatBytes';
 import { PanelHint } from './ApprovalPanel';
@@ -30,6 +30,7 @@ export interface ArtifactPanelProps {
   emptyText: string;
   items: ArtifactItem[];
   onDownload?: (artifact: ArtifactItem) => void | Promise<void>;
+  onShare?: (artifact: ArtifactItem) => void | Promise<void>;
   buildDownloadUrl?: (artifactId: string) => string;
   downloadingId?: string | null;
   /** 为 true 时隐藏面板自带标题（用于外部已有标题的场景，如移动端 bottom sheet） */
@@ -42,6 +43,7 @@ export function ArtifactPanel({
   emptyText,
   items,
   onDownload,
+  onShare,
   buildDownloadUrl,
   downloadingId,
   hideTitle,
@@ -79,17 +81,34 @@ export function ArtifactPanel({
 
             if (onDownload) {
               return (
-                <button
+                <div
                   key={artifact.artifact_id}
-                  type="button"
-                  onClick={() => {
-                    void onDownload(artifact);
-                  }}
-                  disabled={downloadingId === artifact.artifact_id}
-                  className="flex w-full items-start justify-between gap-3 rounded-2xl border border-[#ebe2d5] bg-[#faf7f1] px-3 py-3 transition-colors hover:bg-white disabled:cursor-not-allowed disabled:opacity-70"
+                  className="flex items-start gap-2"
                 >
-                  {content}
-                </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      void onDownload(artifact);
+                    }}
+                    disabled={downloadingId === artifact.artifact_id}
+                    className="flex flex-1 items-start justify-between gap-3 rounded-2xl border border-[#ebe2d5] bg-[#faf7f1] px-3 py-3 transition-colors hover:bg-white disabled:cursor-not-allowed disabled:opacity-70"
+                  >
+                    {content}
+                  </button>
+                  {onShare && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        void onShare(artifact);
+                      }}
+                      disabled={downloadingId === artifact.artifact_id}
+                      className="mt-1 inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-[#ebe2d5] bg-[#faf7f1] text-slate-500 transition-colors hover:bg-white hover:text-slate-700 disabled:cursor-not-allowed disabled:opacity-70"
+                      aria-label="Share"
+                    >
+                      <Share2 size={14} />
+                    </button>
+                  )}
+                </div>
               );
             }
 

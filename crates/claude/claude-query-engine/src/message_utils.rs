@@ -5,8 +5,9 @@
 //! message manipulation and inspection.
 
 use claude_core::{
-    AssistantContentBlock, AssistantMessage, Message, MessageBase, MessageOrigin, SystemMessage,
-    SystemMessageSubtype, ToolCall, ToolResult, ToolUseSummaryMessage, UserMessage,
+    AssistantContentBlock, AssistantMessage, ConversationEntry, Message, MessageBase,
+    MessageOrigin, SystemMessage, SystemMessageSubtype, ToolCall, ToolResult,
+    ToolUseSummaryMessage, UserMessage,
 };
 
 /// Create a user text message.
@@ -202,6 +203,50 @@ pub fn is_error_message(message: &Message) -> bool {
 /// Check if a message is a tool use summary.
 pub fn is_tool_summary(message: &Message) -> bool {
     matches!(message, Message::ToolUseSummary(_))
+}
+
+/// Generate synthetic tool result messages for tool calls that lack results.
+///
+/// Mirrors TS `yieldMissingToolResultBlocks`. When a model errors out after
+/// emitting tool_use blocks but before receiving tool_result blocks, the
+/// conversation has orphaned tool_use entries. This function finds all
+/// assistant tool_use IDs that don't have a corresponding tool result and
+/// creates synthetic error tool results for them.
+pub fn yield_missing_tool_result_messages(messages: &[Message], error_text: &str) -> Vec<Message> {
+    // Collect all tool_call IDs from assistant messages
+    let mut tool_call_ids: Vec<String> = Vec::new();
+    for msg in messages {
+        if let Message::Assistant(assistant) = msg {
+            for tc in &assistant.tool_calls {
+                tool_call_ids.push(tc.id.clone());
+            }
+            for block in &assistant.blocks {
+                if let AssistantContentBlock::ToolUse { id, .. } = block {
+                    if !tool_call_ids.contains(id) {
+                        tool_call_ids.push(id.clone());
+                    }
+                }
+            }
+        }
+    }
+
+    // Collect all tool_call IDs that already have results
+    let mut responded_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for msg in messages {
+        if let Message::ToolUseSummary(summary) = msg {
+            responded_ids.insert(summary.tool_call_id.clone());
+        }
+    }
+
+    // Create synthetic results for missing tool calls
+    let mut results = Vec::new();
+    for id in tool_call_ids {
+        if !responded_ids.contains(&id) {
+            let entry = ConversationEntry::tool(&id, "unknown", error_text, true);
+            results.push(Message::from(entry));
+        }
+    }
+    results
 }
 
 #[cfg(test)]

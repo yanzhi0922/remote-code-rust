@@ -334,20 +334,38 @@ fn classify_bash_in_yolo(command: &str, rules: &AutoModeRules) -> YoloClassifier
 
 /// Check if a tool is known to be read-only.
 fn is_read_only_tool(tool_name: &str) -> bool {
+    is_auto_mode_allowlisted_tool(tool_name)
+}
+
+/// Full safe-tools allowlist matching TS `isAutoModeAllowlistedTool`.
+///
+/// These tools bypass the LLM classifier entirely — they're always safe.
+fn is_auto_mode_allowlisted_tool(tool_name: &str) -> bool {
     matches!(
         tool_name,
-        "Read"
-            | "Grep"
-            | "Glob"
-            | "LS"
-            | "WebFetch"
-            | "WebSearch"
-            | "read"
-            | "grep"
-            | "glob"
-            | "ls"
-            | "list_files"
-            | "search"
+        // Read tools
+        "Read" | "read" | "ReadFile" | "read_file" | "ReadMultipleFiles" | "read_multiple_files"
+        // Search tools
+        | "Grep" | "grep" | "Glob" | "glob" | "SearchFiles" | "search_files"
+        | "CodebaseSearch" | "codebase_search"
+        // Directory listing
+        | "LS" | "ls" | "ListFiles" | "list_files" | "ListDir" | "list_dir"
+        | "DirectoryTree" | "directory_tree"
+        // Web tools
+        | "WebFetch" | "web_fetch" | "WebSearch" | "web_search"
+        // MCP read tools
+        | "ListDocuments" | "list_documents" | "ListMcpResourcesTool" | "list_mcp_resources"
+        | "ReadMcpResourceTool" | "read_mcp_resource"
+        // LSP tools
+        | "GetDiagnostics" | "get_diagnostics" | "GetTypeInfo" | "get_type_info"
+        | "Hover" | "hover" | "GoToDefinition" | "go_to_definition"
+        | "References" | "references" | "DocumentSymbols" | "document_symbols"
+        // Utility tools
+        | "Sticker" | "sticker" | "TodoRead" | "todo_read"
+        | "StatusLine" | "statusline" | "Task" | "task"
+        | "NotebookEdit" | "notebook_edit"
+        // Search / listing aliases
+        | "list_directory" | "directory_search" | "file_search" | "search"
     )
 }
 
@@ -407,7 +425,7 @@ fn is_safe_write_path(path: &str) -> bool {
 // ---------------------------------------------------------------------------
 
 /// System prompt for the 2-stage LLM classifier.
-/// Mirrors TS `yoloClassifier.ts` system prompt.
+/// Mirrors TS `yoloClassifier.ts` system prompt with XML output format.
 pub const YOLO_CLASSIFIER_SYSTEM_PROMPT: &str = r#"You are a security classifier for tool use in an AI coding assistant. Your job is to determine whether a tool invocation is safe to auto-approve.
 
 Respond with an XML block:
@@ -420,7 +438,182 @@ Guidelines:
 - Running build commands, tests, and linters is generally safe
 - Commands that delete files, force-push, modify system configs, or access credentials are unsafe
 - When in doubt, err on the side of blocking (fail-closed)
-- Never execute the command yourself — you are only classifying it"#;
+- Never execute the command yourself — you are only classifying it
+- You MUST respond with a <block> tag containing exactly "yes" or "no""#;
+
+/// XML suffix for Stage 1 (fast) classification prompt.
+pub const XML_S1_SUFFIX: &str = "\n\nErr on the side of blocking. Respond with <block>yes</block> or <block>no</block>.";
+
+/// XML suffix for Stage 2 (thinking) classification prompt.
+pub const XML_S2_SUFFIX: &str = "\n\nThink carefully about the security implications. Respond with <block>yes</block> or <block>no</block>.";
+
+// ---------------------------------------------------------------------------
+// Transcript types for classifier context
+// ---------------------------------------------------------------------------
+
+/// A single block within a transcript entry.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum TranscriptBlock {
+    /// Text content.
+    Text { text: String },
+    /// Tool use block.
+    ToolUse { id: String, name: String, input: serde_json::Value },
+    /// Tool result block.
+    ToolResult { id: String, content: String, is_error: bool },
+    /// Thinking block (stripped before sending to classifier).
+    Thinking { text: String },
+}
+
+/// A single entry in the conversation transcript for classifier context.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TranscriptEntry {
+    /// The role of the message author.
+    pub role: String,
+    /// Content blocks.
+    pub blocks: Vec<TranscriptBlock>,
+}
+
+/// Build transcript entries from conversation messages.
+///
+/// Mirrors TS `buildTranscriptEntries`. Converts messages into a simplified
+/// format for the classifier LLM context, stripping thinking blocks.
+pub fn build_transcript_entries(
+    messages: &[serde_json::Value],
+) -> Vec<TranscriptEntry> {
+    let mut entries = Vec::new();
+
+    for msg in messages {
+        let role = msg.get("role").and_then(|v| v.as_str()).unwrap_or("unknown");
+
+        let mut blocks = Vec::new();
+
+        // Handle content as either a string or array of blocks
+        if let Some(content) = msg.get("content") {
+            if let Some(text) = content.as_str() {
+                blocks.push(TranscriptBlock::Text { text: text.to_owned() });
+            } else if let Some(content_arr) = content.as_array() {
+                for block in content_arr {
+                    let block_type = block.get("type").and_then(|v| v.as_str()).unwrap_or("");
+
+                    match block_type {
+                        "text" => {
+                            if let Some(text) = block.get("text").and_then(|v| v.as_str()) {
+                                blocks.push(TranscriptBlock::Text { text: text.to_owned() });
+                            }
+                        }
+                        "tool_use" => {
+                            blocks.push(TranscriptBlock::ToolUse {
+                                id: block.get("id").and_then(|v| v.as_str()).unwrap_or("").to_owned(),
+                                name: block.get("name").and_then(|v| v.as_str()).unwrap_or("").to_owned(),
+                                input: block.get("input").cloned().unwrap_or(serde_json::Value::Null),
+                            });
+                        }
+                        "tool_result" => {
+                            blocks.push(TranscriptBlock::ToolResult {
+                                id: block.get("tool_use_id").and_then(|v| v.as_str()).unwrap_or("").to_owned(),
+                                content: block.get("content").and_then(|v| v.as_str()).unwrap_or("").to_owned(),
+                                is_error: block.get("is_error").and_then(|v| v.as_bool()).unwrap_or(false),
+                            });
+                        }
+                        "thinking" => {
+                            // Skip thinking blocks for classifier context
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+
+        if !blocks.is_empty() {
+            entries.push(TranscriptEntry { role: role.to_owned(), blocks });
+        }
+    }
+
+    entries
+}
+
+/// Build the transcript XML string for the classifier prompt.
+///
+/// Mirrors TS `buildTranscriptForClassifier`. Creates a compact XML
+/// representation of the conversation for the classifier to reason about.
+pub fn build_transcript_for_classifier(
+    tool_name: &str,
+    tool_input: &serde_json::Value,
+    entries: &[TranscriptEntry],
+) -> String {
+    let mut xml = String::from("<transcript>\n");
+
+    for entry in entries {
+        xml.push_str(&format!("  <{role}>\n", role = entry.role));
+        for block in &entry.blocks {
+            match block {
+                TranscriptBlock::Text { text } => {
+                    let truncated = if text.len() > 500 { &text[..500] } else { text };
+                    xml.push_str(&format!("    <text>{truncated}</text>\n"));
+                }
+                TranscriptBlock::ToolUse { name, input, .. } => {
+                    let input_str = serde_json::to_string(input).unwrap_or_default();
+                    let truncated = if input_str.len() > 300 { &input_str[..300] } else { &input_str };
+                    xml.push_str(&format!("    <tool_use name=\"{name}\">{truncated}</tool_use>\n"));
+                }
+                TranscriptBlock::ToolResult { content, is_error, .. } => {
+                    let tag = if *is_error { "tool_error" } else { "tool_result" };
+                    let truncated = if content.len() > 300 { &content[..300] } else { content };
+                    xml.push_str(&format!("    <{tag}>{truncated}</{tag}>\n", ));
+                }
+                TranscriptBlock::Thinking { .. } => {
+                    // Stripped — never included in classifier context
+                }
+            }
+        }
+        xml.push_str(&format!("  </{role}>\n", role = entry.role));
+    }
+
+    // Append the tool invocation being classified
+    let input_str = serde_json::to_string(tool_input).unwrap_or_default();
+    let truncated_input = if input_str.len() > 500 { &input_str[..500] } else { &input_str };
+    xml.push_str(&format!(
+        "  <classify tool=\"{tool_name}\">{truncated_input}</classify>\n"
+    ));
+    xml.push_str("</transcript>");
+
+    xml
+}
+
+// ---------------------------------------------------------------------------
+// Full classifier result types
+// ---------------------------------------------------------------------------
+
+/// Which stage produced the classification result.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ClassifierStage {
+    /// Stage 1 — fast, max_tokens=64, stop on </block>.
+    Fast,
+    /// Stage 2 — thinking, max_tokens=4096, full chain-of-thought.
+    Thinking,
+}
+
+/// Token usage from the classifier LLM call.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ClassifierUsage {
+    /// Input tokens consumed.
+    pub input_tokens: u64,
+    /// Output tokens generated.
+    pub output_tokens: u64,
+}
+
+/// Full result from the 2-stage LLM classifier.
+#[derive(Debug, Clone)]
+pub struct YoloClassifierFullResult {
+    /// The classification decision.
+    pub decision: YoloClassifierResult,
+    /// Which stage produced the final decision.
+    pub stage: ClassifierStage,
+    /// Token usage from the LLM call(s).
+    pub usage: ClassifierUsage,
+    /// The thinking/reasoning text from Stage 2 (if available).
+    pub thinking: Option<String>,
+}
 
 /// Request for a single LLM classification call.
 #[derive(Debug, Clone)]
@@ -429,14 +622,16 @@ pub struct YoloLlmRequest {
     pub tool_name: String,
     /// The JSON input of the tool call.
     pub tool_input: serde_json::Value,
-    /// Conversation context (recent messages for the classifier to consider).
+    /// Conversation context as XML transcript.
     pub context: String,
     /// Maximum tokens for the response.
     pub max_tokens: u32,
     /// Optional stop sequences.
     pub stop_sequences: Vec<String>,
-    /// Suffix hint appended to the prompt.
+    /// Suffix hint appended to the prompt (XML suffix).
     pub suffix_hint: Option<String>,
+    /// Which classifier stage this request is for.
+    pub stage: ClassifierStage,
 }
 
 /// Response from a single LLM classification call.
@@ -491,9 +686,6 @@ impl YoloLlmClassifier {
             return Some(YoloClassifierResult::Allow);
         }
 
-        let input_str = serde_json::to_string_pretty(tool_input)
-            .unwrap_or_else(|_| tool_input.to_string());
-
         // Stage 1: Fast classification
         let stage1_request = YoloLlmRequest {
             tool_name: tool_name.to_owned(),
@@ -501,12 +693,14 @@ impl YoloLlmClassifier {
             context: context.to_owned(),
             max_tokens: 64,
             stop_sequences: vec!["</block>".to_owned()],
-            suffix_hint: Some("Err on the side of blocking.".to_owned()),
+            suffix_hint: Some(XML_S1_SUFFIX.to_owned()),
+            stage: ClassifierStage::Fast,
         };
 
         let stage1_response = client.classify(stage1_request).await.ok()?;
+        let stage1_text = strip_thinking_tags(&stage1_response.text);
 
-        if let Some(decision) = parse_block_xml(&stage1_response.text) {
+        if let Some(decision) = parse_block_xml(&stage1_text) {
             match decision {
                 BlockDecision::Allow => return Some(YoloClassifierResult::Allow),
                 BlockDecision::Block => {
@@ -522,7 +716,8 @@ impl YoloLlmClassifier {
             context: context.to_owned(),
             max_tokens: 4096,
             stop_sequences: vec![],
-            suffix_hint: None,
+            suffix_hint: Some(XML_S2_SUFFIX.to_owned()),
+            stage: ClassifierStage::Thinking,
         };
 
         let stage2_response = match client.classify(stage2_request).await {
@@ -535,8 +730,10 @@ impl YoloLlmClassifier {
             }
         };
 
+        let stage2_text = strip_thinking_tags(&stage2_response.text);
+
         // Parse stage 2 response
-        if let Some(decision) = parse_block_xml(&stage2_response.text) {
+        if let Some(decision) = parse_block_xml(&stage2_text) {
             match decision {
                 BlockDecision::Allow => return Some(YoloClassifierResult::Allow),
                 BlockDecision::Block => {
@@ -552,6 +749,99 @@ impl YoloLlmClassifier {
             "LLM classifier returned unparseable response — fail-closed".to_owned(),
         ))
     }
+
+    /// Full classification returning detailed result with stage and usage.
+    pub async fn classify_full(
+        &self,
+        tool_name: &str,
+        tool_input: &serde_json::Value,
+        context: &str,
+    ) -> Option<YoloClassifierFullResult> {
+        let client = self.client.as_ref()?;
+
+        // Safe tools bypass
+        if is_read_only_tool(tool_name) {
+            return Some(YoloClassifierFullResult {
+                decision: YoloClassifierResult::Allow,
+                stage: ClassifierStage::Fast,
+                usage: ClassifierUsage::default(),
+                thinking: None,
+            });
+        }
+
+        // Stage 1
+        let stage1_request = YoloLlmRequest {
+            tool_name: tool_name.to_owned(),
+            tool_input: tool_input.clone(),
+            context: context.to_owned(),
+            max_tokens: 64,
+            stop_sequences: vec!["</block>".to_owned()],
+            suffix_hint: Some(XML_S1_SUFFIX.to_owned()),
+            stage: ClassifierStage::Fast,
+        };
+
+        if let Ok(stage1_response) = client.classify(stage1_request).await {
+            let stage1_text = strip_thinking_tags(&stage1_response.text);
+            if let Some(BlockDecision::Allow) = parse_block_xml(&stage1_text) {
+                return Some(YoloClassifierFullResult {
+                    decision: YoloClassifierResult::Allow,
+                    stage: ClassifierStage::Fast,
+                    usage: ClassifierUsage::default(),
+                    thinking: None,
+                });
+            }
+        }
+
+        // Stage 2
+        let stage2_request = YoloLlmRequest {
+            tool_name: tool_name.to_owned(),
+            tool_input: tool_input.clone(),
+            context: context.to_owned(),
+            max_tokens: 4096,
+            stop_sequences: vec![],
+            suffix_hint: Some(XML_S2_SUFFIX.to_owned()),
+            stage: ClassifierStage::Thinking,
+        };
+
+        match client.classify(stage2_request).await {
+            Ok(stage2_response) => {
+                let stage2_text = strip_thinking_tags(&stage2_response.text);
+                let thinking = extract_thinking_text(&stage2_response.text);
+
+                if let Some(decision) = parse_block_xml(&stage2_text) {
+                    let result = match decision {
+                        BlockDecision::Allow => YoloClassifierResult::Allow,
+                        BlockDecision::Block => {
+                            YoloClassifierResult::Deny("LLM classifier blocked the operation".to_owned())
+                        }
+                    };
+                    Some(YoloClassifierFullResult {
+                        decision: result,
+                        stage: ClassifierStage::Thinking,
+                        usage: ClassifierUsage::default(),
+                        thinking,
+                    })
+                } else {
+                    Some(YoloClassifierFullResult {
+                        decision: YoloClassifierResult::Deny(
+                            "LLM classifier returned unparseable response — fail-closed".to_owned(),
+                        ),
+                        stage: ClassifierStage::Thinking,
+                        usage: ClassifierUsage::default(),
+                        thinking,
+                    })
+                }
+            }
+            Err(_) => Some(YoloClassifierFullResult {
+                decision: YoloClassifierResult::Deny(
+                    "LLM classifier stage 2 failed — fail-closed".to_owned(),
+                ),
+                stage: ClassifierStage::Thinking,
+                usage: ClassifierUsage::default(),
+                thinking: None,
+            }),
+        }
+    }
 }
 
 /// Parsed decision from XML block output.
@@ -561,19 +851,93 @@ enum BlockDecision {
     Block,
 }
 
+/// Strip `<thinking>...</thinking>` tags from LLM output before XML parsing.
+///
+/// Mirrors TS `stripThinking` — removes thinking blocks so the `<block>` parser
+/// doesn't get confused by content inside thinking tags.
+fn strip_thinking_tags(text: &str) -> String {
+    let mut result = String::with_capacity(text.len());
+    let mut depth = 0i32;
+    let mut i = 0;
+    let bytes = text.as_bytes();
+
+    while i < bytes.len() {
+        if text[i..].starts_with("<thinking>") {
+            depth += 1;
+            i += "<thinking>".len();
+        } else if depth > 0 && text[i..].starts_with("</thinking>") {
+            depth -= 1;
+            i += "</thinking>".len();
+        } else if depth == 0 {
+            result.push(bytes[i] as char);
+            i += 1;
+        } else {
+            i += 1;
+        }
+    }
+
+    result
+}
+
+/// Extract the text content from `<thinking>...</thinking>` blocks.
+fn extract_thinking_text(text: &str) -> Option<String> {
+    let mut thinking = String::new();
+    let mut start = 0;
+
+    while let Some(open_idx) = text[start..].find("<thinking>") {
+        let abs_open = start + open_idx + "<thinking>".len();
+        if let Some(close_idx) = text[abs_open..].find("</thinking>") {
+            if !thinking.is_empty() {
+                thinking.push('\n');
+            }
+            thinking.push_str(text[abs_open..abs_open + close_idx].trim());
+            start = abs_open + close_idx + "</thinking>".len();
+        } else {
+            // Unclosed thinking tag — take everything after it
+            if !thinking.is_empty() {
+                thinking.push('\n');
+            }
+            thinking.push_str(text[abs_open..].trim());
+            break;
+        }
+    }
+
+    if thinking.is_empty() { None } else { Some(thinking) }
+}
+
 /// Parse `<block>yes</block>` or `<block>no</block>` from LLM output.
+///
+/// Handles:
+/// - Case-insensitive matching
+/// - Multiple blocks (uses last one)
+/// - Unclosed blocks (looks for content after `<block>` until end of text)
+/// - Whitespace in content
 fn parse_block_xml(text: &str) -> Option<BlockDecision> {
-    // Try to find the last <block>...</block> in the text
     let lower = text.to_ascii_lowercase();
 
     // Find the last occurrence of <block>
     if let Some(idx) = lower.rfind("<block>") {
         let after_open = &lower[idx + 7..];
+        // Try to find closing tag
         if let Some(close_idx) = after_open.find("</block>") {
             let content = after_open[..close_idx].trim();
             return match content {
-                "yes" | "allow" | "safe" => Some(BlockDecision::Allow),
-                "no" | "block" | "deny" | "unsafe" => Some(BlockDecision::Block),
+                "yes" | "allow" | "safe" | "true" => Some(BlockDecision::Allow),
+                "no" | "block" | "deny" | "unsafe" | "false" => Some(BlockDecision::Block),
+                _ => None,
+            };
+        }
+
+        // Handle unclosed block — take content until newline or end
+        let content = after_open
+            .lines()
+            .next()
+            .unwrap_or("")
+            .trim();
+        if !content.is_empty() {
+            return match content {
+                "yes" | "allow" | "safe" | "true" => Some(BlockDecision::Allow),
+                "no" | "block" | "deny" | "unsafe" | "false" => Some(BlockDecision::Block),
                 _ => None,
             };
         }
@@ -840,6 +1204,161 @@ mod tests {
         assert_eq!(parse_block_xml("<block>block</block>"), Some(BlockDecision::Block));
         assert_eq!(parse_block_xml("<block>deny</block>"), Some(BlockDecision::Block));
         assert_eq!(parse_block_xml("<block>unsafe</block>"), Some(BlockDecision::Block));
+    }
+
+    #[test]
+    fn parse_block_xml_unclosed_block() {
+        assert_eq!(parse_block_xml("<block>yes"), Some(BlockDecision::Allow));
+        assert_eq!(parse_block_xml("<block>no"), Some(BlockDecision::Block));
+    }
+
+    #[test]
+    fn parse_block_xml_true_false() {
+        assert_eq!(parse_block_xml("<block>true</block>"), Some(BlockDecision::Allow));
+        assert_eq!(parse_block_xml("<block>false</block>"), Some(BlockDecision::Block));
+    }
+
+    #[test]
+    fn strip_thinking_tags_removes_thinking() {
+        let input = "Some reasoning <thinking>internal thoughts</thinking> <block>yes</block>";
+        let stripped = strip_thinking_tags(input);
+        assert!(!stripped.contains("thinking"));
+        assert!(!stripped.contains("internal thoughts"));
+        assert!(stripped.contains("<block>yes</block>"));
+    }
+
+    #[test]
+    fn strip_thinking_tags_nested() {
+        let input = "<thinking>thought 1</thinking>text<thinking>thought 2</thinking>";
+        let stripped = strip_thinking_tags(input);
+        assert_eq!(stripped, "text");
+    }
+
+    #[test]
+    fn strip_thinking_tags_no_thinking() {
+        let input = "<block>yes</block>";
+        assert_eq!(strip_thinking_tags(input), "<block>yes</block>");
+    }
+
+    #[test]
+    fn extract_thinking_text_works() {
+        let input = "<thinking>reasoning here</thinking><block>no</block>";
+        let thinking = extract_thinking_text(input);
+        assert_eq!(thinking, Some("reasoning here".to_owned()));
+    }
+
+    #[test]
+    fn extract_thinking_text_multiple() {
+        let input = "<thinking>part 1</thinking>middle<thinking>part 2</thinking>";
+        let thinking = extract_thinking_text(input);
+        assert!(thinking.is_some());
+        let t = thinking.unwrap();
+        assert!(t.contains("part 1"));
+        assert!(t.contains("part 2"));
+    }
+
+    #[test]
+    fn extract_thinking_text_none() {
+        assert_eq!(extract_thinking_text("<block>yes</block>"), None);
+    }
+
+    #[test]
+    fn expanded_allowlist_includes_all_safe_tools() {
+        // Read tools
+        assert!(is_auto_mode_allowlisted_tool("Read"));
+        assert!(is_auto_mode_allowlisted_tool("ReadFile"));
+        assert!(is_auto_mode_allowlisted_tool("read_file"));
+        assert!(is_auto_mode_allowlisted_tool("ReadMultipleFiles"));
+        // Search tools
+        assert!(is_auto_mode_allowlisted_tool("Grep"));
+        assert!(is_auto_mode_allowlisted_tool("Glob"));
+        assert!(is_auto_mode_allowlisted_tool("SearchFiles"));
+        assert!(is_auto_mode_allowlisted_tool("CodebaseSearch"));
+        // Listing tools
+        assert!(is_auto_mode_allowlisted_tool("LS"));
+        assert!(is_auto_mode_allowlisted_tool("ListFiles"));
+        assert!(is_auto_mode_allowlisted_tool("ListDir"));
+        assert!(is_auto_mode_allowlisted_tool("DirectoryTree"));
+        // Web tools
+        assert!(is_auto_mode_allowlisted_tool("WebFetch"));
+        assert!(is_auto_mode_allowlisted_tool("WebSearch"));
+        // MCP read tools
+        assert!(is_auto_mode_allowlisted_tool("ListMcpResourcesTool"));
+        assert!(is_auto_mode_allowlisted_tool("ReadMcpResourceTool"));
+        // LSP tools
+        assert!(is_auto_mode_allowlisted_tool("GetDiagnostics"));
+        assert!(is_auto_mode_allowlisted_tool("GetTypeInfo"));
+        assert!(is_auto_mode_allowlisted_tool("Hover"));
+        assert!(is_auto_mode_allowlisted_tool("GoToDefinition"));
+        assert!(is_auto_mode_allowlisted_tool("References"));
+        assert!(is_auto_mode_allowlisted_tool("DocumentSymbols"));
+        // Utility tools
+        assert!(is_auto_mode_allowlisted_tool("TodoRead"));
+        assert!(is_auto_mode_allowlisted_tool("NotebookEdit"));
+        // Not safe
+        assert!(!is_auto_mode_allowlisted_tool("Bash"));
+        assert!(!is_auto_mode_allowlisted_tool("Write"));
+        assert!(!is_auto_mode_allowlisted_tool("Edit"));
+    }
+
+    #[test]
+    fn build_transcript_entries_parses_messages() {
+        let messages = vec![
+            serde_json::json!({
+                "role": "user",
+                "content": "Hello"
+            }),
+            serde_json::json!({
+                "role": "assistant",
+                "content": [
+                    {"type": "text", "text": "I will help"},
+                    {"type": "tool_use", "id": "tu1", "name": "Read", "input": {"path": "src/lib.rs"}},
+                    {"type": "thinking", "thinking": "internal reasoning"}
+                ]
+            }),
+        ];
+        let entries = build_transcript_entries(&messages);
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].role, "user");
+        assert_eq!(entries[1].role, "assistant");
+        // Thinking block should be stripped
+        assert_eq!(entries[1].blocks.len(), 2); // text + tool_use, no thinking
+    }
+
+    #[test]
+    fn build_transcript_for_classifier_produces_xml() {
+        let entries = vec![
+            TranscriptEntry {
+                role: "user".to_owned(),
+                blocks: vec![TranscriptBlock::Text { text: "Hello".to_owned() }],
+            },
+        ];
+        let xml = build_transcript_for_classifier(
+            "Read",
+            &serde_json::json!({"path": "src/lib.rs"}),
+            &entries,
+        );
+        assert!(xml.contains("<transcript>"));
+        assert!(xml.contains("<user>"));
+        assert!(xml.contains("<text>Hello</text>"));
+        assert!(xml.contains("<classify tool=\"Read\">"));
+        assert!(xml.contains("</transcript>"));
+    }
+
+    #[test]
+    fn xml_suffixes_are_nonempty() {
+        assert!(!XML_S1_SUFFIX.is_empty());
+        assert!(!XML_S2_SUFFIX.is_empty());
+        assert!(XML_S1_SUFFIX.contains("Err on the side"));
+        assert!(XML_S2_SUFFIX.contains("Think carefully"));
+    }
+
+    #[test]
+    fn classifier_stage_serialization() {
+        let fast = serde_json::to_string(&ClassifierStage::Fast).unwrap();
+        let thinking = serde_json::to_string(&ClassifierStage::Thinking).unwrap();
+        assert!(fast.contains("Fast") || fast.contains("fast"));
+        assert!(thinking.contains("Thinking") || thinking.contains("thinking"));
     }
 
     #[test]

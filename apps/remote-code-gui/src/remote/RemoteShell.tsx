@@ -15,6 +15,7 @@
 
 import {
   LoaderCircle,
+  LogOut,
   Menu,
   RotateCcw,
   Wifi,
@@ -27,6 +28,7 @@ import {
   formatRemoteRelativeTime,
   type RemoteConnectionState,
   type RemoteCopy,
+  type RemoteLocale,
   resolveRemoteLocale,
 } from './i18n';
 import { resolveRemoteSessionTitle } from '../session/normalize/fromRemote';
@@ -40,7 +42,6 @@ import type {
 // ---------------------------------------------------------------------------
 
 export interface RemoteShellProps {
-  /** Session 列表 */
   sessions: RemoteSessionRecord[];
   sessionsLoading: boolean;
   activeSessionId: string | null;
@@ -51,11 +52,14 @@ export interface RemoteShellProps {
   statusMessage: string | null;
   baseUrl: string;
   copy: RemoteCopy;
-  locale: ReturnType<typeof resolveRemoteLocale>;
+  locale: RemoteLocale;
+  transportStrategy: string | null;
+  transportLatencyMs: number | null;
 
   onToggleSidebar: (open: boolean) => void;
   onSelectSession: (sessionId: string) => void;
   onRefreshSessions: () => void;
+  onSignOut: () => void;
 
   /** 主内容区域（时间线 + 侧面板） */
   children: ReactNode;
@@ -80,6 +84,9 @@ export function RemoteShell({
   onToggleSidebar,
   onSelectSession,
   onRefreshSessions,
+  onSignOut,
+  transportStrategy,
+  transportLatencyMs,
   children,
 }: RemoteShellProps) {
   return (
@@ -212,6 +219,25 @@ export function RemoteShell({
               </div>
 
               <div className="flex shrink-0 items-center gap-2">
+                {transportStrategy && (
+                  <span className="hidden items-center gap-1.5 rounded-full border border-[#e5ddcf] bg-white/80 px-2.5 py-1 text-[11px] font-medium text-slate-500 sm:inline-flex">
+                    <span>{strategyLabel(copy, transportStrategy)}</span>
+                    {transportLatencyMs != null && (
+                      <>
+                        <span className="text-slate-300">·</span>
+                        <span>{transportLatencyMs}ms</span>
+                      </>
+                    )}
+                  </span>
+                )}
+                <button
+                  type="button"
+                  onClick={onSignOut}
+                  title={copy.signOutAction}
+                  className="inline-flex h-9 w-9 items-center justify-center rounded-2xl border border-[#ddd4c5] bg-white text-slate-500 transition-colors hover:bg-[#faf6ef] hover:text-slate-700"
+                >
+                  <LogOut size={16} />
+                </button>
                 <ConnectionPill copy={copy} state={connectionState} />
                 {activeSession && <StatePill copy={copy} state={activeSession.state} compact />}
               </div>
@@ -247,6 +273,17 @@ function RemoteFrame({ children }: { children: ReactNode }) {
       {children}
     </div>
   );
+}
+
+function strategyLabel(copy: RemoteCopy, strategy: string): string {
+  switch (strategy) {
+    case 'direct_ws': return copy.strategyDirect;
+    case 'server_relay': return copy.strategyRelay;
+    case 'outbound_polling': return copy.strategyPolling;
+    case 'hybrid': return copy.strategyHybrid;
+    case 'quic': return copy.strategyQuic;
+    default: return strategy;
+  }
 }
 
 export function EmptyCard({

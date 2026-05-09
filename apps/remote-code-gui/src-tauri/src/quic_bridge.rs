@@ -9,8 +9,8 @@ use rc_remote_transport::{RemoteTransport, TransportCommand, TransportConfig, Tr
 
 type SharedQuicState = Arc<Mutex<Option<QuicBridge>>>;
 
-struct QuicBridge {
-    transport: QuicTransport,
+pub(crate) struct QuicBridge {
+    pub(crate) transport: QuicTransport,
 }
 
 pub struct QuicBridgeState(pub SharedQuicState);
@@ -95,5 +95,33 @@ pub async fn quic_state(
             serde_json::to_string(&s).map_err(|e| format!("{e}"))
         }
         None => Ok("\"disconnected\"".to_owned()),
+    }
+}
+
+#[tauri::command]
+pub async fn quic_health_probe(
+    state: State<'_, QuicBridgeState>,
+) -> std::result::Result<String, String> {
+    let guard = state.0.lock().await;
+    match guard.as_ref() {
+        Some(bridge) => {
+            let health = bridge.transport.health_probe().await;
+            serde_json::to_string(&health).map_err(|e| format!("{e}"))
+        }
+        None => Ok("null".to_owned()),
+    }
+}
+
+#[tauri::command]
+pub async fn quic_get_metrics(
+    state: State<'_, QuicBridgeState>,
+) -> std::result::Result<String, String> {
+    let guard = state.0.lock().await;
+    match guard.as_ref() {
+        Some(bridge) => {
+            let metrics = bridge.transport.metrics();
+            serde_json::to_string(&metrics).map_err(|e| format!("{e}"))
+        }
+        None => Ok("null".to_owned()),
     }
 }
