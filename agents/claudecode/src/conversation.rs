@@ -557,6 +557,7 @@ fn build_streaming_callbacks(
         })),
         on_usage: None,
         on_thinking_delta: None,
+        on_lifecycle_event: None,
     }
 }
 

@@ -14,7 +14,9 @@
 
 use claude_core::Message;
 
+use crate::context_collapse::{ContextCollapseConfig, ContextCollapseEngine};
 use crate::engine::{ERROR_MESSAGE_PROMPT_TOO_LONG, compact_conversation};
+use crate::estimate_message_tokens;
 use crate::strategy::{
     CompactOptions, CompactProgressEvent, CompactStrategy, CompactStrategyType, CompactionResult,
     ProgressCallback, SummaryProvider,
@@ -91,10 +93,19 @@ impl CompactStrategy for ReactiveCompactStrategy {
 // Core reactive-compact implementation
 // ---------------------------------------------------------------------------
 
-/// Perform reactive compaction.
+/// Perform reactive compaction with a two-stage approach.
 ///
-/// This is called when the main query loop receives a prompt-too-long error.
-/// It progressively drops the oldest messages and retries compaction.
+/// Stage 1 (cheap): try context-collapse drain — deterministic operations
+/// that remove tombstones, deduplicate system messages, trim tool outputs,
+/// and drop old tool results without calling the LLM.  If this reduces the
+/// token count sufficiently, return immediately.
+///
+/// Stage 2 (expensive): fall back to full LLM-based compaction with
+/// progressive message dropping on prompt-too-long errors.
+///
+/// Mirrors the two-stage recovery in the TS reference (`query.ts` lines
+/// 1085–1183): first `contextCollapse.recoverFromOverflow()`, then
+/// `reactiveCompact.tryReactiveCompact()`.
 pub async fn reactive_compact(
     messages: &[Message],
     config: &ReactiveCompactConfig,
@@ -108,6 +119,59 @@ pub async fn reactive_compact(
         });
     }
 
+    // Stage 1: cheap collapse drain
+    let collapse_config = ContextCollapseConfig {
+        max_context_tokens: config.context_window_size as usize,
+        ..ContextCollapseConfig::default()
+    };
+    let mut collapse_engine = ContextCollapseEngine::new(collapse_config);
+    let pre_collapse_tokens = estimate_message_tokens(messages);
+
+    if collapse_engine.should_collapse(messages) {
+        if let Some(sink) = progress {
+            sink(CompactProgressEvent::Summarizing {
+                messages_processed: messages.len(),
+            });
+        }
+
+        if let Ok((collapsed, _collapse_result)) = collapse_engine.execute_collapse(messages) {
+            let post_collapse_tokens = estimate_message_tokens(&collapsed);
+            let tokens_saved = pre_collapse_tokens.saturating_sub(post_collapse_tokens);
+
+            if tokens_saved > 0 && post_collapse_tokens < pre_collapse_tokens {
+                tracing::info!(
+                    pre_tokens = pre_collapse_tokens,
+                    post_tokens = post_collapse_tokens,
+                    "Reactive compact: collapse drain recovered tokens"
+                );
+
+                let messages_removed = messages.len().saturating_sub(collapsed.len());
+                let result = CompactionResult {
+                    summary: format!(
+                        "Context collapse drain: {} messages removed, ~{} tokens saved",
+                        messages_removed, tokens_saved
+                    ),
+                    messages_removed,
+                    tokens_saved,
+                    strategy_used: CompactStrategyType::Reactive,
+                    preserved_segments: Vec::new(),
+                    pre_compact_token_count: Some(pre_collapse_tokens),
+                    post_compact_token_count: Some(post_collapse_tokens),
+                    messages_to_keep: collapsed,
+                    attachments: Vec::new(),
+                    hook_results: Vec::new(),
+                    user_display_message: None,
+                };
+
+                if let Some(sink) = progress {
+                    sink(CompactProgressEvent::Completed(result.clone()));
+                }
+                return Ok(result);
+            }
+        }
+    }
+
+    // Stage 2: full LLM-based compaction with PTL retry loop
     let mut current_messages = messages.to_vec();
     let mut attempt: u32 = 0;
 
@@ -120,7 +184,6 @@ pub async fn reactive_compact(
             });
         }
 
-        // Try compacting the current set of messages
         match compact_conversation(&current_messages, options, provider, None).await {
             Ok(mut result) => {
                 result.strategy_used = CompactStrategyType::Reactive;
@@ -141,7 +204,6 @@ pub async fn reactive_compact(
                         return Err(e);
                     }
 
-                    // Drop the oldest 20% of messages and retry
                     let drop_count =
                         std::cmp::max(1, (current_messages.len() as f64 * DROP_FRACTION) as usize);
                     let remaining = current_messages.len().saturating_sub(drop_count);

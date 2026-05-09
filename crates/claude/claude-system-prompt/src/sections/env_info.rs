@@ -1,6 +1,6 @@
 //! Environment Info section — platform, git status, model details.
 //!
-//! Matches `computeSimpleEnvInfo()` in Claude Code's `prompts.ts`.
+//! Matches `computeSimpleEnvInfo()` and `computeEnvInfo()` in Claude Code's `prompts.ts`.
 
 use anyhow::Result;
 
@@ -210,6 +210,60 @@ impl SystemPromptSection for EnvInfoSection {
     }
 }
 
+/// Compute environment info using the legacy `<env>` XML format.
+///
+/// Matches `computeEnvInfo()` in Claude Code's `prompts.ts`. Used by
+/// subagent prompts via `enhanceSystemPromptWithEnvDetails()`.
+pub fn compute_env_info_xml(ctx: &PromptContext) -> String {
+    let undercover = ctx.is_undercover;
+
+    let model_description = if undercover {
+        String::new()
+    } else if ctx.model.is_empty() {
+        String::new()
+    } else if let Some(marketing_name) = get_marketing_name_for_model(&ctx.model) {
+        format!(
+            "You are powered by the model named {marketing_name}. The exact model ID is {}.",
+            ctx.model
+        )
+    } else {
+        format!("You are powered by the model {}.", ctx.model)
+    };
+
+    let additional_dirs_line = if ctx.additional_dirs.is_empty() {
+        String::new()
+    } else {
+        let dirs: Vec<String> = ctx.additional_dirs.iter().map(|d| format!("{}", d.display())).collect();
+        format!("Additional working directories: {}\n", dirs.join(", "))
+    };
+
+    let cutoff = get_knowledge_cutoff(&ctx.model);
+    let cutoff_msg = cutoff
+        .map(|c| format!("\n\nAssistant knowledge cutoff is {c}."))
+        .unwrap_or_default();
+
+    format!(
+        "Here is useful information about the environment you are running in:\n\
+         <env>\n\
+         Working directory: {cwd}\n\
+         Is directory a git repo: {is_git}\n\
+         {additional_dirs}\
+         Platform: {platform}\n\
+         {shell_line}\n\
+         OS Version: {os_version}\n\
+         </env>\n\
+         {model_description}{cutoff_msg}",
+        cwd = ctx.cwd.display(),
+        is_git = if ctx.is_git { "Yes" } else { "No" },
+        additional_dirs = additional_dirs_line,
+        platform = ctx.platform,
+        shell_line = get_shell_info_line(&ctx.shell, &ctx.platform),
+        os_version = ctx.os_version,
+        model_description = model_description,
+        cutoff_msg = cutoff_msg,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -312,5 +366,48 @@ mod tests {
     fn shell_info_windows() {
         let line = get_shell_info_line("cmd.exe", "win32");
         assert!(line.contains("Unix shell syntax"));
+    }
+
+    #[test]
+    fn xml_env_info_contains_env_tags() {
+        let result = compute_env_info_xml(&test_ctx());
+        assert!(result.contains("<env>"));
+        assert!(result.contains("</env>"));
+    }
+
+    #[test]
+    fn xml_env_info_contains_working_directory() {
+        let result = compute_env_info_xml(&test_ctx());
+        assert!(result.contains("Working directory: /home/user/project"));
+    }
+
+    #[test]
+    fn xml_env_info_contains_git_status() {
+        let result = compute_env_info_xml(&test_ctx());
+        assert!(result.contains("Is directory a git repo: Yes"));
+    }
+
+    #[test]
+    fn xml_env_info_contains_model_description() {
+        let result = compute_env_info_xml(&test_ctx());
+        assert!(result.contains("You are powered by the model named Sonnet 4.6"));
+        assert!(result.contains("claude-sonnet-4-6"));
+    }
+
+    #[test]
+    fn xml_env_info_undercover_suppresses_model() {
+        let mut ctx = test_ctx();
+        ctx.is_undercover = true;
+        let result = compute_env_info_xml(&ctx);
+        assert!(!result.contains("Sonnet"));
+        assert!(!result.contains("claude-sonnet"));
+    }
+
+    #[test]
+    fn xml_env_info_additional_dirs() {
+        let mut ctx = test_ctx();
+        ctx.additional_dirs = vec![PathBuf::from("/other/dir")];
+        let result = compute_env_info_xml(&ctx);
+        assert!(result.contains("Additional working directories: /other/dir"));
     }
 }

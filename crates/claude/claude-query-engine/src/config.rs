@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::observer::{NoopQueryObserver, QueryObserver};
-use crate::stop_hooks::{ReplHookContext, StopHookOutcome, StopHookRequest};
+use crate::stop_hooks::{ReplHookContext, StopHookOutcome, StopHookPipeline, StopHookRequest};
 
 pub type PostCompactTransform = dyn Fn(
         Vec<claude_core::ConversationEntry>,
@@ -269,6 +269,7 @@ pub struct QueryEngineConfig {
     pub post_compact_transform: Option<Arc<PostCompactTransform>>,
     pub post_sampling_hooks: Vec<Arc<PostSamplingHook>>,
     pub stop_hook: Option<Arc<StopHook>>,
+    pub stop_hook_pipeline: Option<Arc<StopHookPipeline>>,
     #[allow(dead_code)]
     pub metadata: Value,
 }
@@ -305,6 +306,7 @@ impl QueryEngineConfig {
             post_compact_transform: None,
             post_sampling_hooks: Vec::new(),
             stop_hook: None,
+            stop_hook_pipeline: None,
             metadata: Value::Null,
         }
     }
@@ -363,6 +365,12 @@ impl QueryEngineConfig {
     #[must_use]
     pub fn with_stop_hook(mut self, hook: Arc<StopHook>) -> Self {
         self.stop_hook = Some(hook);
+        self
+    }
+
+    #[must_use]
+    pub fn with_stop_hook_pipeline(mut self, pipeline: Arc<StopHookPipeline>) -> Self {
+        self.stop_hook_pipeline = Some(pipeline);
         self
     }
 }
