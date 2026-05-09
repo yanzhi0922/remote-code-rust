@@ -12,7 +12,7 @@ import type {
 } from './types';
 import { hydrateRemoteTimeline } from '../session/normalize/fromRemote';
 
-export interface RemoteSessionBundleData {
+interface RemoteSessionBundleData {
   events: RemoteTimelineEvent[];
   approvals: RemoteApprovalRecord[];
   artifacts: RemoteArtifactRecord[];
@@ -38,7 +38,7 @@ export async function loadRemoteSessionBundle(
   };
 }
 
-export interface RemoteSessionStreamHandle {
+interface RemoteSessionStreamHandle {
   close(): void;
 }
 

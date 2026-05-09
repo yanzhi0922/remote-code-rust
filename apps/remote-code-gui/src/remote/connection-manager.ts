@@ -54,7 +54,7 @@ export function onConnectionManagerEvent(listener: EventListener): () => void {
   return () => eventListeners.delete(listener);
 }
 
-export class ConnectionManager {
+class ConnectionManager {
   private transport: UnifiedTransport | null = null;
   private _state: ConnectionManagerState = {
     connectionState: 'idle',

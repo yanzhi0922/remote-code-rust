@@ -63,7 +63,7 @@ export interface TransportCallbacks {
   onError: (error: Error) => void;
 }
 
-export interface TransportHandle {
+interface TransportHandle {
   close(): void;
   readonly state: ConnectionState;
   readonly strategy: TransportStrategyType;

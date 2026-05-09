@@ -543,7 +543,7 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
                 "type": "object",
                 "properties": {
                     "notebook_path": {"type": "string", "description": "The absolute path to the Jupyter notebook file to edit (must be absolute, not relative)"},
-                    "cell_id": {"type": "string", "description": "The ID of the cell to edit. When inserting a new cell, the new cell will be inserted after the cell with this ID, or at the beginning if not specified."},
+                    "cell_number": {"type": "integer", "description": "The cell number (0-indexed) to edit. When inserting a new cell, the new cell will be inserted at this index."},
                     "new_source": {"type": "string", "description": "The new source for the cell"},
                     "cell_type": {"type": "string", "enum": ["code", "markdown"], "description": "The type of the cell (code or markdown). If not specified, it defaults to the current cell type. If using edit_mode=insert, this is required."},
                     "edit_mode": {"type": "string", "enum": ["replace", "insert", "delete"], "description": "The type of edit to make (replace, insert, delete). Defaults to replace."}
@@ -913,6 +913,36 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
                     }
                 },
                 "required": ["cron", "prompt"],
+                "additionalProperties": false,
+            }),
+        },
+        ToolSpec {
+            name: "cron_delete".to_owned(),
+            protocol_name: "CronDelete".to_owned(),
+            permission_tool_name: "CronDelete".to_owned(),
+            description: tool_prompts::CRON_DELETE.to_owned(),
+            requires_permission: false,
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "id": {
+                        "type": "string",
+                        "description": "Job ID returned by CronCreate"
+                    }
+                },
+                "required": ["id"],
+                "additionalProperties": false,
+            }),
+        },
+        ToolSpec {
+            name: "cron_list".to_owned(),
+            protocol_name: "CronList".to_owned(),
+            permission_tool_name: "CronList".to_owned(),
+            description: tool_prompts::CRON_LIST.to_owned(),
+            requires_permission: false,
+            input_schema: json!({
+                "type": "object",
+                "properties": {},
                 "additionalProperties": false,
             }),
         },
@@ -1485,7 +1515,7 @@ mod tests {
         let notebook = properties_for("notebook_edit");
         for field in [
             "notebook_path",
-            "cell_id",
+            "cell_number",
             "new_source",
             "cell_type",
             "edit_mode",

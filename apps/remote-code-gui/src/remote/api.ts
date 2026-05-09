@@ -7,12 +7,8 @@ import type {
   RemoteControlPlaneHealth,
   RemoteListResponse,
   RemotePairingAcceptResponse,
-  RemotePairingOfferCreateResponse,
-  RemotePushTokenRegistrationRequest,
-  RemotePushTokenRegistrationResponse,
   RemoteSessionRecord,
   RemoteTimelineEvent,
-  RemoteTrustedDeviceRecord,
 } from './types';
 import {
   resolveRemoteAccessToken,
@@ -36,12 +32,6 @@ export async function getControlPlaneHealth(baseUrl: string): Promise<RemoteCont
   return requestJson<RemoteControlPlaneHealth>(baseUrl, '/healthz');
 }
 
-export async function listTrustedDevices(
-  baseUrl: string,
-): Promise<RemoteListResponse<RemoteTrustedDeviceRecord>> {
-  return requestJson<RemoteListResponse<RemoteTrustedDeviceRecord>>(baseUrl, '/v1/devices');
-}
-
 export async function bootstrapControlPlane(
   baseUrl: string,
   bootstrapSecret: string,
@@ -53,21 +43,6 @@ export async function bootstrapControlPlane(
       bootstrap_secret: bootstrapSecret,
       device_name: deviceName,
       device_kind: 'browser',
-    }),
-  });
-}
-
-export async function createPairingOffer(
-  baseUrl: string,
-  deviceName: string,
-  expiresInSecs?: number,
-): Promise<RemotePairingOfferCreateResponse> {
-  return requestJson<RemotePairingOfferCreateResponse>(baseUrl, '/v1/pairing/offers', {
-    method: 'POST',
-    body: JSON.stringify({
-      device_name: deviceName,
-      device_kind: 'browser',
-      expires_in_secs: expiresInSecs,
     }),
   });
 }
@@ -176,20 +151,6 @@ export async function respondToApproval(
         responder: 'remote-code-gui',
         note: note ?? null,
       }),
-    },
-  );
-}
-
-export async function registerPushToken(
-  baseUrl: string,
-  request: RemotePushTokenRegistrationRequest,
-): Promise<RemotePushTokenRegistrationResponse> {
-  return requestJson<RemotePushTokenRegistrationResponse>(
-    baseUrl,
-    '/v1/devices/push-token',
-    {
-      method: 'POST',
-      body: JSON.stringify(request),
     },
   );
 }

@@ -5,7 +5,6 @@
 //! usage summaries, hook definitions, and session events.
 
 pub mod app_state;
-pub mod cost;
 pub mod exit_reasons;
 pub mod hook_executor;
 pub mod hook_matcher;
@@ -32,7 +31,6 @@ use uuid::Uuid;
 pub use app_state::{
     AppStateManager, SharedStateManager, StateManagerExt, StateSnapshot, StateUpdate,
 };
-pub use cost::CostTracker;
 pub use exit_reasons::{ExitReason, ExitReasonTracker, ExitRecord};
 pub use hook_executor::{
     HookBatchResult, HookExecutor, HookOutcome, format_blocking_message, is_url_safe_for_hook,

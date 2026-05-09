@@ -456,6 +456,7 @@ pub async fn mobile_push_register_token(
 
 /// Get the current QUIC connection state (idle, connecting, open, etc.).
 #[tauri::command]
+#[allow(dead_code)]
 pub async fn mobile_quic_status(
     state: tauri::State<'_, crate::quic_bridge::QuicBridgeState>,
 ) -> std::result::Result<String, String> {
@@ -471,6 +472,7 @@ pub async fn mobile_quic_status(
 
 /// Get the current connection strategy (direct_ws, server_relay, quic, etc.).
 #[tauri::command]
+#[allow(dead_code)]
 pub async fn mobile_connection_strategy(
     state: tauri::State<'_, crate::quic_bridge::QuicBridgeState>,
 ) -> std::result::Result<String, String> {

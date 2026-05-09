@@ -573,18 +573,17 @@ Notes:
 
 /// Prompt for `sleep`.
 pub const SLEEP: &str = "\
-Sleep for a specified number of seconds (max 30).
+Wait for a specified duration. The user can interrupt the sleep at any time.
 
-Usage:
-- Use sparingly — most tasks do not require delays.
-- Useful for waiting for external processes or rate limiting.
-- Maximum sleep duration is 30 seconds.
+Use this when the user tells you to sleep or rest, when you have nothing to do, or when you're waiting for something.
 
-Notes:
-- Do not sleep between commands that can run immediately — just run them.
-- Do not retry failing commands in a sleep loop — diagnose the root cause.
-- If waiting for a background task, you will be notified when it completes — do not poll.
-- If you must poll an external process, use a check command rather than sleeping first.";
+You may receive <tick> prompts — these are periodic check-ins. Look for useful work to do before sleeping.
+
+You can call this concurrently with other tools — it won't interfere with them.
+
+Prefer this over `Bash(sleep ...)` — it doesn't hold a shell process.
+
+Each wake-up costs an API call, but the prompt cache expires after 5 minutes of inactivity — balance accordingly.";
 
 /// Prompt for `snip`.
 pub const SNIP: &str = "\
@@ -602,17 +601,16 @@ Notes:
 
 /// Prompt for `tool_search`.
 pub const TOOL_SEARCH: &str = "\
-Search available tools by keyword. Returns matching tool names and descriptions.
+Fetches full schema definitions for deferred tools so they can be called.
 
-Usage:
-- Pass a `query` string to search tool names and descriptions.
-- Use `max_results` to limit the number of matches (max 20).
-- Returns tool names and their descriptions for review.
+Deferred tools appear by name in <system-reminder> messages. Until fetched, only the name is known — there is no parameter schema, so the tool cannot be invoked. This tool takes a query, matches it against the deferred tool list, and returns the matched tools' complete JSONSchema definitions inside a <functions> block. Once a tool's schema appears in that result, it is callable exactly like any tool defined at the top of the prompt.
 
-Notes:
-- Useful when you are unsure which tool to use for a task.
-- Searches are fuzzy — partial matches and synonyms are supported.
-- After finding the right tool, read its description carefully before using it.";
+Result format: each matched tool appears as one <function>{\"description\": \"...\", \"name\": \"...\", \"parameters\": {...}}</function> line inside the <functions> block — the same encoding as the tool list at the top of this prompt.
+
+Query forms:
+- \"select:Read,Edit,Grep\" — fetch these exact tools by name
+- \"notebook jupyter\" — keyword search, up to max_results best matches
+- \"+slack send\" — require \"slack\" in the name, rank by remaining terms";
 
 /// Prompt for `verify_plan`.
 pub const VERIFY_PLAN: &str = "\
@@ -658,17 +656,11 @@ Notes:
 
 /// Prompt for `brief`.
 pub const BRIEF: &str = "\
-Summarize or truncate content to a maximum length.
+Send a message the user will read. Text outside this tool is visible in the detail view, but most won't open it — the answer lives here.
 
-Usage:
-- Pass `content` to summarize or truncate.
-- Use `max_length` to set the maximum output length (max 100000 characters).
-- Useful for condensing large outputs before including them in context.
+`message` supports markdown. `attachments` takes file paths (absolute or cwd-relative) for images, diffs, logs.
 
-Notes:
-- When content exceeds max_length, it is truncated with a marker indicating the cut point.
-- Prefer using this tool when you need to reduce large outputs for context management.
-- Does not perform AI summarization — only truncation.";
+`status` labels intent: 'normal' when replying to what they just asked; 'proactive' when you're initiating — a scheduled task finished, a blocker surfaced during background work, you need input on something they haven't asked about. Set it honestly; downstream routing uses it.";
 
 /// Prompt for `ctx_inspect`.
 pub const CTX_INSPECT: &str = "\
@@ -779,18 +771,12 @@ Note: LSP servers must be configured for the file type. If no server is availabl
 
 /// Prompt for `notebook_edit`.
 pub const NOTEBOOK_EDIT: &str = "\
-Edit a cell in a Jupyter notebook (.ipynb) file.
-
-Usage:
-- `notebook_path` specifies the notebook file and must be an absolute path, not a relative path.
-- `cell_id` is the ID of the cell to edit. When inserting, the new cell is inserted after this cell, or at the beginning if omitted.
-- `new_source` is the new cell content.
-- Optionally set `cell_type` to 'code' or 'markdown' to change the cell type.
-- Optionally set `edit_mode` to 'replace', 'insert', or 'delete'. Defaults to 'replace'.
-
-Notes:
-- The notebook must be a valid .ipynb file.
-- Requires read permission on the notebook file.";
+Completely replaces the contents of a specific cell in a Jupyter notebook (.ipynb file) with \
+new source. Jupyter notebooks are interactive documents that combine code, text, and \
+visualizations, commonly used for data analysis and scientific computing. The notebook_path \
+parameter must be an absolute path, not a relative path. The cell_number is 0-indexed.
+Use edit_mode=insert to add a new cell at the index specified by cell_number. Use
+edit_mode=delete to delete the cell at the index specified by cell_number.";
 
 /// Prompt for `skill_discover`.
 pub const SKILL_DISCOVER: &str = "\
@@ -1439,6 +1425,17 @@ when scheduling recurring jobs.
 
 Returns a job ID you can pass to CronDelete.";
 
+/// Prompt for `cron_delete`.
+pub const CRON_DELETE: &str = "\
+Cancel a cron job previously scheduled with CronCreate. Removes it from \
+.claude/scheduled_tasks.json (durable jobs) or the in-memory session store \
+(session-only jobs).";
+
+/// Prompt for `cron_list`.
+pub const CRON_LIST: &str = "\
+List all cron jobs scheduled via CronCreate, both durable \
+(.claude/scheduled_tasks.json) and session-only.";
+
 /// Prompt for `workflow`.
 pub const WORKFLOW: &str = "\
 Create, run, list, delete, or check status of a simple workflow with sequential step execution.
@@ -1472,17 +1469,16 @@ Notes:
 
 /// Prompt for `remote_trigger`.
 pub const REMOTE_TRIGGER: &str = "\
-Send an HTTP POST to trigger a remote event.
+Call the claude.ai remote-trigger API. Use this instead of curl — the OAuth token is added automatically in-process and never exposed.
 
-Usage:
-- `url` is the endpoint to POST to.
-- `event` is the event name or type.
-- `payload` is an optional JSON object to send as the request body.
+Actions:
+- list: GET /v1/code/triggers
+- get: GET /v1/code/triggers/{trigger_id}
+- create: POST /v1/code/triggers (requires body)
+- update: POST /v1/code/triggers/{trigger_id} (requires body, partial update)
+- run: POST /v1/code/triggers/{trigger_id}/run
 
-Notes:
-- Requires network access to the target URL.
-- Use this for webhook integrations and remote notifications.
-- The target server must be configured to accept the event.";
+The response is the raw JSON from the API.";
 
 /// Prompt for `enter_worktree`.
 pub const ENTER_WORKTREE: &str = "\
@@ -2159,7 +2155,7 @@ IMPORTANT - Use the correct year in search queries:
 /// Returns the Grep tool prompt matching Claude Code's GrepTool/prompt.ts.
 #[must_use]
 pub fn grep_tool_prompt() -> String {
-    "A powerful search tool built on ripgrep.\n\n\
+    "A powerful search tool built on ripgrep\n\n\
     Usage:\n\
     - ALWAYS use Grep for search tasks. NEVER invoke `grep` or `rg` as a Bash \
     command. The Grep tool has been optimized for correct permissions and access.\n\
@@ -2179,27 +2175,28 @@ pub fn grep_tool_prompt() -> String {
 /// Returns the WebFetch tool prompt matching Claude Code's WebFetchTool/prompt.ts.
 #[must_use]
 pub fn web_fetch_tool_prompt() -> String {
-    "Fetches content from a specified URL and processes it using an AI model.\n\n\
-    - Takes a URL and a prompt as input\n\
-    - Fetches the URL content, converts HTML to markdown\n\
-    - Processes the content with the prompt using a small, fast model\n\
-    - Returns the model's response about the content\n\
-    - Use this tool when you need to retrieve and analyze web content\n\n\
-    Usage notes:\n\
-      - IMPORTANT: If an MCP-provided web fetch tool is available, prefer using \
-    that tool instead of this one, as it may have fewer restrictions.\n\
-      - The URL must be a fully-formed valid URL\n\
-      - HTTP URLs will be automatically upgraded to HTTPS\n\
-      - The prompt should describe what information you want to extract from the page\n\
-      - This tool is read-only and does not modify any files\n\
-      - Results may be summarized if the content is very large\n\
-      - Includes a self-cleaning 15-minute cache for faster responses when \
-    repeatedly accessing the same URL\n\
-      - When a URL redirects to a different host, the tool will inform you and \
-    provide the redirect URL in a special format. You should then make a new \
-    WebFetch request with the redirect URL to fetch the content.\n\
-      - For GitHub URLs, prefer using the gh CLI via Bash instead (e.g., gh pr \
-    view, gh issue view, gh api)."
+    "\n\
+- Fetches content from a specified URL and processes it using an AI model\n\
+- Takes a URL and a prompt as input\n\
+- Fetches the URL content, converts HTML to markdown\n\
+- Processes the content with the prompt using a small, fast model\n\
+- Returns the model's response about the content\n\
+- Use this tool when you need to retrieve and analyze web content\n\n\
+Usage notes:\n\
+  - IMPORTANT: If an MCP-provided web fetch tool is available, prefer using \
+that tool instead of this one, as it may have fewer restrictions.\n\
+  - The URL must be a fully-formed valid URL\n\
+  - HTTP URLs will be automatically upgraded to HTTPS\n\
+  - The prompt should describe what information you want to extract from the page\n\
+  - This tool is read-only and does not modify any files\n\
+  - Results may be summarized if the content is very large\n\
+  - Includes a self-cleaning 15-minute cache for faster responses when \
+repeatedly accessing the same URL\n\
+  - When a URL redirects to a different host, the tool will inform you and \
+provide the redirect URL in a special format. You should then make a new \
+WebFetch request with the redirect URL to fetch the content.\n\
+  - For GitHub URLs, prefer using the gh CLI via Bash instead (e.g., gh pr \
+view, gh issue view, gh api)."
         .to_owned()
 }
 
@@ -2340,7 +2337,7 @@ pub fn todo_write_tool_prompt() -> String {
     what it does?\n\
     Assistant: Sure, let me add a comment to the calculateTotal function to \
     explain what it does.\n\
-    * Uses the edit_file tool to add a comment to the calculateTotal function *\n\n\
+    * Uses the Edit tool to add a comment to the calculateTotal function *\n\n\
     <reasoning>\n\
     The assistant did not use the todo list because this is a single, \
     straightforward task confined to one location in the code. Adding a comment \
@@ -2577,7 +2574,7 @@ instead.";
         - Try to maintain your current working directory throughout the session by using absolute \
         paths and avoiding usage of `cd`. You may use `cd` if the User explicitly requests it.\n\
         - You may specify an optional timeout in milliseconds (up to 600000ms / 10 minutes). By \
-        default, your command will timeout after 600000ms (10 minutes).\n\
+        default, your command will timeout after 120000ms (2 minutes).\n\
         - {background_note}\n\
         - When issuing multiple commands:\n\
           - If the commands are independent and can run in parallel, make multiple Bash tool \
@@ -2651,7 +2648,8 @@ pub fn file_read_tool_prompt() -> String {
     - This tool allows Claude Code to read images (eg PNG, JPG, etc). When reading an image file \
     the contents are presented visually as Claude Code is a multimodal LLM.\n\
     - This tool can read PDF files (.pdf). For large PDFs (more than 10 pages), you MUST provide \
-    the pages parameter to read specific page ranges (e.g., pages: \"1-5\").\n\
+    the pages parameter to read specific page ranges (e.g., pages: \"1-5\"). Reading a large PDF \
+    without the pages parameter will fail. Maximum 20 pages per request.\n\
     - This tool can read Jupyter notebooks (.ipynb files) and returns all cells with their \
     outputs, combining code, text, and visualizations.\n\
     - This tool can only read files, not directories. To read a directory, use an ls command via \

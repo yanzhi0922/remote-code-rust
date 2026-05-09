@@ -884,10 +884,12 @@ impl Registry {
         reaped
     }
 
+    #[allow(dead_code)]
     pub(crate) fn list_approvals(&self) -> Vec<ApprovalRequestRecord> {
         self.approvals.values().cloned().collect()
     }
 
+    #[allow(dead_code)]
     pub(crate) fn list_artifacts(&self) -> Vec<ArtifactRecord> {
         self.artifacts.values().cloned().collect()
     }

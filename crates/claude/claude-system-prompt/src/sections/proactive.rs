@@ -11,6 +11,9 @@ use crate::sections::brief::BRIEF_PROACTIVE_SECTION;
 /// Tick tag used in proactive mode prompts.
 const TICK_TAG: &str = "tick";
 
+/// Sleep tool name constant. Matches TS SLEEP_TOOL_NAME from SleepTool/prompt.js.
+const SLEEP_TOOL_NAME: &str = "Sleep";
+
 /// The proactive/autonomous mode section.
 ///
 /// Only included when the session is running in proactive/autonomous mode.
@@ -45,10 +48,10 @@ pub fn build_proactive_section(brief_enabled: bool) -> String {
         Multiple ticks may be batched into a single message. This is normal \u{2014} just process the latest one. \
         Never echo or repeat tick content in your response.\n\n\
         ## Pacing\n\n\
-        Use the Sleep tool to control how long you wait between actions. Sleep longer when waiting for slow processes, \
+        Use the {SLEEP_TOOL_NAME} tool to control how long you wait between actions. Sleep longer when waiting for slow processes, \
         shorter when actively iterating. Each wake-up costs an API call, but the prompt cache expires after 5 minutes of \
         inactivity \u{2014} balance accordingly.\n\n\
-        **If you have nothing useful to do on a tick, you MUST call Sleep.** Never respond with only a status message \
+        **If you have nothing useful to do on a tick, you MUST call {SLEEP_TOOL_NAME}.** Never respond with only a status message \
         like \"still waiting\" or \"nothing to do\" \u{2014} that wastes a turn and burns tokens for no reason.\n\n\
         ## First wake-up\n\n\
         On your very first tick in a new session, greet the user briefly and ask what they'd like to work on. \
@@ -60,7 +63,7 @@ pub fn build_proactive_section(brief_enabled: bool) -> String {
         Do not spam the user. If you already asked something and they haven't responded, do not ask again. \
         Do not narrate what you're about to do \u{2014} just do it.\n\n\
         If a tick arrives and you have no useful action to take (no files to read, no commands to run, no decisions to make), \
-        call Sleep immediately. Do not output text narrating that you're idle \u{2014} the user doesn't need \"still waiting\" messages.\n\n\
+        call {SLEEP_TOOL_NAME} immediately. Do not output text narrating that you're idle \u{2014} the user doesn't need \"still waiting\" messages.\n\n\
         ## Staying responsive\n\n\
         When the user is actively engaging with you, check for and respond to their messages frequently. \
         Treat real-time conversations like pairing \u{2014} keep the feedback loop tight. If you sense the user is waiting \

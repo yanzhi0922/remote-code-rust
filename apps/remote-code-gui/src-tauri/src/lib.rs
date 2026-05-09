@@ -18,8 +18,6 @@ pub(crate) mod state;
 #[cfg(feature = "desktop")]
 pub use desktop::run;
 // Re-export desktop items at crate root so sibling modules can find them.
-#[cfg(feature = "desktop")]
-pub use desktop::*;
 
 // Mobile entry point — minimal dependencies, no heavy crates.
 #[cfg(feature = "mobile")]

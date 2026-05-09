@@ -434,7 +434,12 @@ fn notebook_mtime_ms(path: &std::path::Path) -> Result<u128> {
 }
 
 fn notebook_cell_index(cells: &[Value], input: &Value, edit_mode: &str) -> Result<usize> {
-    if let Some(index) = input.get("cell_index").and_then(Value::as_u64) {
+    // Accept both "cell_number" (current schema) and "cell_index" (legacy).
+    let numeric_index = input
+        .get("cell_number")
+        .or_else(|| input.get("cell_index"))
+        .and_then(Value::as_u64);
+    if let Some(index) = numeric_index {
         return Ok(if edit_mode == "insert" {
             index as usize + 1
         } else {

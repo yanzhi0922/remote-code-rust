@@ -103,6 +103,7 @@ mobile = [
     "dep:tauri-plugin-haptics",
     "dep:tauri-plugin-biometric",
     "dep:tauri-plugin-deep-link",
+    "dep:tauri-plugin-network",
     "dep:tauri-plugin-notification",
     "dep:tauri-plugin-share",
     "dep:mime_guess",
