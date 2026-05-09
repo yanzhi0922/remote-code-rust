@@ -177,18 +177,18 @@ pub const GLOB: &str = "\
 pub const GREP: &str = "\
 A powerful search tool built on ripgrep
 
-\t  Usage:
-\t  - ALWAYS use Grep for search tasks. NEVER invoke `grep` or `rg` as a Bash \
+  Usage:
+  - ALWAYS use Grep for search tasks. NEVER invoke `grep` or `rg` as a Bash \
 command. The Grep tool has been optimized for correct permissions and access.
-\t  - Supports full regex syntax (e.g., \"log.*Error\", \"function\\s+\\w+\")
-\t  - Filter files with glob parameter (e.g., \"*.js\", \"**/*.tsx\") or type \
+  - Supports full regex syntax (e.g., \"log.*Error\", \"function\\s+\\w+\")
+  - Filter files with glob parameter (e.g., \"*.js\", \"**/*.tsx\") or type \
 parameter (e.g., \"js\", \"py\", \"rust\")
-\t  - Output modes: \"content\" shows matching lines, \"files_with_matches\" \
+  - Output modes: \"content\" shows matching lines, \"files_with_matches\" \
 shows only file paths (default), \"count\" shows match counts
-\t  - Use Agent tool for open-ended searches requiring multiple rounds
-\t  - Pattern syntax: Uses ripgrep (not grep) - literal braces need escaping \
+  - Use Agent tool for open-ended searches requiring multiple rounds
+  - Pattern syntax: Uses ripgrep (not grep) - literal braces need escaping \
 (use `interface\\{\\}` to find `interface{}` in Go code)
-\t  - Multiline matching: By default patterns match within single lines only. \
+  - Multiline matching: By default patterns match within single lines only. \
 For cross-line patterns like `struct \\{[\\s\\S]*?field`, use `multiline: true`";
 
 /// Prompt for `web_fetch`.

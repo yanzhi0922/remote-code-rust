@@ -4,9 +4,11 @@
 //! throughout the query engine, along with utility functions for
 //! message manipulation and inspection.
 
+use std::collections::BTreeMap;
+
 use claude_core::{
-    AssistantContentBlock, AssistantMessage, ConversationEntry, Message, MessageBase,
-    MessageOrigin, SystemMessage, SystemMessageSubtype, ToolCall, ToolResult,
+    AssistantContentBlock, AssistantMessage, ConversationEntry, ConversationRole, Message,
+    MessageBase, MessageOrigin, SystemMessage, SystemMessageSubtype, ToolCall, ToolResult,
     ToolUseSummaryMessage, UserMessage,
 };
 
@@ -212,6 +214,48 @@ pub fn is_tool_summary(message: &Message) -> bool {
 /// conversation has orphaned tool_use entries. This function finds all
 /// assistant tool_use IDs that don't have a corresponding tool result and
 /// creates synthetic error tool results for them.
+pub fn prepend_user_context_to_conversation(
+    conversation: Vec<ConversationEntry>,
+    user_context: &BTreeMap<String, String>,
+) -> Vec<ConversationEntry> {
+    if user_context.is_empty() {
+        return conversation;
+    }
+    let context_lines: Vec<String> = user_context
+        .iter()
+        .map(|(key, value)| format!("# {key}\n{value}"))
+        .collect();
+    let content = format!(
+        "<system-reminder>\nAs you answer the user's questions, you can use the following context:\n{}\n\nIMPORTANT: this context may or may not be relevant to your tasks. You should not respond to this context unless it is highly relevant to your task.\n</system-reminder>",
+        context_lines.join("\n")
+    );
+    let mut result = vec![ConversationEntry::user(&content)];
+    result.extend(conversation);
+    result
+}
+
+pub fn append_system_context_to_conversation(
+    conversation: &mut Vec<ConversationEntry>,
+    system_context: &BTreeMap<String, String>,
+) {
+    if system_context.is_empty() {
+        return;
+    }
+    let context_text = system_context
+        .iter()
+        .map(|(key, value)| format!("{key}: {value}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    if let Some(entry) = conversation
+        .iter_mut()
+        .find(|e| matches!(e.role, ConversationRole::System))
+    {
+        entry.text = format!("{}\n{}", entry.text, context_text);
+    } else {
+        conversation.push(ConversationEntry::system(&context_text));
+    }
+}
+
 pub fn yield_missing_tool_result_messages(messages: &[Message], error_text: &str) -> Vec<Message> {
     // Collect all tool_call IDs from assistant messages
     let mut tool_call_ids: Vec<String> = Vec::new();

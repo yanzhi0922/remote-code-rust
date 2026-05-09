@@ -47,7 +47,7 @@ pub use retry::{
     is_enterprise_subscriber, is_fast_mode_enabled, is_persistent_retry_enabled, is_subscriber,
     should_retry_529, with_retry_ext,
 };
-pub use streaming::StreamingCallbacks;
+pub use streaming::{StreamingCallbacks, StreamingLifecycleEvent};
 
 use crate::model_info::get_model_info;
 use crate::retry::{
@@ -2068,8 +2068,15 @@ fn apply_anthropic_thinking_options(body: &mut Value, provider: &ProviderConfig)
         return;
     };
 
-    // Clamp budget_tokens so it is strictly less than max_tokens.
-    // This mirrors the TS reference: Math.min(maxOutputTokens - 1, thinkingBudget).
+    let model = provider.model.as_deref().unwrap_or("");
+
+    if !claude_config::env_vars::disable_adaptive_thinking()
+        && thinking_blocks::should_use_adaptive_thinking(model)
+    {
+        body["thinking"] = json!({ "type": "adaptive" });
+        return;
+    }
+
     let max_tokens = body
         .get("max_tokens")
         .and_then(Value::as_u64)
@@ -2084,7 +2091,6 @@ fn apply_anthropic_thinking_options(body: &mut Value, provider: &ProviderConfig)
         "type": "enabled",
         "budget_tokens": budget,
     });
-    // Anthropic requires max_tokens > budget_tokens.
     let current_max = body.get("max_tokens").and_then(Value::as_u64).unwrap_or(0);
     if current_max <= u64::from(budget) {
         body["max_tokens"] = json!(u64::from(budget) + 4096);
@@ -2104,7 +2110,7 @@ fn apply_anthropic_sampling_params(body: &mut Value, provider: &ProviderConfig) 
         .get("thinking")
         .and_then(|t| t.get("type"))
         .and_then(Value::as_str)
-        .is_some_and(|t| t == "enabled");
+        .is_some_and(|t| t == "enabled" || t == "adaptive");
 
     if !thinking_enabled {
         // Use configured temperature, or default to 1.0 (already set by

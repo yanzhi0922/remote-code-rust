@@ -127,6 +127,17 @@ pub fn disable_interleaved_thinking() -> bool {
         .is_some_and(is_truthy)
 }
 
+/// Check whether adaptive thinking should be disabled.
+///
+/// When `CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING` is set to a truthy value,
+/// the budget-based thinking mode is used instead of adaptive thinking
+/// even for models that support it.
+pub fn disable_adaptive_thinking() -> bool {
+    read_first(&["CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING"])
+        .as_deref()
+        .is_some_and(is_truthy)
+}
+
 // ---------------------------------------------------------------------------
 // Gap 7: USER_TYPE
 // ---------------------------------------------------------------------------

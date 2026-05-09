@@ -523,6 +523,7 @@ pub async fn build_runtime_system_prompt(
             ant_user: settings.runtime_identity.is_ant_user(),
             proactive_active: settings.proactive_active,
             brief_enabled: settings.brief_enabled,
+            simple_mode: false,
             repl_mode_active: false,
             embedded_search_tools: settings.runtime_identity.features.embedded_search_tools,
             user_invocable_skills_available: settings.user_invocable_skills_available,

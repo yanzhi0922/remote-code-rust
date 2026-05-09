@@ -125,12 +125,7 @@ impl PreprocessingPipeline {
         let messages_micro_compacted = Self::micro_compact(messages, self.micro_keep_recent);
 
         // Stage 4: context collapse
-        //
-        // Disabled on the live query path for now. Collapsing tool-result
-        // messages without simultaneously rewriting the paired assistant
-        // tool_use blocks breaks Anthropic-compatible transcript continuity
-        // and causes provider-side `tool_use`/`tool_result` validation errors.
-        let messages_collapsed = 0;
+        let messages_collapsed = Self::context_collapse(messages);
 
         // Stage 5: autocompact check
         let estimated_tokens = estimate_tokens(messages);

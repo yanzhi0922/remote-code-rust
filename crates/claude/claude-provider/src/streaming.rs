@@ -92,8 +92,44 @@ pub struct StreamingUsageUpdate {
     pub cache_creation_input_tokens: u64,
 }
 
+/// Granular lifecycle events emitted during streaming.
+///
+/// Mirrors the Anthropic SSE event types (`message_start`, `content_block_start`,
+/// `content_block_delta`, `content_block_stop`, `message_delta`, `message_stop`)
+/// and provides analogous events for OpenAI-compatible streaming.
+#[derive(Debug, Clone)]
+pub enum StreamingLifecycleEvent {
+    /// The streaming message has started (Anthropic `message_start`).
+    MessageStart,
+    /// A new content block has started (Anthropic `content_block_start`).
+    ContentBlockStart {
+        /// Zero-based content block index.
+        index: usize,
+        /// Block type string (e.g. `"text"`, `"thinking"`, `"tool_use"`).
+        block_type: String,
+    },
+    /// A content block has finished (Anthropic `content_block_stop`).
+    ContentBlockStop {
+        /// Zero-based content block index.
+        index: usize,
+    },
+    /// The final message delta with authoritative `stop_reason` and output tokens
+    /// (Anthropic `message_delta`).
+    MessageDelta {
+        /// The stop reason (e.g. `"end_turn"`, `"tool_use"`).
+        stop_reason: String,
+        /// Final output token count.
+        output_tokens: u64,
+    },
+    /// The streaming message has ended (Anthropic `message_stop`).
+    MessageStop,
+}
+
 /// Type alias for a usage callback.
 type UsageCallback = Box<dyn Fn(StreamingUsageUpdate) + Send + Sync>;
+
+/// Type alias for a lifecycle event callback.
+type LifecycleCallback = Box<dyn Fn(StreamingLifecycleEvent) + Send + Sync>;
 
 /// Optional callbacks for observing streaming events in real time.
 ///
@@ -112,6 +148,8 @@ pub struct StreamingCallbacks {
     pub on_usage: Option<UsageCallback>,
     /// Fired for every thinking delta received during extended thinking.
     pub on_thinking_delta: Option<TextCallback>,
+    /// Fired for granular streaming lifecycle events (message/block start/stop).
+    pub on_lifecycle_event: Option<LifecycleCallback>,
 }
 
 // ---------------------------------------------------------------------------
@@ -318,6 +356,7 @@ impl ProviderClient {
         let mut finish_reason = "stop".to_owned();
         let mut usage = UsageSummary::default();
         let mut request_id: Option<String> = None;
+        let mut message_started = false;
 
         let mut stream = response.bytes_stream();
         let mut sse_buffer = String::new();
@@ -372,6 +411,14 @@ impl ProviderClient {
                             .and_then(Value::as_str)
                             .map(ToOwned::to_owned);
                     }
+                    if !message_started {
+                        message_started = true;
+                        if let Some(cb) =
+                            callbacks.as_ref().and_then(|c| c.on_lifecycle_event.as_ref())
+                        {
+                            cb(StreamingLifecycleEvent::MessageStart);
+                        }
+                    }
 
                     if let Some(choice) = parsed
                         .get("choices")
@@ -382,6 +429,14 @@ impl ProviderClient {
                             && reason != "null"
                         {
                             reason.clone_into(&mut finish_reason);
+                            if let Some(cb) =
+                                callbacks.as_ref().and_then(|c| c.on_lifecycle_event.as_ref())
+                            {
+                                cb(StreamingLifecycleEvent::MessageDelta {
+                                    stop_reason: reason.to_owned(),
+                                    output_tokens: 0,
+                                });
+                            }
                         }
 
                         let delta = choice.get("delta");
@@ -421,6 +476,15 @@ impl ProviderClient {
                                             && let Some(ref id) = accumulator.id
                                         {
                                             cb(id, name);
+                                        }
+                                        if let Some(cb) = callbacks
+                                            .as_ref()
+                                            .and_then(|c| c.on_lifecycle_event.as_ref())
+                                        {
+                                            cb(StreamingLifecycleEvent::ContentBlockStart {
+                                                index,
+                                                block_type: "tool_use".to_owned(),
+                                            });
                                         }
                                     }
                                     if let Some(args) =
@@ -464,6 +528,11 @@ impl ProviderClient {
         }
 
         let raw_text = text_parts.join("");
+        if message_started {
+            if let Some(cb) = callbacks.as_ref().and_then(|c| c.on_lifecycle_event.as_ref()) {
+                cb(StreamingLifecycleEvent::MessageStop);
+            }
+        }
         let tool_calls = tool_calls_map
             .into_iter()
             .filter_map(|(_, acc)| {
@@ -1168,6 +1237,9 @@ fn process_anthropic_event(
 
     match event_type {
         "message_start" => {
+            if let Some(cb) = callbacks.and_then(|c| c.on_lifecycle_event.as_ref()) {
+                cb(StreamingLifecycleEvent::MessageStart);
+            }
             if let Some(msg) = event.get("message") {
                 if request_id.is_none() {
                     *request_id = msg.get("id").and_then(Value::as_str).map(ToOwned::to_owned);
@@ -1232,6 +1304,13 @@ fn process_anthropic_event(
                 .and_then(|b| b.get("type"))
                 .and_then(Value::as_str)
                 .unwrap_or("");
+
+            if let Some(cb) = callbacks.and_then(|c| c.on_lifecycle_event.as_ref()) {
+                cb(StreamingLifecycleEvent::ContentBlockStart {
+                    index,
+                    block_type: block_type.to_owned(),
+                });
+            }
 
             match block_type {
                 "text" => {
@@ -1497,7 +1576,18 @@ fn process_anthropic_event(
                 }
             }
         }
-        "content_block_stop" | "message_stop" => {}
+        "content_block_stop" => {
+            #[allow(clippy::cast_possible_truncation)]
+            let index = event.get("index").and_then(Value::as_u64).unwrap_or(0) as usize;
+            if let Some(cb) = callbacks.and_then(|c| c.on_lifecycle_event.as_ref()) {
+                cb(StreamingLifecycleEvent::ContentBlockStop { index });
+            }
+        }
+        "message_stop" => {
+            if let Some(cb) = callbacks.and_then(|c| c.on_lifecycle_event.as_ref()) {
+                cb(StreamingLifecycleEvent::MessageStop);
+            }
+        }
         "message_delta" => {
             if let Some(delta_val) = event.get("delta")
                 && let Some(reason) = delta_val.get("stop_reason").and_then(Value::as_str)
@@ -1507,6 +1597,12 @@ fn process_anthropic_event(
             if let Some(u) = event.get("usage") {
                 let out = u.get("output_tokens").and_then(Value::as_u64).unwrap_or(0);
                 usage.output_tokens = out;
+                if let Some(cb) = callbacks.and_then(|c| c.on_lifecycle_event.as_ref()) {
+                    cb(StreamingLifecycleEvent::MessageDelta {
+                        stop_reason: stop_reason.clone(),
+                        output_tokens: out,
+                    });
+                }
                 // Fire on_usage callback with final output token count.
                 if let Some(cb) = callbacks.and_then(|c| c.on_usage.as_ref()) {
                     cb(StreamingUsageUpdate {
@@ -1618,6 +1714,7 @@ fn wrap_streaming_callbacks(
         on_tool_call_delta,
         on_usage,
         on_thinking_delta,
+        on_lifecycle_event,
     } = callbacks;
 
     let start_activity = Arc::clone(&streamed_tool_activity);
@@ -1642,6 +1739,7 @@ fn wrap_streaming_callbacks(
         on_tool_call_delta: Some(tracked_tool_call_delta),
         on_usage,
         on_thinking_delta,
+        on_lifecycle_event,
     }
 }
 

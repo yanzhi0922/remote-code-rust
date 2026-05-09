@@ -39,6 +39,7 @@
 
 pub mod cache;
 pub mod sections;
+pub mod subagent;
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -71,6 +72,9 @@ use sections::token_budget::TokenBudgetSection;
 use sections::tone_style::ToneStyleSection;
 use sections::tool_result::{FunctionResultClearingSection, ToolResultSection};
 use sections::using_tools::UsingToolsSection;
+
+pub const CLAUDE_CODE_DOCS_MAP_URL: &str =
+    "https://code.claude.com/docs/en/claude_code_docs_map.md";
 
 /// Configuration for a custom output style.
 #[derive(Debug, Clone)]
@@ -121,6 +125,8 @@ pub struct PromptFeatures {
     pub function_result_keep_recent: Option<usize>,
     /// Whether the token-budget guidance section is enabled.
     pub include_token_budget_prompt: bool,
+    /// Whether to produce a minimal prompt matching CLAUDE_CODE_SIMPLE mode.
+    pub simple_mode: bool,
 }
 
 /// Runtime context for system prompt section computation.
@@ -474,6 +480,14 @@ impl SystemPromptBuilder {
     /// The boundary marker [`SYSTEM_PROMPT_DYNAMIC_BOUNDARY`] separates static
     /// from dynamic content (if global cache scope is enabled).
     pub fn build(&mut self, ctx: &PromptContext) -> Result<Vec<String>> {
+        if ctx.features.simple_mode {
+            return Ok(vec![format!(
+                "You are Claude Code, Anthropic's official CLI for Claude.\n\nCWD: {}\nDate: {}",
+                ctx.cwd.display(),
+                ctx.session_start_date
+            )]);
+        }
+
         if ctx.features.proactive_active {
             return self.build_proactive(ctx);
         }
@@ -661,6 +675,10 @@ fn resolve_default_prompt_blocks(
     result.extend(resolve_sections(cache, ctx, &dynamic_sections)?);
     Ok(result)
 }
+
+pub use subagent::{
+    DEFAULT_AGENT_PROMPT, enhance_system_prompt_with_env_details,
+};
 
 pub fn build_default_system_prompt_for_session(
     session_id: uuid::Uuid,
@@ -1113,5 +1131,41 @@ mod tests {
 
         let rendered = render_system_prompt_for_api(&raw, &SystemPromptSplitOptions::default());
         assert_eq!(rendered.text, "one\n\ntwo");
+    }
+
+    #[test]
+    fn simple_mode_returns_minimal_prompt() {
+        let mut builder = SystemPromptBuilder::with_default_sections();
+        let mut ctx = test_prompt_context();
+        ctx.features.simple_mode = true;
+        let result = builder.build(&ctx).expect("build should succeed");
+        assert_eq!(result.len(), 1);
+        assert!(result[0].contains("You are Claude Code"));
+        assert!(result[0].contains("CWD:"));
+        assert!(result[0].contains("Date:"));
+        assert!(!result[0].contains("# System"));
+    }
+
+    #[test]
+    fn docs_map_url_constant() {
+        assert!(CLAUDE_CODE_DOCS_MAP_URL.starts_with("https://"));
+        assert!(CLAUDE_CODE_DOCS_MAP_URL.contains("docs_map"));
+    }
+
+    #[test]
+    fn default_agent_prompt_is_exported() {
+        assert!(!DEFAULT_AGENT_PROMPT.is_empty());
+        assert!(DEFAULT_AGENT_PROMPT.contains("agent for Claude Code"));
+    }
+
+    #[test]
+    fn enhance_system_prompt_is_callable() {
+        let result = enhance_system_prompt_with_env_details(
+            vec!["test".to_string()],
+            &test_prompt_context(),
+        )
+        .expect("should succeed");
+        assert!(result.len() > 1);
+        assert!(result.last().unwrap().contains("<env>"));
     }
 }

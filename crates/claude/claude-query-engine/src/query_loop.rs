@@ -16,7 +16,7 @@ use serde_json::json;
 use tokio::sync::mpsc;
 
 use crate::config::{
-    ProcessUserInputContext, ProviderInvocationMode, QueryEngineConfig, ToolRunResult,
+    ProcessUserInputContext, ProviderInvocationMode, QueryEngineConfig, QuerySource, ToolRunResult,
 };
 use crate::engine::{
     EngineError, EngineState, QueryResult,
@@ -31,7 +31,9 @@ use crate::observer::{
 use crate::preprocessing::PreprocessingPipeline;
 use crate::reactive_compact::ReactiveCompactHandler;
 use crate::state_machine::EnginePhase;
-use crate::stop_hooks::{ReplHookContext, StopHookOutcome, StopHookRequest, StopHookResult};
+use crate::stop_hooks::{
+    ReplHookContext, StopHookBaseInput, StopHookOutcome, StopHookRequest, StopHookResult,
+};
 use crate::token_budget::TokenBudgetDecision;
 
 /// Execute the Phase 2 compat query loop in-memory.
@@ -156,11 +158,53 @@ pub async fn run_query_loop(
             preprocessing_pipeline.run(&mut state.messages, context_usage, max_context);
 
         let mut legacy_conversation = state.legacy_conversation();
-        maybe_compact_conversation(config, state, &mut legacy_conversation).await;
+        let had_compaction = maybe_compact_conversation(config, state, &mut legacy_conversation).await;
 
-        // ---- Blocking limit check (TS lines 628–648) ----
-        // Skip this check if compaction just happened or if reactive compact is enabled.
-        // Mirrors TS: blocks when auto-compact is OFF and we're at the blocking limit.
+        let mut api_conversation = {
+            let sliced =
+                crate::message_utils::get_messages_after_compact_boundary(&state.messages);
+            sliced
+                .iter()
+                .filter_map(|m| m.as_conversation_entry())
+                .collect::<Vec<_>>()
+        };
+
+        if !had_compaction
+            && !matches!(
+                context.query_source,
+                QuerySource::Compact | QuerySource::SessionMemory
+            )
+        {
+            let snapshot = config.context_manager.budget_snapshot(&api_conversation);
+            if snapshot.usage_ratio >= 1.0 {
+                let stop_message =
+                    crate::message_utils::create_error_message(
+                        "Prompt is too long: context window exceeded. Run /compact to reduce context size.",
+                    );
+                state.messages.push(stop_message.clone());
+                let _ = config
+                    .observer
+                    .on_event(QueryObserverEvent::MessagesAppended {
+                        session_id: context.session_id.clone(),
+                        appended: vec![stop_message],
+                        total_messages: state.messages.len(),
+                    })
+                    .await;
+                state.state_machine.force_set(EnginePhase::Failed);
+                return Err(EngineError::Stopped(
+                    "blocking_limit: prompt too long".to_owned(),
+                ));
+            }
+        }
+
+        api_conversation = crate::message_utils::prepend_user_context_to_conversation(
+            api_conversation,
+            &context.user_context,
+        );
+        crate::message_utils::append_system_context_to_conversation(
+            &mut api_conversation,
+            &context.system_context,
+        );
 
         // Transition: CallingProvider
         let _ = state.state_machine.transition(EnginePhase::CallingProvider);
@@ -168,7 +212,7 @@ pub async fn run_query_loop(
         // Normalize messages before sending to provider (TS: normalizeMessagesForAPI).
         // Ensures role alternation, merges consecutive user messages, fills orphaned tool_results.
         {
-            let mut raw_messages: Vec<serde_json::Value> = legacy_conversation
+            let mut raw_messages: Vec<serde_json::Value> = api_conversation
                 .iter()
                 .filter_map(|entry| serde_json::to_value(entry).ok())
                 .collect();
@@ -188,7 +232,7 @@ pub async fn run_query_loop(
         }
 
         // ---- Provider call ----
-        let response = call_provider(&mut context, config, &legacy_conversation, state).await;
+        let response = call_provider(&mut context, config, &api_conversation, state).await;
 
         let response = match response {
             Ok(resp) => {
@@ -657,7 +701,92 @@ pub async fn run_query_loop(
         let is_stop_sequence = response.stop_reason == "stop_sequence";
         if response.tool_calls.is_empty() || is_stop_sequence {
             // ---- Stop hooks ----
-            if let Some(stop_hook) = config.stop_hook.as_ref() {
+            if let Some(pipeline) = config.stop_hook_pipeline.as_ref() {
+                let pipeline_input = StopHookBaseInput {
+                    session_id: context.session_id.clone(),
+                    turn: state.turn,
+                    stop_reason: response.stop_reason.clone(),
+                    final_text: (!response.text.trim().is_empty())
+                        .then_some(response.text.clone()),
+                    agent_id: context.agent_id.clone(),
+                    query_source: context.query_source,
+                    messages: state.messages.clone(),
+                };
+                let pipeline_result = pipeline.execute(&pipeline_input).await;
+
+                if pipeline_result.prevent_continuation {
+                    let _ = config
+                        .observer
+                        .on_event(QueryObserverEvent::StopHookPrevented {
+                            reason: "pipeline prevented continuation".to_owned(),
+                            turn: state.turn,
+                            session_id: context.session_id.clone(),
+                        })
+                        .await;
+                    let _ = state.state_machine.transition(EnginePhase::Finalizing);
+                    return Ok(QueryResult {
+                        state: state.clone(),
+                        final_text: (!response.text.trim().is_empty()).then_some(response.text),
+                        stop_reason: response.stop_reason.clone(),
+                        turns: state.turn,
+                        permission_denials: state.permission_denials.clone(),
+                    });
+                }
+
+                if !pipeline_result.blocking_errors.is_empty() {
+                    let error_messages: Vec<Message> = pipeline_result
+                        .blocking_errors
+                        .iter()
+                        .map(|e| crate::message_utils::create_error_message(e))
+                        .collect();
+                    let appended = error_messages.clone();
+                    state.messages.extend(error_messages);
+                    let _ = config
+                        .observer
+                        .on_event(QueryObserverEvent::MessagesAppended {
+                            session_id: context.session_id.clone(),
+                            appended,
+                            total_messages: state.messages.len(),
+                        })
+                        .await;
+                    let _ = config
+                        .observer
+                        .on_event(QueryObserverEvent::StopHookBlocking {
+                            event: crate::observer::StopHookBlockingEvent {
+                                blocking_errors_count: pipeline_result.blocking_errors.len(),
+                                turn: state.turn,
+                                session_id: context.session_id.clone(),
+                            },
+                        })
+                        .await;
+                    has_attempted_reactive_compact = false;
+                    continue;
+                }
+
+                if !pipeline_result.injected_messages.is_empty() {
+                    let injected = pipeline_result.injected_messages.clone();
+                    state.messages.extend(injected.clone());
+                    let _ = config
+                        .observer
+                        .on_event(QueryObserverEvent::MessagesAppended {
+                            session_id: context.session_id.clone(),
+                            appended: injected,
+                            total_messages: state.messages.len(),
+                        })
+                        .await;
+                    let _ = config
+                        .observer
+                        .on_event(QueryObserverEvent::StopHookBlocking {
+                            event: crate::observer::StopHookBlockingEvent {
+                                blocking_errors_count: 0,
+                                turn: state.turn,
+                                session_id: context.session_id.clone(),
+                            },
+                        })
+                        .await;
+                    continue;
+                }
+            } else if let Some(stop_hook) = config.stop_hook.as_ref() {
                 state
                     .stop_hook_manager
                     .request_stop(response.stop_reason.clone());
@@ -1004,7 +1133,7 @@ async fn maybe_compact_conversation(
     config: &QueryEngineConfig,
     state: &mut EngineState,
     legacy_conversation: &mut Vec<ConversationEntry>,
-) {
+) -> bool {
     let before_snapshot = config.context_manager.budget_snapshot(legacy_conversation);
     let needs_compaction = before_snapshot.exceeds_threshold();
     if needs_compaction {
@@ -1025,7 +1154,7 @@ async fn maybe_compact_conversation(
         })
         .await;
     if !needs_compaction {
-        return;
+        return false;
     }
     config.event_stream.emit(EngineEvent::CompactStarted {
         strategy: "standard".to_owned(),
@@ -1044,7 +1173,7 @@ async fn maybe_compact_conversation(
         config.context_manager.compact(legacy_conversation)
     };
     if compacted.len() == before_messages {
-        return;
+        return false;
     }
     if let Some(transform) = config.post_compact_transform.as_ref() {
         compacted = transform(compacted).await;
@@ -1076,6 +1205,7 @@ async fn maybe_compact_conversation(
         })
         .await;
     let _ = state.state_machine.transition(EnginePhase::BuildingPrompt);
+    true
 }
 
 fn record_permission_denial(
@@ -1306,6 +1436,7 @@ fn build_streaming_callbacks(
         on_tool_call_delta: Some(on_tool_call_delta),
         on_usage: Some(on_usage),
         on_thinking_delta: Some(on_thinking_delta),
+        on_lifecycle_event: None,
     }
 }
 
