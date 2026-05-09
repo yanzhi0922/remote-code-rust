@@ -41,7 +41,7 @@ import type {
 // Props
 // ---------------------------------------------------------------------------
 
-export interface RemoteShellProps {
+interface RemoteShellProps {
   sessions: RemoteSessionRecord[];
   sessionsLoading: boolean;
   activeSessionId: string | null;
@@ -297,14 +297,6 @@ export function EmptyCard({
     <div className="max-w-md rounded-[28px] border border-[#e1d7c8] bg-white px-6 py-6 text-center shadow-[0_16px_38px_rgba(34,32,28,0.08)]">
       <div className="text-lg font-semibold text-slate-900">{title}</div>
       <div className="mt-3 text-sm leading-6 text-slate-500">{description}</div>
-    </div>
-  );
-}
-
-export function PanelHint({ children }: { children: ReactNode }) {
-  return (
-    <div className="rounded-2xl bg-[#faf7f1] px-3 py-3 text-sm leading-6 text-slate-500">
-      {children}
     </div>
   );
 }

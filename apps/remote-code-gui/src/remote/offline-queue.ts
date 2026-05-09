@@ -1,6 +1,6 @@
 import type { RemoteApprovalDecision } from './types';
 
-export interface QueuedCommand {
+interface QueuedCommand {
   id: string;
   timestamp: number;
   sessionId: string;

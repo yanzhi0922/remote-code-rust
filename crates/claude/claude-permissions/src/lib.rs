@@ -99,6 +99,11 @@ pub use path_validation::{
     PathValidation, clean_path_input, path_requires_manual_approval, validate_path,
 };
 pub use rule::PermissionRuleV2;
+pub use rule_parser::{
+    escape_rule_content, find_first_unescaped_char, find_last_unescaped_char,
+    normalize_legacy_tool_name, parse_permission_rule_value, permission_rule_value_to_string,
+    unescape_rule_content,
+};
 pub use setup::{PermissionSetup, PermissionSetupConfig, get_next_permission_mode};
 pub use shadowed_detection::{ShadowReason, ShadowedRule, detect_shadowed_rules};
 pub use shell_matching::shell_command_matches_pattern;

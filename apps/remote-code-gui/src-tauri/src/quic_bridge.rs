@@ -99,6 +99,7 @@ pub async fn quic_state(
 }
 
 #[tauri::command]
+#[allow(dead_code)]
 pub async fn quic_health_probe(
     state: State<'_, QuicBridgeState>,
 ) -> std::result::Result<String, String> {
@@ -113,6 +114,7 @@ pub async fn quic_health_probe(
 }
 
 #[tauri::command]
+#[allow(dead_code)]
 pub async fn quic_get_metrics(
     state: State<'_, QuicBridgeState>,
 ) -> std::result::Result<String, String> {

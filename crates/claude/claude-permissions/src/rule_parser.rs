@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use serde::Deserialize;
 
+use crate::rule::PermissionRuleValue;
 use crate::rules::{RuleAction, RuleSource, SourceAwarePermissionRule};
 
 #[derive(Debug, Default, Deserialize)]
@@ -171,17 +172,142 @@ fn materialize_rules(
     rules
 }
 
+pub fn normalize_legacy_tool_name(name: &str) -> &str {
+    match name {
+        "Task" => "Agent",
+        "KillShell" => "TaskStop",
+        "AgentOutputTool" => "TaskOutput",
+        "BashOutputTool" => "TaskOutput",
+        _ => name,
+    }
+}
+
+pub fn find_first_unescaped_char(s: &str, ch: char) -> Option<usize> {
+    for (i, c) in s.char_indices() {
+        if c == ch {
+            let bytes_before = &s[..i];
+            let backslash_count = bytes_before.chars().rev().take_while(|&c| c == '\\').count();
+            if backslash_count % 2 == 0 {
+                return Some(i);
+            }
+        }
+    }
+    None
+}
+
+pub fn find_last_unescaped_char(s: &str, ch: char) -> Option<usize> {
+    let mut last: Option<usize> = None;
+    for (i, c) in s.char_indices() {
+        if c == ch {
+            let bytes_before = &s[..i];
+            let backslash_count = bytes_before.chars().rev().take_while(|&c| c == '\\').count();
+            if backslash_count % 2 == 0 {
+                last = Some(i);
+            }
+        }
+    }
+    last
+}
+
+pub fn escape_rule_content(content: &str) -> String {
+    let mut out = String::with_capacity(content.len());
+    for c in content.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '(' => out.push_str("\\("),
+            ')' => out.push_str("\\)"),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+pub fn unescape_rule_content(content: &str) -> String {
+    let mut out = String::with_capacity(content.len());
+    let mut chars = content.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            match chars.peek() {
+                Some('\\') | Some('(') | Some(')') => {
+                    out.push(chars.next().unwrap());
+                }
+                _ => out.push(c),
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+pub fn parse_permission_rule_value(input: &str) -> Option<PermissionRuleValue> {
+    let open = find_first_unescaped_char(input, '(');
+    let close = find_last_unescaped_char(input, ')');
+
+    match (open, close) {
+        (None, _) | (_, None) => {
+            if input.is_empty() {
+                return None;
+            }
+            Some(PermissionRuleValue::tool_only(normalize_legacy_tool_name(input)))
+        }
+        (Some(oi), Some(ci)) => {
+            if ci <= oi || ci != input.len() - 1 {
+                if input.is_empty() {
+                    return None;
+                }
+                return Some(PermissionRuleValue::tool_only(
+                    normalize_legacy_tool_name(input),
+                ));
+            }
+            let tool_name = &input[..oi];
+            let raw_content = &input[oi + 1..ci];
+            if tool_name.is_empty() {
+                if input.is_empty() {
+                    return None;
+                }
+                return Some(PermissionRuleValue::tool_only(
+                    normalize_legacy_tool_name(input),
+                ));
+            }
+            if raw_content.is_empty() || raw_content == "*" {
+                return Some(PermissionRuleValue::tool_only(
+                    normalize_legacy_tool_name(tool_name),
+                ));
+            }
+            let rule_content = unescape_rule_content(raw_content);
+            Some(PermissionRuleValue::new(
+                normalize_legacy_tool_name(tool_name),
+                Some(rule_content),
+            ))
+        }
+    }
+}
+
+pub fn permission_rule_value_to_string(value: &PermissionRuleValue) -> String {
+    match &value.rule_content {
+        Some(content) => {
+            let escaped = escape_rule_content(content);
+            format!("{}({escaped})", value.tool_name)
+        }
+        None => value.tool_name.clone(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
 
     use tempfile::tempdir;
 
+    use crate::rule::PermissionRuleValue;
     use crate::rules::{RuleAction, RuleSource};
 
     use super::{
         classify_settings_rule_source, discover_permission_rule_files,
-        load_permission_rules_from_file,
+        escape_rule_content, find_first_unescaped_char, find_last_unescaped_char,
+        load_permission_rules_from_file, normalize_legacy_tool_name, parse_permission_rule_value,
+        permission_rule_value_to_string, unescape_rule_content,
     };
 
     #[test]
@@ -280,5 +406,184 @@ mod tests {
             ),
             RuleSource::Cli
         );
+    }
+
+    #[test]
+    fn normalize_legacy_aliases() {
+        assert_eq!(normalize_legacy_tool_name("Task"), "Agent");
+        assert_eq!(normalize_legacy_tool_name("KillShell"), "TaskStop");
+        assert_eq!(normalize_legacy_tool_name("AgentOutputTool"), "TaskOutput");
+        assert_eq!(normalize_legacy_tool_name("BashOutputTool"), "TaskOutput");
+        assert_eq!(normalize_legacy_tool_name("Bash"), "Bash");
+        assert_eq!(normalize_legacy_tool_name("Read"), "Read");
+    }
+
+    #[test]
+    fn find_first_unescaped_finds_unescaped() {
+        assert_eq!(find_first_unescaped_char("abc(def", '('), Some(3));
+        assert_eq!(find_first_unescaped_char("abc\\(def", '('), None);
+        assert_eq!(find_first_unescaped_char("abc\\\\(def", '('), Some(5));
+        assert_eq!(find_first_unescaped_char("abcdef", '('), None);
+    }
+
+    #[test]
+    fn find_last_unescaped_finds_unescaped() {
+        assert_eq!(find_last_unescaped_char("a)b)c)", ')'), Some(5));
+        assert_eq!(find_last_unescaped_char("a)b\\)c)", ')'), Some(6));
+        assert_eq!(find_last_unescaped_char("a)b\\\\)c", ')'), Some(5));
+        assert_eq!(find_last_unescaped_char("abcdef", ')'), None);
+    }
+
+    #[test]
+    fn escape_rule_content_escapes_special_chars() {
+        assert_eq!(escape_rule_content("hello"), "hello");
+        assert_eq!(escape_rule_content("a(b)c"), "a\\(b\\)c");
+        assert_eq!(escape_rule_content("a\\b"), "a\\\\b");
+        assert_eq!(escape_rule_content("a\\(b)"), "a\\\\\\(b\\)");
+    }
+
+    #[test]
+    fn unescape_rule_content_reverses_escape() {
+        assert_eq!(unescape_rule_content("hello"), "hello");
+        assert_eq!(unescape_rule_content("a\\(b\\)c"), "a(b)c");
+        assert_eq!(unescape_rule_content("a\\\\b"), "a\\b");
+    }
+
+    #[test]
+    fn escape_unescape_roundtrip() {
+        let cases = [
+            "simple",
+            "with(backslash)parens",
+            "a\\b\\c",
+            "a(b)c)d\\e(f",
+            "",
+        ];
+        for case in cases {
+            assert_eq!(unescape_rule_content(&escape_rule_content(case)), case);
+        }
+    }
+
+    #[test]
+    fn parse_tool_name_only() {
+        let v = parse_permission_rule_value("Bash").unwrap();
+        assert_eq!(v.tool_name, "Bash");
+        assert!(v.rule_content.is_none());
+    }
+
+    #[test]
+    fn parse_tool_name_with_content() {
+        let v = parse_permission_rule_value("Bash(npm install)").unwrap();
+        assert_eq!(v.tool_name, "Bash");
+        assert_eq!(v.rule_content.as_deref(), Some("npm install"));
+    }
+
+    #[test]
+    fn parse_empty_content_treated_as_tool_only() {
+        let v = parse_permission_rule_value("Bash()").unwrap();
+        assert_eq!(v.tool_name, "Bash");
+        assert!(v.rule_content.is_none());
+    }
+
+    #[test]
+    fn parse_wildcard_content_treated_as_tool_only() {
+        let v = parse_permission_rule_value("Bash(*)").unwrap();
+        assert_eq!(v.tool_name, "Bash");
+        assert!(v.rule_content.is_none());
+    }
+
+    #[test]
+    fn parse_escaped_parens_in_content() {
+        let v = parse_permission_rule_value("Bash(python -c \"print\\(1\\)\")").unwrap();
+        assert_eq!(v.tool_name, "Bash");
+        assert_eq!(v.rule_content.as_deref(), Some("python -c \"print(1)\""));
+    }
+
+    #[test]
+    fn parse_legacy_tool_name_is_normalized() {
+        let v = parse_permission_rule_value("Task").unwrap();
+        assert_eq!(v.tool_name, "Agent");
+        let v2 = parse_permission_rule_value("KillShell(foo)").unwrap();
+        assert_eq!(v2.tool_name, "TaskStop");
+        assert_eq!(v2.rule_content.as_deref(), Some("foo"));
+    }
+
+    #[test]
+    fn parse_empty_input_returns_none() {
+        assert!(parse_permission_rule_value("").is_none());
+    }
+
+    #[test]
+    fn parse_malformed_no_close_paren() {
+        let v = parse_permission_rule_value("Bash(nope").unwrap();
+        assert_eq!(v.tool_name, "Bash(nope");
+        assert!(v.rule_content.is_none());
+    }
+
+    #[test]
+    fn parse_malformed_trailing_chars() {
+        let v = parse_permission_rule_value("Bash(foo)extra").unwrap();
+        assert_eq!(v.tool_name, "Bash(foo)extra");
+        assert!(v.rule_content.is_none());
+    }
+
+    #[test]
+    fn parse_empty_tool_name_treated_as_tool_name() {
+        let v = parse_permission_rule_value("(foo)").unwrap();
+        assert_eq!(v.tool_name, "(foo)");
+        assert!(v.rule_content.is_none());
+    }
+
+    #[test]
+    fn to_string_tool_only() {
+        let v = PermissionRuleValue::tool_only("Bash");
+        assert_eq!(permission_rule_value_to_string(&v), "Bash");
+    }
+
+    #[test]
+    fn to_string_with_content() {
+        let v = PermissionRuleValue::new("Bash", Some("npm install".to_string()));
+        assert_eq!(permission_rule_value_to_string(&v), "Bash(npm install)");
+    }
+
+    #[test]
+    fn to_string_escapes_special_chars() {
+        let v = PermissionRuleValue::new("Bash", Some("python -c \"print(1)\"".to_string()));
+        assert_eq!(
+            permission_rule_value_to_string(&v),
+            "Bash(python -c \"print\\(1\\)\")"
+        );
+    }
+
+    #[test]
+    fn to_string_escapes_backslash() {
+        let v = PermissionRuleValue::new("Bash", Some("echo \\\\n".to_string()));
+        assert_eq!(
+            permission_rule_value_to_string(&v),
+            "Bash(echo \\\\\\\\n)"
+        );
+    }
+
+    #[test]
+    fn parse_to_string_roundtrip() {
+        let cases = [
+            "Bash",
+            "Bash(npm install)",
+            "Read(src/**)",
+            "Bash(git *)",
+        ];
+        for case in cases {
+            let parsed = parse_permission_rule_value(case).unwrap();
+            let back = permission_rule_value_to_string(&parsed);
+            assert_eq!(back, case);
+        }
+    }
+
+    #[test]
+    fn parse_to_string_roundtrip_with_special_chars() {
+        let original = "python -c \"print(1)\"";
+        let v = PermissionRuleValue::new("Bash", Some(original.to_string()));
+        let s = permission_rule_value_to_string(&v);
+        let back = parse_permission_rule_value(&s).unwrap();
+        assert_eq!(back.rule_content.as_deref(), Some(original));
     }
 }

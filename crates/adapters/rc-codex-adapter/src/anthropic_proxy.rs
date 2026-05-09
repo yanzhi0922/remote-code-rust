@@ -122,6 +122,7 @@ struct ProxyState {
 
 /// The request body that codex sends (Responses API shape).
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct ResponsesApiRequest {
     model: String,
     #[serde(default)]
@@ -232,6 +233,7 @@ struct AnthropicDelta {
 }
 
 #[derive(Debug, Deserialize, Clone)]
+#[allow(dead_code)]
 struct AnthropicUsage {
     #[serde(default)]
     input_tokens: Option<u32>,

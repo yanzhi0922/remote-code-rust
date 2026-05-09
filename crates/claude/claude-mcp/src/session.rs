@@ -1275,8 +1275,8 @@ impl RemoteMcpSession {
             .unwrap_or(DEFAULT_REQUEST_TIMEOUT_SECS);
 
         // Resolve headers dynamically if a headers_helper is configured.
-        let resolved_headers = match &server.transport {
-            McpTransportConfig::Http { headers_helper: Some(helper), .. } => {
+        let _resolved_headers = match &server.transport {
+            McpTransportConfig::Http { headers_helper: Some(_helper), .. } => {
                 resolve_headers_with_helper(&server.name, None, headers).await
             }
             _ => headers.clone(),
@@ -1899,6 +1899,7 @@ type WsStream =
 /// Connects via WebSocket to the MCP server endpoint, sends the MCP initialize
 /// message as JSON, reads the response, and then uses the same connection for
 /// all subsequent JSON-RPC requests.
+#[allow(dead_code)]
 pub(crate) struct WebSocketMcpSession {
     /// Server name (for error messages).
     server_name: String,

@@ -3984,7 +3984,7 @@ while True:
                 name: "notebook_edit".to_owned(),
                 input: json!({
                     "notebook_path": "test.ipynb",
-                    "cell_id": "cell-0",
+                    "cell_number": 0,
                     "new_source": "print('world')",
                     "cell_type": "code"
                 }),
@@ -4064,7 +4064,7 @@ while True:
                 name: "notebook_edit".to_owned(),
                 input: json!({
                     "notebook_path": "test.ipynb",
-                    "cell_id": "first",
+                    "cell_number": 0,
                     "new_source": "## Inserted",
                     "cell_type": "markdown",
                     "edit_mode": "insert"
@@ -4090,7 +4090,7 @@ while True:
                 name: "notebook_edit".to_owned(),
                 input: json!({
                     "notebook_path": "test.ipynb",
-                    "cell_id": "first",
+                    "cell_number": 0,
                     "new_source": "",
                     "edit_mode": "delete"
                 }),

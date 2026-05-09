@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use crate::builtin;
 use crate::loader::AgentLoader;
-use crate::types::{AgentModel, AgentScope, SpecializedAgent};
+use crate::types::{AgentScope, SpecializedAgent};
 
 /// Registry of all available specialized agents.
 pub struct AgentRegistry {

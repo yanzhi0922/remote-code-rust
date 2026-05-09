@@ -18,6 +18,7 @@ import {
   hapticWarning,
 } from './lib/mobile';
 import RemoteApp from './remote/RemoteApp';
+import MobileRemoteApp from './remote/MobileRemoteApp';
 import { useAppStore } from './stores/useAppStore';
 
 type MobileInitPhase = 'loading' | 'biometric' | 'ready' | 'error';
@@ -195,7 +196,7 @@ function App() {
       return (
         <AppErrorBoundary>
           <MobileGate>
-            <RemoteApp />
+            <MobileRemoteApp />
           </MobileGate>
         </AppErrorBoundary>
       );
