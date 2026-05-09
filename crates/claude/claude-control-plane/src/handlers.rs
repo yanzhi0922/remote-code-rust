@@ -1,6 +1,6 @@
 //! HTTP handler functions for the control plane axum router.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 
 use axum::Json;
 use axum::extract::{Extension, Path as AxumPath, Query, State, WebSocketUpgrade};
@@ -24,8 +24,8 @@ use crate::helpers::{
     session_state_to_runner, update_runner_session_state,
 };
 use crate::streams::{
-    serve_approval_stream, serve_event_stream, serve_runner_approval_stream,
-    serve_runner_event_stream, serve_session_approval_stream, serve_session_event_stream,
+    serve_filtered_event_stream, serve_runner_approval_stream, serve_runner_event_stream,
+    serve_session_approval_stream, serve_session_event_stream,
 };
 use crate::types::{
     ApiError, ArtifactCreateRequest, ArtifactRecord, BootstrapClaimRequest, BootstrapClaimResponse,
@@ -44,6 +44,63 @@ use crate::{AuthPrincipal, ControlPlaneService, PersistedEventQuery};
 async fn persist_state_logged(service: &ControlPlaneService) {
     if let Err(e) = service.persist_state().await {
         tracing::error!("Failed to persist control plane state: {e:#}");
+    }
+}
+
+/// Extract the tenant-scoping `owner_user_id` from the auth principal.
+/// Returns `None` for `SharedToken` (admin — sees all) and `Device` (legacy).
+fn user_id_from_principal(principal: &AuthPrincipal) -> Option<&str> {
+    principal.user_id()
+}
+
+/// Snapshot of ownership data for tenant-filtered event streams.
+/// Pre-computed before entering the stream loop so the sync filter closure
+/// doesn't need async lock access.
+struct TenantFilter {
+    runner_ids: HashSet<String>,
+    session_ids: HashSet<Uuid>,
+}
+
+impl TenantFilter {
+    /// Build a tenant filter snapshot.  Returns `None` for admin/legacy principals
+    /// (no filtering needed).
+    fn from_registry(
+        registry: &crate::registry::Registry,
+        user_id: Option<&str>,
+    ) -> Option<Self> {
+        let uid = user_id?;
+        Some(Self {
+            runner_ids: registry
+                .runner_owners
+                .iter()
+                .filter(|(_, owner)| owner.as_str() == uid)
+                .map(|(rid, _)| rid.clone())
+                .collect(),
+            session_ids: registry
+                .sessions
+                .iter()
+                .filter(|(_, s)| s.owner_user_id.as_deref() == Some(uid))
+                .map(|(id, _)| *id)
+                .collect(),
+        })
+    }
+
+    fn event_visible(&self, event: &TimelineEvent) -> bool {
+        if let Some(ref rid) = event.runner_id {
+            return self.runner_ids.contains(rid);
+        }
+        if let Some(sid) = event.session_id {
+            return self.session_ids.contains(&sid);
+        }
+        false
+    }
+}
+
+/// Filter a backlog of events by tenant visibility.
+fn filter_events_by_tenant(events: Vec<TimelineEvent>, filter: &Option<TenantFilter>) -> Vec<TimelineEvent> {
+    match filter {
+        None => events,
+        Some(f) => events.into_iter().filter(|e| f.event_visible(e)).collect(),
     }
 }
 
@@ -234,8 +291,14 @@ pub(crate) async fn refresh_token(
 
 pub(crate) async fn list_recent_events(
     State(service): State<ControlPlaneService>,
+    Extension(principal): Extension<AuthPrincipal>,
     Query(query): Query<RecentEventsQuery>,
 ) -> Result<Json<ListResponse<TimelineEvent>>, ApiError> {
+    let user_id = user_id_from_principal(&principal);
+    let tenant_filter = {
+        let registry = service.registry.read().await;
+        TenantFilter::from_registry(&registry, user_id)
+    };
     let latest_sequence = service
         .latest_persisted_event_sequence(PersistedEventQuery {
             kind: query.kind,
@@ -253,23 +316,21 @@ pub(crate) async fn list_recent_events(
         .await
         .map_err(|error| ApiError::internal(format!("failed to read persisted events: {error}")))?;
     Ok(Json(ListResponse {
-        items,
+        items: filter_events_by_tenant(items, &tenant_filter),
         latest_sequence,
     }))
 }
 
 pub(crate) async fn list_session_events(
     State(service): State<ControlPlaneService>,
+    Extension(principal): Extension<AuthPrincipal>,
     AxumPath(session_id): AxumPath<Uuid>,
     Query(query): Query<RecentEventsQuery>,
 ) -> Result<Json<ListResponse<TimelineEvent>>, ApiError> {
     {
         let registry = service.registry.read().await;
-        if !registry.sessions.contains_key(&session_id) {
-            return Err(ApiError::not_found(format!(
-                "session `{session_id}` was not found"
-            )));
-        }
+        let user_id = user_id_from_principal(&principal);
+        registry.get_session_for_user(session_id, user_id)?;
     }
     let latest_sequence = service
         .latest_persisted_event_sequence(PersistedEventQuery {
@@ -298,12 +359,14 @@ pub(crate) async fn list_session_events(
 
 pub(crate) async fn list_runner_events(
     State(service): State<ControlPlaneService>,
+    Extension(principal): Extension<AuthPrincipal>,
     AxumPath(runner_id): AxumPath<String>,
     Query(query): Query<RecentEventsQuery>,
 ) -> Result<Json<ListResponse<TimelineEvent>>, ApiError> {
+    let user_id = user_id_from_principal(&principal);
     {
         let registry = service.registry.read().await;
-        if !registry.runners.contains_key(&runner_id) {
+        if !registry.runner_visible_to(&runner_id, user_id) {
             return Err(ApiError::not_found(format!(
                 "runner `{runner_id}` was not found"
             )));
@@ -342,7 +405,13 @@ pub(crate) async fn subscribe_events(
     ws: WebSocketUpgrade,
     Query(query): Query<EventStreamQuery>,
     State(service): State<ControlPlaneService>,
+    Extension(principal): Extension<AuthPrincipal>,
 ) -> Response {
+    let user_id = user_id_from_principal(&principal);
+    let tenant_filter = {
+        let registry = service.registry.read().await;
+        TenantFilter::from_registry(&registry, user_id)
+    };
     let subscription = service.timeline.subscribe();
     let backlog = if query.after.is_some() {
         match service
@@ -353,7 +422,7 @@ pub(crate) async fn subscribe_events(
             })
             .await
         {
-            Ok(backlog) => backlog,
+            Ok(backlog) => filter_events_by_tenant(backlog, &tenant_filter),
             Err(error) => {
                 return ApiError::internal(format!("failed to replay persisted events: {error}"))
                     .into_response();
@@ -362,24 +431,34 @@ pub(crate) async fn subscribe_events(
     } else {
         Vec::new()
     };
-    ws.on_upgrade(move |socket| serve_event_stream(socket, subscription, backlog, query.kind))
+    let kind = query.kind;
+    ws.on_upgrade(move |socket| {
+        serve_filtered_event_stream(socket, subscription, backlog, move |event| {
+            if !crate::helpers::event_matches_kind(event, kind) {
+                return false;
+            }
+            match &tenant_filter {
+                None => true,
+                Some(f) => f.event_visible(event),
+            }
+        })
+    })
 }
 
 pub(crate) async fn subscribe_session_events(
     ws: WebSocketUpgrade,
     Query(query): Query<EventStreamQuery>,
     State(service): State<ControlPlaneService>,
+    Extension(principal): Extension<AuthPrincipal>,
     AxumPath(session_id): AxumPath<Uuid>,
 ) -> Response {
-    if !service
-        .registry
-        .read()
-        .await
-        .sessions
-        .contains_key(&session_id)
+    let user_id = user_id_from_principal(&principal);
     {
-        return ApiError::not_found(format!("session `{session_id}` was not found"))
-            .into_response();
+        let registry = service.registry.read().await;
+        if registry.get_session_for_user(session_id, user_id).is_err() {
+            return ApiError::not_found(format!("session `{session_id}` was not found"))
+                .into_response();
+        }
     }
     let subscription = service.timeline.subscribe();
     let backlog = if query.after.is_some() {
@@ -412,8 +491,17 @@ pub(crate) async fn subscribe_runner_events(
     ws: WebSocketUpgrade,
     Query(query): Query<EventStreamQuery>,
     State(service): State<ControlPlaneService>,
+    Extension(principal): Extension<AuthPrincipal>,
     AxumPath(runner_id): AxumPath<String>,
 ) -> Response {
+    let user_id = user_id_from_principal(&principal);
+    {
+        let registry = service.registry.read().await;
+        if !registry.runner_visible_to(&runner_id, user_id) {
+            return ApiError::not_found(format!("runner `{runner_id}` was not found"))
+                .into_response();
+        }
+    }
     let subscription = service.timeline.subscribe();
     let backlog = if query.after.is_some() {
         match service
@@ -445,7 +533,13 @@ pub(crate) async fn subscribe_approvals(
     ws: WebSocketUpgrade,
     Query(query): Query<EventStreamQuery>,
     State(service): State<ControlPlaneService>,
+    Extension(principal): Extension<AuthPrincipal>,
 ) -> Response {
+    let user_id = user_id_from_principal(&principal);
+    let tenant_filter = {
+        let registry = service.registry.read().await;
+        TenantFilter::from_registry(&registry, user_id)
+    };
     let subscription = service.timeline.subscribe();
     let backlog = if query.after.is_some() {
         match service
@@ -457,7 +551,7 @@ pub(crate) async fn subscribe_approvals(
             })
             .await
         {
-            Ok(backlog) => backlog,
+            Ok(backlog) => filter_events_by_tenant(backlog, &tenant_filter),
             Err(error) => {
                 return ApiError::internal(format!(
                     "failed to replay persisted approval events: {error}"
@@ -468,7 +562,18 @@ pub(crate) async fn subscribe_approvals(
     } else {
         Vec::new()
     };
-    ws.on_upgrade(move |socket| serve_approval_stream(socket, subscription, backlog, query.kind))
+    let kind = query.kind;
+    ws.on_upgrade(move |socket| {
+        serve_filtered_event_stream(socket, subscription, backlog, move |event| {
+            if !crate::helpers::approval_event_matches(event, kind) {
+                return false;
+            }
+            match &tenant_filter {
+                None => true,
+                Some(f) => f.event_visible(event),
+            }
+        })
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -477,19 +582,28 @@ pub(crate) async fn subscribe_approvals(
 
 pub(crate) async fn list_runners(
     State(service): State<ControlPlaneService>,
+    Extension(principal): Extension<AuthPrincipal>,
 ) -> Json<ListResponse<RunnerSnapshot>> {
     let registry = service.registry.read().await;
+    let user_id = user_id_from_principal(&principal);
     Json(ListResponse {
-        items: registry.runners.values().cloned().collect(),
+        items: registry.list_runners_for_user(user_id),
         latest_sequence: None,
     })
 }
 
 pub(crate) async fn list_runner_approvals(
     State(service): State<ControlPlaneService>,
+    Extension(principal): Extension<AuthPrincipal>,
     AxumPath(runner_id): AxumPath<String>,
 ) -> Result<Json<ListResponse<claude_runner::ApprovalRequestRecord>>, ApiError> {
+    let user_id = user_id_from_principal(&principal);
     let registry = service.registry.read().await;
+    if !registry.runner_visible_to(&runner_id, user_id) {
+        return Err(ApiError::not_found(format!(
+            "runner `{runner_id}` was not found"
+        )));
+    }
     let items = registry.list_runner_approvals(&runner_id)?;
     drop(registry);
     let latest_sequence = service
@@ -510,8 +624,17 @@ pub(crate) async fn subscribe_runner_approvals(
     ws: WebSocketUpgrade,
     Query(query): Query<EventStreamQuery>,
     State(service): State<ControlPlaneService>,
+    Extension(principal): Extension<AuthPrincipal>,
     AxumPath(runner_id): AxumPath<String>,
 ) -> Response {
+    let user_id = user_id_from_principal(&principal);
+    {
+        let registry = service.registry.read().await;
+        if !registry.runner_visible_to(&runner_id, user_id) {
+            return ApiError::not_found(format!("runner `{runner_id}` was not found"))
+                .into_response();
+        }
+    }
     let subscription = service.timeline.subscribe();
     let backlog = if query.after.is_some() {
         match service
@@ -544,17 +667,16 @@ pub(crate) async fn subscribe_session_approvals(
     ws: WebSocketUpgrade,
     Query(query): Query<EventStreamQuery>,
     State(service): State<ControlPlaneService>,
+    Extension(principal): Extension<AuthPrincipal>,
     AxumPath(session_id): AxumPath<Uuid>,
 ) -> Response {
-    if !service
-        .registry
-        .read()
-        .await
-        .sessions
-        .contains_key(&session_id)
+    let user_id = user_id_from_principal(&principal);
     {
-        return ApiError::not_found(format!("session `{session_id}` was not found"))
-            .into_response();
+        let registry = service.registry.read().await;
+        if registry.get_session_for_user(session_id, user_id).is_err() {
+            return ApiError::not_found(format!("session `{session_id}` was not found"))
+                .into_response();
+        }
     }
     let subscription = service.timeline.subscribe();
     let backlog = if query.after.is_some() {
@@ -586,9 +708,14 @@ pub(crate) async fn subscribe_session_approvals(
 
 pub(crate) async fn get_runner(
     State(service): State<ControlPlaneService>,
+    Extension(principal): Extension<AuthPrincipal>,
     AxumPath(runner_id): AxumPath<String>,
 ) -> Result<Json<RunnerSnapshot>, ApiError> {
+    let user_id = user_id_from_principal(&principal);
     let registry = service.registry.read().await;
+    if !registry.runner_visible_to(&runner_id, user_id) {
+        return Err(ApiError::not_found(format!("runner `{runner_id}` was not found")));
+    }
     let snapshot = registry
         .runners
         .get(&runner_id)
@@ -599,11 +726,13 @@ pub(crate) async fn get_runner(
 
 pub(crate) async fn register_runner(
     State(service): State<ControlPlaneService>,
+    Extension(principal): Extension<AuthPrincipal>,
     Json(request): Json<RunnerRegistrationRequest>,
 ) -> Json<RunnerRegistrationResponse> {
+    let user_id = user_id_from_principal(&principal);
     let mut response = {
         let mut registry = service.registry.write().await;
-        registry.register_runner(request, service.runner_lease_ttl_secs)
+        registry.register_runner(request, service.runner_lease_ttl_secs, user_id)
     };
     let _event = service
         .publish_event(TimelineEventDraft {
@@ -634,9 +763,17 @@ pub(crate) async fn register_runner(
 
 pub(crate) async fn update_runner_heartbeat(
     State(service): State<ControlPlaneService>,
+    Extension(principal): Extension<AuthPrincipal>,
     AxumPath(runner_id): AxumPath<String>,
     Json(heartbeat): Json<RunnerHeartbeat>,
 ) -> Result<Json<RunnerSnapshot>, ApiError> {
+    let user_id = user_id_from_principal(&principal);
+    {
+        let registry = service.registry.read().await;
+        if !registry.runner_visible_to(&runner_id, user_id) {
+            return Err(ApiError::not_found(format!("runner `{runner_id}` was not found")));
+        }
+    }
     let snapshot = {
         let mut registry = service.registry.write().await;
         registry.apply_heartbeat(&runner_id, heartbeat)?
@@ -686,9 +823,19 @@ pub(crate) async fn update_runner_heartbeat(
 
 pub(crate) async fn pull_runner_commands(
     State(service): State<ControlPlaneService>,
+    Extension(principal): Extension<AuthPrincipal>,
     AxumPath(runner_id): AxumPath<String>,
     Query(query): Query<RunnerCommandPullQuery>,
 ) -> Result<Json<RunnerCommandPullResponse>, ApiError> {
+    let user_id = user_id_from_principal(&principal);
+    {
+        let registry = service.registry.read().await;
+        if !registry.runner_visible_to(&runner_id, user_id) {
+            return Err(ApiError::not_found(format!(
+                "runner `{runner_id}` was not found"
+            )));
+        }
+    }
     let commands = {
         let mut registry = service.registry.write().await;
         registry.pull_runner_commands(&runner_id, query.limit.unwrap_or(16).clamp(1, 64))?
@@ -705,50 +852,63 @@ pub(crate) async fn pull_runner_commands(
 
 pub(crate) async fn list_sessions(
     State(service): State<ControlPlaneService>,
+    Extension(principal): Extension<AuthPrincipal>,
     Query(query): Query<ListSessionsQuery>,
 ) -> Json<ListResponse<SessionView>> {
     let registry = service.registry.read().await;
+    let user_id = user_id_from_principal(&principal);
     Json(ListResponse {
-        items: build_session_views(&service, &registry, registry.list_sessions_filtered(&query)),
+        items: build_session_views(&service, &registry, registry.list_sessions_filtered(&query, user_id)),
         latest_sequence: None,
     })
 }
 
 pub(crate) async fn get_session(
     State(service): State<ControlPlaneService>,
+    Extension(principal): Extension<AuthPrincipal>,
     AxumPath(session_id): AxumPath<Uuid>,
 ) -> Result<Json<SessionView>, ApiError> {
     let registry = service.registry.read().await;
+    let user_id = user_id_from_principal(&principal);
     Ok(Json(build_session_view(
         &service,
         &registry,
-        registry.get_session(session_id)?,
+        registry.get_session_for_user(session_id, user_id)?,
     )))
 }
 
 pub(crate) async fn list_runner_sessions(
     State(service): State<ControlPlaneService>,
+    Extension(principal): Extension<AuthPrincipal>,
     AxumPath(runner_id): AxumPath<String>,
     Query(mut query): Query<ListSessionsQuery>,
 ) -> Result<Json<ListResponse<SessionView>>, ApiError> {
+    let user_id = user_id_from_principal(&principal);
     let registry = service.registry.read().await;
-    if !registry.runners.contains_key(&runner_id) {
+    if !registry.runner_visible_to(&runner_id, user_id) {
         return Err(ApiError::not_found(format!(
             "runner `{runner_id}` was not found"
         )));
     }
     query.runner_id = Some(runner_id);
     Ok(Json(ListResponse {
-        items: build_session_views(&service, &registry, registry.list_sessions_filtered(&query)),
+        items: build_session_views(&service, &registry, registry.list_sessions_filtered(&query, user_id)),
         latest_sequence: None,
     }))
 }
 
 pub(crate) async fn list_runner_artifacts(
     State(service): State<ControlPlaneService>,
+    Extension(principal): Extension<AuthPrincipal>,
     AxumPath(runner_id): AxumPath<String>,
 ) -> Result<Json<ListResponse<ArtifactRecord>>, ApiError> {
+    let user_id = user_id_from_principal(&principal);
     let registry = service.registry.read().await;
+    if !registry.runner_visible_to(&runner_id, user_id) {
+        return Err(ApiError::not_found(format!(
+            "runner `{runner_id}` was not found"
+        )));
+    }
     Ok(Json(ListResponse {
         items: registry.list_runner_artifacts(&runner_id)?,
         latest_sequence: None,
@@ -757,12 +917,14 @@ pub(crate) async fn list_runner_artifacts(
 
 pub(crate) async fn update_session_state(
     State(service): State<ControlPlaneService>,
+    Extension(principal): Extension<AuthPrincipal>,
     AxumPath(session_id): AxumPath<Uuid>,
     Json(request): Json<SessionStateUpdateRequest>,
 ) -> Result<Json<SessionView>, ApiError> {
+    let user_id = user_id_from_principal(&principal);
     let existing = {
         let registry = service.registry.read().await;
-        registry.get_session(session_id)?
+        registry.get_session_for_user(session_id, user_id)?
     };
     let requested_state = request.state;
     let metadata = request.metadata.clone();
@@ -842,12 +1004,14 @@ pub(crate) async fn update_session_state(
 
 pub(crate) async fn post_session_command(
     State(service): State<ControlPlaneService>,
+    Extension(principal): Extension<AuthPrincipal>,
     AxumPath(session_id): AxumPath<Uuid>,
     Json(request): Json<RunnerSessionCommandRequest>,
 ) -> Result<Json<RunnerSessionCommandResponse>, ApiError> {
+    let user_id = user_id_from_principal(&principal);
     let session = {
         let registry = service.registry.read().await;
-        registry.get_session(session_id)?
+        registry.get_session_for_user(session_id, user_id)?
     };
     let Some(owner_runner_id) = session.owner_runner_id.as_deref() else {
         return Err(ApiError::service_unavailable(format!(
@@ -905,9 +1069,12 @@ pub(crate) async fn post_session_command(
 
 pub(crate) async fn list_session_approvals(
     State(service): State<ControlPlaneService>,
+    Extension(principal): Extension<AuthPrincipal>,
     AxumPath(session_id): AxumPath<Uuid>,
 ) -> Result<Json<ListResponse<claude_runner::ApprovalRequestRecord>>, ApiError> {
+    let user_id = user_id_from_principal(&principal);
     let registry = service.registry.read().await;
+    registry.get_session_for_user(session_id, user_id)?;
     let items = registry.list_session_approvals(session_id)?;
     drop(registry);
     let latest_sequence = service
@@ -928,9 +1095,12 @@ pub(crate) async fn list_session_approvals(
 
 pub(crate) async fn list_session_artifacts(
     State(service): State<ControlPlaneService>,
+    Extension(principal): Extension<AuthPrincipal>,
     AxumPath(session_id): AxumPath<Uuid>,
 ) -> Result<Json<ListResponse<ArtifactRecord>>, ApiError> {
+    let user_id = user_id_from_principal(&principal);
     let registry = service.registry.read().await;
+    registry.get_session_for_user(session_id, user_id)?;
     Ok(Json(ListResponse {
         items: registry.list_session_artifacts(session_id)?,
         latest_sequence: None,
@@ -939,11 +1109,13 @@ pub(crate) async fn list_session_artifacts(
 
 pub(crate) async fn create_session(
     State(service): State<ControlPlaneService>,
+    Extension(principal): Extension<AuthPrincipal>,
     Json(request): Json<CreateSessionRequest>,
 ) -> Result<(StatusCode, Json<SessionView>), ApiError> {
+    let user_id = user_id_from_principal(&principal);
     let planned = {
         let registry = service.registry.read().await;
-        registry.plan_session(&request, service.runner_lease_ttl_secs)?
+        registry.plan_session(&request, service.runner_lease_ttl_secs, user_id)?
     };
     let mut record = planned.record;
 
@@ -994,12 +1166,14 @@ pub(crate) async fn create_session(
 
 pub(crate) async fn create_session_runtime_event(
     State(service): State<ControlPlaneService>,
+    Extension(principal): Extension<AuthPrincipal>,
     AxumPath(session_id): AxumPath<Uuid>,
     Json(request): Json<RuntimeEventCreateRequest>,
 ) -> Result<(StatusCode, Json<TimelineEvent>), ApiError> {
+    let user_id = user_id_from_principal(&principal);
     let session = {
         let registry = service.registry.read().await;
-        let session = registry.get_session(session_id)?;
+        let session = registry.get_session_for_user(session_id, user_id)?;
         validate_runtime_event_request(&registry, session_id, &request.detail)?;
         session
     };
@@ -1019,27 +1193,39 @@ pub(crate) async fn create_session_runtime_event(
 
 pub(crate) async fn list_artifacts(
     State(service): State<ControlPlaneService>,
+    Extension(principal): Extension<AuthPrincipal>,
 ) -> Json<ListResponse<ArtifactRecord>> {
+    let user_id = user_id_from_principal(&principal);
     let registry = service.registry.read().await;
     Json(ListResponse {
-        items: registry.list_artifacts(),
+        items: registry.list_artifacts_for_user(user_id),
         latest_sequence: None,
     })
 }
 
 pub(crate) async fn get_artifact(
     State(service): State<ControlPlaneService>,
+    Extension(principal): Extension<AuthPrincipal>,
     AxumPath(artifact_id): AxumPath<Uuid>,
 ) -> Result<Json<ArtifactRecord>, ApiError> {
+    let user_id = user_id_from_principal(&principal);
     let registry = service.registry.read().await;
-    Ok(Json(registry.get_artifact(artifact_id)?))
+    let artifact = registry.get_artifact(artifact_id)?;
+    registry.get_session_for_user(artifact.session_id, user_id)?;
+    Ok(Json(artifact))
 }
 
 pub(crate) async fn create_artifact(
     State(service): State<ControlPlaneService>,
+    Extension(principal): Extension<AuthPrincipal>,
     AxumPath(session_id): AxumPath<Uuid>,
     Json(request): Json<ArtifactCreateRequest>,
 ) -> Result<(StatusCode, Json<ArtifactRecord>), ApiError> {
+    let user_id = user_id_from_principal(&principal);
+    {
+        let registry = service.registry.read().await;
+        registry.get_session_for_user(session_id, user_id)?;
+    }
     let contents = BASE64_STANDARD
         .decode(request.content_base64.as_bytes())
         .map_err(|error| {
@@ -1076,11 +1262,15 @@ pub(crate) async fn create_artifact(
 
 pub(crate) async fn download_artifact(
     State(service): State<ControlPlaneService>,
+    Extension(principal): Extension<AuthPrincipal>,
     AxumPath(artifact_id): AxumPath<Uuid>,
 ) -> Result<Response, ApiError> {
+    let user_id = user_id_from_principal(&principal);
     let artifact = {
         let registry = service.registry.read().await;
-        registry.get_artifact(artifact_id)?
+        let artifact = registry.get_artifact(artifact_id)?;
+        registry.get_session_for_user(artifact.session_id, user_id)?;
+        artifact
     };
     let path = artifact_file_path(&service.artifact_root_dir, &artifact);
     let bytes = tokio::fs::read(&path).await.map_err(|error| {
@@ -1105,9 +1295,11 @@ pub(crate) async fn download_artifact(
 
 pub(crate) async fn list_approvals(
     State(service): State<ControlPlaneService>,
+    Extension(principal): Extension<AuthPrincipal>,
 ) -> Json<ListResponse<claude_runner::ApprovalRequestRecord>> {
+    let user_id = user_id_from_principal(&principal);
     let registry = service.registry.read().await;
-    let items = registry.list_approvals();
+    let items = registry.list_approvals_for_user(user_id);
     drop(registry);
     let latest_sequence = service
         .latest_persisted_event_sequence(PersistedEventQuery {
@@ -1125,17 +1317,27 @@ pub(crate) async fn list_approvals(
 
 pub(crate) async fn get_approval(
     State(service): State<ControlPlaneService>,
+    Extension(principal): Extension<AuthPrincipal>,
     AxumPath(approval_id): AxumPath<Uuid>,
 ) -> Result<Json<claude_runner::ApprovalRequestRecord>, ApiError> {
+    let user_id = user_id_from_principal(&principal);
     let registry = service.registry.read().await;
-    Ok(Json(registry.get_approval(approval_id)?))
+    let approval = registry.get_approval(approval_id)?;
+    registry.get_session_for_user(approval.session_id, user_id)?;
+    Ok(Json(approval))
 }
 
 pub(crate) async fn create_approval(
     State(service): State<ControlPlaneService>,
+    Extension(principal): Extension<AuthPrincipal>,
     AxumPath(session_id): AxumPath<Uuid>,
     Json(request): Json<ApprovalCreateRequest>,
 ) -> Result<(StatusCode, Json<claude_runner::ApprovalRequestRecord>), ApiError> {
+    let user_id = user_id_from_principal(&principal);
+    {
+        let registry = service.registry.read().await;
+        registry.get_session_for_user(session_id, user_id)?;
+    }
     let planned = {
         let registry = service.registry.read().await;
         registry.plan_approval(session_id, request)?
@@ -1223,9 +1425,17 @@ pub(crate) async fn create_approval(
 
 pub(crate) async fn apply_approval_decision(
     State(service): State<ControlPlaneService>,
+    Extension(principal): Extension<AuthPrincipal>,
     AxumPath(approval_id): AxumPath<Uuid>,
     Json(request): Json<ApprovalDecisionRequest>,
 ) -> Result<Json<claude_runner::ApprovalRequestRecord>, ApiError> {
+    let user_id = user_id_from_principal(&principal);
+    // Verify the approval belongs to a session owned by this user.
+    {
+        let registry = service.registry.read().await;
+        let approval = registry.get_approval(approval_id)?;
+        registry.get_session_for_user(approval.session_id, user_id)?;
+    }
     let planned = {
         let registry = service.registry.read().await;
         registry.plan_approval_decision(approval_id, request)?
@@ -1547,12 +1757,17 @@ pub(crate) async fn register_push_token(
             "push_token cannot be empty".to_owned(),
         ));
     }
-    let device_id = principal
-        .created_by_device_id()
-        .ok_or_else(|| ApiError::unauthorized("no device identity".to_owned()))?;
-
+    // Device-based registration (legacy pairing flow) uses the device_id as key.
+    // User-based registration (tenant flow) uses the user_key as key.
     let mut registry = service.registry.write().await;
-    let _is_new = registry.register_push_token(device_id, body)?;
+    if let Some(device_id) = principal.created_by_device_id() {
+        let _is_new = registry.register_push_token(device_id, body)?;
+    } else if let Some(user_id) = principal.user_id() {
+        let _is_new = registry.register_user_push_token(user_id.to_owned(), body);
+    } else {
+        drop(registry);
+        return Err(ApiError::unauthorized("no device or user identity".to_owned()));
+    }
     drop(registry);
 
     service

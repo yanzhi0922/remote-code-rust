@@ -161,6 +161,7 @@ fn mcp_connection_state_recovery() {
         request_timeout_secs: None,
         oauth: None,
         metadata: BTreeMap::new(),
+        tool_policy: Default::default(),
     };
     let scoped =
         claude_mcp::scope::ScopedMcpServerConfig::new(config, claude_mcp::scope::ConfigScope::Local);

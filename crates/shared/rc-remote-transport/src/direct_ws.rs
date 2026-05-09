@@ -78,14 +78,6 @@ impl RemoteTransport for DirectWsTransport {
         Ok(())
     }
 
-    async fn subscribe_events(
-        &self,
-        after: u64,
-    ) -> anyhow::Result<mpsc::Receiver<TransportEvent>> {
-        let _ = after;
-        anyhow::bail!("use the event_rx from connect() — single-consumer channel")
-    }
-
     async fn send_command(&self, command: TransportCommand) -> anyhow::Result<CommandAck> {
         let config = self
             .config

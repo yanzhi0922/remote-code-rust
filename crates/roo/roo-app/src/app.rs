@@ -54,7 +54,19 @@ pub struct App {
     roo_ignore: Option<Arc<roo_ignore::RooIgnoreController>>,
 
     /// Skills manager for discovering and managing skills.
-    skills_manager: Option<Arc<roo_skills::SkillsManager>>,
+    /// Wrapped in RwLock to allow mutation (create/delete/move/update) from handlers.
+    skills_manager: Option<Arc<RwLock<roo_skills::SkillsManager>>>,
+
+    /// Marketplace manager for installing/removing marketplace items.
+    ///
+    /// Source: TS `this.marketplaceManager` — `MarketplaceManager`
+    marketplace_manager: Option<Arc<RwLock<roo_marketplace::MarketplaceManager>>>,
+
+    /// Custom modes manager for CRUD on custom modes (YAML persistence).
+    ///
+    /// Source: TS `this.customModesManager` — `CustomModesManager`
+    /// Uses std::sync::RwLock since CustomModesManager methods are synchronous.
+    custom_modes_manager: Option<Arc<std::sync::RwLock<roo_modes::CustomModesManager>>>,
 
     /// Todo list storage (in-memory, keyed by task ID).
     todos: Arc<RwLock<std::collections::HashMap<String, serde_json::Value>>>,
@@ -75,6 +87,8 @@ impl App {
             telemetry: None,
             roo_ignore: None,
             skills_manager: None,
+            marketplace_manager: None,
+            custom_modes_manager: None,
             todos: Arc::new(RwLock::new(std::collections::HashMap::new())),
         }
     }
@@ -226,8 +240,30 @@ impl App {
         if let Err(e) = skills.discover_skills(&skills_dirs).await {
             tracing::warn!("Failed to discover skills: {}", e);
         }
-        self.skills_manager = Some(Arc::new(skills));
+        self.skills_manager = Some(Arc::new(RwLock::new(skills)));
         tracing::debug!("Skills manager initialized");
+
+        // ── Initialize Marketplace Manager ──────────────────────────────
+        let marketplace = roo_marketplace::MarketplaceManager::new();
+        self.marketplace_manager = Some(Arc::new(RwLock::new(marketplace)));
+        tracing::debug!("Marketplace manager initialized");
+
+        // ── Initialize Custom Modes Manager ─────────────────────────────
+        let global_settings = if self.config.global_storage_path.is_empty() {
+            std::path::PathBuf::new()
+        } else {
+            std::path::PathBuf::from(&self.config.global_storage_path)
+        };
+        let project_roomodes = std::path::Path::new(&self.config.cwd)
+            .join(roo_modes::ROOMODES_FILENAME);
+        let project_roomodes = if project_roomodes.exists() {
+            Some(project_roomodes)
+        } else {
+            None
+        };
+        let custom_modes = roo_modes::CustomModesManager::new(global_settings, project_roomodes);
+        self.custom_modes_manager = Some(Arc::new(std::sync::RwLock::new(custom_modes)));
+        tracing::debug!("Custom modes manager initialized");
 
         // ── Update state ────────────────────────────────────────────────
         state.current_mode = self.config.mode.clone();
@@ -304,8 +340,18 @@ impl App {
     }
 
     /// Get a reference to the skills manager, if initialized.
-    pub fn skills_manager(&self) -> Option<&Arc<roo_skills::SkillsManager>> {
+    pub fn skills_manager(&self) -> Option<&Arc<RwLock<roo_skills::SkillsManager>>> {
         self.skills_manager.as_ref()
+    }
+
+    /// Get a reference to the marketplace manager, if initialized.
+    pub fn marketplace_manager(&self) -> Option<&Arc<RwLock<roo_marketplace::MarketplaceManager>>> {
+        self.marketplace_manager.as_ref()
+    }
+
+    /// Get a reference to the custom modes manager, if initialized.
+    pub fn custom_modes_manager(&self) -> Option<&Arc<std::sync::RwLock<roo_modes::CustomModesManager>>> {
+        self.custom_modes_manager.as_ref()
     }
 
     /// Get the todo list storage.
@@ -461,6 +507,8 @@ mod tests {
         assert!(app.telemetry().is_some());
         assert!(app.roo_ignore().is_some());
         assert!(app.skills_manager().is_some());
+        assert!(app.marketplace_manager().is_some());
+        assert!(app.custom_modes_manager().is_some());
     }
 
     #[tokio::test]

@@ -399,6 +399,7 @@ fn worker_agent_lifecycle_transitions() {
         max_turns: 10,
         simple_mode: false,
         working_dir: None,
+        session_dir: None,
     };
     let mut worker = claude_agents::WorkerAgent::new("w-1", config);
     assert_eq!(worker.status, claude_agents::WorkerStatus::Idle);
@@ -440,6 +441,7 @@ fn worker_config_serialization_round_trip() {
         max_turns: 42,
         simple_mode: true,
         working_dir: Some("/tmp".to_owned()),
+        session_dir: None,
     };
     let json = serde_json::to_string(&config).expect("serialize");
     let decoded: claude_agents::WorkerConfig = serde_json::from_str(&json).expect("deserialize");

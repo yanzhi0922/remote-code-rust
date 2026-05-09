@@ -957,6 +957,7 @@ pub async fn register_with_control_plane(
     control_plane_url: &str,
     registration: &RunnerRegistrationRequest,
 ) -> Result<RunnerRegistrationLease> {
+    let explicit_token = registration.auth_token.as_deref();
     let payload = RunnerRegistrationWire {
         runner_id: &registration.runner_id,
         control_plane_url: &registration.control_plane_url,
@@ -970,7 +971,7 @@ pub async fn register_with_control_plane(
     let response = authorize_control_plane_request(client.post(control_plane_endpoint(
         control_plane_url,
         "/v1/runners/register",
-    )?))
+    )?), explicit_token)
     .json(&payload)
     .send()
     .await
@@ -987,6 +988,7 @@ pub async fn send_heartbeat(
     client: &Client,
     control_plane_url: &str,
     heartbeat: &RunnerHeartbeat,
+    auth_token: Option<&str>,
 ) -> Result<RunnerSnapshot> {
     let path = format!(
         "/v1/runners/{}/heartbeat",
@@ -994,6 +996,7 @@ pub async fn send_heartbeat(
     );
     let response = authorize_control_plane_request(
         client.post(control_plane_endpoint(control_plane_url, &path)?),
+        auth_token,
     )
     .json(heartbeat)
     .send()
@@ -1015,8 +1018,12 @@ fn control_plane_endpoint(base_url: &str, path: &str) -> Result<String> {
     Ok(format!("{base_url}{path}"))
 }
 
-fn authorize_control_plane_request(builder: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
-    if let Some(token) = control_plane_auth_token() {
+fn authorize_control_plane_request(builder: reqwest::RequestBuilder, explicit_token: Option<&str>) -> reqwest::RequestBuilder {
+    let token = explicit_token
+        .map(|s| s.trim().to_owned())
+        .filter(|s| !s.is_empty())
+        .or_else(control_plane_auth_token);
+    if let Some(token) = token {
         builder.bearer_auth(token)
     } else {
         builder
@@ -2192,7 +2199,7 @@ mod tests {
             queued_sessions: 1,
             timestamp: Utc::now(),
         };
-        let snapshot = send_heartbeat(&Client::new(), &format!("http://{address}"), &heartbeat)
+        let snapshot = send_heartbeat(&Client::new(), &format!("http://{address}"), &heartbeat, None)
             .await
             .expect("heartbeat request should succeed");
         assert_eq!(snapshot.registration.runner_id, "runner/a b?c");

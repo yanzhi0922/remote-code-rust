@@ -7,11 +7,12 @@ edition.workspace = true
 
 [lib]
 name = "remote_code_gui_lib"
-crate-type = ["staticlib", "cdylib", "rlib"]
+crate-type = ["cdylib", "rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
+# ── Shared dependencies (always compiled) ──────────────────────────────────────
 [dependencies]
 tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
@@ -20,40 +21,92 @@ tauri-plugin-fs = "2"
 serde = { workspace = true }
 serde_json = { workspace = true }
 anyhow = { workspace = true }
-async-trait = { workspace = true }
 tokio = { workspace = true }
 uuid = { workspace = true }
-chrono = { workspace = true }
-directories = { workspace = true }
-keyring = { workspace = true }
-claude-core = { path = "../../../crates/claude/claude-core" }
-claude-config = { path = "../../../crates/claude/claude-config" }
-claude-tools = { path = "../../../crates/claude/claude-tools" }
-claude-provider = { path = "../../../crates/claude/claude-provider" }
-claude-session = { path = "../../../crates/claude/claude-session" }
-claude-ui-bridge = { path = "../../../crates/claude/claude-ui-bridge" }
-claude-permissions = { path = "../../../crates/claude/claude-permissions" }
-claude-mcp = { path = "../../../crates/claude/claude-mcp" }
-claude-plugins = { path = "../../../crates/claude/claude-plugins" }
-claude-skills = { path = "../../../crates/claude/claude-skills" }
-rc-agent-protocol = { path = "../../../crates/shared/rc-agent-protocol" }
-rc-codex-adapter = { path = "../../../crates/adapters/rc-codex-adapter" }
-rc-roo-adapter = { path = "../../../crates/adapters/rc-roo-adapter" }
-rc-claude-adapter = { path = "../../../crates/adapters/rc-claude-adapter" }
-claude-voice = { path = "../../../crates/claude/claude-voice" }
-claude-query-engine = { path = "../../../crates/claude/claude-query-engine" }
-rc-engine-events = { path = "../../../crates/shared/rc-engine-events" }
-rc-remote-transport = { path = "../../../crates/shared/rc-remote-transport", features = ["quic"] }
-codex-app-server-protocol = { workspace = true }
-codex-arg0 = { workspace = true }
-reqwest = { workspace = true }
 tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+rc-remote-transport = { path = "../../../crates/shared/rc-remote-transport", features = ["quic"] }
+rc-engine-events = { path = "../../../crates/shared/rc-engine-events" }
+rc-agent-protocol = { path = "../../../crates/shared/rc-agent-protocol" }
+reqwest = { workspace = true }
+keyring = { workspace = true }
+
+# ── Desktop-only dependencies ──────────────────────────────────────────────────
+async-trait = { workspace = true, optional = true }
+chrono = { workspace = true, optional = true }
+directories = { workspace = true, optional = true }
+sha2 = { workspace = true, optional = true }
+tokio-util = { workspace = true, optional = true }
+claude-core = { path = "../../../crates/claude/claude-core", optional = true }
+claude-config = { path = "../../../crates/claude/claude-config", optional = true }
+claude-tools = { path = "../../../crates/claude/claude-tools", optional = true }
+claude-provider = { path = "../../../crates/claude/claude-provider", optional = true }
+claude-session = { path = "../../../crates/claude/claude-session", optional = true }
+claude-ui-bridge = { path = "../../../crates/claude/claude-ui-bridge", optional = true }
+claude-permissions = { path = "../../../crates/claude/claude-permissions", optional = true }
+claude-mcp = { path = "../../../crates/claude/claude-mcp", optional = true }
+claude-plugins = { path = "../../../crates/claude/claude-plugins", optional = true }
+claude-skills = { path = "../../../crates/claude/claude-skills", optional = true }
+claude-query-engine = { path = "../../../crates/claude/claude-query-engine", optional = true }
+claude-voice = { path = "../../../crates/claude/claude-voice", optional = true }
+claude-runner = { path = "../../../crates/claude/claude-runner", optional = true }
+claude-control-plane = { path = "../../../crates/claude/claude-control-plane", optional = true }
+claude-telemetry = { path = "../../../crates/claude/claude-telemetry", optional = true }
+rc-codex-adapter = { path = "../../../crates/adapters/rc-codex-adapter", optional = true }
+rc-roo-adapter = { path = "../../../crates/adapters/rc-roo-adapter", optional = true }
+rc-claude-adapter = { path = "../../../crates/adapters/rc-claude-adapter", optional = true }
+codex-app-server-protocol = { workspace = true, optional = true }
+codex-arg0 = { workspace = true, optional = true }
+
+# ── Mobile-only dependencies ───────────────────────────────────────────────────
+tauri-plugin-haptics = { version = "2", optional = true }
+tauri-plugin-biometric = { version = "2", optional = true }
+tauri-plugin-network = { version = "2", optional = true, default-features = false }
+tauri-plugin-deep-link = { version = "2", optional = true }
+tauri-plugin-notification = { version = "2", optional = true }
+tauri-plugin-share = { version = "2", optional = true }
+mime_guess = { version = "2", optional = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
 
 [features]
-mobile = []
+default = ["desktop"]
+desktop = [
+    "dep:async-trait",
+    "dep:chrono",
+    "dep:directories",
+    "dep:sha2",
+    "dep:tokio-util",
+    "dep:claude-core",
+    "dep:claude-config",
+    "dep:claude-tools",
+    "dep:claude-provider",
+    "dep:claude-session",
+    "dep:claude-ui-bridge",
+    "dep:claude-permissions",
+    "dep:claude-mcp",
+    "dep:claude-plugins",
+    "dep:claude-skills",
+    "dep:claude-query-engine",
+    "dep:claude-voice",
+    "dep:claude-runner",
+    "dep:claude-control-plane",
+    "dep:claude-telemetry",
+    "dep:rc-codex-adapter",
+    "dep:rc-roo-adapter",
+    "dep:rc-claude-adapter",
+    "dep:codex-app-server-protocol",
+    "dep:codex-arg0",
+]
+mobile = [
+    "dep:tauri-plugin-haptics",
+    "dep:tauri-plugin-biometric",
+    "dep:tauri-plugin-deep-link",
+    "dep:tauri-plugin-notification",
+    "dep:tauri-plugin-share",
+    "dep:mime_guess",
+]
 
 [lints]
 workspace = true

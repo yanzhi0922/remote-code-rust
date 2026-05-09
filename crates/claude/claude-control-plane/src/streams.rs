@@ -11,65 +11,41 @@ use crate::types::{TimelineEvent, TimelineEventKind};
 // WebSocket stream serving functions
 // ---------------------------------------------------------------------------
 
-pub(crate) async fn serve_event_stream(
-    mut socket: WebSocket,
-    mut subscription: broadcast::Receiver<TimelineEvent>,
-    backlog: Vec<TimelineEvent>,
-    kind: Option<TimelineEventKind>,
-) {
-    serve_filtered_event_stream(&mut socket, &mut subscription, backlog, move |event| {
-        crate::helpers::event_matches_kind(event, kind)
-    })
-    .await;
-}
-
 pub(crate) async fn serve_session_event_stream(
-    mut socket: WebSocket,
-    mut subscription: broadcast::Receiver<TimelineEvent>,
+    socket: WebSocket,
+    subscription: broadcast::Receiver<TimelineEvent>,
     backlog: Vec<TimelineEvent>,
     session_id: Uuid,
     kind: Option<TimelineEventKind>,
 ) {
-    serve_filtered_event_stream(&mut socket, &mut subscription, backlog, move |event| {
+    serve_filtered_event_stream(socket, subscription, backlog, move |event| {
         event.session_id == Some(session_id) && crate::helpers::event_matches_kind(event, kind)
     })
     .await;
 }
 
 pub(crate) async fn serve_runner_event_stream(
-    mut socket: WebSocket,
-    mut subscription: broadcast::Receiver<TimelineEvent>,
+    socket: WebSocket,
+    subscription: broadcast::Receiver<TimelineEvent>,
     backlog: Vec<TimelineEvent>,
     runner_id: String,
     kind: Option<TimelineEventKind>,
 ) {
-    serve_filtered_event_stream(&mut socket, &mut subscription, backlog, move |event| {
+    serve_filtered_event_stream(socket, subscription, backlog, move |event| {
         event.runner_id.as_deref() == Some(runner_id.as_str())
             && crate::helpers::event_matches_kind(event, kind)
     })
     .await;
 }
 
-pub(crate) async fn serve_approval_stream(
-    mut socket: WebSocket,
-    mut subscription: broadcast::Receiver<TimelineEvent>,
-    backlog: Vec<TimelineEvent>,
-    kind: Option<TimelineEventKind>,
-) {
-    serve_filtered_event_stream(&mut socket, &mut subscription, backlog, move |event| {
-        crate::helpers::approval_event_matches(event, kind)
-    })
-    .await;
-}
-
 pub(crate) async fn serve_runner_approval_stream(
-    mut socket: WebSocket,
-    mut subscription: broadcast::Receiver<TimelineEvent>,
+    socket: WebSocket,
+    subscription: broadcast::Receiver<TimelineEvent>,
     backlog: Vec<TimelineEvent>,
     runner_id: String,
     kind: Option<TimelineEventKind>,
 ) {
-    serve_filtered_event_stream(&mut socket, &mut subscription, backlog, move |event| {
+    serve_filtered_event_stream(socket, subscription, backlog, move |event| {
         event.runner_id.as_deref() == Some(runner_id.as_str())
             && crate::helpers::approval_event_matches(event, kind)
     })
@@ -77,21 +53,21 @@ pub(crate) async fn serve_runner_approval_stream(
 }
 
 pub(crate) async fn serve_session_approval_stream(
-    mut socket: WebSocket,
-    mut subscription: broadcast::Receiver<TimelineEvent>,
+    socket: WebSocket,
+    subscription: broadcast::Receiver<TimelineEvent>,
     backlog: Vec<TimelineEvent>,
     session_id: Uuid,
     kind: Option<TimelineEventKind>,
 ) {
-    serve_filtered_event_stream(&mut socket, &mut subscription, backlog, move |event| {
+    serve_filtered_event_stream(socket, subscription, backlog, move |event| {
         event.session_id == Some(session_id) && crate::helpers::approval_event_matches(event, kind)
     })
     .await;
 }
 
-async fn serve_filtered_event_stream<F>(
-    socket: &mut WebSocket,
-    subscription: &mut broadcast::Receiver<TimelineEvent>,
+pub(crate) async fn serve_filtered_event_stream<F>(
+    mut socket: WebSocket,
+    mut subscription: broadcast::Receiver<TimelineEvent>,
     backlog: Vec<TimelineEvent>,
     filter: F,
 ) where
@@ -99,7 +75,7 @@ async fn serve_filtered_event_stream<F>(
 {
     let mut last_sequence = 0;
     for event in backlog {
-        if send_timeline_event(socket, &event).await.is_err() {
+        if send_timeline_event(&mut socket, &event).await.is_err() {
             return;
         }
         last_sequence = event.sequence;
@@ -117,7 +93,7 @@ async fn serve_filtered_event_stream<F>(
         if event.sequence <= last_sequence || !filter(&event) {
             continue;
         }
-        if send_timeline_event(socket, &event).await.is_err() {
+        if send_timeline_event(&mut socket, &event).await.is_err() {
             break;
         }
         last_sequence = event.sequence;

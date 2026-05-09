@@ -2144,6 +2144,7 @@ impl ToolRunner for CompatToolRunner {
             pre_messages,
             post_messages,
             permission_denial,
+            output_tokens_consumed: None,
         })
     }
 }
@@ -2875,6 +2876,7 @@ mod tests {
                 request_timeout_secs: Some(1),
                 metadata: BTreeMap::new(),
                 oauth: None,
+            tool_policy: Default::default(),
             },
         }
     }
@@ -3355,6 +3357,7 @@ mod tests {
                     request_timeout_secs: Some(3),
                     metadata: BTreeMap::new(),
                     oauth: None,
+                tool_policy: Default::default(),
                 },
             }],
             shell_policy: Default::default(),
@@ -3830,6 +3833,7 @@ while True:
                 request_id: None,
                 usage: UsageSummary::default(),
                 stop_reason: "end_turn".to_owned(),
+            research: None,
             })
         }
     }
@@ -3855,6 +3859,7 @@ while True:
                 request_id: None,
                 usage: UsageSummary::default(),
                 stop_reason: "end_turn".to_owned(),
+            research: None,
             })
         }
 
@@ -3899,6 +3904,7 @@ while True:
                     request_id: None,
                     usage: UsageSummary::default(),
                     stop_reason: "tool_use".to_owned(),
+                research: None,
                 });
             }
 
@@ -3911,6 +3917,7 @@ while True:
                 request_id: None,
                 usage: UsageSummary::default(),
                 stop_reason: "end_turn".to_owned(),
+            research: None,
             })
         }
 
@@ -3946,6 +3953,7 @@ while True:
                 request_id: None,
                 usage: UsageSummary::default(),
                 stop_reason: "end_turn".to_owned(),
+            research: None,
             })
         }
 
@@ -3969,6 +3977,7 @@ while True:
                 request_id: None,
                 usage: UsageSummary::default(),
                 stop_reason: "end_turn".to_owned(),
+            research: None,
             })
         }
 
@@ -3993,7 +4002,7 @@ while True:
             if let Some(callbacks) = callbacks
                 && let Some(on_usage) = callbacks.on_usage.as_ref()
             {
-                on_usage(7, 4);
+                on_usage(claude_provider::streaming::StreamingUsageUpdate { input_tokens: 7, output_tokens: 4, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 });
             }
             Err(anyhow::anyhow!("streaming backend failed"))
         }
@@ -4034,6 +4043,7 @@ while True:
                 request_id: None,
                 usage: UsageSummary::default(),
                 stop_reason: "end_turn".to_owned(),
+            research: None,
             })
         }
 
@@ -4072,6 +4082,7 @@ while True:
                     request_id: None,
                     usage: UsageSummary::default(),
                     stop_reason: "end_turn".to_owned(),
+                research: None,
                 });
             }
 
@@ -4088,6 +4099,7 @@ while True:
                 request_id: None,
                 usage: UsageSummary::default(),
                 stop_reason: "tool_use".to_owned(),
+            research: None,
             })
         }
 
@@ -4904,6 +4916,7 @@ while True:
                     request_timeout_secs: Some(3),
                     oauth: None,
                     metadata: BTreeMap::new(),
+                tool_policy: Default::default(),
                 },
             }],
             shell_policy: Default::default(),

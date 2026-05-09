@@ -46,12 +46,29 @@ pub(crate) struct Registry {
     /// Push tokens keyed by device_id for sending push notifications.
     #[serde(default)]
     pub(crate) push_tokens: BTreeMap<Uuid, StoredPushToken>,
+    /// Push tokens keyed by user_id for tenant-based push notifications.
+    #[serde(default)]
+    pub(crate) user_push_tokens: BTreeMap<String, UserPushToken>,
+    /// Maps runner_id to owner_user_id for tenant isolation.
+    /// Populated when a runner registers via `AuthPrincipal::User`.
+    #[serde(default)]
+    pub(crate) runner_owners: BTreeMap<String, String>,
 }
 
 /// Stored push notification token for a trusted device.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct StoredPushToken {
     pub(crate) device_id: Uuid,
+    pub(crate) push_token: String,
+    pub(crate) platform: PushPlatform,
+    pub(crate) registered_at: DateTime<Utc>,
+    pub(crate) updated_at: DateTime<Utc>,
+}
+
+/// Push notification token keyed by tenant user_id.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct UserPushToken {
+    pub(crate) user_id: String,
     pub(crate) push_token: String,
     pub(crate) platform: PushPlatform,
     pub(crate) registered_at: DateTime<Utc>,
@@ -510,6 +527,9 @@ impl Registry {
         let now = Utc::now();
         self.pairing_offers
             .retain(|_, offer| offer.expires_at >= now);
+        // Also remove orphaned runner ownership records.
+        self.runner_owners
+            .retain(|runner_id, _| self.runners.contains_key(runner_id));
     }
 
     pub(crate) fn queued_runner_command_count(&self) -> usize {
@@ -519,10 +539,93 @@ impl Registry {
             .sum::<usize>()
     }
 
+    // -----------------------------------------------------------------------
+    // Tenant isolation helpers
+    // -----------------------------------------------------------------------
+
+    /// Check if a runner belongs to the given user (or has no owner).
+    /// Returns `true` when `owner_user_id` is `None` (admin — sees all).
+    pub(crate) fn runner_visible_to(&self, runner_id: &str, owner_user_id: Option<&str>) -> bool {
+        match owner_user_id {
+            None => true,
+            Some(uid) => self
+                .runner_owners
+                .get(runner_id)
+                .is_some_and(|owner| owner == uid),
+        }
+    }
+
+    /// Check if a session belongs to the given user.
+    /// Returns `true` when `owner_user_id` is `None` (admin — sees all)
+    /// or when the session has no `owner_user_id` (legacy session).
+    pub(crate) fn session_visible_to(&self, session: &SessionRecord, owner_user_id: Option<&str>) -> bool {
+        match owner_user_id {
+            None => true,
+            Some(uid) => session.owner_user_id.as_deref() == Some(uid),
+        }
+    }
+
+    /// List runners visible to the given user (tenant-filtered).
+    pub(crate) fn list_runners_for_user(&self, owner_user_id: Option<&str>) -> Vec<RunnerSnapshot> {
+        self.runners
+            .values()
+            .filter(|snapshot| self.runner_visible_to(&snapshot.registration.runner_id, owner_user_id))
+            .cloned()
+            .collect()
+    }
+
+    /// List approvals visible to the given user (tenant-filtered).
+    pub(crate) fn list_approvals_for_user(&self, owner_user_id: Option<&str>) -> Vec<ApprovalRequestRecord> {
+        self.approvals
+            .values()
+            .filter(|approval| {
+                // Filter by the session's owner_user_id.
+                owner_user_id.is_none_or(|uid| {
+                    self.sessions
+                        .get(&approval.session_id)
+                        .is_some_and(|session| session.owner_user_id.as_deref() == Some(uid))
+                })
+            })
+            .cloned()
+            .collect()
+    }
+
+    /// List artifacts visible to the given user (tenant-filtered).
+    pub(crate) fn list_artifacts_for_user(&self, owner_user_id: Option<&str>) -> Vec<ArtifactRecord> {
+        self.artifacts
+            .values()
+            .filter(|artifact| {
+                owner_user_id.is_none_or(|uid| {
+                    self.sessions
+                        .get(&artifact.session_id)
+                        .is_some_and(|session| session.owner_user_id.as_deref() == Some(uid))
+                })
+            })
+            .cloned()
+            .collect()
+    }
+
+    /// Verify that a session belongs to the given user (or user is admin).
+    /// Returns `ApiError::not_found` if the session doesn't exist or isn't visible.
+    pub(crate) fn get_session_for_user(
+        &self,
+        session_id: Uuid,
+        owner_user_id: Option<&str>,
+    ) -> Result<SessionRecord, ApiError> {
+        let session = self.get_session(session_id)?;
+        if !self.session_visible_to(&session, owner_user_id) {
+            return Err(ApiError::not_found(format!(
+                "session `{session_id}` was not found"
+            )));
+        }
+        Ok(session)
+    }
+
     pub(crate) fn register_runner(
         &mut self,
         request: RunnerRegistrationRequest,
         lease_ttl_secs: u64,
+        owner_user_id: Option<&str>,
     ) -> crate::types::RunnerRegistrationResponse {
         let now = Utc::now();
         let runner_id = request.runner_id.clone();
@@ -535,6 +638,11 @@ impl Registry {
             last_seen_at: now,
         };
         self.runners.insert(runner_id.clone(), snapshot);
+
+        // Track tenant ownership for data isolation.
+        if let Some(user_id) = owner_user_id {
+            self.runner_owners.insert(runner_id.clone(), user_id.to_owned());
+        }
 
         // Recalculate session counts from existing sessions so that a
         // runner re-registering (e.g. after a brief restart) does not
@@ -575,6 +683,7 @@ impl Registry {
         &self,
         request: &CreateSessionRequest,
         lease_ttl_secs: u64,
+        owner_user_id: Option<&str>,
     ) -> Result<PlannedSession, ApiError> {
         let session_id = request.session_id.unwrap_or_else(Uuid::new_v4);
         if self.sessions.contains_key(&session_id) {
@@ -587,6 +696,7 @@ impl Registry {
             &request.workspace_id,
             request.preferred_runner_id.as_deref(),
             lease_ttl_secs,
+            owner_user_id,
         )?;
         let state = if owner_runner_id.is_some() {
             SessionState::Assigned
@@ -601,6 +711,7 @@ impl Registry {
             metadata: request.metadata.clone(),
             created_at: now,
             updated_at: now,
+            owner_user_id: owner_user_id.map(str::to_owned),
         };
         let owner_runner = owner_runner_id
             .as_ref()
@@ -643,7 +754,7 @@ impl Registry {
             .ok_or_else(|| ApiError::not_found(format!("session `{session_id}` was not found")))
     }
 
-    pub(crate) fn list_sessions_filtered(&self, query: &ListSessionsQuery) -> Vec<SessionRecord> {
+    pub(crate) fn list_sessions_filtered(&self, query: &ListSessionsQuery, owner_user_id: Option<&str>) -> Vec<SessionRecord> {
         self.sessions
             .values()
             .filter(|session| {
@@ -659,6 +770,12 @@ impl Registry {
                     .is_none_or(|workspace_id| session.workspace_id == workspace_id)
             })
             .filter(|session| query.state.is_none_or(|state| session.state == state))
+            // Tenant isolation: only return sessions belonging to the requesting user.
+            .filter(|session| {
+                owner_user_id.is_none_or(|uid| {
+                    session.owner_user_id.as_deref() == Some(uid)
+                })
+            })
             .cloned()
             .collect()
     }
@@ -1091,7 +1208,7 @@ impl Registry {
             .filter(|session| !skipped_session_ids.contains(&session.session_id))
             .filter_map(|session| {
                 let selected = self
-                    .select_runner(&session.workspace_id, None, lease_ttl_secs)
+                    .select_runner(&session.workspace_id, None, lease_ttl_secs, session.owner_user_id.as_deref())
                     .ok()?;
                 (selected.as_deref() == Some(runner_id)).then(|| PendingSessionDispatch {
                     session_id: session.session_id,
@@ -1138,6 +1255,7 @@ impl Registry {
         workspace_id: &str,
         preferred_runner_id: Option<&str>,
         lease_ttl_secs: u64,
+        owner_user_id: Option<&str>,
     ) -> Result<Option<String>, ApiError> {
         if let Some(runner_id) = preferred_runner_id {
             let snapshot = self.runners.get(runner_id).ok_or_else(|| {
@@ -1155,6 +1273,14 @@ impl Registry {
             .runners
             .values()
             .filter(|snapshot| runner_can_host(snapshot, workspace_id, lease_ttl_secs))
+            // Tenant isolation: only assign to runners owned by the same user.
+            .filter(|snapshot| {
+                owner_user_id.is_none_or(|uid| {
+                    self.runner_owners
+                        .get(&snapshot.registration.runner_id)
+                        .is_some_and(|owner| owner == uid)
+                })
+            })
             .min_by_key(|snapshot| {
                 (
                     runner_rank(snapshot.state),
@@ -1250,5 +1376,30 @@ impl Registry {
             },
         );
         Ok(is_new)
+    }
+
+    /// Register or update a push notification token for a tenant user.
+    pub(crate) fn register_user_push_token(
+        &mut self,
+        user_id: String,
+        request: PushTokenRegistrationRequest,
+    ) -> bool {
+        let now = Utc::now();
+        let is_new = !self.user_push_tokens.contains_key(&user_id);
+        self.user_push_tokens.insert(
+            user_id.clone(),
+            UserPushToken {
+                user_id: user_id.clone(),
+                push_token: request.push_token,
+                platform: request.platform,
+                registered_at: self
+                    .user_push_tokens
+                    .get(&user_id)
+                    .map(|t| t.registered_at)
+                    .unwrap_or(now),
+                updated_at: now,
+            },
+        );
+        is_new
     }
 }

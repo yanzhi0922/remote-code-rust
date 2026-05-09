@@ -262,6 +262,7 @@ impl ToolRunner for AdapterToolRunner {
                     claude_core::task_stack::TaskStack::default(),
                 )),
                 read_file_state: FileStateCache::new(),
+                sub_agent_output_tokens: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             }
         };
 
@@ -290,6 +291,7 @@ impl ToolRunner for AdapterToolRunner {
                     claude_core::task_stack::TaskStack::default(),
                 )),
                 read_file_state: FileStateCache::new(),
+                sub_agent_output_tokens: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             };
 
             if apply_worktree_tool_result_to_runtime(
@@ -341,6 +343,7 @@ impl ToolRunner for AdapterToolRunner {
             pre_messages: Vec::new(),
             post_messages,
             permission_denial: None,
+            output_tokens_consumed: None,
         })
     }
 }

@@ -16,6 +16,7 @@ use serde_json::{json, Value};
 use tracing::{debug, error, info, instrument, warn};
 
 use roo_app::App;
+use roo_config::paths;
 use roo_jsonrpc::types::Message;
 use roo_task::task_lifecycle::TaskLifecycle;
 use roo_task::ask_say::AskResponse;
@@ -368,6 +369,54 @@ impl Handler {
             task_manager: Arc::new(TaskManager::new()),
             pending_notifications: Arc::new(Mutex::new(Vec::new())),
         }
+    }
+
+    // ── Settings persistence helpers ──────────────────────────────────────
+
+    /// Returns the path to the roo-settings JSON file.
+    ///
+    /// Uses `{global_storage_path}/settings/roo-settings.json` when available,
+    /// otherwise falls back to `~/.roo/settings/roo-settings.json`.
+    fn roo_settings_path(global_storage_path: &str) -> std::path::PathBuf {
+        let base = if global_storage_path.is_empty() {
+            paths::get_global_roo_directory()
+        } else {
+            std::path::PathBuf::from(global_storage_path)
+        };
+        base.join("settings").join("roo-settings.json")
+    }
+
+    /// Read the current settings from disk. Returns an empty JSON object if
+    /// the file does not exist yet.
+    async fn read_roo_settings(global_storage_path: &str) -> Value {
+        let path = Self::roo_settings_path(global_storage_path);
+        match tokio::fs::read_to_string(&path).await {
+            Ok(content) => serde_json::from_str(&content).unwrap_or_else(|e| {
+                warn!(path = %path.display(), error = %e, "Failed to parse settings file, using defaults");
+                json!({})
+            }),
+            Err(_) => json!({}),
+        }
+    }
+
+    /// Write settings back to disk using the safe atomic write from roo-config.
+    async fn write_roo_settings(
+        global_storage_path: &str,
+        settings: &Value,
+    ) -> Result<(), String> {
+        let path = Self::roo_settings_path(global_storage_path);
+        roo_config::safe_write_json(
+            &path,
+            settings,
+            Some(roo_config::safe_write_json::SafeWriteJsonOptions {
+                pretty_print: true,
+            }),
+        )
+        .await
+        .map_err(|e| {
+            error!(path = %path.display(), error = %e, "Failed to write settings file");
+            format!("Failed to write settings: {}", e)
+        })
     }
 
     /// Dispatch a JSON-RPC request message to the appropriate handler.
@@ -944,12 +993,25 @@ impl Handler {
     }
 
     async fn handle_task_delete_queued_message(&self, params: Value) -> ServerResult<Value> {
-        let _message_id = params.get("messageId").and_then(|v| v.as_str())
+        let message_id = params.get("messageId").and_then(|v| v.as_str())
             .ok_or_else(|| ServerError::InvalidParams {
                 method: methods::TASK_DELETE_QUEUED_MESSAGE.to_string(),
                 detail: "Missing messageId".to_string(),
             })?;
-        Ok(json!({"status": "deleted"}))
+
+        let app = self.app.read().await;
+        match app.message_queue() {
+            Some(queue) => {
+                let mut q = queue.lock().await;
+                let removed = q.remove_message(message_id);
+                if removed {
+                    Ok(json!({"status": "deleted", "messageId": message_id}))
+                } else {
+                    Ok(json!({"status": "error", "error": "message not found", "messageId": message_id}))
+                }
+            }
+            None => Ok(json!({"status": "error", "error": "message queue not available"})),
+        }
     }
 
     /// R10-A — Condense the active task's context.
@@ -1001,10 +1063,19 @@ impl Handler {
     /// Cancel any pending auto-approval timeout for the current task.
     ///
     /// Source: TS `webviewMessageHandler.ts` — `cancelAutoApproval`
+    /// TS: `provider.getCurrentTask()?.cancelAutoApprovalTimeout()`
     async fn handle_task_cancel_auto_approval(&self, _params: Value) -> ServerResult<Value> {
         debug!("Cancelling auto-approval");
-        // In headless mode, auto-approval is not applicable
-        Ok(json!({"status": "cancelled"}))
+        match self.task_manager.get_active_task() {
+            Some(lifecycle) => {
+                let mut lc = lifecycle.lock().await;
+                if let Some(handler) = lc.auto_approval_handler_mut() {
+                    handler.reset_request_count();
+                }
+                Ok(json!({"status": "cancelled"}))
+            }
+            None => Ok(json!({"status": "cancelled", "warning": "no active task"})),
+        }
     }
 
     /// Get aggregated costs for a task including subtasks.
@@ -1366,7 +1437,21 @@ impl Handler {
                         }
                     }
                     "continue" => {
-                        // Continue current terminal operation (no-op in headless mode)
+                        // Source: TS line 1633 — `this.terminalProcess?.continue()`
+                        // Delegate to TaskLifecycle::handle_terminal_operation
+                        // which emits TaskUnpaused event and handles terminal continue
+                        drop(app);
+                        match self.task_manager.get_active_task() {
+                            Some(lifecycle) => {
+                                let mut lc = lifecycle.lock().await;
+                                if let Err(e) = lc.handle_terminal_operation("continue").await {
+                                    warn!(error = %e, "Failed to continue terminal operation");
+                                }
+                            }
+                            None => {
+                                debug!("No active task for terminal continue");
+                            }
+                        }
                         Ok(json!({"status": "ok"}))
                     }
                     _ => Ok(json!({"status": "ok", "operation": operation})),
@@ -1446,52 +1531,54 @@ impl Handler {
     }
 
     /// C7 — Restore checkpoint.
+    ///
+    /// Source: TS `webviewMessageHandler.ts` — `checkpointRestore`
+    /// TS: cancels the current task, restores checkpoint, then re-initializes.
     async fn handle_checkpoint_restore(&self, params: Value) -> ServerResult<Value> {
         let commit_hash = params.get("commitHash").and_then(|v| v.as_str()).unwrap_or("");
+        let timestamp = params.get("timestamp").and_then(|v| v.as_f64());
 
-        let (task_id, cwd) = {
-            match self.task_manager.get_active_task() {
-                Some(lifecycle) => {
-                    let lc = lifecycle.lock().await;
-                    (
-                        lc.task_id().to_string(),
-                        lc.engine().config().cwd.clone(),
-                    )
-                }
-                None => {
-                    let app = self.app.read().await;
-                    ("".to_string(), app.cwd().to_string())
-                }
-            }
-        };
-
-        if task_id.is_empty() {
-            return Ok(json!({"status": "error", "error": "no active task for checkpoint"}));
-        }
-
-        let checkpoints_dir = std::path::Path::new(&cwd)
-            .join(".roo")
-            .join("checkpoints")
-            .join(&task_id);
-
-        match roo_checkpoint::service::ShadowCheckpointService::new(
-            &task_id,
-            &checkpoints_dir,
-            &cwd,
-            None,
-        ) {
-            Ok(mut service) => {
-                if let Err(e) = service.init_shadow_git().await {
-                    let err_msg: String = e.to_string();
-                    return Ok(json!({"status": "error", "error": err_msg}));
-                }
-
-                match service.restore_checkpoint(commit_hash).await {
+        match self.task_manager.get_active_task() {
+            Some(lifecycle) => {
+                let mut lc = lifecycle.lock().await;
+                match lc.checkpoint_restore(commit_hash, timestamp).await {
                     Ok(()) => Ok(json!({"status": "restored"})),
                     Err(e) => Ok(json!({"status": "error", "error": e.to_string()})),
                 }
             }
-            Err(e) => Ok(json!({"status": "error", "error": e.to_string()})),
+            None => {
+                // No active task — try using a standalone checkpoint service
+                let app = self.app.read().await;
+                let cwd = app.cwd().to_string();
+                drop(app);
+
+                let checkpoints_dir = std::path::Path::new(&cwd)
+                    .join(".roo")
+                    .join("checkpoints");
+
+                // Try to find any task directory
+                if let Ok(entries) = std::fs::read_dir(&checkpoints_dir) {
+                    for entry in entries.flatten() {
+                        if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                            let task_id = entry.file_name().to_string_lossy().to_string();
+                            if let Ok(mut service) = roo_checkpoint::service::ShadowCheckpointService::new(
+                                &task_id,
+                                &entry.path(),
+                                &cwd,
+                                None,
+                            ) {
+                                if service.init_shadow_git().await.is_ok() {
+                                    match service.restore_checkpoint(commit_hash).await {
+                                        Ok(()) => return Ok(json!({"status": "restored"})),
+                                        Err(e) => return Ok(json!({"status": "error", "error": e.to_string()})),
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                Ok(json!({"status": "error", "error": "no active task for checkpoint"}))
+            }
         }
     }
 
@@ -1847,11 +1934,24 @@ impl Handler {
     /// Update application settings.
     ///
     /// Source: TS `webviewMessageHandler.ts` — `updateSettings`
-    async fn handle_settings_update(&self, _params: Value) -> ServerResult<Value> {
+    async fn handle_settings_update(&self, params: Value) -> ServerResult<Value> {
         debug!("Updating settings");
-        // In headless mode, settings updates are stored in memory
+
         let app = self.app.read().await;
-        let _ = app.config();
+        let gsp = app.config().global_storage_path.clone();
+        drop(app);
+
+        // If params contain actual data, merge it; otherwise just acknowledge
+        if !params.is_null() && params.as_object().map_or(false, |o| !o.is_empty()) {
+            let mut settings = Self::read_roo_settings(&gsp).await;
+            if let (Some(existing), Some(incoming)) = (settings.as_object_mut(), params.as_object()) {
+                for (key, value) in incoming {
+                    existing.insert(key.clone(), value.clone());
+                }
+            }
+            Self::write_roo_settings(&gsp, &settings).await?;
+        }
+
         Ok(json!({"status": "updated"}))
     }
 
@@ -1860,9 +1960,22 @@ impl Handler {
     /// Source: TS `webviewMessageHandler.ts` — `saveApiConfiguration`
     async fn handle_settings_save_api_config(&self, params: Value) -> ServerResult<Value> {
         let name = params.get("name").and_then(|v| v.as_str()).unwrap_or("");
-        let _config = params.get("apiConfiguration").cloned();
+        let config = params.get("apiConfiguration").cloned().unwrap_or(json!({}));
         debug!(name = name, "Saving API configuration");
-        // In headless mode, we acknowledge but don't persist to VS Code settings
+
+        let app = self.app.read().await;
+        let gsp = app.config().global_storage_path.clone();
+        drop(app);
+
+        let mut settings = Self::read_roo_settings(&gsp).await;
+        let configs = settings
+            .as_object_mut()
+            .unwrap()
+            .entry("apiConfigs")
+            .or_insert_with(|| json!({}));
+        configs[&name.to_string()] = config.clone();
+
+        Self::write_roo_settings(&gsp, &settings).await?;
         Ok(json!({"status": "saved", "name": name}))
     }
 
@@ -1873,11 +1986,24 @@ impl Handler {
         let name = params.get("name").and_then(|v| v.as_str()).unwrap_or("");
         debug!(name = name, "Loading API configuration");
         let app = self.app.read().await;
-        let settings = app.provider_settings();
+        let gsp = app.config().global_storage_path.clone();
+        let api_provider = app.provider_settings().api_provider.clone();
+        let api_model_id = app.provider_settings().api_model_id.clone();
+        drop(app);
+
+        // Try to load from persisted settings first
+        let persisted = Self::read_roo_settings(&gsp).await;
+        if let Some(cfg) = persisted.get("apiConfigs").and_then(|c| c.get(name)) {
+            let mut result = cfg.clone();
+            result["name"] = json!(name);
+            return Ok(result);
+        }
+
+        // Fall back to live provider settings
         Ok(json!({
             "name": name,
-            "provider": settings.api_provider,
-            "modelId": settings.api_model_id,
+            "provider": api_provider,
+            "modelId": api_model_id,
         }))
     }
 
@@ -1888,11 +2014,29 @@ impl Handler {
         let id = params.get("id").and_then(|v| v.as_str()).unwrap_or("");
         debug!(id = id, "Loading API configuration by ID");
         let app = self.app.read().await;
-        let settings = app.provider_settings();
+        let gsp = app.config().global_storage_path.clone();
+        let api_provider = app.provider_settings().api_provider.clone();
+        let api_model_id = app.provider_settings().api_model_id.clone();
+        drop(app);
+
+        // Try to find a config matching the requested ID in persisted settings
+        let persisted = Self::read_roo_settings(&gsp).await;
+        if let Some(configs) = persisted.get("apiConfigs").and_then(|c| c.as_object()) {
+            for (name, cfg) in configs {
+                if cfg.get("id").and_then(|v| v.as_str()) == Some(id) {
+                    let mut result = cfg.clone();
+                    result["name"] = json!(name);
+                    result["id"] = json!(id);
+                    return Ok(result);
+                }
+            }
+        }
+
+        // Fall back to live provider settings
         Ok(json!({
             "id": id,
-            "provider": settings.api_provider,
-            "modelId": settings.api_model_id,
+            "provider": api_provider,
+            "modelId": api_model_id,
         }))
     }
 
@@ -1902,7 +2046,24 @@ impl Handler {
     async fn handle_settings_delete_api_config(&self, params: Value) -> ServerResult<Value> {
         let name = params.get("name").and_then(|v| v.as_str()).unwrap_or("");
         debug!(name = name, "Deleting API configuration");
-        Ok(json!({"status": "deleted", "name": name}))
+
+        let app = self.app.read().await;
+        let gsp = app.config().global_storage_path.clone();
+        drop(app);
+
+        let mut settings = Self::read_roo_settings(&gsp).await;
+        let removed = if let Some(configs) = settings.get_mut("apiConfigs").and_then(|c| c.as_object_mut()) {
+            configs.remove(name).is_some()
+        } else {
+            false
+        };
+        Self::write_roo_settings(&gsp, &settings).await?;
+
+        if removed {
+            Ok(json!({"status": "deleted", "name": name}))
+        } else {
+            Ok(json!({"status": "not_found", "name": name}))
+        }
     }
 
     /// List all API configurations.
@@ -1911,13 +2072,29 @@ impl Handler {
     async fn handle_settings_list_api_configs(&self, _params: Value) -> ServerResult<Value> {
         debug!("Listing API configurations");
         let app = self.app.read().await;
-        let settings = app.provider_settings();
-        Ok(json!({
-            "configs": [{
-                "provider": settings.api_provider,
-                "modelId": settings.api_model_id,
-            }]
-        }))
+        let gsp = app.config().global_storage_path.clone();
+        let api_provider = app.provider_settings().api_provider.clone();
+        let api_model_id = app.provider_settings().api_model_id.clone();
+        drop(app);
+
+        // Start with the live provider as the "default" entry
+        let mut configs = vec![json!({
+            "name": "default",
+            "provider": api_provider,
+            "modelId": api_model_id,
+        })];
+
+        // Merge in any persisted API configs from the settings file
+        let persisted = Self::read_roo_settings(&gsp).await;
+        if let Some(saved_configs) = persisted.get("apiConfigs").and_then(|v| v.as_object()) {
+            for (name, cfg) in saved_configs {
+                let mut entry = cfg.clone();
+                entry["name"] = json!(name);
+                configs.push(entry);
+            }
+        }
+
+        Ok(json!({"configs": configs}))
     }
 
     /// Upsert an API configuration.
@@ -1925,8 +2102,25 @@ impl Handler {
     /// Source: TS `webviewMessageHandler.ts` — `upsertApiConfiguration`
     async fn handle_settings_upsert_api_config(&self, params: Value) -> ServerResult<Value> {
         let name = params.get("name").and_then(|v| v.as_str()).unwrap_or("");
+        let config = params.get("apiConfiguration").cloned().unwrap_or(json!({}));
         debug!(name = name, "Upserting API configuration");
-        Ok(json!({"status": "upserted", "name": name}))
+
+        let app = self.app.read().await;
+        let gsp = app.config().global_storage_path.clone();
+        drop(app);
+
+        let mut settings = Self::read_roo_settings(&gsp).await;
+        let configs = settings
+            .as_object_mut()
+            .unwrap()
+            .entry("apiConfigs")
+            .or_insert_with(|| json!({}));
+        let existed = configs.get(name).is_some();
+        configs[&name.to_string()] = config;
+
+        Self::write_roo_settings(&gsp, &settings).await?;
+        let action = if existed { "updated" } else { "created" };
+        Ok(json!({"status": "upserted", "action": action, "name": name}))
     }
 
     /// Rename an API configuration.
@@ -1936,7 +2130,29 @@ impl Handler {
         let old_name = params.get("oldName").and_then(|v| v.as_str()).unwrap_or("");
         let new_name = params.get("newName").and_then(|v| v.as_str()).unwrap_or("");
         debug!(old_name = old_name, new_name = new_name, "Renaming API configuration");
-        Ok(json!({"status": "renamed", "oldName": old_name, "newName": new_name}))
+
+        let app = self.app.read().await;
+        let gsp = app.config().global_storage_path.clone();
+        drop(app);
+
+        let mut settings = Self::read_roo_settings(&gsp).await;
+        let renamed = if let Some(configs) = settings.get_mut("apiConfigs").and_then(|c| c.as_object_mut()) {
+            if let Some(entry) = configs.remove(old_name) {
+                configs.insert(new_name.to_string(), entry);
+                true
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+        Self::write_roo_settings(&gsp, &settings).await?;
+
+        if renamed {
+            Ok(json!({"status": "renamed", "oldName": old_name, "newName": new_name}))
+        } else {
+            Ok(json!({"status": "not_found", "oldName": old_name}))
+        }
     }
 
     /// Update custom instructions.
@@ -1955,8 +2171,22 @@ impl Handler {
     /// Source: TS `webviewMessageHandler.ts` — `updatePrompt`
     async fn handle_settings_update_prompt(&self, params: Value) -> ServerResult<Value> {
         let prompt_mode = params.get("promptMode").and_then(|v| v.as_str()).unwrap_or("");
-        let _custom_prompt = params.get("customPrompt").cloned();
+        let custom_prompt = params.get("customPrompt").cloned().unwrap_or(Value::Null);
         debug!(prompt_mode = prompt_mode, "Updating prompt for mode");
+
+        let app = self.app.read().await;
+        let gsp = app.config().global_storage_path.clone();
+        drop(app);
+
+        let mut settings = Self::read_roo_settings(&gsp).await;
+        let prompts = settings
+            .as_object_mut()
+            .unwrap()
+            .entry("customPrompts")
+            .or_insert_with(|| json!({}));
+        prompts[&prompt_mode.to_string()] = custom_prompt;
+
+        Self::write_roo_settings(&gsp, &settings).await?;
         Ok(json!({"status": "updated", "promptMode": prompt_mode}))
     }
 
@@ -1982,9 +2212,22 @@ impl Handler {
     /// Import settings.
     ///
     /// Source: TS `webviewMessageHandler.ts` — `importSettings`
-    async fn handle_settings_import_settings(&self, _params: Value) -> ServerResult<Value> {
+    async fn handle_settings_import_settings(&self, params: Value) -> ServerResult<Value> {
         debug!("Importing settings");
-        // In headless mode, settings import is acknowledged
+
+        let app = self.app.read().await;
+        let gsp = app.config().global_storage_path.clone();
+        drop(app);
+
+        // The import data is the params itself — merge it into the existing settings
+        let mut settings = Self::read_roo_settings(&gsp).await;
+        if let (Some(existing), Some(incoming)) = (settings.as_object_mut(), params.as_object()) {
+            for (key, value) in incoming {
+                existing.insert(key.clone(), value.clone());
+            }
+        }
+
+        Self::write_roo_settings(&gsp, &settings).await?;
         Ok(json!({"status": "imported"}))
     }
 
@@ -1994,13 +2237,25 @@ impl Handler {
     async fn handle_settings_export_settings(&self, _params: Value) -> ServerResult<Value> {
         debug!("Exporting settings");
         let app = self.app.read().await;
-        let settings = app.provider_settings();
-        Ok(json!({
-            "settings": {
-                "provider": settings.api_provider,
-                "modelId": settings.api_model_id,
+        let gsp = app.config().global_storage_path.clone();
+        let api_provider = app.provider_settings().api_provider.clone();
+        let api_model_id = app.provider_settings().api_model_id.clone();
+        let provider_info = json!({
+            "provider": api_provider,
+            "modelId": api_model_id,
+        });
+        drop(app);
+
+        // Merge persisted settings with the live provider info
+        let persisted = Self::read_roo_settings(&gsp).await;
+        let mut exported = persisted;
+        if let (Some(obj), Some(pobj)) = (exported.as_object_mut(), provider_info.as_object()) {
+            for (k, v) in pobj {
+                obj.insert(k.clone(), v.clone());
             }
-        }))
+        }
+
+        Ok(json!({"settings": exported}))
     }
 
     /// Lock API config across modes.
@@ -2009,6 +2264,15 @@ impl Handler {
     async fn handle_settings_lock_api_config(&self, params: Value) -> ServerResult<Value> {
         let enabled = params.get("enabled").and_then(|v| v.as_bool()).unwrap_or(false);
         debug!(enabled = enabled, "Locking API config across modes");
+
+        let app = self.app.read().await;
+        let gsp = app.config().global_storage_path.clone();
+        drop(app);
+
+        let mut settings = Self::read_roo_settings(&gsp).await;
+        settings["lockApiConfigAcrossModes"] = json!(enabled);
+
+        Self::write_roo_settings(&gsp, &settings).await?;
         Ok(json!({"status": "updated", "enabled": enabled}))
     }
 
@@ -2018,7 +2282,31 @@ impl Handler {
     async fn handle_settings_toggle_api_config_pin(&self, params: Value) -> ServerResult<Value> {
         let config_name = params.get("name").and_then(|v| v.as_str()).unwrap_or("");
         debug!(config_name = config_name, "Toggling API config pin");
-        Ok(json!({"status": "toggled", "name": config_name}))
+
+        let app = self.app.read().await;
+        let gsp = app.config().global_storage_path.clone();
+        drop(app);
+
+        let mut settings = Self::read_roo_settings(&gsp).await;
+        let pinned = settings
+            .pointer_mut(&format!("/apiConfigs/{}/pinned", config_name))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let new_pinned = !pinned;
+        if let Some(configs) = settings.get_mut("apiConfigs").and_then(|c| c.as_object_mut()) {
+            if let Some(cfg) = configs.get_mut(config_name) {
+                cfg["pinned"] = json!(new_pinned);
+            } else {
+                // Config entry does not exist yet — create a stub with pin state
+                configs.insert(
+                    config_name.to_string(),
+                    json!({"pinned": new_pinned}),
+                );
+            }
+        }
+
+        Self::write_roo_settings(&gsp, &settings).await?;
+        Ok(json!({"status": "toggled", "name": config_name, "pinned": new_pinned}))
     }
 
     /// Set enhancement API config ID.
@@ -2027,6 +2315,15 @@ impl Handler {
     async fn handle_settings_enhancement_api_config_id(&self, params: Value) -> ServerResult<Value> {
         let config_id = params.get("id").and_then(|v| v.as_str()).unwrap_or("");
         debug!(config_id = config_id, "Setting enhancement API config ID");
+
+        let app = self.app.read().await;
+        let gsp = app.config().global_storage_path.clone();
+        drop(app);
+
+        let mut settings = Self::read_roo_settings(&gsp).await;
+        settings["enhancementApiConfigId"] = json!(config_id);
+
+        Self::write_roo_settings(&gsp, &settings).await?;
         Ok(json!({"status": "updated", "id": config_id}))
     }
 
@@ -2036,6 +2333,15 @@ impl Handler {
     async fn handle_settings_auto_approval_enabled(&self, params: Value) -> ServerResult<Value> {
         let enabled = params.get("enabled").and_then(|v| v.as_bool()).unwrap_or(false);
         debug!(enabled = enabled, "Setting auto-approval enabled");
+
+        let app = self.app.read().await;
+        let gsp = app.config().global_storage_path.clone();
+        drop(app);
+
+        let mut settings = Self::read_roo_settings(&gsp).await;
+        settings["autoApprovalEnabled"] = json!(enabled);
+
+        Self::write_roo_settings(&gsp, &settings).await?;
         Ok(json!({"status": "updated", "enabled": enabled}))
     }
 
@@ -2045,6 +2351,15 @@ impl Handler {
     async fn handle_settings_debug_setting(&self, params: Value) -> ServerResult<Value> {
         let enabled = params.get("enabled").and_then(|v| v.as_bool()).unwrap_or(false);
         debug!(enabled = enabled, "Setting debug setting");
+
+        let app = self.app.read().await;
+        let gsp = app.config().global_storage_path.clone();
+        drop(app);
+
+        let mut settings = Self::read_roo_settings(&gsp).await;
+        settings["debugSetting"] = json!(enabled);
+
+        Self::write_roo_settings(&gsp, &settings).await?;
         Ok(json!({"status": "updated", "enabled": enabled}))
     }
 
@@ -2061,6 +2376,16 @@ impl Handler {
             .map(|a| a.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
             .unwrap_or_default();
         debug!(allowed = ?allowed, denied = ?denied, "Setting allowed commands");
+
+        let app = self.app.read().await;
+        let gsp = app.config().global_storage_path.clone();
+        drop(app);
+
+        let mut settings = Self::read_roo_settings(&gsp).await;
+        settings["allowedCommands"] = json!(allowed);
+        settings["deniedCommands"] = json!(denied);
+
+        Self::write_roo_settings(&gsp, &settings).await?;
         Ok(json!({"status": "updated", "allowedCount": allowed.len(), "deniedCount": denied.len()}))
     }
 
@@ -2074,7 +2399,8 @@ impl Handler {
         let app = self.app.read().await;
         match app.skills_manager() {
             Some(manager) => {
-                let skills = manager.get_all_skills();
+                let mgr = manager.read().await;
+                let skills = mgr.get_all_skills();
                 let skill_list: Vec<Value> = skills.iter().map(|s| {
                     json!({
                         "name": s.name,
@@ -2093,11 +2419,30 @@ impl Handler {
     /// Source: TS `webviewMessageHandler.ts` — `createSkill`
     async fn handle_skills_create(&self, params: Value) -> ServerResult<Value> {
         let name = params.get("name").and_then(|v| v.as_str()).unwrap_or("");
+        let description = params.get("description").and_then(|v| v.as_str()).unwrap_or("");
+        let source_str = params.get("source").and_then(|v| v.as_str()).unwrap_or("project");
+        let source = match source_str {
+            "global" => roo_skills::SkillSource::Global,
+            _ => roo_skills::SkillSource::Project,
+        };
+        let modes: Option<Vec<String>> = params.get("modes")
+            .and_then(|v| v.as_array())
+            .map(|a| a.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect());
         debug!(name = name, "Creating skill");
-        // Note: SkillsManager::create_skill takes &mut self, which requires
-        // mutable access. In headless mode, we acknowledge the request.
-        // Full implementation would require Arc<Mutex<SkillsManager>>.
-        Ok(json!({"status": "created", "name": name}))
+
+        let app = self.app.read().await;
+        match app.skills_manager() {
+            Some(manager) => {
+                let mut mgr = manager.write().await;
+                let cwd = app.cwd();
+                let mode_slugs = modes.as_deref();
+                match mgr.create_skill(name, source, description, mode_slugs, cwd, None).await {
+                    Ok(meta) => Ok(json!({"status": "created", "name": meta.name})),
+                    Err(e) => Ok(json!({"status": "error", "error": e.to_string()})),
+                }
+            }
+            None => Ok(json!({"status": "error", "error": "skills manager not initialized"})),
+        }
     }
 
     /// Delete a skill.
@@ -2105,8 +2450,24 @@ impl Handler {
     /// Source: TS `webviewMessageHandler.ts` — `deleteSkill`
     async fn handle_skills_delete(&self, params: Value) -> ServerResult<Value> {
         let name = params.get("name").and_then(|v| v.as_str()).unwrap_or("");
+        let source_str = params.get("source").and_then(|v| v.as_str()).unwrap_or("project");
+        let source = match source_str {
+            "global" => roo_skills::SkillSource::Global,
+            _ => roo_skills::SkillSource::Project,
+        };
         debug!(name = name, "Deleting skill");
-        Ok(json!({"status": "deleted", "name": name}))
+
+        let app = self.app.read().await;
+        match app.skills_manager() {
+            Some(manager) => {
+                let mut mgr = manager.write().await;
+                match mgr.delete_skill(name, source, None).await {
+                    Ok(()) => Ok(json!({"status": "deleted", "name": name})),
+                    Err(e) => Ok(json!({"status": "error", "error": e.to_string()})),
+                }
+            }
+            None => Ok(json!({"status": "error", "error": "skills manager not initialized"})),
+        }
     }
 
     /// Move a skill.
@@ -2114,9 +2475,26 @@ impl Handler {
     /// Source: TS `webviewMessageHandler.ts` — `moveSkill`
     async fn handle_skills_move(&self, params: Value) -> ServerResult<Value> {
         let name = params.get("name").and_then(|v| v.as_str()).unwrap_or("");
-        let direction = params.get("direction").and_then(|v| v.as_str()).unwrap_or("up");
-        debug!(name = name, direction = direction, "Moving skill");
-        Ok(json!({"status": "moved", "name": name}))
+        let source_str = params.get("source").and_then(|v| v.as_str()).unwrap_or("project");
+        let source = match source_str {
+            "global" => roo_skills::SkillSource::Global,
+            _ => roo_skills::SkillSource::Project,
+        };
+        let new_mode = params.get("newMode").and_then(|v| v.as_str()).unwrap_or("code");
+        debug!(name = name, new_mode = new_mode, "Moving skill");
+
+        let app = self.app.read().await;
+        match app.skills_manager() {
+            Some(manager) => {
+                let mut mgr = manager.write().await;
+                let cwd = app.cwd();
+                match mgr.move_skill(name, source, None, new_mode, cwd).await {
+                    Ok(meta) => Ok(json!({"status": "moved", "name": meta.name})),
+                    Err(e) => Ok(json!({"status": "error", "error": e.to_string()})),
+                }
+            }
+            None => Ok(json!({"status": "error", "error": "skills manager not initialized"})),
+        }
     }
 
     /// Update skill modes.
@@ -2124,12 +2502,28 @@ impl Handler {
     /// Source: TS `webviewMessageHandler.ts` — `updateSkillModes`
     async fn handle_skills_update_modes(&self, params: Value) -> ServerResult<Value> {
         let name = params.get("name").and_then(|v| v.as_str()).unwrap_or("");
+        let source_str = params.get("source").and_then(|v| v.as_str()).unwrap_or("project");
+        let source = match source_str {
+            "global" => roo_skills::SkillSource::Global,
+            _ => roo_skills::SkillSource::Project,
+        };
         let modes: Vec<String> = params.get("modes")
             .and_then(|v| v.as_array())
             .map(|a| a.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
             .unwrap_or_default();
         debug!(name = name, modes = ?modes, "Updating skill modes");
-        Ok(json!({"status": "updated", "name": name}))
+
+        let app = self.app.read().await;
+        match app.skills_manager() {
+            Some(manager) => {
+                let mut mgr = manager.write().await;
+                match mgr.update_skill_modes(name, source, None, Some(modes.as_slice())).await {
+                    Ok(meta) => Ok(json!({"status": "updated", "name": meta.name})),
+                    Err(e) => Ok(json!({"status": "error", "error": e.to_string()})),
+                }
+            }
+            None => Ok(json!({"status": "error", "error": "skills manager not initialized"})),
+        }
     }
 
     // ── Mode commands ────────────────────────────────────────────────────
@@ -2140,8 +2534,36 @@ impl Handler {
     async fn handle_mode_update_custom(&self, params: Value) -> ServerResult<Value> {
         let slug = params.get("slug").and_then(|v| v.as_str()).unwrap_or("");
         debug!(slug = slug, "Updating custom mode");
-        // In headless mode, custom mode updates are acknowledged
-        Ok(json!({"status": "updated", "slug": slug}))
+
+        let app = self.app.read().await;
+        match app.custom_modes_manager() {
+            Some(manager) => {
+                let mut mgr = manager.write().map_err(|e| ServerError::Internal(e.to_string()))?;
+
+                // Build ModeConfig from params
+                let mode_config = roo_types::mode::ModeConfig {
+                    slug: slug.to_string(),
+                    name: params.get("name").and_then(|v| v.as_str()).unwrap_or(slug).to_string(),
+                    role_definition: params.get("roleDefinition").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                    when_to_use: params.get("whenToUse").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                    description: params.get("description").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                    custom_instructions: params.get("customInstructions").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                    groups: vec![],
+                    source: params.get("source").and_then(|v| v.as_str()).map(|s| {
+                        match s {
+                            "project" => roo_types::mode::ModeSource::Project,
+                            _ => roo_types::mode::ModeSource::Global,
+                        }
+                    }),
+                };
+
+                match mgr.update_custom_mode(slug, mode_config) {
+                    Ok(()) => Ok(json!({"status": "updated", "slug": slug})),
+                    Err(e) => Ok(json!({"status": "error", "error": e})),
+                }
+            }
+            None => Ok(json!({"status": "error", "error": "custom modes manager not initialized"})),
+        }
     }
 
     /// Delete a custom mode.
@@ -2149,8 +2571,38 @@ impl Handler {
     /// Source: TS `webviewMessageHandler.ts` — `deleteCustomMode`
     async fn handle_mode_delete_custom(&self, params: Value) -> ServerResult<Value> {
         let slug = params.get("slug").and_then(|v| v.as_str()).unwrap_or("");
-        debug!(slug = slug, "Deleting custom mode");
-        Ok(json!({"status": "deleted", "slug": slug}))
+        let check_only = params.get("checkOnly").and_then(|v| v.as_bool()).unwrap_or(false);
+        debug!(slug = slug, check_only = check_only, "Deleting custom mode");
+
+        if check_only {
+            // TS: sends back deleteCustomModeCheck with rules folder path
+            let app = self.app.read().await;
+            let rules_path = if let Some(manager) = app.custom_modes_manager() {
+                let mgr = manager.read().map_err(|e| ServerError::Internal(e.to_string()))?;
+                let cwd = app.cwd();
+                let has_content = mgr.check_rules_directory_has_content(slug, Some(std::path::Path::new(cwd)));
+                if has_content {
+                    Some(format!(".roo/rules-{slug}/"))
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+            return Ok(json!({"status": "check", "slug": slug, "rulesPath": rules_path}));
+        }
+
+        let app = self.app.read().await;
+        match app.custom_modes_manager() {
+            Some(manager) => {
+                let mut mgr = manager.write().map_err(|e| ServerError::Internal(e.to_string()))?;
+                match mgr.delete_custom_mode(slug) {
+                    Ok(()) => Ok(json!({"status": "deleted", "slug": slug})),
+                    Err(e) => Ok(json!({"status": "error", "error": e})),
+                }
+            }
+            None => Ok(json!({"status": "error", "error": "custom modes manager not initialized"})),
+        }
     }
 
     // ── Message commands ─────────────────────────────────────────────────
@@ -2162,12 +2614,21 @@ impl Handler {
         let message_ts = params.get("messageTs").and_then(|v| v.as_u64());
         debug!(message_ts = message_ts, "Deleting message");
 
+        let message_ts = match message_ts {
+            Some(ts) => ts,
+            None => return Ok(json!({"status": "error", "error": "missing messageTs"})),
+        };
+
         match self.task_manager.get_active_task() {
             Some(lifecycle) => {
-                let lc = lifecycle.lock().await;
-                // Acknowledge deletion in headless mode
-                drop(lc);
-                Ok(json!({"status": "deleted"}))
+                let mut lc = lifecycle.lock().await;
+                let engine = lc.engine_mut();
+                let ts_f64 = message_ts as f64;
+                engine.cline_messages_mut().retain(|m| m.ts != ts_f64);
+                if let Err(e) = engine.save_cline_messages().await {
+                    warn!(error = %e, "Failed to save cline messages after delete");
+                }
+                Ok(json!({"status": "deleted", "messageTs": message_ts}))
             }
             None => Ok(json!({"status": "error", "error": "no active task"})),
         }
@@ -2181,11 +2642,23 @@ impl Handler {
         let text = params.get("text").and_then(|v| v.as_str()).unwrap_or("");
         debug!(message_ts = message_ts, text_len = text.len(), "Editing message");
 
+        let message_ts = match message_ts {
+            Some(ts) => ts,
+            None => return Ok(json!({"status": "error", "error": "missing messageTs"})),
+        };
+
         match self.task_manager.get_active_task() {
             Some(lifecycle) => {
-                let lc = lifecycle.lock().await;
-                drop(lc);
-                Ok(json!({"status": "edited"}))
+                let mut lc = lifecycle.lock().await;
+                let engine = lc.engine_mut();
+                let ts_f64 = message_ts as f64;
+                if let Some(msg) = engine.cline_messages_mut().iter_mut().find(|m| m.ts == ts_f64) {
+                    msg.text = Some(text.to_string());
+                }
+                if let Err(e) = engine.save_cline_messages().await {
+                    warn!(error = %e, "Failed to save cline messages after edit");
+                }
+                Ok(json!({"status": "edited", "messageTs": message_ts}))
             }
             None => Ok(json!({"status": "error", "error": "no active task"})),
         }
@@ -2226,9 +2699,29 @@ impl Handler {
 
         match self.task_manager.get_active_task() {
             Some(lifecycle) => {
-                let lc = lifecycle.lock().await;
-                // In headless mode, we acknowledge the deletion
-                drop(lc);
+                let mut lc = lifecycle.lock().await;
+                let engine = lc.engine_mut();
+                let ts_f64 = message_ts as f64;
+
+                let api_truncate_idx = engine.cline_messages()
+                    .iter()
+                    .position(|m| m.ts == ts_f64)
+                    .and_then(|pos| engine.cline_messages()[pos].conversation_history_index);
+
+                if let Some(pos) = engine.cline_messages().iter().position(|m| m.ts == ts_f64) {
+                    engine.cline_messages_mut().truncate(pos);
+                }
+
+                if let Some(api_idx) = api_truncate_idx {
+                    engine.api_conversation_history_mut().truncate(api_idx);
+                }
+
+                if let Err(e) = engine.save_cline_messages().await {
+                    warn!(error = %e, "Failed to save cline messages after delete confirm");
+                }
+                if let Err(e) = engine.save_api_conversation_history().await {
+                    warn!(error = %e, "Failed to save API history after delete confirm");
+                }
                 Ok(json!({"status": "deleted", "messageTs": message_ts}))
             }
             None => Ok(json!({"status": "error", "error": "no active task"})),
@@ -2253,8 +2746,30 @@ impl Handler {
 
         match self.task_manager.get_active_task() {
             Some(lifecycle) => {
-                let lc = lifecycle.lock().await;
-                drop(lc);
+                let mut lc = lifecycle.lock().await;
+                let engine = lc.engine_mut();
+                let ts_f64 = message_ts as f64;
+
+                let msg_pos = engine.cline_messages().iter().position(|m| m.ts == ts_f64);
+                let api_truncate_idx = msg_pos.and_then(|pos| {
+                    engine.cline_messages()[pos].conversation_history_index
+                });
+
+                if let Some(pos) = msg_pos {
+                    engine.cline_messages_mut()[pos].text = Some(text.to_string());
+                    engine.cline_messages_mut().truncate(pos + 1);
+                }
+
+                if let Some(api_idx) = api_truncate_idx {
+                    engine.api_conversation_history_mut().truncate(api_idx);
+                }
+
+                if let Err(e) = engine.save_cline_messages().await {
+                    warn!(error = %e, "Failed to save cline messages after edit confirm");
+                }
+                if let Err(e) = engine.save_api_conversation_history().await {
+                    warn!(error = %e, "Failed to save API history after edit confirm");
+                }
                 Ok(json!({"status": "edited", "messageTs": message_ts}))
             }
             None => Ok(json!({"status": "error", "error": "no active task"})),
@@ -2265,30 +2780,63 @@ impl Handler {
     ///
     /// Source: TS `webviewMessageHandler.ts` — `editQueuedMessage`
     async fn handle_message_edit_queued(&self, params: Value) -> ServerResult<Value> {
-        let message_id = params.get("messageId").and_then(|v| v.as_str()).unwrap_or("");
-        let text = params.get("text").and_then(|v| v.as_str()).unwrap_or("");
+        let message_id = params.get("messageId").and_then(|v| v.as_str())
+            .ok_or_else(|| ServerError::InvalidParams {
+                method: methods::MESSAGE_EDIT_QUEUED.to_string(),
+                detail: "Missing messageId".to_string(),
+            })?;
+        let text = params.get("text").and_then(|v| v.as_str())
+            .ok_or_else(|| ServerError::InvalidParams {
+                method: methods::MESSAGE_EDIT_QUEUED.to_string(),
+                detail: "Missing text".to_string(),
+            })?;
+        let images: Option<Vec<String>> = params.get("images").and_then(|v| v.as_array()).map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .collect()
+        });
+
         debug!(message_id = message_id, text_len = text.len(), "Editing queued message");
 
-        // In headless mode, queued message editing is acknowledged
-        // Full implementation would update the message in MessageQueueService
-        Ok(json!({"status": "edited", "messageId": message_id}))
+        let app = self.app.read().await;
+        match app.message_queue() {
+            Some(queue) => {
+                let mut q = queue.lock().await;
+                let updated = q.update_message(message_id, text, images);
+                if updated {
+                    Ok(json!({"status": "edited", "messageId": message_id}))
+                } else {
+                    Ok(json!({"status": "error", "error": "message not found", "messageId": message_id}))
+                }
+            }
+            None => Ok(json!({"status": "error", "error": "message queue not available"})),
+        }
     }
 
     /// Remove a queued message.
     ///
     /// Source: TS `webviewMessageHandler.ts` — `removeQueuedMessage`
     async fn handle_message_remove_queued(&self, params: Value) -> ServerResult<Value> {
-        let message_id = params.get("messageId").and_then(|v| v.as_str()).unwrap_or("");
+        let message_id = params.get("messageId").and_then(|v| v.as_str())
+            .ok_or_else(|| ServerError::InvalidParams {
+                method: methods::MESSAGE_REMOVE_QUEUED.to_string(),
+                detail: "Missing messageId".to_string(),
+            })?;
+
         debug!(message_id = message_id, "Removing queued message");
 
-        match self.task_manager.get_active_task() {
-            Some(lifecycle) => {
-                let lc = lifecycle.lock().await;
-                // Remove from message queue service
-                drop(lc);
-                Ok(json!({"status": "removed", "messageId": message_id}))
+        let app = self.app.read().await;
+        match app.message_queue() {
+            Some(queue) => {
+                let mut q = queue.lock().await;
+                let removed = q.remove_message(message_id);
+                if removed {
+                    Ok(json!({"status": "removed", "messageId": message_id}))
+                } else {
+                    Ok(json!({"status": "error", "error": "message not found", "messageId": message_id}))
+                }
             }
-            None => Ok(json!({"status": "error", "error": "no active task"})),
+            None => Ok(json!({"status": "error", "error": "message queue not available"})),
         }
     }
 
@@ -2299,9 +2847,19 @@ impl Handler {
     /// Source: TS `webviewMessageHandler.ts` — `refreshCustomTools`
     async fn handle_tools_refresh_custom(&self, _params: Value) -> ServerResult<Value> {
         debug!("Refreshing custom tools");
-        let _app = self.app.read().await;
-        // Reload custom tools from disk
-        Ok(json!({"status": "refreshed"}))
+        let cwd = self.get_cwd().await;
+        let project_tools = std::path::Path::new(&cwd).join(".roo").join("tools");
+        let global_dir = roo_config::paths::get_global_roo_directory().join("tools");
+
+        let mut total = 0usize;
+        for dir in [&project_tools, &global_dir] {
+            if dir.exists() {
+                if let Ok(result) = roo_custom_tools::loader::load_from_directory(dir) {
+                    total += result.loaded.len();
+                }
+            }
+        }
+        Ok(json!({"status": "refreshed", "totalTools": total}))
     }
 
     // ── Telemetry commands ───────────────────────────────────────────────
@@ -2312,6 +2870,15 @@ impl Handler {
     async fn handle_telemetry_set_setting(&self, params: Value) -> ServerResult<Value> {
         let setting = params.get("setting").and_then(|v| v.as_str()).unwrap_or("unset");
         debug!(setting = setting, "Setting telemetry setting");
+
+        let app = self.app.read().await;
+        let gsp = app.config().global_storage_path.clone();
+        drop(app);
+
+        let mut settings = Self::read_roo_settings(&gsp).await;
+        settings["telemetrySetting"] = json!(setting);
+
+        Self::write_roo_settings(&gsp, &settings).await?;
         Ok(json!({"status": "updated", "setting": setting}))
     }
 
@@ -2325,11 +2892,11 @@ impl Handler {
             .or_else(|| params.get("name").and_then(|v| v.as_str()))
             .unwrap_or("");
         debug!(name = name, "Opening skill file");
-        // In headless mode, return the skill file path if found
         let app = self.app.read().await;
         match app.skills_manager() {
             Some(manager) => {
-                if let Some(skill) = manager.get_skill(name, roo_skills::types::SkillSource::Project, None) {
+                let mgr = manager.read().await;
+                if let Some(skill) = mgr.get_skill(name, roo_skills::SkillSource::Project, None) {
                     Ok(json!({"status": "ok", "path": skill.path}))
                 } else {
                     Ok(json!({"status": "not_found", "name": name}))
@@ -2347,15 +2914,52 @@ impl Handler {
     async fn handle_mode_export(&self, params: Value) -> ServerResult<Value> {
         let slug = params.get("slug").and_then(|v| v.as_str()).unwrap_or("");
         debug!(slug = slug, "Exporting mode");
-        Ok(json!({"status": "exported", "slug": slug}))
+
+        let app = self.app.read().await;
+        match app.custom_modes_manager() {
+            Some(manager) => {
+                let mut mgr = manager.write().map_err(|e| ServerError::Internal(e.to_string()))?;
+                let cwd = app.cwd();
+                let result = mgr.export_mode_with_rules(slug, None, Some(std::path::Path::new(cwd)));
+                Ok(json!({
+                    "status": "exported",
+                    "slug": slug,
+                    "yaml": result.yaml,
+                    "success": result.success,
+                    "error": result.error,
+                }))
+            }
+            None => Ok(json!({"status": "error", "error": "custom modes manager not initialized"})),
+        }
     }
 
     /// Import a custom mode.
     ///
     /// Source: TS `webviewMessageHandler.ts` — `importMode`
-    async fn handle_mode_import(&self, _params: Value) -> ServerResult<Value> {
+    async fn handle_mode_import(&self, params: Value) -> ServerResult<Value> {
+        let yaml_content = params.get("yaml").and_then(|v| v.as_str()).unwrap_or("");
+        let source_str = params.get("source").and_then(|v| v.as_str()).unwrap_or("project");
+        let source = match source_str {
+            "global" => roo_types::mode::ModeSource::Global,
+            _ => roo_types::mode::ModeSource::Project,
+        };
         debug!("Importing mode");
-        Ok(json!({"status": "imported"}))
+
+        let app = self.app.read().await;
+        match app.custom_modes_manager() {
+            Some(manager) => {
+                let mut mgr = manager.write().map_err(|e| ServerError::Internal(e.to_string()))?;
+                let cwd = app.cwd();
+                let result = mgr.import_mode_with_rules(yaml_content, source, Some(std::path::Path::new(cwd)));
+                Ok(json!({
+                    "status": "imported",
+                    "slug": result.slug,
+                    "success": result.success,
+                    "error": result.error,
+                }))
+            }
+            None => Ok(json!({"status": "error", "error": "custom modes manager not initialized"})),
+        }
     }
 
     /// Switch mode.
@@ -2377,7 +2981,17 @@ impl Handler {
     async fn handle_mode_check_rules(&self, params: Value) -> ServerResult<Value> {
         let slug = params.get("slug").and_then(|v| v.as_str()).unwrap_or("");
         debug!(slug = slug, "Checking rules directory");
-        Ok(json!({"status": "checked", "slug": slug, "hasContent": false}))
+
+        let app = self.app.read().await;
+        match app.custom_modes_manager() {
+            Some(manager) => {
+                let mgr = manager.read().map_err(|e| ServerError::Internal(e.to_string()))?;
+                let cwd = app.cwd();
+                let has_content = mgr.check_rules_directory_has_content(slug, Some(std::path::Path::new(cwd)));
+                Ok(json!({"status": "checked", "slug": slug, "hasContent": has_content}))
+            }
+            None => Ok(json!({"status": "checked", "slug": slug, "hasContent": false})),
+        }
     }
 
     /// Open custom modes settings file.
@@ -2385,8 +2999,19 @@ impl Handler {
     /// Source: TS `webviewMessageHandler.ts` — `openCustomModesSettings`
     async fn handle_mode_open_settings(&self, _params: Value) -> ServerResult<Value> {
         debug!("Opening custom modes settings");
-        // Headless: return file path info
-        Ok(json!({"status": "not_applicable", "note": "headless mode"}))
+        let app = self.app.read().await;
+        let gsp = app.config().global_storage_path.clone();
+        let cwd = app.cwd().to_string();
+        drop(app);
+        let global_modes = Self::roo_settings_path(&gsp).parent()
+            .map(|p| p.join("roomodes"))
+            .unwrap_or_default();
+        let project_modes = std::path::Path::new(&cwd).join(".roomodes");
+        Ok(json!({
+            "action": "openModeSettings",
+            "globalModesPath": global_modes.to_string_lossy(),
+            "projectModesPath": project_modes.to_string_lossy(),
+        }))
     }
 
     /// Set OpenAI custom model info.
@@ -2411,11 +3036,38 @@ impl Handler {
             .unwrap_or("");
         debug!(message_ts = message_ts, text_len = text.len(), "Submitting edited message");
 
+        let message_ts = match message_ts {
+            Some(ts) => ts,
+            None => return Ok(json!({"status": "error", "error": "missing messageTs"})),
+        };
+
         match self.task_manager.get_active_task() {
             Some(lifecycle) => {
-                let lc = lifecycle.lock().await;
-                drop(lc);
-                Ok(json!({"status": "edited"}))
+                let mut lc = lifecycle.lock().await;
+                let engine = lc.engine_mut();
+                let ts_f64 = message_ts as f64;
+
+                let msg_pos = engine.cline_messages().iter().position(|m| m.ts == ts_f64);
+                let api_truncate_idx = msg_pos.and_then(|pos| {
+                    engine.cline_messages()[pos].conversation_history_index
+                });
+
+                if let Some(pos) = msg_pos {
+                    engine.cline_messages_mut()[pos].text = Some(text.to_string());
+                    engine.cline_messages_mut().truncate(pos + 1);
+                }
+
+                if let Some(api_idx) = api_truncate_idx {
+                    engine.api_conversation_history_mut().truncate(api_idx);
+                }
+
+                if let Err(e) = engine.save_cline_messages().await {
+                    warn!(error = %e, "Failed to save cline messages after submit edited");
+                }
+                if let Err(e) = engine.save_api_conversation_history().await {
+                    warn!(error = %e, "Failed to save API history after submit edited");
+                }
+                Ok(json!({"status": "edited", "messageTs": message_ts}))
             }
             None => Ok(json!({"status": "error", "error": "no active task"})),
         }
@@ -2430,8 +3082,18 @@ impl Handler {
         let item_id = params.get("mpItem").and_then(|i| i.get("id")).and_then(|v| v.as_str())
             .unwrap_or("");
         debug!(item_id = item_id, "Installing marketplace item");
-        // TODO: Wire up to MarketplaceManager once app.marketplace() is available
-        Ok(json!({"success": false, "slug": item_id, "error": "marketplace not yet integrated in headless mode"}))
+
+        let app = self.app.read().await;
+        match app.marketplace_manager() {
+            Some(manager) => {
+                let mut mgr = manager.write().await;
+                match mgr.install_item(item_id) {
+                    Ok(()) => Ok(json!({"success": true, "slug": item_id})),
+                    Err(e) => Ok(json!({"success": false, "slug": item_id, "error": e.to_string()})),
+                }
+            }
+            None => Ok(json!({"success": false, "slug": item_id, "error": "marketplace manager not initialized"})),
+        }
     }
 
     /// Remove an installed marketplace item.
@@ -2441,17 +3103,40 @@ impl Handler {
         let item_id = params.get("mpItem").and_then(|i| i.get("id")).and_then(|v| v.as_str())
             .unwrap_or("");
         debug!(item_id = item_id, "Removing marketplace item");
-        // TODO: Wire up to MarketplaceManager once app.marketplace() is available
-        Ok(json!({"success": false, "slug": item_id, "error": "marketplace not yet integrated in headless mode"}))
+
+        let app = self.app.read().await;
+        match app.marketplace_manager() {
+            Some(manager) => {
+                let mut mgr = manager.write().await;
+                match mgr.remove_item(item_id) {
+                    Ok(true) => Ok(json!({"success": true, "slug": item_id})),
+                    Ok(false) => Ok(json!({"success": false, "slug": item_id, "error": "item not found"})),
+                    Err(e) => Ok(json!({"success": false, "slug": item_id, "error": e.to_string()})),
+                }
+            }
+            None => Ok(json!({"success": false, "slug": item_id, "error": "marketplace manager not initialized"})),
+        }
     }
 
     /// Install marketplace item with parameters.
     ///
     /// Source: TS `webviewMessageHandler.ts` — `installMarketplaceItemWithParameters`
-    async fn handle_marketplace_install_with_params(&self, _params: Value) -> ServerResult<Value> {
-        debug!("Installing marketplace item with parameters");
-        // TODO: Wire up to MarketplaceManager once app.marketplace() is available
-        Ok(json!({"success": false, "error": "marketplace not yet integrated in headless mode"}))
+    async fn handle_marketplace_install_with_params(&self, params: Value) -> ServerResult<Value> {
+        let item_id = params.get("mpItem").and_then(|i| i.get("id")).and_then(|v| v.as_str())
+            .unwrap_or("");
+        debug!(item_id = item_id, "Installing marketplace item with parameters");
+
+        let app = self.app.read().await;
+        match app.marketplace_manager() {
+            Some(manager) => {
+                let mut mgr = manager.write().await;
+                match mgr.install_item(item_id) {
+                    Ok(()) => Ok(json!({"success": true, "slug": item_id})),
+                    Err(e) => Ok(json!({"success": false, "slug": item_id, "error": e.to_string()})),
+                }
+            }
+            None => Ok(json!({"success": false, "error": "marketplace manager not initialized"})),
+        }
     }
 
     /// Fetch marketplace data.
@@ -2459,8 +3144,23 @@ impl Handler {
     /// Source: TS `webviewMessageHandler.ts` — `fetchMarketplaceData`
     async fn handle_marketplace_fetch_data(&self, _params: Value) -> ServerResult<Value> {
         debug!("Fetching marketplace data");
-        // TODO: Wire up to MarketplaceManager once app.marketplace() is available
-        Ok(json!({"items": []}))
+
+        let app = self.app.read().await;
+        match app.marketplace_manager() {
+            Some(manager) => {
+                let mgr = manager.read().await;
+                let items = mgr.get_items();
+                let item_list: Vec<Value> = items.iter().map(|item| {
+                    json!({
+                        "id": item.id,
+                        "name": item.name,
+                        "type": format!("{:?}", item.item_type),
+                    })
+                }).collect();
+                Ok(json!({"items": item_list}))
+            }
+            None => Ok(json!({"items": []})),
+        }
     }
 
     /// Filter marketplace items.
@@ -2470,8 +3170,34 @@ impl Handler {
         let filter_type = params.get("filters").and_then(|f| f.get("type")).and_then(|v| v.as_str());
         let search = params.get("filters").and_then(|f| f.get("search")).and_then(|v| v.as_str());
         debug!(filter_type = filter_type, search = search, "Filtering marketplace items");
-        // Filtering is done client-side in headless mode; acknowledge
-        Ok(json!({"status": "filtered"}))
+
+        let app = self.app.read().await;
+        match app.marketplace_manager() {
+            Some(manager) => {
+                let mgr = manager.read().await;
+                let item_type = filter_type.and_then(|t| match t {
+                    "mcp" => Some(roo_marketplace::MarketplaceItemType::Mcp),
+                    "mode" => Some(roo_marketplace::MarketplaceItemType::Mode),
+                    "skill" => Some(roo_marketplace::MarketplaceItemType::Skill),
+                    _ => None,
+                });
+                let filter = roo_marketplace::MarketplaceFilter {
+                    item_type,
+                    search_query: search.map(|s| s.to_string()),
+                    tags: None,
+                };
+                let filtered = mgr.filter_items(&filter);
+                let items: Vec<Value> = filtered.iter().map(|item| {
+                    json!({
+                        "id": item.id,
+                        "name": item.name,
+                        "type": format!("{:?}", item.item_type),
+                    })
+                }).collect();
+                Ok(json!({"items": items, "status": "filtered"}))
+            }
+            None => Ok(json!({"items": [], "status": "filtered"})),
+        }
     }
 
     /// Marketplace button clicked.
@@ -2497,6 +3223,50 @@ impl Handler {
     async fn get_cwd(&self) -> String {
         let app = self.app.read().await;
         app.cwd().to_string()
+    }
+
+    /// Get API key for a specific provider from current settings.
+    async fn get_api_key_for_provider(&self, provider: &str) -> Option<String> {
+        let app = self.app.read().await;
+        let settings = app.provider_settings();
+        match provider {
+            "anthropic" => settings.api_key.clone(),
+            "openai" => settings.open_ai_api_key.clone(),
+            "openrouter" => settings.open_router_api_key.clone(),
+            "ollama" => settings.ollama_api_key.clone(),
+            "deepseek" => settings.deep_seek_api_key.clone(),
+            "gemini" => settings.gemini_api_key.clone().or(settings.google_api_key.clone()),
+            "mistral" => settings.mistral_api_key.clone(),
+            "minimax" => settings.minimax_api_key.clone(),
+            "xai" => settings.xai_api_key.clone(),
+            "litellm" => settings.litellm_api_key.clone(),
+            "requesty" => settings.requesty_api_key.clone(),
+            "openai-native" => settings.open_ai_native_api_key.clone(),
+            "poe" => settings.poe_api_key.clone(),
+            "roo" => settings.roo_api_key.clone(),
+            _ => None,
+        }.filter(|k| !k.is_empty())
+    }
+
+    /// Get base URL for a specific provider from current settings.
+    async fn get_base_url_for_provider(&self, provider: &str) -> Option<String> {
+        let app = self.app.read().await;
+        let settings = app.provider_settings();
+        let url = match provider {
+            "anthropic" => settings.anthropic_base_url.clone(),
+            "openai" => settings.open_ai_base_url.clone(),
+            "openrouter" => settings.open_router_base_url.clone(),
+            "ollama" => settings.ollama_base_url.clone(),
+            "deepseek" => settings.deep_seek_base_url.clone(),
+            "gemini" => settings.google_gemini_base_url.clone().or(settings.gemini_base_url.clone()),
+            "mistral" => settings.mistral_base_url.clone(),
+            "minimax" => settings.minimax_base_url.clone(),
+            "xai" => settings.xai_base_url.clone(),
+            "litellm" => settings.litellm_base_url.clone(),
+            "lmstudio" => settings.lm_studio_base_url.clone(),
+            _ => None,
+        };
+        url.filter(|u| !u.is_empty())
     }
 
     /// List git worktrees.
@@ -2616,8 +3386,18 @@ impl Handler {
     async fn handle_worktree_switch(&self, params: Value) -> ServerResult<Value> {
         let wt_path = params.get("worktreePath").and_then(|v| v.as_str()).unwrap_or("");
         debug!(wt_path = wt_path, "Switching worktree");
-        // In headless CLI mode, switching worktrees means changing cwd
-        Ok(json!({"success": true, "text": format!("Switch to {wt_path} requested (headless mode: update working directory externally)")}))
+
+        if wt_path.is_empty() {
+            return Ok(json!({"success": false, "message": "missing worktreePath"}));
+        }
+
+        // Return action for the Tauri GUI to switch the working directory
+        Ok(json!({
+            "action": "switchWorktree",
+            "path": wt_path,
+            "success": true,
+            "text": format!("Switch to {wt_path}"),
+        }))
     }
 
     /// Get available git branches.
@@ -2746,7 +3526,7 @@ impl Handler {
         if let Some(path) = defaults.get("suggestedPath").and_then(|v| v.as_str()) {
             Ok(json!({"path": path}))
         } else {
-            Ok(json!({"status": "not_applicable", "note": "headless mode - no folder picker"}))
+            Ok(json!({"action": "showFolderPicker"}))
         }
     }
 
@@ -2758,8 +3538,7 @@ impl Handler {
     async fn handle_tts_play(&self, params: Value) -> ServerResult<Value> {
         let text = params.get("text").and_then(|v| v.as_str()).unwrap_or("");
         debug!(text_len = text.len(), "Playing TTS");
-        // TTS is not available in headless mode
-        Ok(json!({"status": "not_applicable", "note": "TTS not available in headless mode"}))
+        Ok(json!({"action": "playTts", "text": text}))
     }
 
     /// Stop text-to-speech.
@@ -2767,7 +3546,7 @@ impl Handler {
     /// Source: TS `webviewMessageHandler.ts` — `stopTts`
     async fn handle_tts_stop(&self, _params: Value) -> ServerResult<Value> {
         debug!("Stopping TTS");
-        Ok(json!({"status": "stopped"}))
+        Ok(json!({"action": "stopTts"}))
     }
 
     /// Set TTS enabled.
@@ -2776,6 +3555,14 @@ impl Handler {
     async fn handle_tts_enabled(&self, params: Value) -> ServerResult<Value> {
         let enabled = params.get("bool").and_then(|v| v.as_bool()).unwrap_or(true);
         debug!(enabled = enabled, "Setting TTS enabled");
+
+        let app = self.app.read().await;
+        let gsp = app.config().global_storage_path.clone();
+        drop(app);
+        let mut settings = Self::read_roo_settings(&gsp).await;
+        settings["ttsEnabled"] = json!(enabled);
+        let _ = Self::write_roo_settings(&gsp, &settings).await;
+
         Ok(json!({"status": "updated", "ttsEnabled": enabled}))
     }
 
@@ -2785,6 +3572,14 @@ impl Handler {
     async fn handle_tts_speed(&self, params: Value) -> ServerResult<Value> {
         let speed = params.get("value").and_then(|v| v.as_f64()).unwrap_or(1.0);
         debug!(speed = speed, "Setting TTS speed");
+
+        let app = self.app.read().await;
+        let gsp = app.config().global_storage_path.clone();
+        drop(app);
+        let mut settings = Self::read_roo_settings(&gsp).await;
+        settings["ttsSpeed"] = json!(speed);
+        let _ = Self::write_roo_settings(&gsp, &settings).await;
+
         Ok(json!({"status": "updated", "ttsSpeed": speed}))
     }
 
@@ -2846,8 +3641,13 @@ impl Handler {
     async fn handle_image_open(&self, params: Value) -> ServerResult<Value> {
         let path = params.get("text").and_then(|v| v.as_str()).unwrap_or("");
         debug!(path = path, "Opening image");
-        // Headless: no image viewer available
-        Ok(json!({"status": "not_applicable", "note": "headless mode"}))
+        if path.is_empty() {
+            return Ok(json!({"status": "error", "error": "missing path"}));
+        }
+        match opener::open(path) {
+            Ok(()) => Ok(json!({"status": "opened"})),
+            Err(e) => Ok(json!({"status": "error", "error": e.to_string()})),
+        }
     }
 
     // ── Model requests ─────────────────────────────────────────────────────
@@ -2855,9 +3655,25 @@ impl Handler {
     /// Flush router models cache.
     ///
     /// Source: TS `webviewMessageHandler.ts` — `flushRouterModels`
+    /// TS: calls `flushModels({provider: routerName}, true)` which clears the model cache.
     async fn handle_models_flush_router(&self, params: Value) -> ServerResult<Value> {
         let router_name = params.get("text").and_then(|v| v.as_str()).unwrap_or("");
         debug!(router_name = router_name, "Flushing router models");
+
+        // Clear any cached model data from settings
+        let app = self.app.read().await;
+        let gsp = app.config().global_storage_path.clone();
+        drop(app);
+
+        let mut settings = Self::read_roo_settings(&gsp).await;
+        // Remove cached model lists for this router
+        if let Some(obj) = settings.as_object_mut() {
+            let cache_key = format!("cachedModels_{}", router_name);
+            obj.remove(&cache_key);
+            obj.remove("cachedModels"); // Also clear the generic cache
+        }
+        let _ = Self::write_roo_settings(&gsp, &settings).await;
+
         Ok(json!({"status": "flushed", "router": router_name}))
     }
 
@@ -2876,7 +3692,20 @@ impl Handler {
     /// Source: TS `webviewMessageHandler.ts` — `requestOpenAiModels`
     async fn handle_models_request_openai(&self, _params: Value) -> ServerResult<Value> {
         debug!("Requesting OpenAI models");
-        Ok(json!({"models": []}))
+        let api_key = self.get_api_key_for_provider("openai").await;
+        match roo_provider::fetcher::fetch_openai_compatible_models(
+            "https://api.openai.com/v1",
+            api_key.as_deref(),
+        ).await {
+            Ok(models) => {
+                let model_list: Vec<String> = models.keys().cloned().collect();
+                Ok(json!({"models": model_list}))
+            }
+            Err(e) => {
+                warn!(error = %e, "Failed to fetch OpenAI models");
+                Ok(json!({"models": [], "error": e.to_string()}))
+            }
+        }
     }
 
     /// Request Ollama models.
@@ -2884,7 +3713,25 @@ impl Handler {
     /// Source: TS `webviewMessageHandler.ts` — `requestOllamaModels`
     async fn handle_models_request_ollama(&self, _params: Value) -> ServerResult<Value> {
         debug!("Requesting Ollama models");
-        Ok(json!({"models": []}))
+        let base_url = self.get_base_url_for_provider("ollama").await
+            .unwrap_or_else(|| "http://localhost:11434".to_string());
+        let tags_url = format!("{}/api/tags", base_url.trim_end_matches("/v1").trim_end_matches('/'));
+        match roo_provider::fetcher::fetch_models_raw::<serde_json::Value>(&tags_url, None).await {
+            Ok(data) => {
+                let models: Vec<String> = data.get("models")
+                    .and_then(|m| m.as_array())
+                    .map(|arr| arr.iter()
+                        .filter_map(|m| m.get("name").and_then(|n| n.as_str())
+                            .map(|s| s.trim_end_matches(":latest").to_string()))
+                        .collect())
+                    .unwrap_or_default();
+                Ok(json!({"models": models}))
+            }
+            Err(e) => {
+                debug!(error = %e, "Ollama not available");
+                Ok(json!({"models": [], "error": e.to_string()}))
+            }
+        }
     }
 
     /// Request LM Studio models.
@@ -2892,23 +3739,88 @@ impl Handler {
     /// Source: TS `webviewMessageHandler.ts` — `requestLmStudioModels`
     async fn handle_models_request_lmstudio(&self, _params: Value) -> ServerResult<Value> {
         debug!("Requesting LM Studio models");
-        Ok(json!({"models": []}))
+        let base_url = self.get_base_url_for_provider("lmstudio").await
+            .unwrap_or_else(|| "http://localhost:1234".to_string());
+        let url = format!("{}/v1/models", base_url.trim_end_matches('/'));
+        match roo_provider::fetcher::fetch_openai_compatible_models(&url, None).await {
+            Ok(models) => {
+                let model_list: Vec<String> = models.keys().cloned().collect();
+                Ok(json!({"models": model_list}))
+            }
+            Err(e) => {
+                debug!(error = %e, "LM Studio not available");
+                Ok(json!({"models": [], "error": e.to_string()}))
+            }
+        }
     }
 
     /// Request Roo models.
     ///
     /// Source: TS `webviewMessageHandler.ts` — `requestRooModels`
+    /// TS: Fetches from `https://api.roocode.com/proxy` with cloud session token.
     async fn handle_models_request_roo(&self, _params: Value) -> ServerResult<Value> {
         debug!("Requesting Roo models");
-        Ok(json!({"models": []}))
+        let api_key = self.get_api_key_for_provider("roo").await;
+        let base_url = self.get_base_url_for_provider("roo").await
+            .unwrap_or_else(|| "https://api.roocode.com/proxy".to_string());
+
+        let models_url = format!("{}/models", base_url.trim_end_matches('/'));
+        match roo_provider::fetcher::fetch_openai_compatible_models(&models_url, api_key.as_deref()).await {
+            Ok(models) => {
+                let model_list: Vec<String> = models.keys().cloned().collect();
+                Ok(json!({
+                    "type": "singleRouterModelFetchResponse",
+                    "success": true,
+                    "values": {"provider": "roo", "models": model_list},
+                }))
+            }
+            Err(e) => {
+                debug!(error = %e, "Failed to fetch Roo models");
+                Ok(json!({
+                    "type": "singleRouterModelFetchResponse",
+                    "success": false,
+                    "values": {"provider": "roo", "models": []},
+                    "error": e.to_string(),
+                }))
+            }
+        }
     }
 
     /// Request Roo credit balance.
     ///
     /// Source: TS `webviewMessageHandler.ts` — `requestRooCreditBalance`
-    async fn handle_models_request_roo_credit(&self, _params: Value) -> ServerResult<Value> {
+    /// TS: Calls CloudService.instance.cloudAPI.creditBalance().
+    async fn handle_models_request_roo_credit(&self, params: Value) -> ServerResult<Value> {
         debug!("Requesting Roo credit balance");
-        Ok(json!({"credits": null}))
+        let request_id = params.get("requestId").and_then(|v| v.as_str()).unwrap_or("");
+
+        // Check for Roo API key (session token equivalent)
+        let api_key = self.get_api_key_for_provider("roo").await;
+        let base_url = self.get_base_url_for_provider("roo").await
+            .unwrap_or_else(|| "https://api.roocode.com".to_string());
+
+        match api_key {
+            Some(key) => {
+                let url = format!("{}/credits/balance", base_url.trim_end_matches('/'));
+                match roo_provider::fetcher::fetch_models_raw::<serde_json::Value>(&url, Some(&key)).await {
+                    Ok(data) => Ok(json!({
+                        "type": "rooCreditBalance",
+                        "requestId": request_id,
+                        "values": data,
+                    })),
+                    Err(e) => Ok(json!({
+                        "type": "rooCreditBalance",
+                        "requestId": request_id,
+                        "error": e.to_string(),
+                    })),
+                }
+            }
+            None => Ok(json!({
+                "type": "rooCreditBalance",
+                "requestId": request_id,
+                "error": "Cloud service not available",
+            })),
+        }
     }
 
     /// Request VS Code LM models.
@@ -2922,14 +3834,16 @@ impl Handler {
     // ── Mentions ───────────────────────────────────────────────────────────
     // Source: TS `src/core/mentions/index.ts` — `openMention`, `parseMentions`
 
-    /// Open a mention (file reference).
+    /// Open a mention (file reference, problems, git, url, terminal).
     ///
     /// Source: TS `webviewMessageHandler.ts` — `openMention`
-    /// In headless mode, returns the file/folder content for the mentioned path.
+    /// TS handles: file paths (`/path`), `@problems`, `@git`, `@url`, `@terminal`.
+    /// For file paths, returns content directly. For non-file types, delegates to Tauri GUI.
     async fn handle_mention_open(&self, params: Value) -> ServerResult<Value> {
         let mention = params.get("text").and_then(|v| v.as_str()).unwrap_or("");
         debug!(mention = mention, "Opening mention");
 
+        // File path mentions start with / or \
         if mention.starts_with('/') || mention.starts_with("\\") {
             let cwd = self.get_cwd().await;
             let cwd_path = Path::new(&cwd);
@@ -2946,7 +3860,68 @@ impl Handler {
                     "error": e,
                 })),
             }
-        } else {
+        }
+        // @problems — open VS Code / Tauri problems panel
+        else if mention == "@problems" {
+            Ok(json!({"action": "openProblemsPanel", "mention": mention}))
+        }
+        // @git — open git history / SCM view
+        else if mention == "@git" {
+            let cwd = self.get_cwd().await;
+            // Return recent git log as content for the mention
+            match std::process::Command::new("git")
+                .args(["log", "--oneline", "-20"])
+                .current_dir(&cwd)
+                .output()
+            {
+                Ok(output) => {
+                    let log = String::from_utf8_lossy(&output.stdout);
+                    Ok(json!({
+                        "status": "opened",
+                        "mention": mention,
+                        "content": log,
+                    }))
+                }
+                Err(e) => Ok(json!({
+                    "status": "error",
+                    "mention": mention,
+                    "error": e.to_string(),
+                })),
+            }
+        }
+        // @url — open URL in browser
+        else if mention.starts_with("@url:") || mention.starts_with("http://") || mention.starts_with("https://") {
+            let url = mention.trim_start_matches("@url:").trim();
+            match opener::open(url) {
+                Ok(()) => Ok(json!({"status": "opened", "mention": mention})),
+                Err(e) => Ok(json!({"status": "error", "mention": mention, "error": e.to_string()})),
+            }
+        }
+        // @terminal — show terminal output
+        else if mention == "@terminal" {
+            // Return terminal output from active task's terminals
+            let output = match self.task_manager.get_active_task() {
+                Some(lifecycle) => {
+                    let lc = lifecycle.lock().await;
+                    if let Some(ref registry) = lc.services().terminal_registry {
+                        let terminals = registry.get_background_terminals(None).await;
+                        let mut outputs = Vec::new();
+                        for terminal in terminals {
+                            let mut guard = terminal.lock().await;
+                            let tid = guard.get_id();
+                            let out = guard.get_unretrieved_output();
+                            outputs.push(format!("Terminal [{}]: {}", tid, if out.is_empty() { "(no output)" } else { &out }));
+                        }
+                        outputs.join("\n")
+                    } else {
+                        "No terminal registry available".to_string()
+                    }
+                }
+                None => "No active task".to_string(),
+            };
+            Ok(json!({"status": "opened", "mention": mention, "content": output}))
+        }
+        else {
             Ok(json!({"status": "not_applicable", "mention": mention}))
         }
     }
@@ -2995,7 +3970,28 @@ impl Handler {
     async fn handle_command_open_file(&self, params: Value) -> ServerResult<Value> {
         let name = params.get("text").and_then(|v| v.as_str()).unwrap_or("");
         debug!(name = name, "Opening command file");
-        Ok(json!({"status": "not_applicable", "note": "headless mode"}))
+
+        if name.is_empty() {
+            return Ok(json!({"status": "error", "error": "missing command name"}));
+        }
+
+        // Try project commands first, then global
+        let cwd = self.get_cwd().await;
+        let project_cmd = std::path::Path::new(&cwd).join(".roo").join("commands").join(format!("{name}.md"));
+        let global_dir = roo_config::paths::get_global_roo_directory().join("commands").join(format!("{name}.md"));
+
+        let path_to_open = if project_cmd.exists() {
+            project_cmd
+        } else if global_dir.exists() {
+            global_dir
+        } else {
+            return Ok(json!({"status": "not_found", "name": name}));
+        };
+
+        match opener::open(&path_to_open) {
+            Ok(()) => Ok(json!({"status": "opened", "path": path_to_open.to_string_lossy()})),
+            Err(e) => Ok(json!({"status": "error", "error": e.to_string()})),
+        }
     }
 
     /// Delete a command.
@@ -3003,8 +3999,45 @@ impl Handler {
     /// Source: TS `webviewMessageHandler.ts` — `deleteCommand`
     async fn handle_command_delete(&self, params: Value) -> ServerResult<Value> {
         let name = params.get("text").and_then(|v| v.as_str()).unwrap_or("");
-        debug!(name = name, "Deleting command");
-        Ok(json!({"status": "deleted", "name": name}))
+        if name.is_empty() {
+            return Err(ServerError::InvalidParams {
+                method: "command_delete".into(),
+                detail: "command name is required".into(),
+            });
+        }
+
+        let cwd = self.get_cwd().await;
+        let cwd_path = Path::new(&cwd);
+
+        // Build candidate paths: project first, then global
+        let project_cmd = paths::get_project_roo_directory_for_cwd(cwd_path)
+            .join("commands")
+            .join(format!("{name}.md"));
+        let global_cmd = paths::get_global_roo_directory()
+            .join("commands")
+            .join(format!("{name}.md"));
+
+        let file_path = if project_cmd.exists() {
+            &project_cmd
+        } else if global_cmd.exists() {
+            &global_cmd
+        } else {
+            return Err(ServerError::InvalidParams {
+                method: "command_delete".into(),
+                detail: format!("command '{name}' not found in project or global commands directory"),
+            });
+        };
+
+        match std::fs::remove_file(file_path) {
+            Ok(()) => {
+                debug!(name = name, path = %file_path.display(), "Deleted command");
+                Ok(json!({"status": "deleted", "name": name}))
+            }
+            Err(e) => {
+                error!(name = name, error = %e, "Failed to delete command");
+                Err(ServerError::Internal(format!("failed to delete command: {e}")))
+            }
+        }
     }
 
     /// Create a command.
@@ -3012,9 +4045,42 @@ impl Handler {
     /// Source: TS `webviewMessageHandler.ts` — `createCommand`
     async fn handle_command_create(&self, params: Value) -> ServerResult<Value> {
         let name = params.get("text").and_then(|v| v.as_str()).unwrap_or("");
-        let source = params.get("values").and_then(|v| v.get("source")).and_then(|v| v.as_str()).unwrap_or("project");
-        debug!(name = name, source = source, "Creating command");
-        Ok(json!({"status": "created", "name": name, "source": source}))
+        let content = params
+            .get("values")
+            .and_then(|v| v.get("content"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+
+        if name.is_empty() {
+            return Err(ServerError::InvalidParams {
+                method: "command_create".into(),
+                detail: "command name is required".into(),
+            });
+        }
+
+        let cwd = self.get_cwd().await;
+        let cwd_path = Path::new(&cwd);
+        let commands_dir = paths::get_project_roo_directory_for_cwd(cwd_path).join("commands");
+
+        // Create the commands directory if it doesn't exist
+        if let Err(e) = std::fs::create_dir_all(&commands_dir) {
+            error!(dir = %commands_dir.display(), error = %e, "Failed to create commands directory");
+            return Err(ServerError::Internal(format!(
+                "failed to create commands directory: {e}"
+            )));
+        }
+
+        let file_path = commands_dir.join(format!("{name}.md"));
+        match std::fs::write(&file_path, content) {
+            Ok(()) => {
+                debug!(name = name, path = %file_path.display(), "Created command");
+                Ok(json!({"status": "created", "name": name, "source": "project"}))
+            }
+            Err(e) => {
+                error!(name = name, error = %e, "Failed to write command");
+                Err(ServerError::Internal(format!("failed to write command: {e}")))
+            }
+        }
     }
 
     // ── Settings (additional) ──────────────────────────────────────────────
@@ -3028,6 +4094,15 @@ impl Handler {
             .map(|a| a.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
             .unwrap_or_default();
         debug!(denied = ?denied, "Setting denied commands");
+
+        let app = self.app.read().await;
+        let gsp = app.config().global_storage_path.clone();
+        drop(app);
+
+        let mut settings = Self::read_roo_settings(&gsp).await;
+        settings["deniedCommands"] = json!(denied);
+
+        Self::write_roo_settings(&gsp, &settings).await?;
         Ok(json!({"status": "updated", "deniedCount": denied.len()}))
     }
 
@@ -3037,6 +4112,15 @@ impl Handler {
     async fn handle_settings_condensing_prompt(&self, params: Value) -> ServerResult<Value> {
         let text = params.get("text").and_then(|v| v.as_str()).unwrap_or("");
         debug!(text_len = text.len(), "Updating condensing prompt");
+
+        let app = self.app.read().await;
+        let gsp = app.config().global_storage_path.clone();
+        drop(app);
+
+        let mut settings = Self::read_roo_settings(&gsp).await;
+        settings["condensingPrompt"] = json!(text);
+
+        Self::write_roo_settings(&gsp, &settings).await?;
         Ok(json!({"status": "updated"}))
     }
 
@@ -3045,6 +4129,7 @@ impl Handler {
     /// Source: TS `webviewMessageHandler.ts` — `setApiConfigPassword`
     async fn handle_settings_set_api_config_password(&self, _params: Value) -> ServerResult<Value> {
         debug!("Setting API config password");
+        // Intentionally not persisted — passwords are never stored in plaintext settings
         Ok(json!({"status": "updated"}))
     }
 
@@ -3054,6 +4139,15 @@ impl Handler {
     async fn handle_settings_has_opened_mode_selector(&self, params: Value) -> ServerResult<Value> {
         let opened = params.get("bool").and_then(|v| v.as_bool()).unwrap_or(true);
         debug!(opened = opened, "Setting has opened mode selector");
+
+        let app = self.app.read().await;
+        let gsp = app.config().global_storage_path.clone();
+        drop(app);
+
+        let mut settings = Self::read_roo_settings(&gsp).await;
+        settings["hasOpenedModeSelector"] = json!(opened);
+
+        Self::write_roo_settings(&gsp, &settings).await?;
         Ok(json!({"status": "updated", "hasOpenedModeSelector": opened}))
     }
 
@@ -3063,15 +4157,37 @@ impl Handler {
     async fn handle_settings_task_sync_enabled(&self, params: Value) -> ServerResult<Value> {
         let enabled = params.get("bool").and_then(|v| v.as_bool()).unwrap_or(false);
         debug!(enabled = enabled, "Setting task sync enabled");
+
+        let app = self.app.read().await;
+        let gsp = app.config().global_storage_path.clone();
+        drop(app);
+
+        let mut settings = Self::read_roo_settings(&gsp).await;
+        settings["taskSyncEnabled"] = json!(enabled);
+
+        Self::write_roo_settings(&gsp, &settings).await?;
         Ok(json!({"status": "updated", "taskSyncEnabled": enabled}))
     }
 
     /// Batch update settings.
     ///
     /// Source: TS `webviewMessageHandler.ts` — `updateSettings`
-    async fn handle_settings_update_settings(&self, _params: Value) -> ServerResult<Value> {
+    async fn handle_settings_update_settings(&self, params: Value) -> ServerResult<Value> {
         debug!("Batch updating settings");
-        // In headless mode, settings updates are stored in memory
+
+        let app = self.app.read().await;
+        let gsp = app.config().global_storage_path.clone();
+        drop(app);
+
+        let mut settings = Self::read_roo_settings(&gsp).await;
+        // Merge all incoming keys into the existing settings
+        if let (Some(existing), Some(incoming)) = (settings.as_object_mut(), params.as_object()) {
+            for (key, value) in incoming {
+                existing.insert(key.clone(), value.clone());
+            }
+        }
+
+        Self::write_roo_settings(&gsp, &settings).await?;
         Ok(json!({"status": "updated"}))
     }
 
@@ -3098,26 +4214,126 @@ impl Handler {
     /// Share current task.
     ///
     /// Source: TS `webviewMessageHandler.ts` — `shareCurrentTask`
-    async fn handle_history_share_task(&self, _params: Value) -> ServerResult<Value> {
-        debug!("Sharing task");
+    /// Share/export a task's conversation history.
+    ///
+    /// Source: TS `webviewMessageHandler.ts` — `shareCurrentTask`
+    /// TS: calls CloudService.instance.shareTask() which uploads to Roo Cloud.
+    /// In Tauri: we export the task data as a JSON file that can be shared.
+    async fn handle_history_share_task(&self, params: Value) -> ServerResult<Value> {
+        let visibility = params.get("visibility").and_then(|v| v.as_str()).unwrap_or("organization");
+        debug!(visibility = visibility, "Sharing/exporting task");
+
         match self.task_manager.get_active_task() {
             Some(lifecycle) => {
                 let lc = lifecycle.lock().await;
                 let task_id = lc.task_id().to_string();
-                Ok(json!({"status": "shared", "taskId": task_id}))
+                let messages = lc.engine().cline_messages();
+                let api_history = lc.engine().api_conversation_history();
+                let cwd = lc.engine().config().cwd.clone();
+
+                let export = json!({
+                    "taskId": task_id,
+                    "visibility": visibility,
+                    "exportedAt": chrono::Utc::now().to_rfc3339(),
+                    "workspace": cwd,
+                    "clineMessages": messages,
+                    "apiConversationHistory": api_history.iter().map(|m| {
+                        json!({
+                            "role": format!("{:?}", m.role),
+                            "contentBlocks": m.content.len(),
+                        })
+                    }).collect::<Vec<_>>(),
+                });
+
+                // Write export file
+                let app = self.app.read().await;
+                let gsp = app.config().global_storage_path.clone();
+                drop(app);
+                let export_dir = if gsp.is_empty() {
+                    paths::get_global_roo_directory()
+                } else {
+                    std::path::PathBuf::from(&gsp)
+                }.join("exports");
+                let _ = tokio::fs::create_dir_all(&export_dir).await;
+                let export_path = export_dir.join(format!("task-{}-{}.json", &task_id[..8.min(task_id.len())], chrono::Utc::now().format("%Y%m%d%H%M%S")));
+                match tokio::fs::write(&export_path, serde_json::to_string_pretty(&export).unwrap_or_default()).await {
+                    Ok(()) => Ok(json!({
+                        "status": "exported",
+                        "taskId": task_id,
+                        "path": export_path.to_string_lossy(),
+                        "visibility": visibility,
+                    })),
+                    Err(e) => Ok(json!({"status": "error", "error": e.to_string()})),
+                }
             }
             None => Ok(json!({"status": "error", "error": "no active task"})),
         }
     }
 
-    // ── UI / VS Code-specific (stubs) ──────────────────────────────────────
+    // ── UI / Tauri GUI commands ──────────────────────────────────────────
 
-    /// Webview did launch.
+    /// Webview did launch — full initialization.
     ///
     /// Source: TS `webviewMessageHandler.ts` — `webviewDidLaunch`
+    /// TS loads: custom modes, workspace tracker, theme, MCP servers, API configs.
+    /// In Rust: returns all initial state the GUI needs to bootstrap.
     async fn handle_webview_did_launch(&self, _params: Value) -> ServerResult<Value> {
-        debug!("Webview did launch");
-        Ok(json!({"status": "launched"}))
+        debug!("GUI did launch — initializing");
+
+        let app = self.app.read().await;
+        let gsp = app.config().global_storage_path.clone();
+        let cwd = app.cwd().to_string();
+
+        // 1. Load custom modes via CustomModesManager
+        let custom_modes: Vec<roo_types::mode::ModeConfig> = match app.custom_modes_manager() {
+            Some(mgr_arc) => {
+                let mut mgr = mgr_arc.write().unwrap();
+                mgr.get_custom_modes()
+            }
+            None => vec![],
+        };
+
+        // 2. Get current provider settings
+        let prov_settings = app.provider_settings();
+        let api_provider = prov_settings.api_provider.map(|p| format!("{:?}", p));
+        let api_model_id = prov_settings.api_model_id.clone();
+
+        // 3. List MCP servers
+        let mcp_servers = match app.mcp_hub() {
+            Some(hub) => hub.get_all_servers().await,
+            None => vec![],
+        };
+
+        // 4. Get current state from settings
+        let roo_settings = Self::read_roo_settings(&gsp).await;
+        let current_config_name = roo_settings.get("currentApiConfigName")
+            .and_then(|v| v.as_str())
+            .unwrap_or("default")
+            .to_string();
+
+        // 5. Read API config entries from settings file
+        let api_configs: Vec<Value> = roo_settings.get("apiConfigEntries")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+
+        let state_json = json!({
+            "mode": roo_settings.get("mode").and_then(|v| v.as_str()).unwrap_or("code"),
+            "currentApiConfigName": current_config_name,
+            "customModes": custom_modes,
+            "apiProvider": api_provider,
+            "apiModelId": api_model_id,
+        });
+
+        drop(app);
+
+        Ok(json!({
+            "status": "launched",
+            "state": state_json,
+            "mcpServers": mcp_servers,
+            "apiConfigs": api_configs,
+            "workspace": cwd,
+        }))
     }
 
     /// Announcement did show.
@@ -3125,15 +4341,22 @@ impl Handler {
     /// Source: TS `webviewMessageHandler.ts` — `didShowAnnouncement`
     async fn handle_announcement_did_show(&self, _params: Value) -> ServerResult<Value> {
         debug!("Announcement did show");
+        let app = self.app.read().await;
+        let gsp = app.config().global_storage_path.clone();
+        drop(app);
+        let mut settings = Self::read_roo_settings(&gsp).await;
+        settings["announcementShown"] = json!(true);
+        let _ = Self::write_roo_settings(&gsp, &settings).await;
         Ok(json!({"status": "acknowledged"}))
     }
 
-    /// Select images.
+    /// Select images via file dialog.
     ///
     /// Source: TS `webviewMessageHandler.ts` — `selectImages`
+    /// In Tauri: returns an action for the GUI to show a file picker dialog.
     async fn handle_images_select(&self, _params: Value) -> ServerResult<Value> {
         debug!("Selecting images");
-        Ok(json!({"images": []}))
+        Ok(json!({"action": "showImagePicker", "images": []}))
     }
 
     /// Dragged images.
@@ -3151,28 +4374,41 @@ impl Handler {
     /// Play sound.
     ///
     /// Source: TS `webviewMessageHandler.ts` — `playSound`
+    /// In Tauri: returns an action for the GUI to play the sound.
     async fn handle_play_sound(&self, params: Value) -> ServerResult<Value> {
         let audio_type = params.get("audioType").and_then(|v| v.as_str()).unwrap_or("notification");
         debug!(audio_type = audio_type, "Playing sound");
-        Ok(json!({"status": "not_applicable", "note": "headless mode"}))
+        Ok(json!({"action": "playSound", "audioType": audio_type}))
     }
 
-    /// Open a file.
+    /// Open a file in the system editor.
     ///
     /// Source: TS `webviewMessageHandler.ts` — `openFile`
     async fn handle_file_open(&self, params: Value) -> ServerResult<Value> {
         let path = params.get("text").and_then(|v| v.as_str()).unwrap_or("");
         debug!(path = path, "Opening file");
-        Ok(json!({"status": "not_applicable", "note": "headless mode"}))
+        if path.is_empty() {
+            return Ok(json!({"status": "error", "error": "missing path"}));
+        }
+        match opener::open(path) {
+            Ok(()) => Ok(json!({"status": "opened"})),
+            Err(e) => Ok(json!({"status": "error", "error": e.to_string()})),
+        }
     }
 
-    /// Open external URL.
+    /// Open external URL in the system browser.
     ///
     /// Source: TS `webviewMessageHandler.ts` — `openExternal`
     async fn handle_external_open(&self, params: Value) -> ServerResult<Value> {
         let url = params.get("url").and_then(|v| v.as_str()).unwrap_or("");
         debug!(url = url, "Opening external URL");
-        Ok(json!({"status": "not_applicable", "note": "headless mode"}))
+        if url.is_empty() {
+            return Ok(json!({"status": "error", "error": "missing url"}));
+        }
+        match opener::open(url) {
+            Ok(()) => Ok(json!({"status": "opened"})),
+            Err(e) => Ok(json!({"status": "error", "error": e.to_string()})),
+        }
     }
 
     /// Open keyboard shortcuts.
@@ -3180,7 +4416,7 @@ impl Handler {
     /// Source: TS `webviewMessageHandler.ts` — `openKeyboardShortcuts`
     async fn handle_open_keyboard_shortcuts(&self, _params: Value) -> ServerResult<Value> {
         debug!("Opening keyboard shortcuts");
-        Ok(json!({"status": "not_applicable", "note": "headless mode"}))
+        Ok(json!({"action": "openKeyboardShortcuts"}))
     }
 
     /// Open MCP settings file.
@@ -3188,7 +4424,21 @@ impl Handler {
     /// Source: TS `webviewMessageHandler.ts` — `openMcpSettings`
     async fn handle_open_mcp_settings(&self, _params: Value) -> ServerResult<Value> {
         debug!("Opening MCP settings");
-        Ok(json!({"status": "not_applicable", "note": "headless mode"}))
+        let app = self.app.read().await;
+        let gsp = app.config().global_storage_path.clone();
+        drop(app);
+        let settings_path = Self::roo_settings_path(&gsp);
+        let mcp_path = settings_path.parent()
+            .map(|p| p.join("mcp.json"))
+            .unwrap_or_else(|| settings_path.clone());
+        if mcp_path.exists() {
+            match opener::open(&mcp_path) {
+                Ok(()) => Ok(json!({"status": "opened", "path": mcp_path.to_string_lossy()})),
+                Err(e) => Ok(json!({"status": "error", "error": e.to_string()})),
+            }
+        } else {
+            Ok(json!({"action": "openFile", "path": mcp_path.to_string_lossy(), "exists": false}))
+        }
     }
 
     /// Open project MCP settings file.
@@ -3196,7 +4446,16 @@ impl Handler {
     /// Source: TS `webviewMessageHandler.ts` — `openProjectMcpSettings`
     async fn handle_open_project_mcp_settings(&self, _params: Value) -> ServerResult<Value> {
         debug!("Opening project MCP settings");
-        Ok(json!({"status": "not_applicable", "note": "headless mode"}))
+        let cwd = self.get_cwd().await;
+        let mcp_path = std::path::Path::new(&cwd).join(".roo").join("mcp.json");
+        if mcp_path.exists() {
+            match opener::open(&mcp_path) {
+                Ok(()) => Ok(json!({"status": "opened", "path": mcp_path.to_string_lossy()})),
+                Err(e) => Ok(json!({"status": "error", "error": e.to_string()})),
+            }
+        } else {
+            Ok(json!({"action": "openFile", "path": mcp_path.to_string_lossy(), "exists": false}))
+        }
     }
 
     /// Focus panel request.
@@ -3204,7 +4463,7 @@ impl Handler {
     /// Source: TS `webviewMessageHandler.ts` — `focusPanelRequest`
     async fn handle_focus_panel(&self, _params: Value) -> ServerResult<Value> {
         debug!("Focus panel request");
-        Ok(json!({"status": "not_applicable", "note": "headless mode"}))
+        Ok(json!({"action": "focusPanel"}))
     }
 
     /// Switch tab.
@@ -3213,7 +4472,7 @@ impl Handler {
     async fn handle_tab_switch(&self, params: Value) -> ServerResult<Value> {
         let tab = params.get("tab").and_then(|v| v.as_str()).unwrap_or("");
         debug!(tab = tab, "Switching tab");
-        Ok(json!({"status": "switched", "tab": tab}))
+        Ok(json!({"action": "switchTab", "tab": tab}))
     }
 
     /// Insert text into textarea.
@@ -3222,7 +4481,7 @@ impl Handler {
     async fn handle_insert_text(&self, params: Value) -> ServerResult<Value> {
         let text = params.get("text").and_then(|v| v.as_str()).unwrap_or("");
         debug!(text_len = text.len(), "Inserting text");
-        Ok(json!({"status": "not_applicable", "note": "headless mode"}))
+        Ok(json!({"action": "insertText", "text": text}))
     }
 
     /// Open markdown preview.
@@ -3231,27 +4490,27 @@ impl Handler {
     async fn handle_markdown_preview(&self, params: Value) -> ServerResult<Value> {
         let text = params.get("text").and_then(|v| v.as_str()).unwrap_or("");
         debug!(text_len = text.len(), "Opening markdown preview");
-        Ok(json!({"status": "not_applicable", "note": "headless mode"}))
+        Ok(json!({"action": "openMarkdownPreview", "text": text}))
     }
 
     // ── Cloud ──────────────────────────────────────────────────────────────
 
-    /// Cloud sign in.
+    /// Cloud sign in — delegates to Tauri GUI auth flow.
     async fn handle_cloud_sign_in(&self, _params: Value) -> ServerResult<Value> {
         debug!("Cloud sign in");
-        Ok(json!({"status": "not_applicable", "note": "headless mode"}))
+        Ok(json!({"action": "cloudSignIn"}))
     }
 
     /// Cloud sign out.
     async fn handle_cloud_sign_out(&self, _params: Value) -> ServerResult<Value> {
         debug!("Cloud sign out");
-        Ok(json!({"status": "not_applicable", "note": "headless mode"}))
+        Ok(json!({"action": "cloudSignOut"}))
     }
 
     /// Cloud manual URL.
     async fn handle_cloud_manual_url(&self, _params: Value) -> ServerResult<Value> {
         debug!("Cloud manual URL");
-        Ok(json!({"status": "not_applicable", "note": "headless mode"}))
+        Ok(json!({"action": "cloudManualUrl"}))
     }
 
     /// Cloud button clicked.
@@ -3261,8 +4520,20 @@ impl Handler {
     }
 
     /// Clear cloud auth skip model.
+    ///
+    /// Source: TS `webviewMessageHandler.ts` — `clearCloudAuthSkipModel`
+    /// TS: `await provider.context.globalState.update("roo-auth-skip-model", undefined)`
     async fn handle_cloud_clear_skip_model(&self, _params: Value) -> ServerResult<Value> {
         debug!("Clearing cloud auth skip model");
+        let app = self.app.read().await;
+        let gsp = app.config().global_storage_path.clone();
+        drop(app);
+
+        let mut settings = Self::read_roo_settings(&gsp).await;
+        if let Some(obj) = settings.as_object_mut() {
+            obj.remove("roo-auth-skip-model");
+        }
+        let _ = Self::write_roo_settings(&gsp, &settings).await;
         Ok(json!({"status": "cleared"}))
     }
 
@@ -3270,25 +4541,43 @@ impl Handler {
     async fn handle_cloud_switch_org(&self, params: Value) -> ServerResult<Value> {
         let org_id = params.get("organizationId").and_then(|v| v.as_str()).unwrap_or("");
         debug!(org_id = org_id, "Switching organization");
-        Ok(json!({"status": "not_applicable", "note": "headless mode"}))
+        Ok(json!({"action": "switchOrganization", "organizationId": org_id}))
     }
 
     /// Codex sign in.
     async fn handle_codex_sign_in(&self, _params: Value) -> ServerResult<Value> {
         debug!("Codex sign in");
-        Ok(json!({"status": "not_applicable", "note": "headless mode"}))
+        Ok(json!({"action": "codexSignIn"}))
     }
 
     /// Codex sign out.
     async fn handle_codex_sign_out(&self, _params: Value) -> ServerResult<Value> {
         debug!("Codex sign out");
-        Ok(json!({"status": "not_applicable", "note": "headless mode"}))
+        Ok(json!({"action": "codexSignOut"}))
     }
 
     /// Request Codex rate limits.
+    ///
+    /// Source: TS `webviewMessageHandler.ts` — `requestOpenAiCodexRateLimits`
+    /// TS: Uses OAuth manager to get access token, then fetches rate limits from API.
     async fn handle_codex_request_rate_limits(&self, _params: Value) -> ServerResult<Value> {
         debug!("Requesting Codex rate limits");
-        Ok(json!({"rateLimits": null}))
+
+        // Get Codex API key from settings (if configured)
+        let codex_api_key = self.get_api_key_for_provider("openai").await;
+        let codex_base_url = self.get_base_url_for_provider("openai").await
+            .unwrap_or_else(|| "https://api.openai.com/v1".to_string());
+
+        match codex_api_key {
+            Some(api_key) => {
+                let url = format!("{}/rate_limits", codex_base_url.trim_end_matches('/'));
+                match roo_provider::fetcher::fetch_models_raw::<serde_json::Value>(&url, Some(&api_key)).await {
+                    Ok(data) => Ok(json!({"rateLimits": data})),
+                    Err(e) => Ok(json!({"rateLimits": null, "error": e.to_string()})),
+                }
+            }
+            None => Ok(json!({"rateLimits": null, "error": "Not authenticated with OpenAI Codex"})),
+        }
     }
 
     // ── Codebase Index ─────────────────────────────────────────────────────
@@ -3297,70 +4586,202 @@ impl Handler {
     async fn handle_index_enabled(&self, params: Value) -> ServerResult<Value> {
         let enabled = params.get("bool").and_then(|v| v.as_bool()).unwrap_or(true);
         debug!(enabled = enabled, "Setting codebase index enabled");
+
+        let app = self.app.read().await;
+        let gsp = app.config().global_storage_path.clone();
+        drop(app);
+
+        let mut settings = Self::read_roo_settings(&gsp).await;
+        settings["codebaseIndexEnabled"] = json!(enabled);
+
+        let _ = Self::write_roo_settings(&gsp, &settings).await;
         Ok(json!({"status": "updated", "enabled": enabled}))
     }
 
     /// Request indexing status.
     async fn handle_index_request_status(&self, _params: Value) -> ServerResult<Value> {
         debug!("Requesting indexing status");
-        Ok(json!({"state": "Standby", "message": "not available in headless mode"}))
+        Ok(json!({"action": "requestIndexStatus", "state": "Standby"}))
     }
 
     /// Start indexing.
+    ///
+    /// Source: TS `webviewMessageHandler.ts` — `startIndexing`
+    /// TS: enables workspace, initializes CodeIndexManager, starts indexing.
     async fn handle_index_start(&self, _params: Value) -> ServerResult<Value> {
         debug!("Starting indexing");
-        Ok(json!({"status": "not_applicable", "note": "headless mode"}))
+        // Persist: implicitly enable workspace indexing when starting
+        let app = self.app.read().await;
+        let gsp = app.config().global_storage_path.clone();
+        let cwd = app.cwd().to_string();
+        drop(app);
+
+        let mut settings = Self::read_roo_settings(&gsp).await;
+        settings["codebaseIndexEnabled"] = json!(true);
+        // Mark this workspace as enabled
+        if let Some(obj) = settings.as_object_mut() {
+            let workspaces = obj.entry("codebaseIndexWorkspaces").or_insert_with(|| json!({}));
+            if let Some(ws) = workspaces.as_object_mut() {
+                ws.insert(cwd.clone(), json!(true));
+            }
+        }
+        let _ = Self::write_roo_settings(&gsp, &settings).await;
+
+        Ok(json!({"action": "startIndexing", "workspace": cwd}))
     }
 
     /// Stop indexing.
+    ///
+    /// Source: TS `webviewMessageHandler.ts` — `stopIndexing`
     async fn handle_index_stop(&self, _params: Value) -> ServerResult<Value> {
         debug!("Stopping indexing");
-        Ok(json!({"status": "not_applicable", "note": "headless mode"}))
+        Ok(json!({"action": "stopIndexing", "state": "Standby"}))
     }
 
     /// Clear index data.
+    ///
+    /// Source: TS `webviewMessageHandler.ts` — `clearIndexData`
+    /// TS: calls `manager.clearIndexData()` then posts indexCleared event.
     async fn handle_index_clear(&self, _params: Value) -> ServerResult<Value> {
         debug!("Clearing index data");
-        Ok(json!({"status": "not_applicable", "note": "headless mode"}))
+        let app = self.app.read().await;
+        let gsp = app.config().global_storage_path.clone();
+        let cwd = app.cwd().to_string();
+        drop(app);
+
+        // Clear the index data directory for this workspace
+        let index_dir = std::path::Path::new(&gsp)
+            .join("codebase-index")
+            .join(roo_checkpoint::service::ShadowCheckpointService::hash_workspace_dir(&cwd));
+
+        if index_dir.exists() {
+            match tokio::fs::remove_dir_all(&index_dir).await {
+                Ok(()) => Ok(json!({"action": "indexCleared", "success": true})),
+                Err(e) => Ok(json!({"action": "indexCleared", "success": false, "error": e.to_string()})),
+            }
+        } else {
+            Ok(json!({"action": "indexCleared", "success": true}))
+        }
     }
 
     /// Toggle workspace indexing.
-    async fn handle_index_toggle_workspace(&self, _params: Value) -> ServerResult<Value> {
-        debug!("Toggling workspace indexing");
-        Ok(json!({"status": "not_applicable", "note": "headless mode"}))
+    ///
+    /// Source: TS `webviewMessageHandler.ts` — `toggleWorkspaceIndexing`
+    /// TS: enables/disables workspace in CodeIndexManager.
+    async fn handle_index_toggle_workspace(&self, params: Value) -> ServerResult<Value> {
+        let enabled = params.get("bool").and_then(|v| v.as_bool()).unwrap_or(true);
+        debug!(enabled = enabled, "Toggling workspace indexing");
+
+        let app = self.app.read().await;
+        let gsp = app.config().global_storage_path.clone();
+        let cwd = app.cwd().to_string();
+        drop(app);
+
+        let mut settings = Self::read_roo_settings(&gsp).await;
+        if let Some(obj) = settings.as_object_mut() {
+            let workspaces = obj.entry("codebaseIndexWorkspaces").or_insert_with(|| json!({}));
+            if let Some(ws) = workspaces.as_object_mut() {
+                ws.insert(cwd.clone(), json!(enabled));
+            }
+        }
+        let _ = Self::write_roo_settings(&gsp, &settings).await;
+
+        Ok(json!({
+            "action": "toggleWorkspaceIndexing",
+            "workspace": cwd,
+            "enabled": enabled,
+            "state": if enabled { "Indexing" } else { "Standby" },
+        }))
     }
 
     /// Set auto-enable default.
-    async fn handle_index_set_auto_enable(&self, _params: Value) -> ServerResult<Value> {
-        debug!("Setting auto-enable default");
-        Ok(json!({"status": "not_applicable", "note": "headless mode"}))
+    async fn handle_index_set_auto_enable(&self, params: Value) -> ServerResult<Value> {
+        let enabled = params.get("bool").and_then(|v| v.as_bool()).unwrap_or(true);
+        debug!(enabled = enabled, "Setting auto-enable default");
+
+        let app = self.app.read().await;
+        let gsp = app.config().global_storage_path.clone();
+        drop(app);
+
+        let mut settings = Self::read_roo_settings(&gsp).await;
+        settings["codebaseIndexAutoEnable"] = json!(enabled);
+
+        let _ = Self::write_roo_settings(&gsp, &settings).await;
+        Ok(json!({"status": "updated", "autoEnable": enabled}))
     }
 
     /// Save code index settings atomically.
-    async fn handle_index_save_settings(&self, _params: Value) -> ServerResult<Value> {
+    async fn handle_index_save_settings(&self, params: Value) -> ServerResult<Value> {
         debug!("Saving code index settings");
-        Ok(json!({"status": "not_applicable", "note": "headless mode"}))
+
+        let app = self.app.read().await;
+        let gsp = app.config().global_storage_path.clone();
+        drop(app);
+
+        let mut settings = Self::read_roo_settings(&gsp).await;
+        if let (Some(obj), Some(incoming)) = (settings.as_object_mut(), params.as_object()) {
+            for (key, value) in incoming {
+                obj.insert(key.clone(), value.clone());
+            }
+        }
+
+        let _ = Self::write_roo_settings(&gsp, &settings).await;
+        Ok(json!({"status": "saved"}))
     }
 
     /// Request code index secret status.
     async fn handle_index_request_secret_status(&self, _params: Value) -> ServerResult<Value> {
         debug!("Requesting code index secret status");
-        Ok(json!({"status": "not_applicable", "note": "headless mode"}))
+        Ok(json!({"action": "requestSecretStatus"}))
     }
 
     // ── Upsell ─────────────────────────────────────────────────────────────
 
     /// Dismiss an upsell.
+    /// Dismiss an upsell.
+    ///
+    /// Source: TS `webviewMessageHandler.ts` — `dismissUpsell`
+    /// TS: Persists to `globalState("dismissedUpsells")`.
     async fn handle_upsell_dismiss(&self, params: Value) -> ServerResult<Value> {
         let upsell_id = params.get("upsellId").and_then(|v| v.as_str()).unwrap_or("");
         debug!(upsell_id = upsell_id, "Dismissing upsell");
-        Ok(json!({"status": "dismissed", "upsellId": upsell_id}))
+
+        let app = self.app.read().await;
+        let gsp = app.config().global_storage_path.clone();
+        drop(app);
+
+        let mut settings = Self::read_roo_settings(&gsp).await;
+        let mut dismissed: Vec<String> = settings.get("dismissedUpsells")
+            .and_then(|v| v.as_array())
+            .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+            .unwrap_or_default();
+
+        if !dismissed.contains(&upsell_id.to_string()) {
+            dismissed.push(upsell_id.to_string());
+        }
+
+        settings["dismissedUpsells"] = serde_json::to_value(&dismissed).unwrap_or(json!([]));
+        let _ = Self::write_roo_settings(&gsp, &settings).await;
+
+        Ok(json!({"type": "dismissedUpsells", "list": dismissed}))
     }
 
     /// Get dismissed upsells.
+    ///
+    /// Source: TS `webviewMessageHandler.ts` — `getDismissedUpsells`
     async fn handle_upsell_get_dismissed(&self, _params: Value) -> ServerResult<Value> {
         debug!("Getting dismissed upsells");
-        Ok(json!({"list": []}))
+        let app = self.app.read().await;
+        let gsp = app.config().global_storage_path.clone();
+        drop(app);
+
+        let settings = Self::read_roo_settings(&gsp).await;
+        let dismissed: Vec<String> = settings.get("dismissedUpsells")
+            .and_then(|v| v.as_array())
+            .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+            .unwrap_or_default();
+
+        Ok(json!({"type": "dismissedUpsells", "list": dismissed}))
     }
 
     // ── Debug ──────────────────────────────────────────────────────────────
@@ -3368,19 +4789,64 @@ impl Handler {
     /// Open debug API history.
     async fn handle_debug_api_history(&self, _params: Value) -> ServerResult<Value> {
         debug!("Opening debug API history");
-        Ok(json!({"status": "not_applicable", "note": "headless mode"}))
+        Ok(json!({"action": "openDebugApiHistory"}))
     }
 
     /// Open debug UI history.
     async fn handle_debug_ui_history(&self, _params: Value) -> ServerResult<Value> {
         debug!("Opening debug UI history");
-        Ok(json!({"status": "not_applicable", "note": "headless mode"}))
+        Ok(json!({"action": "openDebugUiHistory"}))
     }
 
     /// Download error diagnostics.
-    async fn handle_debug_download_diagnostics(&self, _params: Value) -> ServerResult<Value> {
+    ///
+    /// Source: TS `webviewMessageHandler.ts` — `downloadErrorDiagnostics`
+    /// TS: calls `generateErrorDiagnostics()` which creates a diagnostics file.
+    async fn handle_debug_download_diagnostics(&self, params: Value) -> ServerResult<Value> {
         debug!("Downloading error diagnostics");
-        Ok(json!({"status": "not_applicable", "note": "headless mode"}))
+
+        let (task_id, cwd) = match self.task_manager.get_active_task() {
+            Some(lifecycle) => {
+                let lc = lifecycle.lock().await;
+                (lc.task_id().to_string(), lc.engine().config().cwd.clone())
+            }
+            None => {
+                let app = self.app.read().await;
+                ("".to_string(), app.cwd().to_string())
+            }
+        };
+
+        let app = self.app.read().await;
+        let gsp = app.config().global_storage_path.clone();
+        drop(app);
+
+        // Generate diagnostics file
+        let diagnostics = json!({
+            "taskId": task_id,
+            "workspace": cwd,
+            "timestamp": chrono::Utc::now().to_rfc3339(),
+            "values": params.get("values"),
+            "settings": {
+                "codebaseIndexEnabled": true,
+            },
+            "system": {
+                "platform": std::env::consts::OS,
+                "arch": std::env::consts::ARCH,
+            },
+        });
+
+        let diag_dir = if gsp.is_empty() {
+            paths::get_global_roo_directory()
+        } else {
+            std::path::PathBuf::from(&gsp)
+        }.join("diagnostics");
+        let _ = tokio::fs::create_dir_all(&diag_dir).await;
+        let diag_path = diag_dir.join(format!("diagnostics-{}.json", chrono::Utc::now().format("%Y%m%d%H%M%S")));
+
+        match tokio::fs::write(&diag_path, serde_json::to_string_pretty(&diagnostics).unwrap_or_default()).await {
+            Ok(()) => Ok(json!({"status": "generated", "path": diag_path.to_string_lossy()})),
+            Err(e) => Ok(json!({"status": "error", "error": e.to_string()})),
+        }
     }
 
     // ── Other ──────────────────────────────────────────────────────────────
@@ -3388,13 +4854,13 @@ impl Handler {
     /// Show MDM auth required notification.
     async fn handle_mdm_auth_notification(&self, _params: Value) -> ServerResult<Value> {
         debug!("Showing MDM auth notification");
-        Ok(json!({"status": "not_applicable", "note": "headless mode"}))
+        Ok(json!({"action": "showMdmAuthNotification"}))
     }
 
     /// Image generation settings.
     async fn handle_image_generation_settings(&self, _params: Value) -> ServerResult<Value> {
         debug!("Image generation settings");
-        Ok(json!({"status": "not_applicable", "note": "headless mode"}))
+        Ok(json!({"action": "openImageGenerationSettings"}))
     }
 }
 

@@ -19,6 +19,22 @@ const mockApi = vi.hoisted(() => ({
 
 const mockFileDownload = vi.hoisted(() => ({
   downloadRemoteArtifact: vi.fn(),
+  shareFile: vi.fn(),
+}));
+
+const mockPush = vi.hoisted(() => ({
+  initPushNotifications: vi.fn(() => Promise.resolve()),
+  registerPushTokenWithControlPlane: vi.fn(() => Promise.resolve()),
+  showLocalNotification: vi.fn(() => Promise.resolve()),
+}));
+
+const mockDeepLink = vi.hoisted(() => ({
+  initDeepLinks: vi.fn(() => Promise.resolve()),
+  parsePairingUrl: vi.fn(() => null),
+}));
+
+const mockLifecycle = vi.hoisted(() => ({
+  initAppLifecycle: vi.fn(() => Promise.resolve()),
 }));
 
 const mockRuntime = vi.hoisted(() => ({
@@ -37,6 +53,9 @@ const mockRuntime = vi.hoisted(() => ({
 vi.mock('./api', () => mockApi);
 vi.mock('../lib/fileDownload', () => mockFileDownload);
 vi.mock('../lib/runtime', () => mockRuntime);
+vi.mock('../lib/mobile/pushNotifications', () => mockPush);
+vi.mock('../lib/mobile/deepLink', () => mockDeepLink);
+vi.mock('../lib/mobile/appLifecycle', () => mockLifecycle);
 
 const HEALTH_RESPONSE = {
   ok: true,
@@ -199,6 +218,8 @@ describe('RemoteApp', () => {
         'https://remote-code.yz520gzy.top',
         'approval-1',
         'approved',
+        undefined,
+        undefined,
       );
     });
 
@@ -236,6 +257,7 @@ describe('RemoteApp', () => {
         'https://remote-code.yz520gzy.top',
         'session-1',
         '请只回复 中文链路正常-0413，不要附加任何其他内容。',
+        undefined,
       );
     });
 
@@ -257,6 +279,7 @@ describe('RemoteApp', () => {
       expect(mockApi.interruptSession).toHaveBeenCalledWith(
         'https://remote-code.yz520gzy.top',
         'session-1',
+        undefined,
       );
     });
   });

@@ -96,6 +96,7 @@ pub(crate) async fn require_api_auth(
             registry.trusted_devices.is_empty()
         };
         if is_empty {
+            request.extensions_mut().insert(AuthPrincipal::SharedToken);
             return next.run(request).await;
         }
     }
@@ -124,6 +125,17 @@ pub(crate) async fn require_api_auth(
         request
             .extensions_mut()
             .insert(AuthPrincipal::Device(device));
+        return next.run(request).await;
+    }
+
+    // If a bearer token was provided but didn't match the shared token or any
+    // device token, treat it as a user-derived tenant identity.  The token is
+    // `sha256(username:password)` computed client-side — the server never
+    // stores the password, it just uses this value as a tenant-scoping key.
+    if let Some(token) = extract_request_auth_token(&mut request) {
+        request
+            .extensions_mut()
+            .insert(AuthPrincipal::User { user_id: token });
         return next.run(request).await;
     }
 

@@ -30,6 +30,9 @@ fn test_config() -> ControlPlaneConfig {
         auth_token: None,
         bootstrap_secret: Some("bootstrap-secret".to_owned()),
         downloads_dir: None,
+        quic_bind: None,
+        quic_cert_pem: None,
+        quic_key_pem: None,
     }
 }
 

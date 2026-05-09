@@ -31,6 +31,7 @@ import {
   clearRemoteActiveSessionId,
   clearRemoteAccessToken,
   clearRemotePairingContext,
+  deriveUserKey,
   persistRemoteAccessToken,
   persistRemoteActiveSessionId,
   persistRemoteRefreshToken,
@@ -41,6 +42,14 @@ import {
   stripRemoteSensitiveQueryParams,
 } from '../lib/runtime';
 import { downloadRemoteArtifact } from '../lib/fileDownload';
+import { shareFile } from '../lib/mobile/fileDownload';
+import {
+  initPushNotifications,
+  registerPushTokenWithControlPlane,
+  showLocalNotification,
+} from '../lib/mobile/pushNotifications';
+import { initDeepLinks, parsePairingUrl } from '../lib/mobile/deepLink';
+import { initAppLifecycle } from '../lib/mobile/appLifecycle';
 import { ApprovalPanel } from '../components/shared/ApprovalPanel';
 import { ArtifactPanel } from '../components/shared/ArtifactPanel';
 import { formatBytes } from '../components/shared/formatBytes';
@@ -119,6 +128,8 @@ export default function RemoteApp() {
   const [authErrorMessage, setAuthErrorMessage] = useState<string | null>(null);
   const [manualAccessToken, setManualAccessToken] = useState('');
   const [bootstrapSecret, setBootstrapSecret] = useState('');
+  const [signInUsername, setSignInUsername] = useState('');
+  const [signInPassword, setSignInPassword] = useState('');
   const [deviceName, setDeviceName] = useState('Mobile Browser');
   const [pairingOfferId, setPairingOfferId] = useState(initialPairingContext.offerId ?? '');
   const [pairingSecret, setPairingSecret] = useState(initialPairingContext.pairingSecret ?? '');
@@ -245,7 +256,76 @@ export default function RemoteApp() {
     };
   }, [baseUrl, accessToken]);
 
-  // ── Auth handlers ──────────────────────────────────────────────────────
+  // ── Auth handlers ──
+
+  // ── Mobile: Deep links ────────────────────────────────────────────────
+
+  useEffect(() => {
+    let cancelled = false;
+    void initDeepLinks((url, _path, _params) => {
+      if (cancelled) return;
+      const pairing = parsePairingUrl(url);
+      if (pairing) {
+        setPairingOfferId(pairing.offerId);
+        setPairingSecret(pairing.secret);
+        showStatusMessage(copy.deepLinkPairingReceived);
+      }
+    });
+    return () => { cancelled = true; };
+  }, [copy]);
+
+  // ── Mobile: Push notifications ────────────────────────────────────────
+
+  useEffect(() => {
+    if (!accessToken || !baseUrl) return;
+
+    let cancelled = false;
+    void (async () => {
+      await initPushNotifications({
+        onApproval: (approvalId, sessionId) => {
+          if (cancelled) return;
+          // If this approval belongs to the active session, refresh approvals
+          if (sessionId === activeSessionIdRef.current) {
+            void refreshApprovals(sessionId).catch(reportAsyncError);
+          }
+          void showLocalNotification(
+            copy.pushNotificationApprovalTitle,
+            copy.pushNotificationApprovalBody(approvalId),
+          );
+          scheduleSessionsRefresh();
+        },
+        onSessionUpdate: (sessionId) => {
+          if (cancelled) return;
+          scheduleSessionsRefresh();
+          if (sessionId === activeSessionIdRef.current) {
+            void refreshSessionBundle(sessionId).catch(reportAsyncError);
+          }
+        },
+      });
+
+      // Register the push token with the control plane.
+      if (!cancelled) {
+        await registerPushTokenWithControlPlane(baseUrl, accessToken);
+      }
+    })();
+
+    return () => { cancelled = true; };
+  }, [accessToken, baseUrl, copy]);
+
+  // ── Mobile: App lifecycle ─────────────────────────────────────────────
+
+  useEffect(() => {
+    void initAppLifecycle({
+      onResume: () => {
+        // Refresh data when coming back to foreground
+        void refreshSessions().catch(reportAsyncError);
+        if (activeSessionIdRef.current) {
+          void refreshSessionBundle(activeSessionIdRef.current).catch(reportAsyncError);
+        }
+      },
+    });
+  }, []);
+
 
   const completeAuthentication = useEffectEvent((token: string, message: string, refreshToken?: string) => {
     persistRemoteAccessToken(token);
@@ -258,6 +338,8 @@ export default function RemoteApp() {
     setPairingOfferId('');
     setPairingSecret('');
     setManualAccessToken('');
+    setSignInUsername('');
+    setSignInPassword('');
     setAccessToken(token);
     setAuthErrorMessage(null);
     setErrorMessage(null);
@@ -314,6 +396,8 @@ export default function RemoteApp() {
     setPairingOfferId('');
     setPairingSecret('');
     setManualAccessToken('');
+    setSignInUsername('');
+    setSignInPassword('');
     setAccessToken(manualAccessToken.trim());
     setAuthErrorMessage(null);
     showStatusMessage(copy.statusSavedAccessToken);
@@ -329,8 +413,31 @@ export default function RemoteApp() {
     setPairingSecret('');
     setAccessToken(null);
     setManualAccessToken('');
+    setSignInUsername('');
+    setSignInPassword('');
     setAuthErrorMessage(null);
     showStatusMessage(copy.statusClearedAccessToken);
+  });
+
+  const handleUserSignIn = useEffectEvent(async () => {
+    if (!baseUrl || authLoading || !signInUsername.trim() || !signInPassword.trim()) {
+      return;
+    }
+    setAuthLoading(true);
+    try {
+      const userKey = await deriveUserKey(signInUsername.trim(), signInPassword.trim());
+      persistRemoteAccessToken(userKey);
+      setAccessToken(userKey);
+      setAuthErrorMessage(null);
+      setSignInPassword('');
+      showStatusMessage(copy.statusSignInSucceeded);
+      const nextHealth = await getControlPlaneHealth(baseUrl);
+      setHealth(nextHealth);
+    } catch (error) {
+      reportAsyncError(error);
+    } finally {
+      setAuthLoading(false);
+    }
   });
 
   // ── Data fetching ──────────────────────────────────────────────────────
@@ -459,6 +566,8 @@ export default function RemoteApp() {
 
   const {
     connectionState: transportConnectionState,
+    strategy: transportStrategy,
+    metrics: transportMetrics,
     connect: transportConnect,
     disconnect: transportDisconnect,
     latestSequence: transportSequence,
@@ -654,16 +763,30 @@ export default function RemoteApp() {
 
     setDownloadingArtifactId(artifact.artifact_id);
     try {
-      await downloadRemoteArtifact({
+      const filePath = await downloadRemoteArtifact({
         url: buildArtifactDownloadUrl(baseUrl, artifact.artifact_id),
         fileName: artifact.file_name,
         token: accessToken,
       });
       showStatusMessage(copy.statusArtifactDownloaded(artifact.file_name));
+      return filePath;
     } catch (error) {
       reportAsyncError(error);
+      return null;
     } finally {
       setDownloadingArtifactId(null);
+    }
+  };
+
+  const handleArtifactShare = async (artifact: RemoteArtifactRecord) => {
+    if (!baseUrl || (authRequired && !accessToken)) return;
+    try {
+      const filePath = await handleArtifactDownload(artifact);
+      if (filePath) {
+        await shareFile(filePath, artifact.file_name);
+      }
+    } catch (error) {
+      reportAsyncError(error);
     }
   };
 
@@ -706,6 +829,8 @@ export default function RemoteApp() {
           deviceName={deviceName}
           health={health}
           manualAccessToken={manualAccessToken}
+          username={signInUsername}
+          password={signInPassword}
           onBootstrapClaim={() => {
             void handleBootstrapClaim();
           }}
@@ -716,6 +841,9 @@ export default function RemoteApp() {
           onPairingAccept={() => {
             void handlePairingAccept();
           }}
+          onUserSignIn={() => {
+            void handleUserSignIn();
+          }}
           pairingOfferId={pairingOfferId}
           pairingSecret={pairingSecret}
           setBootstrapSecret={setBootstrapSecret}
@@ -723,6 +851,8 @@ export default function RemoteApp() {
           setManualAccessToken={setManualAccessToken}
           setPairingOfferId={setPairingOfferId}
           setPairingSecret={setPairingSecret}
+          setUsername={setSignInUsername}
+          setPassword={setSignInPassword}
         />
       </div>
     );
@@ -751,6 +881,9 @@ export default function RemoteApp() {
       onRefreshSessions={() => {
         void refreshSessions();
       }}
+      onSignOut={handleClearSavedToken}
+      transportStrategy={transportStrategy}
+      transportLatencyMs={transportMetrics?.latencyMs ?? null}
     >
       <main className="grid min-h-0 flex-1 gap-0 lg:grid-cols-[minmax(0,1fr)_340px]">
         {/* ── Timeline + Composer ── */}
@@ -889,6 +1022,13 @@ export default function RemoteApp() {
                 }
                 void handleArtifactDownload(record);
               }}
+              onShare={(artifact) => {
+                const record = artifacts.find((item) => item.artifact_id === artifact.artifact_id);
+                if (!record) {
+                  return;
+                }
+                void handleArtifactShare(record);
+              }}
             />
           </div>
         </aside>
@@ -1014,6 +1154,13 @@ export default function RemoteApp() {
                         return;
                       }
                       void handleArtifactDownload(record);
+                    }}
+                    onShare={(artifact) => {
+                      const record = artifacts.find((item) => item.artifact_id === artifact.artifact_id);
+                      if (!record) {
+                        return;
+                      }
+                      void handleArtifactShare(record);
                     }}
                     hideTitle
                   />

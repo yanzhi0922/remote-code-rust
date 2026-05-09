@@ -1113,6 +1113,7 @@ async fn run_control_plane_sync(
     };
     let registration = config.registration_request();
     let configured_interval_secs = config.heartbeat_interval_secs;
+    let auth_token = config.auth_token.clone();
     let mut retry_delay = Duration::from_secs(1);
     let client = reqwest::Client::new();
     const IDLE_POLL_SECS: u64 = 5;
@@ -1144,7 +1145,7 @@ async fn run_control_plane_sync(
                         }
                         _ = heartbeat_interval.tick() => {
                             let heartbeat = api.heartbeat().await;
-                            if let Err(error) = send_heartbeat(&client, &control_plane_url, &heartbeat).await {
+                            if let Err(error) = send_heartbeat(&client, &control_plane_url, &heartbeat, auth_token.as_deref()).await {
                                 warn!("failed to send heartbeat to control plane: {error}");
                                 break;
                             }

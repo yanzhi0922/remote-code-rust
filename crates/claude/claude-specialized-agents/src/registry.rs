@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use crate::builtin;
 use crate::loader::AgentLoader;
-use crate::types::{AgentScope, SpecializedAgent};
+use crate::types::{AgentModel, AgentScope, SpecializedAgent};
 
 /// Registry of all available specialized agents.
 pub struct AgentRegistry {
@@ -131,8 +131,9 @@ mod tests {
     fn test_builtin_agents_are_read_only() {
         let registry = AgentRegistry::default();
         for agent in registry.list_by_scope(AgentScope::BuiltIn) {
-            // Code reviewer, bug analyzer, dev planner, architect should be read-only
-            if agent.name != "test-writer" {
+            // Code reviewer, dev planner, architect should be read-only
+            // bug-analyzer and test-writer may use bash
+            if agent.name != "test-writer" && agent.name != "bug-analyzer" {
                 assert!(agent.read_only, "Agent {} should be read-only", agent.name);
             }
         }

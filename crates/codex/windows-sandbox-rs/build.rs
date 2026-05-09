@@ -9,7 +9,13 @@ fn main() {
         return;
     }
 
-    let mut res = winres::WindowsResource::new();
-    res.set_manifest_file("codex-windows-sandbox-setup.manifest");
-    let _ = res.compile();
+    // Only embed the Windows resource for the setup binary.
+    // The lib target is used by downstream GUI binaries (e.g. Tauri) that
+    // already embed their own VERSION resource via `tauri_build`, causing
+    // CVTRES CVT1100 "duplicate resource" when both are linked.
+    if std::env::var("CARGO_BIN_NAME").is_ok() {
+        let mut res = winres::WindowsResource::new();
+        res.set_manifest_file("codex-windows-sandbox-setup.manifest");
+        let _ = res.compile();
+    }
 }

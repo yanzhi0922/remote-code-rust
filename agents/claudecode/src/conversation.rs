@@ -905,6 +905,7 @@ async fn run_prompt_legacy(
             claude_core::task_stack::TaskStack::default(),
         )),
         read_file_state,
+        sub_agent_output_tokens: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
     };
     let mut usage = UsagePayload::default();
     let mut num_turns = 0u32;

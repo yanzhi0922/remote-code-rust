@@ -8,7 +8,14 @@
     "build": "tsc && vite build",
     "test": "vitest run",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "android:init": "tauri android init",
+    "android:dev": "tauri android dev",
+    "android:build": "tsc && vite build && tauri android build",
+    "android:build:debug": "tsc && vite build && tauri android build --debug",
+    "ios:init": "tauri ios init",
+    "ios:dev": "tauri ios dev",
+    "ios:build": "tsc && vite build && tauri ios build"
   },
   "dependencies": {
     "@radix-ui/react-dialog": "^1.1.15",
@@ -46,7 +53,7 @@
     "@tauri-apps/plugin-share": "file:./plugins/plugin-share"
   },
   "devDependencies": {
-    "@tauri-apps/cli": "^2",
+    "@tauri-apps/cli": "^2.11.1",
     "@testing-library/jest-dom": "^6.8.0",
     "@testing-library/react": "^16.3.0",
     "@types/node": "^25.6.0",

@@ -1086,13 +1086,21 @@ fn parse_sse_events_from_buffer(sse_buffer: &mut String) -> Vec<Value> {
         sse_buffer.replace_range(..event_end + 2, "");
 
         let mut data_lines: Vec<&str> = Vec::new();
+        let mut event_type: Option<&str> = None;
         for line in event_text.lines() {
             if let Some(data) = line.strip_prefix("data: ") {
                 data_lines.push(data.trim());
+            } else if let Some(data) = line.strip_prefix("data:") {
+                // SSE spec: space after colon is optional — handle `data:value`
+                data_lines.push(data.trim());
             } else if line.starts_with(':') {
                 // SSE comment — ignore per spec
-            } else if line.starts_with("id: ") || line.starts_with("event: ") {
-                // SSE fields not used for API event parsing
+            } else if let Some(ev) = line.strip_prefix("event: ") {
+                event_type = Some(ev.trim());
+            } else if let Some(ev) = line.strip_prefix("event:") {
+                event_type = Some(ev.trim());
+            } else if line.starts_with("id:") {
+                // SSE event ID — not used for API event parsing
             }
         }
 
@@ -1108,7 +1116,13 @@ fn parse_sse_events_from_buffer(sse_buffer: &mut String) -> Vec<Value> {
             continue;
         }
 
-        if let Ok(event) = serde_json::from_str::<Value>(&joined) {
+        if let Ok(mut event) = serde_json::from_str::<Value>(&joined) {
+            // If JSON has no "type" but SSE `event:` field was present, inject it
+            if event.get("type").is_none() {
+                if let Some(ev_type) = event_type {
+                    event.as_object_mut().map(|o| o.insert("type".to_owned(), Value::String(ev_type.to_owned())));
+                }
+            }
             events.push(event);
         } else {
             // If joined payload isn't valid JSON, try parsing each line
@@ -1117,7 +1131,12 @@ fn parse_sse_events_from_buffer(sse_buffer: &mut String) -> Vec<Value> {
                 if *data == "[DONE]" {
                     continue;
                 }
-                if let Ok(event) = serde_json::from_str::<Value>(data) {
+                if let Ok(mut event) = serde_json::from_str::<Value>(data) {
+                    if event.get("type").is_none() {
+                        if let Some(ev_type) = event_type {
+                            event.as_object_mut().map(|o| o.insert("type".to_owned(), Value::String(ev_type.to_owned())));
+                        }
+                    }
                     events.push(event);
                 }
             }

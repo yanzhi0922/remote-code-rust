@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.RemoteCode" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <item name="colorPrimary">#17181a</item>
+        <item name="colorPrimaryVariant">#282a2d</item>
+        <item name="colorOnPrimary">@android:color/white</item>
+        <item name="android:statusBarColor">#f4efe4</item>
+        <item name="android:navigationBarColor">#f4efe4</item>
+        <item name="android:windowLightStatusBar">true</item>
+    </style>
+</resources>

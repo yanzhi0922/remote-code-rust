@@ -45,13 +45,16 @@ use tauri::{AppHandle, Emitter};
 use tokio::sync::{Mutex, oneshot};
 use uuid::Uuid;
 
-use crate::{
+use crate::dto::{
+    BatchProgressDto, ContextCompactedDto, ContextOverflowDto, ContextUsageDto,
+    StreamingDeltaDto, SubtaskCompletedDto, SubtaskProgressDto, SubtaskStartedDto,
+    ToolProgressDto, ToolResultDto,
+};
+use crate::state::{
     APP_EVENT_BATCH_PROGRESS, APP_EVENT_CONTEXT_COMPACTED, APP_EVENT_CONTEXT_OVERFLOW,
     APP_EVENT_CONTEXT_USAGE, APP_EVENT_STREAMING_DELTA, APP_EVENT_SUBTASK_COMPLETED,
     APP_EVENT_SUBTASK_PROGRESS, APP_EVENT_SUBTASK_STARTED, APP_EVENT_TOOL_PROGRESS,
-    APP_EVENT_TOOL_RESULT, APP_EVENT_TOOL_START, BatchProgressDto, ContextCompactedDto,
-    ContextOverflowDto, ContextUsageDto, StreamingDeltaDto, SubtaskCompletedDto,
-    SubtaskProgressDto, SubtaskStartedDto, ToolProgressDto, ToolResultDto,
+    APP_EVENT_TOOL_RESULT, APP_EVENT_TOOL_START, DEFAULT_MAX_TURNS,
 };
 
 // ─── GuiToolRunner ──────────────────────────────────────────────────────────
@@ -156,6 +159,7 @@ impl ToolRunner for GuiToolRunner {
                     claude_core::task_stack::TaskStack::default(),
                 )),
                 read_file_state: FileStateCache::new(),
+                sub_agent_output_tokens: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             }
         };
 
@@ -185,6 +189,7 @@ impl ToolRunner for GuiToolRunner {
                     claude_core::task_stack::TaskStack::default(),
                 )),
                 read_file_state: FileStateCache::new(),
+                sub_agent_output_tokens: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             };
 
             if apply_worktree_tool_result_to_runtime(
@@ -194,7 +199,7 @@ impl ToolRunner for GuiToolRunner {
                 &mut config,
                 &mut temp_context,
             )? {
-                crate::persist_session_context(self.store.as_ref(), &config)?;
+                crate::desktop::persist_session_context(self.store.as_ref(), &config)?;
             }
         }
 
@@ -247,6 +252,7 @@ impl ToolRunner for GuiToolRunner {
             pre_messages: Vec::new(),
             post_messages,
             permission_denial: None,
+            output_tokens_consumed: None,
         })
     }
 }
@@ -289,7 +295,7 @@ fn emit_delegate_progress(
                     depth,
                 },
             );
-            crate::emit_task_snapshot_for_session(app, paths, session_id);
+            crate::desktop::emit_task_snapshot_for_session(app, paths, session_id);
         }
         claude_tools::agent::DelegateProgressEvent::SubtaskProgress {
             task_id,
@@ -316,7 +322,7 @@ fn emit_delegate_progress(
                     active_form: None,
                 },
             );
-            crate::emit_task_snapshot_for_session(app, paths, session_id);
+            crate::desktop::emit_task_snapshot_for_session(app, paths, session_id);
         }
         claude_tools::agent::DelegateProgressEvent::SubtaskCompleted {
             task_id,
@@ -334,7 +340,7 @@ fn emit_delegate_progress(
                     turns_used,
                 },
             );
-            crate::emit_task_snapshot_for_session(app, paths, session_id);
+            crate::desktop::emit_task_snapshot_for_session(app, paths, session_id);
         }
         claude_tools::agent::DelegateProgressEvent::BatchProgress {
             total,
@@ -350,7 +356,7 @@ fn emit_delegate_progress(
                     running,
                 },
             );
-            crate::emit_task_snapshot_for_session(app, paths, session_id);
+            crate::desktop::emit_task_snapshot_for_session(app, paths, session_id);
         }
     }
 }
@@ -589,7 +595,7 @@ pub(crate) async fn run_unified_prompt_with_provider(
         .unwrap_or_else(|| "unknown".to_owned());
 
     // 1. Session initialization (same as run_gui_prompt).
-    let mut conversation = crate::initialize_session_conversation(&store, &config, Some(prompt))?;
+    let mut conversation = crate::desktop::initialize_session_conversation(&store, &config, Some(prompt))?;
     let plan_mode_controller = RuntimePlanModeController::load(&config, store.as_ref())?;
     let _plan_mode_runtime_guard = install_plan_mode_runtime(plan_mode_controller.clone())?;
     inject_plan_mode_runtime_messages(store.as_ref(), session_id, &mut conversation)?;
@@ -611,7 +617,7 @@ pub(crate) async fn run_unified_prompt_with_provider(
     conversation.push(user_entry);
 
     // 2. Build permission broker.
-    let broker = crate::GuiRuntimePermissionBroker::new(
+    let broker = crate::desktop::GuiRuntimePermissionBroker::new(
         &config,
         plan_mode_controller,
         app.clone(),
@@ -648,7 +654,7 @@ pub(crate) async fn run_unified_prompt_with_provider(
 
     // 7. Build QueryEngineConfig.
     let event_stream = EventStream::new(64);
-    let max_turns = config.max_turns.max(crate::DEFAULT_MAX_TURNS) as u32;
+    let max_turns = config.max_turns.max(DEFAULT_MAX_TURNS) as u32;
 
     let mut query_config = QueryEngineConfig::new(
         SessionId::from(session_id),

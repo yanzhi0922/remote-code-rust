@@ -87,9 +87,18 @@ pub fn should_use_1h_cache(estimated_tokens: u64, session_turns: u32) -> bool {
 
 /// Check whether prompt caching is enabled for the given model.
 ///
-/// Respects the `DISABLE_PROMPT_CACHING` environment variable.
+/// Respects both `CLAUDE_CODE_DISABLE_PROMPT_CACHING` and `DISABLE_PROMPT_CACHING`
+/// environment variables (the prefixed form takes precedence).
 #[must_use]
 pub fn is_prompt_caching_enabled(model: &str) -> bool {
+    // Check CLAUDE_CODE_-prefixed variant first (TS parity)
+    if std::env::var("CLAUDE_CODE_DISABLE_PROMPT_CACHING")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+    {
+        return false;
+    }
+
     if std::env::var("DISABLE_PROMPT_CACHING")
         .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
         .unwrap_or(false)

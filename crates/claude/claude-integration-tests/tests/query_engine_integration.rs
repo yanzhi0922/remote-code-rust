@@ -181,11 +181,11 @@ fn engine_phase_active_states() {
 fn budget_tracker_allows_within_limits() {
     let tracker = claude_query_engine::BudgetTracker::new(10, Some(100000));
     assert_eq!(
-        tracker.evaluate(0, 0),
+        tracker.evaluate_hard_limits(0, 0),
         claude_query_engine::TokenBudgetDecision::Continue
     );
     assert_eq!(
-        tracker.evaluate(5, 50000),
+        tracker.evaluate_hard_limits(5, 50000),
         claude_query_engine::TokenBudgetDecision::Continue
     );
 }
@@ -194,13 +194,14 @@ fn budget_tracker_allows_within_limits() {
 fn budget_tracker_stops_on_turn_limit() {
     let tracker = claude_query_engine::BudgetTracker::new(3, None);
     assert_eq!(
-        tracker.evaluate(0, 0),
+        tracker.evaluate_hard_limits(0, 0),
         claude_query_engine::TokenBudgetDecision::Continue
     );
     assert_eq!(
-        tracker.evaluate(3, 0),
+        tracker.evaluate_hard_limits(3, 0),
         claude_query_engine::TokenBudgetDecision::Stop {
-            reason: "turn budget exceeded (3)".to_owned()
+            reason: "turn budget exceeded (3)".to_owned(),
+            completion_event: None,
         }
     );
 }
@@ -209,9 +210,10 @@ fn budget_tracker_stops_on_turn_limit() {
 fn budget_tracker_stops_on_token_limit() {
     let tracker = claude_query_engine::BudgetTracker::new(100, Some(1000));
     assert_eq!(
-        tracker.evaluate(1, 1000),
+        tracker.evaluate_hard_limits(1, 1000),
         claude_query_engine::TokenBudgetDecision::Stop {
-            reason: "token budget exceeded (1000)".to_owned()
+            reason: "token budget exceeded (1000)".to_owned(),
+            completion_event: None,
         }
     );
 }
@@ -220,18 +222,9 @@ fn budget_tracker_stops_on_token_limit() {
 fn budget_tracker_no_token_limit() {
     let tracker = claude_query_engine::BudgetTracker::new(10, None);
     assert_eq!(
-        tracker.evaluate(5, 999999999),
+        tracker.evaluate_hard_limits(5, 999999999),
         claude_query_engine::TokenBudgetDecision::Continue
     );
-}
-
-#[test]
-fn budget_tracker_serialization() {
-    let tracker = claude_query_engine::BudgetTracker::new(5, Some(10000));
-    let json = serde_json::to_string(&tracker).expect("serialize budget tracker");
-    let decoded: claude_query_engine::BudgetTracker =
-        serde_json::from_str(&json).expect("deserialize budget tracker");
-    assert_eq!(decoded, tracker);
 }
 
 // ─── Failure tracker ────────────────────────────────────────────────────────

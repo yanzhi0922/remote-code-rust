@@ -2,7 +2,6 @@
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use tokio::sync::mpsc;
 
 use crate::{ConnectionState, EndpointHealth, TransportConfig, TransportMetrics};
 
@@ -38,13 +37,6 @@ pub struct HealthStatus {
 pub trait RemoteTransport: Send + Sync {
     /// Establish a connection using the given config.
     async fn connect(&mut self, config: TransportConfig) -> anyhow::Result<()>;
-
-    /// Subscribe to real-time events starting after the given sequence.
-    /// Returns a channel that emits events until the connection drops.
-    async fn subscribe_events(
-        &self,
-        after: u64,
-    ) -> anyhow::Result<mpsc::Receiver<crate::TransportEvent>>;
 
     /// Send a command to the runner/control plane.
     async fn send_command(&self, command: TransportCommand) -> anyhow::Result<CommandAck>;

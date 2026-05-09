@@ -37,10 +37,13 @@ describe('RemoteAuthGate', () => {
           device_count: 1,
         }}
         manualAccessToken=""
+        username=""
+        password=""
         onBootstrapClaim={onBootstrapClaim}
         onClearSavedToken={onClearSavedToken}
         onManualTokenSave={onManualTokenSave}
         onPairingAccept={onPairingAccept}
+        onUserSignIn={vi.fn()}
         pairingOfferId=""
         pairingSecret=""
         setBootstrapSecret={setBootstrapSecret}
@@ -48,6 +51,8 @@ describe('RemoteAuthGate', () => {
         setManualAccessToken={setManualAccessToken}
         setPairingOfferId={setPairingOfferId}
         setPairingSecret={setPairingSecret}
+        setUsername={vi.fn()}
+        setPassword={vi.fn()}
       />,
     );
 

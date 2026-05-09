@@ -844,6 +844,11 @@ pub struct AgentLoop {
     ///
     /// Source: TS `AttemptCompletionTool.ts` → `task.ask("completion_result", ...)` → user feedback
     pending_completion_tx: Arc<std::sync::Mutex<Option<oneshot::Sender<String>>>>,
+
+    /// Terminal registry for querying active/inactive terminal state.
+    ///
+    /// Source: TS `integrations/terminal/TerminalRegistry.ts` — `getTerminals()`
+    terminal_registry: Option<Arc<roo_terminal::TerminalRegistry>>,
 }
 
 impl AgentLoop {
@@ -931,6 +936,7 @@ impl AgentLoop {
             pending_mistake_limit_tx: Arc::new(std::sync::Mutex::new(None)),
             pending_followup_tx: Arc::new(std::sync::Mutex::new(None)),
             pending_completion_tx: Arc::new(std::sync::Mutex::new(None)),
+            terminal_registry: None,
         }
     }
 
@@ -988,6 +994,14 @@ impl AgentLoop {
     ///   `fileContextTracker: FileContextTracker`
     pub fn with_file_context_tracker(mut self, tracker: FileContextTracker<InMemoryMetadataStore>) -> Self {
         self.file_context_tracker = Some(tracker);
+        self
+    }
+
+    /// Set the terminal registry for querying active/inactive terminal state.
+    ///
+    /// Source: TS `integrations/terminal/TerminalRegistry.ts` — `getTerminals()`
+    pub fn with_terminal_registry(mut self, registry: Arc<roo_terminal::TerminalRegistry>) -> Self {
+        self.terminal_registry = Some(registry);
         self
     }
 
@@ -4697,11 +4711,9 @@ impl AgentLoop {
             // Intentionally empty: open_tabs requires a GUI editor integration;
             // in headless/CLI mode there is no concept of "open tabs".
             open_tabs: Vec::new(),
-            // Intentionally empty: terminal registry is owned by TaskLifecycle,
-            // not by AgentLoop. Terminal info would need to be plumbed through
-            // the service layer; left empty until that wiring is added.
-            active_terminals: Vec::new(),
-            inactive_terminals: Vec::new(),
+            // Terminal state from registry
+            active_terminals: self.collect_active_terminals().await,
+            inactive_terminals: self.collect_inactive_terminals().await,
             recently_modified_files,
             git_status,
             total_cost,
@@ -4724,6 +4736,47 @@ impl AgentLoop {
         };
 
         build_environment_details(&input)
+    }
+
+    /// Collect active (busy) terminals from the terminal registry.
+    ///
+    /// Source: TS `getEnvironmentDetails.ts` — `TerminalRegistry.getTerminals(true, cline.taskId)`
+    async fn collect_active_terminals(&self) -> Vec<roo_environment::types::TerminalInfo> {
+        let Some(registry) = &self.terminal_registry else {
+            return Vec::new();
+        };
+        let busy = registry.get_terminals(true, None).await;
+        let mut infos = Vec::new();
+        for term in busy {
+            let t = term.lock().await;
+            infos.push(roo_environment::types::TerminalInfo {
+                id: format!("{}", t.get_id().as_u32()),
+                working_directory: t.get_cwd().to_string_lossy().to_string(),
+                last_command: String::new(),
+                new_output: None,
+            });
+        }
+        infos
+    }
+
+    /// Collect inactive (idle) terminals with completed process output.
+    ///
+    /// Source: TS `getEnvironmentDetails.ts` — `TerminalRegistry.getTerminals(false, cline.taskId)`
+    async fn collect_inactive_terminals(&self) -> Vec<roo_environment::types::InactiveTerminalInfo> {
+        let Some(registry) = &self.terminal_registry else {
+            return Vec::new();
+        };
+        let idle = registry.get_terminals(false, None).await;
+        let mut infos = Vec::new();
+        for term in idle {
+            let t = term.lock().await;
+            infos.push(roo_environment::types::InactiveTerminalInfo {
+                id: format!("{}", t.get_id().as_u32()),
+                working_directory: t.get_cwd().to_string_lossy().to_string(),
+                completed_processes: Vec::new(),
+            });
+        }
+        infos
     }
 
     // ===================================================================
@@ -5489,6 +5542,8 @@ mod tests {
             has_mcp: false,
             skills: Vec::new(),
             mcp_servers: Vec::new(),
+            custom_modes: None,
+            custom_mode_prompts: None,
         };
         assert_eq!(config.max_api_retries, 5);
         assert!(config.stop_on_tool_error);

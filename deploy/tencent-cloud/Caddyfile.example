@@ -1,3 +1,10 @@
+{
+    # Enable HTTP/3 (QUIC) support on all HTTPS servers.
+    servers {
+        protocols h1 h2 h3
+    }
+}
+
 remote-code.yz520gzy.top {
     root * /opt/remote-code/remote-code-gui/dist
     encode zstd gzip

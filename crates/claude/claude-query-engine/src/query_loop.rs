@@ -202,7 +202,7 @@ pub async fn run_query_loop(
                     match reason {
                         PromptTooLongReason::ImageError => {
                             // Gap 2: Strip problematic image blocks and retry.
-                            let before_count = count_image_blocks(&state.messages);
+                            let _before_count = count_image_blocks(&state.messages);
                             let stripped = strip_image_blocks(&mut state.messages);
                             state.replace_from_legacy(&state.legacy_conversation());
 
@@ -384,6 +384,27 @@ pub async fn run_query_loop(
                     if let Some(fallback) = fallback {
                         // Generate missing tool result blocks for pending tool uses
                         // (mirrors TS `yieldMissingToolResultBlocks`)
+                        //
+                        // When a model errors out after emitting tool_use blocks but before
+                        // receiving tool_result blocks, the conversation has orphaned tool_use
+                        // entries. We fill them with synthetic tool results so the fallback
+                        // model sees a valid conversation.
+                        let missing_results = crate::message_utils::yield_missing_tool_result_messages(
+                            &state.messages,
+                            "Model fallback triggered — previous response was interrupted",
+                        );
+                        for msg in &missing_results {
+                            state.messages.push(msg.clone());
+                            let _ = config
+                                .observer
+                                .on_event(QueryObserverEvent::MessagesAppended {
+                                    session_id: context.session_id.clone(),
+                                    appended: vec![msg.clone()],
+                                    total_messages: state.messages.len(),
+                                })
+                                .await;
+                        }
+
                         let tool_result_message = Message::from(ConversationEntry::user(format!(
                             "Model fallback triggered: {error:#}"
                         )));
@@ -1341,6 +1362,7 @@ fn classify_prompt_too_long_error(error: &anyhow::Error) -> Option<PromptTooLong
     None
 }
 
+#[allow(dead_code)]
 fn is_prompt_too_long_error(error: &anyhow::Error) -> bool {
     classify_prompt_too_long_error(error).is_some()
 }

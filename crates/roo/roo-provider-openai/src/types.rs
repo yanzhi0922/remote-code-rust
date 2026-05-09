@@ -74,3 +74,23 @@ impl OpenAiConfig {
         })
     }
 }
+
+impl Default for OpenAiConfig {
+    fn default() -> Self {
+        Self {
+            api_key: String::new(),
+            base_url: Self::DEFAULT_BASE_URL.to_string(),
+            org_id: None,
+            model_id: None,
+            temperature: None,
+            reasoning_effort: None,
+            request_timeout: None,
+            use_azure: false,
+            azure_api_version: None,
+            streaming_enabled: true,
+            headers: HashMap::new(),
+            r1_format_enabled: false,
+            custom_model_info: None,
+        }
+    }
+}
