@@ -88,7 +88,7 @@ features = [
     "Win32_UI_Shell",
     "Win32_System_Registry",
 ]
-version = "0.52"
+version = "0.61"
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }

@@ -2265,7 +2265,6 @@ name = "claude-model"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "claude-context",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
@@ -2338,7 +2337,6 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "claude-config",
- "claude-context",
  "claude-core",
  "claude-tools",
  "futures",
@@ -2362,7 +2360,6 @@ dependencies = [
  "anyhow",
  "async-trait",
  "chrono",
- "claude-context",
  "claude-core",
  "claude-provider",
  "filetime",
@@ -3367,7 +3364,7 @@ dependencies = [
  "tracing",
  "wildmatch",
  "winapi-util",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4656,7 +4653,7 @@ dependencies = [
  "vt100",
  "webbrowser",
  "which 8.0.2",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
  "winsplit",
 ]
 
@@ -4904,7 +4901,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "windows 0.58.0",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
  "winres",
 ]
 
