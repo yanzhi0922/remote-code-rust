@@ -1799,6 +1799,9 @@ Notes:
 - For simple content fetching, `web_fetch` may be sufficient.";
 
 /// Prompt for `web_search`.
+///
+/// NOTE: The date in the "current month" section is a static fallback.
+/// Use [`web_search_tool_prompt()`] instead for dynamic date injection at runtime.
 pub const WEB_SEARCH: &str = "\
 - Allows Claude to search the web and use the results to inform responses
 - Provides up-to-date information for current events and recent data
@@ -1826,8 +1829,8 @@ Usage notes:
   - Web search is only available in the US
 
 IMPORTANT - Use the correct year in search queries:
-  - The current month is May 2026. You MUST use this year when searching \
-for recent information, documentation, or current events.
+  - You MUST use the current year when searching for recent information, \
+documentation, or current events.
   - Example: If the user asks for \"latest React docs\", search for \
 \"React documentation\" with the current year, NOT last year";
 

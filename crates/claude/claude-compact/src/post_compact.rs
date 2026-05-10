@@ -1,8 +1,9 @@
 //! Post-compaction cleanup and result tracking.
 //!
 //! Provides utilities for cleaning up conversation state after a compaction
-//! operation, including result tracking, warning state management, and
-//! post-compact file re-reads.
+//! operation, including result tracking, warning state management,
+//! post-compact file re-reads, and a cascade cache-reset registry matching
+//! TS's `runPostCompactCleanup()`.
 
 use claude_core::Message;
 
@@ -332,6 +333,98 @@ impl Default for CompactWarningManager {
 }
 
 // ---------------------------------------------------------------------------
+// Post-compact cache-reset cascade (matches TS runPostCompactCleanup)
+// ---------------------------------------------------------------------------
+
+/// A named cleanup callback that is invoked after compaction.
+///
+/// The TS `runPostCompactCleanup()` resets 10+ caches after compaction:
+/// microcompactState, contextCollapse, getUserContext cache, getMemoryFiles cache,
+/// systemPromptSections, classifierApprovals, speculativeChecks, betaTracingState,
+/// attributionHooks.sweepFileContentCache, sessionMessagesCache.
+///
+/// In Rust, these caches are spread across crates. The registry allows each
+/// module to register a cleanup callback that is called in cascade after compaction.
+pub type CleanupCallback = Box<dyn Fn() + Send + Sync>;
+
+/// A named cleanup entry in the registry.
+pub struct CleanupEntry {
+    /// Human-readable name for debugging/logging.
+    pub name: String,
+    /// The callback to invoke.
+    pub callback: CleanupCallback,
+}
+
+impl std::fmt::Debug for CleanupEntry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CleanupEntry")
+            .field("name", &self.name)
+            .field("callback", &"<callback>")
+            .finish()
+    }
+}
+
+/// Registry of post-compact cleanup callbacks.
+///
+/// Modules register their cleanup callbacks during initialization.
+/// After compaction, [`PostCompactCleanupRegistry::run_cascade`] invokes all
+/// registered callbacks in registration order.
+pub struct PostCompactCleanupRegistry {
+    entries: Vec<CleanupEntry>,
+}
+
+impl PostCompactCleanupRegistry {
+    /// Create a new empty registry.
+    #[must_use]
+    pub fn new() -> Self {
+        Self { entries: Vec::new() }
+    }
+
+    /// Register a cleanup callback.
+    pub fn register(&mut self, name: impl Into<String>, callback: CleanupCallback) {
+        self.entries.push(CleanupEntry {
+            name: name.into(),
+            callback,
+        });
+    }
+
+    /// Run all registered cleanup callbacks in order.
+    ///
+    /// Returns the number of callbacks invoked.
+    pub fn run_cascade(&self) -> usize {
+        let count = self.entries.len();
+        for entry in &self.entries {
+            tracing::debug!("post-compact cleanup: {}", entry.name);
+            (entry.callback)();
+        }
+        count
+    }
+
+    /// Number of registered callbacks.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// Whether any callbacks are registered.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    /// Clear all registered callbacks.
+    pub fn clear(&mut self) {
+        self.entries.clear();
+    }
+}
+
+impl Default for PostCompactCleanupRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -627,5 +720,67 @@ mod tests {
         // Should stop before exhausting all 25 files
         assert!(msgs.len() < 25, "should stop at token budget");
         assert!(!msgs.is_empty(), "should include some files");
+    }
+
+    // -- PostCompactCleanupRegistry tests --------------------------------------
+
+    #[test]
+    fn cleanup_registry_starts_empty() {
+        let registry = PostCompactCleanupRegistry::new();
+        assert!(registry.is_empty());
+        assert_eq!(registry.len(), 0);
+    }
+
+    #[test]
+    fn cleanup_registry_register_and_run() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        use std::sync::Arc;
+
+        let counter = Arc::new(AtomicU32::new(0));
+        let counter_clone = Arc::clone(&counter);
+
+        let mut registry = PostCompactCleanupRegistry::new();
+        registry.register("test_callback", Box::new(move || {
+            counter_clone.fetch_add(1, Ordering::SeqCst);
+        }));
+
+        assert_eq!(registry.len(), 1);
+        let count = registry.run_cascade();
+        assert_eq!(count, 1);
+        assert_eq!(counter.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn cleanup_registry_multiple_callbacks() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        use std::sync::Arc;
+
+        let counter = Arc::new(AtomicU32::new(0));
+
+        let mut registry = PostCompactCleanupRegistry::new();
+        for i in 0..5 {
+            let counter_clone = Arc::clone(&counter);
+            registry.register(format!("callback_{i}"), Box::new(move || {
+                counter_clone.fetch_add(1, Ordering::SeqCst);
+            }));
+        }
+
+        assert_eq!(registry.len(), 5);
+        registry.run_cascade();
+        assert_eq!(counter.load(Ordering::SeqCst), 5);
+
+        // Run again — callbacks should fire again.
+        registry.run_cascade();
+        assert_eq!(counter.load(Ordering::SeqCst), 10);
+    }
+
+    #[test]
+    fn cleanup_registry_clear() {
+        let mut registry = PostCompactCleanupRegistry::new();
+        registry.register("cb1", Box::new(|| {}));
+        registry.register("cb2", Box::new(|| {}));
+        assert_eq!(registry.len(), 2);
+        registry.clear();
+        assert!(registry.is_empty());
     }
 }

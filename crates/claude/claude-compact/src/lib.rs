@@ -218,7 +218,8 @@ pub use attachment::{
 // ---------------------------------------------------------------------------
 
 pub use post_compact::{
-    CompactWarningManager, CompactWarningState, CleanupCriteria, PostCompactResult,
+    CleanupCallback, CleanupEntry, CompactWarningManager, CompactWarningState,
+    CleanupCriteria, PostCompactCleanupRegistry, PostCompactResult,
     run_post_compact_cleanup, re_read_recent_files,
 };
 

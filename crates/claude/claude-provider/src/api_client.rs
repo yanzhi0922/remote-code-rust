@@ -709,6 +709,37 @@ fn build_auth_headers(provider: &ProviderConfig) -> Result<HeaderMap> {
         headers.insert(header_name, header_value);
     }
 
+    // Parse ANTHROPIC_CUSTOM_HEADERS env var (newline-separated "Name: Value" pairs).
+    if let Ok(custom_headers) = std::env::var("ANTHROPIC_CUSTOM_HEADERS") {
+        for line in custom_headers.lines() {
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+            if let Some((name, value)) = line.split_once(':') {
+                let name = name.trim();
+                let value = value.trim();
+                if let Ok(header_name) = HeaderName::from_bytes(name.as_bytes()) {
+                    if let Ok(header_value) = HeaderValue::from_str(value) {
+                        headers.insert(header_name, header_value);
+                    }
+                }
+            }
+        }
+    }
+
+    // CCR (Claude Code Remote) headers.
+    if let Ok(container_id) = std::env::var("CLAUDE_CODE_REMOTE_CONTAINER_ID") {
+        if let Ok(value) = HeaderValue::from_str(&container_id) {
+            headers.insert(HeaderName::from_static("x-claude-remote-container-id"), value);
+        }
+    }
+    if let Ok(session_id) = std::env::var("CLAUDE_CODE_REMOTE_SESSION_ID") {
+        if let Ok(value) = HeaderValue::from_str(&session_id) {
+            headers.insert(HeaderName::from_static("x-claude-remote-session-id"), value);
+        }
+    }
+
     Ok(headers)
 }
 

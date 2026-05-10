@@ -15,6 +15,8 @@ fn get_knowledge_cutoff(model_id: &str) -> Option<&'static str> {
         Some("August 2025")
     } else if lower.contains("claude-opus-4-7") {
         Some("May 2025")
+    } else if lower.contains("claude-opus-4-6") {
+        Some("May 2025")
     } else if lower.contains("claude-opus-4-5") {
         Some("May 2025")
     } else if lower.contains("claude-haiku-4") {
@@ -155,7 +157,7 @@ impl SystemPromptSection for EnvInfoSection {
 
         env_items.push(BulletItem::Nested(vec![format!(
             "Is a git repository: {}",
-            if ctx.is_git { "true" } else { "false" }
+            if ctx.is_git { "Yes" } else { "No" }
         )]));
 
         if !ctx.additional_dirs.is_empty() {
@@ -315,7 +317,7 @@ mod tests {
         let section = EnvInfoSection;
         let result = section.compute(&test_ctx()).expect("compute ok");
         let content = result.expect("should be Some");
-        assert!(content.contains("Is a git repository: true"));
+        assert!(content.contains("Is a git repository: Yes"));
     }
 
     #[test]
@@ -356,6 +358,14 @@ mod tests {
     #[test]
     fn knowledge_cutoff_opus_4_5() {
         assert_eq!(get_knowledge_cutoff("claude-opus-4-5"), Some("May 2025"));
+    }
+
+    #[test]
+    fn knowledge_cutoff_opus_4_6() {
+        assert_eq!(
+            get_knowledge_cutoff("claude-opus-4-6"),
+            Some("May 2025")
+        );
     }
 
     #[test]
