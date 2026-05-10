@@ -721,6 +721,9 @@ pub fn should_retry_from_header(headers: &reqwest::header::HeaderMap) -> Option<
 ///
 /// The header value is a Unix timestamp (seconds, possibly fractional).
 /// Returns `None` if the header is absent or cannot be parsed.
+///
+/// Cap is [`PERSISTENT_RESET_CAP_MS`] (6 hours) matching TS's
+/// `getRateLimitResetDelayMs` which uses the full persistent reset cap.
 #[must_use]
 pub fn get_rate_limit_wait_duration(headers: &reqwest::header::HeaderMap) -> Option<Duration> {
     let reset_header = headers.get("anthropic-ratelimit-unified-reset")?;
@@ -731,8 +734,9 @@ pub fn get_rate_limit_wait_duration(headers: &reqwest::header::HeaderMap) -> Opt
         .ok()?
         .as_secs_f64();
     let wait_secs = (reset_ts - now_ts).max(0.0);
-    // Cap at 60 seconds to avoid extremely long waits.
-    Some(Duration::from_secs_f64(wait_secs.min(60.0)))
+    // Cap at 6 hours matching TS PERSISTENT_RESET_CAP_MS.
+    let max_secs = PERSISTENT_RESET_CAP_MS as f64 / 1000.0;
+    Some(Duration::from_secs_f64(wait_secs.min(max_secs)))
 }
 
 // ---------------------------------------------------------------------------
@@ -1413,19 +1417,42 @@ mod tests {
     }
 
     #[test]
-    fn rate_limit_wait_duration_caps_at_60s() {
+    fn rate_limit_wait_duration_caps_at_6hr() {
         let mut headers = reqwest::header::HeaderMap::new();
+        // 7 hours in the future — should cap at 6 hours (21600 seconds).
         let future_ts = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_secs_f64()
-            + 120.0;
+            + 7.0 * 3600.0;
         headers.insert(
             "anthropic-ratelimit-unified-reset",
             format!("{future_ts:.3}").parse().unwrap(),
         );
         let dur = get_rate_limit_wait_duration(&headers).unwrap();
-        assert_eq!(dur, Duration::from_secs(60));
+        assert_eq!(dur, Duration::from_secs(6 * 3600));
+    }
+
+    #[test]
+    fn rate_limit_wait_duration_under_cap_unchanged() {
+        let mut headers = reqwest::header::HeaderMap::new();
+        // 2 hours in the future — under the 6hr cap, should be roughly 7200 seconds.
+        let future_ts = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs_f64()
+            + 2.0 * 3600.0;
+        headers.insert(
+            "anthropic-ratelimit-unified-reset",
+            format!("{future_ts:.3}").parse().unwrap(),
+        );
+        let dur = get_rate_limit_wait_duration(&headers).unwrap();
+        // Should be close to 2 hours (7000-7300s range accounts for test execution time).
+        assert!(
+            dur.as_secs_f64() > 7000.0 && dur.as_secs_f64() < 7300.0,
+            "expected ~7200s, got {}s",
+            dur.as_secs_f64()
+        );
     }
 
     #[test]
