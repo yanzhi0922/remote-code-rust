@@ -419,7 +419,7 @@ serde_with = "3"
 sha1 = "0.10"
 starlark = "0.13"
 time = "0.3"
-ts-rs = { version = "11", features = ["uuid-impl", "serde-json-impl", "no-serde-warnings"] }
+ts-rs = { version = "12", features = ["uuid-impl", "serde-json-impl", "no-serde-warnings"] }
 uds_windows = "1.1"
 url = "2"
 tiny_http = "0.12"
