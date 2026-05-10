@@ -3213,7 +3213,17 @@ impl Handler {
     /// Source: TS `webviewMessageHandler.ts` — `cancelMarketplaceInstall`
     async fn handle_marketplace_cancel_install(&self, _params: Value) -> ServerResult<Value> {
         debug!("Cancelling marketplace install");
-        Ok(json!({"status": "cancelled"}))
+        let app = self.app.read().await;
+        match app.marketplace_manager() {
+            Some(manager) => {
+                let mut mgr = manager.write().await;
+                match mgr.cancel_install() {
+                    Ok(()) => Ok(json!({"status": "cancelled"})),
+                    Err(e) => Ok(json!({"status": "error", "error": e.to_string()})),
+                }
+            }
+            None => Ok(json!({"status": "cancelled", "note": "no marketplace manager"})),
+        }
     }
 
     // ── Worktree ────────────────────────────────────────────────────────────
@@ -4601,7 +4611,9 @@ impl Handler {
     /// Request indexing status.
     async fn handle_index_request_status(&self, _params: Value) -> ServerResult<Value> {
         debug!("Requesting indexing status");
-        Ok(json!({"action": "requestIndexStatus", "state": "Standby"}))
+        // Report the real state: indexing is not yet available in CLI mode
+        // because the embedder requires a real embedding model.
+        Ok(json!({"action": "requestIndexStatus", "state": "Not Available", "message": "Codebase indexing requires an embedding model (not yet configured in CLI mode)"}))
     }
 
     /// Start indexing.
@@ -4610,7 +4622,9 @@ impl Handler {
     /// TS: enables workspace, initializes CodeIndexManager, starts indexing.
     async fn handle_index_start(&self, _params: Value) -> ServerResult<Value> {
         debug!("Starting indexing");
-        // Persist: implicitly enable workspace indexing when starting
+        // Persist the setting even though the engine isn't running yet.
+        // When an embedding model is configured later, this preference
+        // will be respected.
         let app = self.app.read().await;
         let gsp = app.config().global_storage_path.clone();
         let cwd = app.cwd().to_string();
@@ -4618,7 +4632,6 @@ impl Handler {
 
         let mut settings = Self::read_roo_settings(&gsp).await;
         settings["codebaseIndexEnabled"] = json!(true);
-        // Mark this workspace as enabled
         if let Some(obj) = settings.as_object_mut() {
             let workspaces = obj.entry("codebaseIndexWorkspaces").or_insert_with(|| json!({}));
             if let Some(ws) = workspaces.as_object_mut() {
@@ -4627,7 +4640,7 @@ impl Handler {
         }
         let _ = Self::write_roo_settings(&gsp, &settings).await;
 
-        Ok(json!({"action": "startIndexing", "workspace": cwd}))
+        Ok(json!({"action": "startIndexing", "workspace": cwd, "state": "Pending", "message": "Indexing preference saved. Requires embedding model to start."}))
     }
 
     /// Stop indexing.
@@ -4635,7 +4648,16 @@ impl Handler {
     /// Source: TS `webviewMessageHandler.ts` — `stopIndexing`
     async fn handle_index_stop(&self, _params: Value) -> ServerResult<Value> {
         debug!("Stopping indexing");
-        Ok(json!({"action": "stopIndexing", "state": "Standby"}))
+        // Persist the disabled setting.
+        let app = self.app.read().await;
+        let gsp = app.config().global_storage_path.clone();
+        drop(app);
+
+        let mut settings = Self::read_roo_settings(&gsp).await;
+        settings["codebaseIndexEnabled"] = json!(false);
+        let _ = Self::write_roo_settings(&gsp, &settings).await;
+
+        Ok(json!({"action": "stopIndexing", "state": "Stopped"}))
     }
 
     /// Clear index data.

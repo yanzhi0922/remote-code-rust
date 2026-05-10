@@ -3,6 +3,7 @@
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use axum::Json;
 use axum::http::StatusCode;
@@ -30,6 +31,7 @@ pub(crate) const DEFAULT_EVENT_LIST_LIMIT: usize = 50;
 pub(crate) const MAX_EVENT_LIST_LIMIT: usize = 200;
 pub(crate) const DEFAULT_PAIRING_TTL_SECS: u64 = 600;
 pub(crate) const MAX_PAIRING_TTL_SECS: u64 = 3600;
+pub(crate) const MAX_ARTIFACT_SIZE_BYTES: usize = 10 * 1024 * 1024; // 10 MiB
 pub(crate) const EVENT_STREAM_BUFFER: usize = 256;
 pub(crate) const PHASE: &str = "phase5-remote-stable";
 
@@ -634,22 +636,22 @@ pub enum TimelineEventDetail {
         message_id: Option<String>,
     },
     ToolStarted {
-        tool_call_id: String,
-        tool_name: String,
+        tool_call_id: Arc<str>,
+        tool_name: Arc<str>,
     },
     ToolProgress {
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        tool_call_id: Option<String>,
+        tool_call_id: Option<Arc<str>>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        tool_name: Option<String>,
+        tool_name: Option<Arc<str>>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         delta: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         elapsed_time_seconds: Option<u64>,
     },
     ToolFinished {
-        tool_call_id: String,
-        tool_name: String,
+        tool_call_id: Arc<str>,
+        tool_name: Arc<str>,
         is_error: bool,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         summary: Option<String>,
@@ -664,18 +666,18 @@ pub enum TimelineEventDetail {
         state: DaemonPresenceState,
     },
     SubtaskStarted {
-        task_id: String,
-        parent_task_id: Option<String>,
+        task_id: Arc<str>,
+        parent_task_id: Option<Arc<str>>,
         description: String,
         depth: u32,
     },
     SubtaskProgress {
-        task_id: String,
+        task_id: Arc<str>,
         status: String,
         summary: String,
     },
     SubtaskCompleted {
-        task_id: String,
+        task_id: Arc<str>,
         status: String,
         summary: String,
         turns_used: Option<u32>,
@@ -906,12 +908,12 @@ impl TryFrom<SharedRuntimeEventContract> for RuntimeEventDetail {
                 tool_use_id,
                 tool_name,
             } => Self::ToolStarted {
-                tool_call_id: tool_use_id,
-                tool_name,
+                tool_call_id: tool_use_id.into(),
+                tool_name: tool_name.into(),
             },
             SharedRuntimeEventContract::ToolProgress { progress } => Self::ToolProgress {
-                tool_call_id: progress.tool_use_id,
-                tool_name: progress.tool_name,
+                tool_call_id: progress.tool_use_id.map(Into::into),
+                tool_name: progress.tool_name.map(Into::into),
                 delta: progress.input_delta,
                 elapsed_time_seconds: progress.elapsed_time_seconds,
             },
@@ -921,8 +923,8 @@ impl TryFrom<SharedRuntimeEventContract> for RuntimeEventDetail {
                 is_error,
                 summary,
             } => Self::ToolFinished {
-                tool_call_id: tool_use_id,
-                tool_name,
+                tool_call_id: tool_use_id.into(),
+                tool_name: tool_name.into(),
                 is_error,
                 summary,
             },
@@ -936,8 +938,8 @@ impl TryFrom<SharedRuntimeEventContract> for RuntimeEventDetail {
                 description,
                 depth,
             } => Self::SubtaskStarted {
-                task_id,
-                parent_task_id,
+                task_id: task_id.into(),
+                parent_task_id: parent_task_id.map(Into::into),
                 description,
                 depth,
             },
@@ -946,7 +948,7 @@ impl TryFrom<SharedRuntimeEventContract> for RuntimeEventDetail {
                 status,
                 summary,
             } => Self::SubtaskProgress {
-                task_id,
+                task_id: task_id.into(),
                 status,
                 summary,
             },
@@ -956,7 +958,7 @@ impl TryFrom<SharedRuntimeEventContract> for RuntimeEventDetail {
                 summary,
                 turns_used,
             } => Self::SubtaskCompleted {
-                task_id,
+                task_id: task_id.into(),
                 status,
                 summary,
                 turns_used,
@@ -1032,8 +1034,8 @@ mod tests {
         assert_eq!(
             detail,
             RuntimeEventDetail::ToolProgress {
-                tool_call_id: Some("tool-1".to_owned()),
-                tool_name: Some("shell".to_owned()),
+                tool_call_id: Some("tool-1".into()),
+                tool_name: Some("shell".into()),
                 delta: Some("dir".to_owned()),
                 elapsed_time_seconds: Some(2),
             }
@@ -1053,8 +1055,8 @@ mod tests {
         assert_eq!(
             detail,
             RuntimeEventDetail::ToolProgress {
-                tool_call_id: Some("tool-legacy".to_owned()),
-                tool_name: Some("shell".to_owned()),
+                tool_call_id: Some("tool-legacy".into()),
+                tool_name: Some("shell".into()),
                 delta: Some("ls".to_owned()),
                 elapsed_time_seconds: None,
             }

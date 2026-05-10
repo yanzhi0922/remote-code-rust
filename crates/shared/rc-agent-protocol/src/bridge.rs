@@ -3,6 +3,8 @@
 //! This allows any Agent adapter (Roo, Codex, or future ones) to feed events
 //! into the same control-plane timeline that Claude sessions already use.
 
+use std::sync::Arc;
+
 use rc_engine_events::{MessageRole, RuntimeEventDetail};
 
 use crate::events::UnifiedAgentEvent;
@@ -23,20 +25,23 @@ pub fn unified_event_to_runtime_detail(event: &UnifiedAgentEvent) -> Option<Runt
             tool_input,
             ..
         } => Some(RuntimeEventDetail::ToolStarted {
-            tool_call_id: derive_tool_call_id(tool_name, tool_input),
-            tool_name: tool_name.clone(),
+            tool_call_id: derive_tool_call_id(tool_name, tool_input).into(),
+            tool_name: Arc::from(tool_name.as_str()),
         }),
 
         UnifiedAgentEvent::ToolCallProgress {
             tool_name,
             progress,
             ..
-        } => Some(RuntimeEventDetail::ToolProgress {
-            tool_call_id: Some(tool_name.clone()),
-            tool_name: Some(tool_name.clone()),
-            delta: Some(progress.clone()),
-            elapsed_time_seconds: None,
-        }),
+        } => {
+            let name: Arc<str> = Arc::from(tool_name.as_str());
+            Some(RuntimeEventDetail::ToolProgress {
+                tool_call_id: Some(name.clone()),
+                tool_name: Some(name),
+                delta: Some(progress.clone()),
+                elapsed_time_seconds: None,
+            })
+        }
 
         UnifiedAgentEvent::ToolCallCompleted {
             tool_name,
@@ -48,8 +53,8 @@ pub fn unified_event_to_runtime_detail(event: &UnifiedAgentEvent) -> Option<Runt
                 .and_then(|v| v.as_bool())
                 .is_none_or(|s| !s);
             Some(RuntimeEventDetail::ToolFinished {
-                tool_call_id: derive_tool_call_id(tool_name, result),
-                tool_name: tool_name.clone(),
+                tool_call_id: derive_tool_call_id(tool_name, result).into(),
+                tool_name: Arc::from(tool_name.as_str()),
                 is_error,
                 summary: Some(result.to_string()),
             })
@@ -57,17 +62,20 @@ pub fn unified_event_to_runtime_detail(event: &UnifiedAgentEvent) -> Option<Runt
 
         UnifiedAgentEvent::PermissionRequest {
             tool_name, ..
-        } => Some(RuntimeEventDetail::ToolStarted {
-            tool_call_id: format!("approval-{tool_name}"),
-            tool_name: format!("approval:{tool_name}"),
-        }),
+        } => {
+            let name: Arc<str> = Arc::from(tool_name.as_str());
+            Some(RuntimeEventDetail::ToolStarted {
+                tool_call_id: format!("approval-{name}").into(),
+                tool_name: format!("approval:{name}").into(),
+            })
+        }
 
         UnifiedAgentEvent::SubtaskStarted {
             task_id,
             description,
             ..
         } => Some(RuntimeEventDetail::SubtaskStarted {
-            task_id: task_id.clone(),
+            task_id: Arc::from(task_id.as_str()),
             parent_task_id: None,
             description: description.clone(),
             depth: 0,
@@ -78,7 +86,7 @@ pub fn unified_event_to_runtime_detail(event: &UnifiedAgentEvent) -> Option<Runt
             progress,
             ..
         } => Some(RuntimeEventDetail::SubtaskProgress {
-            task_id: task_id.clone(),
+            task_id: Arc::from(task_id.as_str()),
             status: "running".to_owned(),
             summary: progress.clone(),
         }),
@@ -87,7 +95,7 @@ pub fn unified_event_to_runtime_detail(event: &UnifiedAgentEvent) -> Option<Runt
             task_id,
             result, ..
         } => Some(RuntimeEventDetail::SubtaskCompleted {
-            task_id: task_id.clone(),
+            task_id: Arc::from(task_id.as_str()),
             status: "completed".to_owned(),
             summary: result.to_string(),
             turns_used: None,
@@ -178,7 +186,7 @@ mod tests {
             tool_input: serde_json::json!({"path": "/tmp/a.rs"}),
         };
         let d = unified_event_to_runtime_detail(&started).unwrap();
-        assert!(matches!(d, RuntimeEventDetail::ToolStarted { tool_name, .. } if tool_name == "read_file"));
+        assert!(matches!(d, RuntimeEventDetail::ToolStarted { tool_name, .. } if &*tool_name == "read_file"));
 
         let completed = UnifiedAgentEvent::ToolCallCompleted {
             session_id: "s1".into(),
@@ -228,7 +236,7 @@ mod tests {
         };
         let d = unified_event_to_runtime_detail(&started).unwrap();
         assert!(matches!(d, RuntimeEventDetail::SubtaskStarted { task_id, description, .. }
-            if task_id == "t1" && description == "explore code"));
+            if &*task_id == "t1" && description == "explore code"));
 
         let completed = UnifiedAgentEvent::SubtaskCompleted {
             session_id: "s1".into(),

@@ -75,10 +75,11 @@ pub(crate) async fn require_api_auth(
     mut request: Request,
     next: Next,
 ) -> axum::response::Response {
-    // Explicit disable via env var (local dev).
-    if std::env::var("REMOTE_CODE_REQUIRE_AUTH")
-        .as_deref()
-        .is_ok_and(|v| v.eq_ignore_ascii_case("false"))
+    // Explicit disable via env var (local dev only — compiled out in release).
+    if cfg!(debug_assertions)
+        && std::env::var("REMOTE_CODE_REQUIRE_AUTH")
+            .as_deref()
+            .is_ok_and(|v| v.eq_ignore_ascii_case("false"))
     {
         return next.run(request).await;
     }

@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
@@ -40,22 +42,22 @@ pub enum RuntimeEventDetail {
         message_id: Option<String>,
     },
     ToolStarted {
-        tool_call_id: String,
-        tool_name: String,
+        tool_call_id: Arc<str>,
+        tool_name: Arc<str>,
     },
     ToolProgress {
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        tool_call_id: Option<String>,
+        tool_call_id: Option<Arc<str>>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        tool_name: Option<String>,
+        tool_name: Option<Arc<str>>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         delta: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         elapsed_time_seconds: Option<u64>,
     },
     ToolFinished {
-        tool_call_id: String,
-        tool_name: String,
+        tool_call_id: Arc<str>,
+        tool_name: Arc<str>,
         is_error: bool,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         summary: Option<String>,
@@ -70,18 +72,18 @@ pub enum RuntimeEventDetail {
         state: DaemonPresenceState,
     },
     SubtaskStarted {
-        task_id: String,
-        parent_task_id: Option<String>,
+        task_id: Arc<str>,
+        parent_task_id: Option<Arc<str>>,
         description: String,
         depth: u32,
     },
     SubtaskProgress {
-        task_id: String,
+        task_id: Arc<str>,
         status: String,
         summary: String,
     },
     SubtaskCompleted {
-        task_id: String,
+        task_id: Arc<str>,
         status: String,
         summary: String,
         turns_used: Option<u32>,
@@ -252,10 +254,10 @@ pub enum EngineEvent {
         session_id: SessionId,
     },
     StreamStarted {
-        request_id: String,
+        request_id: Arc<str>,
     },
     StreamMessageStart {
-        model: String,
+        model: Arc<str>,
         usage: Usage,
     },
     StreamContentBlockStart {
@@ -279,24 +281,24 @@ pub enum EngineEvent {
         error: String,
     },
     ToolUseStarted {
-        tool_use_id: String,
-        tool_name: String,
-        input: Value,
+        tool_use_id: Arc<str>,
+        tool_name: Arc<str>,
+        input: Arc<Value>,
     },
     ToolUseProgress {
-        tool_use_id: String,
+        tool_use_id: Arc<str>,
         progress: ToolProgress,
     },
     ToolUseCompleted {
-        tool_use_id: String,
+        tool_use_id: Arc<str>,
         result: ToolResult,
     },
     ToolUseError {
-        tool_use_id: String,
+        tool_use_id: Arc<str>,
         error: ToolError,
     },
     ToolUseRejected {
-        tool_use_id: String,
+        tool_use_id: Arc<str>,
         reason: String,
     },
     CompactStarted {
@@ -338,8 +340,8 @@ mod tests {
     #[test]
     fn runtime_event_serialization_matches_control_plane_shape() {
         let detail = RuntimeEventDetail::ToolProgress {
-            tool_call_id: Some("tool-1".to_owned()),
-            tool_name: Some("bash".to_owned()),
+            tool_call_id: Some("tool-1".into()),
+            tool_name: Some("bash".into()),
             delta: Some("{\"command\":\"ls\"}".to_owned()),
             elapsed_time_seconds: Some(2),
         };
@@ -416,9 +418,9 @@ mod tests {
     #[test]
     fn engine_event_round_trips_with_tool_payloads() {
         let event = EngineEvent::ToolUseStarted {
-            tool_use_id: "toolu_123".to_owned(),
-            tool_name: "read_file".to_owned(),
-            input: json!({ "path": "src/lib.rs" }),
+            tool_use_id: "toolu_123".into(),
+            tool_name: "read_file".into(),
+            input: Arc::new(json!({ "path": "src/lib.rs" })),
         };
 
         let encoded = serde_json::to_string(&event).expect("event should serialize");

@@ -54,7 +54,41 @@ use crate::native_tool_call_parser::NativeToolCallParser;
 use crate::present_assistant_message::PresentAssistantMessage;
 use crate::stream_parser::{ParsedStreamContent, ParsedToolCall, StreamParser};
 use crate::tool_dispatcher::{ToolContext, ToolDispatcher, ToolExecutionResult};
-use crate::types::{DiffStrategy, StreamEvent, TaskError, TaskResult, TaskState};
+use crate::types::{DiffStrategy, StreamEvent, TaskConfig, TaskError, TaskResult, TaskState};
+
+// ===========================================================================
+// ArcProviderWrapper — adapts Arc<dyn Provider> to Box<dyn Provider>
+// ===========================================================================
+
+/// Wrapper to use a shared `Arc<dyn Provider>` where `Box<dyn Provider>` is
+/// expected. Used when spawning a nested agent loop for subtask execution —
+/// the child shares the same provider via Arc.
+struct ArcProviderWrapper(Arc<dyn Provider>);
+
+#[async_trait::async_trait]
+impl Provider for ArcProviderWrapper {
+    async fn create_message(
+        &self,
+        system_prompt: &str,
+        messages: Vec<roo_types::api::ApiMessage>,
+        tools: Option<Vec<serde_json::Value>>,
+        metadata: CreateMessageMetadata,
+    ) -> Result<roo_provider::handler::ApiStream, roo_provider::ProviderError> {
+        self.0.create_message(system_prompt, messages, tools, metadata).await
+    }
+
+    fn get_model(&self) -> (String, roo_types::model::ModelInfo) {
+        self.0.get_model()
+    }
+
+    async fn complete_prompt(&self, prompt: &str) -> Result<String, roo_provider::ProviderError> {
+        self.0.complete_prompt(prompt).await
+    }
+
+    fn provider_name(&self) -> roo_types::api::ProviderName {
+        self.0.provider_name()
+    }
+}
 
 // ===========================================================================
 // MistakeLimitAction — user response to mistake limit reached
@@ -4047,25 +4081,99 @@ impl AgentLoop {
     /// The parent blocks until the child completes, collecting the
     /// `attempt_completion` result.
     async fn execute_subtask(
-        &self,
+        &mut self,
         mode: String,
         message: String,
         todos: Option<&str>,
     ) -> Result<String, String> {
-        let config = crate::tool_dispatcher::SubtaskConfig {
-            mode,
-            message,
-            todos: todos.map(String::from),
-            cwd: self.engine.config().cwd.clone().into(),
-            parent_task_id: self.engine.config().task_id.clone(),
-            root_task_id: None,
-            task_number: 0,
-        };
-        let result = crate::tool_dispatcher::execute_subtask(config).await;
-        if result.success {
-            Ok(result.completion_text)
+        let parent_task_id = self.engine.config().task_id.clone();
+        let root_task_id = self.engine.config().root_task_id.clone()
+            .unwrap_or_else(|| parent_task_id.clone());
+        let cwd = self.engine.config().cwd.clone();
+        let storage_path = self.engine.config().storage_path.clone();
+        let max_iterations = self.engine.config().max_iterations;
+        let consecutive_mistake_limit = self.engine.config().consecutive_mistake_limit;
+
+        let child_task_id = format!(
+            "{}-sub-{}",
+            &parent_task_id[..8.min(parent_task_id.len())],
+            uuid::Uuid::new_v4().as_simple()
+        );
+
+        let initial_text = if let Some(t) = todos {
+            format!("{}\n\nTodos:\n{}", message, t)
         } else {
-            Err(result.completion_text)
+            message
+        };
+
+        let child_config = TaskConfig {
+            task_id: child_task_id.clone(),
+            root_task_id: Some(root_task_id),
+            parent_task_id: Some(parent_task_id),
+            task_number: 0,
+            cwd: cwd.clone(),
+            mode: mode.clone(),
+            api_config_name: self.engine.config().api_config_name.clone(),
+            workspace: self.engine.config().workspace.clone(),
+            max_iterations,
+            auto_approval: self.engine.config().auto_approval,
+            enable_checkpoints: self.engine.config().enable_checkpoints,
+            checkpoint_timeout: self.engine.config().checkpoint_timeout,
+            consecutive_mistake_limit,
+            task_text: Some(initial_text),
+            images: Vec::new(),
+            history_item_id: None,
+            storage_path,
+            custom_condensing_prompt: self.engine.config().custom_condensing_prompt.clone(),
+            instance_id: uuid::Uuid::new_v4().as_simple().to_string()[..8].to_string(),
+            start_task: false,
+        };
+
+        let child_engine = match TaskEngine::new(child_config) {
+            Ok(e) => e,
+            Err(e) => return Err(format!("Failed to create child task engine: {}", e)),
+        };
+
+        // Build a child dispatcher with the standard tool set.
+        let child_dispatcher = crate::tool_dispatcher::default_dispatcher();
+        let child_message_builder = MessageBuilder::new("");
+        let child_provider = ArcProviderWrapper(self.provider.clone());
+
+        let mut child_loop = AgentLoop::new(
+            child_engine,
+            Box::new(child_provider),
+            child_message_builder,
+            child_dispatcher,
+        );
+
+        // Inherit controller references from parent.
+        if let Some(ref ctrl) = self.roo_ignore_controller {
+            child_loop = child_loop.with_roo_ignore_controller(ctrl.clone());
+        }
+        if let Some(ref ctrl) = self.roo_protected_controller {
+            child_loop = child_loop.with_roo_protected_controller(ctrl.clone());
+        }
+        // Note: FileContextTracker does not implement Clone, so the child
+        // gets a fresh tracker. This is fine — the child tracks its own reads.
+
+        info!(task_id = %child_task_id, mode = %mode, "Starting nested agent loop for subtask");
+
+        // Box the recursive async call to avoid infinitely-sized futures.
+        let result = Box::pin(async {
+            child_loop.run_loop().await
+        }).await;
+
+        match result {
+            Ok(task_result) => {
+                let completion = task_result.final_message
+                    .unwrap_or_else(|| "Subtask completed (no explicit completion text)".to_string());
+                info!(task_id = %child_task_id, "Subtask completed");
+                Ok(completion)
+            }
+            Err(e) => {
+                warn!(task_id = %child_task_id, error = %e, "Subtask failed");
+                Err(format!("Subtask failed: {}", e))
+            }
         }
     }
 
@@ -4942,21 +5050,6 @@ impl AgentLoop {
     // TS Task.ts processQueuedMessages — line 4714-4729
     // ===================================================================
 
-    /// Process any queued messages by dequeuing and submitting them.
-    ///
-    /// Source: `src/core/task/Task.ts` lines 4714-4729
-    ///   `public processQueuedMessages(): void { ... }`
-    ///
-    /// This ensures that queued user messages are sent when appropriate,
-    /// preventing them from getting stuck in the queue.
-    #[allow(dead_code)]
-    pub fn process_queued_messages(&mut self) {
-        // In the current architecture, message queue processing is handled
-        // at the server/lifecycle layer. This method is provided for
-        // compatibility with the TS interface.
-        debug!("processQueuedMessages called (handled at lifecycle layer)");
-    }
-
     // ===================================================================
     // TS Task.ts taskStatus getter — line 4639-4653
     // ===================================================================
@@ -5009,29 +5102,6 @@ impl AgentLoop {
     // TS Task.ts getCurrentProfileId — line 3821-3826
     // ===================================================================
 
-    /// Get the current profile ID from state.
-    ///
-    /// Source: `src/core/task/Task.ts` lines 3821-3826
-    ///   `private getCurrentProfileId(state: any): string { ... }`
-    #[allow(dead_code)]
-    fn get_current_profile_id(&self) -> String {
-        // In the current architecture, profile management is at the server layer
-        "default".to_string()
-    }
-
-    // ===================================================================
-    // TS Task.ts getEnabledMcpToolsCount — line 1892-1911
-    // ===================================================================
-
-    /// Get the count of enabled MCP tools.
-    ///
-    /// Source: `src/core/task/Task.ts` lines 1892-1911
-    ///   `private async getEnabledMcpToolsCount() { ... }`
-    #[allow(dead_code)]
-    fn get_enabled_mcp_tools_count(&self) -> (usize, usize) {
-        // In the current architecture, MCP tool counting is at the server layer
-        (0, 0)
-    }
 }
 
 // ===========================================================================

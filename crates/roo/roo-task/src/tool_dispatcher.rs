@@ -1835,15 +1835,12 @@ pub struct SubtaskResult {
     pub total_cost: f64,
 }
 
-/// Executes a subtask by running a nested agent loop.
+/// Executes a subtask by validating the configuration.
 ///
-/// In the VS Code extension, `new_task` creates a new `Task` instance and
-/// delegates to it. In the CLI, we spawn a nested agent loop synchronously
-/// (the parent blocks until the child completes).
-///
-/// This is the structural hook for subtask execution. The actual nested
-/// agent loop is wired at the application layer; this function validates
-/// and prepares the subtask configuration and returns a placeholder result.
+/// Note: The actual nested agent loop execution is performed by
+/// [`AgentLoop::execute_subtask()`] which creates a child `TaskEngine` +
+/// `AgentLoop` and runs it to completion. This function is kept for
+/// backward compatibility with external callers that need validation only.
 ///
 /// Source: `src/core/tools/NewTaskTool.ts` — `execute()`
 pub async fn execute_subtask(
@@ -1853,10 +1850,9 @@ pub async fn execute_subtask(
         mode = %config.mode,
         parent_task_id = %config.parent_task_id,
         task_number = config.task_number,
-        "Subtask execution started"
+        "Subtask validation started"
     );
 
-    // Validate the subtask mode
     let task_params = roo_types::tool::NewTaskParams {
         mode: config.mode.clone(),
         message: config.message.clone(),
@@ -1865,21 +1861,10 @@ pub async fn execute_subtask(
 
     match roo_tools_mode::process_new_task(&task_params) {
         Ok(result) => {
-            tracing::info!(
-                mode = %result.mode,
-                "Subtask validated, returning for nested execution"
-            );
-            // In the full implementation, the application layer would:
-            // 1. Create a new TaskEngine with the subtask config
-            // 2. Create a new AgentLoop with the subtask mode and provider
-            // 3. Run the nested agent loop until completion
-            // 4. Collect the attempt_completion result
-            //
-            // For now, return a structured result indicating the subtask was
-            // validated and is ready for nested execution.
+            tracing::info!(mode = %result.mode, "Subtask validated");
             SubtaskResult {
                 completion_text: format!(
-                    "Subtask in '{}' mode completed. Task: {}",
+                    "Subtask in '{}' mode validated. Task: {}",
                     result.mode, result.message
                 ),
                 success: true,

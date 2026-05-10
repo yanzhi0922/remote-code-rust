@@ -9,6 +9,8 @@ use rc_engine_events::{
     Usage,
 };
 use claude_provider::{
+    ErrorCategory,
+    extract_provider_error,
     StreamingCallbacks,
     query_source::{ProviderRequestContext, ProviderTaskBudget},
 };
@@ -952,9 +954,9 @@ pub async fn run_query_loop(
                     let ctx = context.clone();
 
                     config.event_stream.emit(EngineEvent::ToolUseStarted {
-                        tool_use_id: tool_call.id.clone(),
-                        tool_name: tool_call.name.clone(),
-                        input: tool_call.input.clone(),
+                        tool_use_id: tool_call.id.clone().into(),
+                        tool_name: tool_call.name.clone().into(),
+                        input: Arc::new(tool_call.input.clone()),
                     });
 
                     let handle = tokio::spawn(async move {
@@ -1016,16 +1018,16 @@ pub async fn run_query_loop(
                         })
                         .await;
                     config.event_stream.emit(EngineEvent::ToolUseStarted {
-                        tool_use_id: tool_call.id.clone(),
-                        tool_name: tool_call.name.clone(),
-                        input: tool_call.input.clone(),
+                        tool_use_id: tool_call.id.clone().into(),
+                        tool_name: tool_call.name.clone().into(),
+                        input: Arc::new(tool_call.input.clone()),
                     });
 
                     let tool_run = match config.tool_runner.run_tool(tool_call, &context).await {
                         Ok(result) => result,
                         Err(error) => {
                             config.event_stream.emit(EngineEvent::ToolUseError {
-                                tool_use_id: tool_call.id.clone(),
+                                tool_use_id: tool_call.id.clone().into(),
                                 error: ToolError {
                                     message: format!("{error:#}"),
                                     retryable: false,
@@ -1460,6 +1462,17 @@ pub enum PromptTooLongReason {
 }
 
 fn classify_prompt_too_long_error(error: &anyhow::Error) -> Option<PromptTooLongReason> {
+    // Fast path: check for structured ProviderError in the error chain.
+    if let Some(pe) = extract_provider_error(error) {
+        if pe.category == ErrorCategory::PromptTooLong {
+            match pe.status_code {
+                Some(413) => return Some(PromptTooLongReason::ContextCollapse),
+                _ => return Some(PromptTooLongReason::PromptTooLong),
+            }
+        }
+    }
+
+    // Fallback: string-based classification for errors without structured metadata.
     let msg = format!("{error:#}");
     let lowered = msg.to_ascii_lowercase();
 
@@ -1640,6 +1653,15 @@ fn count_image_blocks(messages: &[Message]) -> usize {
 }
 
 fn is_model_overloaded_error(error: &anyhow::Error) -> bool {
+    // Fast path: check for structured ProviderError in the error chain.
+    if let Some(pe) = extract_provider_error(error) {
+        return matches!(
+            pe.category,
+            ErrorCategory::ServerError | ErrorCategory::RateLimit
+        );
+    }
+
+    // Fallback: string-based classification.
     let msg = format!("{error:#}");
     let lowered = msg.to_ascii_lowercase();
     lowered.contains("overloaded")
@@ -1797,7 +1819,7 @@ async fn commit_tool_result(
         })
         .await;
     config.event_stream.emit(EngineEvent::ToolUseCompleted {
-        tool_use_id: tool_call.id.clone(),
+        tool_use_id: tool_call.id.clone().into(),
         result: EventToolResult {
             content: tool_run.result.content.clone(),
             is_error: tool_run.result.is_error,

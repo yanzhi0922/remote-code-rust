@@ -822,7 +822,7 @@ mod tests {
         );
         assert!(engine_events.iter().any(|event| matches!(
             event,
-            EngineEvent::ToolUseStarted { tool_use_id, .. } if tool_use_id == "tool-1"
+            EngineEvent::ToolUseStarted { tool_use_id, .. } if tool_use_id.as_ref() == "tool-1"
         )));
         assert!(
             engine_events
