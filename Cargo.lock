@@ -14406,6 +14406,7 @@ dependencies = [
  "roo-mentions",
  "roo-message-queue",
  "roo-modes",
+ "roo-prompt",
  "roo-provider",
  "roo-provider-anthropic",
  "roo-provider-deepseek",

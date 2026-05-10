@@ -12,18 +12,36 @@ pub enum PermissionBehavior {
 /// Why a permission decision was made — mirrors the TS `decisionReason` field.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum PermissionDecisionReason {
-    /// User explicitly approved/denied via interactive prompt.
-    UserDecision,
     /// Matched an entry in the allow/deny lists from settings.
     SettingsMatch {
         source: PermissionRuleSource,
     },
+    /// Decision driven by permission mode (e.g. bypass, acceptEdits).
+    Mode,
+    /// Result from a subcommand check (compound bash commands).
+    SubcommandResults,
+    /// Decision made by the permission prompt tool (headless SDK mode).
+    PermissionPromptTool,
+    /// Decision made by a hook (PreToolUse hook returned allow/deny).
+    Hook,
+    /// Decision made by an async/headless agent.
+    AsyncAgent,
     /// Classifier-based auto-approval (used in `auto` permission mode).
     Classifier,
+    /// Sandbox override — tool is allowed because it runs in sandbox mode.
+    SandboxOverride,
+    /// Decision based on working directory scope.
+    WorkingDir,
+    /// Safety check — bypass-immune check for protected paths (.git, .claude, etc).
+    SafetyCheck,
+    /// User explicitly approved/denied via interactive prompt.
+    UserDecision,
     /// Pre-approved in a previous session and remembered.
     PreviouslyApproved,
     /// Default fallback when no rule matched.
     DefaultRule,
+    /// Other/miscellaneous reason.
+    Other,
 }
 
 /// Metadata attached to every permission decision for audit and provenance.

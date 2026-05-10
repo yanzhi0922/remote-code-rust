@@ -117,8 +117,9 @@ impl SystemPromptSection for EnvInfoSection {
 
     fn compute(&self, ctx: &PromptContext) -> Result<Option<String>> {
         // In undercover mode, suppress model names, model family references,
-        // Claude Code availability info, and fast mode text (TS: isUndercover()).
-        let undercover = ctx.is_undercover;
+        // Claude Code availability info, and fast mode text.
+        // TS gates on process.env.USER_TYPE === 'ant' && isUndercover().
+        let undercover = ctx.features.ant_user && ctx.is_undercover;
 
         let model_description = if undercover {
             None
@@ -215,7 +216,7 @@ impl SystemPromptSection for EnvInfoSection {
 /// Matches `computeEnvInfo()` in Claude Code's `prompts.ts`. Used by
 /// subagent prompts via `enhanceSystemPromptWithEnvDetails()`.
 pub fn compute_env_info_xml(ctx: &PromptContext) -> String {
-    let undercover = ctx.is_undercover;
+    let undercover = ctx.features.ant_user && ctx.is_undercover;
 
     let model_description = if undercover {
         String::new()
@@ -398,6 +399,7 @@ mod tests {
     fn xml_env_info_undercover_suppresses_model() {
         let mut ctx = test_ctx();
         ctx.is_undercover = true;
+        ctx.features.ant_user = true;
         let result = compute_env_info_xml(&ctx);
         assert!(!result.contains("Sonnet"));
         assert!(!result.contains("claude-sonnet"));

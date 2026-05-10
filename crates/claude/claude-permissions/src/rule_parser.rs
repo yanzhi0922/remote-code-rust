@@ -178,6 +178,7 @@ pub fn normalize_legacy_tool_name(name: &str) -> &str {
         "KillShell" => "TaskStop",
         "AgentOutputTool" => "TaskOutput",
         "BashOutputTool" => "TaskOutput",
+        "Brief" => "Brief",
         _ => name,
     }
 }

@@ -35,6 +35,7 @@ roo-marketplace = { path = "../roo-marketplace" }
 roo-worktree = { path = "../roo-worktree" }
 roo-mentions = { path = "../roo-mentions" }
 roo-config = { path = "../roo-config" }
+roo-prompt = { path = "../roo-prompt" }
 tokio = { workspace = true, features = ["full"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }

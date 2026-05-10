@@ -559,17 +559,43 @@ attentiveness and ensures you complete all requirements successfully.";
 
 /// Prompt for `config_read`.
 pub const CONFIG_READ: &str = "\
-Read or modify runtime configuration settings.
+Get or set Claude Code configuration settings.
 
-Usage:
-- Use action 'get' with a `key` to read a configuration value.
-- Use action 'set' with `key` and `value` to update a configuration value.
-- Configuration keys are dot-separated paths (e.g., 'shell.default', 'tools.timeout_ms').
+View or change Claude Code settings. Use when the user requests configuration changes, asks about current settings, or when adjusting a setting would benefit them.
 
-Notes:
-- Some configuration changes take effect immediately; others require a restart.
-- Be cautious when modifying configuration — incorrect values may break functionality.
-- Prefer reading configuration before modifying it to understand current state.";
+## Usage
+- **Get current value:** Omit the \"value\" parameter
+- **Set new value:** Include the \"value\" parameter
+
+## Configurable settings list
+The following settings are available for you to change:
+
+### Global Settings (stored in ~/.claude.json)
+- theme: \"auto\", \"dark\", \"light\", \"light-daltonized\", \"dark-daltonized\", \"light-ansi\", \"dark-ansi\" - Color theme for terminal output
+- editorMode: \"normal\", \"vim\" - Editor keybinding mode
+- verbose: true/false - Enable verbose output
+- preferredNotifChannel: \"auto\", \"iterm2\", \"iterm2_with_bell\", \"terminal_bell\", \"kitty\", \"ghostty\", \"notifications_disabled\" - Notification delivery channel
+- autoCompactEnabled: true/false - Automatically compact conversations when context gets large
+- fileCheckpointingEnabled: true/false - Enable file checkpointing for undo support
+- showTurnDuration: true/false - Show turn duration in output
+- terminalProgressBarEnabled: true/false - Show progress bar in terminal
+
+### Project Settings (stored in settings.json)
+- autoMemoryEnabled: true/false - Automatically extract and store memories
+- autoDreamEnabled: true/false - Enable auto-dream background consolidation
+- model: \"sonnet\", \"opus\", \"haiku\", \"best\", or full model ID - Override the default model
+- alwaysThinkingEnabled: true/false - Enable extended thinking by default
+- permissions.defaultMode: \"default\", \"plan\", \"acceptEdits\", \"dontAsk\" - Default permission mode
+- language: any string - Preferred response language
+- todoFeatureEnabled: true/false - Enable todo list feature
+
+## Examples
+- Get theme: { \"setting\": \"theme\" }
+- Set dark theme: { \"setting\": \"theme\", \"value\": \"dark\" }
+- Enable vim mode: { \"setting\": \"editorMode\", \"value\": \"vim\" }
+- Enable verbose: { \"setting\": \"verbose\", \"value\": true }
+- Change model: { \"setting\": \"model\", \"value\": \"opus\" }
+- Change permission mode: { \"setting\": \"permissions.defaultMode\", \"value\": \"plan\" }";
 
 /// Prompt for `sleep`.
 pub const SLEEP: &str = "\
@@ -1482,28 +1508,65 @@ The response is the raw JSON from the API.";
 
 /// Prompt for `enter_worktree`.
 pub const ENTER_WORKTREE: &str = "\
-Suggest a git worktree add command for a branch.
+Use this tool ONLY when the user explicitly asks to work in a worktree. This tool creates an isolated git worktree and switches the current session into it.
 
-Usage:
-- `branch` specifies the branch name for the worktree.
-- Returns the suggested git worktree add command.
+## When to Use
 
-Notes:
-- Worktrees allow working on multiple branches simultaneously.
-- The branch must exist in the repository.
-- Use `exit_worktree` to clean up when done.";
+- The user explicitly says \"worktree\" (e.g., \"start a worktree\", \"work in a worktree\", \"create a worktree\", \"use a worktree\")
+
+## When NOT to Use
+
+- The user asks to create a branch, switch branches, or work on a different branch — use git commands instead
+- Never use this tool unless the user explicitly mentions \"worktrees\"
+
+## Requirements
+
+- Must be in a git repository, OR have WorktreeCreate/WorktreeRemove hooks configured in settings.json
+- Must not already be in a worktree
+
+## Behavior
+
+- In a git repository: creates a new git worktree inside `.claude/worktrees/` with a new branch based on HEAD
+- Outside a git repository: delegates to WorktreeCreate/WorktreeRemove hooks for VCS-agnostic isolation
+- Switches the session's working directory to the new worktree
+- Use ExitWorktree to leave the worktree mid-session (keep or remove). On session exit, if still in the worktree, the user will be prompted to keep or remove it
+
+## Parameters
+
+- `name` (optional): A name for the new worktree. If neither is provided, a random name is generated.
+- `path` (optional): Path to an existing worktree of the current repository to switch into instead of creating a new one. Mutually exclusive with `name`.";
 
 /// Prompt for `exit_worktree`.
 pub const EXIT_WORKTREE: &str = "\
-Suggest a git worktree remove command for a branch.
+Exit a worktree session created by EnterWorktree and return the session to the original working directory.
 
-Usage:
-- `branch` specifies the branch whose worktree to remove.
-- Returns the suggested git worktree remove command.
+## Scope
 
-Notes:
-- Ensure all changes in the worktree are committed or stashed before removing.
-- Use `list_worktrees` to see all active worktrees.";
+This tool ONLY operates on worktrees created by EnterWorktree in this session. It will NOT touch:
+- Worktrees you created manually with `git worktree add`
+- Worktrees from a previous session (even if created by EnterWorktree then)
+- The directory you're in if EnterWorktree was never called
+
+If called outside an EnterWorktree session, the tool is a **no-op**: it reports that no worktree session is active and takes no action. Filesystem state is unchanged.
+
+## When to Use
+
+- The user explicitly asks to \"exit the worktree\", \"leave the worktree\", \"go back\", or otherwise end the worktree session
+- Do NOT call this proactively — only when the user asks
+
+## Parameters
+
+- `action` (required): `\"keep\"` or `\"remove\"`
+  - `\"keep\"` — leave the worktree directory and branch intact on disk. Use this if the user wants to come back to the work later, or if there are changes to preserve.
+  - `\"remove\"` — delete the worktree directory and its branch. Use this for a clean exit when the work is done or abandoned.
+- `discard_changes` (optional, default false): only meaningful with `action: \"remove\"`. If the worktree has uncommitted files or commits not on the original branch, the tool will REFUSE to remove it unless this is set to `true`. If the tool returns an error listing changes, confirm with the user before re-invoking with `discard_changes: true`.
+
+## Behavior
+
+- Restores the session's working directory to where it was before EnterWorktree
+- Clears CWD-dependent caches (system prompt sections, memory files, plans directory) so the session state reflects the original directory
+- If a tmux session was attached to the worktree: killed on `remove`, left running on `keep` (its name is returned so the user can reattach)
+- Once exited, EnterWorktree can be called again to create a fresh worktree";
 
 /// Prompt for `list_worktrees`.
 pub const LIST_WORKTREES: &str = "\
@@ -2043,71 +2106,12 @@ Use this when all teammates have finished their work and you want to clean up th
 
 #[must_use]
 pub fn enter_worktree_tool_prompt() -> String {
-    "\
-Use this tool ONLY when the user explicitly asks to work in a worktree. This tool creates an isolated git worktree and switches the current session into it.
-
-## When to Use
-
-- The user explicitly says \"worktree\" (e.g., \"start a worktree\", \"work in a worktree\", \"create a worktree\", \"use a worktree\")
-
-## When NOT to Use
-
-- The user asks to create a branch, switch branches, or work on a different branch — use git commands instead
-- The user asks to fix a bug or work on a feature — use normal git workflow unless they specifically mention worktrees
-- Never use this tool unless the user explicitly mentions \"worktree\"
-
-## Requirements
-
-- Must be in a git repository, OR have WorktreeCreate/WorktreeRemove hooks configured in settings.json
-- Must not already be in a worktree
-
-## Behavior
-
-- In a git repository: creates a new git worktree inside `.claude/worktrees/` with a new branch based on HEAD
-- Outside a git repository: delegates to WorktreeCreate/WorktreeRemove hooks for VCS-agnostic isolation
-- Switches the session's working directory to the new worktree
-- Use ExitWorktree to leave the worktree mid-session (keep or remove). On session exit, if still in the worktree, the user will be prompted to keep or remove it
-
-## Parameters
-
-- `name` (optional): A name for the worktree. If neither is provided, a random name is generated.
-- `path` (optional): Path to an existing worktree to switch into. Use this instead of `name` to enter an existing worktree."
-        .to_owned()
+    ENTER_WORKTREE.to_owned()
 }
 
 #[must_use]
 pub fn exit_worktree_tool_prompt() -> String {
-    "\
-Exit a worktree session created by EnterWorktree and return the session to the original working directory.
-
-## Scope
-
-This tool ONLY operates on worktrees created by EnterWorktree in this session. It will NOT touch:
-- Worktrees you created manually with `git worktree add`
-- Worktrees from a previous session (even if created by EnterWorktree then)
-- The directory you're in if EnterWorktree was never called
-
-If called outside an EnterWorktree session, the tool is a **no-op**: it reports that no worktree session is active and takes no action. Filesystem state is unchanged.
-
-## When to Use
-
-- The user explicitly asks to \"exit the worktree\", \"leave the worktree\", \"go back\", or otherwise end the worktree session
-- Do NOT call this proactively — only when the user asks
-
-## Parameters
-
-- `action` (required): `\"keep\"` or `\"remove\"`
-  - `\"keep\"` — leave the worktree directory and branch intact on disk. Use this if the user wants to come back to the work later, or if there are changes to preserve.
-  - `\"remove\"` — delete the worktree directory and its branch. Use this for a clean exit when the work is done or abandoned.
-- `discard_changes` (optional, default false): only meaningful with `action: \"remove\"`. If the worktree has uncommitted files or commits not on the original branch, the tool will REFUSE to remove it unless this is set to `true`. If the tool returns an error listing changes, confirm with the user before re-invoking with `discard_changes: true`.
-
-## Behavior
-
-- Restores the session's working directory to where it was before EnterWorktree
-- Clears CWD-dependent caches (system prompt sections, memory files, plans directory) so the session state reflects the original directory
-- If a tmux session was attached to the worktree: killed on `remove`, left running on `keep` (its name is returned so the user can reattach)
-- Once exited, EnterWorktree can be called again to create a fresh worktree"
-        .to_owned()
+    EXIT_WORKTREE.to_owned()
 }
 
 #[must_use]

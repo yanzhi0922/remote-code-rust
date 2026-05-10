@@ -13,6 +13,13 @@ use claude_provider::{
     query_source::{ProviderRequestContext, ProviderTaskBudget},
 };
 use serde_json::json;
+
+/// Lock a Mutex, recovering from poison instead of panicking.
+/// A poisoned mutex means another thread panicked while holding the lock,
+/// but the data is still readable — we recover it rather than cascading the crash.
+fn lock_unpoison<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(|e| e.into_inner())
+}
 use tokio::sync::mpsc;
 
 use crate::config::{
@@ -66,16 +73,12 @@ pub async fn run_query_loop(
         .await;
 
     // Set up budget tracking
-    let max_turns = context
-        .task_budget
-        .lock().unwrap()
+    let max_turns = lock_unpoison(&context.task_budget)
         .as_ref()
         .and_then(|budget| budget.max_turns)
         .unwrap_or(config.max_turns);
     state.budget_tracker.max_turns = max_turns;
-    state.budget_tracker.max_total_tokens = context
-        .task_budget
-        .lock().unwrap()
+    state.budget_tracker.max_total_tokens = lock_unpoison(&context.task_budget)
         .as_ref()
         .and_then(|budget| budget.max_total_tokens);
 
@@ -600,9 +603,7 @@ pub async fn run_query_loop(
         state.stop_reason = Some(response.stop_reason.clone());
 
         // ---- USD budget check (TS: maxBudgetUsd) ----
-        let max_budget_usd = context
-            .task_budget
-            .lock().unwrap()
+        let max_budget_usd = lock_unpoison(&context.task_budget)
             .as_ref()
             .and_then(|b| b.max_budget_usd);
         if let Some(budget_usd) = max_budget_usd {
@@ -852,7 +853,7 @@ pub async fn run_query_loop(
 
             // ---- Token budget continuation check (TS lines 1308–1355) ----
             // Only on main thread (no agent_id). Uses per-turn output tokens.
-            let budget_total = context.task_budget.lock().unwrap().as_ref().and_then(|b| b.max_total_tokens);
+            let budget_total = lock_unpoison(&context.task_budget).as_ref().and_then(|b| b.max_total_tokens);
             if context.agent_id.is_none()
                 && let Some(budget_total) = budget_total
             {
@@ -1332,7 +1333,7 @@ fn provider_request_context(context: &ProcessUserInputContext) -> ProviderReques
         .with_fast_mode(context.fast_mode)
         .with_task_budget(
             {
-                let guard = context.task_budget.lock().unwrap();
+                let guard = lock_unpoison(&context.task_budget);
                 guard
                 .as_ref()
                 .and_then(|budget| budget.max_total_tokens)
@@ -1782,7 +1783,7 @@ async fn commit_tool_result(
     }
     // Record sub-agent token consumption against the task budget.
     if let Some(tokens) = tool_run.output_tokens_consumed {
-        if let Some(budget) = context.task_budget.lock().unwrap().as_mut() {
+        if let Some(budget) = lock_unpoison(&context.task_budget).as_mut() {
             budget.record_sub_agent_usage(tokens);
         }
     }

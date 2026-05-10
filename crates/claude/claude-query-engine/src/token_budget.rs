@@ -93,7 +93,8 @@ impl BudgetTracker {
             };
         }
 
-        let budget = budget.expect("budget is Some after early return");
+        // Early return above guarantees budget is Some; safe to unwrap.
+        let budget = budget.unwrap_or(1);
         let turn_tokens = global_turn_tokens;
         let pct = ((turn_tokens as f64 / budget as f64) * 100.0).round() as u32;
         let delta_since_last = global_turn_tokens.saturating_sub(self.last_global_turn_tokens);

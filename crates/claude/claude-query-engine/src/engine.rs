@@ -31,6 +31,17 @@ pub enum EngineError {
     Other(#[from] anyhow::Error),
     #[error("query stopped: {0}")]
     Stopped(String),
+    /// Prompt exceeds the model's context window.
+    #[error("prompt too long: {reason:?}")]
+    PromptTooLong {
+        reason: crate::query_loop::PromptTooLongReason,
+    },
+    /// Model is temporarily overloaded (503 / rate-limit).
+    #[error("model overloaded")]
+    ModelOverloaded,
+    /// Max output tokens reached — response was truncated.
+    #[error("max output tokens reached")]
+    MaxTokensReached,
 }
 
 /// Mutable state carried across query turns.
