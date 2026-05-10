@@ -2265,7 +2265,6 @@ name = "claude-model"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "claude-context",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
@@ -2338,7 +2337,6 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "claude-config",
- "claude-context",
  "claude-core",
  "claude-tools",
  "futures",
@@ -2362,7 +2360,6 @@ dependencies = [
  "anyhow",
  "async-trait",
  "chrono",
- "claude-context",
  "claude-core",
  "claude-provider",
  "filetime",
@@ -17957,9 +17954,9 @@ dependencies = [
 
 [[package]]
 name = "tree-sitter"
-version = "0.25.10"
+version = "0.26.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "78f873475d258561b06f1c595d93308a7ed124d9977cb26b148c2084a4a3cc87"
+checksum = "887bd495d0582c5e3e0d8ece2233666169fa56a9644d172fc22ad179ab2d0538"
 dependencies = [
  "cc",
  "regex",
