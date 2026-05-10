@@ -174,7 +174,7 @@ fn merge_consecutive_api_messages(
             }
 
             if last.role == msg.role && roles.contains(&msg.role) {
-                // Merge content blocks
+                // Merge content blocks — only clone individual blocks, not the whole message
                 last.content.extend(msg.content.iter().cloned());
 
                 // Merge timestamps: keep the maximum timestamp
@@ -1052,7 +1052,7 @@ impl AgentLoop {
     /// `true` if the response was successfully sent, `false` if there was no
     /// pending approval request (e.g., it timed out or was already responded to).
     pub fn set_approval_response(&self, approved: bool) -> bool {
-        if let Some(tx) = self.pending_approval_tx.lock().unwrap().take() {
+        if let Some(tx) = self.pending_approval_tx.lock().unwrap_or_else(|e| e.into_inner()).take() {
             tx.send(approved).is_ok()
         } else {
             false
@@ -1072,7 +1072,7 @@ impl AgentLoop {
     /// `true` if the response was successfully sent, `false` if there was no
     /// pending retry request.
     pub fn set_api_retry_response(&self, retry: bool) -> bool {
-        if let Some(tx) = self.pending_api_retry_tx.lock().unwrap().take() {
+        if let Some(tx) = self.pending_api_retry_tx.lock().unwrap_or_else(|e| e.into_inner()).take() {
             tx.send(retry).is_ok()
         } else {
             false
@@ -1092,7 +1092,7 @@ impl AgentLoop {
     /// `true` if the response was successfully sent, `false` if there was no
     /// pending mistake limit request.
     pub fn set_mistake_limit_response(&self, action: MistakeLimitAction) -> bool {
-        if let Some(tx) = self.pending_mistake_limit_tx.lock().unwrap().take() {
+        if let Some(tx) = self.pending_mistake_limit_tx.lock().unwrap_or_else(|e| e.into_inner()).take() {
             tx.send(action).is_ok()
         } else {
             false
@@ -1103,7 +1103,7 @@ impl AgentLoop {
     ///
     /// Source: TS `AskFollowupQuestionTool.ts` → `task.ask("followup", ...)` → user response
     pub fn set_followup_response(&self, response: String) -> bool {
-        if let Some(tx) = self.pending_followup_tx.lock().unwrap().take() {
+        if let Some(tx) = self.pending_followup_tx.lock().unwrap_or_else(|e| e.into_inner()).take() {
             tx.send(response).is_ok()
         } else {
             false
@@ -1115,7 +1115,7 @@ impl AgentLoop {
     /// Source: TS `AttemptCompletionTool.ts` → `task.ask("completion_result", ...)` → feedback
     /// Empty string means acceptance, non-empty means feedback to continue.
     pub fn set_completion_response(&self, feedback: String) -> bool {
-        if let Some(tx) = self.pending_completion_tx.lock().unwrap().take() {
+        if let Some(tx) = self.pending_completion_tx.lock().unwrap_or_else(|e| e.into_inner()).take() {
             tx.send(feedback).is_ok()
         } else {
             false
@@ -1593,7 +1593,7 @@ impl AgentLoop {
                     // TS: Always ask user when mistake limit is reached (no grace mechanism).
                     // Source: TS `ask("mistake_limit_reached")`
                     let (tx, rx) = oneshot::channel();
-                    *self.pending_mistake_limit_tx.lock().unwrap() = Some(tx);
+                    *self.pending_mistake_limit_tx.lock().unwrap_or_else(|e| e.into_inner()) = Some(tx);
 
                     // Emit event for UI to present dialog
                     self.engine.emitter().emit_mistake_limit_reached(
@@ -1898,7 +1898,7 @@ impl AgentLoop {
 
                     // Auto-approval disabled — ask user via oneshot channel
                     let (tx, rx) = oneshot::channel();
-                    *self.pending_api_retry_tx.lock().unwrap() = Some(tx);
+                    *self.pending_api_retry_tx.lock().unwrap_or_else(|e| e.into_inner()) = Some(tx);
 
                     // Emit event for UI to present retry dialog
                     self.engine.emitter().emit_api_request_failed(
@@ -2944,15 +2944,18 @@ impl AgentLoop {
         let metadata = CreateMessageMetadata {
             task_id: Some(task_id.clone()),
             mode: Some(self.engine.config().mode.clone()),
-            tools: Some(tools.to_vec()),
+            tools: None, // Avoid double-clone; provider already receives tools
             ..Default::default()
         };
+
+        // Clone tools once for the provider call
+        let tools_clone = tools.to_vec();
 
         // Create the API stream
         let stream = match self.provider.create_message(
             system_prompt,
             messages.to_vec(),
-            Some(tools.to_vec()),
+            Some(tools_clone),
             metadata,
         ).await {
             Ok(s) => s,
@@ -3877,7 +3880,7 @@ impl AgentLoop {
                     // The sender is stored in `pending_approval_tx` so that
                     // external code can respond via `set_approval_response()`.
                     let (tx, rx) = oneshot::channel();
-                    *self.pending_approval_tx.lock().unwrap() = Some(tx);
+                    *self.pending_approval_tx.lock().unwrap_or_else(|e| e.into_inner()) = Some(tx);
 
                     // Emit a ToolApprovalRequired event so the UI can present
                     // the approval dialog to the user.
@@ -3989,7 +3992,7 @@ impl AgentLoop {
                         "suggest": suggestions.iter().map(|s| serde_json::json!({"answer": s})).collect::<Vec<_>>(),
                     });
                     let (tx, rx) = oneshot::channel();
-                    *self.pending_followup_tx.lock().unwrap() = Some(tx);
+                    *self.pending_followup_tx.lock().unwrap_or_else(|e| e.into_inner()) = Some(tx);
                     self.engine.emitter().emit_followup_question(
                         &self.engine.config().task_id,
                         &tool_call.id,
@@ -4008,7 +4011,7 @@ impl AgentLoop {
                 crate::tool_dispatcher::ToolExecutionAction::AttemptCompletion { result: completion_text, .. } => {
                     // Emit completion result and wait for user acceptance or feedback.
                     let (tx, rx) = oneshot::channel();
-                    *self.pending_completion_tx.lock().unwrap() = Some(tx);
+                    *self.pending_completion_tx.lock().unwrap_or_else(|e| e.into_inner()) = Some(tx);
                     self.engine.emitter().emit_completion_result(
                         &self.engine.config().task_id,
                         &tool_call.id,

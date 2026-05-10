@@ -668,7 +668,7 @@ impl Handler {
         lifecycle.engine().emitter().on(move |event| {
             let notification = task_event_to_notification(event, &task_id);
             if let Some(msg) = notification {
-                notifications.lock().unwrap().push(msg);
+                notifications.lock().unwrap_or_else(|e| e.into_inner()).push(msg);
             }
         });
     }
@@ -678,7 +678,7 @@ impl Handler {
     /// The server calls this after each request-response cycle to forward
     /// any queued task events to the client.
     pub fn drain_notifications(&self) -> Vec<Message> {
-        let mut guard = self.pending_notifications.lock().unwrap();
+        let mut guard = self.pending_notifications.lock().unwrap_or_else(|e| e.into_inner());
         std::mem::take(&mut *guard)
     }
 
@@ -1970,7 +1970,7 @@ impl Handler {
         let mut settings = Self::read_roo_settings(&gsp).await;
         let configs = settings
             .as_object_mut()
-            .unwrap()
+            .ok_or_else(|| ServerError::Internal("Settings file is not a JSON object".into()))?
             .entry("apiConfigs")
             .or_insert_with(|| json!({}));
         configs[&name.to_string()] = config.clone();
@@ -2112,7 +2112,7 @@ impl Handler {
         let mut settings = Self::read_roo_settings(&gsp).await;
         let configs = settings
             .as_object_mut()
-            .unwrap()
+            .ok_or_else(|| ServerError::Internal("Settings file is not a JSON object".into()))?
             .entry("apiConfigs")
             .or_insert_with(|| json!({}));
         let existed = configs.get(name).is_some();
@@ -2181,7 +2181,7 @@ impl Handler {
         let mut settings = Self::read_roo_settings(&gsp).await;
         let prompts = settings
             .as_object_mut()
-            .unwrap()
+            .ok_or_else(|| ServerError::Internal("Settings file is not a JSON object".into()))?
             .entry("customPrompts")
             .or_insert_with(|| json!({}));
         prompts[&prompt_mode.to_string()] = custom_prompt;
@@ -4297,7 +4297,7 @@ impl Handler {
         // 1. Load custom modes via CustomModesManager
         let custom_modes: Vec<roo_types::mode::ModeConfig> = match app.custom_modes_manager() {
             Some(mgr_arc) => {
-                let mut mgr = mgr_arc.write().unwrap();
+                let mut mgr = mgr_arc.write().unwrap_or_else(|e| e.into_inner());
                 mgr.get_custom_modes()
             }
             None => vec![],

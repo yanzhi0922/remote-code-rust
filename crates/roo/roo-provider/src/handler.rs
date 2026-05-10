@@ -141,7 +141,7 @@ static PROVIDER_REGISTRY: RwLock<Option<HashMap<ProviderName, ProviderFactoryFn>
 /// roo_provider::register_provider(ProviderName::Anthropic, my_factory);
 /// ```
 pub fn register_provider(name: ProviderName, factory: ProviderFactoryFn) {
-    let mut registry = PROVIDER_REGISTRY.write().unwrap();
+    let mut registry = PROVIDER_REGISTRY.write().unwrap_or_else(|e| e.into_inner());
     let map = registry.get_or_insert_with(HashMap::new);
     map.insert(name, factory);
 }
@@ -182,7 +182,7 @@ pub fn build_api_handler(
         .api_provider
         .ok_or_else(|| ProviderError::Other("No API provider specified".to_string()))?;
 
-    let registry = PROVIDER_REGISTRY.read().unwrap();
+    let registry = PROVIDER_REGISTRY.read().unwrap_or_else(|e| e.into_inner());
     let map = registry
         .as_ref()
         .ok_or_else(|| ProviderError::Other("No providers registered — call register_provider() first".to_string()))?;
