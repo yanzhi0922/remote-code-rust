@@ -2265,7 +2265,6 @@ name = "claude-model"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "claude-context",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
@@ -2338,7 +2337,6 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "claude-config",
- "claude-context",
  "claude-core",
  "claude-tools",
  "futures",
@@ -2362,7 +2360,6 @@ dependencies = [
  "anyhow",
  "async-trait",
  "chrono",
- "claude-context",
  "claude-core",
  "claude-provider",
  "filetime",
@@ -4898,7 +4895,7 @@ dependencies = [
  "dunce",
  "glob",
  "pretty_assertions",
- "rand 0.8.6",
+ "rand 0.9.4",
  "serde",
  "serde_json",
  "tempfile",
@@ -14529,7 +14526,7 @@ dependencies = [
 name = "roo-terminal"
 version = "0.1.0"
 dependencies = [
- "rand 0.8.6",
+ "rand 0.9.4",
  "roo-types",
  "tempfile",
  "thiserror 2.0.18",

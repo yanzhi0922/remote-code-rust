@@ -51,7 +51,7 @@ path = "../protocol"
 [dependencies.rand]
 default-features = false
 features = ["std", "small_rng"]
-version = "0.8"
+version = "0.9"
 
 [dependencies.dirs-next]
 version = "2.0"
