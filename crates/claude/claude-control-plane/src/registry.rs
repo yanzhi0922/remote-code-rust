@@ -364,7 +364,10 @@ impl Registry {
         let access_hash = sha256_hex(&new_access_token);
         let expires_at = now + Duration::minutes(15);
 
-        let device = self.trusted_devices.get_mut(&device_id).unwrap();
+        let device = self
+            .trusted_devices
+            .get_mut(&device_id)
+            .ok_or_else(|| ApiError::internal("device disappeared during token refresh".to_owned()))?;
         device.access_token_hash = Some(access_hash);
         device.access_token_expires_at = Some(expires_at);
         device.last_seen_at = now;
@@ -650,6 +653,7 @@ impl Registry {
         // loop to over-assign work beyond its capacity.
         self.refresh_runner_session_counts(&runner_id, now);
 
+        // The runner was inserted above; this is a guaranteed lookup.
         let snapshot = self
             .runners
             .get(&runner_id)

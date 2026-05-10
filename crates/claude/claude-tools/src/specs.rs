@@ -898,32 +898,6 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
             }),
         },
         ToolSpec {
-            name: "cron_update".to_owned(),
-            protocol_name: "CronUpdate".to_owned(),
-            permission_tool_name: "CronUpdate".to_owned(),
-            description: "Update a scheduled cron job by ID — change its cron expression, prompt, name, description, folder, model, permission mode, worktree, or recurring setting.".to_owned(),
-            requires_permission: false,
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "id": {"type": "string", "description": "Job ID returned by CronCreate."},
-                    "cron": {"type": "string", "description": "New 5-field cron expression in local time."},
-                    "prompt": {"type": "string", "description": "New prompt to enqueue at each fire time."},
-                    "name": {"type": "string", "description": "New task name."},
-                    "description": {"type": "string", "description": "New task description."},
-                    "folder": {"type": "string", "description": "New working directory path."},
-                    "model": {"type": "string", "description": "New model to use."},
-                    "permissionMode": {"type": "string", "description": "New permission mode: \"ask\" | \"auto-accept\" | \"plan\" | \"bypass\"."},
-                    "worktree": {"type": "boolean", "description": "New worktree setting."},
-                    "recurring": {"type": "boolean", "description": "New recurring setting."},
-                    "frequency": {"type": "string", "description": "New frequency: \"manual\" | \"hourly\" | \"daily\" | \"weekdays\" | \"weekly\"."},
-                    "scheduledTime": {"type": "string", "description": "New time string (e.g. \"09:00\")."}
-                },
-                "required": ["id"],
-                "additionalProperties": false,
-            }),
-        },
-        ToolSpec {
             name: "cron_delete".to_owned(),
             protocol_name: "CronDelete".to_owned(),
             permission_tool_name: "CronDelete".to_owned(),

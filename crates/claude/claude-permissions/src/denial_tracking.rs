@@ -20,13 +20,19 @@ pub struct DenialRecord {
     pub consecutive_count: u32,
 }
 
+/// Session-level denial limits (matching TS `DENIAL_LIMITS`).
+pub const MAX_CONSECUTIVE_DENIALS: u32 = 3;
+pub const MAX_TOTAL_DENIALS: u64 = 20;
+
 /// Denial tracking state.
 #[derive(Debug, Default)]
 pub struct DenialTracker {
     /// Denial records by tool name.
     denials: HashMap<String, DenialRecord>,
-    /// Total denial count.
+    /// Total denial count across all tools.
     total_denials: u64,
+    /// Consecutive denials across any tool (resets on any approval).
+    session_consecutive: u32,
 }
 
 impl DenialTracker {
@@ -39,6 +45,7 @@ impl DenialTracker {
     /// Record a denial.
     pub fn record_denial(&mut self, tool_name: &str, reason: &str) {
         self.total_denials += 1;
+        self.session_consecutive += 1;
 
         let entry = self.denials.get_mut(tool_name);
         match entry {
@@ -63,6 +70,7 @@ impl DenialTracker {
 
     /// Record an approval (resets consecutive denial count).
     pub fn record_approval(&mut self, tool_name: &str) {
+        self.session_consecutive = 0;
         if let Some(record) = self.denials.get_mut(tool_name) {
             record.consecutive_count = 0;
         }
@@ -89,10 +97,20 @@ impl DenialTracker {
         self.total_denials
     }
 
+    /// Check if the system should fall back to prompting (not auto-mode)
+    /// because too many denials have occurred in this session.
+    /// Matches TS `shouldFallbackToPrompting()`.
+    #[must_use]
+    pub fn should_fallback_to_prompting(&self) -> bool {
+        self.session_consecutive >= MAX_CONSECUTIVE_DENIALS
+            || self.total_denials >= MAX_TOTAL_DENIALS
+    }
+
     /// Clear all tracking data.
     pub fn clear(&mut self) {
         self.denials.clear();
         self.total_denials = 0;
+        self.session_consecutive = 0;
     }
 }
 
@@ -142,6 +160,15 @@ impl SharedDenialTracker {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .should_auto_skip(tool_name, threshold)
+    }
+
+    /// Check if should fall back to prompting.
+    #[must_use]
+    pub fn should_fallback_to_prompting(&self) -> bool {
+        self.inner
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .should_fallback_to_prompting()
     }
 }
 
@@ -201,5 +228,34 @@ mod tests {
         tracker.clear();
         assert_eq!(tracker.total_denials(), 0);
         assert_eq!(tracker.consecutive_denials("Bash"), 0);
+    }
+
+    #[test]
+    fn fallback_to_prompting_after_consecutive_limit() {
+        let mut tracker = DenialTracker::new();
+        for _ in 0..MAX_CONSECUTIVE_DENIALS {
+            tracker.record_denial("Bash", "dangerous");
+        }
+        assert!(tracker.should_fallback_to_prompting());
+    }
+
+    #[test]
+    fn approval_resets_session_consecutive() {
+        let mut tracker = DenialTracker::new();
+        tracker.record_denial("Bash", "dangerous");
+        tracker.record_denial("Bash", "dangerous");
+        tracker.record_approval("Bash");
+        assert!(!tracker.should_fallback_to_prompting());
+    }
+
+    #[test]
+    fn fallback_after_total_limit() {
+        let mut tracker = DenialTracker::new();
+        for i in 0..MAX_TOTAL_DENIALS {
+            let tool = format!("Tool{i}");
+            tracker.record_denial(&tool, "test");
+            tracker.record_approval(&tool); // Reset consecutive each time
+        }
+        assert!(tracker.should_fallback_to_prompting());
     }
 }

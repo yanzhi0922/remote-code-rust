@@ -23,9 +23,14 @@ impl SystemPromptSection for BriefSection {
     }
 
     fn compute(&self, ctx: &PromptContext) -> Result<Option<String>> {
-        Ok(ctx
-            .features
-            .brief_enabled
-            .then_some(BRIEF_PROACTIVE_SECTION.to_string()))
+        if !ctx.features.brief_enabled {
+            return Ok(None);
+        }
+        // When proactive is active, getProactiveSection() already appends the
+        // section inline. Skip here to avoid duplicating it in the system prompt.
+        if ctx.features.proactive_active {
+            return Ok(None);
+        }
+        Ok(Some(BRIEF_PROACTIVE_SECTION.to_string()))
     }
 }

@@ -505,7 +505,6 @@ fn canonical_builtin_tool_name(internal_name: &str) -> Option<&'static str> {
         "mcp_call" => Some("McpCall"),
         "voice_input" => Some("VoiceInput"),
         "daemon" => Some("Daemon"),
-        "discover_skills" => Some("discover_skills"),
         "team_delete" => Some("TeamDelete"),
         "team_list" => Some("TeamList"),
         "broadcast_message" => Some("BroadcastMessage"),
@@ -1837,7 +1836,6 @@ pub async fn execute_tool_call(
             "voice_input" => misc::voice_input_tool(&effective_call.input),
             "daemon" => workflow::daemon_tool(&effective_call.input, context),
             // ── Phase 9: New dedicated tool modules ────────────────────────────
-            "discover_skills" => discover_skills::discover_skills(&effective_call.input, context),
             "team_delete" => team_tools::team_delete(&effective_call.input, context),
             "team_list" => team_tools::team_list(&effective_call.input, context),
             "broadcast_message" => {
