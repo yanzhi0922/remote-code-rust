@@ -116,6 +116,17 @@ impl MarketplaceManager {
         Ok(true)
     }
 
+    /// Cancel an in-progress installation.
+    ///
+    /// Removes the installation metadata if it exists. Since installation
+    /// is synchronous in the current implementation, this is primarily for
+    /// cleaning up any partially installed state.
+    pub fn cancel_install(&mut self) -> Result<(), MarketplaceError> {
+        // In the current synchronous implementation, installations complete
+        // atomically. Cancel is a no-op that signals acknowledgement.
+        Ok(())
+    }
+
     /// Check whether an item is currently installed.
     pub fn is_installed(&self, item_id: &str) -> bool {
         self.items

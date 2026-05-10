@@ -30,12 +30,12 @@ use crate::streams::{
 use crate::types::{
     ApiError, ArtifactCreateRequest, ArtifactRecord, BootstrapClaimRequest, BootstrapClaimResponse,
     ControlPlaneHealth, ControlPlaneMeta, CreateSessionRequest, DEFAULT_EVENT_LIST_LIMIT,
-    EventStreamQuery, ListSessionsQuery, PairingAcceptRequest, PairingAcceptResponse,
-    PairingOfferCreateRequest, PairingOfferCreateResponse, PushTokenRegistrationRequest,
-    PushTokenRegistrationResponse, RecentEventsQuery, RunnerCommandPullQuery,
-    RunnerCommandPullResponse, RunnerQueuedCommandBody, RunnerRegistrationResponse,
-    RuntimeEventCreateRequest, RuntimeEventDetail, SessionRecord, SessionState,
-    SessionStateUpdateRequest, SessionView, TimelineEvent, TimelineEventDetail,
+    EventStreamQuery, ListSessionsQuery, MAX_ARTIFACT_SIZE_BYTES, PairingAcceptRequest,
+    PairingAcceptResponse, PairingOfferCreateRequest, PairingOfferCreateResponse,
+    PushTokenRegistrationRequest, PushTokenRegistrationResponse, RecentEventsQuery,
+    RunnerCommandPullQuery, RunnerCommandPullResponse, RunnerQueuedCommandBody,
+    RunnerRegistrationResponse, RuntimeEventCreateRequest, RuntimeEventDetail, SessionRecord,
+    SessionState, SessionStateUpdateRequest, SessionView, TimelineEvent, TimelineEventDetail,
     TimelineEventDraft, TokenRefreshRequest, TokenRefreshResponse, TrustedDeviceRecord,
 };
 use crate::{AuthPrincipal, ControlPlaneService, PersistedEventQuery};
@@ -1225,6 +1225,12 @@ pub(crate) async fn create_artifact(
     {
         let registry = service.registry.read().await;
         registry.get_session_for_user(session_id, user_id)?;
+    }
+    let encoded_len = request.content_base64.len();
+    if encoded_len > MAX_ARTIFACT_SIZE_BYTES {
+        return Err(ApiError::bad_request(format!(
+            "artifact exceeds {MAX_ARTIFACT_SIZE_BYTES} byte limit (got {encoded_len} bytes encoded)"
+        )));
     }
     let contents = BASE64_STANDARD
         .decode(request.content_base64.as_bytes())

@@ -166,8 +166,8 @@ impl<W: Write> ProtocolEmitter<W> {
     /// Emit a tool-started event.
     pub fn emit_tool_started(&mut self, tool_use_id: &str, tool_name: &str) -> Result<()> {
         self.emit_runtime_event(&RuntimeEventDetail::ToolStarted {
-            tool_call_id: tool_use_id.to_owned(),
-            tool_name: tool_name.to_owned(),
+            tool_call_id: tool_use_id.into(),
+            tool_name: tool_name.into(),
         })
     }
 
@@ -362,8 +362,8 @@ impl<W: Write> ProtocolEmitter<W> {
     /// Emit a detailed tool progress update for remote consumers.
     pub fn emit_tool_progress_detail(&mut self, payload: ToolProgressPayload) -> Result<()> {
         self.emit_runtime_event(&RuntimeEventDetail::ToolProgress {
-            tool_call_id: payload.tool_use_id,
-            tool_name: payload.tool_name,
+            tool_call_id: payload.tool_use_id.map(Into::into),
+            tool_name: payload.tool_name.map(Into::into),
             delta: payload.input_delta,
             elapsed_time_seconds: payload.elapsed_time_seconds,
         })
@@ -378,8 +378,8 @@ impl<W: Write> ProtocolEmitter<W> {
         summary: Option<&str>,
     ) -> Result<()> {
         self.emit_runtime_event(&RuntimeEventDetail::ToolFinished {
-            tool_call_id: tool_use_id.to_owned(),
-            tool_name: tool_name.to_owned(),
+            tool_call_id: tool_use_id.into(),
+            tool_name: tool_name.into(),
             is_error,
             summary: summary.map(ToOwned::to_owned),
         })
@@ -675,8 +675,8 @@ impl<'a> From<&'a RuntimeEventDetail> for ProtocolRuntimeEventRef<'a> {
                 tool_call_id,
                 tool_name,
             } => Self::ToolStarted {
-                tool_call_id,
-                tool_name,
+                tool_call_id: tool_call_id.as_ref(),
+                tool_name: tool_name.as_ref(),
             },
             RuntimeEventDetail::ToolProgress {
                 tool_call_id,
@@ -695,8 +695,8 @@ impl<'a> From<&'a RuntimeEventDetail> for ProtocolRuntimeEventRef<'a> {
                 is_error,
                 summary,
             } => Self::ToolFinished {
-                tool_call_id,
-                tool_name,
+                tool_call_id: tool_call_id.as_ref(),
+                tool_name: tool_name.as_ref(),
                 is_error: *is_error,
                 summary: summary.as_deref(),
             },
@@ -708,18 +708,18 @@ impl<'a> From<&'a RuntimeEventDetail> for ProtocolRuntimeEventRef<'a> {
                 Self::DaemonPresenceChanged { state }
             }
             RuntimeEventDetail::SubtaskStarted { task_id, parent_task_id, description, depth } => Self::SubtaskStarted {
-                task_id,
+                task_id: task_id.as_ref(),
                 parent_task_id: parent_task_id.as_deref(),
                 description,
                 depth: *depth,
             },
             RuntimeEventDetail::SubtaskProgress { task_id, status, summary } => Self::SubtaskProgress {
-                task_id,
+                task_id: task_id.as_ref(),
                 status,
                 summary,
             },
             RuntimeEventDetail::SubtaskCompleted { task_id, status, summary, turns_used } => Self::SubtaskCompleted {
-                task_id,
+                task_id: task_id.as_ref(),
                 status,
                 summary,
                 turns_used: *turns_used,
@@ -973,8 +973,8 @@ mod tests {
         let mut emitter = ProtocolEmitter::new(&mut buf, test_session_id());
         emitter
             .emit_runtime_event(&RuntimeEventDetail::ToolProgress {
-                tool_call_id: Some("tool-call-1".to_owned()),
-                tool_name: Some("bash_command".to_owned()),
+                tool_call_id: Some("tool-call-1".into()),
+                tool_name: Some("bash_command".into()),
                 delta: Some("{\"command\":\"dir\"}".to_owned()),
                 elapsed_time_seconds: Some(9),
             })

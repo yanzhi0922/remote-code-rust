@@ -2254,9 +2254,9 @@ fn parse_openai_response(status: u16, raw_text: String) -> Result<ProviderRespon
             .and_then(Value::as_str)
             .or_else(|| payload.get("message").and_then(Value::as_str))
             .unwrap_or("provider error");
-        return Err(anyhow!(
-            "provider request failed ({status}): {error_message}"
-        ));
+        let pe = classify_provider_error(status, error_message, "openai");
+        return Err(anyhow::Error::from(pe)
+            .context(format!("provider request failed ({status}): {error_message}")));
     }
 
     let choice = payload
@@ -2349,9 +2349,9 @@ fn parse_anthropic_response(status: u16, raw_text: String) -> Result<ProviderRes
             .and_then(Value::as_str)
             .or_else(|| payload.get("message").and_then(Value::as_str))
             .unwrap_or("provider error");
-        return Err(anyhow!(
-            "provider request failed ({status}): {error_message}"
-        ));
+        let pe = classify_provider_error(status, error_message, "anthropic");
+        return Err(anyhow::Error::from(pe)
+            .context(format!("provider request failed ({status}): {error_message}")));
     }
     let blocks = payload
         .get("content")
@@ -2773,6 +2773,40 @@ pub fn is_retryable(error: &ProviderError) -> bool {
 #[must_use]
 pub fn is_prompt_too_long(error: &ProviderError) -> bool {
     error.category == ErrorCategory::PromptTooLong
+}
+
+impl std::fmt::Display for ProviderError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "[{}] {} (status={:?}, provider={})",
+            match self.category {
+                ErrorCategory::RateLimit => "RateLimit",
+                ErrorCategory::Authentication => "Authentication",
+                ErrorCategory::PromptTooLong => "PromptTooLong",
+                ErrorCategory::ModelNotFound => "ModelNotFound",
+                ErrorCategory::ServerError => "ServerError",
+                ErrorCategory::Network => "Network",
+                ErrorCategory::Timeout => "Timeout",
+                ErrorCategory::StreamInterrupted => "StreamInterrupted",
+                ErrorCategory::InvalidRequest => "InvalidRequest",
+                ErrorCategory::QuotaExceeded => "QuotaExceeded",
+                ErrorCategory::Unknown => "Unknown",
+            },
+            self.message,
+            self.status_code,
+            self.provider_name,
+        )
+    }
+}
+
+impl std::error::Error for ProviderError {}
+
+/// Try to extract a [`ProviderError`] from an `anyhow::Error` chain.
+/// Returns `None` if the error chain does not contain a `ProviderError`.
+#[must_use]
+pub fn extract_provider_error(error: &anyhow::Error) -> Option<&ProviderError> {
+    error.downcast_ref::<ProviderError>()
 }
 
 #[cfg(test)]
