@@ -2,12 +2,12 @@
 
 use axum::extract::{Request, State};
 use axum::http::{
-    Method,
+    HeaderValue, Method,
     header::{AUTHORIZATION, CONTENT_DISPOSITION, CONTENT_TYPE},
 };
 use axum::middleware::Next;
 use axum::response::IntoResponse;
-use tower_http::cors::CorsLayer;
+use tower_http::cors::{AllowOrigin, CorsLayer};
 
 use crate::AuthPrincipal;
 use crate::state::ControlPlaneService;
@@ -17,34 +17,132 @@ use crate::types::ApiError;
 // CORS
 // ---------------------------------------------------------------------------
 
-pub(crate) fn build_cors_layer() -> CorsLayer {
-    use axum::http::HeaderValue;
+pub(crate) fn build_cors_layer(public_base_url: Option<&str>) -> CorsLayer {
+    let policy = CorsOriginPolicy::from_env(public_base_url);
 
-    let raw_origins = std::env::var("REMOTE_CODE_CORS_ORIGINS")
-        .unwrap_or_else(|_| "http://localhost:*".to_owned());
-    let origins: Vec<HeaderValue> = raw_origins
-        .split(',')
-        .filter_map(|o| o.trim().parse::<HeaderValue>().ok())
-        .collect();
+    CorsLayer::new()
+        .allow_origin(AllowOrigin::predicate(
+            move |origin: &HeaderValue, _request_parts: &axum::http::request::Parts| {
+                policy.allows(origin)
+            },
+        ))
+        .allow_methods([Method::GET, Method::POST, Method::DELETE, Method::OPTIONS])
+        .allow_headers([CONTENT_TYPE, AUTHORIZATION, axum::http::header::ACCEPT])
+        .expose_headers([CONTENT_DISPOSITION, CONTENT_TYPE])
+}
 
-    let any_localhost = raw_origins.contains("http://localhost:*");
-    if any_localhost {
-        CorsLayer::new()
-            .allow_origin(tower_http::cors::AllowOrigin::any())
-            .allow_methods([Method::GET, Method::POST, Method::DELETE, Method::OPTIONS])
-            .allow_headers([CONTENT_TYPE, AUTHORIZATION, axum::http::header::ACCEPT])
-            .expose_headers([CONTENT_DISPOSITION, CONTENT_TYPE])
-    } else if origins.is_empty() {
-        CorsLayer::new()
-            .allow_methods([Method::GET, Method::POST, Method::DELETE, Method::OPTIONS])
-            .allow_headers([CONTENT_TYPE, AUTHORIZATION, axum::http::header::ACCEPT])
-            .expose_headers([CONTENT_DISPOSITION, CONTENT_TYPE])
+#[derive(Clone, Debug)]
+struct CorsOriginPolicy {
+    exact_origins: Vec<HeaderValue>,
+    allow_http_loopback: bool,
+    allow_https_loopback: bool,
+}
+
+impl CorsOriginPolicy {
+    fn from_env(public_base_url: Option<&str>) -> Self {
+        let mut policy = Self {
+            exact_origins: Vec::new(),
+            allow_http_loopback: true,
+            allow_https_loopback: false,
+        };
+
+        if let Some(origin) = public_base_url.and_then(origin_from_url) {
+            policy.add_exact_origin(&origin);
+        }
+
+        // The desktop WebView uses a non-HTTP origin.  It still needs a bearer
+        // token; CORS just decides whether browser-style clients may send it.
+        policy.add_exact_origin("tauri://localhost");
+        policy.add_exact_origin("http://tauri.localhost");
+
+        if let Ok(raw_origins) = std::env::var("REMOTE_CODE_CORS_ORIGINS") {
+            policy.apply_origin_list(&raw_origins);
+        }
+
+        policy
+    }
+
+    fn apply_origin_list(&mut self, raw_origins: &str) {
+        self.exact_origins.clear();
+        self.allow_http_loopback = false;
+        self.allow_https_loopback = false;
+
+        for origin in raw_origins.split(',').map(str::trim) {
+            if origin.is_empty() {
+                continue;
+            }
+            match origin {
+                "*" => tracing::warn!(
+                    "Ignoring REMOTE_CODE_CORS_ORIGINS=*; configure explicit trusted origins"
+                ),
+                "http://localhost:*" | "http://127.0.0.1:*" | "http://[::1]:*" => {
+                    self.allow_http_loopback = true;
+                }
+                "https://localhost:*" | "https://127.0.0.1:*" | "https://[::1]:*" => {
+                    self.allow_https_loopback = true;
+                }
+                _ => self.add_exact_origin(origin),
+            }
+        }
+    }
+
+    fn add_exact_origin(&mut self, origin: &str) {
+        match origin.parse::<HeaderValue>() {
+            Ok(header) if !self.exact_origins.contains(&header) => {
+                self.exact_origins.push(header);
+            }
+            Ok(_) => {}
+            Err(_) => tracing::warn!(origin, "Ignoring invalid CORS origin"),
+        }
+    }
+
+    fn allows(&self, origin: &HeaderValue) -> bool {
+        if self.exact_origins.iter().any(|allowed| allowed == origin) {
+            return true;
+        }
+
+        let Ok(raw_origin) = origin.to_str() else {
+            return false;
+        };
+        is_allowed_loopback_origin(
+            raw_origin,
+            self.allow_http_loopback,
+            self.allow_https_loopback,
+        )
+    }
+}
+
+fn origin_from_url(raw_url: &str) -> Option<String> {
+    let parsed = reqwest::Url::parse(raw_url).ok()?;
+    let host = parsed.host_str()?;
+    let host = if host.contains(':') && !host.starts_with('[') {
+        format!("[{host}]")
     } else {
-        CorsLayer::new()
-            .allow_origin(origins)
-            .allow_methods([Method::GET, Method::POST, Method::DELETE, Method::OPTIONS])
-            .allow_headers([CONTENT_TYPE, AUTHORIZATION, axum::http::header::ACCEPT])
-            .expose_headers([CONTENT_DISPOSITION, CONTENT_TYPE])
+        host.to_owned()
+    };
+    Some(match parsed.port() {
+        Some(port) => format!("{}://{}:{port}", parsed.scheme(), host),
+        None => format!("{}://{}", parsed.scheme(), host),
+    })
+}
+
+fn is_allowed_loopback_origin(raw_origin: &str, allow_http: bool, allow_https: bool) -> bool {
+    let Ok(parsed) = reqwest::Url::parse(raw_origin) else {
+        return false;
+    };
+
+    match parsed.scheme() {
+        "http" if allow_http => {}
+        "https" if allow_https => {}
+        _ => return false,
+    }
+
+    match parsed.host_str() {
+        Some("localhost") => true,
+        Some(host) => host
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback()),
+        None => false,
     }
 }
 

@@ -119,7 +119,7 @@ impl ControlPlaneService {
             .route("/v1/pairing/accept", post(accept_pairing_offer))
             .route("/v1/auth/refresh", post(refresh_token))
             .merge(protected)
-            .layer(build_cors_layer())
+            .layer(build_cors_layer(self.meta.public_base_url.as_deref()))
             .with_state(self)
     }
 }
