@@ -21,6 +21,7 @@ use windows_sys::Win32::Foundation::GetLastError;
 use windows_sys::Win32::Foundation::HANDLE;
 use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
 use windows_sys::Win32::System::Console::ClosePseudoConsole;
+use windows_sys::Win32::System::Console::HPCON;
 use windows_sys::Win32::System::Threading::CREATE_UNICODE_ENVIRONMENT;
 use windows_sys::Win32::System::Threading::CreateProcessAsUserW;
 use windows_sys::Win32::System::Threading::EXTENDED_STARTUPINFO_PRESENT;
@@ -32,7 +33,7 @@ use crate::process::make_env_block;
 
 /// Owns a ConPTY handle and its backing pipe handles.
 pub struct ConptyInstance {
-    pub hpc: HANDLE,
+    pub hpc: HPCON,
     pub input_write: HANDLE,
     pub output_read: HANDLE,
     desktop: Option<LaunchDesktop>,
@@ -41,13 +42,13 @@ pub struct ConptyInstance {
 impl Drop for ConptyInstance {
     fn drop(&mut self) {
         unsafe {
-            if self.input_write != 0 && self.input_write != INVALID_HANDLE_VALUE {
+            if !self.input_write.is_null() && self.input_write != INVALID_HANDLE_VALUE {
                 CloseHandle(self.input_write);
             }
-            if self.output_read != 0 && self.output_read != INVALID_HANDLE_VALUE {
+            if !self.output_read.is_null() && self.output_read != INVALID_HANDLE_VALUE {
                 CloseHandle(self.output_read);
             }
-            if self.hpc != 0 && self.hpc != INVALID_HANDLE_VALUE {
+            if self.hpc != 0 {
                 ClosePseudoConsole(self.hpc);
             }
         }
@@ -56,7 +57,7 @@ impl Drop for ConptyInstance {
 
 impl ConptyInstance {
     /// Consume the instance and return raw handles without closing them.
-    pub fn into_raw(self) -> (HANDLE, HANDLE, HANDLE, Option<LaunchDesktop>) {
+    pub fn into_raw(self) -> (HPCON, HANDLE, HANDLE, Option<LaunchDesktop>) {
         let me = std::mem::ManuallyDrop::new(self);
         let desktop = unsafe { std::ptr::read(&me.desktop) };
         (me.hpc, me.input_write, me.output_read, desktop)
@@ -73,7 +74,7 @@ pub fn create_conpty(cols: i16, rows: i16) -> Result<ConptyInstance> {
     let (hpc, input_write, output_read) = raw.into_raw_handles();
 
     Ok(ConptyInstance {
-        hpc: hpc as HANDLE,
+        hpc: hpc as HPCON,
         input_write: input_write as HANDLE,
         output_read: output_read as HANDLE,
         desktop: None,
@@ -111,7 +112,7 @@ pub fn spawn_conpty_process_as_user(
     let raw = RawConPty::new(/*cols*/ 80, /*rows*/ 24)?;
     let (hpc, input_write, output_read) = raw.into_raw_handles();
     let conpty = ConptyInstance {
-        hpc: hpc as HANDLE,
+        hpc: hpc as HPCON,
         input_write: input_write as HANDLE,
         output_read: output_read as HANDLE,
         desktop: Some(desktop),

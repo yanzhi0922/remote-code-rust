@@ -2,6 +2,7 @@ use crate::winutil::to_wide;
 use anyhow::anyhow;
 use anyhow::Result;
 use std::ffi::c_void;
+use std::ptr;
 use windows_sys::Win32::Foundation::CloseHandle;
 use windows_sys::Win32::Foundation::GetLastError;
 use windows_sys::Win32::Foundation::LocalFree;
@@ -152,7 +153,7 @@ pub unsafe fn get_current_token_for_restriction() -> Result<HANDLE> {
         | TOKEN_ADJUST_DEFAULT
         | TOKEN_ADJUST_SESSIONID
         | TOKEN_ADJUST_PRIVILEGES;
-    let mut h: HANDLE = 0;
+    let mut h: HANDLE = ptr::null_mut();
     #[link(name = "advapi32")]
     unsafe extern "system" {
         fn OpenProcessToken(
@@ -240,7 +241,7 @@ pub unsafe fn get_logon_sid_bytes(h_token: HANDLE) -> Result<Vec<u8>> {
         if ok != 0 {
             let lt: TOKEN_LINKED_TOKEN =
                 std::ptr::read_unaligned(ln_buf.as_ptr() as *const TOKEN_LINKED_TOKEN);
-            if lt.linked_token != 0 {
+            if !lt.linked_token.is_null() {
                 let res = scan_token_groups_for_logon(lt.linked_token);
                 CloseHandle(lt.linked_token);
                 if let Some(v) = res {
@@ -429,7 +430,7 @@ unsafe fn create_token_with_caps_from(
     entries[logon_idx + 1].Sid = psid_everyone;
     entries[logon_idx + 1].Attributes = 0;
 
-    let mut new_token: HANDLE = 0;
+    let mut new_token: HANDLE = ptr::null_mut();
     let flags = DISABLE_MAX_PRIVILEGE | LUA_TOKEN | WRITE_RESTRICTED;
     let ok = CreateRestrictedToken(
         base_token,

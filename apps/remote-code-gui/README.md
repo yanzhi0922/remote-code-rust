@@ -27,6 +27,17 @@
 - 🎯 **专业化 Agent** — @agent-name 引用下拉选择，5 个内置 Agent
 - 🌐 **PWA / 移动端** — Tauri v2 移动构建目标（iOS / Android）
 
+## 产品形态
+
+桌面端以独立 Windows GUI 应用为主入口。安装包使用 Tauri NSIS 生成，安装后可从桌面快捷方式或开始菜单打开 `Remote Code`，Release 构建不会弹出额外控制台窗口。
+
+远程控制不再要求用户手工设置环境变量。打开 GUI 后进入 `设置 -> 远程控制`：
+
+1. 填写控制平面 URL。
+2. Runner ID 可留空，应用会生成稳定 ID 并保存到本机配置目录。
+3. 保持“随 GUI 自动启动远程服务”开启后，下次点击桌面快捷方式打开应用会自动连接控制平面。
+4. 设置电脑端和手机端一致的用户名与配对密码后，手机 App 可以通过控制平面控制这台电脑上的本地 Agent。
+
 ## 开发
 
 ```bash
@@ -35,10 +46,13 @@ cd apps/remote-code-gui
 npm install
 
 # 开发模式（需要 Rust 工具链）
-npm run tauri dev
+npm run desktop:dev
 
 # 仅构建前端
 npm run build
+
+# 构建 Windows 桌面安装包
+npm run desktop:build
 
 # 类型检查
 npx tsc --noEmit

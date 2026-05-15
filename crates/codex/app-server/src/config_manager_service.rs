@@ -516,7 +516,10 @@ fn toml_value_to_value(value: &TomlValue) -> anyhow::Result<toml_edit::Value> {
         TomlValue::Integer(val) => Ok(toml_edit::Value::from(*val)),
         TomlValue::Float(val) => Ok(toml_edit::Value::from(*val)),
         TomlValue::Boolean(val) => Ok(toml_edit::Value::from(*val)),
-        TomlValue::Datetime(val) => Ok(toml_edit::Value::from(*val)),
+        TomlValue::Datetime(val) => {
+            let datetime = val.to_string().parse::<toml_edit::Datetime>()?;
+            Ok(toml_edit::Value::from(datetime))
+        }
         TomlValue::Array(items) => {
             let mut array = toml_edit::Array::new();
             for item in items {

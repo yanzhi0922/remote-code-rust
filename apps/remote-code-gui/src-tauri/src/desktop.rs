@@ -6662,6 +6662,7 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .setup(|app| {
             crate::mobile::register_mobile_plugins(app.handle());
+            crate::remote_runner::start_remote_service(app.handle().clone());
             Ok(())
         })
         .manage(AppState {
@@ -6838,7 +6839,16 @@ pub fn run() {
             crate::quic_bridge::quic_connect,
             crate::quic_bridge::quic_send_command,
             crate::quic_bridge::quic_disconnect,
-            crate::quic_bridge::quic_state
+            crate::quic_bridge::quic_state,
+            crate::remote_runner::remote_get_status,
+            crate::remote_runner::remote_set_password,
+            crate::remote_runner::remote_set_username,
+            crate::remote_runner::remote_set_credentials,
+            crate::remote_runner::remote_get_username,
+            crate::remote_runner::remote_get_connection_info,
+            crate::remote_runner::remote_set_connection,
+            crate::remote_runner::remote_start_service,
+            crate::remote_runner::remote_has_password
         ])
         .run(tauri::generate_context!())
         .unwrap_or_else(|error| panic!("error while running tauri application: {error}"));

@@ -11,6 +11,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
@@ -21,6 +22,7 @@ use rc_claude_adapter::ClaudeInProcessAdapter;
 use rc_codex_adapter::CodexInProcessAdapter;
 use rc_engine_events::types::{RuntimeEventCreateRequest, RuntimeEventDetail};
 use rc_roo_adapter::RooInProcessAdapter;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::{Mutex, mpsc, watch};
@@ -34,34 +36,198 @@ use claude_runner::{
     register_with_control_plane, send_heartbeat,
 };
 
+static REMOTE_SERVICE_STARTED: AtomicBool = AtomicBool::new(false);
+
 // ─── Public API ─────────────────────────────────────────────────────────────
 
 /// Check if remote control should be auto-started.
-/// Reads from env var REMOTE_CODE_RUNNER_MODE=outbound or settings.
-pub fn should_auto_start_remote() -> bool {
-    // Default: auto-start if control plane URL is configured.
-    std::env::var("REMOTE_CODE_CONTROL_PLANE_URL").is_ok()
+/// Reads from environment variables first, then persisted GUI settings.
+pub fn should_auto_start_remote(app: &AppHandle) -> bool {
+    if read_nonempty_env("REMOTE_CODE_CONTROL_PLANE_URL").is_some() {
+        return true;
+    }
+
+    let settings = load_remote_settings(app);
+    settings.auto_start
+        && settings
+            .control_plane_url
+            .as_deref()
+            .is_some_and(|url| !url.trim().is_empty())
 }
 
 /// Start the remote control background service.
 /// Call this from Tauri's setup() callback.
 pub fn start_remote_service(app: AppHandle) {
-    if !should_auto_start_remote() {
+    if !should_auto_start_remote(&app) {
         info!("Remote control: no control plane URL configured, skipping");
         return;
     }
 
-    info!("Remote control: starting background service");
-
-    let rt = tokio::runtime::Handle::current();
-    rt.spawn(async move {
-        if let Err(e) = run_remote_service(app).await {
-            error!("Remote control service error: {e:#}");
-        }
-    });
+    if let Err(error) = start_configured_remote_service(app) {
+        warn!("Remote control: failed to start background service: {error}");
+    }
 }
 
 // ─── Settings ───────────────────────────────────────────────────────────────
+
+fn default_auto_start() -> bool {
+    true
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct RemoteControlSettings {
+    #[serde(default)]
+    control_plane_url: Option<String>,
+    #[serde(default)]
+    runner_id: Option<String>,
+    #[serde(default = "default_auto_start")]
+    auto_start: bool,
+}
+
+impl Default for RemoteControlSettings {
+    fn default() -> Self {
+        Self {
+            control_plane_url: None,
+            runner_id: None,
+            auto_start: true,
+        }
+    }
+}
+
+fn read_nonempty_env(name: &str) -> Option<String> {
+    std::env::var(name)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn normalize_nonempty(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
+}
+
+fn normalize_control_plane_url(raw: &str) -> Result<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err(anyhow!("Control plane URL is required"));
+    }
+
+    let parsed =
+        reqwest::Url::parse(trimmed).map_err(|_| anyhow!("Control plane URL is invalid"))?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return Err(anyhow!(
+            "Control plane URL must start with http:// or https://"
+        ));
+    }
+    if parsed.host_str().is_none() {
+        return Err(anyhow!("Control plane URL must include a host"));
+    }
+
+    Ok(trimmed.trim_end_matches('/').to_string())
+}
+
+fn normalize_runner_id(runner_id: Option<String>) -> Option<String> {
+    runner_id.and_then(|value| normalize_nonempty(&value))
+}
+
+fn generate_runner_id() -> String {
+    format!("desktop-{}", Uuid::new_v4())
+}
+
+fn remote_settings_path(app: &AppHandle) -> Result<PathBuf> {
+    let dir = app
+        .path()
+        .app_config_dir()
+        .context("failed to get app config dir")?;
+    Ok(dir.join("remote_control.json"))
+}
+
+fn load_remote_settings(app: &AppHandle) -> RemoteControlSettings {
+    let Ok(path) = remote_settings_path(app) else {
+        return RemoteControlSettings::default();
+    };
+    let Ok(contents) = std::fs::read_to_string(path) else {
+        return RemoteControlSettings::default();
+    };
+    match serde_json::from_str::<RemoteControlSettings>(&contents) {
+        Ok(settings) => settings,
+        Err(error) => {
+            warn!("Remote control: ignoring invalid settings file: {error}");
+            RemoteControlSettings::default()
+        }
+    }
+}
+
+fn save_remote_settings(app: &AppHandle, settings: &RemoteControlSettings) -> Result<()> {
+    let path = remote_settings_path(app)?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let contents = serde_json::to_string_pretty(settings)?;
+    std::fs::write(path, contents)?;
+    Ok(())
+}
+
+fn configured_control_plane_url(app: &AppHandle) -> Option<String> {
+    read_nonempty_env("REMOTE_CODE_CONTROL_PLANE_URL")
+        .or_else(|| load_remote_settings(app).control_plane_url)
+}
+
+fn configured_runner_id(app: &AppHandle) -> Option<String> {
+    read_nonempty_env("REMOTE_CODE_RUNNER_ID").or_else(|| load_remote_settings(app).runner_id)
+}
+
+fn ensure_runner_id(app: &AppHandle) -> Result<String> {
+    if let Some(runner_id) = configured_runner_id(app) {
+        return Ok(runner_id);
+    }
+
+    let mut settings = load_remote_settings(app);
+    let runner_id = generate_runner_id();
+    settings.runner_id = Some(runner_id.clone());
+    save_remote_settings(app, &settings)?;
+    Ok(runner_id)
+}
+
+fn remote_connection_info(app: &AppHandle) -> serde_json::Value {
+    let settings = load_remote_settings(app);
+    let control_plane_url = configured_control_plane_url(app).unwrap_or_default();
+    let runner_id = configured_runner_id(app).unwrap_or_default();
+    let configured = !control_plane_url.is_empty();
+    let running = REMOTE_SERVICE_STARTED.load(Ordering::SeqCst);
+
+    serde_json::json!({
+        "control_plane_url": control_plane_url,
+        "runner_id": runner_id,
+        "auto_start": settings.auto_start,
+        "configured": configured,
+        "running": running,
+    })
+}
+
+fn start_configured_remote_service(app: AppHandle) -> std::result::Result<(), String> {
+    let control_plane_url = configured_control_plane_url(&app)
+        .filter(|url| !url.trim().is_empty())
+        .ok_or_else(|| "Control plane URL is not configured".to_string())?;
+
+    if REMOTE_SERVICE_STARTED
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        info!("Remote control: background service is already running");
+        return Ok(());
+    }
+
+    info!("Remote control: starting background service for {control_plane_url}");
+    tauri::async_runtime::spawn(async move {
+        if let Err(error) = run_remote_service(app).await {
+            error!("Remote control service error: {error:#}");
+            REMOTE_SERVICE_STARTED.store(false, Ordering::SeqCst);
+        }
+    });
+
+    Ok(())
+}
 
 /// Get the stored remote control password hash (if any).
 fn get_remote_password_hash(app: &AppHandle) -> Option<String> {
@@ -179,8 +345,10 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
 // ─── Tauri commands ─────────────────────────────────────────────────────────
 
 #[tauri::command]
-pub fn remote_get_status() -> String {
-    if should_auto_start_remote() {
+pub fn remote_get_status(app: AppHandle) -> String {
+    if REMOTE_SERVICE_STARTED.load(Ordering::SeqCst) {
+        "running".to_string()
+    } else if configured_control_plane_url(&app).is_some() {
         "enabled".to_string()
     } else {
         "disabled".to_string()
@@ -242,13 +410,37 @@ pub fn remote_get_username(app: AppHandle) -> Option<String> {
 }
 
 #[tauri::command]
-pub fn remote_get_connection_info() -> Result<serde_json::Value, String> {
-    let url = std::env::var("REMOTE_CODE_CONTROL_PLANE_URL").unwrap_or_default();
-    let runner_id = std::env::var("REMOTE_CODE_RUNNER_ID").unwrap_or_default();
-    Ok(serde_json::json!({
-        "control_plane_url": url,
-        "runner_id": runner_id,
-    }))
+pub fn remote_get_connection_info(app: AppHandle) -> Result<serde_json::Value, String> {
+    Ok(remote_connection_info(&app))
+}
+
+#[tauri::command]
+pub fn remote_set_connection(
+    app: AppHandle,
+    control_plane_url: String,
+    runner_id: Option<String>,
+    auto_start: Option<bool>,
+) -> Result<serde_json::Value, String> {
+    let control_plane_url =
+        normalize_control_plane_url(&control_plane_url).map_err(|e| e.to_string())?;
+    let mut settings = load_remote_settings(&app);
+
+    let runner_id = normalize_runner_id(runner_id)
+        .or(settings.runner_id.clone())
+        .unwrap_or_else(generate_runner_id);
+
+    settings.control_plane_url = Some(control_plane_url);
+    settings.runner_id = Some(runner_id);
+    settings.auto_start = auto_start.unwrap_or(settings.auto_start);
+    save_remote_settings(&app, &settings).map_err(|e| e.to_string())?;
+
+    Ok(remote_connection_info(&app))
+}
+
+#[tauri::command]
+pub fn remote_start_service(app: AppHandle) -> Result<String, String> {
+    start_configured_remote_service(app.clone())?;
+    Ok(remote_get_status(app))
 }
 
 #[tauri::command]
@@ -264,14 +456,17 @@ async fn run_remote_service(app: AppHandle) -> Result<()> {
     let auth_token = user_key
         .or_else(|| std::env::var("REMOTE_CODE_RUNNER_AUTH_TOKEN").ok())
         .filter(|s| !s.is_empty());
+    let runner_id = ensure_runner_id(&app)?;
+    let control_plane_url =
+        configured_control_plane_url(&app).context("control plane URL is not configured")?;
 
     let config = load_runner_config(
         std::env::var("REMOTE_CODE_PROFILE_DIR")
             .ok()
             .map(PathBuf::from),
         RunnerConfigOverrides {
-            runner_id: std::env::var("REMOTE_CODE_RUNNER_ID").ok(),
-            control_plane_url: std::env::var("REMOTE_CODE_CONTROL_PLANE_URL").ok(),
+            runner_id: Some(runner_id),
+            control_plane_url: Some(control_plane_url),
             auth_token: auth_token.clone(),
             heartbeat_interval_secs: std::env::var("REMOTE_CODE_RUNNER_HEARTBEAT_SECS")
                 .ok()
