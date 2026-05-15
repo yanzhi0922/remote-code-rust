@@ -85,10 +85,10 @@ impl RunnerTransport {
 fn try_take_completed_connect_result(
     connect_thread: &mut Option<thread::JoinHandle<()>>,
     connect_result_rx: &mpsc::Receiver<Result<()>>,
-    thread_handle: HANDLE,
+    thread_handle: usize,
     pipe_label: &str,
 ) -> Result<Option<Result<()>>> {
-    let thread_wait = unsafe { WaitForSingleObject(thread_handle, 0) };
+    let thread_wait = unsafe { WaitForSingleObject(thread_handle as HANDLE, 0) };
     if thread_wait != WAIT_OBJECT_0 {
         return Ok(None);
     }
@@ -110,6 +110,7 @@ fn connect_pipe_with_timeout(
 ) -> Result<()> {
     let pipe_label = pipe_label.to_string();
     let pipe_label_for_thread = pipe_label.clone();
+    let h_pipe_raw = h_pipe as usize;
     let (thread_handle_tx, thread_handle_rx) = mpsc::sync_channel(1);
     let (connect_result_tx, connect_result_rx) = mpsc::sync_channel(1);
     let mut connect_thread = Some(
@@ -117,7 +118,8 @@ fn connect_pipe_with_timeout(
             .name(format!("codex-runner-connect-{pipe_label}"))
             .spawn(move || {
                 let current_process = unsafe { GetCurrentProcess() };
-                let mut thread_handle = 0;
+                let h_pipe = h_pipe_raw as HANDLE;
+                let mut thread_handle: HANDLE = ptr::null_mut();
                 let duplicate_ok = unsafe {
                     DuplicateHandle(
                         current_process,
@@ -139,7 +141,7 @@ fn connect_pipe_with_timeout(
 
                 // Publish the helper thread HANDLE before the blocking pipe connect so the
                 // parent can cancel this specific operation if it times out.
-                let _ = thread_handle_tx.send(Ok(thread_handle));
+                let _ = thread_handle_tx.send(Ok(thread_handle as usize));
 
                 let result = connect_pipe(h_pipe, expected_runner_pid)
                     .map_err(anyhow::Error::from)
@@ -167,7 +169,7 @@ fn connect_pipe_with_timeout(
             )? {
                 result
             } else {
-                let cancel_ok = unsafe { CancelSynchronousIo(thread_handle) };
+                let cancel_ok = unsafe { CancelSynchronousIo(thread_handle as HANDLE) };
                 if cancel_ok == 0 {
                     let err = unsafe { GetLastError() };
                     if err != ERROR_NOT_FOUND {
@@ -209,7 +211,7 @@ fn connect_pipe_with_timeout(
     };
 
     unsafe {
-        CloseHandle(thread_handle);
+        CloseHandle(thread_handle as HANDLE);
     }
 
     result
@@ -290,7 +292,7 @@ pub(crate) fn spawn_runner_transport(
     })();
 
     unsafe {
-        if pi.hThread != 0 {
+        if !pi.hThread.is_null() {
             CloseHandle(pi.hThread);
         }
     }
@@ -300,7 +302,7 @@ pub(crate) fn spawn_runner_transport(
             // Keep the process handle alive until the pipe handshake finishes. If the handshake
             // fails after the runner process has already launched, we still need a way to stop
             // that child instead of leaking a stray `codex-command-runner.exe`.
-            if pi.hProcess != 0 {
+            if !pi.hProcess.is_null() {
                 let _ = TerminateProcess(pi.hProcess, 1);
                 CloseHandle(pi.hProcess);
             }
@@ -326,7 +328,7 @@ pub(crate) fn spawn_runner_transport(
     })();
     if let Err(err) = startup_result {
         unsafe {
-            if pi.hProcess != 0 {
+            if !pi.hProcess.is_null() {
                 let _ = TerminateProcess(pi.hProcess, 1);
                 CloseHandle(pi.hProcess);
             }
@@ -336,7 +338,7 @@ pub(crate) fn spawn_runner_transport(
     }
 
     unsafe {
-        if pi.hProcess != 0 {
+        if !pi.hProcess.is_null() {
             // The runner has now connected both pipes *and* acknowledged the spawn request, so
             // startup is complete. At that point the transport pipes become the only lifetime
             // anchor we need to keep the session alive.

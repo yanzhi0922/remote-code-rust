@@ -58,6 +58,7 @@ use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_WRITE;
 use windows_sys::Win32::Storage::FileSystem::OPEN_EXISTING;
 use windows_sys::Win32::System::Console::COORD;
 use windows_sys::Win32::System::Console::ClosePseudoConsole;
+use windows_sys::Win32::System::Console::HPCON;
 use windows_sys::Win32::System::Console::ResizePseudoConsole;
 use windows_sys::Win32::System::JobObjects::AssignProcessToJobObject;
 use windows_sys::Win32::System::JobObjects::CreateJobObjectW;
@@ -87,7 +88,7 @@ struct IpcSpawnedProcess {
     stdout_handle: HANDLE,
     stderr_handle: HANDLE,
     stdin_handle: Option<HANDLE>,
-    hpc_handle: Option<HANDLE>,
+    hpc_handle: Option<HPCON>,
     _desktop_owner: Option<LaunchDesktop>,
     _pipe_handles: Option<PipeSpawnHandles>,
 }
@@ -112,14 +113,14 @@ impl OwnedWinHandle {
         // Transfer ownership to the caller. After this point the caller is responsible for
         // eventually closing the returned HANDLE.
         let handle = self.0;
-        self.0 = 0;
+        self.0 = ptr::null_mut();
         handle
     }
 }
 
 impl Drop for OwnedWinHandle {
     fn drop(&mut self) {
-        if self.0 != 0 && self.0 != INVALID_HANDLE_VALUE {
+        if !self.0.is_null() && self.0 != INVALID_HANDLE_VALUE {
             unsafe {
                 CloseHandle(self.0);
             }
@@ -129,7 +130,7 @@ impl Drop for OwnedWinHandle {
 
 unsafe fn create_job_kill_on_close() -> Result<HANDLE> {
     let h_job = OwnedWinHandle::new(CreateJobObjectW(std::ptr::null_mut(), std::ptr::null()));
-    if h_job.raw() == 0 {
+    if h_job.raw().is_null() {
         return Err(anyhow::anyhow!("CreateJobObjectW failed"));
     }
     let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
@@ -157,10 +158,10 @@ fn open_pipe(name: &str, access: u32) -> Result<HANDLE> {
             std::ptr::null_mut(),
             OPEN_EXISTING,
             0,
-            0,
+            std::ptr::null_mut(),
         )
     };
-    if handle == windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE {
+    if handle.is_null() || handle == windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE {
         let err = unsafe { GetLastError() };
         return Err(anyhow::anyhow!("CreateFileW failed for pipe {name}: {err}"));
     }
@@ -263,7 +264,7 @@ fn spawn_ipc_process(req: &SpawnRequest) -> Result<IpcSpawnedProcess> {
 
     let effective_cwd = effective_cwd(&req.cwd, Some(log_dir.as_path()));
 
-    let mut hpc_handle: Option<HANDLE> = None;
+    let mut hpc_handle: Option<HPCON> = None;
     let mut desktop_owner = None;
     let mut pipe_handles = None;
     let (pi, stdout_handle, stderr_handle, stdin_handle) = if req.tty {
@@ -361,10 +362,11 @@ fn spawn_output_reader(
 fn spawn_input_loop(
     mut reader: File,
     stdin_handle: Option<HANDLE>,
-    hpc_handle: Arc<StdMutex<Option<HANDLE>>>,
-    process_handle: Arc<StdMutex<Option<HANDLE>>>,
+    hpc_handle: Arc<StdMutex<Option<HPCON>>>,
+    process_handle: Arc<StdMutex<Option<usize>>>,
     log_dir: Option<PathBuf>,
 ) -> std::thread::JoinHandle<()> {
+    let stdin_handle = stdin_handle.map(|handle| handle as usize);
     std::thread::spawn(move || {
         let mut stdin_handle = stdin_handle;
         loop {
@@ -379,6 +381,7 @@ fn spawn_input_loop(
                         continue;
                     };
                     if let Some(handle) = stdin_handle {
+                        let handle = handle as HANDLE;
                         let mut offset = 0usize;
                         // `WriteFile` can report success after consuming only part of the buffer
                         // when the target is a pipe. Treat this like a normal partial write and
@@ -433,7 +436,7 @@ fn spawn_input_loop(
                 Message::CloseStdin { .. } => {
                     if let Some(handle) = stdin_handle.take() {
                         unsafe {
-                            CloseHandle(handle);
+                            CloseHandle(handle as HANDLE);
                         }
                     }
                 }
@@ -459,7 +462,7 @@ fn spawn_input_loop(
                         && let Some(handle) = guard.as_ref()
                     {
                         unsafe {
-                            let _ = TerminateProcess(*handle, 1);
+                            let _ = TerminateProcess(*handle as HANDLE, 1);
                         }
                     }
                 }
@@ -472,7 +475,7 @@ fn spawn_input_loop(
         }
         if let Some(handle) = stdin_handle {
             unsafe {
-                CloseHandle(handle);
+                CloseHandle(handle as HANDLE);
             }
         }
     })
@@ -536,7 +539,7 @@ pub fn main() -> Result<()> {
         }
     }
 
-    let process_handle = Arc::new(StdMutex::new(Some(pi.hProcess)));
+    let process_handle = Arc::new(StdMutex::new(Some(pi.hProcess as usize)));
 
     let msg = FramedMessage {
         version: 1,
@@ -594,10 +597,10 @@ pub fn main() -> Result<()> {
             GetExitCodeProcess(pi.hProcess, &mut raw_exit);
             exit_code = raw_exit as i32;
         }
-        if pi.hThread != 0 {
+        if !pi.hThread.is_null() {
             CloseHandle(pi.hThread);
         }
-        if pi.hProcess != 0 {
+        if !pi.hProcess.is_null() {
             CloseHandle(pi.hProcess);
         }
         if let Some(job) = h_job {

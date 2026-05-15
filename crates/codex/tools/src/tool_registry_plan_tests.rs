@@ -2245,17 +2245,11 @@ fn build_specs_with_optional_tool_namespaces<'a>(
 }
 
 fn mcp_tool(name: &str, description: &str, input_schema: serde_json::Value) -> rmcp::model::Tool {
-    rmcp::model::Tool {
-        name: name.to_string().into(),
-        title: None,
-        description: Some(description.to_string().into()),
-        input_schema: std::sync::Arc::new(rmcp::model::object(input_schema)),
-        output_schema: None,
-        annotations: None,
-        execution: None,
-        icons: None,
-        meta: None,
-    }
+    rmcp::model::Tool::new(
+        name.to_string(),
+        description.to_string(),
+        std::sync::Arc::new(rmcp::model::object(input_schema)),
+    )
 }
 
 #[test]

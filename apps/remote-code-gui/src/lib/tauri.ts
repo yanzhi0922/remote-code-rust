@@ -999,8 +999,18 @@ export function transcribeAudio(
 
 // ─── Remote Control ──────────────────────────────────────────────────────────
 
-export function remoteGetStatus(): Promise<string> {
-  return invoke<string>('remote_get_status');
+export type RemoteControlStatus = 'disabled' | 'enabled' | 'running';
+
+export interface RemoteConnectionInfo {
+  control_plane_url: string;
+  runner_id: string;
+  auto_start: boolean;
+  configured: boolean;
+  running: boolean;
+}
+
+export function remoteGetStatus(): Promise<RemoteControlStatus> {
+  return invoke<RemoteControlStatus>('remote_get_status');
 }
 
 export function remoteSetPassword(password: string): Promise<void> {
@@ -1019,8 +1029,24 @@ export function remoteGetUsername(): Promise<string | null> {
   return invoke<string | null>('remote_get_username');
 }
 
-export function remoteGetConnectionInfo(): Promise<Record<string, string>> {
-  return invoke<Record<string, string>>('remote_get_connection_info');
+export function remoteGetConnectionInfo(): Promise<RemoteConnectionInfo> {
+  return invoke<RemoteConnectionInfo>('remote_get_connection_info');
+}
+
+export function remoteSetConnection(
+  controlPlaneUrl: string,
+  runnerId?: string,
+  autoStart?: boolean,
+): Promise<RemoteConnectionInfo> {
+  return invoke<RemoteConnectionInfo>('remote_set_connection', {
+    controlPlaneUrl,
+    runnerId: runnerId || null,
+    autoStart: autoStart ?? null,
+  });
+}
+
+export function remoteStartService(): Promise<RemoteControlStatus> {
+  return invoke<RemoteControlStatus>('remote_start_service');
 }
 
 export function remoteHasPassword(): Promise<boolean> {

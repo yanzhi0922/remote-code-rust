@@ -360,7 +360,6 @@ pub fn calculate_model_params(opts: GetModelParamsOptions) -> ModelParams {
 mod tests {
     use super::*;
     use roo_types::model::{ReasoningEffortExtended, SupportsReasoningEffort};
-    use serde_json::json;
 
     /// Helper: basic model with no special capabilities.
     fn basic_model() -> ModelInfo {

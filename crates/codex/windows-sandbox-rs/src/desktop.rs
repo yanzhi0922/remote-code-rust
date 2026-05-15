@@ -7,8 +7,8 @@ use anyhow::Result;
 use rand::Rng;
 use rand::SeedableRng;
 use rand::rngs::SmallRng;
-use std::path::Path;
 use std::ffi::c_void;
+use std::path::Path;
 use std::ptr;
 use windows_sys::Win32::Foundation::CloseHandle;
 use windows_sys::Win32::Foundation::GetLastError;
@@ -39,6 +39,7 @@ use windows_sys::Win32::System::StationsAndDesktops::DESKTOP_SWITCHDESKTOP;
 use windows_sys::Win32::System::StationsAndDesktops::DESKTOP_WRITE_DAC;
 use windows_sys::Win32::System::StationsAndDesktops::DESKTOP_WRITE_OWNER;
 use windows_sys::Win32::System::StationsAndDesktops::DESKTOP_WRITEOBJECTS;
+use windows_sys::Win32::System::StationsAndDesktops::HDESK;
 
 const DESKTOP_ALL_ACCESS: u32 = DESKTOP_READOBJECTS
     | DESKTOP_CREATEWINDOW
@@ -82,14 +83,18 @@ impl LaunchDesktop {
 }
 
 struct PrivateDesktop {
-    handle: isize,
+    handle: HDESK,
     name: String,
 }
 
+// HDESK is an opaque Win32 handle. This type owns the handle and only closes it on drop,
+// so moving that ownership to the session cleanup thread is safe.
+unsafe impl Send for PrivateDesktop {}
+
 impl PrivateDesktop {
     fn create(logs_base_dir: Option<&Path>) -> Result<Self> {
-        let mut rng = SmallRng::from_entropy();
-        let name = format!("CodexSandboxDesktop-{:x}", rng.r#gen::<u128>());
+        let mut rng = SmallRng::from_rng(&mut rand::rng());
+        let name = format!("CodexSandboxDesktop-{:x}", rng.random::<u128>());
         let name_wide = to_wide(&name);
         let handle = unsafe {
             CreateDesktopW(
@@ -101,7 +106,7 @@ impl PrivateDesktop {
                 ptr::null_mut(),
             )
         };
-        if handle == 0 {
+        if handle.is_null() {
             let err = unsafe { GetLastError() } as i32;
             logging::debug_log(
                 &format!(
@@ -125,7 +130,7 @@ impl PrivateDesktop {
     }
 }
 
-unsafe fn grant_desktop_access(handle: isize, logs_base_dir: Option<&Path>) -> Result<()> {
+unsafe fn grant_desktop_access(handle: HDESK, logs_base_dir: Option<&Path>) -> Result<()> {
     let token = get_current_token_for_restriction()?;
     let mut logon_sid = get_logon_sid_bytes(token)?;
     CloseHandle(token);
@@ -188,7 +193,7 @@ unsafe fn grant_desktop_access(handle: isize, logs_base_dir: Option<&Path>) -> R
 impl Drop for PrivateDesktop {
     fn drop(&mut self) {
         unsafe {
-            if self.handle != 0 {
+            if !self.handle.is_null() {
                 let _ = CloseDesktop(self.handle);
             }
         }

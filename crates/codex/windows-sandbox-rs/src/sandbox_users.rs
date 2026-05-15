@@ -362,7 +362,7 @@ pub fn sid_bytes_to_psid(sid: &[u8]) -> Result<*mut c_void> {
 fn random_password() -> String {
     const CHARS: &[u8] =
         b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*()-_=+";
-    let mut rng = SmallRng::from_entropy();
+    let mut rng = SmallRng::from_rng(&mut rand::rng());
     let mut buf = [0u8; 24];
     rng.fill_bytes(&mut buf);
     buf.iter()

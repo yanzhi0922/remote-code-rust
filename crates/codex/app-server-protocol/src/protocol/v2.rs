@@ -7720,6 +7720,9 @@ impl From<McpServerElicitationRequestResponse> for rmcp::model::CreateElicitatio
         Self {
             action: value.action.into(),
             content: value.content,
+            meta: value
+                .meta
+                .and_then(|meta| meta.as_object().cloned().map(rmcp::model::Meta)),
         }
     }
 }
@@ -7729,7 +7732,7 @@ impl From<rmcp::model::CreateElicitationResult> for McpServerElicitationRequestR
         Self {
             action: value.action.into(),
             content: value.content,
-            meta: None,
+            meta: value.meta.map(|meta| JsonValue::Object(meta.0)),
         }
     }
 }
@@ -9771,6 +9774,7 @@ mod tests {
             content: Some(json!({
                 "confirmed": true,
             })),
+            meta: None,
         };
 
         let v2_response = McpServerElicitationRequestResponse::from(rmcp_result.clone());

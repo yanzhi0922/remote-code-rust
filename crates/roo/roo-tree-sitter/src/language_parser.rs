@@ -328,7 +328,9 @@ pub fn process_captures(
             if let Some(parent) = node.parent() {
                 let child_count = parent.child_count();
                 if child_count > 0 {
-                    if let Some(last_child) = parent.child(child_count - 1) {
+                    if let Ok(last_child_index) = u32::try_from(child_count - 1)
+                        && let Some(last_child) = parent.child(last_child_index)
+                    {
                         let context_end = last_child.end_position().row;
                         let context_span = context_end - parent.start_position().row + 1;
 

@@ -289,12 +289,12 @@ mod windows_impl {
     type PipeHandles = ((HANDLE, HANDLE), (HANDLE, HANDLE), (HANDLE, HANDLE));
 
     unsafe fn setup_stdio_pipes() -> io::Result<PipeHandles> {
-        let mut in_r: HANDLE = 0;
-        let mut in_w: HANDLE = 0;
-        let mut out_r: HANDLE = 0;
-        let mut out_w: HANDLE = 0;
-        let mut err_r: HANDLE = 0;
-        let mut err_w: HANDLE = 0;
+        let mut in_r: HANDLE = ptr::null_mut();
+        let mut in_w: HANDLE = ptr::null_mut();
+        let mut out_r: HANDLE = ptr::null_mut();
+        let mut out_w: HANDLE = ptr::null_mut();
+        let mut err_r: HANDLE = ptr::null_mut();
+        let mut err_w: HANDLE = ptr::null_mut();
         if CreatePipe(&mut in_r, &mut in_w, ptr::null_mut(), 0) == 0 {
             return Err(io::Error::from_raw_os_error(GetLastError() as i32));
         }
@@ -506,7 +506,10 @@ mod windows_impl {
 
         let (tx_out, rx_out) = std::sync::mpsc::channel::<Vec<u8>>();
         let (tx_err, rx_err) = std::sync::mpsc::channel::<Vec<u8>>();
+        let out_r_raw = out_r as usize;
+        let err_r_raw = err_r as usize;
         let t_out = std::thread::spawn(move || {
+            let out_r = out_r_raw as HANDLE;
             let mut buf = Vec::new();
             let mut tmp = [0u8; 8192];
             loop {
@@ -528,6 +531,7 @@ mod windows_impl {
             let _ = tx_out.send(buf);
         });
         let t_err = std::thread::spawn(move || {
+            let err_r = err_r_raw as HANDLE;
             let mut buf = Vec::new();
             let mut tmp = [0u8; 8192];
             loop {
@@ -564,10 +568,10 @@ mod windows_impl {
         }
 
         unsafe {
-            if pi.hThread != 0 {
+            if !pi.hThread.is_null() {
                 CloseHandle(pi.hThread);
             }
-            if pi.hProcess != 0 {
+            if !pi.hProcess.is_null() {
                 CloseHandle(pi.hProcess);
             }
             CloseHandle(h_token);

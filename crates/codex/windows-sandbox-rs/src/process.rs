@@ -58,7 +58,7 @@ pub fn make_env_block(env: &HashMap<String, String>) -> Vec<u16> {
 unsafe fn ensure_inheritable_stdio(si: &mut STARTUPINFOW) -> Result<()> {
     for kind in [STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE] {
         let h = GetStdHandle(kind);
-        if h == 0 || h == INVALID_HANDLE_VALUE {
+        if h.is_null() || h == INVALID_HANDLE_VALUE {
             return Err(anyhow!("GetStdHandle failed: {}", GetLastError()));
         }
         if SetHandleInformation(h, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT) == 0 {
@@ -234,12 +234,12 @@ pub fn spawn_process_with_pipes(
     use_private_desktop: bool,
     logs_base_dir: Option<&Path>,
 ) -> Result<PipeSpawnHandles> {
-    let mut in_r: HANDLE = 0;
-    let mut in_w: HANDLE = 0;
-    let mut out_r: HANDLE = 0;
-    let mut out_w: HANDLE = 0;
-    let mut err_r: HANDLE = 0;
-    let mut err_w: HANDLE = 0;
+    let mut in_r: HANDLE = ptr::null_mut();
+    let mut in_w: HANDLE = ptr::null_mut();
+    let mut out_r: HANDLE = ptr::null_mut();
+    let mut out_w: HANDLE = ptr::null_mut();
+    let mut err_r: HANDLE = ptr::null_mut();
+    let mut err_w: HANDLE = ptr::null_mut();
     unsafe {
         if CreatePipe(&mut in_r, &mut in_w, ptr::null_mut(), 0) == 0 {
             return Err(anyhow!("CreatePipe stdin failed: {}", GetLastError()));
@@ -330,7 +330,9 @@ pub fn read_handle_loop<F>(handle: HANDLE, mut on_chunk: F) -> std::thread::Join
 where
     F: FnMut(&[u8]) + Send + 'static,
 {
+    let handle_raw = handle as usize;
     std::thread::spawn(move || {
+        let handle = handle_raw as HANDLE;
         let mut buf = [0u8; 8192];
         loop {
             let mut read_bytes: u32 = 0;

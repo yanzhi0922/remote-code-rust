@@ -41,7 +41,7 @@
 - 📡 **SSH 模式** — 远程主机安全执行
 - ⌨️ **Vim 模式** — Normal / Insert / Visual / Buffer 四种模式
 - 🖥️ **桌面 GUI** — Tauri v2 + React 19，内置 Provider/Model/Runtime 管理
-- 📱 **移动端** — Tauri v2 移动构建目标（iOS / Android），Rust 原生后端 + React 前端
+- 📱 **移动端远程控制** — 桌面 GUI 内置远程 Runner 服务，手机 App 可经控制平面控制本机 Agent
 - 🔐 **OAuth2 认证** — PKCE 流程 + 自动 Token 刷新
 - 📈 **遥测与分析** — Datadog / 自有端点 / 文件导出三种方式
 - 🎤 **语音输入** — Web Speech API + 音频级别实时反馈
@@ -209,6 +209,16 @@ cargo build --release
 # 编译检查（开发模式）
 cargo check --workspace
 ```
+
+### Windows 桌面 GUI
+
+```bash
+cd apps/remote-code-gui
+npm install
+npm run desktop:build
+```
+
+桌面安装包由 Tauri NSIS 生成。安装后打开 `Remote Code`，在 `设置 -> 远程控制` 填写控制平面 URL、保存配对账号密码，即可让手机 App 通过控制平面远程控制本机 GUI 内置 Agent。
 
 ### 构建 Agent 二进制
 
