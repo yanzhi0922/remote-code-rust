@@ -15,10 +15,12 @@ import * as tauri from '../../lib/tauri';
 
 type RemoteStatus = 'loading' | tauri.RemoteControlStatus;
 
+const DEFAULT_CONTROL_PLANE_URL = 'https://remote-code.yz520gzy.top';
+
 export function RemoteSettings() {
   const [status, setStatus] = useState<RemoteStatus>('loading');
   const [connectionInfo, setConnectionInfo] = useState<tauri.RemoteConnectionInfo | null>(null);
-  const [controlPlaneUrl, setControlPlaneUrl] = useState('');
+  const [controlPlaneUrl, setControlPlaneUrl] = useState(DEFAULT_CONTROL_PLANE_URL);
   const [runnerId, setRunnerId] = useState('');
   const [autoStart, setAutoStart] = useState(true);
   const [username, setUsername] = useState('');
@@ -45,7 +47,7 @@ export function RemoteSettings() {
 
     if (info.status === 'fulfilled') {
       setConnectionInfo(info.value);
-      setControlPlaneUrl(info.value.control_plane_url || '');
+      setControlPlaneUrl(info.value.control_plane_url || DEFAULT_CONTROL_PLANE_URL);
       setRunnerId(info.value.runner_id || '');
       setAutoStart(info.value.auto_start);
     } else {
@@ -196,7 +198,7 @@ export function RemoteSettings() {
             type="url"
             value={controlPlaneUrl}
             onChange={(event) => setControlPlaneUrl(event.target.value)}
-            placeholder="https://remote-code.example.com"
+            placeholder={DEFAULT_CONTROL_PLANE_URL}
             className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-800 placeholder:text-slate-400 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
           />
         </label>
