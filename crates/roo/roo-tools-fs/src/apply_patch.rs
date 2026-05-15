@@ -183,7 +183,9 @@ pub struct ApplyPatchFileChange {
 /// Matches TS `ApplyPatchTool.execute` validation: patch must be non-empty.
 pub fn validate_apply_patch_params(patch: &str) -> Result<(), FsToolError> {
     if patch.trim().is_empty() {
-        return Err(FsToolError::Validation("patch must not be empty".to_string()));
+        return Err(FsToolError::Validation(
+            "patch must not be empty".to_string(),
+        ));
     }
     Ok(())
 }
@@ -433,9 +435,7 @@ pub fn parse_patch(patch: &str) -> Result<ApplyPatchArgs, ParseError> {
     let effective_lines: Vec<&str> = if all_lines.len() >= 4 {
         let first_line = all_lines[0];
         let last_line = all_lines[all_lines.len() - 1];
-        if (first_line == "<<EOF"
-            || first_line == "<<'EOF'"
-            || first_line == "<<\"EOF\"")
+        if (first_line == "<<EOF" || first_line == "<<'EOF'" || first_line == "<<\"EOF\"")
             && last_line.ends_with("EOF")
         {
             all_lines[1..all_lines.len() - 1].to_vec()
@@ -541,9 +541,7 @@ fn trim_match_fn(lines: &[&str], pattern: &[String], start_index: usize) -> bool
 /// Check if two arrays of lines match after Unicode normalization.
 fn normalized_match(lines: &[&str], pattern: &[String], start_index: usize) -> bool {
     for i in 0..pattern.len() {
-        let line = lines
-            .get(start_index + i)
-            .map(|s| normalize_unicode(s));
+        let line = lines.get(start_index + i).map(|s| normalize_unicode(s));
         let pat = pattern.get(i).map(|s| normalize_unicode(s));
         if line != pat {
             return false;
@@ -564,12 +562,7 @@ fn normalized_match(lines: &[&str], pattern: &[String], start_index: usize) -> b
 /// When `eof` is true, first try starting at the end-of-file.
 ///
 /// Corresponds to `seekSequence` in `seek-sequence.ts`.
-pub fn seek_sequence(
-    lines: &[&str],
-    pattern: &[String],
-    start: usize,
-    eof: bool,
-) -> Option<usize> {
+pub fn seek_sequence(lines: &[&str], pattern: &[String], start: usize, eof: bool) -> Option<usize> {
     if pattern.is_empty() {
         return Some(start);
     }
@@ -655,13 +648,13 @@ fn compute_replacements(
 
         if chunk.old_lines.is_empty() {
             // Pure addition (no old lines). Add at the end or before final empty line.
-            let insertion_idx =
-                if !original_lines.is_empty() && original_lines[original_lines.len() - 1].is_empty()
-                {
-                    original_lines.len() - 1
-                } else {
-                    original_lines.len()
-                };
+            let insertion_idx = if !original_lines.is_empty()
+                && original_lines[original_lines.len() - 1].is_empty()
+            {
+                original_lines.len() - 1
+            } else {
+                original_lines.len()
+            };
             replacements.push((insertion_idx, 0, chunk.new_lines.clone()));
             continue;
         }
@@ -713,10 +706,7 @@ fn compute_replacements(
 
 /// Apply replacements to the original lines, returning the modified content.
 /// Replacements must be applied in reverse order to preserve indices.
-fn apply_replacements(
-    lines: &[&str],
-    replacements: &[(usize, usize, Vec<String>)],
-) -> Vec<String> {
+fn apply_replacements(lines: &[&str], replacements: &[(usize, usize, Vec<String>)]) -> Vec<String> {
     let mut result: Vec<String> = lines.iter().map(|s| s.to_string()).collect();
 
     // Apply in reverse order so earlier replacements don't shift later indices
@@ -917,10 +907,7 @@ mod tests {
                 assert_eq!(path, "src/app.py");
                 assert!(move_path.is_none());
                 assert_eq!(chunks.len(), 1);
-                assert_eq!(
-                    chunks[0].change_context,
-                    Some("def greet():".to_string())
-                );
+                assert_eq!(chunks[0].change_context, Some("def greet():".to_string()));
                 assert_eq!(chunks[0].old_lines, vec!["print(\"Hi\")"]);
                 assert_eq!(chunks[0].new_lines, vec!["print(\"Hello, world!\")"]);
             }
@@ -995,7 +982,8 @@ mod tests {
 
     #[test]
     fn test_parse_update_with_eof_marker() {
-        let patch = "*** Begin Patch\n*** Update File: foo.rs\n@@\n-old\n*** End of File\n*** End Patch";
+        let patch =
+            "*** Begin Patch\n*** Update File: foo.rs\n@@\n-old\n*** End of File\n*** End Patch";
         let result = parse_patch(patch).unwrap();
         match &result.hunks[0] {
             Hunk::UpdateFile { chunks, .. } => {

@@ -1,9 +1,9 @@
 use std::path::Path;
 
-use directories::BaseDirs;
 use claude_config::RuntimeConfig;
 use claude_runtime_prompt::RuntimePromptSettings;
 use claude_session::session_memory::session_memory_path;
+use directories::BaseDirs;
 
 pub fn render(config: &RuntimeConfig) {
     let prompt_settings = RuntimePromptSettings::from_config(config);

@@ -12,9 +12,9 @@
 //! - Moonshot:  <https://platform.moonshot.cn/pricing> (2025-01)
 //! - 百度 ERNIE: <https://cloud.baidu.com> (2025-01)
 
+use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::fmt::Write as _;
-use std::sync::Mutex;
 
 /// Per-model cost breakdown.
 #[derive(Debug, Clone, Default)]
@@ -55,7 +55,7 @@ impl CostTracker {
     /// Record a single API call's token usage.
     pub fn record(&self, model: &str, input_tokens: u64, output_tokens: u64) {
         let cost = estimate_cost(model, input_tokens, output_tokens);
-        let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let mut inner = self.inner.lock();
         inner.total_input_tokens += input_tokens;
         inner.total_output_tokens += output_tokens;
         inner.estimated_cost_usd += cost;
@@ -68,38 +68,29 @@ impl CostTracker {
 
     /// Record cache-related token usage.
     pub fn record_cache(&self, cache_read_tokens: u64, cache_creation_tokens: u64) {
-        let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let mut inner = self.inner.lock();
         inner.total_cache_read_tokens += cache_read_tokens;
         inner.total_cache_creation_tokens += cache_creation_tokens;
     }
 
     /// Get the total estimated cost in USD.
     pub fn total_cost_usd(&self) -> f64 {
-        self.inner
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .estimated_cost_usd
+        self.inner.lock().estimated_cost_usd
     }
 
     /// Get the total input tokens across all models.
     pub fn total_input_tokens(&self) -> u64 {
-        self.inner
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .total_input_tokens
+        self.inner.lock().total_input_tokens
     }
 
     /// Get the total output tokens across all models.
     pub fn total_output_tokens(&self) -> u64 {
-        self.inner
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .total_output_tokens
+        self.inner.lock().total_output_tokens
     }
 
     /// Generate a human-readable summary of accumulated costs.
     pub fn summary(&self) -> String {
-        let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let inner = self.inner.lock();
         let mut out = String::new();
 
         let _ = writeln!(

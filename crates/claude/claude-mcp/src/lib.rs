@@ -56,8 +56,8 @@ pub mod resources;
 pub mod scope;
 pub mod serialization;
 pub mod session;
-pub mod transport;
 pub mod tool_policy;
+pub mod transport;
 pub mod types;
 pub mod validation;
 
@@ -80,14 +80,16 @@ pub use transport::{McpTransport, McpTransportConfig};
 
 // Core types
 pub use types::{
-    McpClientInfo, McpPeerInfo, McpPromptArgument, McpPromptDescriptor, McpPromptGetResponse,
-    McpPromptGetResult, McpPromptMessage, McpServerInspection, McpToolCallContent,
-    McpToolCallResponse, McpToolCallResult, McpToolDescriptor, MCP_TOOL_RESULT_MAX_CHARS,
-    MCP_TOOL_RESULT_TRUNCATION_NOTICE, truncate_tool_call_result, truncate_tool_result_content,
+    MCP_TOOL_RESULT_MAX_CHARS, MCP_TOOL_RESULT_TRUNCATION_NOTICE, McpClientInfo, McpPeerInfo,
+    McpPromptArgument, McpPromptDescriptor, McpPromptGetResponse, McpPromptGetResult,
+    McpPromptMessage, McpServerInspection, McpToolCallContent, McpToolCallResponse,
+    McpToolCallResult, McpToolDescriptor, truncate_tool_call_result, truncate_tool_result_content,
 };
 
 // Error types
-pub use error::{McpConfigError, McpRuntimeError, is_session_expired_error, MCP_SESSION_EXPIRED_CODE};
+pub use error::{
+    MCP_SESSION_EXPIRED_CODE, McpConfigError, McpRuntimeError, is_session_expired_error,
+};
 
 // Session functions and persistent client
 pub use session::{

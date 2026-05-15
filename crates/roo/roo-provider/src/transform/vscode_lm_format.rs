@@ -82,14 +82,18 @@ pub fn convert_to_vscode_lm_messages(
     for (role, content) in messages {
         match role {
             MessageRole::User => {
-                let (tool_messages, non_tool_messages) =
-                    partition_user_content(content);
+                let (tool_messages, non_tool_messages) = partition_user_content(content);
 
                 let mut content_parts: Vec<VsCodeLmContentPart> = Vec::new();
 
                 // Convert tool messages to ToolResultParts first
                 for tool_msg in &tool_messages {
-                    if let ContentBlock::ToolResult { tool_use_id, content, .. } = tool_msg {
+                    if let ContentBlock::ToolResult {
+                        tool_use_id,
+                        content,
+                        ..
+                    } = tool_msg
+                    {
                         let tool_content_parts: Vec<VsCodeLmContentPart> =
                             convert_tool_result_content(content);
                         content_parts.push(VsCodeLmContentPart::ToolResult {
@@ -112,8 +116,7 @@ pub fn convert_to_vscode_lm_messages(
                 }
             }
             MessageRole::Assistant => {
-                let (tool_messages, non_tool_messages) =
-                    partition_assistant_content(content);
+                let (tool_messages, non_tool_messages) = partition_assistant_content(content);
 
                 let mut content_parts: Vec<VsCodeLmContentPart> = Vec::new();
 
@@ -239,9 +242,7 @@ fn partition_user_content(content: &[ContentBlock]) -> (Vec<ContentBlock>, Vec<C
 }
 
 /// Partition assistant content blocks into tool uses and non-tool blocks.
-fn partition_assistant_content(
-    content: &[ContentBlock],
-) -> (Vec<ContentBlock>, Vec<ContentBlock>) {
+fn partition_assistant_content(content: &[ContentBlock]) -> (Vec<ContentBlock>, Vec<ContentBlock>) {
     let mut tool_messages = Vec::new();
     let mut non_tool_messages = Vec::new();
 
@@ -365,8 +366,14 @@ mod tests {
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].content.len(), 2);
         // Text comes first, then tool call
-        assert!(matches!(result[0].content[0], VsCodeLmContentPart::Text { .. }));
-        assert!(matches!(result[0].content[1], VsCodeLmContentPart::ToolCall { .. }));
+        assert!(matches!(
+            result[0].content[0],
+            VsCodeLmContentPart::Text { .. }
+        ));
+        assert!(matches!(
+            result[0].content[1],
+            VsCodeLmContentPart::ToolCall { .. }
+        ));
     }
 
     #[test]
@@ -384,12 +391,18 @@ mod tests {
         let result = convert_to_vscode_lm_messages(&messages);
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].role, VsCodeLmRole::User);
-        assert!(matches!(result[0].content[0], VsCodeLmContentPart::ToolResult { .. }));
+        assert!(matches!(
+            result[0].content[0],
+            VsCodeLmContentPart::ToolResult { .. }
+        ));
     }
 
     #[test]
     fn test_convert_to_anthropic_role() {
-        assert_eq!(convert_to_anthropic_role(VsCodeLmRole::Assistant), Some("assistant"));
+        assert_eq!(
+            convert_to_anthropic_role(VsCodeLmRole::Assistant),
+            Some("assistant")
+        );
         assert_eq!(convert_to_anthropic_role(VsCodeLmRole::User), Some("user"));
     }
 

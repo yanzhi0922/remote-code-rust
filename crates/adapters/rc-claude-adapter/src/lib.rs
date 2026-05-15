@@ -55,14 +55,8 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 use uuid::Uuid;
 
-use rc_agent_protocol::adapter::AgentAdapter;
-use rc_agent_protocol::error::AdapterError;
-use rc_agent_protocol::events::UnifiedAgentEvent;
-use rc_agent_protocol::permission::PermissionDecision as ProtocolPermissionDecision;
-use rc_agent_protocol::types::{AgentConfig, AgentInfo, AgentStatus, AgentType};
 use claude_config::RuntimeConfig;
 use claude_core::{ConversationEntry, Message, SessionId, SubAgentCompletion, ToolResult};
-use rc_engine_events::EventStream;
 use claude_permissions::{
     PermissionBroker, PermissionDecision as PermissionsPermissionDecision,
     PermissionRequest as PermissionsPermissionRequest,
@@ -77,12 +71,15 @@ use claude_session::SessionStore;
 use claude_session::conversation::ensure_conversation_initialized;
 use claude_session::runtime_context::persist_runtime_config_session_context;
 use claude_tools::{
-    FileStateCache,
-    agent::parse_delegate_progress_event,
-    execute_tool_call,
-    git::apply_worktree_tool_result_to_runtime,
-    runtime_provider_tool_spec,
+    FileStateCache, agent::parse_delegate_progress_event, execute_tool_call,
+    git::apply_worktree_tool_result_to_runtime, runtime_provider_tool_spec,
 };
+use rc_agent_protocol::adapter::AgentAdapter;
+use rc_agent_protocol::error::AdapterError;
+use rc_agent_protocol::events::UnifiedAgentEvent;
+use rc_agent_protocol::permission::PermissionDecision as ProtocolPermissionDecision;
+use rc_agent_protocol::types::{AgentConfig, AgentInfo, AgentStatus, AgentType};
+use rc_engine_events::EventStream;
 
 /// Maximum time (in seconds) to wait for a permission decision before denying.
 const PERMISSION_TIMEOUT_SECS: u64 = 60 * 30; // 30 minutes
@@ -122,10 +119,7 @@ impl AdapterPermissionBroker {
 
 #[async_trait]
 impl PermissionBroker for AdapterPermissionBroker {
-    async fn decide(
-        &self,
-        request: PermissionsPermissionRequest,
-    ) -> PermissionsPermissionDecision {
+    async fn decide(&self, request: PermissionsPermissionRequest) -> PermissionsPermissionDecision {
         let request_id = uuid::Uuid::new_v4().to_string();
 
         // Create oneshot channel for the response.
@@ -258,7 +252,7 @@ impl ToolRunner for AdapterToolRunner {
                 progress_cb: Some(Arc::new(move |message: &str| {
                     emit_delegate_progress(&event_tx, &session_id_str, message);
                 })),
-                task_stack: Arc::new(std::sync::Mutex::new(
+                task_stack: Arc::new(parking_lot::Mutex::new(
                     claude_core::task_stack::TaskStack::default(),
                 )),
                 read_file_state: FileStateCache::new(),
@@ -267,15 +261,16 @@ impl ToolRunner for AdapterToolRunner {
         };
 
         // 3. Execute tool.
-        let tool_result = match execute_tool_call(tool_call, &tool_context, self.broker.as_ref()).await {
-            Ok(result) => result,
-            Err(error) => ToolResult {
-                content: format!("Tool execution error: {error}"),
-                is_error: true,
-                content_blocks: Vec::new(),
-                follow_up_user_blocks: Vec::new(),
-            },
-        };
+        let tool_result =
+            match execute_tool_call(tool_call, &tool_context, self.broker.as_ref()).await {
+                Ok(result) => result,
+                Err(error) => ToolResult {
+                    content: format!("Tool execution error: {error}"),
+                    is_error: true,
+                    content_blocks: Vec::new(),
+                    follow_up_user_blocks: Vec::new(),
+                },
+            };
 
         // 4. Handle worktree updates (mutates RuntimeConfig if worktree changed).
         {
@@ -287,7 +282,7 @@ impl ToolRunner for AdapterToolRunner {
                 timeout_ms: config.provider.timeout_ms,
                 sub_agent: Some(self.sub_agent.clone()),
                 progress_cb: None,
-                task_stack: Arc::new(std::sync::Mutex::new(
+                task_stack: Arc::new(parking_lot::Mutex::new(
                     claude_core::task_stack::TaskStack::default(),
                 )),
                 read_file_state: FileStateCache::new(),
@@ -380,9 +375,7 @@ fn emit_delegate_progress(
             });
         }
         claude_tools::agent::DelegateProgressEvent::SubtaskProgress {
-            task_id,
-            summary,
-            ..
+            task_id, summary, ..
         } => {
             let _ = event_tx.try_send(UnifiedAgentEvent::SubtaskProgress {
                 session_id: session_id.to_owned(),
@@ -580,10 +573,7 @@ impl ClaudeInProcessAdapter {
     /// The adapter uses [`RuntimeConfig`] for all settings (model, provider,
     /// working directory, permissions, etc.) and [`SessionStore`] for
     /// persisting conversation history and events.
-    pub fn new(
-        runtime_config: RuntimeConfig,
-        session_store: Arc<SessionStore>,
-    ) -> Self {
+    pub fn new(runtime_config: RuntimeConfig, session_store: Arc<SessionStore>) -> Self {
         let caps = rc_agent_protocol::util::standard_capabilities(&[]);
 
         let session_id = runtime_config.session_id;
@@ -621,9 +611,9 @@ impl ClaudeInProcessAdapter {
     async fn drain_pending_permissions(&self) {
         let mut map = self.pending_permissions.lock().await;
         for (id, pending) in map.drain() {
-            let _ = pending.response_tx.send(
-                PermissionsPermissionDecision::deny("Adapter shutting down"),
-            );
+            let _ = pending
+                .response_tx
+                .send(PermissionsPermissionDecision::deny("Adapter shutting down"));
             debug!(%id, "drained pending permission on shutdown");
         }
     }
@@ -657,12 +647,17 @@ impl AgentAdapter for ClaudeInProcessAdapter {
         let (event_tx, event_rx) = mpsc::channel(64);
 
         // 1. Get or create provider client.
-        let provider_client = self.provider_client.clone()
+        let provider_client = self
+            .provider_client
+            .clone()
             .ok_or_else(|| AdapterError::NotStarted)?;
 
         // 2. Build provider config and create backend.
         let provider_config = self.runtime_config.provider.clone();
-        let model = provider_config.model.clone().unwrap_or_else(|| "unknown".to_owned());
+        let model = provider_config
+            .model
+            .clone()
+            .unwrap_or_else(|| "unknown".to_owned());
 
         let backend: Arc<dyn claude_provider::ConversationBackend> = Arc::new(
             ProviderCompatBackend::new(provider_client, &provider_config),
@@ -683,7 +678,8 @@ impl AgentAdapter for ClaudeInProcessAdapter {
 
         // Persist user entry.
         let user_entry = ConversationEntry::user(message);
-        self.session_store.append_conversation_entry(self.session_id, &user_entry)?;
+        self.session_store
+            .append_conversation_entry(self.session_id, &user_entry)?;
         conversation.push(user_entry);
 
         // 5. Create permission broker.
@@ -767,7 +763,9 @@ impl AgentAdapter for ClaudeInProcessAdapter {
             // Check cancellation before starting.
             if cancel_token.is_cancelled() {
                 debug!("Query cancelled before starting");
-                let _ = event_tx_for_completion.send(UnifiedAgentEvent::Stopped).await;
+                let _ = event_tx_for_completion
+                    .send(UnifiedAgentEvent::Stopped)
+                    .await;
                 return;
             }
 
@@ -803,10 +801,13 @@ impl AgentAdapter for ClaudeInProcessAdapter {
                     "Query engine task panicked",
                     panic_payload,
                 );
-                tracing::error!("{}", match &event {
-                    UnifiedAgentEvent::Error { message, .. } => message.clone(),
-                    _ => unreachable!(),
-                });
+                tracing::error!(
+                    "{}",
+                    match &event {
+                        UnifiedAgentEvent::Error { message, .. } => message.clone(),
+                        _ => unreachable!(),
+                    }
+                );
                 let _ = event_tx_for_completion.send(event).await;
             }
         });
@@ -854,7 +855,9 @@ impl AgentAdapter for ClaudeInProcessAdapter {
             let _ = pending.response_tx.send(permissions_decision);
             Ok(())
         } else {
-            Err(anyhow!("no pending permission request with id {request_id}"))
+            Err(anyhow!(
+                "no pending permission request with id {request_id}"
+            ))
         }
     }
 

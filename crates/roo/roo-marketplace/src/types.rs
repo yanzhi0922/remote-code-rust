@@ -157,19 +157,17 @@ mod tests {
     #[test]
     fn test_marketplace_items_response_serialization() {
         let response = MarketplaceItemsResponse {
-            items: vec![
-                MarketplaceItem {
-                    id: "1".to_string(),
-                    name: "Item 1".to_string(),
-                    description: "First".to_string(),
-                    item_type: MarketplaceItemType::Mcp,
-                    author: "author".to_string(),
-                    url: "https://example.com/1".to_string(),
-                    tags: vec![],
-                    installed: false,
-                    extra: serde_json::Map::new(),
-                },
-            ],
+            items: vec![MarketplaceItem {
+                id: "1".to_string(),
+                name: "Item 1".to_string(),
+                description: "First".to_string(),
+                item_type: MarketplaceItemType::Mcp,
+                author: "author".to_string(),
+                url: "https://example.com/1".to_string(),
+                tags: vec![],
+                installed: false,
+                extra: serde_json::Map::new(),
+            }],
         };
         let json = serde_json::to_string(&response).unwrap();
         let deserialized: MarketplaceItemsResponse = serde_json::from_str(&json).unwrap();

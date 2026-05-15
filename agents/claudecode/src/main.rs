@@ -833,9 +833,9 @@ mod tests {
         routing::get,
     };
     use chrono::{DateTime, Utc};
-    use futures::SinkExt;
     use claude_config::{ProviderOverrides, RuntimeOverrides, SettingSource, load_runtime_config};
     use claude_tools::mcp_runtime::{discover_runtime_mcp_servers, resolve_runtime_mcp_server};
+    use futures::SinkExt;
     use std::{
         collections::BTreeSet,
         fs,
@@ -1065,10 +1065,7 @@ mod tests {
             vec![PathBuf::from("mcp.json")],
         );
 
-        assert_eq!(
-            overrides.allowed_tools,
-            vec!["Read", "Edit", "Bash(git:*)"]
-        );
+        assert_eq!(overrides.allowed_tools, vec!["Read", "Edit", "Bash(git:*)"]);
         assert_eq!(overrides.effort.as_deref(), Some("high"));
         assert_eq!(overrides.fallback_model.as_deref(), Some("minimax-m2.7"));
         assert_eq!(overrides.output_style.as_deref(), Some("concise"));
@@ -1086,12 +1083,8 @@ mod tests {
     #[test]
     fn cli_tools_empty_disables_all_builtin_tools() {
         let cli = Cli::parse_from(["remote-code", "--tools", "", "hello"]);
-        let overrides = runtime_overrides_from_cli(
-            &cli,
-            &ResolvedPromptOverrides::default(),
-            None,
-            Vec::new(),
-        );
+        let overrides =
+            runtime_overrides_from_cli(&cli, &ResolvedPromptOverrides::default(), None, Vec::new());
 
         assert!(overrides.allowed_tools.is_empty());
     }

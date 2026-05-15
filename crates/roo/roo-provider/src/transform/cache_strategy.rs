@@ -3,7 +3,6 @@
 ///
 /// Implements the Bedrock MultiPoint cache strategy that decides where to place
 /// `cachePoint` markers in the Converse API request payload.
-
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -167,10 +166,7 @@ impl BedrockCacheModelInfo {
     /// Build from a [`ModelInfo`] by detecting model family.
     pub fn from_model_info(model_info: &ModelInfo) -> Self {
         // Prefer explicit values from ModelInfo when present.
-        let max_cache_points = model_info
-            .max_cache_points
-            .map(|v| v as usize)
-            .unwrap_or(4);
+        let max_cache_points = model_info.max_cache_points.map(|v| v as usize).unwrap_or(4);
         let min_tokens = model_info
             .min_tokens_per_cache_point
             .map(|v| v as usize)
@@ -455,8 +451,7 @@ impl MultiPointStrategy {
                 let mut smallest_gap = usize::MAX;
 
                 for i in 0..tokens_between_placements.len().saturating_sub(1) {
-                    let gap =
-                        tokens_between_placements[i] + tokens_between_placements[i + 1];
+                    let gap = tokens_between_placements[i] + tokens_between_placements[i + 1];
                     if gap < smallest_gap {
                         smallest_gap = gap;
                         smallest_gap_index = i;
@@ -487,19 +482,19 @@ impl MultiPointStrategy {
                             }
                         } else if i == smallest_gap_index {
                             // Replace with a combined placement.
-                            let combined_end_index =
-                                previous_placements[i + 1].index;
-                            let start_of_range =
-                                if i == 0 { 0 } else { previous_placements[i - 1].index + 1 };
+                            let combined_end_index = previous_placements[i + 1].index;
+                            let start_of_range = if i == 0 {
+                                0
+                            } else {
+                                previous_placements[i - 1].index + 1
+                            };
 
-                            if let Some(combined_placement) = self
-                                .find_optimal_placement_for_range(
-                                    start_of_range,
-                                    combined_end_index,
-                                    min_tokens_per_point,
-                                    &previous_placements,
-                                )
-                            {
+                            if let Some(combined_placement) = self.find_optimal_placement_for_range(
+                                start_of_range,
+                                combined_end_index,
+                                min_tokens_per_point,
+                                &previous_placements,
+                            ) {
                                 placements.push(combined_placement);
                             }
                             // Skip the next placement as we've combined it.
@@ -701,7 +696,10 @@ impl MultiPointStrategy {
                     })
                     .collect();
 
-                BedrockMessage { role: role.to_string(), content }
+                BedrockMessage {
+                    role: role.to_string(),
+                    content,
+                }
             })
             .collect()
     }
@@ -972,20 +970,12 @@ mod tests {
 
         assert!(result.message_cache_point_placements.is_empty());
         // System blocks should have no cache point.
-        assert!(result
-            .system
-            .iter()
-            .all(|b| b.get("cachePoint").is_none()));
+        assert!(result.system.iter().all(|b| b.get("cachePoint").is_none()));
     }
 
     #[test]
     fn test_strategy_empty_messages_returns_no_cache_points() {
-        let config = claude_config(
-            vec![],
-            Some("System prompt".to_string()),
-            true,
-            None,
-        );
+        let config = claude_config(vec![], Some("System prompt".to_string()), true, None);
         let strategy = MultiPointStrategy::new(config);
         let result = strategy.determine_optimal_cache_points();
         assert!(result.message_cache_point_placements.is_empty());
@@ -1027,12 +1017,7 @@ mod tests {
 
     #[test]
     fn test_single_message_no_message_cache_points() {
-        let config = claude_config(
-            vec![user_msg(&long_text())],
-            Some(long_text()),
-            true,
-            None,
-        );
+        let config = claude_config(vec![user_msg(&long_text())], Some(long_text()), true, None);
         let strategy = MultiPointStrategy::new(config);
         let result = strategy.determine_optimal_cache_points();
 
@@ -1064,8 +1049,7 @@ mod tests {
         // Placements should be on user messages.
         for placement in &result.message_cache_point_placements {
             assert_eq!(
-                result.messages[placement.index].role,
-                "user",
+                result.messages[placement.index].role, "user",
                 "Cache points should be placed on user messages"
             );
         }
@@ -1075,11 +1059,7 @@ mod tests {
     fn test_cache_points_inserted_into_message_content() {
         let long = long_text();
         let config = claude_config(
-            vec![
-                user_msg(&long),
-                assistant_msg(&long),
-                user_msg(&long),
-            ],
+            vec![user_msg(&long), assistant_msg(&long), user_msg(&long)],
             Some(long),
             true,
             None,
@@ -1090,10 +1070,7 @@ mod tests {
         // Verify cachePoint blocks are in the content arrays at placement indices.
         for placement in &result.message_cache_point_placements {
             let msg = &result.messages[placement.index];
-            let has_cache_point = msg
-                .content
-                .iter()
-                .any(|b| b.get("cachePoint").is_some());
+            let has_cache_point = msg.content.iter().any(|b| b.get("cachePoint").is_some());
             assert!(
                 has_cache_point,
                 "Message at index {} should have a cachePoint block",
@@ -1108,11 +1085,7 @@ mod tests {
         let config = MultiPointStrategyConfig {
             model_info: BedrockCacheModelInfo::nova_defaults(),
             system_prompt: Some(long.clone()),
-            messages: vec![
-                user_msg(&long),
-                assistant_msg(&long),
-                user_msg(&long),
-            ],
+            messages: vec![user_msg(&long), assistant_msg(&long), user_msg(&long)],
             use_prompt_cache: true,
             previous_cache_point_placements: None,
         };
@@ -1159,10 +1132,12 @@ mod tests {
         let result = strategy.determine_optimal_cache_points();
 
         // The previous placement at index 0 should be preserved.
-        assert!(result
-            .message_cache_point_placements
-            .iter()
-            .any(|p| p.index == 0));
+        assert!(
+            result
+                .message_cache_point_placements
+                .iter()
+                .any(|p| p.index == 0)
+        );
     }
 
     #[test]
@@ -1177,9 +1152,9 @@ mod tests {
         // Long new messages that meet the threshold.
         let config = claude_config(
             vec![
-                user_msg(&long),   // index 0 (has previous placement)
+                user_msg(&long),      // index 0 (has previous placement)
                 assistant_msg(&long), // index 1
-                user_msg(&long),   // index 2 (new long message)
+                user_msg(&long),      // index 2 (new long message)
             ],
             Some(long),
             true,
@@ -1245,10 +1220,7 @@ mod tests {
     #[test]
     fn test_messages_to_bedrock_messages() {
         let config = claude_config(
-            vec![
-                user_msg("Hello"),
-                assistant_msg("Hi there"),
-            ],
+            vec![user_msg("Hello"), assistant_msg("Hi there")],
             None,
             true,
             None,

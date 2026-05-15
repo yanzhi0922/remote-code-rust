@@ -34,9 +34,8 @@ impl AgentLoader {
                 "No YAML frontmatter found in agent definition: {source_path}"
             ));
         } else {
-            serde_yaml::from_str(frontmatter_str).map_err(|e| {
-                anyhow::anyhow!("Failed to parse frontmatter in {source_path}: {e}")
-            })?
+            serde_yaml::from_str(frontmatter_str)
+                .map_err(|e| anyhow::anyhow!("Failed to parse frontmatter in {source_path}: {e}"))?
         };
 
         let model = match frontmatter.model.as_str() {
@@ -125,7 +124,11 @@ impl AgentLoader {
             return None;
         }
 
-        let remaining = after_at.get(name_end..).unwrap_or("").trim_start_matches(|c: char| c.is_whitespace() || c == ':').trim_start();
+        let remaining = after_at
+            .get(name_end..)
+            .unwrap_or("")
+            .trim_start_matches(|c: char| c.is_whitespace() || c == ':')
+            .trim_start();
 
         Some(crate::types::AgentMention {
             agent_name: agent_name.to_string(),
@@ -160,12 +163,18 @@ You are a code review expert. Analyze code for:
     #[test]
     fn test_parse_agent_definition() {
         let agent = AgentLoader::parse_agent_definition(SAMPLE_AGENT, "test.md", AgentScope::User)
-            .unwrap();
+            .expect("sample agent definition should parse");
 
         assert_eq!(agent.name, "code-reviewer");
-        assert_eq!(agent.description, "Code review expert for security and quality");
+        assert_eq!(
+            agent.description,
+            "Code review expert for security and quality"
+        );
         assert!(matches!(agent.model, AgentModel::Inherit));
-        assert_eq!(agent.allowed_tools, vec!["read_file", "search_files", "list_files"]);
+        assert_eq!(
+            agent.allowed_tools,
+            vec!["read_file", "search_files", "list_files"]
+        );
         assert_eq!(agent.max_turns, Some(10));
         assert!(agent.read_only);
         assert!(agent.system_prompt.contains("code review expert"));
@@ -181,7 +190,7 @@ model: claude-sonnet-4.5
 ---
 Do stuff."#;
         let agent = AgentLoader::parse_agent_definition(content, "test.md", AgentScope::BuiltIn)
-            .unwrap();
+            .expect("specific model agent definition should parse");
         assert!(matches!(agent.model, AgentModel::Specific(ref m) if m == "claude-sonnet-4.5"));
     }
 
@@ -201,14 +210,16 @@ Do stuff."#;
 
     #[test]
     fn test_parse_mention() {
-        let mention = AgentLoader::parse_mention("@code-reviewer Review this code").unwrap();
+        let mention = AgentLoader::parse_mention("@code-reviewer Review this code")
+            .expect("mention with text should parse");
         assert_eq!(mention.agent_name, "code-reviewer");
         assert_eq!(mention.remaining_text, "Review this code");
     }
 
     #[test]
     fn test_parse_mention_no_space() {
-        let mention = AgentLoader::parse_mention("@code-reviewer").unwrap();
+        let mention =
+            AgentLoader::parse_mention("@code-reviewer").expect("bare mention should parse");
         assert_eq!(mention.agent_name, "code-reviewer");
         assert_eq!(mention.remaining_text, "");
     }
@@ -221,7 +232,8 @@ Do stuff."#;
 
     #[test]
     fn test_parse_mention_with_colon() {
-        let mention = AgentLoader::parse_mention("@bug-analyzer: Check this error").unwrap();
+        let mention = AgentLoader::parse_mention("@bug-analyzer: Check this error")
+            .expect("colon mention should parse");
         assert_eq!(mention.agent_name, "bug-analyzer");
         assert_eq!(mention.remaining_text, "Check this error");
     }

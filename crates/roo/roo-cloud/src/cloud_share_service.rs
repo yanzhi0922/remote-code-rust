@@ -1,6 +1,5 @@
 /// Cloud share service for sharing tasks.
 /// Mirrors packages/cloud/src/CloudShareService.ts
-
 use crate::cloud_api::{CloudApi, ShareVisibility};
 use crate::cloud_settings_service::CloudSettingsService;
 use crate::types::{CloudError, ShareResponse};

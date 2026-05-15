@@ -129,9 +129,8 @@ pub struct CompactionResult {
 /// Mirrors `processSessionStartHooks('compact', ...)` from the TS reference.
 /// The callback receives the source (`"compact"`) and returns a list of
 /// hook result messages to include in the [`CompactionResult`].
-pub type SessionStartHookProvider = dyn Fn() -> Pin<Box<dyn Future<Output = Vec<Message>> + Send>>
-    + Send
-    + Sync;
+pub type SessionStartHookProvider =
+    dyn Fn() -> Pin<Box<dyn Future<Output = Vec<Message>> + Send>> + Send + Sync;
 
 /// Callback that provides post-compact attachment messages (deferred tools
 /// delta, agent listing delta, MCP instructions delta).
@@ -140,9 +139,8 @@ pub type SessionStartHookProvider = dyn Fn() -> Pin<Box<dyn Future<Output = Vec<
 /// `getAgentListingDeltaAttachment`, and `getMcpInstructionsDeltaAttachment`
 /// with an empty message history (full compaction) or kept messages (partial
 /// compaction) to produce re-injection attachments.
-pub type PostCompactAttachmentProvider = dyn Fn() -> Pin<Box<dyn Future<Output = Vec<Message>> + Send>>
-    + Send
-    + Sync;
+pub type PostCompactAttachmentProvider =
+    dyn Fn() -> Pin<Box<dyn Future<Output = Vec<Message>> + Send>> + Send + Sync;
 
 /// Result of executing PreCompact hooks.
 ///
@@ -187,9 +185,8 @@ pub type PostCompactHookProvider = dyn Fn(String, String) -> Pin<Box<dyn Future<
 /// compaction completes (both auto and manual) to reset caches:
 /// system prompt sections, classifier approvals, speculative checks,
 /// file state, session messages cache, etc.
-pub type PostCompactCleanupProvider = dyn Fn() -> Pin<Box<dyn Future<Output = ()> + Send>>
-    + Send
-    + Sync;
+pub type PostCompactCleanupProvider =
+    dyn Fn() -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync;
 
 /// Callback for compact telemetry / analytics events.
 ///

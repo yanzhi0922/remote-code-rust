@@ -1,7 +1,7 @@
 //! Google Gemini-specific configuration and response types.
 
-use serde::Deserialize;
 use roo_types::provider_settings::ProviderSettings;
+use serde::Deserialize;
 
 /// Configuration for the Google Gemini provider.
 #[derive(Debug, Clone)]
@@ -251,9 +251,6 @@ impl VertexConfig {
 
     /// Build the Vertex AI base URL from region.
     pub fn base_url(&self) -> String {
-        format!(
-            "https://{}-aiplatform.googleapis.com/v1",
-            self.region
-        )
+        format!("https://{}-aiplatform.googleapis.com/v1", self.region)
     }
 }

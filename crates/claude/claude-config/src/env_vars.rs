@@ -94,9 +94,12 @@ pub fn effort_level() -> Option<String> {
 ///
 /// Returns `None` when the variable is unset or cannot be parsed as `u32`.
 pub fn max_output_tokens() -> Option<u32> {
-    read_first(&["CLAUDE_CODE_MAX_OUTPUT_TOKENS", "REMOTE_CODE_MAX_OUTPUT_TOKENS"])
-        .and_then(|value| value.parse::<u32>().ok())
-        .filter(|&t| t >= 256)
+    read_first(&[
+        "CLAUDE_CODE_MAX_OUTPUT_TOKENS",
+        "REMOTE_CODE_MAX_OUTPUT_TOKENS",
+    ])
+    .and_then(|value| value.parse::<u32>().ok())
+    .filter(|&t| t >= 256)
 }
 
 // ---------------------------------------------------------------------------
@@ -108,9 +111,12 @@ pub fn max_output_tokens() -> Option<u32> {
 /// When the `CLAUDE_CODE_DISABLE_THINKING` (or `REMOTE_CODE_DISABLE_THINKING`)
 /// env var is set to a truthy value, extended thinking is turned off.
 pub fn disable_thinking() -> bool {
-    read_first(&["CLAUDE_CODE_DISABLE_THINKING", "REMOTE_CODE_DISABLE_THINKING"])
-        .as_deref()
-        .is_some_and(is_truthy)
+    read_first(&[
+        "CLAUDE_CODE_DISABLE_THINKING",
+        "REMOTE_CODE_DISABLE_THINKING",
+    ])
+    .as_deref()
+    .is_some_and(is_truthy)
 }
 
 // ---------------------------------------------------------------------------
@@ -221,19 +227,20 @@ mod tests {
 
     impl EnvGuard {
         fn new(keys: Vec<&'static str>) -> Self {
-            let originals = keys
-                .iter()
-                .map(|key| env::var(key).ok())
-                .collect();
+            let originals = keys.iter().map(|key| env::var(key).ok()).collect();
             Self { keys, originals }
         }
 
         fn set(&self, key: &str, value: &str) {
-            unsafe { env::set_var(key, value); }
+            unsafe {
+                env::set_var(key, value);
+            }
         }
 
         fn remove(&self, key: &str) {
-            unsafe { env::remove_var(key); }
+            unsafe {
+                env::remove_var(key);
+            }
         }
     }
 
@@ -314,8 +321,10 @@ mod tests {
     #[test]
     fn max_output_tokens_parses_valid_value() {
         let _lock = ENV_LOCK.lock().unwrap();
-        let guard =
-            EnvGuard::new(vec!["CLAUDE_CODE_MAX_OUTPUT_TOKENS", "REMOTE_CODE_MAX_OUTPUT_TOKENS"]);
+        let guard = EnvGuard::new(vec![
+            "CLAUDE_CODE_MAX_OUTPUT_TOKENS",
+            "REMOTE_CODE_MAX_OUTPUT_TOKENS",
+        ]);
         guard.set("CLAUDE_CODE_MAX_OUTPUT_TOKENS", "16384");
         assert_eq!(max_output_tokens(), Some(16384));
         drop(guard);
@@ -324,8 +333,10 @@ mod tests {
     #[test]
     fn max_output_tokens_rejects_below_minimum() {
         let _lock = ENV_LOCK.lock().unwrap();
-        let guard =
-            EnvGuard::new(vec!["CLAUDE_CODE_MAX_OUTPUT_TOKENS", "REMOTE_CODE_MAX_OUTPUT_TOKENS"]);
+        let guard = EnvGuard::new(vec![
+            "CLAUDE_CODE_MAX_OUTPUT_TOKENS",
+            "REMOTE_CODE_MAX_OUTPUT_TOKENS",
+        ]);
         guard.set("CLAUDE_CODE_MAX_OUTPUT_TOKENS", "100");
         assert_eq!(max_output_tokens(), None);
         drop(guard);
@@ -334,8 +345,10 @@ mod tests {
     #[test]
     fn disable_thinking_reads_truthy() {
         let _lock = ENV_LOCK.lock().unwrap();
-        let guard =
-            EnvGuard::new(vec!["CLAUDE_CODE_DISABLE_THINKING", "REMOTE_CODE_DISABLE_THINKING"]);
+        let guard = EnvGuard::new(vec![
+            "CLAUDE_CODE_DISABLE_THINKING",
+            "REMOTE_CODE_DISABLE_THINKING",
+        ]);
         guard.set("CLAUDE_CODE_DISABLE_THINKING", "1");
         assert!(disable_thinking());
         drop(guard);
@@ -344,8 +357,10 @@ mod tests {
     #[test]
     fn disable_thinking_returns_false_when_unset() {
         let _lock = ENV_LOCK.lock().unwrap();
-        let _guard =
-            EnvGuard::new(vec!["CLAUDE_CODE_DISABLE_THINKING", "REMOTE_CODE_DISABLE_THINKING"]);
+        let _guard = EnvGuard::new(vec![
+            "CLAUDE_CODE_DISABLE_THINKING",
+            "REMOTE_CODE_DISABLE_THINKING",
+        ]);
         assert!(!disable_thinking());
     }
 
@@ -380,8 +395,10 @@ mod tests {
     #[test]
     fn disable_cost_warnings_reads_truthy() {
         let _lock = ENV_LOCK.lock().unwrap();
-        let guard =
-            EnvGuard::new(vec!["DISABLE_COST_WARNINGS", "REMOTE_CODE_DISABLE_COST_WARNINGS"]);
+        let guard = EnvGuard::new(vec![
+            "DISABLE_COST_WARNINGS",
+            "REMOTE_CODE_DISABLE_COST_WARNINGS",
+        ]);
         guard.set("DISABLE_COST_WARNINGS", "yes");
         assert!(disable_cost_warnings());
         drop(guard);

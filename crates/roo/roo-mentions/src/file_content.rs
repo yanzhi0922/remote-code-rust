@@ -7,20 +7,17 @@ use std::path::Path;
 
 use tokio::fs;
 
-use crate::format::{format_file_read_result, ExtractTextResult, DEFAULT_LINE_LIMIT};
+use crate::format::{DEFAULT_LINE_LIMIT, ExtractTextResult, format_file_read_result};
 use crate::regex::unescape_spaces;
 use crate::types::{MentionBlockType, MentionContentBlock, MentionMetadata};
 
 /// Binary file extensions that should not be read as text.
 const BINARY_EXTENSIONS: &[&str] = &[
-    "png", "jpg", "jpeg", "gif", "bmp", "ico", "webp", "svg", "avif",
-    "mp3", "mp4", "wav", "avi", "mov", "mkv", "flv", "wmv", "webm",
-    "zip", "tar", "gz", "bz2", "xz", "7z", "rar",
-    "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx",
-    "exe", "dll", "so", "dylib", "bin", "dat",
-    "woff", "woff2", "ttf", "eot", "otf",
-    "sqlite", "db", "iso", "dmg", "jar", "class",
-    "pyc", "o", "obj", "pdb", "wasm",
+    "png", "jpg", "jpeg", "gif", "bmp", "ico", "webp", "svg", "avif", "mp3", "mp4", "wav", "avi",
+    "mov", "mkv", "flv", "wmv", "webm", "zip", "tar", "gz", "bz2", "xz", "7z", "rar", "pdf", "doc",
+    "docx", "xls", "xlsx", "ppt", "pptx", "exe", "dll", "so", "dylib", "bin", "dat", "woff",
+    "woff2", "ttf", "eot", "otf", "sqlite", "db", "iso", "dmg", "jar", "class", "pyc", "o", "obj",
+    "pdb", "wasm",
 ];
 
 /// Check if a file extension suggests a binary file.
@@ -110,10 +107,7 @@ pub async fn get_file_or_folder_content(
             Err(e) => Ok(MentionContentBlock {
                 block_type: MentionBlockType::File,
                 path: Some(mention_path.to_string()),
-                content: format!(
-                    "[read_file for '{}']\nError: {}",
-                    mention_path, e
-                ),
+                content: format!("[read_file for '{}']\nError: {}", mention_path, e),
                 metadata: None,
             }),
         }
@@ -270,9 +264,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let file_path = dir.path().join("big.txt");
         let content: Vec<String> = (0..600).map(|i| format!("line {}", i)).collect();
-        fs::write(&file_path, content.join("\n"))
-            .await
-            .unwrap();
+        fs::write(&file_path, content.join("\n")).await.unwrap();
 
         let result = extract_text_from_file_with_metadata(&file_path)
             .await
@@ -346,7 +338,11 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(result.block_type, MentionBlockType::Folder);
-        assert!(result.content.contains("[read_file for folder 'myfolder/']"));
+        assert!(
+            result
+                .content
+                .contains("[read_file for folder 'myfolder/']")
+        );
         assert!(result.content.contains("hello.rs"));
         assert!(result.content.contains("subdir/"));
     }

@@ -3,9 +3,10 @@
 //! Provides a high-level client that handles the LSP lifecycle:
 //! initialization, requests, notifications, and shutdown.
 
+use parking_lot::{Mutex, RwLock};
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, RwLock};
 
 use anyhow::Result;
 use serde_json::Value;
@@ -109,16 +110,13 @@ impl LspClient {
     /// Get the current client status.
     #[must_use]
     pub fn status(&self) -> ClientStatus {
-        *self.status.read().unwrap_or_else(|e| e.into_inner())
+        *self.status.read()
     }
 
     /// Get the server capabilities (if initialized).
     #[must_use]
     pub fn server_capabilities(&self) -> Option<Value> {
-        self.server_capabilities
-            .read()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone()
+        self.server_capabilities.read().clone()
     }
 
     /// Allocate a new request ID.
@@ -133,7 +131,7 @@ impl LspClient {
     /// Transitions the client from `Uninitialized` to `Ready`.
     pub fn initialize(&self, name: &str, version: &str) -> Result<u64> {
         {
-            let mut status = self.status.write().unwrap_or_else(|e| e.into_inner());
+            let mut status = self.status.write();
             if *status != ClientStatus::Uninitialized {
                 anyhow::bail!("Client is not in Uninitialized state (current: {status})");
             }
@@ -155,20 +153,14 @@ impl LspClient {
 
         // Simulate receiving a response
         let response = LspResponse::success(id, serde_json::json!({"capabilities": {}}));
-        self.responses
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .insert(id, response);
+        self.responses.lock().insert(id, response);
 
-        *self
-            .server_capabilities
-            .write()
-            .unwrap_or_else(|e| e.into_inner()) = Some(serde_json::json!({}));
+        *self.server_capabilities.write() = Some(serde_json::json!({}));
 
         // Send initialized notification
         self.send_notification("initialized", Some(serde_json::json!({})))?;
 
-        *self.status.write().unwrap_or_else(|e| e.into_inner()) = ClientStatus::Ready;
+        *self.status.write() = ClientStatus::Ready;
         Ok(id)
     }
 
@@ -177,16 +169,16 @@ impl LspClient {
     /// Transitions the client from `Ready` to `Shutdown`.
     pub fn shutdown(&self) -> Result<u64> {
         {
-            let status = self.status.read().unwrap_or_else(|e| e.into_inner());
+            let status = self.status.read();
             if *status != ClientStatus::Ready {
                 anyhow::bail!("Client is not in Ready state (current: {status})");
             }
         }
 
-        *self.status.write().unwrap_or_else(|e| e.into_inner()) = ClientStatus::ShuttingDown;
+        *self.status.write() = ClientStatus::ShuttingDown;
 
         let id = self.send_request("shutdown", None)?;
-        *self.status.write().unwrap_or_else(|e| e.into_inner()) = ClientStatus::Shutdown;
+        *self.status.write() = ClientStatus::Shutdown;
         Ok(id)
     }
 
@@ -196,57 +188,38 @@ impl LspClient {
     pub fn send_request(&self, method: &str, params: Option<Value>) -> Result<u64> {
         let id = self.next_request_id();
         let msg = LspMessage::request(id, method, params);
-        self.outgoing
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .push(msg);
+        self.outgoing.lock().push(msg);
         Ok(id)
     }
 
     /// Send an LSP notification (no response expected).
     pub fn send_notification(&self, method: &str, params: Option<Value>) -> Result<()> {
         let msg = LspMessage::notification(method, params);
-        self.outgoing
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .push(msg);
+        self.outgoing.lock().push(msg);
         Ok(())
     }
 
     /// Inject a response for a given request ID (for testing).
     pub fn inject_response(&self, id: u64, response: LspResponse) {
-        self.responses
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .insert(id, response);
+        self.responses.lock().insert(id, response);
     }
 
     /// Get the response for a request ID, if available.
     #[must_use]
     pub fn get_response(&self, id: u64) -> Option<LspResponse> {
-        self.responses
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .remove(&id)
+        self.responses.lock().remove(&id)
     }
 
     /// Get all buffered outgoing messages.
     #[must_use]
     pub fn drain_outgoing(&self) -> Vec<LspMessage> {
-        self.outgoing
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .drain(..)
-            .collect()
+        self.outgoing.lock().drain(..).collect()
     }
 
     /// Number of buffered outgoing messages.
     #[must_use]
     pub fn outgoing_count(&self) -> usize {
-        self.outgoing
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .len()
+        self.outgoing.lock().len()
     }
 }
 

@@ -12,11 +12,11 @@ pub mod runtime_context;
 pub mod session_memory;
 pub mod transcript;
 
+use parking_lot::Mutex;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
 
 use anyhow::{Context, Result, anyhow};
 use chrono::{DateTime, Utc};
@@ -680,8 +680,8 @@ impl SessionStore {
     ///
     /// Uses `unwrap_or_else` to recover from a poisoned mutex rather than
     /// panicking, ensuring resilience during long-running sessions.
-    fn conn(&self) -> Result<std::sync::MutexGuard<'_, Connection>> {
-        Ok(self.conn.lock().unwrap_or_else(|e| e.into_inner()))
+    fn conn(&self) -> Result<parking_lot::MutexGuard<'_, Connection>> {
+        Ok(self.conn.lock())
     }
 
     fn try_get_session_summary(&self, session_id: Uuid) -> Result<Option<SessionSummary>> {

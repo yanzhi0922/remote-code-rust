@@ -3,8 +3,8 @@
 use async_trait::async_trait;
 use tokio::sync::mpsc;
 
-use crate::transport::{CommandAck, HealthStatus, RemoteTransport, TransportCommand};
 use crate::reconnect::ReconnectPolicy;
+use crate::transport::{CommandAck, HealthStatus, RemoteTransport, TransportCommand};
 use crate::{ConnectionState, TransportConfig, TransportEvent, TransportMetrics};
 
 /// Server-relayed transport through the control plane.
@@ -35,7 +35,9 @@ impl RelayWsTransport {
 impl RemoteTransport for RelayWsTransport {
     async fn connect(&mut self, config: TransportConfig) -> anyhow::Result<()> {
         let cp_url = match &config.strategy {
-            crate::TransportStrategy::ServerRelay { control_plane_url } => control_plane_url.clone(),
+            crate::TransportStrategy::ServerRelay { control_plane_url } => {
+                control_plane_url.clone()
+            }
             _ => anyhow::bail!("RelayWsTransport requires ServerRelay strategy"),
         };
 
@@ -68,7 +70,10 @@ impl RemoteTransport for RelayWsTransport {
     }
 
     async fn send_command(&self, command: TransportCommand) -> anyhow::Result<CommandAck> {
-        let config = self.config.as_ref().ok_or_else(|| anyhow::anyhow!("not connected"))?;
+        let config = self
+            .config
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("not connected"))?;
         let cp_url = match &config.strategy {
             crate::TransportStrategy::ServerRelay { control_plane_url } => control_plane_url,
             _ => anyhow::bail!("internal error: strategy mismatch, expected ServerRelay"),
@@ -77,7 +82,8 @@ impl RemoteTransport for RelayWsTransport {
         let (path, body) = super::direct_ws::command_to_request(&command, &config.session_id);
         let url = format!("{cp_url}{path}");
 
-        let response = self.client
+        let response = self
+            .client
             .post(&url)
             .bearer_auth(&config.auth_token)
             .json(&body)
@@ -85,11 +91,17 @@ impl RemoteTransport for RelayWsTransport {
             .await?;
 
         if response.status().is_success() {
-            Ok(CommandAck { accepted: true, message: "ok".into() })
+            Ok(CommandAck {
+                accepted: true,
+                message: "ok".into(),
+            })
         } else {
             let status = response.status();
             let text = response.text().await.unwrap_or_default();
-            Ok(CommandAck { accepted: false, message: format!("HTTP {status}: {text}") })
+            Ok(CommandAck {
+                accepted: false,
+                message: format!("HTTP {status}: {text}"),
+            })
         }
     }
 
@@ -98,7 +110,12 @@ impl RemoteTransport for RelayWsTransport {
         if let Some(config) = config {
             let cp_url = match &config.strategy {
                 crate::TransportStrategy::ServerRelay { control_plane_url } => control_plane_url,
-                _ => return HealthStatus { endpoints: vec![], recommended_strategy: None },
+                _ => {
+                    return HealthStatus {
+                        endpoints: vec![],
+                        recommended_strategy: None,
+                    };
+                }
             };
             let health_url = format!("{cp_url}/healthz");
             let health = crate::health::probe_endpoint(
@@ -112,7 +129,10 @@ impl RemoteTransport for RelayWsTransport {
                 recommended_strategy: Some("server_relay".into()),
             }
         } else {
-            HealthStatus { endpoints: vec![], recommended_strategy: None }
+            HealthStatus {
+                endpoints: vec![],
+                recommended_strategy: None,
+            }
         }
     }
 
@@ -136,8 +156,8 @@ impl RemoteTransport for RelayWsTransport {
 }
 
 fn build_cp_ws_url(cp_url: &str, session_id: &str, after: u64, token: &str) -> String {
-    let ws_base = cp_url.replace("https://", "wss://").replace("http://", "ws://");
-    format!(
-        "{ws_base}/v1/sessions/{session_id}/events/stream?after={after}&access_token={token}"
-    )
+    let ws_base = cp_url
+        .replace("https://", "wss://")
+        .replace("http://", "ws://");
+    format!("{ws_base}/v1/sessions/{session_id}/events/stream?after={after}&access_token={token}")
 }

@@ -78,7 +78,8 @@ impl CodeIndexOrchestrator {
         }
 
         self.is_processing = true;
-        self.state_manager.set_system_state(IndexingState::Indexing, Some("Initializing services..."));
+        self.state_manager
+            .set_system_state(IndexingState::Indexing, Some("Initializing services..."));
 
         // Initialize vector store
         let collection_created = self.vector_store.initialize()?;
@@ -100,10 +101,8 @@ impl CodeIndexOrchestrator {
             );
         }
 
-        self.state_manager.set_system_state(
-            IndexingState::Indexed,
-            Some("Index up-to-date."),
-        );
+        self.state_manager
+            .set_system_state(IndexingState::Indexed, Some("Index up-to-date."));
 
         self.is_processing = false;
         Ok(())
@@ -112,16 +111,21 @@ impl CodeIndexOrchestrator {
     /// Stops the indexing process.
     pub fn stop_indexing(&mut self) {
         if self.is_processing {
-            self.state_manager.set_system_state(IndexingState::Stopping, Some("Stopping..."));
+            self.state_manager
+                .set_system_state(IndexingState::Stopping, Some("Stopping..."));
             self.is_processing = false;
-            self.state_manager.set_system_state(IndexingState::Standby, Some("Indexing stopped."));
+            self.state_manager
+                .set_system_state(IndexingState::Standby, Some("Indexing stopped."));
         }
     }
 
     /// Indexes a single file.
     pub fn index_file(&mut self, file_path: &str, content: &str) -> Result<(), IndexError> {
         // Check if file has changed
-        if !self.cache_manager.has_file_changed(file_path, content.as_bytes()) {
+        if !self
+            .cache_manager
+            .has_file_changed(file_path, content.as_bytes())
+        {
             return Ok(());
         }
 
@@ -129,7 +133,8 @@ impl CodeIndexOrchestrator {
         let result = self.processor.process_file(file_path, content)?;
 
         // Update cache
-        self.cache_manager.update_hash(file_path, &result.content_hash);
+        self.cache_manager
+            .update_hash(file_path, &result.content_hash);
 
         // Index the blocks
         if !result.blocks.is_empty() {
@@ -137,7 +142,10 @@ impl CodeIndexOrchestrator {
             let mut payloads = Vec::new();
 
             for block in &result.blocks {
-                ids.push(format!("{}:{}:{}", block.file_path, block.start_line, block.end_line));
+                ids.push(format!(
+                    "{}:{}:{}",
+                    block.file_path, block.start_line, block.end_line
+                ));
                 payloads.push(serde_json::json!({
                     "file_path": block.file_path,
                     "content": block.content,
@@ -164,13 +172,13 @@ impl CodeIndexOrchestrator {
         for (path, content) in files {
             match self.index_file(path, content) {
                 Ok(()) => {
-                    summary.processed_files.push(
-                        crate::processor::FileProcessingResult {
+                    summary
+                        .processed_files
+                        .push(crate::processor::FileProcessingResult {
                             file_path: path.to_string(),
                             blocks: vec![],
                             content_hash: CacheManager::compute_hash(content.as_bytes()),
-                        },
-                    );
+                        });
                 }
                 Err(e) => {
                     summary.errors.push(format!("{}: {}", path, e));

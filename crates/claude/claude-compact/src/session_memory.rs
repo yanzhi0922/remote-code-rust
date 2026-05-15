@@ -6,7 +6,8 @@
 //! last summarized message boundary, and directly emits a compact summary from
 //! `summary.md` instead of asking the model to summarize again.
 
-use std::sync::{Arc, Mutex};
+use parking_lot::Mutex;
+use std::sync::Arc;
 
 use anyhow::Result;
 use claude_config::RuntimeConfig;
@@ -152,7 +153,6 @@ pub async fn session_memory_compact(
     let last_summarized_uuid = file_context
         .state
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
         .last_summarized_message_id
         .as_deref()
         .and_then(|value| uuid::Uuid::parse_str(value).ok());
@@ -236,8 +236,7 @@ fn create_compaction_result_from_session_memory(
         summarize_metadata: None,
     });
 
-    let post_compact_token_count =
-        estimate_single_message_tokens(&boundary_marker)
+    let post_compact_token_count = estimate_single_message_tokens(&boundary_marker)
         + estimate_single_message_tokens(&summary_message)
         + estimate_message_tokens(&messages_to_keep);
     let tokens_saved = pre_compact_token_count.saturating_sub(post_compact_token_count);
@@ -474,7 +473,8 @@ fn is_compact_boundary_message(message: &Message) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, Mutex};
+    use parking_lot::Mutex;
+    use std::sync::Arc;
 
     use claude_config::settings_layers::RuntimeOverrides;
     use claude_config::{ProviderOverrides, load_runtime_config};

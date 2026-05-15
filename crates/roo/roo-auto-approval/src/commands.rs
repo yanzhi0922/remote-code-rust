@@ -4,8 +4,8 @@
 //! for allowlist/denylist resolution, dangerous substitution detection,
 //! and command chain parsing.
 
-use std::sync::LazyLock as Lazy;
 use regex::Regex;
+use std::sync::LazyLock as Lazy;
 
 use crate::types::CommandDecision;
 
@@ -35,8 +35,7 @@ static HERE_STRING_WITH_SUBSTITUTION: Lazy<Regex> =
 static ZSH_PROCESS_SUBSTITUTION: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"(?:^|[\s;|&(<])=\([^)]+\)").unwrap());
 
-static ZSH_GLOB_QUALIFIER: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"[*?+@!]\(e:[^:]+:\)").unwrap());
+static ZSH_GLOB_QUALIFIER: Lazy<Regex> = Lazy::new(|| Regex::new(r"[*?+@!]\(e:[^:]+:\)").unwrap());
 
 // ---------------------------------------------------------------------------
 // Dangerous substitution detection
@@ -77,10 +76,7 @@ pub fn contains_dangerous_substitution(source: &str) -> bool {
 /// - Returns `None` if no match is found.
 ///
 /// Mirrors `findLongestPrefixMatch` from `commands.ts`.
-pub fn find_longest_prefix_match<'a>(
-    command: &str,
-    prefixes: &'a [String],
-) -> Option<&'a str> {
+pub fn find_longest_prefix_match<'a>(command: &str, prefixes: &'a [String]) -> Option<&'a str> {
     if command.is_empty() || prefixes.is_empty() {
         return None;
     }
@@ -498,37 +494,27 @@ mod tests {
 
     #[test]
     fn test_dangerous_parameter_expansion_at_p() {
-        assert!(contains_dangerous_substitution(
-            "echo \"${var@P}\""
-        ));
+        assert!(contains_dangerous_substitution("echo \"${var@P}\""));
     }
 
     #[test]
     fn test_dangerous_parameter_expansion_at_q() {
-        assert!(contains_dangerous_substitution(
-            "echo \"${var@Q}\""
-        ));
+        assert!(contains_dangerous_substitution("echo \"${var@Q}\""));
     }
 
     #[test]
     fn test_dangerous_parameter_expansion_at_e() {
-        assert!(contains_dangerous_substitution(
-            "echo \"${var@E}\""
-        ));
+        assert!(contains_dangerous_substitution("echo \"${var@E}\""));
     }
 
     #[test]
     fn test_dangerous_parameter_expansion_at_a() {
-        assert!(contains_dangerous_substitution(
-            "echo \"${var@A}\""
-        ));
+        assert!(contains_dangerous_substitution("echo \"${var@A}\""));
     }
 
     #[test]
     fn test_dangerous_parameter_expansion_at_lowercase_a() {
-        assert!(contains_dangerous_substitution(
-            "echo \"${var@a}\""
-        ));
+        assert!(contains_dangerous_substitution("echo \"${var@a}\""));
     }
 
     #[test]
@@ -558,9 +544,7 @@ mod tests {
 
     #[test]
     fn test_dangerous_zsh_process_substitution_echo() {
-        assert!(contains_dangerous_substitution(
-            "echo =(cat /etc/passwd)"
-        ));
+        assert!(contains_dangerous_substitution("echo =(cat /etc/passwd)"));
     }
 
     #[test]
@@ -594,16 +578,12 @@ mod tests {
 
     #[test]
     fn test_safe_zsh_array_assignment() {
-        assert!(!contains_dangerous_substitution(
-            "files=(a b c)"
-        ));
+        assert!(!contains_dangerous_substitution("files=(a b c)"));
     }
 
     #[test]
     fn test_safe_zsh_array_assignment_var() {
-        assert!(!contains_dangerous_substitution(
-            "var=(item1 item2)"
-        ));
+        assert!(!contains_dangerous_substitution("var=(item1 item2)"));
     }
 
     #[test]
@@ -704,11 +684,7 @@ mod tests {
         let allowed: Vec<String> = vec!["git push --dry-run".into()];
         let denied: Vec<String> = vec!["git push".into()];
         assert_eq!(
-            get_single_command_decision(
-                "git push --dry-run",
-                &allowed,
-                &denied
-            ),
+            get_single_command_decision("git push --dry-run", &allowed, &denied),
             CommandDecision::AutoApprove
         );
     }
@@ -796,11 +772,7 @@ mod tests {
         let allowed: Vec<String> = vec!["git push --dry-run".into()];
         let denied: Vec<String> = vec!["git push".into()];
         assert_eq!(
-            get_command_decision(
-                "git push --dry-run",
-                &allowed,
-                &denied
-            ),
+            get_command_decision("git push --dry-run", &allowed, &denied),
             CommandDecision::AutoApprove
         );
     }
@@ -820,11 +792,7 @@ mod tests {
         let allowed: Vec<String> = vec!["git".into()];
         let denied: Vec<String> = vec!["rm".into()];
         assert_eq!(
-            get_command_decision(
-                "git status && rm file",
-                &allowed,
-                &denied
-            ),
+            get_command_decision("git status && rm file", &allowed, &denied),
             CommandDecision::AutoDeny
         );
     }
@@ -834,11 +802,7 @@ mod tests {
         let allowed: Vec<String> = vec!["echo".into()];
         let denied: Vec<String> = vec![];
         assert_eq!(
-            get_command_decision(
-                "echo \"${var@P}\"",
-                &allowed,
-                &denied
-            ),
+            get_command_decision("echo \"${var@P}\"", &allowed, &denied),
             CommandDecision::AskUser
         );
     }
@@ -963,21 +927,13 @@ mod tests {
 
     #[test]
     fn test_is_auto_approved_no_allowlist() {
-        assert!(!is_auto_approved_single_command(
-            "git",
-            &[],
-            None
-        ));
+        assert!(!is_auto_approved_single_command("git", &[], None));
     }
 
     #[test]
     fn test_is_auto_approved_wildcard_no_deny() {
         let allowed: Vec<String> = vec!["*".into()];
-        assert!(is_auto_approved_single_command(
-            "anything",
-            &allowed,
-            None
-        ));
+        assert!(is_auto_approved_single_command("anything", &allowed, None));
     }
 
     #[test]
@@ -1011,11 +967,7 @@ mod tests {
 
     #[test]
     fn test_is_auto_denied_no_denylist() {
-        assert!(!is_auto_denied_single_command(
-            "rm",
-            &[],
-            None
-        ));
+        assert!(!is_auto_denied_single_command("rm", &[], None));
     }
 
     #[test]

@@ -168,7 +168,8 @@ impl LoopControl {
 
     /// Reset the per-file apply_diff mistake count for a specific file.
     pub fn reset_apply_diff_mistake(&mut self, file_path: &str) {
-        self.consecutive_mistake_count_for_apply_diff.remove(file_path);
+        self.consecutive_mistake_count_for_apply_diff
+            .remove(file_path);
     }
 
     /// Record a per-file mistake for edit_file.
@@ -185,7 +186,8 @@ impl LoopControl {
 
     /// Reset the per-file edit_file mistake count for a specific file.
     pub fn reset_edit_file_mistake(&mut self, file_path: &str) {
-        self.consecutive_mistake_count_for_edit_file.remove(file_path);
+        self.consecutive_mistake_count_for_edit_file
+            .remove(file_path);
     }
 
     /// Record that the model did not use any tools in this iteration.
@@ -284,7 +286,8 @@ impl LoopControl {
 
     /// Get the remaining iterations, if a limit is set.
     pub fn remaining_iterations(&self) -> Option<usize> {
-        self.max_iterations.map(|max| max.saturating_sub(self.current_iteration))
+        self.max_iterations
+            .map(|max| max.saturating_sub(self.current_iteration))
     }
 
     // -----------------------------------------------------------------------
@@ -460,7 +463,7 @@ mod tests {
         assert!(!lc.increment_iteration()); // 2
         assert!(!lc.increment_iteration()); // 3
         assert!(!lc.increment_iteration()); // 4
-        assert!(lc.increment_iteration());  // 5 = limit
+        assert!(lc.increment_iteration()); // 5 = limit
     }
 
     #[test]
@@ -540,8 +543,16 @@ mod tests {
 
         // Reset specific file
         lc.reset_apply_diff_mistake("/path/to/file.rs");
-        assert_eq!(lc.consecutive_mistake_count_for_apply_diff.get("/path/to/file.rs"), None);
-        assert_eq!(lc.consecutive_mistake_count_for_apply_diff.get("/path/to/other.rs"), Some(&1));
+        assert_eq!(
+            lc.consecutive_mistake_count_for_apply_diff
+                .get("/path/to/file.rs"),
+            None
+        );
+        assert_eq!(
+            lc.consecutive_mistake_count_for_apply_diff
+                .get("/path/to/other.rs"),
+            Some(&1)
+        );
     }
 
     #[test]
@@ -555,7 +566,11 @@ mod tests {
         assert_eq!(count, 2);
 
         lc.reset_edit_file_mistake("/path/to/file.rs");
-        assert_eq!(lc.consecutive_mistake_count_for_edit_file.get("/path/to/file.rs"), None);
+        assert_eq!(
+            lc.consecutive_mistake_count_for_edit_file
+                .get("/path/to/file.rs"),
+            None
+        );
     }
 
     #[test]

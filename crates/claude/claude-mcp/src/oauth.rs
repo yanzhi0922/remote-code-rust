@@ -13,9 +13,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 
+use crate::McpServerConfig;
 use crate::error::McpRuntimeError;
 use crate::transport::{McpOAuthConfig, McpTransportConfig};
-use crate::McpServerConfig;
 
 // ── PKCE parameters ─────────────────────────────────────────────────────────
 

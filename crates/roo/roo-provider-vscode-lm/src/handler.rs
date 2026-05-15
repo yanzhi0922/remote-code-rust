@@ -1,4 +1,4 @@
-﻿//! VS Code Language Model API provider handler.
+//! VS Code Language Model API provider handler.
 //!
 //! This provider uses the VS Code Language Model API to interact with
 //! language models registered in VS Code (e.g., GitHub Copilot models).
@@ -64,13 +64,12 @@ impl VscodeLmHandler {
     pub fn from_settings(
         settings: &roo_types::provider_settings::ProviderSettings,
     ) -> Result<Self, roo_provider::ProviderError> {
-        let config =
-            VscodeLmConfig::from_settings(settings).unwrap_or_else(|| VscodeLmConfig {
-                model_selector: None,
-                model_id: None,
-                temperature: None,
-                request_timeout: None,
-            });
+        let config = VscodeLmConfig::from_settings(settings).unwrap_or_else(|| VscodeLmConfig {
+            model_selector: None,
+            model_id: None,
+            temperature: None,
+            request_timeout: None,
+        });
         Self::new(config)
     }
 
@@ -125,10 +124,7 @@ impl Provider for VscodeLmHandler {
         Ok((total_chars as u64) / 4)
     }
 
-    async fn complete_prompt(
-        &self,
-        prompt: &str,
-    ) -> Result<String, roo_provider::ProviderError> {
+    async fn complete_prompt(&self, prompt: &str) -> Result<String, roo_provider::ProviderError> {
         let _ = prompt;
         Err(roo_provider::ProviderError::Other(
             "VS Code Language Model API requires VS Code extension host runtime.".to_string(),
@@ -158,7 +154,11 @@ mod tests {
     #[test]
     fn test_all_models_have_required_fields() {
         for (id, info) in models::models() {
-            assert!(info.max_tokens.is_some(), "Model '{}' missing max_tokens", id);
+            assert!(
+                info.max_tokens.is_some(),
+                "Model '{}' missing max_tokens",
+                id
+            );
             assert!(
                 info.input_price.is_some(),
                 "Model '{}' missing input_price",

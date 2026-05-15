@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use anyhow::Result;
-use claude_config::{runtime_version, RuntimeConfig, SettingSource, validate_provider_config};
+use claude_config::{RuntimeConfig, SettingSource, runtime_version, validate_provider_config};
 use claude_mcp::McpClientInfo;
 use claude_permissions::{load_layered_rules, rules::summarize_rule_sources};
 use claude_tools::mcp_runtime::observe_runtime_mcp_servers;

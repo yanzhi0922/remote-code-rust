@@ -119,7 +119,10 @@ pub struct CombinedApiResult {
 /// # Arguments
 /// * `chunks` — Slice of API stream chunks to combine
 /// * `model_info` — Model pricing information for cost calculation
-pub fn combine_api_requests(chunks: &[ApiStreamChunk], model_info: &ModelInfo) -> CombinedApiResult {
+pub fn combine_api_requests(
+    chunks: &[ApiStreamChunk],
+    model_info: &ModelInfo,
+) -> CombinedApiResult {
     let mut text = String::new();
     let mut metrics = ApiMetrics::new();
 

@@ -169,7 +169,10 @@ mod tests {
         );
         assert_eq!(
             "index error: something went wrong",
-            format!("{}", IndexError::GeneralError("something went wrong".to_string()))
+            format!(
+                "{}",
+                IndexError::GeneralError("something went wrong".to_string())
+            )
         );
     }
 

@@ -13,7 +13,6 @@ use auto_memory::{
     team_memory_dir_for_read_permissions_with_features,
 };
 use chrono::Local;
-use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
 use claude_agents::coordinator::{
     COORDINATOR_MODE_ALLOWED_TOOLS, McpClientInfo as CoordinatorMcpClientInfo,
     get_coordinator_system_prompt, get_coordinator_user_context, is_coordinator_mode,
@@ -31,6 +30,7 @@ use claude_system_prompt::{
     render_system_prompt_for_api,
 };
 use claude_tools::{ToolSpec, is_runtime_dynamic_mcp_tool_name};
+use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
 
 const MEMORY_INSTRUCTION_PROMPT: &str = "Codebase and user instructions are shown below. Be sure to adhere to these instructions. IMPORTANT: These instructions OVERRIDE any default behavior and you MUST follow them exactly as written.";
 const SCRATCHPAD_FEATURE_KEY: &str = "tengu_scratch";
@@ -728,8 +728,8 @@ fn get_git_status_context(cwd: &Path) -> Option<String> {
 
     let git_user = run_git_command(cwd, &["config", "user.name"]);
 
-    let status_output = run_git_command(cwd, &["--no-optional-locks", "status", "--short"])
-        .unwrap_or_default();
+    let status_output =
+        run_git_command(cwd, &["--no-optional-locks", "status", "--short"]).unwrap_or_default();
 
     let truncated_status = if status_output.len() > MAX_GIT_STATUS_CHARS {
         format!(
@@ -740,11 +740,8 @@ fn get_git_status_context(cwd: &Path) -> Option<String> {
         status_output
     };
 
-    let recent_log = run_git_command(
-        cwd,
-        &["--no-optional-locks", "log", "--oneline", "-n", "5"],
-    )
-    .unwrap_or_else(|| "(no commits)".to_owned());
+    let recent_log = run_git_command(cwd, &["--no-optional-locks", "log", "--oneline", "-n", "5"])
+        .unwrap_or_else(|| "(no commits)".to_owned());
 
     let mut lines = vec![
         "This is the git status at the start of the conversation. Note that this status is a snapshot in time, and will not update during the conversation.".to_owned(),
@@ -760,7 +757,14 @@ fn get_git_status_context(cwd: &Path) -> Option<String> {
     }
 
     lines.push("".to_owned());
-    lines.push(format!("Status:\n{}", if truncated_status.is_empty() { "(clean)" } else { &truncated_status }));
+    lines.push(format!(
+        "Status:\n{}",
+        if truncated_status.is_empty() {
+            "(clean)"
+        } else {
+            &truncated_status
+        }
+    ));
 
     lines.push("".to_owned());
     lines.push(format!("Recent commits:\n{recent_log}"));
@@ -1390,7 +1394,9 @@ fn rule_glob_base_dir(
             .and_then(Path::parent)
             .map(canonical_or_original)
             .unwrap_or_else(|| canonical_or_original(original_cwd)),
-        ClaudeMemoryType::AutoMem | ClaudeMemoryType::TeamMem => canonical_or_original(original_cwd),
+        ClaudeMemoryType::AutoMem | ClaudeMemoryType::TeamMem => {
+            canonical_or_original(original_cwd)
+        }
     }
 }
 
@@ -1825,10 +1831,9 @@ fn collect_claude_md_context_with_roots(
     // Content is truncated to match TS truncateEntrypointContent (200 lines / 25KB caps)
     if is_auto_memory_enabled(config) {
         if let Ok(Some(auto_entrypoint)) = auto_memory_entrypoint(config) {
-            if let Some((mut auto_file, _)) = read_memory_file(
-                &auto_entrypoint,
-                ClaudeMemoryType::AutoMem,
-            ) {
+            if let Some((mut auto_file, _)) =
+                read_memory_file(&auto_entrypoint, ClaudeMemoryType::AutoMem)
+            {
                 auto_file.content = auto_memory::truncate_entrypoint_content(&auto_file.content);
                 memory_files.push(auto_file);
             }
@@ -1839,10 +1844,9 @@ fn collect_claude_md_context_with_roots(
     if let Ok(Some(team_entrypoint)) =
         team_memory_entrypoint_with_features(config, &MemoryPromptFeatures::default())
     {
-        if let Some((mut team_file, _)) = read_memory_file(
-            &team_entrypoint,
-            ClaudeMemoryType::TeamMem,
-        ) {
+        if let Some((mut team_file, _)) =
+            read_memory_file(&team_entrypoint, ClaudeMemoryType::TeamMem)
+        {
             team_file.content = auto_memory::truncate_entrypoint_content(&team_file.content);
             memory_files.push(team_file);
         }
@@ -2131,7 +2135,9 @@ mod tests {
     use claude_config::settings_layers::RuntimeOverrides;
     use claude_config::{ProviderOverrides, SettingSource, load_runtime_config};
     use claude_context::RuntimeIdentityContext;
-    use claude_core::{ConversationEntry, InputFormat, OutputFormat, PermissionMode, ProviderProtocol};
+    use claude_core::{
+        ConversationEntry, InputFormat, OutputFormat, PermissionMode, ProviderProtocol,
+    };
     use claude_provider::DiscoveredToolScope;
     use std::fs;
     use std::path::PathBuf;

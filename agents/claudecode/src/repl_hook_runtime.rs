@@ -347,7 +347,8 @@ mod tests {
             claude_config::settings_layers::RuntimeOverrides::default(),
         )
         .expect("config");
-        let store = Arc::new(claude_session::SessionStore::open(config.paths.clone()).expect("store"));
+        let store =
+            Arc::new(claude_session::SessionStore::open(config.paths.clone()).expect("store"));
         let query_config = QueryEngineConfig::new(
             config.session_id.into(),
             "mock",

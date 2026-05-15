@@ -163,8 +163,10 @@ fn mcp_connection_state_recovery() {
         metadata: BTreeMap::new(),
         tool_policy: Default::default(),
     };
-    let scoped =
-        claude_mcp::scope::ScopedMcpServerConfig::new(config, claude_mcp::scope::ConfigScope::Local);
+    let scoped = claude_mcp::scope::ScopedMcpServerConfig::new(
+        config,
+        claude_mcp::scope::ConfigScope::Local,
+    );
 
     // Simulate: was connected → failed → pending → reconnecting
     let failed = claude_mcp::McpServerConnection::Failed(claude_mcp::connection::FailedServer {
@@ -190,13 +192,14 @@ fn mcp_connection_state_recovery() {
     assert_eq!(pending.connection_type(), "pending");
 
     // Transition to connected
-    let connected = claude_mcp::McpServerConnection::Connected(claude_mcp::connection::ConnectedServer {
-        name: "test".to_owned(),
-        capabilities: claude_mcp::McpCapabilityMatrix::default(),
-        server_info: None,
-        instructions: None,
-        config: scoped,
-    });
+    let connected =
+        claude_mcp::McpServerConnection::Connected(claude_mcp::connection::ConnectedServer {
+            name: "test".to_owned(),
+            capabilities: claude_mcp::McpCapabilityMatrix::default(),
+            server_info: None,
+            instructions: None,
+            config: scoped,
+        });
     assert!(connected.is_connected());
 }
 

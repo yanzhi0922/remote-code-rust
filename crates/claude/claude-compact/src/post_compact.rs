@@ -377,7 +377,9 @@ impl PostCompactCleanupRegistry {
     /// Create a new empty registry.
     #[must_use]
     pub fn new() -> Self {
-        Self { entries: Vec::new() }
+        Self {
+            entries: Vec::new(),
+        }
     }
 
     /// Register a cleanup callback.
@@ -709,11 +711,7 @@ mod tests {
         let mut cache = FileStateCache::new();
         // Each file: 10,000 chars -> ~2,500 tokens. Budget is 50,000 so max ~20 files.
         for i in 0..25 {
-            cache.insert(
-                format!("file_{i}.txt"),
-                "a".repeat(10_000),
-                100 + i as i64,
-            );
+            cache.insert(format!("file_{i}.txt"), "a".repeat(10_000), 100 + i as i64);
         }
         let preserved = std::collections::HashSet::new();
         let msgs = re_read_recent_files(&cache, 25, &preserved);
@@ -733,16 +731,19 @@ mod tests {
 
     #[test]
     fn cleanup_registry_register_and_run() {
-        use std::sync::atomic::{AtomicU32, Ordering};
         use std::sync::Arc;
+        use std::sync::atomic::{AtomicU32, Ordering};
 
         let counter = Arc::new(AtomicU32::new(0));
         let counter_clone = Arc::clone(&counter);
 
         let mut registry = PostCompactCleanupRegistry::new();
-        registry.register("test_callback", Box::new(move || {
-            counter_clone.fetch_add(1, Ordering::SeqCst);
-        }));
+        registry.register(
+            "test_callback",
+            Box::new(move || {
+                counter_clone.fetch_add(1, Ordering::SeqCst);
+            }),
+        );
 
         assert_eq!(registry.len(), 1);
         let count = registry.run_cascade();
@@ -752,17 +753,20 @@ mod tests {
 
     #[test]
     fn cleanup_registry_multiple_callbacks() {
-        use std::sync::atomic::{AtomicU32, Ordering};
         use std::sync::Arc;
+        use std::sync::atomic::{AtomicU32, Ordering};
 
         let counter = Arc::new(AtomicU32::new(0));
 
         let mut registry = PostCompactCleanupRegistry::new();
         for i in 0..5 {
             let counter_clone = Arc::clone(&counter);
-            registry.register(format!("callback_{i}"), Box::new(move || {
-                counter_clone.fetch_add(1, Ordering::SeqCst);
-            }));
+            registry.register(
+                format!("callback_{i}"),
+                Box::new(move || {
+                    counter_clone.fetch_add(1, Ordering::SeqCst);
+                }),
+            );
         }
 
         assert_eq!(registry.len(), 5);

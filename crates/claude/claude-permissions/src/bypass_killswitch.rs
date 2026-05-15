@@ -3,7 +3,7 @@
 //! Corresponds to `src/utils/permissions/bypassPermissionsKillswitch.ts`.
 //! Provides a safety mechanism to disable bypass permissions mode remotely.
 
-use std::sync::Mutex;
+use parking_lot::Mutex;
 use std::time::{Duration, Instant};
 
 /// State of the bypass permissions killswitch.
@@ -82,37 +82,24 @@ impl BypassKillswitchManager {
 
     /// Activate the killswitch.
     pub fn activate(&self, reason: String) {
-        self.state
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .activate(reason);
+        self.state.lock().activate(reason);
     }
 
     /// Deactivate the killswitch.
     pub fn deactivate(&self) {
-        self.state
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .deactivate();
+        self.state.lock().deactivate();
     }
 
     /// Check if bypass permissions is currently disabled.
     #[must_use]
     pub fn is_bypass_disabled(&self) -> bool {
-        self.state
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .is_active()
+        self.state.lock().is_active()
     }
 
     /// Get the reason for the killswitch being active.
     #[must_use]
     pub fn reason(&self) -> Option<String> {
-        self.state
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .reason
-            .clone()
+        self.state.lock().reason.clone()
     }
 }
 

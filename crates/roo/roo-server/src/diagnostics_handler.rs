@@ -180,7 +180,10 @@ async fn generate_diagnostics_inner(
 
     tokio::fs::write(&temp_file_path, full_content).await?;
 
-    info!("Generated diagnostics file at: {}", temp_file_path.display());
+    info!(
+        "Generated diagnostics file at: {}",
+        temp_file_path.display()
+    );
     Ok(temp_file_path)
 }
 
@@ -227,7 +230,8 @@ mod tests {
             global_storage_path: PathBuf::from("/tmp/test-storage"),
             values: None,
             log: Box::new(|_| {}),
-        }).await;
+        })
+        .await;
         // Should succeed even with nonexistent task (creates empty history)
         assert!(result.success);
         assert!(result.file_path.is_some());

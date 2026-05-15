@@ -1,6 +1,5 @@
 /// Static token authentication service for non-cloud environments.
 /// Mirrors packages/cloud/src/StaticTokenAuthService.ts
-
 use crate::types::{AuthState, CloudError, CloudUserInfo};
 
 /// Static token authentication service.

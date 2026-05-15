@@ -2,7 +2,9 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use claude_config::{ProviderOverrides, RuntimeOverrides, import_legacy_profile, load_runtime_config};
+use claude_config::{
+    ProviderOverrides, RuntimeOverrides, import_legacy_profile, load_runtime_config,
+};
 use claude_core::{InputFormat, OutputFormat, PermissionMode};
 use claude_session::SessionStore;
 use claude_telemetry::install_tracing;

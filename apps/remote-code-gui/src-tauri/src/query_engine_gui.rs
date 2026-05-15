@@ -21,7 +21,6 @@ use claude_config::RuntimeConfig;
 use claude_core::{
     ConversationEntry, Message, SessionId, SubAgentCompletion, ToolCall, ToolResult, UsageSummary,
 };
-use rc_engine_events::EventStream;
 use claude_permissions::PermissionDecision;
 use claude_provider::ConversationBackend;
 use claude_provider::context::ContextWindowManager;
@@ -40,15 +39,15 @@ use claude_tools::{
     },
     runtime_provider_tool_spec,
 };
+use rc_engine_events::EventStream;
 use serde_json::json;
 use tauri::{AppHandle, Emitter};
 use tokio::sync::{Mutex, oneshot};
 use uuid::Uuid;
 
 use crate::dto::{
-    BatchProgressDto, ContextCompactedDto, ContextOverflowDto, ContextUsageDto,
-    StreamingDeltaDto, SubtaskCompletedDto, SubtaskProgressDto, SubtaskStartedDto,
-    ToolProgressDto, ToolResultDto,
+    BatchProgressDto, ContextCompactedDto, ContextOverflowDto, ContextUsageDto, StreamingDeltaDto,
+    SubtaskCompletedDto, SubtaskProgressDto, SubtaskStartedDto, ToolProgressDto, ToolResultDto,
 };
 use crate::state::{
     APP_EVENT_BATCH_PROGRESS, APP_EVENT_CONTEXT_COMPACTED, APP_EVENT_CONTEXT_OVERFLOW,
@@ -120,8 +119,15 @@ impl ToolRunner for GuiToolRunner {
                 obj.get("todos")
                     .and_then(|todos| todos.as_array())
                     .and_then(|arr| {
-                        arr.iter().find(|t| t.get("status").and_then(|s| s.as_str()) == Some("in_progress"))
-                            .and_then(|t| t.get("activeForm").and_then(|v| v.as_str()).map(|s| s.to_owned()))
+                        arr.iter()
+                            .find(|t| {
+                                t.get("status").and_then(|s| s.as_str()) == Some("in_progress")
+                            })
+                            .and_then(|t| {
+                                t.get("activeForm")
+                                    .and_then(|v| v.as_str())
+                                    .map(|s| s.to_owned())
+                            })
                     })
             })
         } else {
@@ -132,8 +138,8 @@ impl ToolRunner for GuiToolRunner {
             APP_EVENT_TOOL_START,
             ToolProgressDto {
                 tool_call_id: tool_call.id.clone(),
-                tool_name: tool_call.name.clone(),
-                message: "running".to_owned(),
+                tool_name: tool_call.name.clone().into(),
+                message: "running".to_owned().into(),
                 active_form,
             },
         );
@@ -155,7 +161,7 @@ impl ToolRunner for GuiToolRunner {
                 progress_cb: Some(Arc::new(move |message: &str| {
                     emit_delegate_progress(&app, &sid, &paths, session_id, message);
                 })),
-                task_stack: Arc::new(std::sync::Mutex::new(
+                task_stack: Arc::new(parking_lot::Mutex::new(
                     claude_core::task_stack::TaskStack::default(),
                 )),
                 read_file_state: FileStateCache::new(),
@@ -185,7 +191,7 @@ impl ToolRunner for GuiToolRunner {
                 timeout_ms: config.provider.timeout_ms,
                 sub_agent: Some(self.sub_agent.clone()),
                 progress_cb: None,
-                task_stack: Arc::new(std::sync::Mutex::new(
+                task_stack: Arc::new(parking_lot::Mutex::new(
                     claude_core::task_stack::TaskStack::default(),
                 )),
                 read_file_state: FileStateCache::new(),
@@ -217,7 +223,7 @@ impl ToolRunner for GuiToolRunner {
             APP_EVENT_TOOL_RESULT,
             ToolResultDto {
                 tool_call_id: tool_call.id.clone(),
-                tool_name: tool_call.name.clone(),
+                tool_name: tool_call.name.clone().into(),
                 is_error: tool_result.is_error,
                 output: tool_result.content.clone(),
             },
@@ -270,8 +276,8 @@ fn emit_delegate_progress(
             APP_EVENT_TOOL_PROGRESS,
             ToolProgressDto {
                 tool_call_id: String::new(),
-                tool_name: "agent".to_owned(),
-                message: message.to_owned(),
+                tool_name: "agent".to_owned().into(),
+                message: message.to_owned().into(),
                 active_form: None,
             },
         );
@@ -288,7 +294,7 @@ fn emit_delegate_progress(
             let _ = app.emit(
                 APP_EVENT_SUBTASK_STARTED,
                 SubtaskStartedDto {
-                    session_id: session_id_str.to_owned(),
+                    session_id: session_id_str.to_owned().into(),
                     task_id,
                     parent_task_id,
                     description,
@@ -306,8 +312,8 @@ fn emit_delegate_progress(
             let _ = app.emit(
                 APP_EVENT_SUBTASK_PROGRESS,
                 SubtaskProgressDto {
-                    session_id: session_id_str.to_owned(),
-                    task_id: task_id.clone(),
+                    session_id: session_id_str.to_owned().into(),
+                    task_id: task_id.clone().into(),
                     turn,
                     max_turns,
                     summary: summary.clone(),
@@ -317,8 +323,8 @@ fn emit_delegate_progress(
                 APP_EVENT_TOOL_PROGRESS,
                 ToolProgressDto {
                     tool_call_id: task_id,
-                    tool_name: "agent".to_owned(),
-                    message: summary,
+                    tool_name: "agent".to_owned().into(),
+                    message: summary.into(),
                     active_form: None,
                 },
             );
@@ -333,7 +339,7 @@ fn emit_delegate_progress(
             let _ = app.emit(
                 APP_EVENT_SUBTASK_COMPLETED,
                 SubtaskCompletedDto {
-                    session_id: session_id_str.to_owned(),
+                    session_id: session_id_str.to_owned().into(),
                     task_id,
                     success,
                     output_preview,
@@ -350,7 +356,7 @@ fn emit_delegate_progress(
             let _ = app.emit(
                 APP_EVENT_BATCH_PROGRESS,
                 BatchProgressDto {
-                    session_id: session_id_str.to_owned(),
+                    session_id: session_id_str.to_owned().into(),
                     total,
                     completed,
                     running,
@@ -392,7 +398,7 @@ impl QueryObserver for GuiQueryObserver {
                 let _ = self.app.emit(
                     APP_EVENT_STREAMING_DELTA,
                     StreamingDeltaDto {
-                        session_id: session_id_str,
+                        session_id: session_id_str.into(),
                         delta,
                     },
                 );
@@ -405,7 +411,7 @@ impl QueryObserver for GuiQueryObserver {
                     ToolProgressDto {
                         tool_call_id: tool_call.id,
                         tool_name: tool_call.name,
-                        message: "running".to_owned(),
+                        message: "running".to_owned().into(),
                         active_form: None,
                     },
                 );
@@ -422,7 +428,7 @@ impl QueryObserver for GuiQueryObserver {
                     ToolProgressDto {
                         tool_call_id,
                         tool_name,
-                        message: "running".to_owned(),
+                        message: "running".to_owned().into(),
                         active_form: None,
                     },
                 );
@@ -459,7 +465,7 @@ impl QueryObserver for GuiQueryObserver {
                 let _ = self.app.emit(
                     APP_EVENT_CONTEXT_USAGE,
                     ContextUsageDto {
-                        session_id: session_id_str.clone(),
+                        session_id: session_id_str.clone().into(),
                         estimated_tokens: context.estimated_tokens,
                         max_input_tokens: context.max_input_tokens,
                         threshold_tokens: context.threshold_tokens,
@@ -471,7 +477,7 @@ impl QueryObserver for GuiQueryObserver {
                     let _ = self.app.emit(
                         APP_EVENT_CONTEXT_OVERFLOW,
                         ContextOverflowDto {
-                            session_id: session_id_str,
+                            session_id: session_id_str.into(),
                             estimated_tokens: context.estimated_tokens,
                             max_input_tokens: context.max_input_tokens,
                             threshold_tokens: context.threshold_tokens,
@@ -509,7 +515,7 @@ impl QueryObserver for GuiQueryObserver {
                     let _ = self.app.emit(
                         APP_EVENT_CONTEXT_COMPACTED,
                         ContextCompactedDto {
-                            session_id: self.session_id.to_string(),
+                            session_id: self.session_id.to_string().into(),
                             entries_removed: removed,
                             usage_ratio: usage_ratio_after,
                         },
@@ -595,7 +601,8 @@ pub(crate) async fn run_unified_prompt_with_provider(
         .unwrap_or_else(|| "unknown".to_owned());
 
     // 1. Session initialization (same as run_gui_prompt).
-    let mut conversation = crate::desktop::initialize_session_conversation(&store, &config, Some(prompt))?;
+    let mut conversation =
+        crate::desktop::initialize_session_conversation(&store, &config, Some(prompt))?;
     let plan_mode_controller = RuntimePlanModeController::load(&config, store.as_ref())?;
     let _plan_mode_runtime_guard = install_plan_mode_runtime(plan_mode_controller.clone())?;
     inject_plan_mode_runtime_messages(store.as_ref(), session_id, &mut conversation)?;
@@ -628,10 +635,9 @@ pub(crate) async fn run_unified_prompt_with_provider(
     let context_manager = ContextWindowManager::for_model(&model);
 
     // 4. Create the backend (Arc-wrapped).
-    let backend: Arc<dyn ConversationBackend> = Arc::new(claude_provider::ProviderCompatBackend::new(
-        Arc::clone(&provider),
-        &config.provider,
-    ));
+    let backend: Arc<dyn ConversationBackend> = Arc::new(
+        claude_provider::ProviderCompatBackend::new(Arc::clone(&provider), &config.provider),
+    );
 
     // 5. Build GUI tool runner.
     let tool_runner = Arc::new(GuiToolRunner::new(

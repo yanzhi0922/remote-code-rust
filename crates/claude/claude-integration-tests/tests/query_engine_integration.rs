@@ -3,6 +3,7 @@
 //! Tests state machine transitions, budget tracker, failure tracker,
 //! and observer events.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 // ─── State machine transitions ──────────────────────────────────────────────
@@ -231,7 +232,8 @@ fn budget_tracker_no_token_limit() {
 
 #[test]
 fn failure_tracker_starts_closed() {
-    let tracker = claude_query_engine::failure_tracker::FailureTracker::new(5, Duration::from_secs(30));
+    let tracker =
+        claude_query_engine::failure_tracker::FailureTracker::new(5, Duration::from_secs(30));
     assert_eq!(
         tracker.state(),
         claude_query_engine::failure_tracker::CircuitState::Closed
@@ -324,7 +326,7 @@ fn query_checkpoint_serialization() {
 #[test]
 fn engine_event_stream_started() {
     let event = rc_engine_events::EngineEvent::StreamStarted {
-        request_id: "req-001".to_owned(),
+        request_id: "req-001".into(),
     };
     let json = serde_json::to_string(&event).expect("serialize");
     assert!(json.contains("stream_started"));
@@ -334,16 +336,16 @@ fn engine_event_stream_started() {
 fn engine_event_tool_use_lifecycle() {
     // Tool use started
     let started = rc_engine_events::EngineEvent::ToolUseStarted {
-        tool_use_id: "tu-1".to_owned(),
-        tool_name: "read_file".to_owned(),
-        input: serde_json::json!({"path": "/tmp/test.rs"}),
+        tool_use_id: "tu-1".into(),
+        tool_name: "read_file".into(),
+        input: Arc::new(serde_json::json!({"path": "/tmp/test.rs"})),
     };
     let json = serde_json::to_string(&started).expect("serialize");
     assert!(json.contains("tool_use_started"));
 
     // Tool use completed
     let completed = rc_engine_events::EngineEvent::ToolUseCompleted {
-        tool_use_id: "tu-1".to_owned(),
+        tool_use_id: "tu-1".into(),
         result: rc_engine_events::types::ToolResult {
             content: "file contents".to_owned(),
             is_error: false,

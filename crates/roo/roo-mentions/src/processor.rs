@@ -65,10 +65,15 @@ mod tests {
 
     #[tokio::test]
     async fn test_process_user_content_no_mentions() {
-        let blocks = vec![ContentBlock::text("<user_message>hello world</user_message>")];
+        let blocks = vec![ContentBlock::text(
+            "<user_message>hello world</user_message>",
+        )];
         let result = process_user_content_mentions(&blocks, Path::new("/tmp")).await;
         assert_eq!(result.content.len(), 1);
-        assert_eq!(result.content[0].as_text(), Some("<user_message>hello world</user_message>"));
+        assert_eq!(
+            result.content[0].as_text(),
+            Some("<user_message>hello world</user_message>")
+        );
         assert!(result.mode.is_none());
     }
 
@@ -76,9 +81,7 @@ mod tests {
     async fn test_process_user_content_with_file_mention() {
         let dir = tempfile::tempdir().unwrap();
         let file_path = dir.path().join("test.rs");
-        tokio::fs::write(&file_path, "fn main() {}")
-            .await
-            .unwrap();
+        tokio::fs::write(&file_path, "fn main() {}").await.unwrap();
 
         let blocks = vec![ContentBlock::text(
             "<user_message>\nlook at @/test.rs\n</user_message>",
@@ -108,9 +111,7 @@ mod tests {
     async fn test_process_user_content_multiple_blocks() {
         let dir = tempfile::tempdir().unwrap();
         let file_path = dir.path().join("hello.rs");
-        tokio::fs::write(&file_path, "fn hello() {}")
-            .await
-            .unwrap();
+        tokio::fs::write(&file_path, "fn hello() {}").await.unwrap();
 
         let blocks = vec![
             ContentBlock::text("<user_message>\ncheck @/hello.rs\n</user_message>"),
@@ -121,10 +122,7 @@ mod tests {
         // First block should be expanded
         assert!(result.content.len() >= 2);
         // Last block should be unchanged
-        assert_eq!(
-            result.content.last().unwrap().as_text(),
-            Some("other text")
-        );
+        assert_eq!(result.content.last().unwrap().as_text(), Some("other text"));
     }
 
     #[tokio::test]
@@ -141,7 +139,10 @@ mod tests {
         // Should have text block + image block
         assert!(result.content.len() >= 2);
         // Check that image block is preserved
-        let has_image = result.content.iter().any(|b| matches!(b, ContentBlock::Image { .. }));
+        let has_image = result
+            .content
+            .iter()
+            .any(|b| matches!(b, ContentBlock::Image { .. }));
         assert!(has_image);
     }
 

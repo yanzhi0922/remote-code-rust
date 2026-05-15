@@ -60,7 +60,8 @@ impl TokenManager {
             TokenState::Expired => None,
             TokenState::Valid(pair) => {
                 let now = chrono::Utc::now();
-                let refresh_at = pair.expires_at - chrono::Duration::seconds(self.refresh_buffer_secs);
+                let refresh_at =
+                    pair.expires_at - chrono::Duration::seconds(self.refresh_buffer_secs);
                 if now >= refresh_at {
                     // Need refresh — drop read lock and try to refresh.
                     drop(state);

@@ -53,17 +53,14 @@ impl OpenAiConfig {
             org_id: settings.open_ai_org_id.clone(),
             model_id: settings.api_model_id.clone(),
             temperature: settings.model_temperature.flatten(),
-            reasoning_effort: settings
-                .model_reasoning_effort
-                .clone()
-                .or_else(|| {
-                    settings.reasoning_effort.map(|v| {
-                        serde_json::to_string(&v)
-                            .unwrap_or_default()
-                            .trim_matches('"')
-                            .to_string()
-                    })
-                }),
+            reasoning_effort: settings.model_reasoning_effort.clone().or_else(|| {
+                settings.reasoning_effort.map(|v| {
+                    serde_json::to_string(&v)
+                        .unwrap_or_default()
+                        .trim_matches('"')
+                        .to_string()
+                })
+            }),
             request_timeout: settings.request_timeout,
             use_azure: settings.open_ai_use_azure.unwrap_or(false),
             azure_api_version: settings.azure_api_version.clone(),

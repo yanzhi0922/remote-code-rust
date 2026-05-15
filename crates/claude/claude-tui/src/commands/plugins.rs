@@ -244,7 +244,10 @@ fn set_plugin_enabled(config: &RuntimeConfig, name: &str, enabled: bool) {
     }
 }
 
-fn resolve_plugin(config: &RuntimeConfig, name: &str) -> anyhow::Result<claude_plugins::PluginBundle> {
+fn resolve_plugin(
+    config: &RuntimeConfig,
+    name: &str,
+) -> anyhow::Result<claude_plugins::PluginBundle> {
     let plugins = discover_visible_plugins(config)?;
     let mut matches = plugins
         .into_iter()

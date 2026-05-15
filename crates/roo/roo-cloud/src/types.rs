@@ -243,7 +243,10 @@ mod tests {
         );
         assert_eq!(
             "authentication failed: bad token",
-            format!("{}", CloudError::AuthenticationFailed("bad token".to_string()))
+            format!(
+                "{}",
+                CloudError::AuthenticationFailed("bad token".to_string())
+            )
         );
         assert_eq!("session expired", format!("{}", CloudError::SessionExpired));
         assert_eq!(

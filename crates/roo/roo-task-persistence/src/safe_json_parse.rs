@@ -31,10 +31,7 @@ pub fn safe_json_parse<T: DeserializeOwned>(
 }
 
 /// Safely parse a JSON string with a required default.
-pub fn safe_json_parse_or<T: DeserializeOwned>(
-    json_string: Option<&str>,
-    default: T,
-) -> T {
+pub fn safe_json_parse_or<T: DeserializeOwned>(json_string: Option<&str>, default: T) -> T {
     safe_json_parse(json_string, Some(default)).unwrap()
 }
 
@@ -49,8 +46,7 @@ mod tests {
 
     #[test]
     fn test_parse_valid_json() {
-        let result: Option<serde_json::Value> =
-            safe_json_parse(Some(r#"{"key": "value"}"#), None);
+        let result: Option<serde_json::Value> = safe_json_parse(Some(r#"{"key": "value"}"#), None);
         assert!(result.is_some());
         assert_eq!(result.unwrap()["key"], "value");
     }

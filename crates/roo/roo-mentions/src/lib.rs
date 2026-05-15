@@ -41,8 +41,8 @@ pub mod types;
 
 // Re-export primary types and functions for convenience
 pub use types::{
-    ContentBlock, MentionBlockType, MentionContentBlock, MentionMetadata,
-    ParseMentionsResult, ProcessUserContentMentionsResult,
+    ContentBlock, MentionBlockType, MentionContentBlock, MentionMetadata, ParseMentionsResult,
+    ProcessUserContentMentionsResult,
 };
 
 pub use parser::parse_mentions;
@@ -50,6 +50,8 @@ pub use processor::process_user_content_mentions;
 
 pub use regex::{command_regex, is_git_hash, mention_regex, unescape_spaces};
 
-pub use format::{format_file_read_result, ExtractTextResult, DEFAULT_LINE_LIMIT};
+pub use format::{DEFAULT_LINE_LIMIT, ExtractTextResult, format_file_read_result};
 
-pub use file_content::{extract_text_from_file_with_metadata, get_file_or_folder_content, is_binary_extension};
+pub use file_content::{
+    extract_text_from_file_with_metadata, get_file_or_folder_content, is_binary_extension,
+};

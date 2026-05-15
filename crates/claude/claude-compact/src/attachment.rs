@@ -4,7 +4,9 @@
 //! context (file contents, plan files, skills) after a compaction event.
 //! Mirrors the attachment logic from `compact.ts`.
 
-use claude_core::{Attachment, AttachmentMediaType, Message, MessageBase, MessageOrigin, UserMessage};
+use claude_core::{
+    Attachment, AttachmentMediaType, Message, MessageBase, MessageOrigin, UserMessage,
+};
 
 use crate::prompt::rough_token_count;
 

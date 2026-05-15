@@ -39,7 +39,7 @@ use roo_types::mcp::{
 use tokio::sync::RwLock;
 
 use crate::client::McpClient;
-use crate::config::{validate_server_config, ValidatedServerConfig};
+use crate::config::{ValidatedServerConfig, validate_server_config};
 use crate::error::{McpError, McpResult};
 use crate::name_utils::{sanitize_mcp_name, tool_names_match};
 use crate::transport::{McpTransport, SseTransport, StdioTransport, StreamableHttpTransport};
@@ -134,10 +134,7 @@ pub fn json_deep_equal(a: &serde_json::Value, b: &serde_json::Value) -> bool {
 /// - `${env:VAR_NAME}` → the value of environment variable `VAR_NAME`
 ///
 /// Does not mutate the original; returns a new value.
-pub fn inject_variables(
-    config: &serde_json::Value,
-    workspace_folder: &str,
-) -> serde_json::Value {
+pub fn inject_variables(config: &serde_json::Value, workspace_folder: &str) -> serde_json::Value {
     let mut config_str = serde_json::to_string(config).unwrap_or_default();
 
     // Replace ${workspaceFolder}
@@ -299,10 +296,7 @@ impl McpHub {
     /// Create a new McpHub with workspace and settings paths.
     /// Enables file watching and config hot-reload when paths are provided.
     /// Corresponds to TS: `constructor(provider: ClineProvider)` with path setup.
-    pub fn new_with_paths(
-        workspace_path: Option<String>,
-        settings_path: Option<String>,
-    ) -> Self {
+    pub fn new_with_paths(workspace_path: Option<String>, settings_path: Option<String>) -> Self {
         let mut hub = Self::new();
         hub.workspace_path = workspace_path;
         hub.settings_path = settings_path;
@@ -406,10 +400,7 @@ impl McpHub {
 
         // Inject variables into the config before validation.
         // Corresponds to TS: `const configInjected = await injectVariables(config, { env: process.env, workspaceFolder })`
-        let workspace = self
-            .workspace_path
-            .as_deref()
-            .unwrap_or("");
+        let workspace = self.workspace_path.as_deref().unwrap_or("");
         let injected_config = inject_variables(config, workspace);
 
         // Validate configuration
@@ -453,11 +444,8 @@ impl McpHub {
         }
 
         // Create server state with "connecting" status
-        let mut server_state = McpServerState::new(
-            name.to_string(),
-            serde_json::to_string(&validated)?,
-            source,
-        );
+        let mut server_state =
+            McpServerState::new(name.to_string(), serde_json::to_string(&validated)?, source);
         server_state.status = McpConnectionStatus::Connecting;
 
         // Create a placeholder disconnected connection while connecting
@@ -497,7 +485,8 @@ impl McpHub {
                 let mut connections = self.connections.write().await;
                 if let Some(conn) = connections.find_mut(name, source) {
                     conn.server_mut().status = McpConnectionStatus::Error;
-                    conn.server_mut().append_error(&e.to_string(), ErrorLevel::Error);
+                    conn.server_mut()
+                        .append_error(&e.to_string(), ErrorLevel::Error);
                 }
 
                 tracing::error!("Failed to connect to MCP server '{}': {}", name, e);
@@ -520,10 +509,9 @@ impl McpHub {
         let before_len = connections.len();
 
         // Partition into matching (to delete) and remaining connections
-        let (to_delete, remaining): (Vec<_>, Vec<_>) =
-            connections.drain(..).partition(|conn| {
-                conn.name() == name && conn.source() == source
-            });
+        let (to_delete, remaining): (Vec<_>, Vec<_>) = connections
+            .drain(..)
+            .partition(|conn| conn.name() == name && conn.source() == source);
 
         // Close transports for connected servers being deleted (best-effort)
         for conn in to_delete {
@@ -575,7 +563,8 @@ impl McpHub {
         };
         *order_lock.write().await = server_names;
 
-        self.update_server_connections_inner(new_servers, source, manage_connecting_state).await
+        self.update_server_connections_inner(new_servers, source, manage_connecting_state)
+            .await
     }
 
     /// Inner implementation of `update_server_connections`.
@@ -663,9 +652,7 @@ impl McpHub {
                                 e
                             );
                         }
-                        if let Err(e) =
-                            self.connect_to_server(name, config, source).await
-                        {
+                        if let Err(e) = self.connect_to_server(name, config, source).await {
                             tracing::error!("Failed to reconnect MCP server {}: {}", name, e);
                         }
                     }
@@ -733,9 +720,7 @@ impl McpHub {
             // Validate the config
             match validate_server_config(&config, Some(name)) {
                 Ok(_validated) => {
-                    if let Err(e) =
-                        self.connect_to_server(name, &config, actual_source).await
-                    {
+                    if let Err(e) = self.connect_to_server(name, &config, actual_source).await {
                         tracing::error!(
                             "Failed to restart MCP server connection '{}': {}",
                             name,
@@ -744,11 +729,7 @@ impl McpHub {
                     }
                 }
                 Err(e) => {
-                    tracing::error!(
-                        "Invalid configuration for MCP server \"{}\": {}",
-                        name,
-                        e
-                    );
+                    tracing::error!("Invalid configuration for MCP server \"{}\": {}", name, e);
                 }
             }
         }
@@ -792,13 +773,7 @@ impl McpHub {
             let connections = self.connections.read().await;
             connections
                 .iter()
-                .map(|c| {
-                    (
-                        c.name().to_string(),
-                        c.source(),
-                        c.server().config.clone(),
-                    )
-                })
+                .map(|c| (c.name().to_string(), c.source(), c.server().config.clone()))
                 .collect()
         };
 
@@ -809,8 +784,7 @@ impl McpHub {
 
         // Re-connect all servers from scratch
         for (name, source, config_str) in &connection_infos {
-            let config: serde_json::Value =
-                serde_json::from_str(config_str).unwrap_or_default();
+            let config: serde_json::Value = serde_json::from_str(config_str).unwrap_or_default();
             if let Err(e) = self.connect_to_server(name, &config, *source).await {
                 tracing::error!("Failed to refresh connection '{}': {}", name, e);
             }
@@ -864,10 +838,7 @@ impl McpHub {
         let timeout_duration = {
             let config: serde_json::Value =
                 serde_json::from_str(&connection.server().config).unwrap_or_default();
-            let timeout_secs = config
-                .get("timeout")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(60);
+            let timeout_secs = config.get("timeout").and_then(|v| v.as_u64()).unwrap_or(60);
             std::time::Duration::from_secs(timeout_secs)
         };
 
@@ -882,17 +853,14 @@ impl McpHub {
             McpConnection::Connected(conn) => {
                 let result = tokio::time::timeout(
                     timeout_duration,
-                    conn.client.call_tool(&mut *conn.transport, tool_name, arguments),
+                    conn.client
+                        .call_tool(&mut *conn.transport, tool_name, arguments),
                 )
                 .await;
 
                 match result {
                     Ok(Ok(response)) => {
-                        tracing::info!(
-                            "Tool call '{}' on '{}' succeeded",
-                            tool_name,
-                            server_name
-                        );
+                        tracing::info!("Tool call '{}' on '{}' succeeded", tool_name, server_name);
                         Ok(response)
                     }
                     Ok(Err(e)) => {
@@ -943,10 +911,7 @@ impl McpHub {
             .iter_mut()
             .find(|c| c.name() == server_name && c.is_connected())
             .ok_or_else(|| {
-                McpError::NotConnected(format!(
-                    "No connection found for server: {}",
-                    server_name
-                ))
+                McpError::NotConnected(format!("No connection found for server: {}", server_name))
             })?;
 
         if connection.server().disabled {
@@ -959,11 +924,7 @@ impl McpHub {
 
                 match result {
                     Ok(response) => {
-                        tracing::info!(
-                            "Resource read '{}' on '{}' succeeded",
-                            uri,
-                            server_name
-                        );
+                        tracing::info!("Resource read '{}' on '{}' succeeded", uri, server_name);
                         Ok(response)
                     }
                     Err(e) => {
@@ -983,7 +944,11 @@ impl McpHub {
     /// the server configuration's `alwaysAllow` and `disabledTools` lists.
     ///
     /// Corresponds to TS: `fetchToolsList(serverName, source)`
-    pub async fn fetch_tools_list(&self, server_name: &str, source: McpSource) -> McpResult<Vec<McpTool>> {
+    pub async fn fetch_tools_list(
+        &self,
+        server_name: &str,
+        source: McpSource,
+    ) -> McpResult<Vec<McpTool>> {
         self.check_disposed()?;
 
         let mut connections = self.connections.write().await;
@@ -992,8 +957,8 @@ impl McpHub {
             .iter_mut()
             .find(|c| c.name() == server_name && c.source() == source && c.is_connected());
 
-        let connection = connection
-            .ok_or_else(|| McpError::NotConnected(server_name.to_string()))?;
+        let connection =
+            connection.ok_or_else(|| McpError::NotConnected(server_name.to_string()))?;
 
         match connection {
             McpConnection::Connected(conn) => {
@@ -1031,11 +996,7 @@ impl McpHub {
                     .collect();
 
                 conn.server.tools = tools.clone();
-                tracing::info!(
-                    "Fetched {} tools from '{}'",
-                    tools.len(),
-                    server_name
-                );
+                tracing::info!("Fetched {} tools from '{}'", tools.len(), server_name);
                 Ok(tools)
             }
             _ => Err(McpError::NotConnected(server_name.to_string())),
@@ -1144,15 +1105,12 @@ impl McpHub {
                 config["alwaysAllow"] = serde_json::json!([]);
             }
 
-            let always_allow = config["alwaysAllow"].as_array_mut().ok_or_else(|| {
-                McpError::ConfigError("alwaysAllow is not an array".to_string())
-            })?;
+            let always_allow = config["alwaysAllow"]
+                .as_array_mut()
+                .ok_or_else(|| McpError::ConfigError("alwaysAllow is not an array".to_string()))?;
 
             if should_allow {
-                if !always_allow
-                    .iter()
-                    .any(|v| v.as_str() == Some(tool_name))
-                {
+                if !always_allow.iter().any(|v| v.as_str() == Some(tool_name)) {
                     always_allow.push(serde_json::Value::String(tool_name.to_string()));
                 }
             } else {
@@ -1163,8 +1121,14 @@ impl McpHub {
         }
 
         // 2. Persist to config file on disk
-        self.update_tool_list_in_config_file(server_name, source, tool_name, "alwaysAllow", should_allow)
-            .await?;
+        self.update_tool_list_in_config_file(
+            server_name,
+            source,
+            tool_name,
+            "alwaysAllow",
+            should_allow,
+        )
+        .await?;
 
         tracing::info!(
             "Toggle always-allow for tool '{}' on '{}': {}",
@@ -1227,10 +1191,7 @@ impl McpHub {
                 disabled_tools.retain(|v| v.as_str() != Some(tool_name));
             } else {
                 // Add to disabled list
-                if !disabled_tools
-                    .iter()
-                    .any(|v| v.as_str() == Some(tool_name))
-                {
+                if !disabled_tools.iter().any(|v| v.as_str() == Some(tool_name)) {
                     disabled_tools.push(serde_json::Value::String(tool_name.to_string()));
                 }
             }
@@ -1241,8 +1202,14 @@ impl McpHub {
         // 2. Persist to config file on disk
         // When is_enabled is true, we REMOVE the tool from disabledTools (add_tool=false).
         // When is_enabled is false, we ADD the tool to disabledTools (add_tool=true).
-        self.update_tool_list_in_config_file(server_name, source, tool_name, "disabledTools", !is_enabled)
-            .await?;
+        self.update_tool_list_in_config_file(
+            server_name,
+            source,
+            tool_name,
+            "disabledTools",
+            !is_enabled,
+        )
+        .await?;
 
         tracing::info!(
             "Toggle enabled-for-prompt for tool '{}' on '{}': {}",
@@ -1273,8 +1240,8 @@ impl McpHub {
             connections.find(server_name, source).cloned()
         };
 
-        let connection = connection
-            .ok_or_else(|| McpError::ServerNotFound(server_name.to_string()))?;
+        let connection =
+            connection.ok_or_else(|| McpError::ServerNotFound(server_name.to_string()))?;
 
         let server_source = connection.source();
 
@@ -1360,11 +1327,7 @@ impl McpHub {
         config["timeout"] = serde_json::Value::Number(timeout.into());
         server.config = serde_json::to_string(&config)?;
 
-        tracing::info!(
-            "Updated timeout for '{}' to {}s",
-            server_name,
-            timeout
-        );
+        tracing::info!("Updated timeout for '{}' to {}s", server_name, timeout);
 
         drop(connections);
         self.notify_state_change();
@@ -1382,8 +1345,8 @@ impl McpHub {
             connections.find(server_name, source).cloned()
         };
 
-        let connection = connection
-            .ok_or_else(|| McpError::ServerNotFound(server_name.to_string()))?;
+        let connection =
+            connection.ok_or_else(|| McpError::ServerNotFound(server_name.to_string()))?;
 
         let server_source = connection.source();
 
@@ -1477,10 +1440,7 @@ impl McpHub {
                 // Build result from deduplicated connections
                 enabled
                     .into_iter()
-                    .filter(|conn| {
-                        seen.get(conn.name())
-                            .map_or(false, |s| *s == conn.source())
-                    })
+                    .filter(|conn| seen.get(conn.name()).map_or(false, |s| *s == conn.source()))
                     .map(|conn| McpServerConnection {
                         name: conn.name().to_string(),
                         status: conn.server().status,
@@ -1523,8 +1483,7 @@ impl McpHub {
             let name = conn.name().to_string();
             match seen.get(&name) {
                 Some(existing_source) => {
-                    if conn.source() == McpSource::Project
-                        && *existing_source != McpSource::Project
+                    if conn.source() == McpSource::Project && *existing_source != McpSource::Project
                     {
                         seen.insert(name, conn.source());
                     }
@@ -1538,10 +1497,7 @@ impl McpHub {
         // Build result from deduplicated connections
         let mut servers: Vec<McpServerConnection> = enabled
             .into_iter()
-            .filter(|conn| {
-                seen.get(conn.name())
-                    .map_or(false, |s| *s == conn.source())
-            })
+            .filter(|conn| seen.get(conn.name()).map_or(false, |s| *s == conn.source()))
             .map(|conn| McpServerConnection {
                 name: conn.name().to_string(),
                 status: conn.server().status,
@@ -1570,16 +1526,32 @@ impl McpHub {
             let b_is_global = b_source == McpSource::Global;
 
             if a_is_global && b_is_global {
-                let index_a = global_order.iter().position(|n| n == &a.name).unwrap_or(usize::MAX);
-                let index_b = global_order.iter().position(|n| n == &b.name).unwrap_or(usize::MAX);
+                let index_a = global_order
+                    .iter()
+                    .position(|n| n == &a.name)
+                    .unwrap_or(usize::MAX);
+                let index_b = global_order
+                    .iter()
+                    .position(|n| n == &b.name)
+                    .unwrap_or(usize::MAX);
                 index_a.cmp(&index_b)
             } else if !a_is_global && !b_is_global {
-                let index_a = project_order.iter().position(|n| n == &a.name).unwrap_or(usize::MAX);
-                let index_b = project_order.iter().position(|n| n == &b.name).unwrap_or(usize::MAX);
+                let index_a = project_order
+                    .iter()
+                    .position(|n| n == &a.name)
+                    .unwrap_or(usize::MAX);
+                let index_b = project_order
+                    .iter()
+                    .position(|n| n == &b.name)
+                    .unwrap_or(usize::MAX);
                 index_a.cmp(&index_b)
             } else {
                 // Project servers come before global servers
-                if a_is_global { std::cmp::Ordering::Greater } else { std::cmp::Ordering::Less }
+                if a_is_global {
+                    std::cmp::Ordering::Greater
+                } else {
+                    std::cmp::Ordering::Less
+                }
             }
         });
 
@@ -1615,10 +1587,7 @@ impl McpHub {
     ///
     /// Corresponds to TS: `findServerNameBySanitizedName(sanitizedServerName)`
     /// Checks in order: exact match �?registry �?fuzzy match.
-    pub async fn find_server_name_by_sanitized_name(
-        &self,
-        sanitized_name: &str,
-    ) -> Option<String> {
+    pub async fn find_server_name_by_sanitized_name(&self, sanitized_name: &str) -> Option<String> {
         // 1. First try exact match against connection names
         let connections = self.connections.read().await;
         if let Some(exact) = connections.iter().find(|c| c.name() == sanitized_name) {
@@ -1674,7 +1643,8 @@ impl McpHub {
                 .iter()
                 .find(|conn| {
                     conn.name() == server_name
-                        && (conn.source() == McpSource::Global || conn.source() == McpSource::Global)
+                        && (conn.source() == McpSource::Global
+                            || conn.source() == McpSource::Global)
                 })
                 .cloned()
         }
@@ -1758,9 +1728,7 @@ impl McpHub {
     ) {
         // Only stdio type has args to watch
         if let ValidatedServerConfig::Stdio {
-            args,
-            watch_paths,
-            ..
+            args, watch_paths, ..
         } = config
         {
             // Get the weak self reference for the spawned tasks
@@ -2130,7 +2098,8 @@ impl McpHub {
         if !path.exists() {
             if source == McpSource::Project {
                 tracing::info!("Project MCP config file deleted, cleaning up project servers");
-                self.update_server_connections(&HashMap::new(), source, false).await?;
+                self.update_server_connections(&HashMap::new(), source, false)
+                    .await?;
             }
             return Ok(());
         }
@@ -2175,7 +2144,8 @@ impl McpHub {
 
         // Update connections: this will diff with current state, removing deleted
         // servers, adding new ones, and restarting changed ones.
-        self.update_server_connections(&mcp_servers, source, true).await?;
+        self.update_server_connections(&mcp_servers, source, true)
+            .await?;
 
         tracing::info!(
             "Reloaded MCP config from '{}' ({:?}): {} server(s) defined",
@@ -2289,36 +2259,37 @@ impl McpHub {
         }
 
         // Read current config
-        let content = tokio::fs::read_to_string(&config_path).await
-            .map_err(|e| {
-                tracing::error!("Failed to read config file '{}': {}", config_path, e);
-                McpError::IoError(e)
-            })?;
+        let content = tokio::fs::read_to_string(&config_path).await.map_err(|e| {
+            tracing::error!("Failed to read config file '{}': {}", config_path, e);
+            McpError::IoError(e)
+        })?;
 
-        let mut config: serde_json::Value = serde_json::from_str(&content)
-            .map_err(|e| {
-                tracing::error!("Invalid JSON in config file '{}': {}", config_path, e);
-                McpError::SerializationError(e)
-            })?;
+        let mut config: serde_json::Value = serde_json::from_str(&content).map_err(|e| {
+            tracing::error!("Invalid JSON in config file '{}': {}", config_path, e);
+            McpError::SerializationError(e)
+        })?;
 
         // Ensure the structure exists
         if config.get("mcpServers").is_none() {
             config["mcpServers"] = serde_json::json!({});
         }
-        let servers = config["mcpServers"].as_object_mut()
+        let servers = config["mcpServers"]
+            .as_object_mut()
             .ok_or_else(|| McpError::ConfigError("mcpServers is not an object".to_string()))?;
 
         if servers.get(server_name).is_none() {
             servers.insert(server_name.to_string(), serde_json::json!({}));
         }
-        let server_cfg = servers.get_mut(server_name)
-            .ok_or_else(|| McpError::ConfigError(format!("Server '{}' not found in config", server_name)))?;
+        let server_cfg = servers.get_mut(server_name).ok_or_else(|| {
+            McpError::ConfigError(format!("Server '{}' not found in config", server_name))
+        })?;
 
         if server_cfg.get(list_name).is_none() {
             server_cfg[list_name] = serde_json::json!([]);
         }
 
-        let list = server_cfg[list_name].as_array_mut()
+        let list = server_cfg[list_name]
+            .as_array_mut()
             .ok_or_else(|| McpError::ConfigError(format!("{} is not an array", list_name)))?;
 
         let tool_present = list.iter().any(|v| v.as_str() == Some(tool_name));
@@ -2331,13 +2302,13 @@ impl McpHub {
 
         // Write back with programmatic-update guard
         *self.is_programmatic_update.write().await = true;
-        let json_bytes = serde_json::to_string_pretty(&config)
-            .map_err(|e| {
-                tracing::error!("Failed to serialize config: {}", e);
-                McpError::SerializationError(e)
-            })?;
+        let json_bytes = serde_json::to_string_pretty(&config).map_err(|e| {
+            tracing::error!("Failed to serialize config: {}", e);
+            McpError::SerializationError(e)
+        })?;
 
-        tokio::fs::write(&config_path, &json_bytes).await
+        tokio::fs::write(&config_path, &json_bytes)
+            .await
             .map_err(|e| {
                 tracing::error!("Failed to write config file '{}': {}", config_path, e);
                 McpError::IoError(e)
@@ -2411,12 +2382,8 @@ impl McpHub {
                 cwd,
                 ..
             } => {
-                let mut t = StdioTransport::new(
-                    command.clone(),
-                    args.clone(),
-                    env.clone(),
-                    cwd.clone(),
-                );
+                let mut t =
+                    StdioTransport::new(command.clone(), args.clone(), env.clone(), cwd.clone());
                 t.connect().await?;
                 Box::new(t)
             }
@@ -2472,7 +2439,14 @@ impl McpHub {
             resource_templates.len()
         );
 
-        Ok((client, transport, tools, resources, resource_templates, instructions))
+        Ok((
+            client,
+            transport,
+            tools,
+            resources,
+            resource_templates,
+            instructions,
+        ))
     }
 }
 
@@ -2522,9 +2496,11 @@ impl McpConnectionExt for Vec<McpConnection> {
 impl Clone for McpConnection {
     fn clone(&self) -> Self {
         match self {
-            McpConnection::Disconnected(d) => McpConnection::Disconnected(DisconnectedMcpConnection {
-                server: d.server.clone(),
-            }),
+            McpConnection::Disconnected(d) => {
+                McpConnection::Disconnected(DisconnectedMcpConnection {
+                    server: d.server.clone(),
+                })
+            }
             // Connected connections can't truly be cloned (they hold transport),
             // so we clone as disconnected with the same server state
             McpConnection::Connected(c) => McpConnection::Disconnected(DisconnectedMcpConnection {
@@ -2645,8 +2621,7 @@ mod tests {
 
         let mut server = McpServerState::new(
             "test-server".to_string(),
-            r#"{"type":"stdio","command":"echo","alwaysAllow":[],"disabledTools":[]}"#
-                .to_string(),
+            r#"{"type":"stdio","command":"echo","alwaysAllow":[],"disabledTools":[]}"#.to_string(),
             McpSource::Global,
         );
         server.tools = vec![McpTool {
@@ -2656,9 +2631,12 @@ mod tests {
             always_allow: false,
             enabled_for_prompt: true,
         }];
-        hub.connections.write().await.push(McpConnection::Disconnected(
-            DisconnectedMcpConnection { server },
-        ));
+        hub.connections
+            .write()
+            .await
+            .push(McpConnection::Disconnected(DisconnectedMcpConnection {
+                server,
+            }));
 
         hub.toggle_tool_always_allow("test-server", McpSource::Global, "my-tool", true)
             .await
@@ -2676,9 +2654,7 @@ mod tests {
 
         let config: serde_json::Value = serde_json::from_str(&conn.server().config).unwrap();
         let always_allow = config["alwaysAllow"].as_array().unwrap();
-        assert!(always_allow
-            .iter()
-            .any(|v| v.as_str() == Some("my-tool")));
+        assert!(always_allow.iter().any(|v| v.as_str() == Some("my-tool")));
     }
 
     #[tokio::test]
@@ -2698,9 +2674,12 @@ mod tests {
             always_allow: true,
             enabled_for_prompt: true,
         }];
-        hub.connections.write().await.push(McpConnection::Disconnected(
-            DisconnectedMcpConnection { server },
-        ));
+        hub.connections
+            .write()
+            .await
+            .push(McpConnection::Disconnected(DisconnectedMcpConnection {
+                server,
+            }));
 
         hub.toggle_tool_always_allow("test-server", McpSource::Global, "existing-tool", false)
             .await
@@ -2718,9 +2697,11 @@ mod tests {
 
         let config: serde_json::Value = serde_json::from_str(&conn.server().config).unwrap();
         let always_allow = config["alwaysAllow"].as_array().unwrap();
-        assert!(!always_allow
-            .iter()
-            .any(|v| v.as_str() == Some("existing-tool")));
+        assert!(
+            !always_allow
+                .iter()
+                .any(|v| v.as_str() == Some("existing-tool"))
+        );
     }
 
     #[tokio::test]
@@ -2729,8 +2710,7 @@ mod tests {
 
         let mut server = McpServerState::new(
             "test-server".to_string(),
-            r#"{"type":"stdio","command":"echo","alwaysAllow":[],"disabledTools":[]}"#
-                .to_string(),
+            r#"{"type":"stdio","command":"echo","alwaysAllow":[],"disabledTools":[]}"#.to_string(),
             McpSource::Global,
         );
         server.tools = vec![McpTool {
@@ -2740,9 +2720,12 @@ mod tests {
             always_allow: false,
             enabled_for_prompt: true,
         }];
-        hub.connections.write().await.push(McpConnection::Disconnected(
-            DisconnectedMcpConnection { server },
-        ));
+        hub.connections
+            .write()
+            .await
+            .push(McpConnection::Disconnected(DisconnectedMcpConnection {
+                server,
+            }));
 
         hub.toggle_tool_enabled_for_prompt("test-server", McpSource::Global, "my-tool", false)
             .await
@@ -2760,9 +2743,7 @@ mod tests {
 
         let config: serde_json::Value = serde_json::from_str(&conn.server().config).unwrap();
         let disabled_tools = config["disabledTools"].as_array().unwrap();
-        assert!(disabled_tools
-            .iter()
-            .any(|v| v.as_str() == Some("my-tool")));
+        assert!(disabled_tools.iter().any(|v| v.as_str() == Some("my-tool")));
     }
 
     #[tokio::test]
@@ -2782,9 +2763,12 @@ mod tests {
             always_allow: false,
             enabled_for_prompt: false,
         }];
-        hub.connections.write().await.push(McpConnection::Disconnected(
-            DisconnectedMcpConnection { server },
-        ));
+        hub.connections
+            .write()
+            .await
+            .push(McpConnection::Disconnected(DisconnectedMcpConnection {
+                server,
+            }));
 
         hub.toggle_tool_enabled_for_prompt("test-server", McpSource::Global, "existing-tool", true)
             .await
@@ -2802,9 +2786,11 @@ mod tests {
 
         let config: serde_json::Value = serde_json::from_str(&conn.server().config).unwrap();
         let disabled_tools = config["disabledTools"].as_array().unwrap();
-        assert!(!disabled_tools
-            .iter()
-            .any(|v| v.as_str() == Some("existing-tool")));
+        assert!(
+            !disabled_tools
+                .iter()
+                .any(|v| v.as_str() == Some("existing-tool"))
+        );
     }
 
     #[tokio::test]
@@ -2827,9 +2813,12 @@ mod tests {
             McpSource::Global,
         );
         server.tools = vec![];
-        hub.connections.write().await.push(McpConnection::Disconnected(
-            DisconnectedMcpConnection { server },
-        ));
+        hub.connections
+            .write()
+            .await
+            .push(McpConnection::Disconnected(DisconnectedMcpConnection {
+                server,
+            }));
 
         hub.update_server_timeout("test-server", 120, McpSource::Global)
             .await
@@ -2859,9 +2848,12 @@ mod tests {
             "{}".to_string(),
             McpSource::Global,
         );
-        hub.connections.write().await.push(McpConnection::Disconnected(
-            DisconnectedMcpConnection { server },
-        ));
+        hub.connections
+            .write()
+            .await
+            .push(McpConnection::Disconnected(DisconnectedMcpConnection {
+                server,
+            }));
 
         assert_eq!(hub.connections.read().await.len(), 1);
 
@@ -2875,9 +2867,7 @@ mod tests {
     #[tokio::test]
     async fn test_delete_server_not_found() {
         let hub = McpHub::new();
-        let result = hub
-            .delete_server("nonexistent", McpSource::Global)
-            .await;
+        let result = hub.delete_server("nonexistent", McpSource::Global).await;
         assert!(result.is_err());
     }
 
@@ -2885,32 +2875,35 @@ mod tests {
     async fn test_find_connection() {
         let hub = McpHub::new();
 
-        let server_global = McpServerState::new(
-            "my-server".to_string(),
-            "{}".to_string(),
-            McpSource::Global,
-        );
+        let server_global =
+            McpServerState::new("my-server".to_string(), "{}".to_string(), McpSource::Global);
         let server_project = McpServerState::new(
             "my-server".to_string(),
             "{}".to_string(),
             McpSource::Project,
         );
-        hub.connections.write().await.push(McpConnection::Disconnected(
-            DisconnectedMcpConnection {
+        hub.connections
+            .write()
+            .await
+            .push(McpConnection::Disconnected(DisconnectedMcpConnection {
                 server: server_global,
-            },
-        ));
-        hub.connections.write().await.push(McpConnection::Disconnected(
-            DisconnectedMcpConnection {
+            }));
+        hub.connections
+            .write()
+            .await
+            .push(McpConnection::Disconnected(DisconnectedMcpConnection {
                 server: server_project,
-            },
-        ));
+            }));
 
         // Find by source
-        let conn = hub.find_connection("my-server", Some(McpSource::Global)).await;
+        let conn = hub
+            .find_connection("my-server", Some(McpSource::Global))
+            .await;
         assert!(conn.is_some());
 
-        let conn = hub.find_connection("my-server", Some(McpSource::Project)).await;
+        let conn = hub
+            .find_connection("my-server", Some(McpSource::Project))
+            .await;
         assert!(conn.is_some());
 
         // Without source, project takes priority
@@ -2997,9 +2990,12 @@ mod tests {
             "{}".to_string(),
             McpSource::Global,
         );
-        hub.connections.write().await.push(McpConnection::Disconnected(
-            DisconnectedMcpConnection { server },
-        ));
+        hub.connections
+            .write()
+            .await
+            .push(McpConnection::Disconnected(DisconnectedMcpConnection {
+                server,
+            }));
 
         assert_eq!(hub.connections.read().await.len(), 1);
 

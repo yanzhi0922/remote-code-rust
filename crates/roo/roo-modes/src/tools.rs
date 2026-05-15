@@ -2,7 +2,9 @@
 //!
 //! Source: `src/shared/modes.ts` — `getGroupName`, `getToolsForMode`
 
-use roo_tools::groups::{get_group_name as inner_get_group_name, get_tools_for_mode as inner_get_tools_for_mode};
+use roo_tools::groups::{
+    get_group_name as inner_get_group_name, get_tools_for_mode as inner_get_tools_for_mode,
+};
 use roo_types::tool::{GroupEntry, ToolGroup, ToolName};
 
 // ---------------------------------------------------------------------------
@@ -95,9 +97,6 @@ mod tests {
         ];
         let tools = get_tools_for_mode(&groups);
         // read_file should appear only once
-        assert_eq!(
-            tools.iter().filter(|t| **t == "read_file").count(),
-            1
-        );
+        assert_eq!(tools.iter().filter(|t| **t == "read_file").count(), 1);
     }
 }

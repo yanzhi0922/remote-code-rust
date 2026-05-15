@@ -153,8 +153,10 @@ fn transcript_entry_named_event_round_trip() {
 #[test]
 fn transcript_entry_compact_boundary_round_trip() {
     let session_id = uuid::Uuid::new_v4();
-    let boundary = claude_transcript::CompactBoundary::new(claude_transcript::CompactTrigger::Auto, 100000);
-    let entry = claude_transcript::TranscriptEntry::compact_boundary_now(session_id, boundary.clone());
+    let boundary =
+        claude_transcript::CompactBoundary::new(claude_transcript::CompactTrigger::Auto, 100000);
+    let entry =
+        claude_transcript::TranscriptEntry::compact_boundary_now(session_id, boundary.clone());
     let json = serde_json::to_string(&entry).expect("serialize compact boundary");
     let decoded: claude_transcript::TranscriptEntry =
         serde_json::from_str(&json).expect("deserialize compact boundary");
@@ -194,7 +196,8 @@ fn permission_mode_serialization_matches_wire_format() {
 fn swarm_team_file_round_trips_via_json() {
     let team = claude_swarm::TeamFile::new("test-team", "lead-agent-1");
     let json = serde_json::to_string(&team).expect("serialize team file");
-    let decoded: claude_swarm::TeamFile = serde_json::from_str(&json).expect("deserialize team file");
+    let decoded: claude_swarm::TeamFile =
+        serde_json::from_str(&json).expect("deserialize team file");
     assert_eq!(decoded.name, "test-team");
     assert_eq!(decoded.lead_agent_id, "lead-agent-1");
     assert!(decoded.members.is_empty());
@@ -323,31 +326,32 @@ fn mcp_tool_descriptor_round_trips_via_json() {
 
 #[test]
 fn mcp_server_connection_states_serialize() {
-    let conn = claude_mcp::McpServerConnection::Connected(claude_mcp::connection::ConnectedServer {
-        name: "my-server".to_owned(),
-        capabilities: claude_mcp::McpCapabilityMatrix::default(),
-        server_info: None,
-        instructions: None,
-        config: claude_mcp::scope::ScopedMcpServerConfig::new(
-            claude_mcp::McpServerConfig {
-                name: "my-server".to_owned(),
-                enabled: true,
-                transport: claude_mcp::McpTransportConfig::Stdio {
-                    command: "echo".to_owned(),
-                    args: vec![],
-                    cwd: None,
-                    env: std::collections::BTreeMap::new(),
+    let conn =
+        claude_mcp::McpServerConnection::Connected(claude_mcp::connection::ConnectedServer {
+            name: "my-server".to_owned(),
+            capabilities: claude_mcp::McpCapabilityMatrix::default(),
+            server_info: None,
+            instructions: None,
+            config: claude_mcp::scope::ScopedMcpServerConfig::new(
+                claude_mcp::McpServerConfig {
+                    name: "my-server".to_owned(),
+                    enabled: true,
+                    transport: claude_mcp::McpTransportConfig::Stdio {
+                        command: "echo".to_owned(),
+                        args: vec![],
+                        cwd: None,
+                        env: std::collections::BTreeMap::new(),
+                    },
+                    capabilities: claude_mcp::McpCapabilityMatrix::default(),
+                    startup_timeout_secs: None,
+                    request_timeout_secs: None,
+                    oauth: None,
+                    metadata: std::collections::BTreeMap::new(),
+                    tool_policy: Default::default(),
                 },
-                capabilities: claude_mcp::McpCapabilityMatrix::default(),
-                startup_timeout_secs: None,
-                request_timeout_secs: None,
-                oauth: None,
-                metadata: std::collections::BTreeMap::new(),
-            tool_policy: Default::default(),
-            },
-            claude_mcp::scope::ConfigScope::Local,
-        ),
-    });
+                claude_mcp::scope::ConfigScope::Local,
+            ),
+        });
     let json = serde_json::to_string(&conn).expect("serialize connection");
     assert!(json.contains("\"type\":\"connected\""));
     assert!(conn.is_connected());

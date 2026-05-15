@@ -143,7 +143,11 @@ pub async fn get_url_content(url: &str) -> String {
     match client.get(url).send().await {
         Ok(response) => {
             if !response.status().is_success() {
-                return format!("HTTP error: {} {}", response.status().as_u16(), response.status().canonical_reason().unwrap_or("Unknown"));
+                return format!(
+                    "HTTP error: {} {}",
+                    response.status().as_u16(),
+                    response.status().canonical_reason().unwrap_or("Unknown")
+                );
             }
 
             match response.text().await {

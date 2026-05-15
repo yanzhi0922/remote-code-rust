@@ -45,10 +45,11 @@ pub mod workflow;
 
 use std::future::Future;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+
+use parking_lot::Mutex;
 
 use anyhow::{Result, anyhow};
-use once_cell::sync::Lazy;
 use claude_config::ActiveWorktreeSession;
 use claude_context::RuntimeIdentityContext;
 use claude_core::task_stack::TaskStack;
@@ -60,6 +61,7 @@ use claude_permissions::{
     PermissionBroker, PermissionClass, PermissionDecision, PermissionRequest, auto_allows,
     classify_tool,
 };
+use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -199,9 +201,7 @@ pub struct ToolRuntimePolicyOverlay {
 pub fn configure_tool_runtime_policy(policy: ToolRuntimePolicy) -> Result<()> {
     tasks::configure_task_output_dir(policy.task_output_dir.clone())?;
     tasks::configure_task_list_base_dir(policy.tasks_dir.clone())?;
-    let mut current = TOOL_RUNTIME_POLICY
-        .lock()
-        .map_err(|_| anyhow!("tool runtime policy lock poisoned"))?;
+    let mut current = TOOL_RUNTIME_POLICY.lock();
     *current = normalize_tool_runtime_policy(policy);
     Ok(())
 }
@@ -209,10 +209,7 @@ pub fn configure_tool_runtime_policy(policy: ToolRuntimePolicy) -> Result<()> {
 /// Return the active process-wide tool policy.
 #[must_use]
 pub fn current_tool_runtime_policy() -> ToolRuntimePolicy {
-    let base = TOOL_RUNTIME_POLICY
-        .lock()
-        .map(|policy| policy.clone())
-        .unwrap_or_default();
+    let base = TOOL_RUNTIME_POLICY.lock().clone();
     TOOL_RUNTIME_POLICY_OVERLAY
         .try_with(|overlay| apply_tool_runtime_policy_overlay(base.clone(), overlay.clone()))
         .unwrap_or(base)
@@ -992,7 +989,7 @@ pub struct ToolExecutionContext {
     pub progress_cb: Option<Arc<ProgressCallback>>,
     /// Task stack for tracking nested subtask delegation depth.
     /// Shared across tool executions within the same conversation loop.
-    pub task_stack: Arc<std::sync::Mutex<TaskStack>>,
+    pub task_stack: Arc<parking_lot::Mutex<TaskStack>>,
     /// Read-file state cache shared by tools in a single query loop.
     ///
     /// Fork/subagent contexts should use [`FileStateCache::clone_isolated`]
@@ -1031,7 +1028,7 @@ impl Default for ToolExecutionContext {
             timeout_ms: default_bash_timeout_ms(),
             sub_agent: None,
             progress_cb: None,
-            task_stack: Arc::new(std::sync::Mutex::new(TaskStack::default())),
+            task_stack: Arc::new(parking_lot::Mutex::new(TaskStack::default())),
             read_file_state: crate::FileStateCache::new(),
             sub_agent_output_tokens: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         }
@@ -1073,7 +1070,7 @@ impl ToolExecutionContext {
             timeout_ms: self.timeout_ms,
             sub_agent: self.sub_agent.clone(),
             progress_cb: None,
-            task_stack: Arc::new(std::sync::Mutex::new(TaskStack::default())),
+            task_stack: Arc::new(parking_lot::Mutex::new(TaskStack::default())),
             read_file_state: self.read_file_state.clone_isolated(),
             sub_agent_output_tokens: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         }
@@ -1270,7 +1267,9 @@ fn effective_permission_for_call(call: &ToolCall, spec: &ToolSpec) -> EffectiveP
     }
 }
 
-fn filesystem_operation_for_tool(tool_name: &str) -> Option<claude_permissions::FilesystemOperation> {
+fn filesystem_operation_for_tool(
+    tool_name: &str,
+) -> Option<claude_permissions::FilesystemOperation> {
     match tool_name {
         "list_directory" | "read_file" | "search_text" | "glob" | "grep" => {
             Some(claude_permissions::FilesystemOperation::Read)
@@ -1924,7 +1923,6 @@ mod tests {
         with_runtime_agent_prompt_context_provider, with_tool_runtime_policy_overlay,
     };
     use crate::specs;
-    use once_cell::sync::Lazy;
     use claude_core::{
         HookEvent, PermissionMode, ProviderResponse, SubAgentCompletion, SubAgentExecutionRequest,
         ToolCall, UsageSummary,
@@ -1938,12 +1936,14 @@ mod tests {
         PermissionUpdate, PermissionUpdateDestination, StaticPermissionBroker,
     };
     use claude_swarm::{TeamFile, TeamMember, mailbox, team_helpers};
+    use once_cell::sync::Lazy;
+    use parking_lot::Mutex;
     use serde_json::{Value, json};
     use std::collections::BTreeMap;
     use std::fs;
     use std::path::PathBuf;
     use std::process::Command as ProcessCommand;
-    use std::sync::{Arc, Mutex};
+    use std::sync::Arc;
     use tempfile::tempdir;
     use tokio::sync::Mutex as AsyncMutex;
 
@@ -2086,10 +2086,7 @@ while True:
     #[async_trait::async_trait]
     impl PermissionBroker for RecordingPermissionBroker {
         async fn decide(&self, request: PermissionRequest) -> PermissionDecision {
-            self.requests
-                .lock()
-                .expect("permission requests")
-                .push(request);
+            self.requests.lock().push(request);
             if self.allow {
                 let mut decision = PermissionDecision::allow();
                 decision.feedback = self.allow_feedback.clone();
@@ -2116,10 +2113,7 @@ while True:
     #[async_trait::async_trait]
     impl PermissionBroker for RuleAwareBroker {
         async fn decide(&self, request: PermissionRequest) -> PermissionDecision {
-            self.requests
-                .lock()
-                .expect("permission requests")
-                .push(request);
+            self.requests.lock().push(request);
             if self.allow {
                 PermissionDecision::allow()
             } else {
@@ -2128,10 +2122,7 @@ while True:
         }
 
         async fn decide_forced_prompt(&self, request: PermissionRequest) -> PermissionDecision {
-            self.forced_requests
-                .lock()
-                .expect("forced permission requests")
-                .push(request);
+            self.forced_requests.lock().push(request);
             if self.allow {
                 PermissionDecision::allow()
             } else {
@@ -2174,10 +2165,7 @@ while True:
 
     impl crate::plan_mode::PlanModeRuntime for RecordingPlanModeRuntime {
         fn enter_plan_mode(&self, objective: &str) -> anyhow::Result<String> {
-            self.enter_calls
-                .lock()
-                .expect("enter calls")
-                .push(objective.to_owned());
+            self.enter_calls.lock().push(objective.to_owned());
             Ok(format!("entered plan mode for {objective}"))
         }
 
@@ -2185,7 +2173,7 @@ while True:
             &self,
             input: crate::plan_mode::ExitPlanModeInput,
         ) -> anyhow::Result<String> {
-            self.exit_calls.lock().expect("exit calls").push(input);
+            self.exit_calls.lock().push(input);
             Ok("exited plan mode".to_owned())
         }
 
@@ -2395,7 +2383,7 @@ while True:
             &self,
             request: SubAgentExecutionRequest,
         ) -> anyhow::Result<claude_core::SubAgentExecutionResult> {
-            self.requests.lock().expect("requests lock").push(request);
+            self.requests.lock().push(request);
             Ok(self.result.clone())
         }
     }
@@ -2570,7 +2558,7 @@ while True:
         .expect("tool call should return result");
 
         assert!(result.is_error);
-        let requests = requests.lock().expect("requests");
+        let requests = requests.lock();
         assert_eq!(requests.len(), 1);
         assert_eq!(requests[0].tool_name, "read_file");
         assert_eq!(
@@ -2733,7 +2721,7 @@ while True:
 
         assert!(result.is_error);
         assert!(!outside.join("new.txt").exists());
-        let requests = requests.lock().expect("requests");
+        let requests = requests.lock();
         assert_eq!(requests.len(), 1);
         assert!(
             requests[0]
@@ -2976,7 +2964,7 @@ while True:
 
         assert!(result.is_error);
         assert!(result.content.contains("forced recorded denial"));
-        let forced = forced_requests.lock().expect("forced requests");
+        let forced = forced_requests.lock();
         assert_eq!(forced.len(), 1);
         assert_eq!(forced[0].tool_name, "read_file");
     }
@@ -3021,7 +3009,7 @@ while True:
 
         assert!(result.is_error);
         assert_eq!(std::fs::read_to_string(&target).expect("read"), "before");
-        assert_eq!(forced_requests.lock().expect("forced requests").len(), 1);
+        assert_eq!(forced_requests.lock().len(), 1);
     }
 
     #[tokio::test]
@@ -3064,7 +3052,7 @@ while True:
         .expect("tool call should return result");
 
         assert!(result.is_error);
-        let requests = requests.lock().expect("requests");
+        let requests = requests.lock();
         assert!(!requests[0].permission_suggestions.is_empty());
     }
 
@@ -3113,7 +3101,7 @@ while True:
         .expect("tool call should return result");
 
         assert!(result.is_error);
-        assert_eq!(forced_requests.lock().expect("forced requests").len(), 1);
+        assert_eq!(forced_requests.lock().len(), 1);
         assert_eq!(std::fs::read_to_string(&target).expect("read"), "[core]\n");
     }
 
@@ -3175,7 +3163,7 @@ while True:
         .expect("tool call should return result");
 
         assert!(!result.is_error, "{}", result.content);
-        assert!(forced_requests.lock().expect("forced requests").is_empty());
+        assert!(forced_requests.lock().is_empty());
         assert_eq!(
             std::fs::read_to_string(&target).expect("read"),
             "{\"after\":true}"
@@ -3222,7 +3210,7 @@ while True:
         .expect("tool call should return result");
 
         assert!(result.is_error);
-        let requests = requests.lock().expect("requests");
+        let requests = requests.lock();
         assert_eq!(requests.len(), 1);
         assert_eq!(
             requests[0].blocked_path.as_deref(),
@@ -4442,7 +4430,7 @@ while True:
         assert!(!result.is_error, "agent tool error: {}", result.content);
         assert_eq!(result.content, "verified");
 
-        let requests = requests.lock().expect("requests lock");
+        let requests = requests.lock();
         assert_eq!(requests.len(), 1);
         let request = &requests[0];
         assert_eq!(request.agent_type, "general-purpose");
@@ -4514,10 +4502,7 @@ while True:
         let progress = Arc::new(Mutex::new(Vec::<String>::new()));
         let progress_sink = Arc::clone(&progress);
         let progress_cb: Arc<super::ProgressCallback> = Arc::new(move |message| {
-            progress_sink
-                .lock()
-                .expect("progress lock")
-                .push(message.to_owned());
+            progress_sink.lock().push(message.to_owned());
         });
         let context = ToolExecutionContext {
             original_cwd: tempdir.path().to_path_buf().clone(),
@@ -4553,7 +4538,7 @@ while True:
         assert!(!result.is_error, "agent tool error: {}", result.content);
         assert_eq!(result.content, "plan ready");
 
-        let requests = requests.lock().expect("requests lock");
+        let requests = requests.lock();
         assert_eq!(requests.len(), 1);
         let request = &requests[0];
         assert_eq!(request.agent_type, "Plan");
@@ -4567,7 +4552,7 @@ while True:
         assert!(!request.allowed_tools.contains(&"agent".to_owned()));
         drop(requests);
 
-        let progress = progress.lock().expect("progress lock");
+        let progress = progress.lock();
         assert_eq!(progress.len(), 2);
         let started = crate::agent::parse_delegate_progress_event(&progress[0])
             .expect("start progress event");
@@ -4636,7 +4621,7 @@ while True:
 
         assert!(result.is_error);
         assert!(result.content.contains("unknown subagent_type"));
-        assert!(requests.lock().expect("requests lock").is_empty());
+        assert!(requests.lock().is_empty());
     }
 
     #[tokio::test]
@@ -4679,7 +4664,7 @@ while True:
 
         assert!(result.is_error);
         assert!(result.content.contains("Permission denied"));
-        assert!(requests.lock().expect("requests lock").is_empty());
+        assert!(requests.lock().is_empty());
     }
 
     #[tokio::test]
@@ -4790,10 +4775,10 @@ while True:
 
         assert!(result.is_error);
         assert!(result.content.contains("forced recorded denial"));
-        assert!(requests.lock().expect("requests").is_empty());
-        assert_eq!(forced_requests.lock().expect("forced requests").len(), 1);
-        assert!(enter_calls.lock().expect("enter calls").is_empty());
-        assert!(exit_calls.lock().expect("exit calls").is_empty());
+        assert!(requests.lock().is_empty());
+        assert_eq!(forced_requests.lock().len(), 1);
+        assert!(enter_calls.lock().is_empty());
+        assert!(exit_calls.lock().is_empty());
     }
 
     #[tokio::test]
@@ -4840,10 +4825,10 @@ while True:
 
         assert!(result.is_error);
         assert!(result.content.contains("forced recorded denial"));
-        assert!(requests.lock().expect("requests").is_empty());
-        assert_eq!(forced_requests.lock().expect("forced requests").len(), 1);
-        assert!(enter_calls.lock().expect("enter calls").is_empty());
-        assert!(exit_calls.lock().expect("exit calls").is_empty());
+        assert!(requests.lock().is_empty());
+        assert_eq!(forced_requests.lock().len(), 1);
+        assert!(enter_calls.lock().is_empty());
+        assert!(exit_calls.lock().is_empty());
     }
 
     #[tokio::test]
@@ -4972,7 +4957,11 @@ while True:
         .await
         .expect("discover_skills should work");
 
-        assert!(!result.is_error, "discover_skills error: {}", result.content);
+        assert!(
+            !result.is_error,
+            "discover_skills error: {}",
+            result.content
+        );
         // Empty workspace should return "No skills found"
         assert!(
             result.content.contains("No skills found"),

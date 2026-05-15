@@ -6,10 +6,8 @@
 //! max_completion_tokens, and omitted temperature.
 
 use async_trait::async_trait;
-use roo_provider::{
-    ApiStream, CreateMessageMetadata, Provider,
-};
 use roo_provider::error::{ProviderError, Result};
+use roo_provider::{ApiStream, CreateMessageMetadata, Provider};
 use roo_types::api::{ApiMessage, ProviderName};
 use roo_types::model::ModelInfo;
 
@@ -67,7 +65,9 @@ pub struct OpenAiHandler {
 impl OpenAiHandler {
     /// Create a new OpenAI handler from configuration.
     pub fn new(config: OpenAiConfig) -> Result<Self> {
-        let model_id = config.model_id.unwrap_or_else(|| models::default_model_id());
+        let model_id = config
+            .model_id
+            .unwrap_or_else(|| models::default_model_id());
         let model_info = models::models()
             .get(&model_id)
             .cloned()
@@ -110,8 +110,7 @@ impl OpenAiHandler {
     pub fn from_settings(
         settings: &roo_types::provider_settings::ProviderSettings,
     ) -> Result<Self> {
-        let config =
-            OpenAiConfig::from_settings(settings).ok_or(ProviderError::ApiKeyRequired)?;
+        let config = OpenAiConfig::from_settings(settings).ok_or(ProviderError::ApiKeyRequired)?;
         Self::new(config)
     }
 }
@@ -133,12 +132,7 @@ impl Provider for OpenAiHandler {
             // omit temperature, use max_completion_tokens.
             // Source: `src/api/providers/openai.ts` — `handleO3FamilyMessage`
             self.inner
-                .create_message_with_developer_role(
-                    system_prompt,
-                    messages,
-                    tools,
-                    metadata,
-                )
+                .create_message_with_developer_role(system_prompt, messages, tools, metadata)
                 .await
         } else {
             self.inner
@@ -198,10 +192,7 @@ mod tests {
 
     #[test]
     fn test_config_default_url() {
-        assert_eq!(
-            OpenAiConfig::DEFAULT_BASE_URL,
-            "https://api.openai.com/v1"
-        );
+        assert_eq!(OpenAiConfig::DEFAULT_BASE_URL, "https://api.openai.com/v1");
     }
 
     #[test]
@@ -311,7 +302,10 @@ mod tests {
     #[test]
     fn test_models_count() {
         let all_models = models::models();
-        assert!(all_models.len() >= 7, "Should have at least 7 OpenAI models");
+        assert!(
+            all_models.len() >= 7,
+            "Should have at least 7 OpenAI models"
+        );
     }
 
     #[test]
@@ -404,7 +398,9 @@ mod tests {
         assert!(is_azure_ai_inference(
             "https://myinstance.services.ai.azure.com/v1"
         ));
-        assert!(!is_azure_ai_inference("https://myresource.openai.azure.com/v1"));
+        assert!(!is_azure_ai_inference(
+            "https://myresource.openai.azure.com/v1"
+        ));
         assert!(!is_azure_ai_inference("https://api.openai.com/v1"));
     }
 

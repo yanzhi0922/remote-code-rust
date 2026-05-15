@@ -3,7 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Result, anyhow};
-use claude_config::{runtime_version, RuntimeConfig, SettingSource};
+use claude_config::{RuntimeConfig, SettingSource, runtime_version};
 
 use crate::cli::{
     PluginsCommand, PluginsInspectArgs, PluginsInstallArgs, PluginsInvokeArgs, PluginsListArgs,
@@ -880,7 +880,9 @@ fn build_plugins_validate_output(
     if let Some(plugin_name) = &args.plugin {
         let resolution = resolve_runtime_plugin(config, plugin_name, &args.plugin_roots)?;
         warnings.extend(resolution.warnings);
-        reports.push(claude_plugins::validate_plugin_bundle(&resolution.entry.bundle));
+        reports.push(claude_plugins::validate_plugin_bundle(
+            &resolution.entry.bundle,
+        ));
         return Ok(PluginValidateOutput { warnings, reports });
     }
 

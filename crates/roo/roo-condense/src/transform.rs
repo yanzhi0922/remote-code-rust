@@ -1,4 +1,4 @@
-﻿//! Message transformation for condensing.
+//! Message transformation for condensing.
 //!
 //! Transforms messages by converting tool blocks to text and injecting synthetic
 //! tool results for orphan tool calls.
@@ -73,14 +73,12 @@ pub fn inject_synthetic_tool_results(messages: &[ApiMessage]) -> Vec<ApiMessage>
     // Inject synthetic tool_results as a new user message
     let synthetic_results: Vec<ContentBlock> = orphan_ids
         .into_iter()
-        .map(|id| {
-            ContentBlock::ToolResult {
-                tool_use_id: id,
-                content: vec![ToolResultContent::Text {
-                    text: "Context condensation triggered. Tool execution deferred.".to_string(),
-                }],
-                is_error: None,
-            }
+        .map(|id| ContentBlock::ToolResult {
+            tool_use_id: id,
+            content: vec![ToolResultContent::Text {
+                text: "Context condensation triggered. Tool execution deferred.".to_string(),
+            }],
+            is_error: None,
         })
         .collect();
 
@@ -100,7 +98,7 @@ pub fn inject_synthetic_tool_results(messages: &[ApiMessage]) -> Vec<ApiMessage>
         condense_parent: None,
         is_summary: None,
         condense_id: None,
-            reasoning_details: None,
+        reasoning_details: None,
     };
 
     let mut result = messages.to_vec();
@@ -177,7 +175,9 @@ mod tests {
         assert_eq!(result.len(), 4); // Synthetic message added
         let last = result.last().unwrap();
         assert_eq!(last.role, MessageRole::User);
-        assert!(matches!(&last.content[0], ContentBlock::ToolResult { tool_use_id, .. } if tool_use_id == "tool_2"));
+        assert!(
+            matches!(&last.content[0], ContentBlock::ToolResult { tool_use_id, .. } if tool_use_id == "tool_2")
+        );
     }
 
     #[test]
@@ -201,6 +201,8 @@ mod tests {
         }];
         let result = transform_messages_for_condensing(&messages);
         assert_eq!(result.len(), 1);
-        assert!(matches!(&result[0].content[0], ContentBlock::Text { text } if text.contains("[Tool Use: read_file]")));
+        assert!(
+            matches!(&result[0].content[0], ContentBlock::Text { text } if text.contains("[Tool Use: read_file]"))
+        );
     }
 }

@@ -30,5 +30,8 @@ pub mod utils;
 // Re-export primary types and functions for convenience
 pub use types::{Command, CommandFileInfo, CommandSource};
 
-pub use loader::{get_built_in_command, get_built_in_commands, get_command, get_command_names, get_commands, try_load_command};
+pub use loader::{
+    get_built_in_command, get_built_in_commands, get_command, get_command_names, get_commands,
+    try_load_command,
+};
 pub use utils::{get_command_name_from_file, is_markdown_file};

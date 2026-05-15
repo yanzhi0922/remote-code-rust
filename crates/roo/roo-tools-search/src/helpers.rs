@@ -70,11 +70,7 @@ pub fn format_search_results(matches: &[crate::types::FileMatch]) -> String {
             let start_line = m.line_number.saturating_sub(m.context_before.len());
             for (offset, ctx_line) in m.context_before.iter().enumerate() {
                 let line_num = start_line + offset;
-                output.push_str(&format!(
-                    "{:>3} | {}\n",
-                    line_num,
-                    ctx_line.trim_end()
-                ));
+                output.push_str(&format!("{:>3} | {}\n", line_num, ctx_line.trim_end()));
             }
 
             // The match line itself
@@ -87,11 +83,7 @@ pub fn format_search_results(matches: &[crate::types::FileMatch]) -> String {
             // Context lines after
             for (offset, ctx_line) in m.context_after.iter().enumerate() {
                 let line_num = m.line_number + 1 + offset;
-                output.push_str(&format!(
-                    "{:>3} | {}\n",
-                    line_num,
-                    ctx_line.trim_end()
-                ));
+                output.push_str(&format!("{:>3} | {}\n", line_num, ctx_line.trim_end()));
             }
 
             output.push_str("----\n");
@@ -106,11 +98,7 @@ pub fn format_search_results(matches: &[crate::types::FileMatch]) -> String {
 /// Format a file list for display.
 ///
 /// Sorts files and directories, and applies a limit.
-pub fn format_file_list(
-    files: &[String],
-    directories: &[String],
-    limit: usize,
-) -> (String, bool) {
+pub fn format_file_list(files: &[String], directories: &[String], limit: usize) -> (String, bool) {
     let mut all_entries: Vec<&str> = directories.iter().map(|s| s.as_str()).collect();
     let mut file_entries: Vec<&str> = files.iter().map(|s| s.as_str()).collect();
 
@@ -291,15 +279,13 @@ mod tests {
 
     #[test]
     fn test_format_codebase_results() {
-        let results = vec![
-            crate::types::CodebaseMatch {
-                file_path: "src/main.rs".to_string(),
-                score: 0.95,
-                start_line: 1,
-                end_line: 10,
-                code_chunk: "fn main() {}".to_string(),
-            },
-        ];
+        let results = vec![crate::types::CodebaseMatch {
+            file_path: "src/main.rs".to_string(),
+            score: 0.95,
+            start_line: 1,
+            end_line: 10,
+            code_chunk: "fn main() {}".to_string(),
+        }];
         let result = format_codebase_results(&results);
         assert!(result.contains("src/main.rs:1-10: fn main() {}"));
         assert!(result.contains("score: 0.950"));

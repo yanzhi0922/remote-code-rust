@@ -1,7 +1,7 @@
-﻿//! Roo Code Cloud model definitions.
+//! Roo Code Cloud model definitions.
 
-use std::collections::HashMap;
 use roo_types::model::ModelInfo;
+use std::collections::HashMap;
 
 /// Default Roo model ID.
 pub const DEFAULT_MODEL_ID: &str = "xai/grok-code-fast-1";

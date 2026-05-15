@@ -95,10 +95,7 @@ impl NoopEmbedder {
 #[async_trait]
 impl Embedder for NoopEmbedder {
     async fn create_embeddings(&self, texts: &[&str]) -> Result<EmbeddingResponse, IndexError> {
-        let embeddings = texts
-            .iter()
-            .map(|_| vec![0.0; self.dimension])
-            .collect();
+        let embeddings = texts.iter().map(|_| vec![0.0; self.dimension]).collect();
         Ok(EmbeddingResponse { embeddings })
     }
 
@@ -187,11 +184,11 @@ impl HttpEmbedder {
         let mut headers = reqwest::header::HeaderMap::new();
         headers.insert(
             reqwest::header::AUTHORIZATION,
-            format!("Bearer {}", self.api_key)
-                .parse()
-                .map_err(|e: reqwest::header::InvalidHeaderValue| {
+            format!("Bearer {}", self.api_key).parse().map_err(
+                |e: reqwest::header::InvalidHeaderValue| {
                     IndexError::GeneralError(format!("Invalid API key header: {e}"))
-                })?,
+                },
+            )?,
         );
         headers.insert(
             reqwest::header::CONTENT_TYPE,
@@ -200,9 +197,11 @@ impl HttpEmbedder {
         for (k, v) in &self.extra_headers {
             let header_name = reqwest::header::HeaderName::from_bytes(k.as_bytes())
                 .map_err(|e| IndexError::GeneralError(format!("Invalid header name '{k}': {e}")))?;
-            let header_value = v.parse().map_err(|e: reqwest::header::InvalidHeaderValue| {
-                IndexError::GeneralError(format!("Invalid header value for '{k}': {e}"))
-            })?;
+            let header_value = v
+                .parse()
+                .map_err(|e: reqwest::header::InvalidHeaderValue| {
+                    IndexError::GeneralError(format!("Invalid header value for '{k}': {e}"))
+                })?;
             headers.insert(header_name, header_value);
         }
 
@@ -225,17 +224,19 @@ impl HttpEmbedder {
 
         let status = resp.status();
         if !status.is_success() {
-            let text = resp.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+            let text = resp
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
             return Err(IndexError::GeneralError(format!(
                 "Embedding API returned status {}: {text}",
                 status.as_u16()
             )));
         }
 
-        let embed_resp: OpenAiEmbedResponse = resp
-            .json()
-            .await
-            .map_err(|e| IndexError::GeneralError(format!("Failed to parse embedding response: {e}")))?;
+        let embed_resp: OpenAiEmbedResponse = resp.json().await.map_err(|e| {
+            IndexError::GeneralError(format!("Failed to parse embedding response: {e}"))
+        })?;
 
         let mut result = Vec::with_capacity(embed_resp.data.len());
         for item in &embed_resp.data {
@@ -247,7 +248,9 @@ impl HttpEmbedder {
                     // Base64 encoded floats - decode
                     let bytes = base64::engine::general_purpose::STANDARD
                         .decode(s)
-                        .map_err(|e| IndexError::GeneralError(format!("Base64 decode error: {e}")))?;
+                        .map_err(|e| {
+                            IndexError::GeneralError(format!("Base64 decode error: {e}"))
+                        })?;
                     let floats: Vec<f64> = bytes
                         .chunks_exact(4)
                         .map(|chunk| {
@@ -259,7 +262,7 @@ impl HttpEmbedder {
                 _ => {
                     return Err(IndexError::GeneralError(
                         "Unexpected embedding format in response".to_string(),
-                    ))
+                    ));
                 }
             }
         }
@@ -284,21 +287,25 @@ impl HttpEmbedder {
             .json(&body)
             .send()
             .await
-            .map_err(|e| IndexError::GeneralError(format!("Ollama embedding request failed: {e}")))?;
+            .map_err(|e| {
+                IndexError::GeneralError(format!("Ollama embedding request failed: {e}"))
+            })?;
 
         let status = resp.status();
         if !status.is_success() {
-            let text = resp.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+            let text = resp
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
             return Err(IndexError::GeneralError(format!(
                 "Ollama embedding API returned status {}: {text}",
                 status.as_u16()
             )));
         }
 
-        let embed_resp: OllamaEmbedResponse = resp
-            .json()
-            .await
-            .map_err(|e| IndexError::GeneralError(format!("Failed to parse Ollama embedding response: {e}")))?;
+        let embed_resp: OllamaEmbedResponse = resp.json().await.map_err(|e| {
+            IndexError::GeneralError(format!("Failed to parse Ollama embedding response: {e}"))
+        })?;
 
         Ok(EmbeddingResponse {
             embeddings: embed_resp.embeddings,
@@ -367,8 +374,9 @@ impl BedrockEmbedder {
         );
 
         let body = self.build_request_body(text);
-        let body_bytes = serde_json::to_vec(&body)
-            .map_err(|e| IndexError::GeneralError(format!("Failed to serialize Bedrock request: {e}")))?;
+        let body_bytes = serde_json::to_vec(&body).map_err(|e| {
+            IndexError::GeneralError(format!("Failed to serialize Bedrock request: {e}"))
+        })?;
 
         let timestamp = chrono::Utc::now();
         let auth_header = sign_sigv4(
@@ -385,9 +393,11 @@ impl BedrockEmbedder {
         let mut headers = reqwest::header::HeaderMap::new();
         headers.insert(
             reqwest::header::AUTHORIZATION,
-            auth_header.parse().map_err(|e: reqwest::header::InvalidHeaderValue| {
-                IndexError::GeneralError(format!("Invalid auth header: {e}"))
-            })?,
+            auth_header
+                .parse()
+                .map_err(|e: reqwest::header::InvalidHeaderValue| {
+                    IndexError::GeneralError(format!("Invalid auth header: {e}"))
+                })?,
         );
         headers.insert(
             reqwest::header::CONTENT_TYPE,
@@ -402,16 +412,15 @@ impl BedrockEmbedder {
                 .unwrap(),
         );
         let payload_hash = hex_encode(&sha2::Sha256::digest(&body_bytes));
-        headers.insert(
-            "x-amz-content-sha256",
-            payload_hash.parse().unwrap(),
-        );
+        headers.insert("x-amz-content-sha256", payload_hash.parse().unwrap());
         if let Some(ref token) = self.session_token {
             headers.insert(
                 "x-amz-security-token",
-                token.parse().map_err(|e: reqwest::header::InvalidHeaderValue| {
-                    IndexError::GeneralError(format!("Invalid session token: {e}"))
-                })?,
+                token
+                    .parse()
+                    .map_err(|e: reqwest::header::InvalidHeaderValue| {
+                        IndexError::GeneralError(format!("Invalid session token: {e}"))
+                    })?,
             );
         }
 
@@ -426,17 +435,19 @@ impl BedrockEmbedder {
 
         let status = resp.status();
         if !status.is_success() {
-            let text = resp.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+            let text = resp
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
             return Err(IndexError::GeneralError(format!(
                 "Bedrock API returned status {}: {text}",
                 status.as_u16()
             )));
         }
 
-        let response_body: serde_json::Value = resp
-            .json()
-            .await
-            .map_err(|e| IndexError::GeneralError(format!("Failed to parse Bedrock response: {e}")))?;
+        let response_body: serde_json::Value = resp.json().await.map_err(|e| {
+            IndexError::GeneralError(format!("Failed to parse Bedrock response: {e}"))
+        })?;
 
         self.extract_embedding(&response_body)
     }
@@ -482,9 +493,15 @@ impl BedrockEmbedder {
                 .and_then(|e| e.get(0))
                 .and_then(|e| e.get("embedding"))
                 .cloned()
-                .unwrap_or_else(|| body.get("embedding").cloned().unwrap_or(serde_json::Value::Null))
+                .unwrap_or_else(|| {
+                    body.get("embedding")
+                        .cloned()
+                        .unwrap_or(serde_json::Value::Null)
+                })
         } else if self.model.starts_with("amazon.titan-embed") {
-            body.get("embedding").cloned().unwrap_or(serde_json::Value::Null)
+            body.get("embedding")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null)
         } else if self.model.starts_with("cohere.embed-v4") {
             // Cohere v4: { embeddings: { float: [[...]] } }
             body.get("embeddings")
@@ -504,13 +521,13 @@ impl BedrockEmbedder {
                 .and_then(|a| a.first().cloned())
                 .unwrap_or(serde_json::Value::Null)
         } else {
-            body.get("embedding").cloned().unwrap_or(serde_json::Value::Null)
+            body.get("embedding")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null)
         };
 
         match embedding {
-            serde_json::Value::Array(arr) => {
-                Ok(arr.iter().filter_map(|v| v.as_f64()).collect())
-            }
+            serde_json::Value::Array(arr) => Ok(arr.iter().filter_map(|v| v.as_f64()).collect()),
             other => Err(IndexError::GeneralError(format!(
                 "Unexpected Bedrock embedding format: {other}"
             ))),
@@ -572,7 +589,11 @@ fn parse_url_sigv4(url: &str) -> (String, String, Option<String>) {
     } else {
         (rest.to_string(), None)
     };
-    let path = if path.is_empty() { "/".to_string() } else { format!("/{path}") };
+    let path = if path.is_empty() {
+        "/".to_string()
+    } else {
+        format!("/{path}")
+    };
     (host, path, query)
 }
 
@@ -586,7 +607,10 @@ fn hmac_sha256(key: &[u8], data: &[u8]) -> Vec<u8> {
 }
 
 fn get_signature_key(secret_key: &str, date_stamp: &str, region: &str, service: &str) -> Vec<u8> {
-    let k_date = hmac_sha256(format!("AWS4{secret_key}").as_bytes(), date_stamp.as_bytes());
+    let k_date = hmac_sha256(
+        format!("AWS4{secret_key}").as_bytes(),
+        date_stamp.as_bytes(),
+    );
     let k_region = hmac_sha256(&k_date, region.as_bytes());
     let k_service = hmac_sha256(&k_region, service.as_bytes());
     hmac_sha256(&k_service, b"aws4_request")
@@ -801,7 +825,10 @@ mod tests {
         let embedder = NoopEmbedder::new(128);
         assert_eq!(embedder.dimension(), 128);
 
-        let result = embedder.create_embeddings(&["hello", "world"]).await.unwrap();
+        let result = embedder
+            .create_embeddings(&["hello", "world"])
+            .await
+            .unwrap();
         assert_eq!(result.embeddings.len(), 2);
         assert_eq!(result.embeddings[0].len(), 128);
     }

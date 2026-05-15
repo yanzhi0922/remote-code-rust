@@ -676,9 +676,7 @@ fn resolve_default_prompt_blocks(
     Ok(result)
 }
 
-pub use subagent::{
-    DEFAULT_AGENT_PROMPT, enhance_system_prompt_with_env_details,
-};
+pub use subagent::{DEFAULT_AGENT_PROMPT, enhance_system_prompt_with_env_details};
 
 pub fn build_default_system_prompt_for_session(
     session_id: uuid::Uuid,

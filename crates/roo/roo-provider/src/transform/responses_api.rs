@@ -1,4 +1,4 @@
-﻿//! OpenAI Responses API format conversion (input + stream parsing).
+//! OpenAI Responses API format conversion (input + stream parsing).
 //!
 //! Derived from `src/api/transform/responses-api-input.ts` and
 //! `src/api/transform/responses-api-stream.ts`.
@@ -17,7 +17,7 @@
 //! optional event. [`normalize_usage`] converts a raw usage JSON object into
 //! an [`ApiStreamChunk`] with standardised token counts.
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use roo_types::api::{
     ApiMessage, ApiStreamChunk, ContentBlock, ImageSource, MessageRole, ToolResultContent,
@@ -72,7 +72,11 @@ fn process_assistant_for_input(message: &ApiMessage, input: &mut Vec<Value>) {
                     "content": [{ "type": "output_text", "text": text }]
                 }));
             }
-            ContentBlock::ToolUse { id, name, input: tool_input } => {
+            ContentBlock::ToolUse {
+                id,
+                name,
+                input: tool_input,
+            } => {
                 let args = if tool_input.is_string() {
                     tool_input.as_str().unwrap_or_default().to_string()
                 } else {
@@ -298,10 +302,7 @@ pub fn parse_responses_api_stream(data: &str) -> Result<Option<ResponseApiEvent>
                 .or_else(|| item.get("id"))
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
-            let name = item
-                .get("name")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
+            let name = item.get("name").and_then(|v| v.as_str()).unwrap_or("");
             if !call_id.is_empty() && !name.is_empty() {
                 return Ok(Some(ResponseApiEvent::FunctionCallStart {
                     id: call_id.to_string(),
@@ -523,7 +524,10 @@ mod tests {
 
     #[test]
     fn test_input_assistant_text() {
-        let messages = vec![make_message(MessageRole::Assistant, vec![text_block("Hi!")])];
+        let messages = vec![make_message(
+            MessageRole::Assistant,
+            vec![text_block("Hi!")],
+        )];
         let result = convert_to_responses_api_input(&messages);
         assert_eq!(result.len(), 1);
         assert_eq!(result[0]["type"], "message");
@@ -633,7 +637,11 @@ mod tests {
         let data = r#"{"type":"response.output_item.done","item":{"type":"function_call","call_id":"call_1","name":"read_file","arguments":"{\"path\":\"a.rs\"}"}}"#;
         let event = parse_responses_api_stream(data).unwrap().unwrap();
         match event {
-            ResponseApiEvent::FunctionCall { id, name, arguments } => {
+            ResponseApiEvent::FunctionCall {
+                id,
+                name,
+                arguments,
+            } => {
                 assert_eq!(id, "call_1");
                 assert_eq!(name, "read_file");
                 assert!(arguments.contains("path"));

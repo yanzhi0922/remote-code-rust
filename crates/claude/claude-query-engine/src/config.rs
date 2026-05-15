@@ -26,9 +26,9 @@ pub type PostCompactTransform = dyn Fn(
 pub type CompactConversationHandler = dyn Fn(
         Vec<claude_core::ConversationEntry>,
         ContextWindowManager,
-    )
-        -> Pin<Box<dyn Future<Output = Option<(Vec<claude_core::ConversationEntry>, String)>> + Send>>
-    + Send
+    ) -> Pin<
+        Box<dyn Future<Output = Option<(Vec<claude_core::ConversationEntry>, String)>> + Send>,
+    > + Send
     + Sync;
 
 pub type PostSamplingHook =
@@ -41,15 +41,8 @@ pub type StopHook = dyn Fn(
     + Send
     + Sync;
 
-/// Query effort hint aligned with Claude Code's runtime knobs.
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum EffortLevel {
-    Low,
-    #[default]
-    Medium,
-    High,
-}
+/// Re-export EffortLevel from the canonical definition in claude-context.
+pub use claude_context::effort::EffortLevel;
 
 /// Source that initiated a query.
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -157,7 +150,7 @@ pub struct ProcessUserInputContext {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_output_tokens_override: Option<u32>,
     #[serde(skip)]
-    pub task_budget: Arc<std::sync::Mutex<Option<TaskBudget>>>,
+    pub task_budget: Arc<parking_lot::Mutex<Option<TaskBudget>>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub memory_content: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -193,7 +186,7 @@ impl ProcessUserInputContext {
             model: model.into(),
             provider_model_override: None,
             max_output_tokens_override: None,
-            task_budget: Arc::new(std::sync::Mutex::new(None)),
+            task_budget: Arc::new(parking_lot::Mutex::new(None)),
             memory_content: None,
             mcp_instructions: None,
             discovered_skills: HashSet::new(),

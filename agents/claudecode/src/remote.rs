@@ -5,7 +5,6 @@ use std::time::Duration;
 
 use anyhow::{Result, anyhow};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
-use futures::StreamExt;
 use claude_control_plane::{
     ArtifactCreateRequest as RemoteArtifactCreateRequest, ArtifactRecord as RemoteArtifactRecord,
     BootstrapClaimRequest as RemoteBootstrapClaimRequest,
@@ -27,6 +26,7 @@ use claude_runner::{
     ListResponse as RemoteListResponse, RunnerSnapshot as RemoteRunnerSnapshot,
     RunnerState as RemoteRunnerState,
 };
+use futures::StreamExt;
 use reqwest::Client;
 use tokio::io::AsyncWriteExt;
 use tokio_tungstenite::{
@@ -859,25 +859,71 @@ fn remote_event_summary(detail: &RemoteTimelineEventDetail) -> String {
         RemoteTimelineEventDetail::DaemonPresenceChanged { state } => {
             format!("state={state:?}")
         }
-        RemoteTimelineEventDetail::SubtaskStarted { task_id, parent_task_id, description, depth } => {
-            format!("task_id={task_id} parent={:?} depth={depth} desc={}", parent_task_id.as_deref().unwrap_or("(none)"), truncate_remote_preview(description, 60))
+        RemoteTimelineEventDetail::SubtaskStarted {
+            task_id,
+            parent_task_id,
+            description,
+            depth,
+        } => {
+            format!(
+                "task_id={task_id} parent={:?} depth={depth} desc={}",
+                parent_task_id.as_deref().unwrap_or("(none)"),
+                truncate_remote_preview(description, 60)
+            )
         }
-        RemoteTimelineEventDetail::SubtaskProgress { task_id, status, summary } => {
-            format!("task_id={task_id} status={status} summary={}", truncate_remote_preview(summary, 60))
+        RemoteTimelineEventDetail::SubtaskProgress {
+            task_id,
+            status,
+            summary,
+        } => {
+            format!(
+                "task_id={task_id} status={status} summary={}",
+                truncate_remote_preview(summary, 60)
+            )
         }
-        RemoteTimelineEventDetail::SubtaskCompleted { task_id, status, summary, turns_used } => {
-            format!("task_id={task_id} status={status} turns={:?} summary={}", turns_used, truncate_remote_preview(summary, 60))
+        RemoteTimelineEventDetail::SubtaskCompleted {
+            task_id,
+            status,
+            summary,
+            turns_used,
+        } => {
+            format!(
+                "task_id={task_id} status={status} turns={:?} summary={}",
+                turns_used,
+                truncate_remote_preview(summary, 60)
+            )
         }
-        RemoteTimelineEventDetail::BatchProgress { total, completed, running } => {
+        RemoteTimelineEventDetail::BatchProgress {
+            total,
+            completed,
+            running,
+        } => {
             format!("total={total} completed={completed} running={running}")
         }
-        RemoteTimelineEventDetail::ContextUsage { estimated_tokens, max_input_tokens, threshold_tokens, ratio } => {
-            format!("tokens={estimated_tokens}/{max_input_tokens} threshold={threshold_tokens} ratio={ratio:.2}")
+        RemoteTimelineEventDetail::ContextUsage {
+            estimated_tokens,
+            max_input_tokens,
+            threshold_tokens,
+            ratio,
+        } => {
+            format!(
+                "tokens={estimated_tokens}/{max_input_tokens} threshold={threshold_tokens} ratio={ratio:.2}"
+            )
         }
-        RemoteTimelineEventDetail::ContextOverflow { estimated_tokens, max_input_tokens, threshold_tokens, ratio } => {
-            format!("OVERFLOW tokens={estimated_tokens}/{max_input_tokens} threshold={threshold_tokens} ratio={ratio:.2}")
+        RemoteTimelineEventDetail::ContextOverflow {
+            estimated_tokens,
+            max_input_tokens,
+            threshold_tokens,
+            ratio,
+        } => {
+            format!(
+                "OVERFLOW tokens={estimated_tokens}/{max_input_tokens} threshold={threshold_tokens} ratio={ratio:.2}"
+            )
         }
-        RemoteTimelineEventDetail::ContextCompacted { entries_removed, usage_ratio } => {
+        RemoteTimelineEventDetail::ContextCompacted {
+            entries_removed,
+            usage_ratio,
+        } => {
             format!("removed={entries_removed} ratio={usage_ratio:.2}")
         }
     }

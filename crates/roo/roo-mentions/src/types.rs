@@ -209,9 +209,7 @@ pub enum ContentBlock {
 impl ContentBlock {
     /// Create a new text content block.
     pub fn text(text: impl Into<String>) -> Self {
-        Self::Text {
-            text: text.into(),
-        }
+        Self::Text { text: text.into() }
     }
 
     /// Get the text content if this is a text block.

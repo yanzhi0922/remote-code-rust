@@ -202,9 +202,7 @@ impl McpTransportConfig {
         match self {
             Self::Sse { headers_helper, .. }
             | Self::Http { headers_helper, .. }
-            | Self::WebSocket { headers_helper, .. } => {
-                headers_helper.as_deref()
-            }
+            | Self::WebSocket { headers_helper, .. } => headers_helper.as_deref(),
             Self::Stdio { .. }
             | Self::SseIde { .. }
             | Self::WsIde { .. }

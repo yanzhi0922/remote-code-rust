@@ -203,7 +203,10 @@ mod tests {
 
     #[test]
     fn test_persistence_task_status_default() {
-        assert_eq!(PersistenceTaskStatus::default(), PersistenceTaskStatus::Active);
+        assert_eq!(
+            PersistenceTaskStatus::default(),
+            PersistenceTaskStatus::Active
+        );
     }
 
     #[test]
@@ -353,9 +356,18 @@ mod tests {
         let base = std::path::Path::new("/data/storage");
         let info = TaskStorageInfo::new(base, "abc-123");
         assert_eq!(info.task_id, "abc-123");
-        assert_eq!(info.base_path, std::path::PathBuf::from("/data/storage/tasks/abc-123"));
-        assert_eq!(info.messages_file, std::path::PathBuf::from("/data/storage/tasks/abc-123/messages.json"));
-        assert_eq!(info.meta_file, std::path::PathBuf::from("/data/storage/tasks/abc-123/meta.json"));
+        assert_eq!(
+            info.base_path,
+            std::path::PathBuf::from("/data/storage/tasks/abc-123")
+        );
+        assert_eq!(
+            info.messages_file,
+            std::path::PathBuf::from("/data/storage/tasks/abc-123/messages.json")
+        );
+        assert_eq!(
+            info.meta_file,
+            std::path::PathBuf::from("/data/storage/tasks/abc-123/meta.json")
+        );
     }
 
     #[test]

@@ -43,7 +43,10 @@ pub enum TaskEvent {
     },
     /// Task aborted by user or error.
     /// Source: TS `abortTask()` flow
-    TaskAborted { task_id: String, reason: Option<String> },
+    TaskAborted {
+        task_id: String,
+        reason: Option<String>,
+    },
     /// Task focused (brought to foreground).
     /// Source: TS `ClineProvider.ts` line 274 — `emit(RooCodeEventName.TaskFocused)`
     TaskFocused { task_id: String },
@@ -211,10 +214,7 @@ pub enum TaskEvent {
     // --- Error events ---
     /// An error occurred during task execution.
     /// Source: TS `say("error", ...)` — e.g., "MODEL_NO_TOOLS_USED", "MODEL_NO_ASSISTANT_MESSAGES"
-    Error {
-        task_id: String,
-        error: String,
-    },
+    Error { task_id: String, error: String },
     /// A tool execution error occurred.
     /// Source: TS `recordToolError()` lines 4625-4635
     ToolError {
@@ -289,10 +289,7 @@ pub enum TaskEvent {
     /// Source: TS `attemptApiRequest()` → `ask("api_req_failed")` — when API call
     /// fails, the user can choose to retry or cancel. The Rust implementation uses
     /// a oneshot channel pattern similar to tool approval.
-    ApiRequestFailed {
-        task_id: String,
-        error: String,
-    },
+    ApiRequestFailed { task_id: String, error: String },
 
     /// Consecutive mistake limit reached, asking user for guidance.
     ///
@@ -344,10 +341,7 @@ pub enum TaskEvent {
     // --- Rate limit events ---
     /// Rate limit countdown tick.
     /// Source: TS `maybeWaitForProviderRateLimit()` → `say("api_req_rate_limit_wait")`
-    ApiRateLimitWait {
-        task_id: String,
-        seconds: u64,
-    },
+    ApiRateLimitWait { task_id: String, seconds: u64 },
 }
 
 // ---------------------------------------------------------------------------
@@ -856,12 +850,7 @@ impl TaskEventEmitter {
     /// Source: TS `AskFollowupQuestionTool.ts` → `task.ask("followup", question, suggest)`
     /// Emitted when the `ask_followup_question` tool needs a text response
     /// from the user. The response is provided via `set_followup_response()`.
-    pub fn emit_followup_question(
-        &self,
-        task_id: &str,
-        tool_call_id: &str,
-        question_json: &str,
-    ) {
+    pub fn emit_followup_question(&self, task_id: &str, tool_call_id: &str, question_json: &str) {
         self.emit(&TaskEvent::FollowupQuestion {
             task_id: task_id.to_string(),
             tool_call_id: tool_call_id.to_string(),
@@ -874,12 +863,7 @@ impl TaskEventEmitter {
     /// Source: TS `AttemptCompletionTool.ts` → `task.ask("completion_result", text)`
     /// Emitted when the `attempt_completion` tool presents its result.
     /// The user can accept (empty response) or provide feedback.
-    pub fn emit_completion_result(
-        &self,
-        task_id: &str,
-        tool_call_id: &str,
-        completion_text: &str,
-    ) {
+    pub fn emit_completion_result(&self, task_id: &str, tool_call_id: &str, completion_text: &str) {
         self.emit(&TaskEvent::CompletionResult {
             task_id: task_id.to_string(),
             tool_call_id: tool_call_id.to_string(),
@@ -1107,10 +1091,7 @@ mod tests {
         emitter.emit_task_completed("task_1", token_usage, tool_usage, false);
 
         let data = received.lock().unwrap().clone();
-        assert_eq!(
-            data,
-            Some(("task_1".to_string(), 1000u64, 1, false))
-        );
+        assert_eq!(data, Some(("task_1".to_string(), 1000u64, 1, false)));
     }
 
     #[test]
@@ -1126,8 +1107,11 @@ mod tests {
                 tool_usage,
             } = event
             {
-                *received_clone.lock().unwrap() =
-                    Some((task_id.clone(), token_usage.total_tokens_in, tool_usage.len()));
+                *received_clone.lock().unwrap() = Some((
+                    task_id.clone(),
+                    token_usage.total_tokens_in,
+                    tool_usage.len(),
+                ));
             }
         });
 
@@ -1191,7 +1175,11 @@ mod tests {
             }
         });
 
-        emitter.emit_task_delegation_completed("parent_1", "child_1", "Task completed successfully");
+        emitter.emit_task_delegation_completed(
+            "parent_1",
+            "child_1",
+            "Task completed successfully",
+        );
 
         let data = received.lock().unwrap().clone();
         assert_eq!(

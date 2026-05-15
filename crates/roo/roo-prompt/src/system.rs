@@ -2,7 +2,7 @@
 //!
 //! Source: `src/core/prompts/system.ts`
 
-use roo_types::mode::{get_mode_by_slug, CustomModePrompts, ModeConfig, PromptComponent};
+use roo_types::mode::{CustomModePrompts, ModeConfig, PromptComponent, get_mode_by_slug};
 
 use crate::sections::*;
 use crate::types::SystemPromptParams;
@@ -100,11 +100,7 @@ pub fn generate_system_prompt(params: SystemPromptParams) -> String {
         } else {
             format!("\n{}", skills_section)
         },
-        get_rules_section(
-            &params.cwd,
-            &params.shell,
-            params.settings.as_ref(),
-        ),
+        get_rules_section(&params.cwd, &params.shell, params.settings.as_ref(),),
         get_system_info_section(
             &params.os_info,
             &params.shell,
@@ -206,7 +202,10 @@ mod tests {
         prompts.insert("code".to_string(), Some(component));
         let result = get_prompt_component(Some(&prompts), "code");
         assert!(result.is_some());
-        assert_eq!(result.unwrap().role_definition, Some("Custom role".to_string()));
+        assert_eq!(
+            result.unwrap().role_definition,
+            Some("Custom role".to_string())
+        );
     }
 
     #[test]

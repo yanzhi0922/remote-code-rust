@@ -4,9 +4,11 @@
 //! Computes provider-specific reasoning/thinking parameters based on model
 //! capabilities and user settings.
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
-use roo_types::model::{ModelInfo, ReasoningEffortExtended, ReasoningEffortSetting, SupportsReasoningEffort};
+use roo_types::model::{
+    ModelInfo, ReasoningEffortExtended, ReasoningEffortSetting, SupportsReasoningEffort,
+};
 use roo_types::provider_settings::ProviderSettings;
 
 // ---------------------------------------------------------------------------
@@ -288,22 +290,21 @@ pub fn get_gemini_reasoning(opts: &GetModelReasoningOptions) -> Option<Value> {
     // Validate that the selected effort is supported by this specific model.
     // e.g. gemini-3-pro-preview only supports ["low", "high"] — sending
     // "medium" (carried over from a different model's settings) causes errors.
-    let effort_to_use = if let Some(SupportsReasoningEffort::Array(arr)) = &opts.model.supports_reasoning_effort {
-        if is_gemini_thinking_level(effort_str)
-            && !arr.iter().any(|v| v == effort_str)
-        {
-            // Fall back to model default
-            opts.model
-                .reasoning_effort
-                .map(effort_extended_to_str)
-                .unwrap_or("")
-                .to_string()
+    let effort_to_use =
+        if let Some(SupportsReasoningEffort::Array(arr)) = &opts.model.supports_reasoning_effort {
+            if is_gemini_thinking_level(effort_str) && !arr.iter().any(|v| v == effort_str) {
+                // Fall back to model default
+                opts.model
+                    .reasoning_effort
+                    .map(effort_extended_to_str)
+                    .unwrap_or("")
+                    .to_string()
+            } else {
+                effort_str.to_string()
+            }
         } else {
             effort_str.to_string()
-        }
-    } else {
-        effort_str.to_string()
-    };
+        };
 
     // Effort-based models on Google GenAI support minimal/low/medium/high levels.
     if effort_to_use.is_empty() || !is_gemini_thinking_level(&effort_to_use) {
@@ -323,7 +324,8 @@ pub fn get_gemini_reasoning(opts: &GetModelReasoningOptions) -> Option<Value> {
 /// Returns `None` if reasoning is not applicable or the effort is `"disable"`.
 pub fn get_openrouter_reasoning(opts: &GetModelReasoningOptions) -> Option<Value> {
     if should_use_reasoning_budget(opts.model, opts.settings) {
-        opts.reasoning_budget.map(|budget| json!({ "max_tokens": budget }))
+        opts.reasoning_budget
+            .map(|budget| json!({ "max_tokens": budget }))
     } else if should_use_reasoning_effort(opts.model, opts.settings) {
         match opts.reasoning_effort {
             Some(ReasoningEffortSetting::Disable) | None => None,
@@ -431,7 +433,9 @@ mod tests {
     /// Helper to create a model with reasoning effort support (array).
     fn effort_model_array() -> ModelInfo {
         ModelInfo {
-            supports_reasoning_effort: Some(SupportsReasoningEffort::from(["low", "medium", "high"])),
+            supports_reasoning_effort: Some(SupportsReasoningEffort::from([
+                "low", "medium", "high",
+            ])),
             reasoning_effort: Some(ReasoningEffortExtended::Medium),
             context_window: 128_000,
             ..Default::default()
@@ -672,7 +676,9 @@ mod tests {
     #[test]
     fn test_get_gemini_reasoning_effort_based() {
         let model = ModelInfo {
-            supports_reasoning_effort: Some(SupportsReasoningEffort::from(["low", "medium", "high"])),
+            supports_reasoning_effort: Some(SupportsReasoningEffort::from([
+                "low", "medium", "high",
+            ])),
             reasoning_effort: Some(ReasoningEffortExtended::Medium),
             context_window: 128_000,
             ..Default::default()

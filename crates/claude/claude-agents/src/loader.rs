@@ -7,10 +7,10 @@ use std::fs;
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use indexmap::IndexMap;
-use claude_context::RuntimeIdentityContext;
 #[cfg(test)]
 use claude_context::RuntimeFeatureGates;
+use claude_context::RuntimeIdentityContext;
+use indexmap::IndexMap;
 use serde::Deserialize;
 use walkdir::WalkDir;
 

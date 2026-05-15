@@ -172,8 +172,8 @@ impl RemoteConfigLoader {
         let yaml_data: serde_yaml::Value = serde_yaml::from_str(&data)
             .map_err(|e| RemoteConfigError::YamlParseError(e.to_string()))?;
 
-        let response: ModeMarketplaceResponse =
-            serde_yaml::from_value(yaml_data).map_err(|e| RemoteConfigError::ValidationError(e.to_string()))?;
+        let response: ModeMarketplaceResponse = serde_yaml::from_value(yaml_data)
+            .map_err(|e| RemoteConfigError::ValidationError(e.to_string()))?;
 
         let items: Vec<MarketplaceItem> = response
             .items
@@ -208,8 +208,8 @@ impl RemoteConfigLoader {
         let yaml_data: serde_yaml::Value = serde_yaml::from_str(&data)
             .map_err(|e| RemoteConfigError::YamlParseError(e.to_string()))?;
 
-        let response: McpMarketplaceResponse =
-            serde_yaml::from_value(yaml_data).map_err(|e| RemoteConfigError::ValidationError(e.to_string()))?;
+        let response: McpMarketplaceResponse = serde_yaml::from_value(yaml_data)
+            .map_err(|e| RemoteConfigError::ValidationError(e.to_string()))?;
 
         let items: Vec<MarketplaceItem> = response
             .items
@@ -232,7 +232,11 @@ impl RemoteConfigLoader {
     }
 
     /// Fetch a URL with exponential backoff retry.
-    async fn fetch_with_retry(&self, url: &str, max_retries: u32) -> Result<String, RemoteConfigError> {
+    async fn fetch_with_retry(
+        &self,
+        url: &str,
+        max_retries: u32,
+    ) -> Result<String, RemoteConfigError> {
         let mut last_error: Option<RemoteConfigError> = None;
 
         for i in 0..max_retries {
@@ -272,9 +276,8 @@ impl RemoteConfigLoader {
             }
         }
 
-        Err(last_error.unwrap_or_else(|| {
-            RemoteConfigError::RetriesExhausted("Unknown error".to_string())
-        }))
+        Err(last_error
+            .unwrap_or_else(|| RemoteConfigError::RetriesExhausted("Unknown error".to_string())))
     }
 
     fn get_from_cache(&self, key: &str) -> Option<Vec<MarketplaceItem>> {

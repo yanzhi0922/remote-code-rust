@@ -264,7 +264,10 @@ Instructions.";
 
         let (fm, body) = result.unwrap();
         assert_eq!(fm.name, Some("test-skill".to_string()));
-        assert_eq!(fm.mode_slugs, Some(vec!["code".to_string(), "architect".to_string()]));
+        assert_eq!(
+            fm.mode_slugs,
+            Some(vec!["code".to_string(), "architect".to_string()])
+        );
         assert_eq!(body, "Instructions.");
     }
 

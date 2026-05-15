@@ -1,4 +1,4 @@
-use crate::types::{Message, JSONRPC_VERSION};
+use crate::types::{JSONRPC_VERSION, Message};
 
 /// Validation error types for JSON-RPC 2.0 messages
 #[derive(Debug, thiserror::Error)]

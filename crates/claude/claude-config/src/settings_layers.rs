@@ -1,11 +1,11 @@
-use std::collections::BTreeSet;
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use claude_core::ProviderProtocol;
 use claude_core::HookMatcher;
+use claude_core::ProviderProtocol;
 use serde::{Deserialize, Serialize};
 
 use crate::tool_filters::{merge_tool_filters, normalize_tool_filters};

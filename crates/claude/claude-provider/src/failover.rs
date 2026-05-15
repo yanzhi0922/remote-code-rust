@@ -3,8 +3,8 @@
 //! [`FailoverProviderClient`] wraps multiple provider configurations and
 //! automatically switches to the next healthy provider on transient failures.
 
+use parking_lot::Mutex;
 use std::collections::HashMap;
-use std::sync::Mutex;
 use std::time::Instant;
 
 use anyhow::{Result, anyhow};
@@ -104,7 +104,7 @@ impl FailoverProviderClient {
             .config
             .max_failover_attempts
             .min(self.config.providers.len());
-        let start_index = *self.active_index.lock().unwrap_or_else(|e| e.into_inner());
+        let start_index = *self.active_index.lock();
 
         let mut last_error: Option<anyhow::Error> = None;
         for attempt in 0..max_attempts {
@@ -143,39 +143,30 @@ impl FailoverProviderClient {
     /// # Panics
     /// Panics if the internal `active_index` mutex is poisoned.
     pub fn active_provider(&self) -> &ProviderConfig {
-        let index = *self.active_index.lock().unwrap_or_else(|e| e.into_inner());
+        let index = *self.active_index.lock();
         &self.config.providers[index]
     }
 
     /// # Panics
     /// Panics if the internal stats mutex is poisoned.
     pub fn stats(&self) -> FailoverStats {
-        self.stats.lock().unwrap_or_else(|e| e.into_inner()).clone()
+        self.stats.lock().clone()
     }
 
     fn mark_healthy(&self, index: usize) {
-        *self.active_index.lock().unwrap_or_else(|e| e.into_inner()) = index;
+        *self.active_index.lock() = index;
     }
 
     fn record_attempt(&self, provider_name: &str) {
-        self.stats
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .record_attempt(provider_name);
+        self.stats.lock().record_attempt(provider_name);
     }
 
     fn record_failure(&self, provider_name: &str) {
-        self.stats
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .record_failure(provider_name);
+        self.stats.lock().record_failure(provider_name);
     }
 
     fn record_failover_event(&self) {
-        self.stats
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .record_failover();
+        self.stats.lock().record_failover();
     }
 
     fn should_failover(&self, error: &anyhow::Error) -> bool {

@@ -67,14 +67,14 @@ pub fn generate_system_prompt(params: GenerateSystemPromptParams) -> GenerateSys
     let system_prompt = roo_prompt::build_system_prompt(
         &params.cwd,
         mode,
-        None,                      // custom_modes
-        None,                      // custom_mode_prompts
-        params.mcp_enabled,        // has_mcp
+        None,               // custom_modes
+        None,               // custom_mode_prompts
+        params.mcp_enabled, // has_mcp
         params.custom_instructions.as_deref(),
         params.language.as_deref(),
         params.roo_ignore_instructions.as_deref(),
         Some(&settings),
-        &[],                       // skills
+        &[], // skills
         &os_info,
         shell,
         &home_dir,

@@ -6,7 +6,8 @@
 //! for external processing. Supports URL and text type elicitation with
 //! timeout handling.
 
-use std::sync::{Arc, Mutex};
+use parking_lot::Mutex;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
@@ -332,20 +333,20 @@ impl QueuedElicitationHandler {
     ///
     /// Returns all queued events and clears the internal buffer.
     pub fn drain_pending(&self) -> Vec<ElicitationRequestEvent> {
-        let mut guard = self.pending.lock().unwrap_or_else(|e| e.into_inner());
+        let mut guard = self.pending.lock();
         std::mem::take(&mut *guard)
     }
 
     /// Get the number of pending events.
     #[must_use]
     pub fn pending_count(&self) -> usize {
-        self.pending.lock().unwrap_or_else(|e| e.into_inner()).len()
+        self.pending.lock().len()
     }
 }
 
 impl ElicitationHandler for QueuedElicitationHandler {
     fn handle_elicitation(&self, event: ElicitationRequestEvent) -> ElicitationResult {
-        let mut guard = self.pending.lock().unwrap_or_else(|e| e.into_inner());
+        let mut guard = self.pending.lock();
         guard.push(event);
         // Return decline by default; the queued events can be processed
         // asynchronously and the response can be updated later.

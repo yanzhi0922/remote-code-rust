@@ -23,8 +23,7 @@ pub struct VercelConfig {
 
 impl VercelConfig {
     /// Default Vercel AI Gateway base URL.
-    pub const DEFAULT_BASE_URL: &'static str =
-        "https://sdk.vercel.ai/api/v1/ai-gateway-gateway";
+    pub const DEFAULT_BASE_URL: &'static str = "https://sdk.vercel.ai/api/v1/ai-gateway-gateway";
 
     /// Create configuration from provider settings.
     ///

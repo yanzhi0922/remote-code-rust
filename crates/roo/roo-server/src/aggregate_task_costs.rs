@@ -88,10 +88,7 @@ where
     let history = match get_task_history(task_id) {
         Some(h) => h,
         None => {
-            warn!(
-                "[aggregateTaskCostsRecursive] Task {} not found",
-                task_id
-            );
+            warn!("[aggregateTaskCostsRecursive] Task {} not found", task_id);
             return AggregatedCosts::default();
         }
     };
@@ -104,12 +101,9 @@ where
     let child_ids = history.child_ids();
     if !child_ids.is_empty() {
         for child_id in child_ids {
-            let child_aggregated = aggregate_task_costs_recursive(
-                child_id,
-                &get_task_history,
-                Some(visited.clone()),
-            )
-            .await;
+            let child_aggregated =
+                aggregate_task_costs_recursive(child_id, &get_task_history, Some(visited.clone()))
+                    .await;
             children_cost += child_aggregated.total_cost;
             child_breakdown.insert(child_id.clone(), child_aggregated);
         }
@@ -164,11 +158,8 @@ where
     let child_ids = history.child_ids();
     if !child_ids.is_empty() {
         for child_id in child_ids {
-            let child_aggregated = aggregate_task_costs_sync(
-                child_id,
-                get_task_history,
-                Some(visited.clone()),
-            );
+            let child_aggregated =
+                aggregate_task_costs_sync(child_id, get_task_history, Some(visited.clone()));
             children_cost += child_aggregated.total_cost;
             child_breakdown.insert(child_id.clone(), child_aggregated);
         }
@@ -214,9 +205,15 @@ mod tests {
 
     #[test]
     fn test_aggregate_single_task() {
-        let items: HashMap<String, TestHistoryItem> = vec![
-            ("task1".to_string(), TestHistoryItem { cost: 1.5, children: vec![] }),
-        ].into_iter().collect();
+        let items: HashMap<String, TestHistoryItem> = vec![(
+            "task1".to_string(),
+            TestHistoryItem {
+                cost: 1.5,
+                children: vec![],
+            },
+        )]
+        .into_iter()
+        .collect();
 
         let result = aggregate_task_costs_sync("task1", &|id| items.get(id).cloned(), None);
         assert_eq!(result.own_cost, 1.5);
@@ -228,10 +225,30 @@ mod tests {
     #[test]
     fn test_aggregate_with_children() {
         let items: HashMap<String, TestHistoryItem> = vec![
-            ("parent".to_string(), TestHistoryItem { cost: 2.0, children: vec!["child1".to_string(), "child2".to_string()] }),
-            ("child1".to_string(), TestHistoryItem { cost: 0.5, children: vec![] }),
-            ("child2".to_string(), TestHistoryItem { cost: 1.0, children: vec![] }),
-        ].into_iter().collect();
+            (
+                "parent".to_string(),
+                TestHistoryItem {
+                    cost: 2.0,
+                    children: vec!["child1".to_string(), "child2".to_string()],
+                },
+            ),
+            (
+                "child1".to_string(),
+                TestHistoryItem {
+                    cost: 0.5,
+                    children: vec![],
+                },
+            ),
+            (
+                "child2".to_string(),
+                TestHistoryItem {
+                    cost: 1.0,
+                    children: vec![],
+                },
+            ),
+        ]
+        .into_iter()
+        .collect();
 
         let result = aggregate_task_costs_sync("parent", &|id| items.get(id).cloned(), None);
         assert_eq!(result.own_cost, 2.0);
@@ -253,9 +270,23 @@ mod tests {
     #[test]
     fn test_aggregate_circular_reference() {
         let items: HashMap<String, TestHistoryItem> = vec![
-            ("a".to_string(), TestHistoryItem { cost: 1.0, children: vec!["b".to_string()] }),
-            ("b".to_string(), TestHistoryItem { cost: 1.0, children: vec!["a".to_string()] }),
-        ].into_iter().collect();
+            (
+                "a".to_string(),
+                TestHistoryItem {
+                    cost: 1.0,
+                    children: vec!["b".to_string()],
+                },
+            ),
+            (
+                "b".to_string(),
+                TestHistoryItem {
+                    cost: 1.0,
+                    children: vec!["a".to_string()],
+                },
+            ),
+        ]
+        .into_iter()
+        .collect();
 
         let result = aggregate_task_costs_sync("a", &|id| items.get(id).cloned(), None);
         // Should handle circular reference gracefully
@@ -265,10 +296,30 @@ mod tests {
     #[test]
     fn test_aggregate_nested_children() {
         let items: HashMap<String, TestHistoryItem> = vec![
-            ("root".to_string(), TestHistoryItem { cost: 1.0, children: vec!["mid".to_string()] }),
-            ("mid".to_string(), TestHistoryItem { cost: 2.0, children: vec!["leaf".to_string()] }),
-            ("leaf".to_string(), TestHistoryItem { cost: 3.0, children: vec![] }),
-        ].into_iter().collect();
+            (
+                "root".to_string(),
+                TestHistoryItem {
+                    cost: 1.0,
+                    children: vec!["mid".to_string()],
+                },
+            ),
+            (
+                "mid".to_string(),
+                TestHistoryItem {
+                    cost: 2.0,
+                    children: vec!["leaf".to_string()],
+                },
+            ),
+            (
+                "leaf".to_string(),
+                TestHistoryItem {
+                    cost: 3.0,
+                    children: vec![],
+                },
+            ),
+        ]
+        .into_iter()
+        .collect();
 
         let result = aggregate_task_costs_sync("root", &|id| items.get(id).cloned(), None);
         assert_eq!(result.own_cost, 1.0);

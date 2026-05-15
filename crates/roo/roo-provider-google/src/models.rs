@@ -1,7 +1,7 @@
 //! Google Gemini and Vertex AI model definitions.
 
-use std::collections::HashMap;
 use roo_types::model::{ModelInfo, ModelTier, ReasoningEffortExtended, SupportsReasoningEffort};
+use std::collections::HashMap;
 
 /// Default Gemini model ID.
 pub const DEFAULT_MODEL_ID: &str = "gemini-3.1-pro-preview";
@@ -18,7 +18,9 @@ pub fn models() -> HashMap<String, ModelInfo> {
             context_window: 1_048_576,
             supports_images: Some(true),
             supports_prompt_cache: true,
-            supports_reasoning_effort: Some(SupportsReasoningEffort::from(["low", "medium", "high"])),
+            supports_reasoning_effort: Some(SupportsReasoningEffort::from([
+                "low", "medium", "high",
+            ])),
             reasoning_effort: Some(ReasoningEffortExtended::Low),
             supports_temperature: Some(true),
             default_temperature: Some(1.0),
@@ -56,7 +58,9 @@ pub fn models() -> HashMap<String, ModelInfo> {
             context_window: 1_048_576,
             supports_images: Some(true),
             supports_prompt_cache: true,
-            supports_reasoning_effort: Some(SupportsReasoningEffort::from(["low", "medium", "high"])),
+            supports_reasoning_effort: Some(SupportsReasoningEffort::from([
+                "low", "medium", "high",
+            ])),
             reasoning_effort: Some(ReasoningEffortExtended::Low),
             supports_temperature: Some(true),
             default_temperature: Some(1.0),
@@ -131,7 +135,9 @@ pub fn models() -> HashMap<String, ModelInfo> {
             context_window: 1_048_576,
             supports_images: Some(true),
             supports_prompt_cache: true,
-            supports_reasoning_effort: Some(SupportsReasoningEffort::from(["minimal", "low", "medium", "high"])),
+            supports_reasoning_effort: Some(SupportsReasoningEffort::from([
+                "minimal", "low", "medium", "high",
+            ])),
             reasoning_effort: Some(ReasoningEffortExtended::Medium),
             supports_temperature: Some(true),
             default_temperature: Some(1.0),
@@ -409,7 +415,9 @@ pub fn vertex_models() -> HashMap<String, ModelInfo> {
             context_window: 1_048_576,
             supports_images: Some(true),
             supports_prompt_cache: true,
-            supports_reasoning_effort: Some(SupportsReasoningEffort::from(["low", "medium", "high"])),
+            supports_reasoning_effort: Some(SupportsReasoningEffort::from([
+                "low", "medium", "high",
+            ])),
             reasoning_effort: Some(ReasoningEffortExtended::Low),
             supports_temperature: Some(true),
             default_temperature: Some(1.0),
@@ -448,7 +456,9 @@ pub fn vertex_models() -> HashMap<String, ModelInfo> {
             context_window: 1_048_576,
             supports_images: Some(true),
             supports_prompt_cache: true,
-            supports_reasoning_effort: Some(SupportsReasoningEffort::from(["minimal", "low", "medium", "high"])),
+            supports_reasoning_effort: Some(SupportsReasoningEffort::from([
+                "minimal", "low", "medium", "high",
+            ])),
             reasoning_effort: Some(ReasoningEffortExtended::Medium),
             supports_temperature: Some(true),
             default_temperature: Some(1.0),
@@ -676,16 +686,14 @@ pub fn vertex_models() -> HashMap<String, ModelInfo> {
             cache_reads_price: Some(0.3),
             supports_reasoning_budget: Some(true),
             description: Some("Claude Sonnet 4 (Vertex AI)".to_string()),
-            tiers: Some(vec![
-                ModelTier {
-                    name: None,
-                    context_window: 1_000_000,
-                    input_price: Some(6.0),
-                    output_price: Some(22.5),
-                    cache_writes_price: Some(7.5),
-                    cache_reads_price: Some(0.6),
-                },
-            ]),
+            tiers: Some(vec![ModelTier {
+                name: None,
+                context_window: 1_000_000,
+                input_price: Some(6.0),
+                output_price: Some(22.5),
+                cache_writes_price: Some(7.5),
+                cache_reads_price: Some(0.6),
+            }]),
             ..Default::default()
         },
     );
@@ -703,16 +711,14 @@ pub fn vertex_models() -> HashMap<String, ModelInfo> {
             cache_reads_price: Some(0.3),
             supports_reasoning_budget: Some(true),
             description: Some("Claude Sonnet 4.5 (Vertex AI)".to_string()),
-            tiers: Some(vec![
-                ModelTier {
-                    name: None,
-                    context_window: 1_000_000,
-                    input_price: Some(6.0),
-                    output_price: Some(22.5),
-                    cache_writes_price: Some(7.5),
-                    cache_reads_price: Some(0.6),
-                },
-            ]),
+            tiers: Some(vec![ModelTier {
+                name: None,
+                context_window: 1_000_000,
+                input_price: Some(6.0),
+                output_price: Some(22.5),
+                cache_writes_price: Some(7.5),
+                cache_reads_price: Some(0.6),
+            }]),
             ..Default::default()
         },
     );
@@ -730,16 +736,14 @@ pub fn vertex_models() -> HashMap<String, ModelInfo> {
             cache_reads_price: Some(0.3),
             supports_reasoning_budget: Some(true),
             description: Some("Claude Sonnet 4.6 (Vertex AI)".to_string()),
-            tiers: Some(vec![
-                ModelTier {
-                    name: None,
-                    context_window: 1_000_000,
-                    input_price: Some(6.0),
-                    output_price: Some(22.5),
-                    cache_writes_price: Some(7.5),
-                    cache_reads_price: Some(0.6),
-                },
-            ]),
+            tiers: Some(vec![ModelTier {
+                name: None,
+                context_window: 1_000_000,
+                input_price: Some(6.0),
+                output_price: Some(22.5),
+                cache_writes_price: Some(7.5),
+                cache_reads_price: Some(0.6),
+            }]),
             ..Default::default()
         },
     );
@@ -774,16 +778,14 @@ pub fn vertex_models() -> HashMap<String, ModelInfo> {
             cache_reads_price: Some(0.5),
             supports_reasoning_budget: Some(true),
             description: Some("Claude Opus 4.6 (Vertex AI)".to_string()),
-            tiers: Some(vec![
-                ModelTier {
-                    name: None,
-                    context_window: 1_000_000,
-                    input_price: Some(10.0),
-                    output_price: Some(37.5),
-                    cache_writes_price: Some(12.5),
-                    cache_reads_price: Some(1.0),
-                },
-            ]),
+            tiers: Some(vec![ModelTier {
+                name: None,
+                context_window: 1_000_000,
+                input_price: Some(10.0),
+                output_price: Some(37.5),
+                cache_writes_price: Some(12.5),
+                cache_reads_price: Some(1.0),
+            }]),
             ..Default::default()
         },
     );

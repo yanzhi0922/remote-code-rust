@@ -9,7 +9,9 @@ use roo_types::mode::ModeConfig;
 use roo_types::tool::ToolName;
 
 use crate::definition::ToolDefinition;
-use crate::groups::{get_tools_for_mode, is_always_available, resolve_tool_alias, TOOL_ALIASES, TOOL_GROUPS};
+use crate::groups::{
+    TOOL_ALIASES, TOOL_GROUPS, get_tools_for_mode, is_always_available, resolve_tool_alias,
+};
 use crate::validate::is_tool_allowed_for_mode;
 
 // ---------------------------------------------------------------------------
@@ -19,15 +21,14 @@ use crate::validate::is_tool_allowed_for_mode;
 /// Canonical → list of alias names.
 ///
 /// Source: `filter-tools-for-mode.ts` — `CANONICAL_TO_ALIASES`
-static CANONICAL_TO_ALIASES: LazyLock<HashMap<&'static str, Vec<&'static str>>> = LazyLock::new(|| {
-    let mut m: HashMap<&'static str, Vec<&'static str>> = HashMap::new();
-    for (alias, canonical) in TOOL_ALIASES.iter() {
-        m.entry(canonical.as_str())
-            .or_default()
-            .push(*alias);
-    }
-    m
-});
+static CANONICAL_TO_ALIASES: LazyLock<HashMap<&'static str, Vec<&'static str>>> =
+    LazyLock::new(|| {
+        let mut m: HashMap<&'static str, Vec<&'static str>> = HashMap::new();
+        for (alias, canonical) in TOOL_ALIASES.iter() {
+            m.entry(canonical.as_str()).or_default().push(*alias);
+        }
+        m
+    });
 
 /// Pre-computed alias groups: any tool name (canonical or alias) → full group.
 ///
@@ -357,7 +358,11 @@ fn find_mode_by_slug(slug: &str, custom_modes: &[ModeConfig]) -> Option<ModeConf
         .iter()
         .find(|m| m.slug == slug)
         .cloned()
-        .or_else(|| roo_types::mode::default_modes().into_iter().find(|m| m.slug == slug))
+        .or_else(|| {
+            roo_types::mode::default_modes()
+                .into_iter()
+                .find(|m| m.slug == slug)
+        })
 }
 
 /// Checks if a specific tool is allowed in the current mode.
@@ -424,13 +429,8 @@ mod tests {
     #[test]
     fn test_filter_code_mode() {
         let tools = crate::definition::get_native_tools(Default::default());
-        let filtered = filter_native_tools_for_mode(
-            &tools,
-            Some("code"),
-            &[],
-            None,
-            &default_settings(),
-        );
+        let filtered =
+            filter_native_tools_for_mode(&tools, Some("code"), &[], None, &default_settings());
         // Code mode should have read, edit, command tools
         let names: Vec<&str> = filtered.iter().map(|t| t.name.as_str()).collect();
         assert!(names.contains(&"read_file"));
@@ -445,13 +445,8 @@ mod tests {
     #[test]
     fn test_filter_architect_mode() {
         let tools = crate::definition::get_native_tools(Default::default());
-        let filtered = filter_native_tools_for_mode(
-            &tools,
-            Some("architect"),
-            &[],
-            None,
-            &default_settings(),
-        );
+        let filtered =
+            filter_native_tools_for_mode(&tools, Some("architect"), &[], None, &default_settings());
         let names: Vec<&str> = filtered.iter().map(|t| t.name.as_str()).collect();
         // Architect mode has read and edit (for .md files), but not command
         assert!(names.contains(&"read_file"));
@@ -463,13 +458,8 @@ mod tests {
     #[test]
     fn test_filter_ask_mode() {
         let tools = crate::definition::get_native_tools(Default::default());
-        let filtered = filter_native_tools_for_mode(
-            &tools,
-            Some("ask"),
-            &[],
-            None,
-            &default_settings(),
-        );
+        let filtered =
+            filter_native_tools_for_mode(&tools, Some("ask"), &[], None, &default_settings());
         let names: Vec<&str> = filtered.iter().map(|t| t.name.as_str()).collect();
         // Ask mode has read + mcp groups + always-available tools
         assert!(names.contains(&"ask_followup_question"));
@@ -486,8 +476,7 @@ mod tests {
             disabled_tools: vec!["read_file".to_string()],
             ..default_settings()
         };
-        let filtered =
-            filter_native_tools_for_mode(&tools, Some("code"), &[], None, &settings);
+        let filtered = filter_native_tools_for_mode(&tools, Some("code"), &[], None, &settings);
         let names: Vec<&str> = filtered.iter().map(|t| t.name.as_str()).collect();
         assert!(!names.contains(&"read_file"));
     }
@@ -499,8 +488,7 @@ mod tests {
             todo_list_enabled: false,
             ..default_settings()
         };
-        let filtered =
-            filter_native_tools_for_mode(&tools, Some("code"), &[], None, &settings);
+        let filtered = filter_native_tools_for_mode(&tools, Some("code"), &[], None, &settings);
         let names: Vec<&str> = filtered.iter().map(|t| t.name.as_str()).collect();
         assert!(!names.contains(&"update_todo_list"));
     }
@@ -512,8 +500,7 @@ mod tests {
             codebase_search_enabled: false,
             ..default_settings()
         };
-        let filtered =
-            filter_native_tools_for_mode(&tools, Some("code"), &[], None, &settings);
+        let filtered = filter_native_tools_for_mode(&tools, Some("code"), &[], None, &settings);
         let names: Vec<&str> = filtered.iter().map(|t| t.name.as_str()).collect();
         assert!(!names.contains(&"codebase_search"));
     }

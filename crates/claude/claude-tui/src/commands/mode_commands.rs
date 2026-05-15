@@ -8,7 +8,9 @@ use std::process::Command;
 use claude_config::RuntimeConfig;
 use claude_core::{ConversationEntry, PermissionMode};
 use claude_session::SessionStore;
-use claude_tools::runtime_plan_mode::{RuntimePlanModeController, inject_plan_mode_runtime_messages};
+use claude_tools::runtime_plan_mode::{
+    RuntimePlanModeController, inject_plan_mode_runtime_messages,
+};
 
 use super::RuntimeConfigPatch;
 

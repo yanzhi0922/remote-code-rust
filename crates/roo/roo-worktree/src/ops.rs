@@ -61,8 +61,7 @@ pub fn is_workspace_subfolder(cwd: &str, workspace_root: &str) -> bool {
     }
 
     // cwd must start with root + separator
-    cwd_n.starts_with(&root_n)
-        && cwd_n.as_bytes().get(root_n.len()) == Some(&b'/')
+    cwd_n.starts_with(&root_n) && cwd_n.as_bytes().get(root_n.len()) == Some(&b'/')
 }
 
 /// Normalise a path: replace `\` with `/`, remove trailing `/`.

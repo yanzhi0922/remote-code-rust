@@ -5,8 +5,8 @@
 //! are excluded from results.
 
 use crate::types::*;
-use roo_types::tool::ListFilesParams;
 use roo_ignore::RooIgnoreController;
+use roo_types::tool::ListFilesParams;
 use std::path::{Path, PathBuf};
 
 /// Validate list_files parameters.
@@ -501,8 +501,14 @@ mod tests {
         let result = validate_list_path_exists("/nonexistent/path", Path::new("."));
         assert!(result.is_err());
         let err = format!("{}", result.unwrap_err());
-        assert!(err.contains("does not exist"), "Error should mention path not found");
-        assert!(err.contains("check that the path"), "Error should suggest checking path");
+        assert!(
+            err.contains("does not exist"),
+            "Error should mention path not found"
+        );
+        assert!(
+            err.contains("check that the path"),
+            "Error should suggest checking path"
+        );
     }
 
     #[test]
@@ -511,13 +517,13 @@ mod tests {
         let file_path = dir.path().join("test.txt");
         std::fs::write(&file_path, "hello").unwrap();
 
-        let result = validate_list_path_exists(
-            file_path.to_str().unwrap(),
-            Path::new("."),
-        );
+        let result = validate_list_path_exists(file_path.to_str().unwrap(), Path::new("."));
         assert!(result.is_err());
         let err = format!("{}", result.unwrap_err());
-        assert!(err.contains("not a directory"), "Error should mention not a directory");
+        assert!(
+            err.contains("not a directory"),
+            "Error should mention not a directory"
+        );
     }
 
     #[test]
@@ -529,6 +535,9 @@ mod tests {
         let result = validate_list_files_params(&params);
         assert!(result.is_err());
         let err = format!("{}", result.unwrap_err());
-        assert!(err.contains("path traversal"), "Error should mention path traversal");
+        assert!(
+            err.contains("path traversal"),
+            "Error should mention path traversal"
+        );
     }
 }

@@ -84,10 +84,7 @@ pub async fn access_mcp_resource(
 ) -> McpResourceExecutionResult {
     // 1. Validate parameters
     if let Err(e) = validate_access_mcp_resource_params(params) {
-        return McpResourceExecutionResult::error(format!(
-            "Parameter validation failed: {}",
-            e
-        ));
+        return McpResourceExecutionResult::error(format!("Parameter validation failed: {}", e));
     }
 
     // 2. Resolve server name (handle sanitized names)
@@ -107,7 +104,11 @@ pub async fn access_mcp_resource(
             return McpResourceExecutionResult::error(format!(
                 "Server '{}' not found. Available servers: [{}]",
                 server_name,
-                servers.iter().map(|s| s.name.as_str()).collect::<Vec<_>>().join(", ")
+                servers
+                    .iter()
+                    .map(|s| s.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
             ));
         }
     };
@@ -312,9 +313,7 @@ mod tests {
 
     #[test]
     fn test_format_resource_response_empty() {
-        let response = roo_types::mcp::McpResourceResponse {
-            contents: vec![],
-        };
+        let response = roo_types::mcp::McpResourceResponse { contents: vec![] };
         let result = format_resource_response("server", "file:///test.txt", response);
         assert!(!result.is_error);
         assert!(result.text.contains("no content"));

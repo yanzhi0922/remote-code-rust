@@ -13,10 +13,10 @@ use crate::handlers::{
     list_approvals, list_artifacts, list_devices, list_recent_events, list_runner_approvals,
     list_runner_artifacts, list_runner_events, list_runner_sessions, list_runners,
     list_session_approvals, list_session_artifacts, list_session_events, list_sessions,
-    post_session_command, pull_runner_commands, refresh_token, register_push_token, register_runner,
-    revoke_device, subscribe_approvals, subscribe_events, subscribe_runner_approvals,
-    subscribe_runner_events, subscribe_session_approvals, subscribe_session_events,
-    update_runner_heartbeat, update_session_state,
+    post_session_command, pull_runner_commands, refresh_token, register_push_token,
+    register_runner, revoke_device, subscribe_approvals, subscribe_events,
+    subscribe_runner_approvals, subscribe_runner_events, subscribe_session_approvals,
+    subscribe_session_events, update_runner_heartbeat, update_session_state,
 };
 use crate::state::ControlPlaneService;
 

@@ -72,7 +72,8 @@ fn stress_large_mailbox_messages() {
     // Deserialize all messages
     for msg in &messages {
         let json = serde_json::to_string(msg).expect("should serialize");
-        let _: claude_swarm::MailboxMessage = serde_json::from_str(&json).expect("should deserialize");
+        let _: claude_swarm::MailboxMessage =
+            serde_json::from_str(&json).expect("should deserialize");
     }
 }
 
@@ -199,7 +200,7 @@ fn stress_large_mcp_config() {
                 request_timeout_secs: None,
                 oauth: None,
                 metadata: BTreeMap::new(),
-            tool_policy: Default::default(),
+                tool_policy: Default::default(),
             },
         );
     }

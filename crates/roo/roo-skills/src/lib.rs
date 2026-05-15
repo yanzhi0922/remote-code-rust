@@ -14,9 +14,9 @@ pub mod validate;
 
 // Re-export key types and the manager
 pub use error::SkillsError;
-pub use frontmatter::{parse_skill_md, generate_skill_md, FrontMatter};
+pub use frontmatter::{FrontMatter, generate_skill_md, parse_skill_md};
 pub use manager::SkillsManager;
 pub use types::{
     SkillContent, SkillMetadata, SkillNameValidationError, SkillNameValidationResult, SkillSource,
 };
-pub use validate::{validate_skill_name, get_skill_name_error_message};
+pub use validate::{get_skill_name_error_message, validate_skill_name};

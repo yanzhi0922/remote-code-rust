@@ -234,7 +234,8 @@ impl SingleSearchReplaceDiffStrategy {
             // Validate that search and replace are not identical
             if search_content == replace_content {
                 fail_parts.push(DiffResult::fail(
-                    "Search and replace content are identical - no changes would be made".to_string(),
+                    "Search and replace content are identical - no changes would be made"
+                        .to_string(),
                 ));
                 continue;
             }
@@ -269,12 +270,7 @@ impl SingleSearchReplaceDiffStrategy {
             let search_chunk = search_lines.join("\n");
 
             // Try fuzzy search over the entire content
-            let fuzzy_result = fuzzy_search(
-                &result_lines,
-                &search_chunk,
-                0,
-                result_lines.len(),
-            );
+            let fuzzy_result = fuzzy_search(&result_lines, &search_chunk, 0, result_lines.len());
 
             if fuzzy_result.best_match_index >= 0 && fuzzy_result.best_score >= self.fuzzy_threshold
             {
@@ -328,8 +324,7 @@ impl SingleSearchReplaceDiffStrategy {
 
                 // Splice the replacement
                 let before: Vec<String> = result_lines[..match_idx].to_vec();
-                let after: Vec<String> =
-                    result_lines[match_idx + search_lines.len()..].to_vec();
+                let after: Vec<String> = result_lines[match_idx + search_lines.len()..].to_vec();
                 result_lines = before;
                 result_lines.extend(indented_replace_lines);
                 result_lines.extend(after);
@@ -416,7 +411,11 @@ function hello() {
     console.log(\"goodbye\")
 }";
         let result = strategy.apply_diff(original, diff);
-        assert!(result.success, "Expected success, got error: {:?}", result.error);
+        assert!(
+            result.success,
+            "Expected success, got error: {:?}",
+            result.error
+        );
         assert_eq!(
             result.content.unwrap(),
             "function hello() {\n    console.log(\"goodbye\")\n}\n"
@@ -433,7 +432,11 @@ line 2
 >>> REPLACE
 LINE 2";
         let result = strategy.apply_diff(original, diff);
-        assert!(result.success, "Expected success, got error: {:?}", result.error);
+        assert!(
+            result.success,
+            "Expected success, got error: {:?}",
+            result.error
+        );
         assert_eq!(result.content.unwrap(), "line 1\nLINE 2\nline 3\n");
     }
 
@@ -498,7 +501,11 @@ function processData(data) {
     return data.filter(item => item.active).map(item => item.name);
 }";
         let result = strategy.apply_diff(original, diff);
-        assert!(result.success, "Expected success, got error: {:?}", result.error);
+        assert!(
+            result.success,
+            "Expected success, got error: {:?}",
+            result.error
+        );
     }
 
     #[test]
@@ -515,7 +522,11 @@ function test() {
     return false;
 }";
         let result = strategy.apply_diff(original, diff);
-        assert!(result.success, "Expected success, got error: {:?}", result.error);
+        assert!(
+            result.success,
+            "Expected success, got error: {:?}",
+            result.error
+        );
         assert_eq!(
             result.content.unwrap(),
             "    function test() {\n        return false;\n    }\n"
@@ -536,7 +547,11 @@ function test() {
     return false;
 }";
         let result = strategy.apply_diff(original, diff);
-        assert!(result.success, "Expected success, got error: {:?}", result.error);
+        assert!(
+            result.success,
+            "Expected success, got error: {:?}",
+            result.error
+        );
         assert_eq!(
             result.content.unwrap(),
             "function test() {\r\n    return false;\r\n}\r\n"
@@ -589,7 +604,11 @@ LINE 2";
 >>> REPLACE
     return false;";
         let result = strategy.apply_diff(original, diff);
-        assert!(result.success, "Expected success, got error: {:?}", result.error);
+        assert!(
+            result.success,
+            "Expected success, got error: {:?}",
+            result.error
+        );
         assert_eq!(
             result.content.unwrap(),
             "function test() {\n    return false;\n}\n"

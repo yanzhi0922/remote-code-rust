@@ -240,8 +240,7 @@ pub fn get_custom_instructions(
     mode_slug: &str,
     custom_modes: Option<&[ModeConfig]>,
 ) -> Option<String> {
-    get_mode_by_slug(mode_slug, custom_modes)
-        .and_then(|m| m.custom_instructions)
+    get_mode_by_slug(mode_slug, custom_modes).and_then(|m| m.custom_instructions)
 }
 
 /// File restriction error when a tool tries to operate on a file

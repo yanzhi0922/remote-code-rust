@@ -1,6 +1,5 @@
 /// Text extraction utilities for various file formats.
 /// Mirrors src/integrations/misc/extract-text.ts
-
 use std::path::Path;
 
 /// Extract text content from a file based on its extension.
@@ -25,13 +24,12 @@ pub fn extract_text(file_path: &Path, max_bytes: Option<usize>) -> std::io::Resu
         .to_lowercase();
 
     match extension.as_str() {
-        "txt" | "md" | "markdown" | "rst" | "csv" | "tsv" | "log" | "json" | "jsonl"
-        | "yaml" | "yml" | "toml" | "xml" | "html" | "htm" | "css" | "js" | "jsx" | "ts"
-        | "tsx" | "py" | "rb" | "rs" | "go" | "java" | "c" | "cpp" | "h" | "hpp" | "cs"
-        | "swift" | "kt" | "scala" | "sh" | "bash" | "zsh" | "fish" | "ps1" | "bat" | "cmd"
-        | "sql" | "graphql" | "proto" | "dockerfile" | "makefile" | "cmake" | "gradle"
-        | "properties" | "ini" | "cfg" | "conf" | "env" | "gitignore" | "dockerignore"
-        | "lock" => {
+        "txt" | "md" | "markdown" | "rst" | "csv" | "tsv" | "log" | "json" | "jsonl" | "yaml"
+        | "yml" | "toml" | "xml" | "html" | "htm" | "css" | "js" | "jsx" | "ts" | "tsx" | "py"
+        | "rb" | "rs" | "go" | "java" | "c" | "cpp" | "h" | "hpp" | "cs" | "swift" | "kt"
+        | "scala" | "sh" | "bash" | "zsh" | "fish" | "ps1" | "bat" | "cmd" | "sql" | "graphql"
+        | "proto" | "dockerfile" | "makefile" | "cmake" | "gradle" | "properties" | "ini"
+        | "cfg" | "conf" | "env" | "gitignore" | "dockerignore" | "lock" => {
             // Plain text files - just read them
             std::fs::read_to_string(file_path)
         }
@@ -39,15 +37,9 @@ pub fn extract_text(file_path: &Path, max_bytes: Option<usize>) -> std::io::Resu
             // PDF - return a placeholder (full PDF extraction requires external crate)
             Ok(format!("[PDF file: {} bytes]", metadata.len()))
         }
-        "doc" | "docx" => {
-            Ok(format!("[Word document: {} bytes]", metadata.len()))
-        }
-        "xls" | "xlsx" => {
-            Ok(format!("[Excel spreadsheet: {} bytes]", metadata.len()))
-        }
-        "ppt" | "pptx" => {
-            Ok(format!("[PowerPoint: {} bytes]", metadata.len()))
-        }
+        "doc" | "docx" => Ok(format!("[Word document: {} bytes]", metadata.len())),
+        "xls" | "xlsx" => Ok(format!("[Excel spreadsheet: {} bytes]", metadata.len())),
+        "ppt" | "pptx" => Ok(format!("[PowerPoint: {} bytes]", metadata.len())),
         "zip" | "tar" | "gz" | "bz2" | "xz" | "7z" | "rar" => {
             Ok(format!("[Archive: {} bytes]", metadata.len()))
         }
@@ -79,8 +71,8 @@ pub fn is_supported_extension(extension: &str) -> bool {
     let text_extensions = [
         "txt", "md", "markdown", "rst", "csv", "tsv", "log", "json", "jsonl", "yaml", "yml",
         "toml", "xml", "html", "htm", "css", "js", "jsx", "ts", "tsx", "py", "rb", "rs", "go",
-        "java", "c", "cpp", "h", "hpp", "cs", "swift", "kt", "scala", "sh", "bash", "zsh",
-        "fish", "ps1", "bat", "cmd", "sql", "graphql", "proto",
+        "java", "c", "cpp", "h", "hpp", "cs", "swift", "kt", "scala", "sh", "bash", "zsh", "fish",
+        "ps1", "bat", "cmd", "sql", "graphql", "proto",
     ];
     text_extensions.contains(&extension.to_lowercase().as_str())
 }

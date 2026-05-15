@@ -173,10 +173,7 @@ impl FileProcessor {
     }
 
     /// Processes multiple files in batch.
-    pub fn process_batch(
-        &self,
-        files: &[(&str, &str)],
-    ) -> BatchProcessingSummary {
+    pub fn process_batch(&self, files: &[(&str, &str)]) -> BatchProcessingSummary {
         let mut summary = BatchProcessingSummary::default();
 
         for (path, content) in files {
@@ -216,7 +213,10 @@ mod tests {
     #[test]
     fn test_simple_code_parser_chunking() {
         let parser = SimpleCodeParser::new(5, 2);
-        let content = (0..12).map(|i| format!("line {}", i)).collect::<Vec<_>>().join("\n");
+        let content = (0..12)
+            .map(|i| format!("line {}", i))
+            .collect::<Vec<_>>()
+            .join("\n");
         let blocks = parser.parse_file("test.rs", &content).unwrap();
 
         // 12 lines with max 5 per block = 3 blocks (5+5+2)
@@ -230,7 +230,10 @@ mod tests {
     #[test]
     fn test_language_from_extension() {
         assert_eq!(SimpleCodeParser::language_from_extension("rs"), "rust");
-        assert_eq!(SimpleCodeParser::language_from_extension("ts"), "typescript");
+        assert_eq!(
+            SimpleCodeParser::language_from_extension("ts"),
+            "typescript"
+        );
         assert_eq!(SimpleCodeParser::language_from_extension("py"), "python");
         assert_eq!(SimpleCodeParser::language_from_extension("xyz"), "xyz");
     }

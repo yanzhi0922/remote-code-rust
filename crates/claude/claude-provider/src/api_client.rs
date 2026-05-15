@@ -180,12 +180,18 @@ pub fn update_usage(current: &UsageStats, partial: &UsageStats) -> UsageStats {
         } else {
             current.server_tool_use_web_fetch_requests
         },
-        cache_creation_ephemeral_5m_input_tokens: if partial.cache_creation_ephemeral_5m_input_tokens > 0 {
+        cache_creation_ephemeral_5m_input_tokens: if partial
+            .cache_creation_ephemeral_5m_input_tokens
+            > 0
+        {
             partial.cache_creation_ephemeral_5m_input_tokens
         } else {
             current.cache_creation_ephemeral_5m_input_tokens
         },
-        cache_creation_ephemeral_1h_input_tokens: if partial.cache_creation_ephemeral_1h_input_tokens > 0 {
+        cache_creation_ephemeral_1h_input_tokens: if partial
+            .cache_creation_ephemeral_1h_input_tokens
+            > 0
+        {
             partial.cache_creation_ephemeral_1h_input_tokens
         } else {
             current.cache_creation_ephemeral_1h_input_tokens
@@ -539,8 +545,7 @@ impl ApiClient {
                     &messages,
                     claude_config::runtime_version(),
                 );
-                let attr_text =
-                    crate::attribution::build_billing_attribution_text(&fp);
+                let attr_text = crate::attribution::build_billing_attribution_text(&fp);
                 system.insert(0, json!({"type": "text", "text": attr_text}));
             }
 
@@ -667,7 +672,10 @@ fn build_auth_headers(provider: &ProviderConfig) -> Result<HeaderMap> {
             HeaderName::from_static("x-app"),
             HeaderValue::from_static("cli"),
         );
-        headers.insert(USER_AGENT, HeaderValue::from_str(&super::claude_code_user_agent())?);
+        headers.insert(
+            USER_AGENT,
+            HeaderValue::from_str(&super::claude_code_user_agent())?,
+        );
         let session_id = provider
             .request_metadata
             .get("session_id")
@@ -731,7 +739,10 @@ fn build_auth_headers(provider: &ProviderConfig) -> Result<HeaderMap> {
     // CCR (Claude Code Remote) headers.
     if let Ok(container_id) = std::env::var("CLAUDE_CODE_REMOTE_CONTAINER_ID") {
         if let Ok(value) = HeaderValue::from_str(&container_id) {
-            headers.insert(HeaderName::from_static("x-claude-remote-container-id"), value);
+            headers.insert(
+                HeaderName::from_static("x-claude-remote-container-id"),
+                value,
+            );
         }
     }
     if let Ok(session_id) = std::env::var("CLAUDE_CODE_REMOTE_SESSION_ID") {
@@ -940,10 +951,16 @@ impl From<QueryResult> for ProviderResponse {
                 output_tokens: result.usage.output_tokens,
                 cache_read_input_tokens: result.usage.cache_read_input_tokens,
                 cache_creation_input_tokens: result.usage.cache_creation_input_tokens,
-                server_tool_use_web_search_requests: result.usage.server_tool_use_web_search_requests,
+                server_tool_use_web_search_requests: result
+                    .usage
+                    .server_tool_use_web_search_requests,
                 server_tool_use_web_fetch_requests: result.usage.server_tool_use_web_fetch_requests,
-                cache_creation_ephemeral_5m_input_tokens: result.usage.cache_creation_ephemeral_5m_input_tokens,
-                cache_creation_ephemeral_1h_input_tokens: result.usage.cache_creation_ephemeral_1h_input_tokens,
+                cache_creation_ephemeral_5m_input_tokens: result
+                    .usage
+                    .cache_creation_ephemeral_5m_input_tokens,
+                cache_creation_ephemeral_1h_input_tokens: result
+                    .usage
+                    .cache_creation_ephemeral_1h_input_tokens,
             },
             stop_reason: result.stop_reason.unwrap_or_else(|| "end_turn".to_owned()),
             research: None,

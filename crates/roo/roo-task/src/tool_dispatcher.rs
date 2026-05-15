@@ -183,8 +183,14 @@ impl std::fmt::Debug for ToolContext {
             .field("cwd", &self.cwd)
             .field("task_id", &self.task_id)
             .field("model_id", &self.model_id)
-            .field("roo_ignore_controller", &self.roo_ignore_controller.is_some())
-            .field("roo_protected_controller", &self.roo_protected_controller.is_some())
+            .field(
+                "roo_ignore_controller",
+                &self.roo_ignore_controller.is_some(),
+            )
+            .field(
+                "roo_protected_controller",
+                &self.roo_protected_controller.is_some(),
+            )
             .field("diff_view_provider", &self.diff_view_provider.is_some())
             .field("file_context_tracker", &self.file_context_tracker.is_some())
             .field("terminal_process", &self.terminal_process.is_some())
@@ -222,7 +228,10 @@ impl ToolContext {
     /// Set the RooIgnore controller.
     ///
     /// Source: `src/core/task/Task.ts` — `this.rooIgnoreController`
-    pub fn with_roo_ignore_controller(mut self, controller: roo_ignore::RooIgnoreController) -> Self {
+    pub fn with_roo_ignore_controller(
+        mut self,
+        controller: roo_ignore::RooIgnoreController,
+    ) -> Self {
         self.roo_ignore_controller = Some(controller);
         self
     }
@@ -230,7 +239,10 @@ impl ToolContext {
     /// Set the RooProtected controller.
     ///
     /// Source: `src/core/task/Task.ts` — `this.rooProtectedController`
-    pub fn with_roo_protected_controller(mut self, controller: roo_protect::RooProtectedController) -> Self {
+    pub fn with_roo_protected_controller(
+        mut self,
+        controller: roo_protect::RooProtectedController,
+    ) -> Self {
         self.roo_protected_controller = Some(controller);
         self
     }
@@ -238,7 +250,10 @@ impl ToolContext {
     /// Set the diff-view provider.
     ///
     /// Source: `src/core/task/Task.ts` — `this.diffViewProvider`
-    pub fn with_diff_view_provider(mut self, provider: Arc<tokio::sync::Mutex<roo_editor::DiffViewProvider>>) -> Self {
+    pub fn with_diff_view_provider(
+        mut self,
+        provider: Arc<tokio::sync::Mutex<roo_editor::DiffViewProvider>>,
+    ) -> Self {
         self.diff_view_provider = Some(provider);
         self
     }
@@ -262,7 +277,10 @@ impl ToolContext {
     /// Set the code index manager for codebase search.
     ///
     /// Source: `src/core/task/Task.ts` — `this.codeIndexManager`
-    pub fn with_code_index_manager(mut self, manager: Arc<std::sync::Mutex<CodeIndexManager>>) -> Self {
+    pub fn with_code_index_manager(
+        mut self,
+        manager: Arc<std::sync::Mutex<CodeIndexManager>>,
+    ) -> Self {
         self.code_index_manager = Some(manager);
         self
     }
@@ -496,22 +514,38 @@ impl ToolHandler for ReadFileHandler {
         };
 
         // Parse mode
-        let mode = params.get("mode").and_then(|v| v.as_str()).and_then(|m| {
-            match m {
+        let mode = params
+            .get("mode")
+            .and_then(|v| v.as_str())
+            .and_then(|m| match m {
                 "slice" => Some(roo_types::tool_params::ReadFileMode::Slice),
                 "indentation" => Some(roo_types::tool_params::ReadFileMode::Indentation),
                 _ => None,
-            }
-        });
+            });
 
         // Parse indentation params if present
         let indentation = params.get("indentation").and_then(|v| {
             Some(roo_types::tool_params::IndentationParams {
-                anchor_line: v.get("anchorLine").or_else(|| v.get("anchor_line")).and_then(|v2| v2.as_u64()),
-                max_levels: v.get("maxLevels").or_else(|| v.get("max_levels")).and_then(|v2| v2.as_u64()),
-                include_siblings: v.get("includeSiblings").or_else(|| v.get("include_siblings")).and_then(|v2| v2.as_bool()),
-                include_header: v.get("includeHeader").or_else(|| v.get("include_header")).and_then(|v2| v2.as_bool()),
-                max_lines: v.get("maxLines").or_else(|| v.get("max_lines")).and_then(|v2| v2.as_u64()),
+                anchor_line: v
+                    .get("anchorLine")
+                    .or_else(|| v.get("anchor_line"))
+                    .and_then(|v2| v2.as_u64()),
+                max_levels: v
+                    .get("maxLevels")
+                    .or_else(|| v.get("max_levels"))
+                    .and_then(|v2| v2.as_u64()),
+                include_siblings: v
+                    .get("includeSiblings")
+                    .or_else(|| v.get("include_siblings"))
+                    .and_then(|v2| v2.as_bool()),
+                include_header: v
+                    .get("includeHeader")
+                    .or_else(|| v.get("include_header"))
+                    .and_then(|v2| v2.as_bool()),
+                max_lines: v
+                    .get("maxLines")
+                    .or_else(|| v.get("max_lines"))
+                    .and_then(|v2| v2.as_u64()),
             })
         });
 
@@ -523,7 +557,11 @@ impl ToolHandler for ReadFileHandler {
             indentation,
         };
 
-        match roo_tools_fs::process_read_file(&read_params, &context.cwd, context.roo_ignore_controller.as_ref()) {
+        match roo_tools_fs::process_read_file(
+            &read_params,
+            &context.cwd,
+            context.roo_ignore_controller.as_ref(),
+        ) {
             Ok(result) => {
                 if let Some(image_data_url) = result.image_data_url {
                     ToolExecutionResult::success_with_images(result.content, vec![image_data_url])
@@ -556,18 +594,28 @@ impl ToolHandler for WriteToFileHandler {
         };
 
         // Check .rooignore before any file I/O
-        if let Err(e) = roo_tools_fs::check_roo_ignore(&path, context.roo_ignore_controller.as_ref()) {
+        if let Err(e) =
+            roo_tools_fs::check_roo_ignore(&path, context.roo_ignore_controller.as_ref())
+        {
             return ToolExecutionResult::error(format!("read_file error: {}", e));
         }
 
         // Check write protection before any file I/O
-        if let Err(e) = roo_tools_fs::check_roo_protect(&path, context.roo_protected_controller.as_ref()) {
+        if let Err(e) =
+            roo_tools_fs::check_roo_protect(&path, context.roo_protected_controller.as_ref())
+        {
             return ToolExecutionResult::error(format!("write_to_file error: {}", e));
         }
 
         let write_params = roo_types::tool::WriteToFileParams { path, content };
 
-        match roo_tools_fs::process_write_to_file(&write_params, &context.cwd, context.roo_ignore_controller.as_ref(), context.roo_protected_controller.as_ref(), context.model_id.as_deref()) {
+        match roo_tools_fs::process_write_to_file(
+            &write_params,
+            &context.cwd,
+            context.roo_ignore_controller.as_ref(),
+            context.roo_protected_controller.as_ref(),
+            context.model_id.as_deref(),
+        ) {
             Ok(result) => {
                 let msg = if result.is_new_file {
                     format!(
@@ -625,12 +673,16 @@ impl ToolHandler for ApplyDiffHandler {
         }
 
         // Check .rooignore before any file I/O
-        if let Err(e) = roo_tools_fs::check_roo_ignore(&path, context.roo_ignore_controller.as_ref()) {
+        if let Err(e) =
+            roo_tools_fs::check_roo_ignore(&path, context.roo_ignore_controller.as_ref())
+        {
             return ToolExecutionResult::error(format!("apply_diff error: {}", e));
         }
 
         // Check write protection before any file I/O
-        if let Err(e) = roo_tools_fs::check_roo_protect(&path, context.roo_protected_controller.as_ref()) {
+        if let Err(e) =
+            roo_tools_fs::check_roo_protect(&path, context.roo_protected_controller.as_ref())
+        {
             return ToolExecutionResult::error(format!("apply_diff error: {}", e));
         }
 
@@ -647,9 +699,7 @@ impl ToolHandler for ApplyDiffHandler {
         };
 
         // Select diff strategy based on model ID (mirrors TS getDiffStrategy)
-        let strategy = roo_diff::get_diff_strategy(
-            context.model_id.as_deref().unwrap_or(""),
-        );
+        let strategy = roo_diff::get_diff_strategy(context.model_id.as_deref().unwrap_or(""));
 
         let result = strategy.apply_diff(&original, &diff_params.diff);
 
@@ -677,11 +727,7 @@ impl ToolHandler for ApplyDiffHandler {
             return ToolExecutionResult::error(format!("Failed to write file: {}", e));
         }
 
-        let mut msg = format!(
-            "Applied diff to {} (strategy: {})",
-            path,
-            strategy.name()
-        );
+        let mut msg = format!("Applied diff to {} (strategy: {})", path, strategy.name());
         if !warnings.is_empty() {
             msg.push_str(&format!("\nWarnings: {}", warnings.join(", ")));
         }
@@ -740,16 +786,24 @@ impl ToolHandler for EditFileHandler {
         };
 
         // Check .rooignore before any file I/O
-        if let Err(e) = roo_tools_fs::check_roo_ignore(&file_path, context.roo_ignore_controller.as_ref()) {
+        if let Err(e) =
+            roo_tools_fs::check_roo_ignore(&file_path, context.roo_ignore_controller.as_ref())
+        {
             return ToolExecutionResult::error(format!("edit_file error: {}", e));
         }
 
         // Check write protection before any file I/O
-        if let Err(e) = roo_tools_fs::check_roo_protect(&file_path, context.roo_protected_controller.as_ref()) {
+        if let Err(e) =
+            roo_tools_fs::check_roo_protect(&file_path, context.roo_protected_controller.as_ref())
+        {
             return ToolExecutionResult::error(format!("edit_file error: {}", e));
         }
 
-        match roo_tools_fs::process_edit_file(&edit_params, &context.cwd, context.roo_ignore_controller.as_ref()) {
+        match roo_tools_fs::process_edit_file(
+            &edit_params,
+            &context.cwd,
+            context.roo_ignore_controller.as_ref(),
+        ) {
             Ok(result) => {
                 let msg = result
                     .message
@@ -823,22 +877,23 @@ impl ToolHandler for SearchReplaceHandler {
         }
 
         // Check .rooignore before any file I/O
-        if let Err(e) = roo_tools_fs::check_roo_ignore(&file_path, context.roo_ignore_controller.as_ref()) {
+        if let Err(e) =
+            roo_tools_fs::check_roo_ignore(&file_path, context.roo_ignore_controller.as_ref())
+        {
             return ToolExecutionResult::error(format!("search_replace error: {}", e));
         }
 
         // Check write protection before any file I/O
-        if let Err(e) = roo_tools_fs::check_roo_protect(&file_path, context.roo_protected_controller.as_ref()) {
+        if let Err(e) =
+            roo_tools_fs::check_roo_protect(&file_path, context.roo_protected_controller.as_ref())
+        {
             return ToolExecutionResult::error(format!("search_replace error: {}", e));
         }
 
         // Resolve path
         let full_path = context.cwd.join(&sr_params.file_path);
         if !full_path.exists() {
-            return ToolExecutionResult::error(format!(
-                "File not found: {}",
-                sr_params.file_path
-            ));
+            return ToolExecutionResult::error(format!("File not found: {}", sr_params.file_path));
         }
 
         // Read file
@@ -923,16 +978,24 @@ impl ToolHandler for EditHandler {
         };
 
         // Check .rooignore before any file I/O
-        if let Err(e) = roo_tools_fs::check_roo_ignore(&file_path, context.roo_ignore_controller.as_ref()) {
+        if let Err(e) =
+            roo_tools_fs::check_roo_ignore(&file_path, context.roo_ignore_controller.as_ref())
+        {
             return ToolExecutionResult::error(format!("edit error: {}", e));
         }
 
         // Check write protection before any file I/O
-        if let Err(e) = roo_tools_fs::check_roo_protect(&file_path, context.roo_protected_controller.as_ref()) {
+        if let Err(e) =
+            roo_tools_fs::check_roo_protect(&file_path, context.roo_protected_controller.as_ref())
+        {
             return ToolExecutionResult::error(format!("edit error: {}", e));
         }
 
-        match roo_tools_fs::process_edit_file(&edit_params, &context.cwd, context.roo_ignore_controller.as_ref()) {
+        match roo_tools_fs::process_edit_file(
+            &edit_params,
+            &context.cwd,
+            context.roo_ignore_controller.as_ref(),
+        ) {
             Ok(result) => {
                 let msg = result
                     .message
@@ -974,37 +1037,38 @@ impl ToolHandler for ApplyPatchHandler {
         // Parse patch
         let parsed = match roo_tools_fs::apply_patch::parse_patch(&patch) {
             Ok(p) => p,
-            Err(e) => {
-                return ToolExecutionResult::error(format!("apply_patch parse error: {}", e))
-            }
+            Err(e) => return ToolExecutionResult::error(format!("apply_patch parse error: {}", e)),
         };
 
         // Process all hunks — resolve file paths relative to cwd
         let cwd = context.cwd.clone();
-        let changes = match roo_tools_fs::apply_patch::process_all_hunks(
-            &parsed.hunks,
-            |file_path| {
+        let changes =
+            match roo_tools_fs::apply_patch::process_all_hunks(&parsed.hunks, |file_path| {
                 let full_path = if std::path::Path::new(file_path).is_absolute() {
                     std::path::PathBuf::from(file_path)
                 } else {
                     cwd.join(file_path)
                 };
                 std::fs::read_to_string(&full_path)
-            },
-        ) {
-            Ok(c) => c,
-            Err(e) => return ToolExecutionResult::error(format!("apply_patch error: {}", e)),
-        };
+            }) {
+                Ok(c) => c,
+                Err(e) => return ToolExecutionResult::error(format!("apply_patch error: {}", e)),
+            };
 
         // Apply changes to disk — check ignore/protect for each file
         let mut results = Vec::new();
         for change in &changes {
             // Check .rooignore for each file path
-            if let Err(e) = roo_tools_fs::check_roo_ignore(&change.path, context.roo_ignore_controller.as_ref()) {
+            if let Err(e) =
+                roo_tools_fs::check_roo_ignore(&change.path, context.roo_ignore_controller.as_ref())
+            {
                 return ToolExecutionResult::error(format!("apply_patch error: {}", e));
             }
             // Check write protection for each file path
-            if let Err(e) = roo_tools_fs::check_roo_protect(&change.path, context.roo_protected_controller.as_ref()) {
+            if let Err(e) = roo_tools_fs::check_roo_protect(
+                &change.path,
+                context.roo_protected_controller.as_ref(),
+            ) {
                 return ToolExecutionResult::error(format!("apply_patch error: {}", e));
             }
 
@@ -1036,10 +1100,7 @@ impl ToolHandler for ApplyPatchHandler {
                 }
                 roo_tools_fs::apply_patch::FileChangeType::Delete => {
                     if let Err(e) = std::fs::remove_file(&full_path) {
-                        return ToolExecutionResult::error(format!(
-                            "Failed to delete file: {}",
-                            e
-                        ));
+                        return ToolExecutionResult::error(format!("Failed to delete file: {}", e));
                     }
                     results.push(format!("Deleted: {}", change.path));
                 }
@@ -1115,7 +1176,9 @@ impl ToolHandler for ListFilesHandler {
         }
 
         // Check .rooignore for the directory path
-        if let Err(e) = roo_tools_fs::check_roo_ignore(&path, context.roo_ignore_controller.as_ref()) {
+        if let Err(e) =
+            roo_tools_fs::check_roo_ignore(&path, context.roo_ignore_controller.as_ref())
+        {
             return ToolExecutionResult::error(format!("list_files error: {}", e));
         }
 
@@ -1232,7 +1295,9 @@ impl ToolHandler for SearchFilesHandler {
         }
 
         // Check .rooignore for the search directory
-        if let Err(e) = roo_tools_fs::check_roo_ignore(&path, context.roo_ignore_controller.as_ref()) {
+        if let Err(e) =
+            roo_tools_fs::check_roo_ignore(&path, context.roo_ignore_controller.as_ref())
+        {
             return ToolExecutionResult::error(format!("search_files error: {}", e));
         }
 
@@ -1263,8 +1328,10 @@ impl ToolHandler for SearchFilesHandler {
         );
 
         // Filter results by .rooignore
-        let matches =
-            roo_tools_search::filter_results_by_rooignore(matches, context.roo_ignore_controller.as_ref());
+        let matches = roo_tools_search::filter_results_by_rooignore(
+            matches,
+            context.roo_ignore_controller.as_ref(),
+        );
 
         if matches.is_empty() {
             return ToolExecutionResult::success("No matches found.");
@@ -1328,10 +1395,9 @@ fn search_in_dir(
                                 .collect();
 
                             // Gather context lines after the match
-                            let context_after: Vec<String> =
-                                ((i + 1)..(i + 1 + CONTEXT_LINES))
-                                    .filter_map(|idx| all_lines.get(idx).map(|l| l.to_string()))
-                                    .collect();
+                            let context_after: Vec<String> = ((i + 1)..(i + 1 + CONTEXT_LINES))
+                                .filter_map(|idx| all_lines.get(idx).map(|l| l.to_string()))
+                                .collect();
 
                             matches.push(roo_tools_search::FileMatch {
                                 file_path: relative_str.to_string(),
@@ -1386,7 +1452,7 @@ impl ToolHandler for CodebaseSearchHandler {
                     return ToolExecutionResult::error(format!(
                         "codebase_search error: failed to acquire index manager lock: {}",
                         e
-                    ))
+                    ));
                 }
             };
 
@@ -1428,10 +1494,7 @@ pub struct ExecuteCommandHandler {
 
 impl ExecuteCommandHandler {
     /// Create a new execute_command handler.
-    pub fn new(
-        registry: Arc<roo_terminal::TerminalRegistry>,
-        output_dir: PathBuf,
-    ) -> Self {
+    pub fn new(registry: Arc<roo_terminal::TerminalRegistry>, output_dir: PathBuf) -> Self {
         Self {
             registry,
             output_dir,
@@ -1452,9 +1515,9 @@ impl ToolHandler for ExecuteCommandHandler {
         if let Some(ref ctrl) = context.roo_ignore_controller {
             let unescaped = roo_tools_command::execute_command::unescape_command(&command);
             if let Some(blocked_path) = ctrl.validate_command(&unescaped) {
-                return ToolExecutionResult::error(
-                    roo_prompt::responses::roo_ignore_error(&blocked_path),
-                );
+                return ToolExecutionResult::error(roo_prompt::responses::roo_ignore_error(
+                    &blocked_path,
+                ));
             }
         }
 
@@ -1524,7 +1587,10 @@ impl ToolHandler for ReadCommandOutputHandler {
             artifact_id,
             offset: params.get("offset").and_then(|v| v.as_u64()),
             limit: params.get("limit").and_then(|v| v.as_u64()),
-            search: params.get("search").and_then(|v| v.as_str()).map(String::from),
+            search: params
+                .get("search")
+                .and_then(|v| v.as_str())
+                .map(String::from),
         };
 
         match roo_tools_command::read_command_output::read_command_output_from_disk(
@@ -1559,12 +1625,14 @@ impl ToolHandler for AskFollowupQuestionHandler {
         };
 
         let follow_up: Vec<roo_types::tool::FollowUpOption> = match params.get("follow_up") {
-            Some(opts) => match serde_json::from_value::<Vec<roo_types::tool::FollowUpOption>>(
-                opts.clone(),
-            ) {
-                Ok(o) => o,
-                Err(e) => return ToolExecutionResult::error(format!("Invalid follow_up: {}", e)),
-            },
+            Some(opts) => {
+                match serde_json::from_value::<Vec<roo_types::tool::FollowUpOption>>(opts.clone()) {
+                    Ok(o) => o,
+                    Err(e) => {
+                        return ToolExecutionResult::error(format!("Invalid follow_up: {}", e));
+                    }
+                }
+            }
             None => return ToolExecutionResult::error("Missing required parameter: follow_up"),
         };
 
@@ -1574,17 +1642,15 @@ impl ToolHandler for AskFollowupQuestionHandler {
         };
 
         match roo_tools_misc::process_followup(&ask_params) {
-            Ok(result) => {
-                ToolExecutionResult {
-                    text: result.question.clone(),
-                    images: None,
-                    is_error: false,
-                    action: ToolExecutionAction::AskFollowup {
-                        question: result.question,
-                        suggestions: result.suggestions,
-                    },
-                }
-            }
+            Ok(result) => ToolExecutionResult {
+                text: result.question.clone(),
+                images: None,
+                is_error: false,
+                action: ToolExecutionAction::AskFollowup {
+                    question: result.question,
+                    suggestions: result.suggestions,
+                },
+            },
             Err(e) => ToolExecutionResult::error(format!("ask_followup_question error: {}", e)),
         }
     }
@@ -1706,7 +1772,10 @@ impl ToolHandler for SwitchModeHandler {
             .and_then(|v| v.as_str())
             .map(String::from);
 
-        let switch_params = roo_types::tool::SwitchModeParams { mode_slug: mode_slug.clone(), reason };
+        let switch_params = roo_types::tool::SwitchModeParams {
+            mode_slug: mode_slug.clone(),
+            reason,
+        };
 
         match roo_tools_mode::process_switch_mode(&switch_params, &context.current_mode) {
             Ok(result) => {
@@ -1843,9 +1912,7 @@ pub struct SubtaskResult {
 /// backward compatibility with external callers that need validation only.
 ///
 /// Source: `src/core/tools/NewTaskTool.ts` — `execute()`
-pub async fn execute_subtask(
-    config: SubtaskConfig,
-) -> SubtaskResult {
+pub async fn execute_subtask(config: SubtaskConfig) -> SubtaskResult {
     tracing::info!(
         mode = %config.mode,
         parent_task_id = %config.parent_task_id,
@@ -1969,10 +2036,7 @@ impl ToolHandler for AccessMcpResourceHandler {
             None => return ToolExecutionResult::error("Missing required parameter: uri"),
         };
 
-        let mcp_params = roo_types::tool::AccessMcpResourceParams {
-            server_name,
-            uri,
-        };
+        let mcp_params = roo_types::tool::AccessMcpResourceParams { server_name, uri };
 
         let result = roo_tools_mcp::access_mcp_resource(&self.hub, &mcp_params).await;
 
@@ -2165,13 +2229,18 @@ impl ImageProvider {
         model: &str,
         input_image_data: Option<&str>,
         api_key: Option<&str>,
-    ) -> Result<roo_tools_misc::generate_image::ImageProviderResponse, roo_tools_misc::generate_image::ImageGenerationError> {
+    ) -> Result<
+        roo_tools_misc::generate_image::ImageProviderResponse,
+        roo_tools_misc::generate_image::ImageGenerationError,
+    > {
         match self {
             ImageProvider::OpenRouter(p) => {
-                p.generate_image(prompt, model, input_image_data, api_key).await
+                p.generate_image(prompt, model, input_image_data, api_key)
+                    .await
             }
             ImageProvider::Roo(p) => {
-                p.generate_image(prompt, model, input_image_data, api_key).await
+                p.generate_image(prompt, model, input_image_data, api_key)
+                    .await
             }
         }
     }
@@ -2203,17 +2272,13 @@ impl GenerateImageHandler {
     }
 
     /// Create a handler with an OpenRouter provider and API key.
-    pub fn with_open_router(
-        api_key: String,
-        model: String,
-        base_url: Option<String>,
-    ) -> Self {
+    pub fn with_open_router(api_key: String, model: String, base_url: Option<String>) -> Self {
         let provider = match base_url {
             Some(url) => ImageProvider::OpenRouter(
-                roo_tools_misc::generate_image::OpenRouterImageProvider::with_base_url(&url)
+                roo_tools_misc::generate_image::OpenRouterImageProvider::with_base_url(&url),
             ),
             None => ImageProvider::OpenRouter(
-                roo_tools_misc::generate_image::OpenRouterImageProvider::new()
+                roo_tools_misc::generate_image::OpenRouterImageProvider::new(),
             ),
         };
         Self {
@@ -2224,18 +2289,12 @@ impl GenerateImageHandler {
     }
 
     /// Create a handler with a Roo Cloud provider and API key.
-    pub fn with_roo(
-        api_key: String,
-        model: String,
-        base_url: Option<String>,
-    ) -> Self {
+    pub fn with_roo(api_key: String, model: String, base_url: Option<String>) -> Self {
         let provider = match base_url {
             Some(url) => ImageProvider::Roo(
-                roo_tools_misc::generate_image::RooImageProvider::with_base_url(&url)
+                roo_tools_misc::generate_image::RooImageProvider::with_base_url(&url),
             ),
-            None => ImageProvider::Roo(
-                roo_tools_misc::generate_image::RooImageProvider::new()
-            ),
+            None => ImageProvider::Roo(roo_tools_misc::generate_image::RooImageProvider::new()),
         };
         Self {
             provider: Some(provider),
@@ -2266,7 +2325,10 @@ impl ToolHandler for GenerateImageHandler {
         let image_params = roo_tools_misc::GenerateImageParams {
             prompt: prompt.clone(),
             path: path.clone(),
-            image: params.get("image").and_then(|v| v.as_str()).map(String::from),
+            image: params
+                .get("image")
+                .and_then(|v| v.as_str())
+                .map(String::from),
         };
 
         // Validate parameters
@@ -2293,19 +2355,24 @@ impl ToolHandler for GenerateImageHandler {
                 let full_path = std::path::Path::new(&context.cwd).join(img_path);
                 if !full_path.exists() {
                     return ToolExecutionResult::error(format!(
-                        "Input image not found: {}", img_path
+                        "Input image not found: {}",
+                        img_path
                     ));
                 }
                 match std::fs::read(&full_path) {
                     Ok(data) => {
-                        let ext = full_path.extension()
+                        let ext = full_path
+                            .extension()
                             .and_then(|e| e.to_str())
                             .unwrap_or("png");
-                        Some(roo_tools_misc::generate_image::encode_image_to_data_uri(&data, ext))
+                        Some(roo_tools_misc::generate_image::encode_image_to_data_uri(
+                            &data, ext,
+                        ))
                     }
                     Err(e) => {
                         return ToolExecutionResult::error(format!(
-                            "Failed to read input image '{}': {}", img_path, e
+                            "Failed to read input image '{}': {}",
+                            img_path, e
                         ));
                     }
                 }
@@ -2314,35 +2381,40 @@ impl ToolHandler for GenerateImageHandler {
         };
 
         // Call the provider
-        let result = provider.generate_image(
-            &prompt,
-            &self.model,
-            input_image_data.as_deref(),
-            self.api_key.as_deref(),
-        ).await;
+        let result = provider
+            .generate_image(
+                &prompt,
+                &self.model,
+                input_image_data.as_deref(),
+                self.api_key.as_deref(),
+            )
+            .await;
 
         match result {
             Ok(response) => {
                 if !response.success {
                     return ToolExecutionResult::error(format!(
                         "Image generation failed: {}",
-                        response.error.unwrap_or_else(|| "Unknown error".to_string())
+                        response
+                            .error
+                            .unwrap_or_else(|| "Unknown error".to_string())
                     ));
                 }
 
                 let image_data_uri = match &response.image_data {
                     Some(data) => data,
-                    None => return ToolExecutionResult::error(
-                        "Image generation succeeded but no image data was returned".to_string()
-                    ),
+                    None => {
+                        return ToolExecutionResult::error(
+                            "Image generation succeeded but no image data was returned".to_string(),
+                        );
+                    }
                 };
 
                 // Parse the data URI and save to disk
                 match roo_tools_misc::generate_image::parse_image_data_uri(image_data_uri) {
                     Some((format, raw_bytes)) => {
-                        let final_path = roo_tools_misc::generate_image::determine_final_path(
-                            &path, &format,
-                        );
+                        let final_path =
+                            roo_tools_misc::generate_image::determine_final_path(&path, &format);
                         let full_save_path = std::path::Path::new(&context.cwd).join(&final_path);
 
                         // Create parent directories if needed
@@ -2350,7 +2422,8 @@ impl ToolHandler for GenerateImageHandler {
                             if !parent.exists() {
                                 if let Err(e) = std::fs::create_dir_all(parent) {
                                     return ToolExecutionResult::error(format!(
-                                        "Failed to create directory for '{}': {}", final_path, e
+                                        "Failed to create directory for '{}': {}",
+                                        final_path, e
                                     ));
                                 }
                             }
@@ -2359,21 +2432,22 @@ impl ToolHandler for GenerateImageHandler {
                         match std::fs::write(&full_save_path, &raw_bytes) {
                             Ok(()) => ToolExecutionResult::success(format!(
                                 "Image generated and saved to '{}' (format: {}, size: {} bytes)",
-                                final_path, format, raw_bytes.len()
+                                final_path,
+                                format,
+                                raw_bytes.len()
                             )),
                             Err(e) => ToolExecutionResult::error(format!(
-                                "Failed to save image to '{}': {}", final_path, e
+                                "Failed to save image to '{}': {}",
+                                final_path, e
                             )),
                         }
                     }
                     None => ToolExecutionResult::error(
-                        "Failed to parse image data URI from provider response".to_string()
+                        "Failed to parse image data URI from provider response".to_string(),
                     ),
                 }
             }
-            Err(e) => ToolExecutionResult::error(format!(
-                "Image generation error: {}", e
-            )),
+            Err(e) => ToolExecutionResult::error(format!("Image generation error: {}", e)),
         }
     }
 
@@ -2419,11 +2493,16 @@ impl CustomToolHandler {
     /// global `~/.roo/tools/` directory into the registry.
     ///
     /// Returns a list of loaded tool names and any errors encountered.
-    pub fn load_tools_from_dirs(&self, project_dir: &std::path::Path) -> roo_custom_tools::LoadResult {
+    pub fn load_tools_from_dirs(
+        &self,
+        project_dir: &std::path::Path,
+    ) -> roo_custom_tools::LoadResult {
         let mut combined = roo_custom_tools::LoadResult::default();
         let dirs_to_scan: Vec<std::path::PathBuf> = vec![
             project_dir.join(".roo").join("tools"),
-            dirs::home_dir().map(|h| h.join(".roo").join("tools")).unwrap_or_default(),
+            dirs::home_dir()
+                .map(|h| h.join(".roo").join("tools"))
+                .unwrap_or_default(),
         ];
 
         for tools_dir in dirs_to_scan {
@@ -2439,7 +2518,9 @@ impl CustomToolHandler {
                     if let Ok(entries) = std::fs::read_dir(&tools_dir) {
                         for entry in entries.flatten() {
                             let path = entry.path();
-                            if !path.is_file() { continue; }
+                            if !path.is_file() {
+                                continue;
+                            }
                             let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
                             if ext != "json" && ext != "yaml" && ext != "yml" {
                                 continue;
@@ -2452,7 +2533,8 @@ impl CustomToolHandler {
                                 if let Ok(def) = def_result {
                                     if result.loaded.contains(&def.name) {
                                         if let Ok(mut registry) = self.registry.lock() {
-                                            registry.register(def, Some(&tools_dir.to_string_lossy()));
+                                            registry
+                                                .register(def, Some(&tools_dir.to_string_lossy()));
                                         }
                                     }
                                 }
@@ -2468,7 +2550,9 @@ impl CustomToolHandler {
                     combined.errors.extend(result.errors);
                 }
                 Err(e) => {
-                    combined.errors.push(format!("{}: {}", tools_dir.display(), e));
+                    combined
+                        .errors
+                        .push(format!("{}: {}", tools_dir.display(), e));
                 }
             }
         }
@@ -2508,7 +2592,7 @@ impl ToolHandler for CustomToolHandler {
                 return ToolExecutionResult::error(format!(
                     "Failed to acquire custom tool registry lock: {}",
                     e
-                ))
+                ));
             }
         };
 
@@ -2547,7 +2631,8 @@ impl ToolHandler for CustomToolHandler {
                         // Build the command. If the script has a shebang or is a
                         // known extension, run it directly; otherwise use `sh`.
                         let (program, args): (String, Vec<String>) = {
-                            let ext = script.extension()
+                            let ext = script
+                                .extension()
                                 .and_then(|e| e.to_str())
                                 .unwrap_or("")
                                 .to_lowercase();
@@ -2555,7 +2640,10 @@ impl ToolHandler for CustomToolHandler {
                                 "py" => ("python3".to_string(), vec![script_path.clone()]),
                                 "rb" => ("ruby".to_string(), vec![script_path.clone()]),
                                 "js" => ("node".to_string(), vec![script_path.clone()]),
-                                "ts" => ("npx".to_string(), vec!["ts-node".to_string(), script_path.clone()]),
+                                "ts" => (
+                                    "npx".to_string(),
+                                    vec!["ts-node".to_string(), script_path.clone()],
+                                ),
                                 _ => ("sh".to_string(), vec![script_path.clone()]),
                             }
                         };
@@ -2581,10 +2669,7 @@ impl ToolHandler for CustomToolHandler {
                         let mut all_args: Vec<String> = args;
                         all_args.extend(param_args);
 
-                        match std::process::Command::new(program)
-                            .args(&all_args)
-                            .output()
-                        {
+                        match std::process::Command::new(program).args(&all_args).output() {
                             Ok(output) => {
                                 let stdout = String::from_utf8_lossy(&output.stdout);
                                 let stderr = String::from_utf8_lossy(&output.stderr);
@@ -2660,12 +2745,14 @@ impl ToolHandler for CustomToolHandler {
                                         }
                                     }
                                     Err(e) => ToolExecutionResult::error(format!(
-                                        "Failed to read HTTP response body: {}", e
+                                        "Failed to read HTTP response body: {}",
+                                        e
                                     )),
                                 }
                             }
                             Err(e) => ToolExecutionResult::error(format!(
-                                "HTTP request to '{}' failed: {}", url, e
+                                "HTTP request to '{}' failed: {}",
+                                url, e
                             )),
                         }
                     }
@@ -2742,7 +2829,10 @@ pub fn default_dispatcher_with_terminal(
     // Command execution tools
     dispatcher.register(
         "execute_command",
-        Box::new(ExecuteCommandHandler::new(registry.clone(), output_dir.clone())),
+        Box::new(ExecuteCommandHandler::new(
+            registry.clone(),
+            output_dir.clone(),
+        )),
     );
     dispatcher.register(
         "read_command_output",
@@ -2754,14 +2844,8 @@ pub fn default_dispatcher_with_terminal(
         "ask_followup_question",
         Box::new(AskFollowupQuestionHandler),
     );
-    dispatcher.register(
-        "attempt_completion",
-        Box::new(AttemptCompletionHandler),
-    );
-    dispatcher.register(
-        "update_todo_list",
-        Box::new(UpdateTodoListHandler),
-    );
+    dispatcher.register("attempt_completion", Box::new(AttemptCompletionHandler));
+    dispatcher.register("update_todo_list", Box::new(UpdateTodoListHandler));
 
     // Mode tools
     dispatcher.register(
@@ -2862,21 +2946,24 @@ impl ToolCallValidator {
                 }
             }
             "edit_file" => {
-                if params.get("filePath")
+                if params
+                    .get("filePath")
                     .or_else(|| params.get("file_path"))
                     .and_then(|v| v.as_str())
                     .is_none()
                 {
                     return Err("Missing required parameter: filePath".to_string());
                 }
-                if params.get("oldString")
+                if params
+                    .get("oldString")
                     .or_else(|| params.get("old_string"))
                     .and_then(|v| v.as_str())
                     .is_none()
                 {
                     return Err("Missing required parameter: oldString".to_string());
                 }
-                if params.get("newString")
+                if params
+                    .get("newString")
                     .or_else(|| params.get("new_string"))
                     .and_then(|v| v.as_str())
                     .is_none()
@@ -2973,21 +3060,24 @@ impl ToolCallValidator {
                 }
             }
             "search_replace" => {
-                if params.get("filePath")
+                if params
+                    .get("filePath")
                     .or_else(|| params.get("file_path"))
                     .and_then(|v| v.as_str())
                     .is_none()
                 {
                     return Err("Missing required parameter: filePath".to_string());
                 }
-                if params.get("oldString")
+                if params
+                    .get("oldString")
                     .or_else(|| params.get("old_string"))
                     .and_then(|v| v.as_str())
                     .is_none()
                 {
                     return Err("Missing required parameter: oldString".to_string());
                 }
-                if params.get("newString")
+                if params
+                    .get("newString")
                     .or_else(|| params.get("new_string"))
                     .and_then(|v| v.as_str())
                     .is_none()
@@ -2996,21 +3086,24 @@ impl ToolCallValidator {
                 }
             }
             "edit" => {
-                if params.get("filePath")
+                if params
+                    .get("filePath")
                     .or_else(|| params.get("file_path"))
                     .and_then(|v| v.as_str())
                     .is_none()
                 {
                     return Err("Missing required parameter: filePath".to_string());
                 }
-                if params.get("oldString")
+                if params
+                    .get("oldString")
                     .or_else(|| params.get("old_string"))
                     .and_then(|v| v.as_str())
                     .is_none()
                 {
                     return Err("Missing required parameter: oldString".to_string());
                 }
-                if params.get("newString")
+                if params
+                    .get("newString")
                     .or_else(|| params.get("new_string"))
                     .and_then(|v| v.as_str())
                     .is_none()
@@ -3328,9 +3421,7 @@ impl PresentAssistantMessageProcessor {
                     return Ok(None);
                 }
                 // Strip thinking tags
-                let cleaned = content
-                    .replace("<thinking>", "")
-                    .replace("</thinking>", "");
+                let cleaned = content.replace("<thinking>", "").replace("</thinking>", "");
                 let _ = cleaned; // In a full implementation, this would be sent to the UI
                 Ok(None)
             }
@@ -3341,12 +3432,13 @@ impl PresentAssistantMessageProcessor {
                 }
 
                 // Validate the tool call parameters
-                let args = tool_use.native_args.clone().unwrap_or(serde_json::Value::Null);
+                let args = tool_use
+                    .native_args
+                    .clone()
+                    .unwrap_or(serde_json::Value::Null);
                 if let Err(e) = ToolCallValidator::validate(&tool_use.name, &args) {
-                    let result = ToolExecutionResult::error(format!(
-                        "Tool call validation failed: {}",
-                        e
-                    ));
+                    let result =
+                        ToolExecutionResult::error(format!("Tool call validation failed: {}", e));
                     self.result_collector.push_result(ToolResultEntry {
                         tool_call_id: tool_use.id.clone(),
                         tool_name: tool_use.name.clone(),
@@ -3378,7 +3470,10 @@ impl PresentAssistantMessageProcessor {
                 }
 
                 // Execute the tool
-                let result = self.dispatcher.dispatch(&tool_use.name, args, context).await;
+                let result = self
+                    .dispatcher
+                    .dispatch(&tool_use.name, args, context)
+                    .await;
 
                 self.result_collector.push_result(ToolResultEntry {
                     tool_call_id: tool_use.id.clone(),
@@ -3403,11 +3498,17 @@ impl PresentAssistantMessageProcessor {
                     "arguments": mcp_use.arguments,
                 });
 
-                let result = self.dispatcher.dispatch("use_mcp_tool", args, context).await;
+                let result = self
+                    .dispatcher
+                    .dispatch("use_mcp_tool", args, context)
+                    .await;
 
                 self.result_collector.push_result(ToolResultEntry {
                     tool_call_id: mcp_use.id.clone(),
-                    tool_name: format!("use_mcp_tool({}/{})", mcp_use.server_name, mcp_use.tool_name),
+                    tool_name: format!(
+                        "use_mcp_tool({}/{})",
+                        mcp_use.server_name, mcp_use.tool_name
+                    ),
                     result_text: result.text.clone(),
                     is_error: result.is_error,
                     images: result.images.clone(),
@@ -3666,10 +3767,7 @@ mod tests {
         let handler = AskFollowupQuestionHandler;
         let ctx = make_context();
         let result = handler
-            .execute(
-                serde_json::json!({"follow_up": [{"text": "yes"}]}),
-                &ctx,
-            )
+            .execute(serde_json::json!({"follow_up": [{"text": "yes"}]}), &ctx)
             .await;
         assert!(result.is_error);
         assert!(result.text.contains("question"));
@@ -3726,10 +3824,7 @@ mod tests {
         let handler = UpdateTodoListHandler;
         let ctx = make_context();
         let result = handler
-            .execute(
-                serde_json::json!({"todos": "[x] done\n[ ] pending"}),
-                &ctx,
-            )
+            .execute(serde_json::json!({"todos": "[x] done\n[ ] pending"}), &ctx)
             .await;
         assert!(!result.is_error, "unexpected error: {}", result.text);
         assert!(result.text.contains("done"));
@@ -3889,11 +3984,8 @@ mod tests {
     fn test_default_dispatcher_with_terminal_has_all_tools() {
         let registry = Arc::new(roo_terminal::TerminalRegistry::new());
         let dir = tempfile::tempdir().unwrap();
-        let dispatcher = default_dispatcher_with_terminal(
-            registry,
-            dir.path().to_path_buf(),
-            "code",
-        );
+        let dispatcher =
+            default_dispatcher_with_terminal(registry, dir.path().to_path_buf(), "code");
 
         // Core tools
         assert!(dispatcher.has_handler("read_file"));
@@ -3935,12 +4027,8 @@ mod tests {
         let registry = Arc::new(roo_terminal::TerminalRegistry::new());
         let dir = tempfile::tempdir().unwrap();
         let mcp_hub = Arc::new(roo_mcp::McpHub::new());
-        let dispatcher = default_dispatcher_full(
-            registry,
-            dir.path().to_path_buf(),
-            "code",
-            mcp_hub,
-        );
+        let dispatcher =
+            default_dispatcher_full(registry, dir.path().to_path_buf(), "code", mcp_hub);
 
         // All core tools
         assert!(dispatcher.has_handler("read_file"));
@@ -4039,7 +4127,10 @@ mod tests {
         let handler = SlashCommandHandler;
         let ctx = make_context();
         let result = handler
-            .execute(serde_json::json!({"command": "nonexistent", "args": "setup project"}), &ctx)
+            .execute(
+                serde_json::json!({"command": "nonexistent", "args": "setup project"}),
+                &ctx,
+            )
             .await;
         // Command not found → error with available commands listing
         assert!(result.is_error, "expected error for nonexistent command");
@@ -4094,7 +4185,11 @@ mod tests {
             )
             .await;
         // Without a provider configured, should return an error
-        assert!(result.is_error, "expected error without provider, got: {}", result.text);
+        assert!(
+            result.is_error,
+            "expected error without provider, got: {}",
+            result.text
+        );
         assert!(result.text.contains("provider"));
     }
 

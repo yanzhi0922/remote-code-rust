@@ -307,7 +307,7 @@ mod tests {
             timeout_ms: 30_000,
             sub_agent: None,
             progress_cb: None,
-            task_stack: Arc::new(std::sync::Mutex::new(
+            task_stack: Arc::new(parking_lot::Mutex::new(
                 claude_core::task_stack::TaskStack::default(),
             )),
             read_file_state: crate::FileStateCache::new(),

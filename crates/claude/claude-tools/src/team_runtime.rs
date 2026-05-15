@@ -6,8 +6,8 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result, anyhow};
-use once_cell::sync::Lazy;
 use claude_core::PermissionMode;
+use once_cell::sync::Lazy;
 use serde_json::{Value, json};
 use uuid::Uuid;
 

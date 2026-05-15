@@ -1,8 +1,9 @@
 /// Cloud settings service for fetching and managing organization/user settings.
 /// Mirrors packages/cloud/src/CloudSettingsService.ts
-
 use crate::config::get_roo_code_api_url;
-use crate::types::{CloudError, CloudSettingsConfig, OrganizationSettingsData, UserFeatures, UserSettingsData};
+use crate::types::{
+    CloudError, CloudSettingsConfig, OrganizationSettingsData, UserFeatures, UserSettingsData,
+};
 use serde_json::Value;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -92,10 +93,7 @@ impl CloudSettingsService {
                         .collect()
                 })
                 .unwrap_or_default(),
-            mcps: org_data["mcps"]
-                .as_array()
-                .cloned()
-                .unwrap_or_default(),
+            mcps: org_data["mcps"].as_array().cloned().unwrap_or_default(),
             cloud_settings: self.parse_cloud_settings(&org_data["cloudSettings"]),
         };
 
@@ -268,7 +266,9 @@ mod tests {
     #[tokio::test]
     async fn test_set_session_token() {
         let service = CloudSettingsService::new();
-        service.set_session_token(Some("test-token".to_string())).await;
+        service
+            .set_session_token(Some("test-token".to_string()))
+            .await;
 
         let token = service.session_token.read().await;
         assert_eq!(Some("test-token".to_string()), token.clone());

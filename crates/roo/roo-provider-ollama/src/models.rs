@@ -1,9 +1,9 @@
-﻿//! Ollama model definitions.
+//! Ollama model definitions.
 //!
 //! Ollama supports many local models. We define popular defaults.
 
-use std::collections::HashMap;
 use roo_types::model::ModelInfo;
+use std::collections::HashMap;
 
 /// Default Ollama model ID.
 pub const DEFAULT_MODEL_ID: &str = "devstral:24b";

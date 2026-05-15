@@ -63,7 +63,7 @@ impl PoeHandler {
             model_info: model_info.clone(),
             provider_name_enum: ProviderName::Poe,
             request_timeout: config.request_timeout,
-        reasoning_effort: None,
+            reasoning_effort: None,
             streaming_enabled: None,
             include_max_tokens: None,
             extra_body_fields: None,
@@ -119,10 +119,7 @@ impl Provider for PoeHandler {
         (self.model_id.clone(), self.model_info.clone())
     }
 
-    async fn complete_prompt(
-        &self,
-        prompt: &str,
-    ) -> Result<String, roo_provider::ProviderError> {
+    async fn complete_prompt(&self, prompt: &str) -> Result<String, roo_provider::ProviderError> {
         self.inner.complete_prompt(prompt).await
     }
 
@@ -149,7 +146,11 @@ mod tests {
     #[test]
     fn test_all_models_have_required_fields() {
         for (id, info) in models::models() {
-            assert!(info.max_tokens.is_some(), "Model '{}' missing max_tokens", id);
+            assert!(
+                info.max_tokens.is_some(),
+                "Model '{}' missing max_tokens",
+                id
+            );
             assert!(
                 info.input_price.is_some(),
                 "Model '{}' missing input_price",
@@ -292,7 +293,12 @@ mod tests {
         assert!(info.max_tokens.is_some());
         // Fallback should include a description with the model name
         assert!(info.description.is_some());
-        assert!(info.description.as_ref().unwrap().contains("unknown-poe-model"));
+        assert!(
+            info.description
+                .as_ref()
+                .unwrap()
+                .contains("unknown-poe-model")
+        );
     }
 
     #[test]

@@ -7,10 +7,10 @@ use serde::Deserialize;
 
 use roo_types::message::{ClineMessage, MessageType};
 
+use crate::TaskPersistenceError;
 use crate::messages;
 use crate::storage::TaskFileSystem;
 use crate::types::{HistoryItem, TaskMetadata, TaskMetadataOptions};
-use crate::TaskPersistenceError;
 
 // ---------------------------------------------------------------------------
 // compute_task_metadata
@@ -27,7 +27,11 @@ pub fn compute_task_metadata(
 ) -> Result<TaskMetadata, TaskPersistenceError> {
     // Read messages from disk or use provided messages
     let messages = if opts.messages.is_empty() {
-        let msg_path = opts.global_storage_path.join("tasks").join(&opts.task_id).join("messages.json");
+        let msg_path = opts
+            .global_storage_path
+            .join("tasks")
+            .join(&opts.task_id)
+            .join("messages.json");
         messages::read_task_messages(fs, &msg_path).unwrap_or_default()
     } else {
         opts.messages.clone()
@@ -48,9 +52,7 @@ pub fn compute_task_metadata(
     let timestamp = messages
         .first()
         .map(|m| m.ts as u64)
-        .unwrap_or_else(|| {
-            chrono::Utc::now().timestamp_millis() as u64
-        });
+        .unwrap_or_else(|| chrono::Utc::now().timestamp_millis() as u64);
 
     Ok(TaskMetadata {
         task_id: opts.task_id.clone(),
@@ -178,8 +180,8 @@ fn truncate_description(s: &str, max_len: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::storage::OsFileSystem;
     use crate::PersistenceTaskStatus;
+    use crate::storage::OsFileSystem;
 
     use std::path::PathBuf;
 
@@ -216,26 +218,24 @@ mod tests {
     fn test_compute_metadata_with_messages() {
         let fs = OsFileSystem;
         let mut opts = make_opts();
-        opts.messages = vec![
-            ClineMessage {
-                ts: 1700000000.0,
-                r#type: MessageType::Ask,
-                ask: Some(roo_types::message::ClineAsk::Followup),
-                say: None,
-                text: Some("Build me a todo app".to_string()),
-                images: None,
-                partial: None,
-                reasoning: None,
-                conversation_history_index: None,
-                checkpoint: None,
-                progress_status: None,
-                context_condense: None,
-                context_truncation: None,
-                is_protected: None,
-                api_protocol: None,
-                is_answered: None,
-            },
-        ];
+        opts.messages = vec![ClineMessage {
+            ts: 1700000000.0,
+            r#type: MessageType::Ask,
+            ask: Some(roo_types::message::ClineAsk::Followup),
+            say: None,
+            text: Some("Build me a todo app".to_string()),
+            images: None,
+            partial: None,
+            reasoning: None,
+            conversation_history_index: None,
+            checkpoint: None,
+            progress_status: None,
+            context_condense: None,
+            context_truncation: None,
+            is_protected: None,
+            api_protocol: None,
+            is_answered: None,
+        }];
 
         let meta = compute_task_metadata(&fs, &opts).unwrap();
         assert_eq!(meta.task_description, "Build me a todo app");

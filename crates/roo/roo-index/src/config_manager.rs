@@ -193,8 +193,12 @@ impl CodeIndexConfigManager {
         self.config.enabled = raw.codebase_index_enabled;
         self.config.qdrant_url = Some(raw.codebase_index_qdrant_url.clone());
         self.config.qdrant_api_key = Some(secrets.qdrant_api_key.clone()).filter(|s| !s.is_empty());
-        self.config.search_min_score = raw.codebase_index_search_min_score.unwrap_or(DEFAULT_SEARCH_MIN_SCORE);
-        self.config.search_max_results = raw.codebase_index_search_max_results.unwrap_or(DEFAULT_MAX_SEARCH_RESULTS);
+        self.config.search_min_score = raw
+            .codebase_index_search_min_score
+            .unwrap_or(DEFAULT_SEARCH_MIN_SCORE);
+        self.config.search_max_results = raw
+            .codebase_index_search_max_results
+            .unwrap_or(DEFAULT_MAX_SEARCH_RESULTS);
 
         // Validate and set model dimension
         if let Some(dim) = raw.codebase_index_embedder_model_dimension {
@@ -249,10 +253,12 @@ impl CodeIndexConfigManager {
             &raw.codebase_index_open_ai_compatible_base_url,
             &secrets.open_ai_compatible_api_key,
         ) {
-            (Some(url), key) if !url.is_empty() && !key.is_empty() => Some(OpenAiCompatibleOptions {
-                base_url: url.clone(),
-                api_key: key.clone(),
-            }),
+            (Some(url), key) if !url.is_empty() && !key.is_empty() => {
+                Some(OpenAiCompatibleOptions {
+                    base_url: url.clone(),
+                    api_key: key.clone(),
+                })
+            }
             _ => None,
         };
 
@@ -305,8 +311,18 @@ impl CodeIndexConfigManager {
     /// Returns whether the feature is properly configured.
     pub fn is_feature_configured(&self) -> bool {
         match self.config.embedder_provider {
-            EmbedderProvider::Openai => self.config.open_ai_options.as_ref().and_then(|o| o.open_ai_native_api_key.as_ref()).is_some(),
-            EmbedderProvider::Ollama => self.config.ollama_options.as_ref().and_then(|o| o.ollama_base_url.as_ref()).is_some(),
+            EmbedderProvider::Openai => self
+                .config
+                .open_ai_options
+                .as_ref()
+                .and_then(|o| o.open_ai_native_api_key.as_ref())
+                .is_some(),
+            EmbedderProvider::Ollama => self
+                .config
+                .ollama_options
+                .as_ref()
+                .and_then(|o| o.ollama_base_url.as_ref())
+                .is_some(),
             EmbedderProvider::OpenaiCompatible => self.config.open_ai_compatible_options.is_some(),
             EmbedderProvider::Gemini => self.config.gemini_api_key.is_some(),
             EmbedderProvider::Mistral => self.config.mistral_api_key.is_some(),

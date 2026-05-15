@@ -16,20 +16,16 @@ pub fn get_api_protocol(provider: ProviderName, model_id: Option<&str>) -> &'sta
         ProviderName::Anthropic | ProviderName::Bedrock | ProviderName::MiniMax => "anthropic",
 
         // Vertex uses anthropic protocol for claude models
-        ProviderName::Vertex => {
-            match model_id {
-                Some(id) if id.starts_with("claude") => "anthropic",
-                _ => "openai",
-            }
-        }
+        ProviderName::Vertex => match model_id {
+            Some(id) if id.starts_with("claude") => "anthropic",
+            _ => "openai",
+        },
 
         // Roo / Vercel AI Gateway: anthropic protocol if model starts with "anthropic/"
-        ProviderName::Roo | ProviderName::VercelAiGateway => {
-            match model_id {
-                Some(id) if id.starts_with("anthropic/") => "anthropic",
-                _ => "openai",
-            }
-        }
+        ProviderName::Roo | ProviderName::VercelAiGateway => match model_id {
+            Some(id) if id.starts_with("anthropic/") => "anthropic",
+            _ => "openai",
+        },
 
         // All other providers use OpenAI protocol
         _ => "openai",
@@ -94,10 +90,7 @@ mod tests {
 
     #[test]
     fn test_roo_with_openai_model() {
-        assert_eq!(
-            get_api_protocol(ProviderName::Roo, Some("gpt-4")),
-            "openai"
-        );
+        assert_eq!(get_api_protocol(ProviderName::Roo, Some("gpt-4")), "openai");
     }
 
     #[test]
@@ -120,7 +113,10 @@ mod tests {
 
     #[test]
     fn test_ollama_provider() {
-        assert_eq!(get_api_protocol(ProviderName::Ollama, Some("llama3")), "openai");
+        assert_eq!(
+            get_api_protocol(ProviderName::Ollama, Some("llama3")),
+            "openai"
+        );
     }
 
     #[test]

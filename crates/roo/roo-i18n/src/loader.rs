@@ -26,7 +26,10 @@ impl I18n {
     /// Create a new instance for the given locale.
     pub fn new(locale: Locale) -> Self {
         let translations = translations::get_translations(locale);
-        Self { locale, translations }
+        Self {
+            locale,
+            translations,
+        }
     }
 
     /// Translate `key`, returning the key itself when no translation exists.
@@ -117,10 +120,9 @@ mod tests {
     fn test_translation_en_all_common_keys() {
         let i18n = I18n::new(Locale::En);
         for key in [
-            "save", "cancel", "error", "warning", "loading", "yes", "no",
-            "ok", "retry", "close", "settings", "help", "about", "version",
-            "language", "theme", "mode", "tool", "file", "folder", "search",
-            "edit", "delete", "create", "update", "run", "stop", "start",
+            "save", "cancel", "error", "warning", "loading", "yes", "no", "ok", "retry", "close",
+            "settings", "help", "about", "version", "language", "theme", "mode", "tool", "file",
+            "folder", "search", "edit", "delete", "create", "update", "run", "stop", "start",
             "pause", "resume", "reset", "clear", "refresh",
         ] {
             let val = i18n.t(key);
@@ -146,10 +148,9 @@ mod tests {
     fn test_translation_zh_cn_all_common_keys() {
         let i18n = I18n::new(Locale::ZhCn);
         for key in [
-            "save", "cancel", "error", "warning", "loading", "yes", "no",
-            "ok", "retry", "close", "settings", "help", "about", "version",
-            "language", "theme", "mode", "tool", "file", "folder", "search",
-            "edit", "delete", "create", "update", "run", "stop", "start",
+            "save", "cancel", "error", "warning", "loading", "yes", "no", "ok", "retry", "close",
+            "settings", "help", "about", "version", "language", "theme", "mode", "tool", "file",
+            "folder", "search", "edit", "delete", "create", "update", "run", "stop", "start",
             "pause", "resume", "reset", "clear", "refresh",
         ] {
             let val = i18n.t(key);
@@ -241,8 +242,7 @@ mod tests {
             let i18n = I18n::new(locale);
             let val = i18n.t("save");
             assert_ne!(
-                val,
-                "save",
+                val, "save",
                 "locale {locale:?} is missing the 'save' translation"
             );
         }

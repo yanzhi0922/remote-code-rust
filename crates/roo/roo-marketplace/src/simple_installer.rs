@@ -155,9 +155,7 @@ impl SimpleInstaller {
             return Err(InstallError::ModeContentArray);
         }
 
-        let content_str = content
-            .as_str()
-            .ok_or(InstallError::ModeMissingContent)?;
+        let content_str = content.as_str().ok_or(InstallError::ModeMissingContent)?;
 
         let file_path = self.get_mode_file_path(target)?;
 
@@ -165,8 +163,7 @@ impl SimpleInstaller {
         let mode_data: serde_yaml::Value = serde_yaml::from_str(content_str)?;
 
         // Read existing file or create new structure
-        let mut existing_data: serde_yaml::Value =
-            serde_yaml::from_str("{customModes: []}")?;
+        let mut existing_data: serde_yaml::Value = serde_yaml::from_str("{customModes: []}")?;
 
         match tokio::fs::read_to_string(&file_path).await {
             Ok(existing) => {
@@ -391,7 +388,10 @@ impl SimpleInstaller {
     fn get_mode_file_path(&self, target: InstallTarget) -> Result<PathBuf, InstallError> {
         match target {
             InstallTarget::Project => {
-                let project = self.project_path.as_ref().ok_or(InstallError::NoWorkspaceFolder)?;
+                let project = self
+                    .project_path
+                    .as_ref()
+                    .ok_or(InstallError::NoWorkspaceFolder)?;
                 Ok(project.join(".roomodes"))
             }
             InstallTarget::Global => Ok(self.global_settings_path.join("custom_modes.yaml")),
@@ -401,7 +401,10 @@ impl SimpleInstaller {
     fn get_mcp_file_path(&self, target: InstallTarget) -> Result<PathBuf, InstallError> {
         match target {
             InstallTarget::Project => {
-                let project = self.project_path.as_ref().ok_or(InstallError::NoWorkspaceFolder)?;
+                let project = self
+                    .project_path
+                    .as_ref()
+                    .ok_or(InstallError::NoWorkspaceFolder)?;
                 Ok(project.join(".roo").join("mcp.json"))
             }
             InstallTarget::Global => Ok(self.global_settings_path.join("mcp_settings.json")),
@@ -470,10 +473,8 @@ mod tests {
     #[tokio::test]
     async fn test_install_mode_creates_file() {
         let tmp = tempfile::tempdir().unwrap();
-        let installer = SimpleInstaller::new(
-            Some(tmp.path().to_path_buf()),
-            tmp.path().join("global"),
-        );
+        let installer =
+            SimpleInstaller::new(Some(tmp.path().to_path_buf()), tmp.path().join("global"));
 
         let mut extra = serde_json::Map::new();
         extra.insert(
@@ -507,10 +508,8 @@ mod tests {
     #[tokio::test]
     async fn test_install_mcp_creates_file() {
         let tmp = tempfile::tempdir().unwrap();
-        let installer = SimpleInstaller::new(
-            Some(tmp.path().to_path_buf()),
-            tmp.path().join("global"),
-        );
+        let installer =
+            SimpleInstaller::new(Some(tmp.path().to_path_buf()), tmp.path().join("global"));
 
         let mut extra = serde_json::Map::new();
         extra.insert(
@@ -548,10 +547,8 @@ mod tests {
     #[tokio::test]
     async fn test_remove_mcp() {
         let tmp = tempfile::tempdir().unwrap();
-        let installer = SimpleInstaller::new(
-            Some(tmp.path().to_path_buf()),
-            tmp.path().join("global"),
-        );
+        let installer =
+            SimpleInstaller::new(Some(tmp.path().to_path_buf()), tmp.path().join("global"));
 
         // First install
         let mut extra = serde_json::Map::new();

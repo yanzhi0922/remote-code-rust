@@ -46,10 +46,10 @@ pub mod types;
 pub use process::{ProcessState, SharedTerminalProcess, TerminalProcess};
 pub use registry::TerminalRegistry;
 pub use shell_integration::{
-    ShellIntegrationManager, ShellType, ExecaTerminalConfig, ExecaProcessResult,
-    merge_promise,
+    ExecaProcessResult, ExecaTerminalConfig, ShellIntegrationManager, ShellType, merge_promise,
 };
 pub use terminal::{DefaultTerminal, RooTerminal, TerminalError, get_env};
 pub use types::{
-    CommandResult, NoopCallbacks, ShellExecutionDetails, TerminalCallbacks, TerminalId, TerminalState,
+    CommandResult, NoopCallbacks, ShellExecutionDetails, TerminalCallbacks, TerminalId,
+    TerminalState,
 };

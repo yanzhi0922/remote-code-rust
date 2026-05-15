@@ -40,10 +40,4 @@ pub enum ModeToolError {
 }
 
 /// Valid mode slugs.
-pub const VALID_MODE_SLUGS: &[&str] = &[
-    "code",
-    "architect",
-    "ask",
-    "debug",
-    "orchestrator",
-];
+pub const VALID_MODE_SLUGS: &[&str] = &["code", "architect", "ask", "debug", "orchestrator"];

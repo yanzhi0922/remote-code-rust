@@ -6,15 +6,17 @@
 
 use serde_json::Value;
 
-use roo_types::model::{ModelInfo, ReasoningEffortExtended, ReasoningEffortSetting, VerbosityLevel};
+use roo_types::model::{
+    ModelInfo, ReasoningEffortExtended, ReasoningEffortSetting, VerbosityLevel,
+};
 use roo_types::provider_settings::ProviderSettings;
 
 use super::reasoning::{
-    effort_extended_to_setting, effort_setting_to_extended,
-    get_anthropic_reasoning, get_gemini_reasoning, get_openai_reasoning, get_openrouter_reasoning,
-    should_use_reasoning_budget, should_use_reasoning_effort, GetModelReasoningOptions,
     ANTHROPIC_DEFAULT_MAX_TOKENS, DEFAULT_HYBRID_REASONING_MODEL_MAX_TOKENS,
     DEFAULT_HYBRID_REASONING_MODEL_THINKING_TOKENS, GEMINI_25_PRO_MIN_THINKING_TOKENS,
+    GetModelReasoningOptions, effort_extended_to_setting, effort_setting_to_extended,
+    get_anthropic_reasoning, get_gemini_reasoning, get_openai_reasoning, get_openrouter_reasoning,
+    should_use_reasoning_budget, should_use_reasoning_effort,
 };
 
 // ---------------------------------------------------------------------------
@@ -357,7 +359,7 @@ pub fn calculate_model_params(opts: GetModelParamsOptions) -> ModelParams {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use roo_types::model::{SupportsReasoningEffort, ReasoningEffortExtended};
+    use roo_types::model::{ReasoningEffortExtended, SupportsReasoningEffort};
     use serde_json::json;
 
     /// Helper: basic model with no special capabilities.
@@ -402,7 +404,8 @@ mod tests {
     fn test_max_tokens_reasoning_budget_model() {
         let model = hybrid_model();
         let settings = default_settings();
-        let result = get_model_max_output_tokens("claude-3-7", &model, &settings, Some(Format::Anthropic));
+        let result =
+            get_model_max_output_tokens("claude-3-7", &model, &settings, Some(Format::Anthropic));
         assert_eq!(result, Some(DEFAULT_HYBRID_REASONING_MODEL_MAX_TOKENS));
     }
 
@@ -413,7 +416,8 @@ mod tests {
             model_max_tokens: Some(32_768),
             ..Default::default()
         };
-        let result = get_model_max_output_tokens("claude-3-7", &model, &settings, Some(Format::Anthropic));
+        let result =
+            get_model_max_output_tokens("claude-3-7", &model, &settings, Some(Format::Anthropic));
         assert_eq!(result, Some(32_768));
     }
 
@@ -449,7 +453,8 @@ mod tests {
             ..Default::default()
         };
         let settings = default_settings();
-        let result = get_model_max_output_tokens("gpt-5-turbo", &model, &settings, Some(Format::OpenAi));
+        let result =
+            get_model_max_output_tokens("gpt-5-turbo", &model, &settings, Some(Format::OpenAi));
         // GPT-5 models bypass the 20% cap
         assert_eq!(result, Some(100_000));
     }
@@ -472,7 +477,8 @@ mod tests {
             ..Default::default()
         };
         let settings = default_settings();
-        let result = get_model_max_output_tokens("some-model", &model, &settings, Some(Format::OpenAi));
+        let result =
+            get_model_max_output_tokens("some-model", &model, &settings, Some(Format::OpenAi));
         assert!(result.is_none());
     }
 
@@ -706,7 +712,9 @@ mod tests {
     #[test]
     fn test_calculate_params_gemini_effort_based() {
         let model = ModelInfo {
-            supports_reasoning_effort: Some(SupportsReasoningEffort::from(["low", "medium", "high"])),
+            supports_reasoning_effort: Some(SupportsReasoningEffort::from([
+                "low", "medium", "high",
+            ])),
             reasoning_effort: Some(ReasoningEffortExtended::Medium),
             max_tokens: Some(65_536),
             context_window: 1_048_576,

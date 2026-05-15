@@ -118,7 +118,10 @@ pub struct Cli {
     #[arg(long = "no-proactive", action = clap::ArgAction::SetTrue)]
     pub no_proactive: bool,
 
-    #[arg(long = "dangerously-skip-permissions", alias = "dangerouslySkipPermissions")]
+    #[arg(
+        long = "dangerously-skip-permissions",
+        alias = "dangerouslySkipPermissions"
+    )]
     pub dangerously_skip_permissions: bool,
 
     #[arg(
@@ -1457,7 +1460,10 @@ mod tests {
         assert!(cli.brief);
         assert!(cli.no_proactive);
         assert!(cli.dangerously_skip_permissions);
-        assert_eq!(cli.permission_prompt_tool.as_deref(), Some("mcp__auth__ask"));
+        assert_eq!(
+            cli.permission_prompt_tool.as_deref(),
+            Some("mcp__auth__ask")
+        );
         assert!(cli.include_hook_events);
         assert!(cli.bare);
     }

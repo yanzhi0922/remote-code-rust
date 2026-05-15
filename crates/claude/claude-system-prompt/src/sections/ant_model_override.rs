@@ -33,9 +33,7 @@ impl SystemPromptSection for AntModelOverrideSection {
         // For external builds, read from env var as the configuration source.
         let suffix = std::env::var("ANT_MODEL_OVERRIDE_CONFIG")
             .ok()
-            .and_then(|json| {
-                serde_json::from_str::<serde_json::Value>(&json).ok()
-            })
+            .and_then(|json| serde_json::from_str::<serde_json::Value>(&json).ok())
             .and_then(|v| {
                 v.get("defaultSystemPromptSuffix")
                     .and_then(|s| s.as_str().map(|s| s.to_string()))
@@ -84,18 +82,24 @@ mod tests {
 
     #[test]
     fn returns_none_for_undercover() {
-        unsafe { std::env::set_var("USER_TYPE", "ant"); }
+        unsafe {
+            std::env::set_var("USER_TYPE", "ant");
+        }
         let mut ctx = test_ctx();
         ctx.is_undercover = true;
         let section = AntModelOverrideSection;
         let result = section.compute(&ctx).expect("compute ok");
         assert!(result.is_none());
-        unsafe { std::env::remove_var("USER_TYPE"); }
+        unsafe {
+            std::env::remove_var("USER_TYPE");
+        }
     }
 
     #[test]
     fn returns_suffix_when_configured() {
-        unsafe { std::env::set_var("USER_TYPE", "ant"); }
+        unsafe {
+            std::env::set_var("USER_TYPE", "ant");
+        }
         unsafe {
             std::env::set_var(
                 "ANT_MODEL_OVERRIDE_CONFIG",
@@ -105,7 +109,11 @@ mod tests {
         let section = AntModelOverrideSection;
         let result = section.compute(&test_ctx()).expect("compute ok");
         assert_eq!(result.as_deref(), Some("You are running in ant mode."));
-        unsafe { std::env::remove_var("USER_TYPE"); }
-        unsafe { std::env::remove_var("ANT_MODEL_OVERRIDE_CONFIG"); }
+        unsafe {
+            std::env::remove_var("USER_TYPE");
+        }
+        unsafe {
+            std::env::remove_var("ANT_MODEL_OVERRIDE_CONFIG");
+        }
     }
 }

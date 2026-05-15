@@ -126,8 +126,7 @@ pub struct RuntimeHookDiscovery {
     pub warnings: Vec<String>,
 }
 
-impl RuntimeHookDiscovery {
-}
+impl RuntimeHookDiscovery {}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct HooksListOutput {

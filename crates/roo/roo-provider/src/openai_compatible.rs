@@ -14,7 +14,7 @@ use serde::Deserialize;
 use roo_types::api::{ApiMessage, ApiStreamChunk, ProviderName};
 use roo_types::model::ModelInfo;
 
-use crate::base_provider::{convert_tools_for_openai, BaseProvider};
+use crate::base_provider::{BaseProvider, convert_tools_for_openai};
 use crate::error::{ProviderError, Result};
 use crate::handler::{ApiStream, CreateMessageMetadata, Provider};
 use crate::transform::openai_format::convert_to_openai_messages;
@@ -103,11 +103,14 @@ impl ReasoningDetailsAccumulator {
             let index = detail.index.unwrap_or(i as u64);
             let key = format!("{detail_type}-{index}");
 
-            let entry = self.entries.entry(key).or_insert_with(|| AccumulatedReasoningDetail {
-                detail_type: detail_type.to_string(),
-                index,
-                ..Default::default()
-            });
+            let entry = self
+                .entries
+                .entry(key)
+                .or_insert_with(|| AccumulatedReasoningDetail {
+                    detail_type: detail_type.to_string(),
+                    index,
+                    ..Default::default()
+                });
 
             // Concatenate text fragments
             if let Some(ref text) = detail.text {
@@ -223,7 +226,9 @@ impl ThinkTagMatcher {
                     if ch == '/' && self.index == 0 {
                         // This is a closing tag: `</...`
                         self.state = ThinkTagState::TagClose;
-                    } else if self.index < OPEN_TAG.len() && OPEN_TAG.as_bytes()[self.index] == (ch as u8) {
+                    } else if self.index < OPEN_TAG.len()
+                        && OPEN_TAG.as_bytes()[self.index] == (ch as u8)
+                    {
                         self.index += 1;
                     } else if ch == '>' && self.index == OPEN_TAG.len() {
                         // Matched `<think_open>`
@@ -237,7 +242,9 @@ impl ThinkTagMatcher {
                     }
                 }
                 ThinkTagState::TagClose => {
-                    if self.index < CLOSE_TAG.len() && CLOSE_TAG.as_bytes()[self.index] == (ch as u8) {
+                    if self.index < CLOSE_TAG.len()
+                        && CLOSE_TAG.as_bytes()[self.index] == (ch as u8)
+                    {
                         self.index += 1;
                     } else if ch == '>' && self.index == CLOSE_TAG.len() {
                         // Matched `</think_close>`
@@ -305,10 +312,7 @@ pub(crate) struct OpenAiPromptTokensDetails {
 /// Processes OpenAI usage metrics into an ApiStreamChunk.
 ///
 /// Source: `src/api/providers/base-openai-compatible-provider.ts` — `processUsageMetrics`
-pub fn process_usage_metrics(
-    usage: &OpenAiUsage,
-    model_info: &ModelInfo,
-) -> ApiStreamChunk {
+pub fn process_usage_metrics(usage: &OpenAiUsage, model_info: &ModelInfo) -> ApiStreamChunk {
     let input_tokens = usage.prompt_tokens.unwrap_or(0);
     let output_tokens = usage.completion_tokens.unwrap_or(0);
     let cache_write_tokens = usage
@@ -361,8 +365,16 @@ fn calculate_api_cost_openai(
         model_info,
         input_tokens,
         output_tokens,
-        if cache_write_tokens > 0 { Some(cache_write_tokens) } else { None },
-        if cache_read_tokens > 0 { Some(cache_read_tokens) } else { None },
+        if cache_write_tokens > 0 {
+            Some(cache_write_tokens)
+        } else {
+            None
+        },
+        if cache_read_tokens > 0 {
+            Some(cache_read_tokens)
+        } else {
+            None
+        },
     )
 }
 
@@ -427,13 +439,10 @@ impl OpenAiCompatibleProvider {
 
         let mut client_builder = reqwest::Client::builder();
         if let Some(timeout) = config.request_timeout {
-            client_builder =
-                client_builder.timeout(std::time::Duration::from_millis(timeout));
+            client_builder = client_builder.timeout(std::time::Duration::from_millis(timeout));
         }
 
-        let http_client = client_builder
-            .build()
-            .map_err(ProviderError::Reqwest)?;
+        let http_client = client_builder.build().map_err(ProviderError::Reqwest)?;
 
         Ok(Self {
             base,
@@ -565,7 +574,10 @@ impl OpenAiCompatibleProvider {
 
         if !response.status().is_success() {
             let status = response.status().as_u16();
-            let text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+            let text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
             return Err(ProviderError::api_error_response(
                 &self.provider_name_str,
                 status,
@@ -578,28 +590,22 @@ impl OpenAiCompatibleProvider {
         let stream = response
             .bytes_stream()
             .eventsource()
-            .map(move |event| {
-                match event {
-                    Ok(event) => {
-                        if event.data == "[DONE]" {
-                            return None;
-                        }
-                        match serde_json::from_str::<OpenAiStreamChunk>(&event.data) {
-                            Ok(chunk) => Some(Ok(chunk)),
-                            Err(e) => Some(Err(ProviderError::ParseError(format!(
-                                "Failed to parse stream chunk: {e}"
-                            )))),
-                        }
+            .map(move |event| match event {
+                Ok(event) => {
+                    if event.data == "[DONE]" {
+                        return None;
                     }
-                    Err(e) => Some(Err(ProviderError::StreamError(format!(
-                        "SSE error: {e}"
-                    )))),
+                    match serde_json::from_str::<OpenAiStreamChunk>(&event.data) {
+                        Ok(chunk) => Some(Ok(chunk)),
+                        Err(e) => Some(Err(ProviderError::ParseError(format!(
+                            "Failed to parse stream chunk: {e}"
+                        )))),
+                    }
                 }
+                Err(e) => Some(Err(ProviderError::StreamError(format!("SSE error: {e}")))),
             })
             .filter_map(|item| async move { item })
-            .map_err(move |e| {
-                ProviderError::StreamError(format!("{provider_name}: {e}"))
-            });
+            .map_err(move |e| ProviderError::StreamError(format!("{provider_name}: {e}")));
 
         Ok(Box::pin(stream))
     }
@@ -609,10 +615,7 @@ impl OpenAiCompatibleProvider {
     /// This allows providers that need custom message formatting (e.g. DeepSeek
     /// with R1 format) to build their own request body while still reusing the
     /// HTTP client and SSE stream parsing infrastructure.
-    pub async fn create_message_from_body(
-        &self,
-        body: serde_json::Value,
-    ) -> Result<ApiStream> {
+    pub async fn create_message_from_body(&self, body: serde_json::Value) -> Result<ApiStream> {
         let url = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
 
         let response = self
@@ -630,7 +633,10 @@ impl OpenAiCompatibleProvider {
 
         if !response.status().is_success() {
             let status = response.status().as_u16();
-            let text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+            let text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
             return Err(ProviderError::api_error_response(
                 &self.provider_name_str,
                 status,
@@ -643,28 +649,22 @@ impl OpenAiCompatibleProvider {
         let stream = response
             .bytes_stream()
             .eventsource()
-            .map(move |event| {
-                match event {
-                    Ok(event) => {
-                        if event.data == "[DONE]" {
-                            return None;
-                        }
-                        match serde_json::from_str::<OpenAiStreamChunk>(&event.data) {
-                            Ok(chunk) => Some(Ok(chunk)),
-                            Err(e) => Some(Err(ProviderError::ParseError(format!(
-                                "Failed to parse stream chunk: {e}"
-                            )))),
-                        }
+            .map(move |event| match event {
+                Ok(event) => {
+                    if event.data == "[DONE]" {
+                        return None;
                     }
-                    Err(e) => Some(Err(ProviderError::StreamError(format!(
-                        "SSE error: {e}"
-                    )))),
+                    match serde_json::from_str::<OpenAiStreamChunk>(&event.data) {
+                        Ok(chunk) => Some(Ok(chunk)),
+                        Err(e) => Some(Err(ProviderError::ParseError(format!(
+                            "Failed to parse stream chunk: {e}"
+                        )))),
+                    }
                 }
+                Err(e) => Some(Err(ProviderError::StreamError(format!("SSE error: {e}")))),
             })
             .filter_map(|item| async move { item })
-            .map_err(move |e| {
-                ProviderError::StreamError(format!("{provider_name}: {e}"))
-            });
+            .map_err(move |e| ProviderError::StreamError(format!("{provider_name}: {e}")));
 
         let (_, model_info) = self.base.get_model();
 
@@ -672,12 +672,17 @@ impl OpenAiCompatibleProvider {
         let mut active_tool_call_ids: HashSet<String> = HashSet::new();
         let model_info = model_info.clone();
         let tag_matcher = std::sync::Arc::new(std::sync::Mutex::new(ThinkTagMatcher::new()));
-        let reasoning_accumulator = std::sync::Arc::new(std::sync::Mutex::new(ReasoningDetailsAccumulator::default()));
+        let reasoning_accumulator =
+            std::sync::Arc::new(std::sync::Mutex::new(ReasoningDetailsAccumulator::default()));
 
         let processed = stream.flat_map(move |chunk_result| {
             let results: Vec<Result<ApiStreamChunk>> = match chunk_result {
                 Ok(chunk) => {
-                    let delta = chunk.choices.as_ref().and_then(|c| c.first()).and_then(|c| c.delta.as_ref());
+                    let delta = chunk
+                        .choices
+                        .as_ref()
+                        .and_then(|c| c.first())
+                        .and_then(|c| c.delta.as_ref());
                     let finish_reason = chunk
                         .choices
                         .as_ref()
@@ -703,9 +708,7 @@ impl OpenAiCompatibleProvider {
                                             signature: None,
                                         }));
                                     } else {
-                                        results.push(Ok(ApiStreamChunk::Text {
-                                            text,
-                                        }));
+                                        results.push(Ok(ApiStreamChunk::Text { text }));
                                     }
                                 }
                             } else {
@@ -775,10 +778,7 @@ impl OpenAiCompatibleProvider {
                                 results.push(Ok(ApiStreamChunk::ToolCallPartial {
                                     index: tool_call.index,
                                     id: tool_call.id.clone(),
-                                    name: tool_call
-                                        .function
-                                        .as_ref()
-                                        .and_then(|f| f.name.clone()),
+                                    name: tool_call.function.as_ref().and_then(|f| f.name.clone()),
                                     arguments: tool_call
                                         .function
                                         .as_ref()
@@ -789,7 +789,9 @@ impl OpenAiCompatibleProvider {
                     }
 
                     // Emit tool_call_end events when finish_reason is "tool_calls"
-                    if finish_reason.as_deref() == Some("tool_calls") && !active_tool_call_ids.is_empty() {
+                    if finish_reason.as_deref() == Some("tool_calls")
+                        && !active_tool_call_ids.is_empty()
+                    {
                         for id in active_tool_call_ids.drain() {
                             results.push(Ok(ApiStreamChunk::ToolCallEnd { id }));
                         }
@@ -911,7 +913,10 @@ impl OpenAiCompatibleProvider {
 
         if !response.status().is_success() {
             let status = response.status().as_u16();
-            let text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+            let text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
             return Err(ProviderError::api_error_response(
                 &self.provider_name_str,
                 status,
@@ -926,7 +931,8 @@ impl OpenAiCompatibleProvider {
         let mut chunks: Vec<Result<ApiStreamChunk>> = Vec::new();
 
         // Emit tool calls if present
-        if let Some(tool_calls) = resp.get("choices")
+        if let Some(tool_calls) = resp
+            .get("choices")
             .and_then(|c| c.get(0))
             .and_then(|c| c.get("message"))
             .and_then(|m| m.get("tool_calls"))
@@ -935,13 +941,19 @@ impl OpenAiCompatibleProvider {
             for (i, tc) in tool_calls.iter().enumerate() {
                 if tc.get("type").and_then(|t| t.as_str()) == Some("function") {
                     chunks.push(Ok(ApiStreamChunk::ToolCall {
-                        id: tc.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-                        name: tc.get("function")
+                        id: tc
+                            .get("id")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                        name: tc
+                            .get("function")
                             .and_then(|f| f.get("name"))
                             .and_then(|n| n.as_str())
                             .unwrap_or("")
                             .to_string(),
-                        arguments: tc.get("function")
+                        arguments: tc
+                            .get("function")
                             .and_then(|f| f.get("arguments"))
                             .and_then(|a| a.as_str())
                             .unwrap_or("{}")
@@ -957,7 +969,8 @@ impl OpenAiCompatibleProvider {
         }
 
         // Emit text content
-        let content = resp.get("choices")
+        let content = resp
+            .get("choices")
             .and_then(|c| c.get(0))
             .and_then(|c| c.get("message"))
             .and_then(|m| m.get("content"))
@@ -996,7 +1009,9 @@ impl Provider for OpenAiCompatibleProvider {
         // When streaming is disabled, fall back to non-streaming chat completion.
         // Source: `src/api/providers/openai.ts` — `openAiStreamingEnabled ?? true`
         if !self.streaming_enabled {
-            return self.create_message_non_streaming(system_prompt, &messages, tools.as_ref(), &metadata).await;
+            return self
+                .create_message_non_streaming(system_prompt, &messages, tools.as_ref(), &metadata)
+                .await;
         }
 
         let stream = self
@@ -1009,12 +1024,17 @@ impl Provider for OpenAiCompatibleProvider {
         let mut active_tool_call_ids: HashSet<String> = HashSet::new();
         let model_info = model_info.clone();
         let tag_matcher = std::sync::Arc::new(std::sync::Mutex::new(ThinkTagMatcher::new()));
-        let _reasoning_accumulator = std::sync::Arc::new(std::sync::Mutex::new(ReasoningDetailsAccumulator::default()));
+        let _reasoning_accumulator =
+            std::sync::Arc::new(std::sync::Mutex::new(ReasoningDetailsAccumulator::default()));
 
         let processed = stream.flat_map(move |chunk_result| {
             let results: Vec<Result<ApiStreamChunk>> = match chunk_result {
                 Ok(chunk) => {
-                    let delta = chunk.choices.as_ref().and_then(|c| c.first()).and_then(|c| c.delta.as_ref());
+                    let delta = chunk
+                        .choices
+                        .as_ref()
+                        .and_then(|c| c.first())
+                        .and_then(|c| c.delta.as_ref());
                     let finish_reason = chunk
                         .choices
                         .as_ref()
@@ -1040,9 +1060,7 @@ impl Provider for OpenAiCompatibleProvider {
                                             signature: None,
                                         }));
                                     } else {
-                                        results.push(Ok(ApiStreamChunk::Text {
-                                            text,
-                                        }));
+                                        results.push(Ok(ApiStreamChunk::Text { text }));
                                     }
                                 }
                             } else {
@@ -1101,10 +1119,7 @@ impl Provider for OpenAiCompatibleProvider {
                                 results.push(Ok(ApiStreamChunk::ToolCallPartial {
                                     index: tool_call.index,
                                     id: tool_call.id.clone(),
-                                    name: tool_call
-                                        .function
-                                        .as_ref()
-                                        .and_then(|f| f.name.clone()),
+                                    name: tool_call.function.as_ref().and_then(|f| f.name.clone()),
                                     arguments: tool_call
                                         .function
                                         .as_ref()
@@ -1115,7 +1130,9 @@ impl Provider for OpenAiCompatibleProvider {
                     }
 
                     // Emit tool_call_end events when finish_reason is "tool_calls"
-                    if finish_reason.as_deref() == Some("tool_calls") && !active_tool_call_ids.is_empty() {
+                    if finish_reason.as_deref() == Some("tool_calls")
+                        && !active_tool_call_ids.is_empty()
+                    {
                         for id in active_tool_call_ids.drain() {
                             results.push(Ok(ApiStreamChunk::ToolCallEnd { id }));
                         }
@@ -1166,7 +1183,10 @@ impl Provider for OpenAiCompatibleProvider {
 
         if !response.status().is_success() {
             let status = response.status().as_u16();
-            let text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+            let text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
             return Err(ProviderError::api_error_response(
                 &self.provider_name_str,
                 status,
@@ -1174,10 +1194,7 @@ impl Provider for OpenAiCompatibleProvider {
             ));
         }
 
-        let resp: serde_json::Value = response
-            .json()
-            .await
-            .map_err(ProviderError::Reqwest)?;
+        let resp: serde_json::Value = response.json().await.map_err(ProviderError::Reqwest)?;
 
         Ok(resp["choices"][0]["message"]["content"]
             .as_str()

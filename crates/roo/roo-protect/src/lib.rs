@@ -8,4 +8,6 @@ pub mod controller;
 pub mod patterns;
 
 pub use controller::{PathAnnotation, RooProtectedController};
-pub use patterns::{get_protection_description, is_protected_path, PROTECTED_PATTERNS, SHIELD_SYMBOL};
+pub use patterns::{
+    PROTECTED_PATTERNS, SHIELD_SYMBOL, get_protection_description, is_protected_path,
+};

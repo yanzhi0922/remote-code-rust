@@ -10,8 +10,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use roo_condense::{
-    summarize_conversation, SummarizeConversationOptions, MIN_CONDENSE_THRESHOLD,
-    MAX_CONDENSE_THRESHOLD,
+    MAX_CONDENSE_THRESHOLD, MIN_CONDENSE_THRESHOLD, SummarizeConversationOptions,
+    summarize_conversation,
 };
 use roo_provider::handler::{CreateMessageMetadata, Provider};
 use roo_types::api::{ApiMessage, ContentBlock};
@@ -26,9 +26,9 @@ use roo_types::api::{ApiMessage, ContentBlock};
 /// is actually Anthropic's max output tokens (8192), not the context window.
 const CONTEXT_WINDOW_FALLBACK: u64 = 200_000;
 
+use crate::TOKEN_BUFFER_PERCENTAGE;
 use crate::token::estimate_token_count;
 use crate::truncation::truncate_conversation;
-use crate::TOKEN_BUFFER_PERCENTAGE;
 
 /// Options for checking if context management will likely run.
 ///
@@ -146,7 +146,9 @@ pub fn will_manage_context(options: &WillManageContextOptions) -> bool {
 /// Falls back to sliding window truncation if condensation is unavailable or fails.
 ///
 /// Source: `src/core/context-management/index.ts` — `manageContext`
-pub async fn manage_context(options: ContextManagementOptions) -> anyhow::Result<ContextManagementResult> {
+pub async fn manage_context(
+    options: ContextManagementOptions,
+) -> anyhow::Result<ContextManagementResult> {
     let ContextManagementOptions {
         messages,
         total_tokens,
@@ -175,7 +177,8 @@ pub async fn manage_context(options: ContextManagementOptions) -> anyhow::Result
 
     // Estimate tokens for the last message (which is always a user message)
     let last_message = messages.last().expect("messages should not be empty");
-    let last_message_tokens = estimate_token_count(&last_message.content, api_handler.as_ref()).await? as usize;
+    let last_message_tokens =
+        estimate_token_count(&last_message.content, api_handler.as_ref()).await? as usize;
 
     // Calculate total effective tokens (totalTokens never includes the last message)
     let prev_context_tokens = total_tokens + last_message_tokens;
@@ -240,7 +243,9 @@ pub async fn manage_context(options: ContextManagementOptions) -> anyhow::Result
                     error_details: None,
                     truncation_id: None,
                     messages_removed: None,
-                    new_context_tokens_after_truncation: result.new_context_tokens.map(|t| t as usize),
+                    new_context_tokens_after_truncation: result
+                        .new_context_tokens
+                        .map(|t| t as usize),
                 });
             }
         }
@@ -255,8 +260,7 @@ pub async fn manage_context(options: ContextManagementOptions) -> anyhow::Result
             .messages
             .iter()
             .filter(|msg| {
-                msg.truncation_parent.is_none()
-                    && !msg.is_truncation_marker.unwrap_or(false)
+                msg.truncation_parent.is_none() && !msg.is_truncation_marker.unwrap_or(false)
             })
             .collect();
 
@@ -318,13 +322,13 @@ pub async fn manage_context(options: ContextManagementOptions) -> anyhow::Result
 ///
 /// Source: `src/core/condense/index.ts` — `getEffectiveApiHistory`
 pub fn get_effective_api_history(messages: &[ApiMessage]) -> Vec<ApiMessage> {
-    use std::collections::HashSet;
     use roo_types::api::{ContentBlock, MessageRole};
+    use std::collections::HashSet;
 
     // Find the most recent summary message
-    let last_summary_idx = messages.iter().rposition(|msg| {
-        msg.is_summary.unwrap_or(false)
-    });
+    let last_summary_idx = messages
+        .iter()
+        .rposition(|msg| msg.is_summary.unwrap_or(false));
 
     if let Some(summary_idx) = last_summary_idx {
         // Fresh start model: return only messages from the summary onwards
@@ -604,7 +608,9 @@ mod tests {
     fn make_msg(role: MessageRole, text: &str) -> ApiMessage {
         ApiMessage {
             role,
-            content: vec![ContentBlock::Text { text: text.to_string() }],
+            content: vec![ContentBlock::Text {
+                text: text.to_string(),
+            }],
             reasoning: None,
             ts: None,
             truncation_parent: None,
@@ -620,7 +626,9 @@ mod tests {
     fn make_summary_msg(text: &str, condense_id: &str) -> ApiMessage {
         ApiMessage {
             role: MessageRole::User,
-            content: vec![ContentBlock::Text { text: text.to_string() }],
+            content: vec![ContentBlock::Text {
+                text: text.to_string(),
+            }],
             reasoning: None,
             ts: None,
             truncation_parent: None,
@@ -636,7 +644,9 @@ mod tests {
     fn make_condensed_msg(role: MessageRole, text: &str, condense_parent: &str) -> ApiMessage {
         ApiMessage {
             role,
-            content: vec![ContentBlock::Text { text: text.to_string() }],
+            content: vec![ContentBlock::Text {
+                text: text.to_string(),
+            }],
             reasoning: None,
             ts: None,
             truncation_parent: None,
@@ -741,7 +751,9 @@ mod tests {
                         content: vec![],
                         is_error: None,
                     },
-                    ContentBlock::Text { text: "some text".to_string() },
+                    ContentBlock::Text {
+                        text: "some text".to_string(),
+                    },
                 ],
                 reasoning: None,
                 ts: None,

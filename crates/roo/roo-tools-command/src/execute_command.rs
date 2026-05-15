@@ -48,10 +48,7 @@ pub fn unescape_command(command: &str) -> String {
     let hex_re = regex::Regex::new(r"&#[xX]([0-9a-fA-F]+);").unwrap();
     let hex_result = hex_re.replace_all(&result, |caps: &regex::Captures| {
         if let Ok(code) = u32::from_str_radix(&caps[1], 16) {
-            char::from_u32(code).map_or_else(
-                || caps[0].to_string(),
-                |c| c.to_string(),
-            )
+            char::from_u32(code).map_or_else(|| caps[0].to_string(), |c| c.to_string())
         } else {
             caps[0].to_string()
         }
@@ -62,10 +59,7 @@ pub fn unescape_command(command: &str) -> String {
     let dec_re = regex::Regex::new(r"&#(\d+);").unwrap();
     let dec_result = dec_re.replace_all(&result, |caps: &regex::Captures| {
         if let Ok(code) = caps[1].parse::<u32>() {
-            char::from_u32(code).map_or_else(
-                || caps[0].to_string(),
-                |c| c.to_string(),
-            )
+            char::from_u32(code).map_or_else(|| caps[0].to_string(), |c| c.to_string())
         } else {
             caps[0].to_string()
         }
@@ -80,7 +74,9 @@ pub fn unescape_command(command: &str) -> String {
 // ---------------------------------------------------------------------------
 
 /// Validate execute_command parameters.
-pub fn validate_execute_command_params(params: &ExecuteCommandParams) -> Result<(), CommandToolError> {
+pub fn validate_execute_command_params(
+    params: &ExecuteCommandParams,
+) -> Result<(), CommandToolError> {
     if params.command.trim().is_empty() {
         return Err(CommandToolError::InvalidCommand(
             "command must not be empty".to_string(),
@@ -189,8 +185,9 @@ impl<'a> StreamingCallbacks<'a> {
             streamer,
             throttle_ms,
             accumulated: std::sync::Mutex::new(String::new()),
-            last_emit: std::sync::Mutex::new(std::time::Instant::now()
-                - Duration::from_millis(throttle_ms + 1)),
+            last_emit: std::sync::Mutex::new(
+                std::time::Instant::now() - Duration::from_millis(throttle_ms + 1),
+            ),
         }
     }
 
@@ -531,13 +528,9 @@ pub async fn execute_command_with_opts(
         let cmd_future = guard.run_command(&command, &callbacks);
 
         // We wrap the command future in a helper that respects both timeouts.
-        let result = run_with_dual_timeout(
-            cmd_future,
-            agent_timeout,
-            effective_user_timeout,
-            streamer,
-        )
-        .await;
+        let result =
+            run_with_dual_timeout(cmd_future, agent_timeout, effective_user_timeout, streamer)
+                .await;
 
         match result {
             DualTimeoutResult::Completed(cmd_result) => cmd_result,
@@ -557,7 +550,9 @@ pub async fn execute_command_with_opts(
                     "Command execution failed for '{}': {}. \
                      Working directory: '{}'. \
                      Please check that the command is valid and try again.",
-                    command, e, resolved_cwd.display()
+                    command,
+                    e,
+                    resolved_cwd.display()
                 ));
             }
         }
@@ -575,7 +570,9 @@ pub async fn execute_command_with_opts(
                 return Err(format!(
                     "Failed to create output directory '{}': {}. \
                      Command: '{}'",
-                    cmd_output_dir.display(), e, command
+                    cmd_output_dir.display(),
+                    e,
+                    command
                 ));
             }
             let file_path = cmd_output_dir.join(&artifact_id);
@@ -583,7 +580,9 @@ pub async fn execute_command_with_opts(
                 return Err(format!(
                     "Failed to persist command output to '{}': {}. \
                      Command: '{}'",
-                    file_path.display(), e, command
+                    file_path.display(),
+                    e,
+                    command
                 ));
             }
 
@@ -611,9 +610,18 @@ pub async fn execute_command_with_opts(
     let exit_status = crate::helpers::format_exit_status(result.exit_code);
 
     let final_output = if output.is_empty() {
-        format!("Command executed in terminal within working directory '{}'. {}", resolved_cwd.display(), exit_status)
+        format!(
+            "Command executed in terminal within working directory '{}'. {}",
+            resolved_cwd.display(),
+            exit_status
+        )
     } else {
-        format!("Command executed in terminal within working directory '{}'. {}\nOutput:\n{}", resolved_cwd.display(), exit_status, output)
+        format!(
+            "Command executed in terminal within working directory '{}'. {}\nOutput:\n{}",
+            resolved_cwd.display(),
+            exit_status,
+            output
+        )
     };
 
     Ok(ExecuteCommandResult {
@@ -953,16 +961,7 @@ mod tests {
         let registry = Arc::new(TerminalRegistry::new());
         let dir = tempfile::tempdir().expect("failed to create temp dir");
 
-        let result = execute_command(
-            "",
-            None,
-            None,
-            registry,
-            dir.path(),
-            None,
-            50,
-        )
-        .await;
+        let result = execute_command("", None, None, registry, dir.path(), None, 50).await;
 
         assert!(result.is_err());
     }
@@ -994,17 +993,9 @@ mod tests {
         let dir = tempfile::tempdir().expect("failed to create temp dir");
 
         // Use a command that will fail (exit non-zero)
-        let result = execute_command(
-            "exit 42",
-            None,
-            Some(5000),
-            registry,
-            dir.path(),
-            None,
-            50,
-        )
-        .await
-        .expect("command should complete");
+        let result = execute_command("exit 42", None, Some(5000), registry, dir.path(), None, 50)
+            .await
+            .expect("command should complete");
 
         assert!(!result.was_timed_out);
         assert_eq!(result.exit_code, Some(42));
@@ -1033,8 +1024,14 @@ mod tests {
         .await
         .expect("command should succeed");
 
-        assert!(result.artifact_id.is_some(), "output should be truncated and persisted");
-        assert!(result.output.contains("OUTPUT TRUNCATED"), "should contain truncation notice");
+        assert!(
+            result.artifact_id.is_some(),
+            "output should be truncated and persisted"
+        );
+        assert!(
+            result.output.contains("OUTPUT TRUNCATED"),
+            "should contain truncation notice"
+        );
     }
 
     // --- Detailed error message tests ---
@@ -1046,7 +1043,9 @@ mod tests {
 
         let result = execute_command(
             "echo hello",
-            Some(std::path::Path::new("/nonexistent/path/that/does/not/exist")),
+            Some(std::path::Path::new(
+                "/nonexistent/path/that/does/not/exist",
+            )),
             Some(5000),
             registry,
             dir.path(),
@@ -1057,9 +1056,18 @@ mod tests {
 
         assert!(result.is_err());
         let err = result.unwrap_err();
-        assert!(err.contains("does not exist"), "Error should mention missing path");
-        assert!(err.contains("echo hello"), "Error should include the command");
-        assert!(err.contains("verify the path"), "Error should suggest checking path");
+        assert!(
+            err.contains("does not exist"),
+            "Error should mention missing path"
+        );
+        assert!(
+            err.contains("echo hello"),
+            "Error should include the command"
+        );
+        assert!(
+            err.contains("verify the path"),
+            "Error should suggest checking path"
+        );
     }
 
     #[test]

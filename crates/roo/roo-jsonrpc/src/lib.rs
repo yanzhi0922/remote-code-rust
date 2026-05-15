@@ -22,7 +22,9 @@ pub mod validator;
 
 // Re-export primary types
 pub use batch::{decode_batch, encode_batch};
-pub use codec::{decode_message, encode_message, encode_with_content_length, parse_content_length_header};
+pub use codec::{
+    decode_message, encode_message, encode_with_content_length, parse_content_length_header,
+};
 pub use id::IdGenerator;
-pub use types::{error_codes, Error as JsonRpcError, Id, Message};
+pub use types::{Error as JsonRpcError, Id, Message, error_codes};
 pub use validator::validate;

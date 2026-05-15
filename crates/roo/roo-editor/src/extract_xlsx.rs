@@ -36,8 +36,8 @@ const ROW_LIMIT: u32 = 50000;
 ///
 /// Source: `.research/Roo-Code/src/integrations/misc/extract-text-from-xlsx.ts`
 pub fn extract_text_from_xlsx_file(file_path: &Path) -> Result<String, XlsxError> {
-    let mut workbook = open_workbook_auto(file_path)
-        .map_err(|e| XlsxError::ParseError(e.to_string()))?;
+    let mut workbook =
+        open_workbook_auto(file_path).map_err(|e| XlsxError::ParseError(e.to_string()))?;
 
     extract_text_from_workbook(&mut workbook)
 }
@@ -45,8 +45,8 @@ pub fn extract_text_from_xlsx_file(file_path: &Path) -> Result<String, XlsxError
 /// Extract text from XLSX bytes.
 pub fn extract_text_from_xlsx_bytes(data: &[u8]) -> Result<String, XlsxError> {
     let cursor = std::io::Cursor::new(data);
-    let mut workbook: Sheets<_> = open_workbook_auto_from_rs(cursor)
-        .map_err(|e| XlsxError::ParseError(e.to_string()))?;
+    let mut workbook: Sheets<_> =
+        open_workbook_auto_from_rs(cursor).map_err(|e| XlsxError::ParseError(e.to_string()))?;
 
     extract_text_from_workbook(&mut workbook)
 }
@@ -130,7 +130,10 @@ mod tests {
 
     #[test]
     fn test_format_cell_string() {
-        assert_eq!(format_cell_value(&Data::String("hello".to_string())), "hello");
+        assert_eq!(
+            format_cell_value(&Data::String("hello".to_string())),
+            "hello"
+        );
     }
 
     #[test]

@@ -8,10 +8,10 @@ pub mod ops;
 pub mod types;
 
 pub use git_ops::{
-    branch_has_worktree_include, check_git_installed, check_git_repo, checkout_branch,
-    create_worktree, create_worktree_include, delete_worktree, get_available_branches,
-    get_current_branch, get_git_root_path, get_worktree_include_status, list_worktrees,
-    CreateWorktreeOptions, CreateWorktreeResult, WorktreeInfo,
+    CreateWorktreeOptions, CreateWorktreeResult, WorktreeInfo, branch_has_worktree_include,
+    check_git_installed, check_git_repo, checkout_branch, create_worktree, create_worktree_include,
+    delete_worktree, get_available_branches, get_current_branch, get_git_root_path,
+    get_worktree_include_status, list_worktrees,
 };
 pub use ops::{generate_random_suffix, generate_worktree_name, is_workspace_subfolder};
 pub use types::{

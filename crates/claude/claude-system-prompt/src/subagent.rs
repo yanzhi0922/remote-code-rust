@@ -83,8 +83,8 @@ mod tests {
     #[test]
     fn enhance_appends_notes_and_env() {
         let existing = vec!["system prompt".to_string()];
-        let result = enhance_system_prompt_with_env_details(existing, &test_ctx())
-            .expect("should succeed");
+        let result =
+            enhance_system_prompt_with_env_details(existing, &test_ctx()).expect("should succeed");
         assert_eq!(result.len(), 3);
         assert_eq!(result[0], "system prompt");
         assert!(result[1].contains("Agent threads"));
@@ -93,8 +93,8 @@ mod tests {
 
     #[test]
     fn enhance_notes_mention_absolute_paths() {
-        let result = enhance_system_prompt_with_env_details(vec![], &test_ctx())
-            .expect("should succeed");
+        let result =
+            enhance_system_prompt_with_env_details(vec![], &test_ctx()).expect("should succeed");
         assert!(result[0].contains("absolute file paths"));
     }
 }

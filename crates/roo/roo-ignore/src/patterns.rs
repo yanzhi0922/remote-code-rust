@@ -81,7 +81,9 @@ mod tests {
     #[test]
     fn test_hidden_directory_ignored() {
         assert!(is_path_in_ignored_directory("project/.hidden/file.txt"));
-        assert!(is_path_in_ignored_directory("project/.vscode/settings.json"));
+        assert!(is_path_in_ignored_directory(
+            "project/.vscode/settings.json"
+        ));
     }
 
     #[test]
@@ -109,12 +111,16 @@ mod tests {
 
     #[test]
     fn test_target_dependency_ignored() {
-        assert!(is_path_in_ignored_directory("project/target/dependency/lib.rs"));
+        assert!(is_path_in_ignored_directory(
+            "project/target/dependency/lib.rs"
+        ));
     }
 
     #[test]
     fn test_build_dependencies_ignored() {
-        assert!(is_path_in_ignored_directory("project/build/dependencies/lib.rs"));
+        assert!(is_path_in_ignored_directory(
+            "project/build/dependencies/lib.rs"
+        ));
     }
 
     #[test]

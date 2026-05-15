@@ -2,7 +2,7 @@
 //!
 //! Derived from `src/api/providers/base-provider.ts`.
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use roo_types::api::{ContentBlock, ProviderName};
 use roo_types::model::ModelInfo;
@@ -34,7 +34,9 @@ pub fn convert_tools_for_openai(tools: Option<&Vec<Value>>) -> Option<Vec<Value>
                 let parameters = if is_mcp {
                     function.get("parameters").cloned()
                 } else {
-                    function.get("parameters").map(|p| convert_tool_schema_for_openai(p))
+                    function
+                        .get("parameters")
+                        .map(|p| convert_tool_schema_for_openai(p))
                 };
 
                 json!({
@@ -70,13 +72,16 @@ pub fn convert_tool_schema_for_openai(schema: &Value) -> Value {
         result["additionalProperties"] = json!(false);
     }
 
-    if let Some(properties) = result.get("properties").and_then(|p| p.as_object()).cloned() {
+    if let Some(properties) = result
+        .get("properties")
+        .and_then(|p| p.as_object())
+        .cloned()
+    {
         let all_keys: Vec<String> = properties.keys().cloned().collect();
 
         // OpenAI strict mode requires ALL properties in required array
-        result["required"] = Value::Array(
-            all_keys.iter().map(|k| Value::String(k.clone())).collect(),
-        );
+        result["required"] =
+            Value::Array(all_keys.iter().map(|k| Value::String(k.clone())).collect());
 
         let mut new_props = serde_json::Map::new();
 
@@ -154,26 +159,22 @@ impl BaseProvider {
         let mut total: u64 = 0;
         for block in content {
             total += match block {
-                ContentBlock::Text { text } => {
-                    (text.len() as u64).div_ceil(4)
-                }
+                ContentBlock::Text { text } => (text.len() as u64).div_ceil(4),
                 ContentBlock::ToolUse { name, input, .. } => {
                     let name_tokens = (name.len() as u64).div_ceil(4);
                     let input_str = serde_json::to_string(input).unwrap_or_default();
                     let input_tokens = (input_str.len() as u64).div_ceil(4);
                     name_tokens + input_tokens
                 }
-                ContentBlock::ToolResult { content: inner, .. } => {
-                    inner
-                        .iter()
-                        .map(|c| match c {
-                            roo_types::api::ToolResultContent::Text { text } => {
-                                (text.len() as u64).div_ceil(4)
-                            }
-                            roo_types::api::ToolResultContent::Image { .. } => 256,
-                        })
-                        .sum()
-                }
+                ContentBlock::ToolResult { content: inner, .. } => inner
+                    .iter()
+                    .map(|c| match c {
+                        roo_types::api::ToolResultContent::Text { text } => {
+                            (text.len() as u64).div_ceil(4)
+                        }
+                        roo_types::api::ToolResultContent::Image { .. } => 256,
+                    })
+                    .sum(),
                 ContentBlock::Image { source } => match source {
                     roo_types::api::ImageSource::Base64 { data, .. } => {
                         let len = data.len() as f64;
@@ -181,12 +182,8 @@ impl BaseProvider {
                     }
                     roo_types::api::ImageSource::Url { .. } => 300,
                 },
-                ContentBlock::Thinking { thinking, .. } => {
-                    (thinking.len() as u64).div_ceil(4)
-                }
-                ContentBlock::RedactedThinking { data } => {
-                    (data.len() as f64 / 4.0).ceil() as u64
-                }
+                ContentBlock::Thinking { thinking, .. } => (thinking.len() as u64).div_ceil(4),
+                ContentBlock::RedactedThinking { data } => (data.len() as f64 / 4.0).ceil() as u64,
             };
         }
 

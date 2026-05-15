@@ -21,10 +21,7 @@ impl AgentRegistry {
     }
 
     /// Discover all agents from built-in definitions, user directory, and project directory.
-    pub fn discover(
-        user_agents_dir: Option<&Path>,
-        project_agents_dir: Option<&Path>,
-    ) -> Self {
+    pub fn discover(user_agents_dir: Option<&Path>, project_agents_dir: Option<&Path>) -> Self {
         let mut agents = HashMap::new();
 
         // 1. Load built-in agents (lowest priority)
@@ -63,10 +60,7 @@ impl AgentRegistry {
 
     /// List agents by scope.
     pub fn list_by_scope(&self, scope: AgentScope) -> Vec<&SpecializedAgent> {
-        self.agents
-            .values()
-            .filter(|a| a.scope == scope)
-            .collect()
+        self.agents.values().filter(|a| a.scope == scope).collect()
     }
 
     /// Register a custom agent.
@@ -112,6 +106,7 @@ impl Default for AgentRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::AgentModel;
 
     #[test]
     fn test_default_registry_has_builtin_agents() {

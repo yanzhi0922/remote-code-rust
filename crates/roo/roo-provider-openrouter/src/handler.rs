@@ -17,17 +17,15 @@ use std::sync::RwLock;
 use async_trait::async_trait;
 use serde_json::json;
 
-use roo_provider::{
-    ApiStream, BaseProvider, CreateMessageMetadata, Provider,
-    OpenAiCompatibleConfig, OpenAiCompatibleProvider,
-    convert_tools_for_openai,
-    generate_image_with_provider, ImageGenerationResult, ImageGenerationOptions,
-};
 use roo_provider::error::{ProviderError, Result};
 use roo_provider::transform::caching::{apply_anthropic_caching, apply_gemini_caching};
 use roo_provider::transform::{
-    convert_to_openai_messages, sanitize_gemini_messages,
-    convert_to_r1_zai_messages, R1ZaiOptions,
+    R1ZaiOptions, convert_to_openai_messages, convert_to_r1_zai_messages, sanitize_gemini_messages,
+};
+use roo_provider::{
+    ApiStream, BaseProvider, CreateMessageMetadata, ImageGenerationOptions, ImageGenerationResult,
+    OpenAiCompatibleConfig, OpenAiCompatibleProvider, Provider, convert_tools_for_openai,
+    generate_image_with_provider,
 };
 use roo_types::api::{ApiMessage, ContentBlock, MessageRole, ProviderName};
 use roo_types::model::{ModelInfo, ModelRecord};
@@ -111,9 +109,7 @@ fn is_gemini_model(model_id: &str) -> bool {
 fn apply_router_tool_preferences(model_id: &str, model_info: &mut ModelInfo) {
     if model_id.contains("openai") {
         // Add "apply_diff" and "write_to_file" to excluded_tools (deduplicated)
-        let excluded = model_info
-            .excluded_tools
-            .get_or_insert_with(Vec::new);
+        let excluded = model_info.excluded_tools.get_or_insert_with(Vec::new);
         for tool in &["apply_diff", "write_to_file"] {
             if !excluded.contains(&tool.to_string()) {
                 excluded.push(tool.to_string());
@@ -121,9 +117,7 @@ fn apply_router_tool_preferences(model_id: &str, model_info: &mut ModelInfo) {
         }
 
         // Add "apply_patch" to included_tools (deduplicated)
-        let included = model_info
-            .included_tools
-            .get_or_insert_with(Vec::new);
+        let included = model_info.included_tools.get_or_insert_with(Vec::new);
         let patch = "apply_patch".to_string();
         if !included.contains(&patch) {
             included.push(patch);
@@ -152,7 +146,9 @@ pub struct OpenRouterHandler {
 impl OpenRouterHandler {
     /// Create a new OpenRouter handler from configuration.
     pub fn new(config: OpenRouterConfig) -> Result<Self> {
-        let model_id = config.model_id.unwrap_or_else(|| models::default_model_id());
+        let model_id = config
+            .model_id
+            .unwrap_or_else(|| models::default_model_id());
         let model_info = models::models()
             .get(&model_id)
             .cloned()
@@ -172,8 +168,7 @@ impl OpenRouterHandler {
 
         let mut client_builder = reqwest::Client::builder();
         if let Some(timeout) = config.request_timeout {
-            client_builder =
-                client_builder.timeout(std::time::Duration::from_millis(timeout));
+            client_builder = client_builder.timeout(std::time::Duration::from_millis(timeout));
         }
         let http_client = client_builder.build().map_err(ProviderError::Reqwest)?;
 
@@ -212,8 +207,8 @@ impl OpenRouterHandler {
     pub fn from_settings(
         settings: &roo_types::provider_settings::ProviderSettings,
     ) -> Result<Self> {
-        let config = OpenRouterConfig::from_settings(settings)
-            .ok_or(ProviderError::ApiKeyRequired)?;
+        let config =
+            OpenRouterConfig::from_settings(settings).ok_or(ProviderError::ApiKeyRequired)?;
         Self::new(config)
     }
 
@@ -243,7 +238,9 @@ impl OpenRouterHandler {
             let status = response.status().as_u16();
             let body = response.text().await.unwrap_or_default();
             return Err(ProviderError::api_error_response(
-                "openrouter", status, body,
+                "openrouter",
+                status,
+                body,
             ));
         }
 
@@ -259,9 +256,7 @@ impl OpenRouterHandler {
                     continue;
                 }
 
-                let context_length = entry["context_length"]
-                    .as_u64()
-                    .unwrap_or(128000);
+                let context_length = entry["context_length"].as_u64().unwrap_or(128000);
 
                 let info = ModelInfo {
                     max_tokens: Some(8192),
@@ -375,7 +370,9 @@ impl OpenRouterHandler {
                 if role != "assistant" {
                     continue;
                 }
-                let Some(tool_calls) = msg.get("tool_calls") else { continue };
+                let Some(tool_calls) = msg.get("tool_calls") else {
+                    continue;
+                };
                 let Some(calls) = tool_calls.as_array() else {
                     continue;
                 };
@@ -485,12 +482,7 @@ impl Provider for OpenRouterHandler {
         metadata: CreateMessageMetadata,
     ) -> Result<ApiStream> {
         // Build the request body with all OpenRouter-specific transformations
-        let body = self.build_request_body(
-            system_prompt,
-            &messages,
-            tools.as_ref(),
-            &metadata,
-        )?;
+        let body = self.build_request_body(system_prompt, &messages, tools.as_ref(), &metadata)?;
 
         // Delegate to the reusable inner provider's stream infrastructure.
         // The inner provider handles SSE parsing, reasoning_details display,
@@ -531,12 +523,13 @@ impl Provider for OpenRouterHandler {
                 .await
                 .unwrap_or_else(|_| "Unknown error".to_string());
             return Err(ProviderError::api_error_response(
-                "openrouter", status, text,
+                "openrouter",
+                status,
+                text,
             ));
         }
 
-        let resp: serde_json::Value =
-            response.json().await.map_err(ProviderError::Reqwest)?;
+        let resp: serde_json::Value = response.json().await.map_err(ProviderError::Reqwest)?;
         Ok(resp["choices"][0]["message"]["content"]
             .as_str()
             .unwrap_or("")
@@ -900,7 +893,12 @@ mod tests {
         };
         let handler = OpenRouterHandler::new(config).unwrap();
         let body = handler
-            .build_request_body("You are helpful.", &[], None, &CreateMessageMetadata::default())
+            .build_request_body(
+                "You are helpful.",
+                &[],
+                None,
+                &CreateMessageMetadata::default(),
+            )
             .unwrap();
 
         assert_eq!(body["model"], "openai/gpt-4o");
@@ -956,7 +954,12 @@ mod tests {
         ];
 
         let body = handler
-            .build_request_body("System prompt", &messages, None, &CreateMessageMetadata::default())
+            .build_request_body(
+                "System prompt",
+                &messages,
+                None,
+                &CreateMessageMetadata::default(),
+            )
             .unwrap();
 
         // DeepSeek R1 should merge consecutive same-role messages

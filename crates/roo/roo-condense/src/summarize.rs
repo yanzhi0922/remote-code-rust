@@ -1,4 +1,4 @@
-﻿//! Conversation summarization.
+//! Conversation summarization.
 //!
 //! Summarizes conversation messages using an LLM call, implementing the "fresh start"
 //! model where the summary becomes a user message and all previous messages are tagged
@@ -15,7 +15,7 @@ use roo_types::api::{ApiMessage, ContentBlock, MessageRole};
 use tracing::info;
 
 use crate::convert::extract_command_blocks;
-use crate::folded_file_context::{generate_folded_file_context, FoldedFileContextOptions};
+use crate::folded_file_context::{FoldedFileContextOptions, generate_folded_file_context};
 use crate::history::get_messages_since_last_summary;
 use crate::transform::{inject_synthetic_tool_results, transform_messages_for_condensing};
 
@@ -172,7 +172,7 @@ pub async fn summarize_conversation(
         condense_parent: None,
         is_summary: None,
         condense_id: None,
-            reasoning_details: None,
+        reasoning_details: None,
     };
 
     // Inject synthetic tool_results for orphan tool_calls to prevent API rejections
@@ -320,15 +320,12 @@ pub async fn summarize_conversation(
     let condense_id = uuid::Uuid::now_v7().to_string();
 
     // Use the last message's timestamp + 1 to ensure unique timestamp for summary
-    let last_msg_ts = messages
-        .last()
-        .and_then(|m| m.ts)
-        .unwrap_or_else(|| {
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis() as f64
-        });
+    let last_msg_ts = messages.last().and_then(|m| m.ts).unwrap_or_else(|| {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as f64
+    });
 
     let summary_message = ApiMessage {
         role: MessageRole::User, // Fresh start model: summary is a user message

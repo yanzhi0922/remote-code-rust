@@ -9,9 +9,9 @@ use axum::middleware::Next;
 use axum::response::IntoResponse;
 use tower_http::cors::CorsLayer;
 
+use crate::AuthPrincipal;
 use crate::state::ControlPlaneService;
 use crate::types::ApiError;
-use crate::AuthPrincipal;
 
 // ---------------------------------------------------------------------------
 // CORS
@@ -103,10 +103,8 @@ pub(crate) async fn require_api_auth(
     }
 
     let Some(provided) = extract_request_auth_token(&mut request) else {
-        return ApiError::unauthorized(
-            "missing or invalid control plane bearer token".to_owned(),
-        )
-        .into_response();
+        return ApiError::unauthorized("missing or invalid control plane bearer token".to_owned())
+            .into_response();
     };
 
     if service
@@ -177,10 +175,10 @@ fn request_allows_query_auth(request: &Request) -> bool {
         return false;
     }
     // Must be a WebSocket upgrade or a normal GET (for SSE)
-    let is_ws_upgrade = request
-        .headers()
-        .get("upgrade")
-        .is_some_and(|v| v.to_str().is_ok_and(|v| v.eq_ignore_ascii_case("websocket")));
+    let is_ws_upgrade = request.headers().get("upgrade").is_some_and(|v| {
+        v.to_str()
+            .is_ok_and(|v| v.eq_ignore_ascii_case("websocket"))
+    });
     let is_get = request.method() == Method::GET;
     is_ws_upgrade || is_get
 }

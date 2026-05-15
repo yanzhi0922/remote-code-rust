@@ -63,7 +63,8 @@ fn session_stats_round_trips() {
         },
     };
     let json = serde_json::to_string(&stats).expect("serialize stats");
-    let decoded: claude_session::SessionStats = serde_json::from_str(&json).expect("deserialize stats");
+    let decoded: claude_session::SessionStats =
+        serde_json::from_str(&json).expect("deserialize stats");
     assert_eq!(decoded.total_events, 100);
     assert_eq!(decoded.conversation_entries, 50);
     assert_eq!(decoded.tool_call_count, 10);

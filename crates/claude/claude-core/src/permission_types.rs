@@ -13,9 +13,7 @@ pub enum PermissionBehavior {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum PermissionDecisionReason {
     /// Matched an entry in the allow/deny lists from settings.
-    SettingsMatch {
-        source: PermissionRuleSource,
-    },
+    SettingsMatch { source: PermissionRuleSource },
     /// Decision driven by permission mode (e.g. bypass, acceptEdits).
     Mode,
     /// Result from a subcommand check (compound bash commands).

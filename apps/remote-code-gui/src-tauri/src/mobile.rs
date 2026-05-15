@@ -1,7 +1,7 @@
-use tauri::{AppHandle, Manager, Runtime};
+use rc_remote_transport::RemoteTransport;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
-use rc_remote_transport::RemoteTransport;
+use tauri::{AppHandle, Manager, Runtime};
 
 /// Reject file names that could escape the download directory.
 fn validate_download_name(file_name: &str) -> Result<std::path::PathBuf, String> {
@@ -78,7 +78,10 @@ pub async fn mobile_is_mobile() -> bool {
 }
 
 #[tauri::command]
-pub async fn mobile_haptic_impact(app: AppHandle<impl Runtime>, style: String) -> Result<(), String> {
+pub async fn mobile_haptic_impact(
+    app: AppHandle<impl Runtime>,
+    style: String,
+) -> Result<(), String> {
     #[cfg(any(target_os = "android", target_os = "ios"))]
     {
         use tauri_plugin_haptics::HapticsExt;
@@ -87,7 +90,9 @@ pub async fn mobile_haptic_impact(app: AppHandle<impl Runtime>, style: String) -
             "medium" => tauri_plugin_haptics::ImpactFeedbackStyle::Medium,
             _ => tauri_plugin_haptics::ImpactFeedbackStyle::Light,
         };
-        app.haptics().impact_feedback(impact_style).map_err(|e| e.to_string())?;
+        app.haptics()
+            .impact_feedback(impact_style)
+            .map_err(|e| e.to_string())?;
     }
     let _ = style;
     let _ = &app;
@@ -95,7 +100,10 @@ pub async fn mobile_haptic_impact(app: AppHandle<impl Runtime>, style: String) -
 }
 
 #[tauri::command]
-pub async fn mobile_haptic_notification(app: AppHandle<impl Runtime>, kind: String) -> Result<(), String> {
+pub async fn mobile_haptic_notification(
+    app: AppHandle<impl Runtime>,
+    kind: String,
+) -> Result<(), String> {
     #[cfg(any(target_os = "android", target_os = "ios"))]
     {
         use tauri_plugin_haptics::HapticsExt;
@@ -105,7 +113,9 @@ pub async fn mobile_haptic_notification(app: AppHandle<impl Runtime>, kind: Stri
             "error" => tauri_plugin_haptics::NotificationFeedbackType::Error,
             _ => tauri_plugin_haptics::NotificationFeedbackType::Success,
         };
-        app.haptics().notification_feedback(notif_type).map_err(|e| e.to_string())?;
+        app.haptics()
+            .notification_feedback(notif_type)
+            .map_err(|e| e.to_string())?;
     }
     let _ = kind;
     let _ = &app;
@@ -117,7 +127,9 @@ pub async fn mobile_haptic_selection(app: AppHandle<impl Runtime>) -> Result<(),
     #[cfg(any(target_os = "android", target_os = "ios"))]
     {
         use tauri_plugin_haptics::HapticsExt;
-        app.haptics().selection_feedback().map_err(|e| e.to_string())?;
+        app.haptics()
+            .selection_feedback()
+            .map_err(|e| e.to_string())?;
     }
     let _ = &app;
     Ok(())
@@ -163,7 +175,8 @@ pub async fn mobile_biometric_authenticate(
             title: Some(reason.clone()),
             ..Default::default()
         };
-        app.biometric().authenticate(reason, options)
+        app.biometric()
+            .authenticate(reason, options)
             .map(|_| true)
             .map_err(|e| e.to_string())
     }
@@ -179,8 +192,7 @@ pub async fn mobile_secure_store_get(
     app: AppHandle<impl Runtime>,
     key: String,
 ) -> Result<Option<String>, String> {
-    let entry = keyring::Entry::new("remote-code-secure-store", &key)
-        .map_err(|e| e.to_string())?;
+    let entry = keyring::Entry::new("remote-code-secure-store", &key).map_err(|e| e.to_string())?;
     match entry.get_password() {
         Ok(value) => Ok(Some(value)),
         Err(keyring::Error::NoEntry) => {
@@ -188,10 +200,14 @@ pub async fn mobile_secure_store_get(
                 let legacy_path = dir.join("secure_store.json");
                 if legacy_path.exists() {
                     if let Ok(data) = std::fs::read_to_string(&legacy_path) {
-                        if let Ok(map) = serde_json::from_str::<std::collections::HashMap<String, String>>(&data) {
+                        if let Ok(map) =
+                            serde_json::from_str::<std::collections::HashMap<String, String>>(&data)
+                        {
                             if let Some(value) = map.get(&key).cloned() {
                                 if entry.set_password(&value).is_ok() {
-                                    tracing::info!("Migrated key '{key}' from legacy JSON to keyring");
+                                    tracing::info!(
+                                        "Migrated key '{key}' from legacy JSON to keyring"
+                                    );
                                 }
                                 return Ok(Some(value));
                             }
@@ -211,8 +227,7 @@ pub async fn mobile_secure_store_set(
     key: String,
     value: String,
 ) -> Result<(), String> {
-    let entry = keyring::Entry::new("remote-code-secure-store", &key)
-        .map_err(|e| e.to_string())?;
+    let entry = keyring::Entry::new("remote-code-secure-store", &key).map_err(|e| e.to_string())?;
     entry.set_password(&value).map_err(|e| e.to_string())?;
     let _ = &_app;
     Ok(())
@@ -223,8 +238,7 @@ pub async fn mobile_secure_store_remove(
     _app: AppHandle<impl Runtime>,
     key: String,
 ) -> Result<(), String> {
-    let entry = keyring::Entry::new("remote-code-secure-store", &key)
-        .map_err(|e| e.to_string())?;
+    let entry = keyring::Entry::new("remote-code-secure-store", &key).map_err(|e| e.to_string())?;
     match entry.delete_credential() {
         Ok(()) => Ok(()),
         Err(keyring::Error::NoEntry) => Ok(()),
@@ -359,10 +373,10 @@ pub async fn mobile_share_file(
         .download_dir()
         .unwrap_or_else(|_| std::env::temp_dir())
         .join("remote-code");
-    let canonical_path = std::fs::canonicalize(&file_path)
-        .map_err(|e| format!("file not found: {e}"))?;
-    let canonical_dir = std::fs::canonicalize(&download_dir)
-        .unwrap_or_else(|_| download_dir.clone());
+    let canonical_path =
+        std::fs::canonicalize(&file_path).map_err(|e| format!("file not found: {e}"))?;
+    let canonical_dir =
+        std::fs::canonicalize(&download_dir).unwrap_or_else(|_| download_dir.clone());
     if !canonical_path.starts_with(&canonical_dir) {
         return Err("file is outside the allowed download directory".to_string());
     }
@@ -378,7 +392,8 @@ pub async fn mobile_share_file(
             mime: Some(mime),
             group: _title.clone(),
         };
-        app.share_file().share_file(request)
+        app.share_file()
+            .share_file(request)
             .map_err(|e: tauri_plugin_share::Error| e.to_string())?;
     }
     let _ = (app, file_path, _title);
@@ -423,9 +438,7 @@ pub async fn mobile_push_show(
     #[cfg(any(target_os = "android", target_os = "ios"))]
     {
         use tauri_plugin_notification::NotificationExt;
-        let mut builder = app.notification().builder()
-            .title(&title)
-            .body(&body);
+        let mut builder = app.notification().builder().title(&title).body(&body);
         if let Some(ref d) = data {
             builder = builder.extra("data", d);
         }
@@ -490,7 +503,10 @@ pub fn register_mobile_plugins<R: Runtime>(app: &tauri::AppHandle<R>) {
             ("haptics", app.plugin(tauri_plugin_haptics::init())),
             ("biometric", app.plugin(tauri_plugin_biometric::init())),
             ("deep_link", app.plugin(tauri_plugin_deep_link::init())),
-            ("notification", app.plugin(tauri_plugin_notification::init())),
+            (
+                "notification",
+                app.plugin(tauri_plugin_notification::init()),
+            ),
             ("share", app.plugin(tauri_plugin_share::init())),
         ] {
             if let Err(e) = result {

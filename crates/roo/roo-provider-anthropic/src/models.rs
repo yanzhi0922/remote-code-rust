@@ -1,7 +1,7 @@
 //! Anthropic model definitions.
 
-use std::collections::HashMap;
 use roo_types::model::{ModelInfo, ModelTier};
+use std::collections::HashMap;
 
 /// Default Anthropic model ID.
 pub const DEFAULT_MODEL_ID: &str = "claude-sonnet-4-5";

@@ -13,22 +13,20 @@ use std::pin::Pin;
 use async_trait::async_trait;
 use eventsource_stream::Eventsource;
 use futures::{Stream, StreamExt};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use roo_provider::error::{ProviderError, Result};
 use roo_provider::handler::{ApiStream, CreateMessageMetadata, Provider};
 use roo_provider::transform::anthropic_filter::filter_non_anthropic_blocks;
 use roo_provider::transform::caching::apply_vertex_caching;
-use roo_types::api::{
-    ApiMessage, ApiStreamChunk, ContentBlock, ProviderName,
-};
+use roo_types::api::{ApiMessage, ApiStreamChunk, ContentBlock, ProviderName};
 use roo_types::model::ModelInfo;
 
 use crate::models;
 use crate::types::{
-    AnthropicConfig, AnthropicDelta, AnthropicSseEvent, AnthropicUsage,
-    AnthropicVertexConfig, anthropic_vertex_models, anthropic_vertex_default_model_id,
-    ANTHROPIC_1M_CONTEXT_MODEL_IDS,
+    ANTHROPIC_1M_CONTEXT_MODEL_IDS, AnthropicConfig, AnthropicDelta, AnthropicSseEvent,
+    AnthropicUsage, AnthropicVertexConfig, anthropic_vertex_default_model_id,
+    anthropic_vertex_models,
 };
 use roo_provider::vertex_auth::VertexTokenProvider;
 
@@ -122,22 +120,25 @@ pub struct AnthropicHandler {
 impl AnthropicHandler {
     /// Create a new Anthropic handler from configuration.
     pub fn new(config: AnthropicConfig) -> Result<Self> {
-        let model_id = config.model_id.unwrap_or_else(|| models::default_model_id());
-        let mut model_info = models::models()
-            .get(&model_id)
-            .cloned()
-            .unwrap_or_else(|| ModelInfo {
-                max_tokens: Some(8192),
-                context_window: 200000,
-                supports_images: Some(true),
-                supports_prompt_cache: true,
-                input_price: Some(3.0),
-                output_price: Some(15.0),
-                cache_writes_price: Some(3.75),
-                cache_reads_price: Some(0.3),
-                description: Some("Anthropic Claude model (unknown variant)".to_string()),
-                ..Default::default()
-            });
+        let model_id = config
+            .model_id
+            .unwrap_or_else(|| models::default_model_id());
+        let mut model_info =
+            models::models()
+                .get(&model_id)
+                .cloned()
+                .unwrap_or_else(|| ModelInfo {
+                    max_tokens: Some(8192),
+                    context_window: 200000,
+                    supports_images: Some(true),
+                    supports_prompt_cache: true,
+                    input_price: Some(3.0),
+                    output_price: Some(15.0),
+                    cache_writes_price: Some(3.75),
+                    cache_reads_price: Some(0.3),
+                    description: Some("Anthropic Claude model (unknown variant)".to_string()),
+                    ..Default::default()
+                });
 
         // If 1M context beta is enabled for supported models, update the model info
         // Source: `src/api/providers/anthropic.ts` — `getModel()` lines 340-354
@@ -162,8 +163,7 @@ impl AnthropicHandler {
 
         let mut client_builder = reqwest::Client::builder();
         if let Some(timeout) = config.request_timeout {
-            client_builder =
-                client_builder.timeout(std::time::Duration::from_millis(timeout));
+            client_builder = client_builder.timeout(std::time::Duration::from_millis(timeout));
         }
         let http_client = client_builder.build().map_err(ProviderError::Reqwest)?;
 
@@ -171,9 +171,7 @@ impl AnthropicHandler {
         let use_extended_thinking = if model_info.required_reasoning_budget.unwrap_or(false) {
             true
         } else {
-            config
-                .use_extended_thinking
-                .unwrap_or(false)
+            config.use_extended_thinking.unwrap_or(false)
                 && model_info.supports_reasoning_budget.unwrap_or(false)
         };
 
@@ -287,9 +285,7 @@ impl AnthropicHandler {
         //   2. Cap at 80% of maxTokens
         //   3. Floor at 1024
         if self.use_extended_thinking {
-            let mut budget_tokens = self
-                .max_thinking_tokens
-                .unwrap_or(8192);
+            let mut budget_tokens = self.max_thinking_tokens.unwrap_or(8192);
 
             // Cap at 80% of maxTokens
             let cap = (max_tokens as f64 * 0.8).floor() as u64;
@@ -329,10 +325,9 @@ impl AnthropicHandler {
 
         // Add tool_choice if specified in metadata
         if let Some(ref tool_choice) = metadata.tool_choice {
-            if let Some(anthropic_choice) = convert_tool_choice_for_anthropic(
-                tool_choice,
-                metadata.parallel_tool_calls,
-            ) {
+            if let Some(anthropic_choice) =
+                convert_tool_choice_for_anthropic(tool_choice, metadata.parallel_tool_calls)
+            {
                 body["tool_choice"] = anthropic_choice;
             }
         }
@@ -388,9 +383,7 @@ impl AnthropicHandler {
                         } => {
                             match content_block {
                                 crate::types::AnthropicContentBlock::ToolUse {
-                                    id,
-                                    name,
-                                    ..
+                                    id, name, ..
                                 } => {
                                     tool_id = Some(id.clone());
                                     tool_name = Some(name.clone());
@@ -412,9 +405,8 @@ impl AnthropicHandler {
                                         }));
                                     }
                                     if !text.is_empty() {
-                                        results.push(Ok(ApiStreamChunk::Text {
-                                            text: text.clone(),
-                                        }));
+                                        results
+                                            .push(Ok(ApiStreamChunk::Text { text: text.clone() }));
                                     }
                                     prev_text = true;
                                     prev_thinking = false;
@@ -482,7 +474,10 @@ impl AnthropicHandler {
                                 idx += 1;
                             }
                         }
-                        AnthropicSseEvent::MessageDelta { delta, usage: msg_usage } => {
+                        AnthropicSseEvent::MessageDelta {
+                            delta,
+                            usage: msg_usage,
+                        } => {
                             let _ = delta;
                             if let Some(ref u) = msg_usage {
                                 // TS emits usage at message_delta for output_tokens
@@ -512,8 +507,16 @@ impl AnthropicHandler {
                                 results.push(Ok(ApiStreamChunk::Usage {
                                     input_tokens,
                                     output_tokens,
-                                    cache_write_tokens: if cache_write > 0 { Some(cache_write) } else { None },
-                                    cache_read_tokens: if cache_read > 0 { Some(cache_read) } else { None },
+                                    cache_write_tokens: if cache_write > 0 {
+                                        Some(cache_write)
+                                    } else {
+                                        None
+                                    },
+                                    cache_read_tokens: if cache_read > 0 {
+                                        Some(cache_read)
+                                    } else {
+                                        None
+                                    },
                                     reasoning_tokens: None,
                                     total_cost: None,
                                 }));
@@ -536,13 +539,25 @@ impl AnthropicHandler {
                         }
                         AnthropicSseEvent::MessageStop => {
                             // TS emits total cost at the end
-                            if acc_input > 0 || acc_output > 0 || acc_cache_write > 0 || acc_cache_read > 0 {
+                            if acc_input > 0
+                                || acc_output > 0
+                                || acc_cache_write > 0
+                                || acc_cache_read > 0
+                            {
                                 let total_cost = roo_provider::cost::calculate_api_cost(
                                     &model_info,
                                     acc_input,
                                     acc_output,
-                                    if acc_cache_write > 0 { Some(acc_cache_write) } else { None },
-                                    if acc_cache_read > 0 { Some(acc_cache_read) } else { None },
+                                    if acc_cache_write > 0 {
+                                        Some(acc_cache_write)
+                                    } else {
+                                        None
+                                    },
+                                    if acc_cache_read > 0 {
+                                        Some(acc_cache_read)
+                                    } else {
+                                        None
+                                    },
                                 );
                                 results.push(Ok(ApiStreamChunk::Usage {
                                     input_tokens: 0,
@@ -721,7 +736,10 @@ fn convert_to_anthropic_messages(messages: &[ApiMessage]) -> Vec<Value> {
                     }
                     content_parts.push(result_json);
                 }
-                ContentBlock::Thinking { thinking, signature } => {
+                ContentBlock::Thinking {
+                    thinking,
+                    signature,
+                } => {
                     content_parts.push(json!({
                         "type": "thinking",
                         "thinking": thinking,
@@ -767,16 +785,12 @@ fn apply_cache_control_to_user_messages(messages: &mut Vec<Value>) {
         if let Some(content) = msg["content"].as_array_mut() {
             if let Some(last_block) = content.last_mut() {
                 if let Some(obj) = last_block.as_object_mut() {
-                    obj.insert(
-                        "cache_control".to_string(),
-                        json!({ "type": "ephemeral" }),
-                    );
+                    obj.insert("cache_control".to_string(), json!({ "type": "ephemeral" }));
                 }
             }
         }
     }
 }
-
 
 #[async_trait]
 impl Provider for AnthropicHandler {
@@ -811,10 +825,11 @@ impl Provider for AnthropicHandler {
 
         if !response.status().is_success() {
             let status = response.status().as_u16();
-            let text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
-            return Err(ProviderError::api_error_response(
-                "anthropic", status, text,
-            ));
+            let text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
+            return Err(ProviderError::api_error_response("anthropic", status, text));
         }
 
         let model_info = self.model_info.clone();
@@ -823,20 +838,14 @@ impl Provider for AnthropicHandler {
         let sse_stream = response
             .bytes_stream()
             .eventsource()
-            .map(move |event| {
-                match event {
-                    Ok(event) => {
-                        match serde_json::from_str::<AnthropicSseEvent>(&event.data) {
-                            Ok(sse_event) => Ok(sse_event),
-                            Err(e) => Err(ProviderError::ParseError(format!(
-                                "Failed to parse Anthropic SSE event: {e}"
-                            ))),
-                        }
-                    }
-                    Err(e) => Err(ProviderError::StreamError(format!(
-                        "SSE error: {e}"
+            .map(move |event| match event {
+                Ok(event) => match serde_json::from_str::<AnthropicSseEvent>(&event.data) {
+                    Ok(sse_event) => Ok(sse_event),
+                    Err(e) => Err(ProviderError::ParseError(format!(
+                        "Failed to parse Anthropic SSE event: {e}"
                     ))),
-                }
+                },
+                Err(e) => Err(ProviderError::StreamError(format!("SSE error: {e}"))),
             });
 
         let stream: Pin<Box<dyn Stream<Item = Result<AnthropicSseEvent>> + Send>> =
@@ -855,10 +864,7 @@ impl Provider for AnthropicHandler {
         (clean_id, self.model_info.clone())
     }
 
-    async fn count_tokens(
-        &self,
-        content: &[ContentBlock],
-    ) -> Result<u64> {
+    async fn count_tokens(&self, content: &[ContentBlock]) -> Result<u64> {
         // Simple estimation: ~4 characters per token (rough approximation)
         let mut total_chars: usize = 0;
         for block in content {
@@ -925,10 +931,11 @@ impl Provider for AnthropicHandler {
 
         if !response.status().is_success() {
             let status = response.status().as_u16();
-            let text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
-            return Err(ProviderError::api_error_response(
-                "anthropic", status, text,
-            ));
+            let text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
+            return Err(ProviderError::api_error_response("anthropic", status, text));
         }
 
         let resp: Value = response.json().await.map_err(ProviderError::Reqwest)?;
@@ -1013,8 +1020,7 @@ impl AnthropicVertexHandler {
         let mut betas = Vec::new();
 
         // If 1M context beta is enabled AND the model supports it, update model info
-        let supports_1m = crate::types::VERTEX_1M_CONTEXT_MODEL_IDS
-            .contains(&model_id.as_str());
+        let supports_1m = crate::types::VERTEX_1M_CONTEXT_MODEL_IDS.contains(&model_id.as_str());
         if config.enable_1m_context && supports_1m {
             if let Some(tier) = model_info.tiers.as_ref().and_then(|t| t.first()) {
                 model_info.context_window = tier.context_window;
@@ -1034,17 +1040,14 @@ impl AnthropicVertexHandler {
             betas.push("context-1m-2025-08-07".to_string());
         }
 
-        let use_extended_thinking = config
-            .use_extended_thinking
-            .unwrap_or(false)
+        let use_extended_thinking = config.use_extended_thinking.unwrap_or(false)
             && model_info.supports_reasoning_budget.unwrap_or(false);
 
         let temperature = config.temperature.unwrap_or(0.0);
 
         let mut client_builder = reqwest::Client::builder();
         if let Some(timeout) = config.request_timeout {
-            client_builder =
-                client_builder.timeout(std::time::Duration::from_millis(timeout));
+            client_builder = client_builder.timeout(std::time::Duration::from_millis(timeout));
         }
         let http_client = client_builder.build().map_err(ProviderError::Reqwest)?;
 
@@ -1088,8 +1091,8 @@ impl AnthropicVertexHandler {
     pub fn from_settings(
         settings: &roo_types::provider_settings::ProviderSettings,
     ) -> Result<Self> {
-        let config = AnthropicVertexConfig::from_settings(settings)
-            .ok_or(ProviderError::ApiKeyRequired)?;
+        let config =
+            AnthropicVertexConfig::from_settings(settings).ok_or(ProviderError::ApiKeyRequired)?;
         Self::new(config)
     }
 
@@ -1136,9 +1139,7 @@ impl AnthropicVertexHandler {
         // Add extended thinking configuration
         // Source: `src/api/transform/model-params.ts` — 3-step clamping
         if self.use_extended_thinking {
-            let mut budget_tokens = self
-                .max_thinking_tokens
-                .unwrap_or(8192);
+            let mut budget_tokens = self.max_thinking_tokens.unwrap_or(8192);
 
             // Cap at 80% of maxTokens
             let cap = (max_tokens as f64 * 0.8).floor() as u64;
@@ -1175,10 +1176,9 @@ impl AnthropicVertexHandler {
 
         // Add tool_choice if specified in metadata
         if let Some(ref tool_choice) = metadata.tool_choice {
-            if let Some(anthropic_choice) = convert_tool_choice_for_anthropic(
-                tool_choice,
-                metadata.parallel_tool_calls,
-            ) {
+            if let Some(anthropic_choice) =
+                convert_tool_choice_for_anthropic(tool_choice, metadata.parallel_tool_calls)
+            {
                 body["tool_choice"] = anthropic_choice;
             }
         }
@@ -1221,9 +1221,14 @@ impl Provider for AnthropicVertexHandler {
 
         if !response.status().is_success() {
             let status = response.status().as_u16();
-            let text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+            let text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
             return Err(ProviderError::api_error_response(
-                "anthropic-vertex", status, text,
+                "anthropic-vertex",
+                status,
+                text,
             ));
         }
 
@@ -1233,20 +1238,14 @@ impl Provider for AnthropicVertexHandler {
         let sse_stream = response
             .bytes_stream()
             .eventsource()
-            .map(move |event| {
-                match event {
-                    Ok(event) => {
-                        match serde_json::from_str::<AnthropicSseEvent>(&event.data) {
-                            Ok(sse_event) => Ok(sse_event),
-                            Err(e) => Err(ProviderError::ParseError(format!(
-                                "Failed to parse Anthropic Vertex SSE event: {e}"
-                            ))),
-                        }
-                    }
-                    Err(e) => Err(ProviderError::StreamError(format!(
-                        "SSE error: {e}"
+            .map(move |event| match event {
+                Ok(event) => match serde_json::from_str::<AnthropicSseEvent>(&event.data) {
+                    Ok(sse_event) => Ok(sse_event),
+                    Err(e) => Err(ProviderError::ParseError(format!(
+                        "Failed to parse Anthropic Vertex SSE event: {e}"
                     ))),
-                }
+                },
+                Err(e) => Err(ProviderError::StreamError(format!("SSE error: {e}"))),
             });
 
         let stream: Pin<Box<dyn Stream<Item = Result<AnthropicSseEvent>> + Send>> =
@@ -1265,10 +1264,7 @@ impl Provider for AnthropicVertexHandler {
         (clean_id, self.model_info.clone())
     }
 
-    async fn count_tokens(
-        &self,
-        content: &[ContentBlock],
-    ) -> Result<u64> {
+    async fn count_tokens(&self, content: &[ContentBlock]) -> Result<u64> {
         // Simple estimation: ~4 characters per token (rough approximation)
         let mut total_chars: usize = 0;
         for block in content {
@@ -1337,9 +1333,14 @@ impl Provider for AnthropicVertexHandler {
 
         if !response.status().is_success() {
             let status = response.status().as_u16();
-            let text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+            let text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
             return Err(ProviderError::api_error_response(
-                "anthropic-vertex", status, text,
+                "anthropic-vertex",
+                status,
+                text,
             ));
         }
 
@@ -1390,9 +1391,21 @@ mod tests {
     #[test]
     fn test_all_models_have_required_fields() {
         for (id, info) in models::models() {
-            assert!(info.max_tokens.is_some(), "Model '{}' missing max_tokens", id);
-            assert!(info.input_price.is_some(), "Model '{}' missing input_price", id);
-            assert!(info.output_price.is_some(), "Model '{}' missing output_price", id);
+            assert!(
+                info.max_tokens.is_some(),
+                "Model '{}' missing max_tokens",
+                id
+            );
+            assert!(
+                info.input_price.is_some(),
+                "Model '{}' missing input_price",
+                id
+            );
+            assert!(
+                info.output_price.is_some(),
+                "Model '{}' missing output_price",
+                id
+            );
         }
     }
 
@@ -1485,7 +1498,10 @@ mod tests {
 
         let config = AnthropicConfig::from_settings(&settings).unwrap();
         assert_eq!(config.api_key, "sk-ant-test");
-        assert_eq!(config.model_id, Some("claude-3-5-haiku-20241022".to_string()));
+        assert_eq!(
+            config.model_id,
+            Some("claude-3-5-haiku-20241022".to_string())
+        );
     }
 
     #[test]
@@ -1497,7 +1513,10 @@ mod tests {
     #[test]
     fn test_models_count() {
         let all_models = models::models();
-        assert!(all_models.len() >= 5, "Should have at least 5 Anthropic models");
+        assert!(
+            all_models.len() >= 5,
+            "Should have at least 5 Anthropic models"
+        );
     }
 
     #[test]
@@ -1506,9 +1525,17 @@ mod tests {
         let non_image_models = ["claude-3-5-haiku-20241022"];
         for (id, info) in models::models() {
             if non_image_models.contains(&id.as_str()) {
-                assert!(!info.supports_images.unwrap_or(true), "Model '{}' should NOT support images", id);
+                assert!(
+                    !info.supports_images.unwrap_or(true),
+                    "Model '{}' should NOT support images",
+                    id
+                );
             } else {
-                assert!(info.supports_images.unwrap_or(false), "Model '{}' should support images", id);
+                assert!(
+                    info.supports_images.unwrap_or(false),
+                    "Model '{}' should support images",
+                    id
+                );
             }
         }
     }
@@ -1516,7 +1543,11 @@ mod tests {
     #[test]
     fn test_all_models_support_cache() {
         for (id, info) in models::models() {
-            assert!(info.supports_prompt_cache, "Model '{}' should support prompt cache", id);
+            assert!(
+                info.supports_prompt_cache,
+                "Model '{}' should support prompt cache",
+                id
+            );
         }
     }
 
@@ -1916,7 +1947,10 @@ mod tests {
         assert_eq!(config.project_id, "my-project");
         assert_eq!(config.access_token, "my-creds");
         assert_eq!(config.region, "europe-west1");
-        assert_eq!(config.model_id, Some("claude-sonnet-4@20250514".to_string()));
+        assert_eq!(
+            config.model_id,
+            Some("claude-sonnet-4@20250514".to_string())
+        );
     }
 
     #[test]
@@ -2019,7 +2053,12 @@ mod tests {
             reasoning_details: None,
         }];
 
-        let body = handler.build_request_body("You are helpful", &messages, None, &CreateMessageMetadata::default());
+        let body = handler.build_request_body(
+            "You are helpful",
+            &messages,
+            None,
+            &CreateMessageMetadata::default(),
+        );
 
         // Verify basic structure
         assert_eq!(body["model"], "claude-sonnet-4@20250514");
@@ -2031,7 +2070,9 @@ mod tests {
         assert_eq!(system[0]["cache_control"]["type"], "ephemeral");
 
         // Messages should be present
-        let msgs = body["messages"].as_array().expect("messages should be array");
+        let msgs = body["messages"]
+            .as_array()
+            .expect("messages should be array");
         assert_eq!(msgs.len(), 1);
     }
 
@@ -2060,7 +2101,12 @@ mod tests {
             }
         })]);
 
-        let body = handler.build_request_body("system", &messages, tools.as_ref(), &CreateMessageMetadata::default());
+        let body = handler.build_request_body(
+            "system",
+            &messages,
+            tools.as_ref(),
+            &CreateMessageMetadata::default(),
+        );
 
         let tools_arr = body["tools"].as_array().expect("tools should be array");
         assert_eq!(tools_arr.len(), 1);

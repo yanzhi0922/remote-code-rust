@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
 use anyhow::{Result, anyhow};
-use claude_config::{runtime_version, RuntimeConfig};
+use claude_config::{RuntimeConfig, runtime_version};
 use claude_tools::mcp_runtime::{
     RuntimeMcpResolution, RuntimeMcpServerObservation, observe_runtime_mcp_servers,
     resolve_runtime_mcp_server,

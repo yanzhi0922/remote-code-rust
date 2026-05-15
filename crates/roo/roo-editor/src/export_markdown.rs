@@ -61,7 +61,10 @@ pub struct ConversationMessage {
 pub fn get_task_file_name(date_ts: i64) -> String {
     use chrono::{TimeZone, Utc};
 
-    let dt = Utc.timestamp_opt(date_ts, 0).single().unwrap_or_else(|| Utc::now());
+    let dt = Utc
+        .timestamp_opt(date_ts, 0)
+        .single()
+        .unwrap_or_else(|| Utc::now());
 
     let month = dt.format("%b").to_string().to_lowercase();
     let day = dt.day();
@@ -97,7 +100,8 @@ pub fn format_content_block_to_markdown(block: &ContentBlock) -> String {
                     .map(|(key, value)| {
                         let formatted_key = capitalize_first(key);
                         let formatted_value = if value.is_object() || value.is_array() {
-                            serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string())
+                            serde_json::to_string_pretty(value)
+                                .unwrap_or_else(|_| value.to_string())
                         } else {
                             value.to_string()
                         };
@@ -111,9 +115,7 @@ pub fn format_content_block_to_markdown(block: &ContentBlock) -> String {
             format!("[Tool Use: {}]\n{}", name, input_str)
         }
         ContentBlock::ToolResult {
-            content,
-            is_error,
-            ..
+            content, is_error, ..
         } => {
             let error_suffix = if is_error.unwrap_or(false) {
                 " (Error)"
@@ -123,10 +125,8 @@ pub fn format_content_block_to_markdown(block: &ContentBlock) -> String {
             match content {
                 Some(Value::String(s)) => format!("[Tool{}]\n{}", error_suffix, s),
                 Some(Value::Array(arr)) => {
-                    let parts: Vec<String> = arr
-                        .iter()
-                        .map(|v| format_value_to_markdown(v))
-                        .collect();
+                    let parts: Vec<String> =
+                        arr.iter().map(|v| format_value_to_markdown(v)).collect();
                     format!("[Tool{}]\n{}", error_suffix, parts.join("\n"))
                 }
                 _ => format!("[Tool{}]", error_suffix),
@@ -228,7 +228,10 @@ fn format_value_to_markdown(value: &Value) -> String {
                     .to_string(),
                 "image" => "[Image]".to_string(),
                 "tool_use" => {
-                    let name = obj.get("name").and_then(|v| v.as_str()).unwrap_or("Unknown");
+                    let name = obj
+                        .get("name")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("Unknown");
                     let input = obj.get("input").cloned().unwrap_or(Value::Null);
                     format!("[Tool Use: {}]\n{}", name, input)
                 }

@@ -10,9 +10,9 @@
 //! Anthropic Claude models hosted on AWS and GCP.
 
 use anyhow::{Context, Result, anyhow};
-use futures::StreamExt;
 use claude_config::ProviderConfig;
 use claude_core::{ConversationEntry, ProviderProtocol, ProviderResponse, ToolCall, UsageSummary};
+use futures::StreamExt;
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::{
@@ -384,7 +384,9 @@ impl ProviderClient {
             let bytes = chunk.with_context(|| "failed to read streaming chunk")?;
             sse_buffer.push_str(&String::from_utf8_lossy(&bytes));
             if sse_buffer.len() > MAX_SSE_BUFFER_SIZE {
-                tracing::warn!("SSE buffer exceeded {MAX_SSE_BUFFER_SIZE} bytes, discarding stale data");
+                tracing::warn!(
+                    "SSE buffer exceeded {MAX_SSE_BUFFER_SIZE} bytes, discarding stale data"
+                );
                 sse_buffer.clear();
             }
 
@@ -413,8 +415,9 @@ impl ProviderClient {
                     }
                     if !message_started {
                         message_started = true;
-                        if let Some(cb) =
-                            callbacks.as_ref().and_then(|c| c.on_lifecycle_event.as_ref())
+                        if let Some(cb) = callbacks
+                            .as_ref()
+                            .and_then(|c| c.on_lifecycle_event.as_ref())
                         {
                             cb(StreamingLifecycleEvent::MessageStart);
                         }
@@ -429,8 +432,9 @@ impl ProviderClient {
                             && reason != "null"
                         {
                             reason.clone_into(&mut finish_reason);
-                            if let Some(cb) =
-                                callbacks.as_ref().and_then(|c| c.on_lifecycle_event.as_ref())
+                            if let Some(cb) = callbacks
+                                .as_ref()
+                                .and_then(|c| c.on_lifecycle_event.as_ref())
                             {
                                 cb(StreamingLifecycleEvent::MessageDelta {
                                     stop_reason: reason.to_owned(),
@@ -529,7 +533,10 @@ impl ProviderClient {
 
         let raw_text = text_parts.join("");
         if message_started {
-            if let Some(cb) = callbacks.as_ref().and_then(|c| c.on_lifecycle_event.as_ref()) {
+            if let Some(cb) = callbacks
+                .as_ref()
+                .and_then(|c| c.on_lifecycle_event.as_ref())
+            {
                 cb(StreamingLifecycleEvent::MessageStop);
             }
         }
@@ -623,7 +630,9 @@ impl ProviderClient {
             let bytes = chunk.with_context(|| "failed to read streaming chunk")?;
             sse_buffer.push_str(&String::from_utf8_lossy(&bytes));
             if sse_buffer.len() > MAX_SSE_BUFFER_SIZE {
-                tracing::warn!("SSE buffer exceeded {MAX_SSE_BUFFER_SIZE} bytes, discarding stale data");
+                tracing::warn!(
+                    "SSE buffer exceeded {MAX_SSE_BUFFER_SIZE} bytes, discarding stale data"
+                );
                 sse_buffer.clear();
             }
 
@@ -1016,7 +1025,9 @@ impl ProviderClient {
             let bytes = chunk.with_context(|| "failed to read Vertex streaming chunk")?;
             sse_buffer.push_str(&String::from_utf8_lossy(&bytes));
             if sse_buffer.len() > MAX_SSE_BUFFER_SIZE {
-                tracing::warn!("SSE buffer exceeded {MAX_SSE_BUFFER_SIZE} bytes, discarding stale data");
+                tracing::warn!(
+                    "SSE buffer exceeded {MAX_SSE_BUFFER_SIZE} bytes, discarding stale data"
+                );
                 sse_buffer.clear();
             }
 
@@ -1099,8 +1110,7 @@ impl ProviderClient {
                                 status_code,
                                 "overloaded_error detected in response body, retrying"
                             );
-                            tokio::time::sleep(compute_retry_delay(provider, attempt, None))
-                                .await;
+                            tokio::time::sleep(compute_retry_delay(provider, attempt, None)).await;
                             attempt += 1;
                             continue;
                         }
@@ -1189,7 +1199,9 @@ fn parse_sse_events_from_buffer(sse_buffer: &mut String) -> Vec<Value> {
             // If JSON has no "type" but SSE `event:` field was present, inject it
             if event.get("type").is_none() {
                 if let Some(ev_type) = event_type {
-                    event.as_object_mut().map(|o| o.insert("type".to_owned(), Value::String(ev_type.to_owned())));
+                    event
+                        .as_object_mut()
+                        .map(|o| o.insert("type".to_owned(), Value::String(ev_type.to_owned())));
                 }
             }
             events.push(event);
@@ -1203,7 +1215,9 @@ fn parse_sse_events_from_buffer(sse_buffer: &mut String) -> Vec<Value> {
                 if let Ok(mut event) = serde_json::from_str::<Value>(data) {
                     if event.get("type").is_none() {
                         if let Some(ev_type) = event_type {
-                            event.as_object_mut().map(|o| o.insert("type".to_owned(), Value::String(ev_type.to_owned())));
+                            event.as_object_mut().map(|o| {
+                                o.insert("type".to_owned(), Value::String(ev_type.to_owned()))
+                            });
                         }
                     }
                     events.push(event);
@@ -1319,8 +1333,13 @@ fn process_anthropic_event(
                         .and_then(Value::as_str)
                         .unwrap_or("")
                         .to_owned();
-                    content_block_accumulators
-                        .insert(index, AnthropicContentAccumulator::Text { text, citations: Vec::new() });
+                    content_block_accumulators.insert(
+                        index,
+                        AnthropicContentAccumulator::Text {
+                            text,
+                            citations: Vec::new(),
+                        },
+                    );
                 }
                 "thinking" => {
                     let thinking = content_block
@@ -1409,10 +1428,8 @@ fn process_anthropic_event(
                         .and_then(Value::as_str)
                         .unwrap_or("")
                         .to_owned();
-                    content_block_accumulators.insert(
-                        index,
-                        AnthropicContentAccumulator::ConnectorText { text },
-                    );
+                    content_block_accumulators
+                        .insert(index, AnthropicContentAccumulator::ConnectorText { text });
                 }
                 "web_search_tool_result" => {
                     // Web search tool result blocks contain tool_use_id, content, status.
@@ -1625,7 +1642,11 @@ fn process_anthropic_event(
                 .and_then(|e| e.get("type"))
                 .and_then(|t| t.as_str())
                 .unwrap_or("unknown");
-            return Err(anyhow!("API streaming error ({}): {}", error_type, error_msg));
+            return Err(anyhow!(
+                "API streaming error ({}): {}",
+                error_type,
+                error_msg
+            ));
         }
         "ping" => {
             // Heartbeat from the server, no action needed.
@@ -2390,7 +2411,9 @@ mod tests {
     fn sse_buffer_multi_line_data_joins_per_spec() {
         // When data: lines form a single valid JSON when joined, the joined parse succeeds.
         // This simulates a server splitting "hello world" across two data: lines.
-        let mut buf = "data: {\"type\":\"content_block_delta\"\ndata: ,\"delta\":{\"text\":\"hello\"}}\n\n".to_owned();
+        let mut buf =
+            "data: {\"type\":\"content_block_delta\"\ndata: ,\"delta\":{\"text\":\"hello\"}}\n\n"
+                .to_owned();
         let events = parse_sse_events_from_buffer(&mut buf);
         // Neither individual line is valid JSON, but joined they form:
         // {"type":"content_block_delta"\n,\"delta":{"text":"hello"}}
@@ -3281,7 +3304,8 @@ mod tests {
             &mut research,
             None::<&StreamingCallbacks>,
             false,
-        ).unwrap();
+        )
+        .unwrap();
 
         assert!(matches!(
             accumulators.get(&0),
@@ -3347,7 +3371,8 @@ mod tests {
             &mut research,
             None::<&StreamingCallbacks>,
             false,
-        ).unwrap();
+        )
+        .unwrap();
 
         assert!(matches!(
             accumulators.get(&0),
@@ -3384,7 +3409,8 @@ mod tests {
             &mut research,
             None::<&StreamingCallbacks>,
             false,
-        ).unwrap();
+        )
+        .unwrap();
 
         assert!(matches!(
             accumulators.get(&0),
@@ -3457,7 +3483,8 @@ mod tests {
             &mut research,
             None::<&StreamingCallbacks>,
             false,
-        ).unwrap();
+        )
+        .unwrap();
 
         assert!(matches!(
             accumulators.get(&2),
@@ -3537,11 +3564,10 @@ mod tests {
             &mut research,
             None::<&StreamingCallbacks>,
             false,
-        ).unwrap();
+        )
+        .unwrap();
 
-        if let Some(AnthropicContentAccumulator::Text { text, citations }) =
-            accumulators.get(&0)
-        {
+        if let Some(AnthropicContentAccumulator::Text { text, citations }) = accumulators.get(&0) {
             assert_eq!(text, "According to ");
             assert_eq!(citations.len(), 1);
             assert_eq!(citations[0]["type"], "web_search_result");
@@ -3576,8 +3602,7 @@ mod tests {
             },
         );
 
-        let (raw_text, _, content_blocks, _) =
-            finalize_anthropic_content_blocks(accumulators);
+        let (raw_text, _, content_blocks, _) = finalize_anthropic_content_blocks(accumulators);
 
         assert_eq!(raw_text, "Cited text");
         assert_eq!(content_blocks.len(), 1);
@@ -3635,7 +3660,8 @@ mod tests {
             &mut research,
             None::<&StreamingCallbacks>,
             false,
-        ).unwrap();
+        )
+        .unwrap();
 
         let r = research.expect("research should be extracted");
         assert_eq!(r["status"], "in_progress");
@@ -3668,7 +3694,8 @@ mod tests {
             &mut research,
             None::<&StreamingCallbacks>,
             false,
-        ).unwrap();
+        )
+        .unwrap();
 
         // Should keep the original research value.
         assert_eq!(research.unwrap()["status"], "original");
@@ -3699,7 +3726,8 @@ mod tests {
             &mut research,
             None::<&StreamingCallbacks>,
             false,
-        ).unwrap();
+        )
+        .unwrap();
 
         assert!(research.is_none());
     }

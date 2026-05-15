@@ -194,8 +194,12 @@ fn search_engine_disabled_returns_no_results() {
 #[test]
 fn search_engine_prefetch_tracking() {
     let mut engine = claude_skills::search::SkillSearchEngine::new();
-    engine.index_skill(claude_skills::search::SkillDocument::new("skill-a", "Skill A"));
-    engine.index_skill(claude_skills::search::SkillDocument::new("skill-b", "Skill B"));
+    engine.index_skill(claude_skills::search::SkillDocument::new(
+        "skill-a", "Skill A",
+    ));
+    engine.index_skill(claude_skills::search::SkillDocument::new(
+        "skill-b", "Skill B",
+    ));
 
     let prefetch = engine.prefetch();
     assert_eq!(prefetch.total(), 2);
@@ -345,7 +349,8 @@ fn executor_interpolates_env_vars() {
     };
 
     let executor = claude_skills::executor::SkillExecutor::new();
-    let ctx = claude_skills::executor::SkillExecutionContext::new(&root).with_env("ENV", "production");
+    let ctx =
+        claude_skills::executor::SkillExecutionContext::new(&root).with_env("ENV", "production");
     let result = ok(executor.execute_skill(&skill, &ctx));
     assert_eq!(result.env_vars_interpolated, 1);
     assert!(result.prompt.contains("production"));

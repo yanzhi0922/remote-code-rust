@@ -241,21 +241,20 @@ pub async fn compact_conversation(
     } else {
         "manual"
     };
-    let (merged_instructions, pre_display_message) =
-        if let Some(hook_provider) = options.pre_compact_hook_provider.as_ref() {
-            let result = hook_provider(
-                trigger.to_string(),
-                options.custom_instructions.clone(),
-            )
-            .await;
-            (result.new_custom_instructions, result.user_display_message)
-        } else {
-            (None, None)
-        };
+    let (merged_instructions, pre_display_message) = if let Some(hook_provider) =
+        options.pre_compact_hook_provider.as_ref()
+    {
+        let result = hook_provider(trigger.to_string(), options.custom_instructions.clone()).await;
+        (result.new_custom_instructions, result.user_display_message)
+    } else {
+        (None, None)
+    };
 
     // Merge hook instructions with existing custom instructions
     let effective_instructions = merge_hook_instructions(
-        merged_instructions.as_deref().or(options.custom_instructions.as_deref()),
+        merged_instructions
+            .as_deref()
+            .or(options.custom_instructions.as_deref()),
         None,
     );
 
@@ -380,12 +379,13 @@ pub async fn compact_conversation(
     // Estimate post-compact tokens (boundary + summary + kept messages)
     // Mirrors the TS pattern of counting the full post-compact payload.
     let boundary_token_estimate = rough_token_count(
-        &serde_json::to_string(&serde_json::json!({"trigger": trigger, "preTokens": pre_compact_token_count}))
-            .unwrap_or_default(),
+        &serde_json::to_string(
+            &serde_json::json!({"trigger": trigger, "preTokens": pre_compact_token_count}),
+        )
+        .unwrap_or_default(),
     );
-    let post_compact_token_count = boundary_token_estimate
-        + rough_token_count(&summary_text)
-        + preserve_count as u64 * 100;
+    let post_compact_token_count =
+        boundary_token_estimate + rough_token_count(&summary_text) + preserve_count as u64 * 100;
 
     let tokens_saved = pre_compact_token_count.saturating_sub(post_compact_token_count);
 
@@ -414,7 +414,12 @@ pub async fn compact_conversation(
         boundary_marker = annotate_boundary_with_preserved_segment(
             &boundary_marker,
             seg.anchor_uuid,
-            &messages.iter().rev().take(preserve_count).cloned().collect::<Vec<_>>(),
+            &messages
+                .iter()
+                .rev()
+                .take(preserve_count)
+                .cloned()
+                .collect::<Vec<_>>(),
         );
         vec![seg]
     } else {
@@ -456,11 +461,7 @@ pub async fn compact_conversation(
 
     // Fire PostCompact hooks (if configured)
     let post_display = if let Some(hook_provider) = options.post_compact_hook_provider.as_ref() {
-        let hook_result = hook_provider(
-            trigger.to_string(),
-            result.summary.clone(),
-        )
-        .await;
+        let hook_result = hook_provider(trigger.to_string(), result.summary.clone()).await;
         hook_result.user_display_message
     } else {
         None
@@ -537,12 +538,13 @@ pub async fn partial_compact_conversation(
         return Err(anyhow::anyhow!(ERROR_MESSAGE_NOT_ENOUGH_MESSAGES));
     }
 
-    let (messages_to_summarize_raw, messages_to_keep): (Vec<Message>, Vec<Message>) = match direction {
-        PartialCompactDirection::UpTo => {
-            let to_summarize: Vec<Message> =
-                all_messages.iter().take(pivot_index).cloned().collect();
-            // Strip stale compact boundaries and old summaries from kept portion
-            let to_keep: Vec<Message> = all_messages
+    let (messages_to_summarize_raw, messages_to_keep): (Vec<Message>, Vec<Message>) =
+        match direction {
+            PartialCompactDirection::UpTo => {
+                let to_summarize: Vec<Message> =
+                    all_messages.iter().take(pivot_index).cloned().collect();
+                // Strip stale compact boundaries and old summaries from kept portion
+                let to_keep: Vec<Message> = all_messages
                 .iter()
                 .skip(pivot_index)
                 .filter(|m| {
@@ -562,20 +564,20 @@ pub async fn partial_compact_conversation(
                 })
                 .cloned()
                 .collect();
-            (to_summarize, to_keep)
-        }
-        PartialCompactDirection::From => {
-            let to_summarize: Vec<Message> =
-                all_messages.iter().skip(pivot_index).cloned().collect();
-            let to_keep: Vec<Message> = all_messages
-                .iter()
-                .take(pivot_index)
-                .filter(|m| !matches!(m, Message::Progress(_)))
-                .cloned()
-                .collect();
-            (to_summarize, to_keep)
-        }
-    };
+                (to_summarize, to_keep)
+            }
+            PartialCompactDirection::From => {
+                let to_summarize: Vec<Message> =
+                    all_messages.iter().skip(pivot_index).cloned().collect();
+                let to_keep: Vec<Message> = all_messages
+                    .iter()
+                    .take(pivot_index)
+                    .filter(|m| !matches!(m, Message::Progress(_)))
+                    .cloned()
+                    .collect();
+                (to_summarize, to_keep)
+            }
+        };
 
     // Strip media blocks and reinjected skill attachments before sending to the summarizer
     let messages_to_summarize = strip_media_from_messages_ex(&messages_to_summarize_raw, true);
@@ -700,12 +702,8 @@ pub async fn partial_compact_conversation(
     );
 
     let formatted_summary = format_compact_summary(&summary);
-    let summary_text = build_compact_user_summary_message(
-        &summary,
-        false,
-        None,
-        !messages_to_keep.is_empty(),
-    );
+    let summary_text =
+        build_compact_user_summary_message(&summary, false, None, !messages_to_keep.is_empty());
 
     let has_kept = !messages_to_keep.is_empty();
 
@@ -842,11 +840,7 @@ pub async fn partial_compact_conversation(
         "manual"
     };
     let post_display = if let Some(hook_provider) = options.post_compact_hook_provider.as_ref() {
-        let hook_result = hook_provider(
-            partial_trigger.to_string(),
-            result.summary.clone(),
-        )
-        .await;
+        let hook_result = hook_provider(partial_trigger.to_string(), result.summary.clone()).await;
         hook_result.user_display_message
     } else {
         None
@@ -1061,8 +1055,12 @@ pub fn create_compact_boundary_message(
     }
     if let Some(tools) = discovered_tools {
         if !tools.is_empty() {
-            metadata["preCompactDiscoveredTools"] =
-                serde_json::Value::Array(tools.iter().map(|t| serde_json::Value::String(t.clone())).collect());
+            metadata["preCompactDiscoveredTools"] = serde_json::Value::Array(
+                tools
+                    .iter()
+                    .map(|t| serde_json::Value::String(t.clone()))
+                    .collect(),
+            );
         }
     }
 
@@ -1074,7 +1072,9 @@ pub fn create_compact_boundary_message(
     Message::System(SystemMessage {
         base,
         subtype: SystemMessageSubtype::CompactBoundary,
-        text: serde_json::to_string(&metadata).unwrap_or_else(|_| format!("{{\"trigger\":\"{trigger}\",\"preTokens\":{pre_compact_token_count}}}")),
+        text: serde_json::to_string(&metadata).unwrap_or_else(|_| {
+            format!("{{\"trigger\":\"{trigger}\",\"preTokens\":{pre_compact_token_count}}}")
+        }),
         error: None,
     })
 }
@@ -1109,10 +1109,7 @@ pub fn annotate_boundary_with_preserved_segment(
 /// Parses the `text` field as JSON, applies `f` to mutate the metadata
 /// object, then re-serializes. If parsing fails, returns the boundary
 /// unmodified.
-fn enrich_boundary_metadata(
-    boundary: &Message,
-    f: impl FnOnce(&mut serde_json::Value),
-) -> Message {
+fn enrich_boundary_metadata(boundary: &Message, f: impl FnOnce(&mut serde_json::Value)) -> Message {
     match boundary {
         Message::System(sys) if sys.subtype == SystemMessageSubtype::CompactBoundary => {
             let mut metadata: serde_json::Value =
@@ -1301,11 +1298,7 @@ fn strip_media_from_block(
 }
 
 /// Emit a telemetry event if a provider is configured.
-fn emit_telemetry(
-    options: &CompactOptions,
-    event_name: &str,
-    metadata: serde_json::Value,
-) {
+fn emit_telemetry(options: &CompactOptions, event_name: &str, metadata: serde_json::Value) {
     if let Some(ref provider) = options.telemetry_provider {
         provider(event_name, metadata);
     }
@@ -1325,7 +1318,9 @@ fn is_auto_compact_runtime_enabled() -> bool {
     std::env::var("CLAUDE_CODE_AUTO_COMPACT")
         .ok()
         .as_deref()
-        .map_or(true, |v| !matches!(v.to_lowercase().as_str(), "0" | "false" | "no"))
+        .map_or(true, |v| {
+            !matches!(v.to_lowercase().as_str(), "0" | "false" | "no")
+        })
 }
 
 #[cfg(test)]
@@ -1630,10 +1625,11 @@ mod tests {
         match &stripped[0] {
             Message::User(u) => {
                 assert!(u.attachments.is_empty());
-                assert!(u
-                    .provider_content_blocks
-                    .iter()
-                    .all(|b| b["type"] != "image"));
+                assert!(
+                    u.provider_content_blocks
+                        .iter()
+                        .all(|b| b["type"] != "image")
+                );
             }
             _ => panic!("expected User"),
         }
@@ -1669,7 +1665,11 @@ mod tests {
         ];
 
         let stripped = strip_media_from_messages_ex(&msgs, true);
-        assert_eq!(stripped.len(), 2, "skill_discovery and skill_listing should be removed");
+        assert_eq!(
+            stripped.len(),
+            2,
+            "skill_discovery and skill_listing should be removed"
+        );
         assert!(matches!(&stripped[0], Message::User(_)));
         assert!(
             matches!(&stripped[1], Message::Attachment(a) if a.label.as_deref() == Some("file_state")),
@@ -1688,7 +1688,11 @@ mod tests {
         })];
 
         let stripped = strip_media_from_messages_ex(&msgs, false);
-        assert_eq!(stripped.len(), 1, "strip_skill_attachments=false should preserve all");
+        assert_eq!(
+            stripped.len(),
+            1,
+            "strip_skill_attachments=false should preserve all"
+        );
     }
 
     // -- Boundary metadata tests ------------------------------------------------
@@ -1760,11 +1764,8 @@ mod tests {
     #[test]
     fn annotate_boundary_noop_for_empty_keep() {
         let boundary = create_compact_boundary_message("manual", 5000, None, None);
-        let annotated = annotate_boundary_with_preserved_segment(
-            &boundary,
-            uuid::Uuid::new_v4(),
-            &[],
-        );
+        let annotated =
+            annotate_boundary_with_preserved_segment(&boundary, uuid::Uuid::new_v4(), &[]);
         match (&boundary, &annotated) {
             (Message::System(a), Message::System(b)) => assert_eq!(a.text, b.text),
             _ => panic!("unexpected message types"),

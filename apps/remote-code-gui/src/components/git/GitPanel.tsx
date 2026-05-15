@@ -1,4 +1,13 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import {
+  gitBranches,
+  gitCommit,
+  gitLog,
+  gitStage,
+  gitStatus,
+  gitSwitchBranch,
+} from '../../lib/tauri';
+import type { GitBranchInfo, GitCommitInfo, GitFileStatusInfo } from '../../lib/types';
 
 /**
  * Built-in Git panel for the sidebar, inspired by ZCode's integrated Git management.
@@ -11,26 +20,6 @@ import React, { useState, useEffect, useCallback } from 'react';
  * - Commit history
  */
 
-interface GitFileStatus {
-  path: string;
-  status: 'M' | 'A' | 'D' | 'R' | 'C' | '?' | '!';
-  isStaged: boolean;
-}
-
-interface GitBranch {
-  name: string;
-  isCurrent: boolean;
-  isRemote: boolean;
-}
-
-interface CommitInfo {
-  hash: string;
-  shortHash: string;
-  author: string;
-  message: string;
-  timestamp: number;
-}
-
 interface GitPanelProps {
   projectPath: string | null;
   className?: string;
@@ -40,21 +29,26 @@ type GitTab = 'changes' | 'history' | 'branches';
 
 export const GitPanel: React.FC<GitPanelProps> = ({ projectPath, className = '' }) => {
   const [activeTab, setActiveTab] = useState<GitTab>('changes');
-  const [files, setFiles] = useState<GitFileStatus[]>([]);
-  const [branches, setBranchs] = useState<GitBranch[]>([]);
-  const [commits, setCommits] = useState<CommitInfo[]>([]);
+  const [files, setFiles] = useState<GitFileStatusInfo[]>([]);
+  const [branches, setBranches] = useState<GitBranchInfo[]>([]);
+  const [commits, setCommits] = useState<GitCommitInfo[]>([]);
   const [commitMessage, setCommitMessage] = useState('');
   const [currentBranch, setCurrentBranch] = useState<string>('');
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const refreshStatus = useCallback(async () => {
     if (!projectPath) return;
     setLoading(true);
+    setError(null);
     try {
-      // TODO: Call Tauri backend git_status command
-      // For now, show placeholder
+      const status = await gitStatus(projectPath);
+      setFiles(status.files);
+      setCurrentBranch(status.branch ?? 'Detached HEAD');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
       setFiles([]);
-      setCurrentBranch('main');
+      setCurrentBranch('');
     } finally {
       setLoading(false);
     }
@@ -63,8 +57,10 @@ export const GitPanel: React.FC<GitPanelProps> = ({ projectPath, className = '' 
   const refreshBranches = useCallback(async () => {
     if (!projectPath) return;
     try {
-      // TODO: Call Tauri backend git_branches command
-      setBranchs([{ name: 'main', isCurrent: true, isRemote: false }]);
+      setBranches(await gitBranches(projectPath));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      setBranches([]);
     } finally {
       // done
     }
@@ -73,7 +69,9 @@ export const GitPanel: React.FC<GitPanelProps> = ({ projectPath, className = '' 
   const refreshHistory = useCallback(async () => {
     if (!projectPath) return;
     try {
-      // TODO: Call Tauri backend git_log command
+      setCommits(await gitLog(projectPath));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
       setCommits([]);
     } finally {
       // done
@@ -92,25 +90,34 @@ export const GitPanel: React.FC<GitPanelProps> = ({ projectPath, className = '' 
   const handleCommit = async () => {
     if (!commitMessage.trim() || !projectPath) return;
     try {
-      // TODO: Call Tauri backend git_commit command
+      await gitCommit(projectPath, commitMessage.trim());
       setCommitMessage('');
       refreshStatus();
-    } catch {
-      // Error handled by UI state
+      refreshHistory();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
     }
   };
 
   const handleStageFile = async (path: string) => {
     if (!projectPath) return;
-    // TODO: Call Tauri backend git_stage command
-    refreshStatus();
+    try {
+      await gitStage(projectPath, path);
+      refreshStatus();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
   };
 
   const handleSwitchBranch = async (name: string) => {
     if (!projectPath) return;
-    // TODO: Call Tauri backend git_switch_branch command
-    refreshStatus();
-    refreshBranches();
+    try {
+      await gitSwitchBranch(projectPath, name);
+      refreshStatus();
+      refreshBranches();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
   };
 
   const statusColor = (status: string) => {
@@ -160,6 +167,12 @@ export const GitPanel: React.FC<GitPanelProps> = ({ projectPath, className = '' 
       <div className="px-3 py-1.5 text-xs text-[var(--color-text-muted)] border-b border-[var(--color-border)]">
         🌿 {currentBranch || '—'}
       </div>
+
+      {error && (
+        <div className="px-3 py-2 text-xs text-red-400 border-b border-[var(--color-border)]">
+          {error}
+        </div>
+      )}
 
       {/* Tab content */}
       <div className="flex-1 overflow-y-auto">

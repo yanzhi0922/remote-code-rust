@@ -32,9 +32,7 @@ use crate::types::RequestyConfig;
 fn apply_router_tool_preferences(model_id: &str, model_info: &mut ModelInfo) {
     if model_id.contains("openai") {
         // Add "apply_diff" and "write_to_file" to excluded_tools (deduplicated)
-        let excluded = model_info
-            .excluded_tools
-            .get_or_insert_with(Vec::new);
+        let excluded = model_info.excluded_tools.get_or_insert_with(Vec::new);
         for tool in &["apply_diff", "write_to_file"] {
             if !excluded.contains(&tool.to_string()) {
                 excluded.push(tool.to_string());
@@ -42,9 +40,7 @@ fn apply_router_tool_preferences(model_id: &str, model_info: &mut ModelInfo) {
         }
 
         // Add "apply_patch" to included_tools (deduplicated)
-        let included = model_info
-            .included_tools
-            .get_or_insert_with(Vec::new);
+        let included = model_info.included_tools.get_or_insert_with(Vec::new);
         let patch = "apply_patch".to_string();
         if !included.contains(&patch) {
             included.push(patch);
@@ -71,7 +67,9 @@ pub struct RequestyHandler {
 impl RequestyHandler {
     /// Create a new Requesty handler from configuration.
     pub fn new(config: RequestyConfig) -> Result<Self, roo_provider::ProviderError> {
-        let model_id = config.model_id.unwrap_or_else(|| models::default_model_id());
+        let model_id = config
+            .model_id
+            .unwrap_or_else(|| models::default_model_id());
         let model_info = models::models()
             .get(&model_id)
             .cloned()
@@ -102,7 +100,7 @@ impl RequestyHandler {
             model_info,
             provider_name_enum: ProviderName::Requesty,
             request_timeout: config.request_timeout,
-        reasoning_effort: None,
+            reasoning_effort: None,
             streaming_enabled: None,
             include_max_tokens: None,
             extra_body_fields: None,
@@ -123,9 +121,8 @@ impl RequestyHandler {
     pub fn from_settings(
         settings: &roo_types::provider_settings::ProviderSettings,
     ) -> Result<Self, roo_provider::ProviderError> {
-        let config = RequestyConfig::from_settings(settings).ok_or_else(|| {
-            roo_provider::ProviderError::ApiKeyRequired
-        })?;
+        let config = RequestyConfig::from_settings(settings)
+            .ok_or_else(|| roo_provider::ProviderError::ApiKeyRequired)?;
         Self::new(config)
     }
 
@@ -144,11 +141,7 @@ impl RequestyHandler {
         let url = format!("{}/models", self.base_url.trim_end_matches('/'));
 
         let client = reqwest::Client::new();
-        let response = client
-            .get(&url)
-            .bearer_auth(&self.api_key)
-            .send()
-            .await?;
+        let response = client.get(&url).bearer_auth(&self.api_key).send().await?;
 
         if !response.status().is_success() {
             let status = response.status().as_u16();
@@ -234,10 +227,7 @@ impl Provider for RequestyHandler {
         self.resolve_model_info()
     }
 
-    async fn complete_prompt(
-        &self,
-        prompt: &str,
-    ) -> Result<String, roo_provider::ProviderError> {
+    async fn complete_prompt(&self, prompt: &str) -> Result<String, roo_provider::ProviderError> {
         self.inner.complete_prompt(prompt).await
     }
 
@@ -264,9 +254,21 @@ mod tests {
     #[test]
     fn test_all_models_have_required_fields() {
         for (id, info) in models::models() {
-            assert!(info.max_tokens.is_some(), "Model '{}' missing max_tokens", id);
-            assert!(info.input_price.is_some(), "Model '{}' missing input_price", id);
-            assert!(info.output_price.is_some(), "Model '{}' missing output_price", id);
+            assert!(
+                info.max_tokens.is_some(),
+                "Model '{}' missing max_tokens",
+                id
+            );
+            assert!(
+                info.input_price.is_some(),
+                "Model '{}' missing input_price",
+                id
+            );
+            assert!(
+                info.output_price.is_some(),
+                "Model '{}' missing output_price",
+                id
+            );
         }
     }
 

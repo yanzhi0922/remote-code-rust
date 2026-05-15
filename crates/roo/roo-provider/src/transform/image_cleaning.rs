@@ -1,4 +1,4 @@
-﻿//! Removes image blocks from messages when the provider doesn't support images.
+//! Removes image blocks from messages when the provider doesn't support images.
 //!
 //! Derived from `src/api/transform/image-cleaning.ts`.
 
@@ -8,7 +8,10 @@ use roo_types::model::ModelInfo;
 /// Removes image blocks from messages if they are not supported by the provider's model.
 ///
 /// Source: `src/api/transform/image-cleaning.ts` — `maybeRemoveImageBlocks`
-pub fn maybe_remove_image_blocks(messages: Vec<ApiMessage>, model_info: &ModelInfo) -> Vec<ApiMessage> {
+pub fn maybe_remove_image_blocks(
+    messages: Vec<ApiMessage>,
+    model_info: &ModelInfo,
+) -> Vec<ApiMessage> {
     // Check model capability ONCE instead of for every message
     let supports_images = model_info.supports_images.unwrap_or(false);
 
@@ -80,9 +83,13 @@ mod tests {
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].content.len(), 2);
         // First block should be unchanged
-        assert!(matches!(&result[0].content[0], ContentBlock::Text { text } if text == "Look at this"));
+        assert!(
+            matches!(&result[0].content[0], ContentBlock::Text { text } if text == "Look at this")
+        );
         // Second block should be converted to text
-        assert!(matches!(&result[0].content[1], ContentBlock::Text { text } if text == "[Referenced image in conversation]"));
+        assert!(
+            matches!(&result[0].content[1], ContentBlock::Text { text } if text == "[Referenced image in conversation]")
+        );
     }
 
     #[test]

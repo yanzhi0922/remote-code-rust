@@ -228,7 +228,11 @@ impl DiffViewProvider {
     ///
     /// If `is_final` is `true`, the content is marked as the final version
     /// ready to be saved.
-    pub fn update(&mut self, accumulated_content: &str, is_final: bool) -> Result<(), DiffViewError> {
+    pub fn update(
+        &mut self,
+        accumulated_content: &str,
+        is_final: bool,
+    ) -> Result<(), DiffViewError> {
         if self.rel_path.is_none() {
             return Err(DiffViewError::NotOpen);
         }
@@ -380,12 +384,7 @@ fn format_diff_summary(path: &Path, diffs: &[crate::file_editor::LineDiff]) -> S
     let additions = diffs.iter().filter(|d| d.tag == DiffTag::Insert).count();
     let deletions = diffs.iter().filter(|d| d.tag == DiffTag::Delete).count();
 
-    format!(
-        "{}: +{} -{} lines",
-        path.display(),
-        additions,
-        deletions
-    )
+    format!("{}: +{} -{} lines", path.display(), additions, deletions)
 }
 
 /// Normalize line endings to LF for comparison.
@@ -505,16 +504,15 @@ mod tests {
     async fn test_open_existing_file() {
         let dir = tempfile::tempdir().unwrap();
         let file_path = dir.path().join("test.txt");
-        tokio::fs::write(&file_path, "original content").await.unwrap();
+        tokio::fs::write(&file_path, "original content")
+            .await
+            .unwrap();
 
         let mut provider = make_provider();
         provider.open(&file_path).await.unwrap();
 
         assert!(provider.is_active());
-        assert_eq!(
-            provider.get_original_content().unwrap(),
-            "original content"
-        );
+        assert_eq!(provider.get_original_content().unwrap(), "original content");
         assert_eq!(provider.get_current_content().unwrap(), "original content");
     }
 

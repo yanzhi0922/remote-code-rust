@@ -1,7 +1,7 @@
 //! MiniMax model definitions.
 
-use std::collections::HashMap;
 use roo_types::model::ModelInfo;
+use std::collections::HashMap;
 
 /// Default MiniMax model ID.
 pub const DEFAULT_MODEL_ID: &str = "MiniMax-M2.7";

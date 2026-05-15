@@ -338,5 +338,8 @@ pub const MODEL_ID_KEYS: &[&str] = &[
 ];
 
 /// Anthropic-style API providers.
-pub const ANTHROPIC_STYLE_PROVIDERS: &[ProviderName] =
-    &[ProviderName::Anthropic, ProviderName::Bedrock, ProviderName::MiniMax];
+pub const ANTHROPIC_STYLE_PROVIDERS: &[ProviderName] = &[
+    ProviderName::Anthropic,
+    ProviderName::Bedrock,
+    ProviderName::MiniMax,
+];

@@ -25,7 +25,7 @@ pub async fn probe_endpoint(
                 latency_ms: None,
                 auth_valid: false,
                 error: Some(e.to_string()),
-            }
+            };
         }
     };
 

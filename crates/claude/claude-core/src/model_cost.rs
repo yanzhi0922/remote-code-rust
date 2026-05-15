@@ -109,7 +109,11 @@ pub fn get_model_costs(model_id: &str) -> ModelCosts {
     if lower.contains("claude-opus-4-1") || lower.contains("claude-opus-4-0") {
         return COST_TIER_15_75;
     }
-    if lower.contains("claude-opus-4") && !lower.contains("opus-4-5") && !lower.contains("opus-4-6") && !lower.contains("opus-4-7") {
+    if lower.contains("claude-opus-4")
+        && !lower.contains("opus-4-5")
+        && !lower.contains("opus-4-6")
+        && !lower.contains("opus-4-7")
+    {
         return COST_TIER_15_75;
     }
 
@@ -248,7 +252,10 @@ mod tests {
     #[test]
     fn unknown_model_uses_default() {
         let costs = get_model_costs("some-other-model");
-        assert_eq!(costs.input_per_mtok, DEFAULT_UNKNOWN_MODEL_COST.input_per_mtok);
+        assert_eq!(
+            costs.input_per_mtok,
+            DEFAULT_UNKNOWN_MODEL_COST.input_per_mtok
+        );
     }
 
     #[test]
@@ -280,7 +287,10 @@ mod tests {
             + (300_000.0 / 1_000_000.0) * 0.3
             + (100_000.0 / 1_000_000.0) * 3.75
             + 5.0 * 0.01;
-        assert!((cost - expected).abs() < 1e-9, "cost was {cost}, expected {expected}");
+        assert!(
+            (cost - expected).abs() < 1e-9,
+            "cost was {cost}, expected {expected}"
+        );
     }
 
     #[test]

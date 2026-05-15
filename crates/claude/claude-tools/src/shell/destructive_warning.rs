@@ -1,4 +1,4 @@
-﻿//! Detection of destructive shell commands (bash and PowerShell).
+//! Detection of destructive shell commands (bash and PowerShell).
 //!
 //! Identifies potentially destructive commands and returns a warning string
 //! for display in the permission dialog. This is purely informational —
@@ -22,7 +22,8 @@ static DESTRUCTIVE_PATTERNS: Lazy<Vec<DestructivePattern>> = Lazy::new(|| {
             warning: "Note: may discard uncommitted changes",
         });
     }
-    if let Ok(re) = Regex::new(r"(?i)\bgit\s+push\b[^;&|\n]*[ \t](--force|--force-with-lease|-f)\b") {
+    if let Ok(re) = Regex::new(r"(?i)\bgit\s+push\b[^;&|\n]*[ \t](--force|--force-with-lease|-f)\b")
+    {
         patterns.push(DestructivePattern {
             pattern: re,
             warning: "Note: may overwrite remote history",
@@ -52,7 +53,9 @@ static DESTRUCTIVE_PATTERNS: Lazy<Vec<DestructivePattern>> = Lazy::new(|| {
             warning: "Note: may permanently remove stashed changes",
         });
     }
-    if let Ok(re) = Regex::new(r"(?i)\bgit\s+branch\s+(-D[ \t]|--delete\s+--force|--force\s+--delete)\b") {
+    if let Ok(re) =
+        Regex::new(r"(?i)\bgit\s+branch\s+(-D[ \t]|--delete\s+--force|--force\s+--delete)\b")
+    {
         patterns.push(DestructivePattern {
             pattern: re,
             warning: "Note: may force-delete a branch",
@@ -74,7 +77,9 @@ static DESTRUCTIVE_PATTERNS: Lazy<Vec<DestructivePattern>> = Lazy::new(|| {
     }
 
     // ── Unix rm ────────────────────────────────────────────────────────
-    if let Ok(re) = Regex::new(r"(^|[;&|\n]\s*)rm\s+-[a-zA-Z]*[rR][a-zA-Z]*f|(^|[;&|\n]\s*)rm\s+-[a-zA-Z]*f[a-zA-Z]*[rR]") {
+    if let Ok(re) = Regex::new(
+        r"(^|[;&|\n]\s*)rm\s+-[a-zA-Z]*[rR][a-zA-Z]*f|(^|[;&|\n]\s*)rm\s+-[a-zA-Z]*f[a-zA-Z]*[rR]",
+    ) {
         patterns.push(DestructivePattern {
             pattern: re,
             warning: "Note: may recursively force-remove files",

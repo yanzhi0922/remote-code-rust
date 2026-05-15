@@ -114,7 +114,11 @@ pub async fn execute_mcp_tool(
             return McpToolExecutionResult::error(format!(
                 "Server '{}' not found. Available servers: [{}]",
                 server_name,
-                servers.iter().map(|s| s.name.as_str()).collect::<Vec<_>>().join(", ")
+                servers
+                    .iter()
+                    .map(|s| s.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
             ));
         }
     };

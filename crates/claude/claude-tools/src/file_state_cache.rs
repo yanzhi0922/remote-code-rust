@@ -6,7 +6,9 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::path::{Component, Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+
+use parking_lot::Mutex;
 
 const DEFAULT_MAX_ENTRIES: usize = 100;
 const DEFAULT_MAX_SIZE_BYTES: usize = 25 * 1024 * 1024;
@@ -145,10 +147,8 @@ impl FileStateCache {
         }
     }
 
-    fn lock_inner(&self) -> std::sync::MutexGuard<'_, FileStateCacheInner> {
-        self.inner
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    fn lock_inner(&self) -> parking_lot::MutexGuard<'_, FileStateCacheInner> {
+        self.inner.lock()
     }
 }
 

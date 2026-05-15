@@ -7,8 +7,8 @@ use async_trait::async_trait;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
-use crate::transport::{CommandAck, HealthStatus, RemoteTransport, TransportCommand};
 use crate::reconnect::ReconnectPolicy;
+use crate::transport::{CommandAck, HealthStatus, RemoteTransport, TransportCommand};
 use crate::{ConnectionState, TransportConfig, TransportEvent, TransportMetrics};
 
 /// QUIC transport using quinn.
@@ -50,9 +50,10 @@ impl QuicTransport {
 impl RemoteTransport for QuicTransport {
     async fn connect(&mut self, config: TransportConfig) -> anyhow::Result<()> {
         let (server_url, cert_fp) = match &config.strategy {
-            crate::TransportStrategy::Quic { server_url, server_cert_fingerprint } => {
-                (server_url.clone(), server_cert_fingerprint.clone())
-            }
+            crate::TransportStrategy::Quic {
+                server_url,
+                server_cert_fingerprint,
+            } => (server_url.clone(), server_cert_fingerprint.clone()),
             _ => anyhow::bail!("QuicTransport requires Quic strategy"),
         };
 
@@ -73,7 +74,8 @@ impl RemoteTransport for QuicTransport {
             quinn::crypto::rustls::QuicClientConfig::try_from(tls)
                 .map_err(|e| anyhow::anyhow!("QUIC TLS config error: {e}"))?,
         ));
-        let bind_addr: std::net::SocketAddr = "0.0.0.0:0".parse().map_err(|e| anyhow::anyhow!("{e}"))?;
+        let bind_addr: std::net::SocketAddr =
+            "0.0.0.0:0".parse().map_err(|e| anyhow::anyhow!("{e}"))?;
         let mut endpoint = quinn::Endpoint::client(bind_addr)?;
         endpoint.set_default_client_config(client_config);
 
@@ -92,7 +94,12 @@ impl RemoteTransport for QuicTransport {
         self.event_rx = Some(event_rx);
 
         let cancel_rx = self.cancel.subscribe();
-        tokio::spawn(quic_event_reader(conn, config.auth_token.clone(), event_tx, cancel_rx));
+        tokio::spawn(quic_event_reader(
+            conn,
+            config.auth_token.clone(),
+            event_tx,
+            cancel_rx,
+        ));
 
         self.state = ConnectionState::Open {
             active_strategy: "quic".into(),
@@ -107,7 +114,10 @@ impl RemoteTransport for QuicTransport {
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("not connected"))?;
 
-        let mut stream = conn.open_bi().await.map_err(|e| anyhow::anyhow!("QUIC open stream: {e}"))?;
+        let mut stream = conn
+            .open_bi()
+            .await
+            .map_err(|e| anyhow::anyhow!("QUIC open stream: {e}"))?;
 
         let payload = serde_json::to_vec(&command)?;
         let len = (payload.len() as u32).to_le_bytes();
@@ -135,13 +145,13 @@ impl RemoteTransport for QuicTransport {
                 reachable: has_conn,
                 latency_ms: self.metrics.latency_ms.into(),
                 auth_valid: has_conn,
-                error: if has_conn { None } else { Some("no QUIC connection".into()) },
+                error: if has_conn {
+                    None
+                } else {
+                    Some("no QUIC connection".into())
+                },
             }],
-            recommended_strategy: if has_conn {
-                Some("quic".into())
-            } else {
-                None
-            },
+            recommended_strategy: if has_conn { Some("quic".into()) } else { None },
         }
     }
 
@@ -237,9 +247,5 @@ fn extract_server_name(url: &str) -> String {
         .unwrap_or(url)
         .strip_prefix("https://")
         .unwrap_or(url);
-    stripped
-        .split(':')
-        .next()
-        .unwrap_or("localhost")
-        .to_owned()
+    stripped.split(':').next().unwrap_or("localhost").to_owned()
 }

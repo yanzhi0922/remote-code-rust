@@ -1,6 +1,5 @@
 /// Telemetry client for sending events to the cloud.
 /// Mirrors packages/cloud/src/TelemetryClient.ts
-
 use crate::cloud_api::CloudApi;
 use crate::types::CloudError;
 use serde::{Deserialize, Serialize};
@@ -65,7 +64,9 @@ impl TelemetryClient {
         let body = serde_json::to_value(&telemetry_event)
             .map_err(|e| CloudError::SerializationError(e.to_string()))?;
 
-        self.api.post("/api/extension/telemetry", Some(body), token).await?;
+        self.api
+            .post("/api/extension/telemetry", Some(body), token)
+            .await?;
 
         Ok(())
     }
@@ -83,7 +84,9 @@ impl TelemetryClient {
         let body = serde_json::to_value(&events)
             .map_err(|e| CloudError::SerializationError(e.to_string()))?;
 
-        self.api.post("/api/extension/telemetry/batch", Some(body), token).await?;
+        self.api
+            .post("/api/extension/telemetry/batch", Some(body), token)
+            .await?;
 
         Ok(())
     }

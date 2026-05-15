@@ -44,9 +44,7 @@ pub fn unified_event_to_runtime_detail(event: &UnifiedAgentEvent) -> Option<Runt
         }
 
         UnifiedAgentEvent::ToolCallCompleted {
-            tool_name,
-            result,
-            ..
+            tool_name, result, ..
         } => {
             let is_error = result
                 .get("success")
@@ -60,9 +58,7 @@ pub fn unified_event_to_runtime_detail(event: &UnifiedAgentEvent) -> Option<Runt
             })
         }
 
-        UnifiedAgentEvent::PermissionRequest {
-            tool_name, ..
-        } => {
+        UnifiedAgentEvent::PermissionRequest { tool_name, .. } => {
             let name: Arc<str> = Arc::from(tool_name.as_str());
             Some(RuntimeEventDetail::ToolStarted {
                 tool_call_id: format!("approval-{name}").into(),
@@ -82,9 +78,7 @@ pub fn unified_event_to_runtime_detail(event: &UnifiedAgentEvent) -> Option<Runt
         }),
 
         UnifiedAgentEvent::SubtaskProgress {
-            task_id,
-            progress,
-            ..
+            task_id, progress, ..
         } => Some(RuntimeEventDetail::SubtaskProgress {
             task_id: Arc::from(task_id.as_str()),
             status: "running".to_owned(),
@@ -92,8 +86,7 @@ pub fn unified_event_to_runtime_detail(event: &UnifiedAgentEvent) -> Option<Runt
         }),
 
         UnifiedAgentEvent::SubtaskCompleted {
-            task_id,
-            result, ..
+            task_id, result, ..
         } => Some(RuntimeEventDetail::SubtaskCompleted {
             task_id: Arc::from(task_id.as_str()),
             status: "completed".to_owned(),
@@ -102,7 +95,11 @@ pub fn unified_event_to_runtime_detail(event: &UnifiedAgentEvent) -> Option<Runt
         }),
 
         UnifiedAgentEvent::ContextUsage { used, total, .. } => {
-            let ratio = if *total > 0 { *used as f64 / *total as f64 } else { 0.0 };
+            let ratio = if *total > 0 {
+                *used as f64 / *total as f64
+            } else {
+                0.0
+            };
             Some(RuntimeEventDetail::ContextUsage {
                 estimated_tokens: *used as u64,
                 max_input_tokens: *total as u64,
@@ -112,7 +109,11 @@ pub fn unified_event_to_runtime_detail(event: &UnifiedAgentEvent) -> Option<Runt
         }
 
         UnifiedAgentEvent::ContextOverflow { used, total, .. } => {
-            let ratio = if *total > 0 { *used as f64 / *total as f64 } else { 1.0 };
+            let ratio = if *total > 0 {
+                *used as f64 / *total as f64
+            } else {
+                1.0
+            };
             Some(RuntimeEventDetail::ContextOverflow {
                 estimated_tokens: *used as u64,
                 max_input_tokens: *total as u64,
@@ -186,7 +187,9 @@ mod tests {
             tool_input: serde_json::json!({"path": "/tmp/a.rs"}),
         };
         let d = unified_event_to_runtime_detail(&started).unwrap();
-        assert!(matches!(d, RuntimeEventDetail::ToolStarted { tool_name, .. } if &*tool_name == "read_file"));
+        assert!(
+            matches!(d, RuntimeEventDetail::ToolStarted { tool_name, .. } if &*tool_name == "read_file")
+        );
 
         let completed = UnifiedAgentEvent::ToolCallCompleted {
             session_id: "s1".into(),
@@ -194,22 +197,28 @@ mod tests {
             result: serde_json::json!({"success": true, "content": "ok"}),
         };
         let d = unified_event_to_runtime_detail(&completed).unwrap();
-        assert!(matches!(d, RuntimeEventDetail::ToolFinished { is_error: false, .. }));
+        assert!(matches!(
+            d,
+            RuntimeEventDetail::ToolFinished {
+                is_error: false,
+                ..
+            }
+        ));
     }
 
     #[test]
     fn lifecycle_events_map_to_none() {
         assert!(unified_event_to_runtime_detail(&UnifiedAgentEvent::Ready).is_none());
         assert!(unified_event_to_runtime_detail(&UnifiedAgentEvent::Stopped).is_none());
-        assert!(unified_event_to_runtime_detail(&UnifiedAgentEvent::Started(
-            crate::types::AgentInfo {
+        assert!(
+            unified_event_to_runtime_detail(&UnifiedAgentEvent::Started(crate::types::AgentInfo {
                 name: "test".into(),
                 version: "0.1".into(),
                 capabilities: Default::default(),
                 status: crate::types::AgentStatus::Ready,
-            }
-        ))
-        .is_none());
+            }))
+            .is_none()
+        );
     }
 
     #[test]
@@ -235,8 +244,10 @@ mod tests {
             description: "explore code".into(),
         };
         let d = unified_event_to_runtime_detail(&started).unwrap();
-        assert!(matches!(d, RuntimeEventDetail::SubtaskStarted { task_id, description, .. }
-            if &*task_id == "t1" && description == "explore code"));
+        assert!(
+            matches!(d, RuntimeEventDetail::SubtaskStarted { task_id, description, .. }
+            if &*task_id == "t1" && description == "explore code")
+        );
 
         let completed = UnifiedAgentEvent::SubtaskCompleted {
             session_id: "s1".into(),
@@ -244,6 +255,8 @@ mod tests {
             result: serde_json::json!("done"),
         };
         let d = unified_event_to_runtime_detail(&completed).unwrap();
-        assert!(matches!(d, RuntimeEventDetail::SubtaskCompleted { status, .. } if status == "completed"));
+        assert!(
+            matches!(d, RuntimeEventDetail::SubtaskCompleted { status, .. } if status == "completed")
+        );
     }
 }

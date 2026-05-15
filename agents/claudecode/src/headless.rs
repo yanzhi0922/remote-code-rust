@@ -7,7 +7,7 @@ use std::sync::{
 use std::time::Instant;
 
 use anyhow::Result;
-use claude_config::{runtime_version, RuntimeConfig};
+use claude_config::{RuntimeConfig, runtime_version};
 use claude_core::{InputFormat, PermissionMode, SessionState};
 use claude_permissions::{
     LayeredPermissionBroker, PermissionBroker, PermissionClass, PermissionDecision,
@@ -657,8 +657,8 @@ impl ChannelPermissionFallbackBroker {
                 warn!("failed to emit state change: {error}");
             }
             if let Err(error) = emitter.emit_permission_request(PermissionRequestPayload {
-                request_id: request_id.clone(),
-                tool_name: request.tool_name.clone(),
+                request_id: request_id.clone().into(),
+                tool_name: request.tool_name.clone().into(),
                 tool_use_id: request.tool_use_id.unwrap_or_default(),
                 title: request.title.unwrap_or_default(),
                 description: request.description.unwrap_or_default(),
@@ -905,7 +905,7 @@ mod tests {
                 request_id: None,
                 usage: UsageSummary::default(),
                 stop_reason: "end_turn".to_owned(),
-            research: None,
+                research: None,
             })
         }
     }
@@ -935,7 +935,7 @@ mod tests {
                     ..Default::default()
                 },
                 stop_reason: "end_turn".to_owned(),
-            research: None,
+                research: None,
             })
         }
 
@@ -950,7 +950,12 @@ mod tests {
                     on_text_delta("streaming-backend");
                 }
                 if let Some(on_usage) = callbacks.on_usage.as_ref() {
-                    on_usage(claude_provider::streaming::StreamingUsageUpdate { input_tokens: 12, output_tokens: 3, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 });
+                    on_usage(claude_provider::streaming::StreamingUsageUpdate {
+                        input_tokens: 12,
+                        output_tokens: 3,
+                        cache_read_input_tokens: 0,
+                        cache_creation_input_tokens: 0,
+                    });
                 }
             }
             Ok(ProviderResponse {
@@ -968,7 +973,7 @@ mod tests {
                     ..Default::default()
                 },
                 stop_reason: "end_turn".to_owned(),
-            research: None,
+                research: None,
             })
         }
 
@@ -1037,7 +1042,7 @@ mod tests {
                     request_id: None,
                     usage: UsageSummary::default(),
                     stop_reason: "tool_use".to_owned(),
-                research: None,
+                    research: None,
                 })
             } else {
                 Ok(ProviderResponse {
@@ -1049,7 +1054,7 @@ mod tests {
                     request_id: None,
                     usage: UsageSummary::default(),
                     stop_reason: "end_turn".to_owned(),
-                research: None,
+                    research: None,
                 })
             }
         }
@@ -1327,7 +1332,7 @@ mod tests {
             "req-1".to_owned(),
             PermissionDecision {
                 allowed: true,
-                message: Some("approved".to_owned()),
+                message: Some("approved".to_owned().into()),
                 permission_suggestions: Vec::new(),
                 updated_input: Some(serde_json::json!({"plan":"edited"})),
                 permission_updates: Vec::new(),
@@ -1437,7 +1442,7 @@ mod tests {
             tokio::spawn(async move {
                 broker
                     .decide_forced_prompt(PermissionRequest {
-                        tool_name: "exit_plan_mode".to_owned(),
+                        tool_name: "exit_plan_mode".to_owned().into(),
                         permission_class: Some(PermissionClass::Read),
                         tool_input: serde_json::json!({}),
                         working_directory: Some(cwd),
@@ -1470,7 +1475,7 @@ mod tests {
             request_id,
             PermissionDecision {
                 allowed: true,
-                message: Some("approved".to_owned()),
+                message: Some("approved".to_owned().into()),
                 permission_suggestions: Vec::new(),
                 updated_input: None,
                 permission_updates: Vec::new(),

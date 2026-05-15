@@ -3,7 +3,8 @@
 //! Provides structured event recording with pluggable sinks (console, buffered)
 //! and a simple feature-flag system for controlling analytics behaviour.
 
-use std::sync::{Arc, Mutex};
+use parking_lot::Mutex;
+use std::sync::Arc;
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -242,7 +243,7 @@ impl BufferedSink {
     /// Returns the number of events currently buffered.
     #[must_use]
     pub fn buffered_count(&self) -> usize {
-        self.buffer.lock().unwrap_or_else(|e| e.into_inner()).len()
+        self.buffer.lock().len()
     }
 
     /// Returns the configured max buffer size.
@@ -254,7 +255,7 @@ impl BufferedSink {
 
 impl AnalyticsSink for BufferedSink {
     fn send_event(&self, event: &AnalyticsEvent, metadata: &EventMetadata) -> Result<()> {
-        let mut buf = self.buffer.lock().unwrap_or_else(|e| e.into_inner());
+        let mut buf = self.buffer.lock();
         buf.push((event.clone(), metadata.clone()));
         if buf.len() >= self.max_buffer_size {
             self.flush_locked(&mut buf)?;
@@ -263,7 +264,7 @@ impl AnalyticsSink for BufferedSink {
     }
 
     fn flush(&self) -> Result<()> {
-        let mut buf = self.buffer.lock().unwrap_or_else(|e| e.into_inner());
+        let mut buf = self.buffer.lock();
         self.flush_locked(&mut buf)
     }
 }

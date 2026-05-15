@@ -5,7 +5,6 @@
 //! Provides shell path detection, validation against an allowlist,
 //! and platform-specific fallback logic.
 
-
 /// Security: Allowlist of approved shell executables to prevent arbitrary command execution.
 ///
 /// Source: `src/utils/shell.ts` — `SHELL_ALLOWLIST`
@@ -93,7 +92,8 @@ pub struct ShellPaths;
 
 impl ShellPaths {
     pub const POWERSHELL_7: &str = r"C:\Program Files\PowerShell\7\pwsh.exe";
-    pub const POWERSHELL_LEGACY: &str = r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe";
+    pub const POWERSHELL_LEGACY: &str =
+        r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe";
     pub const CMD: &str = r"C:\Windows\System32\cmd.exe";
     pub const WSL_BASH: &str = "/bin/bash";
     pub const MAC_DEFAULT: &str = "/bin/zsh";

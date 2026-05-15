@@ -23,7 +23,9 @@ pub struct MistralHandler {
 impl MistralHandler {
     /// Create a new Mistral handler from configuration.
     pub fn new(config: MistralConfig) -> Result<Self, roo_provider::ProviderError> {
-        let model_id = config.model_id.unwrap_or_else(|| models::default_model_id());
+        let model_id = config
+            .model_id
+            .unwrap_or_else(|| models::default_model_id());
         let model_info = models::models()
             .get(&model_id)
             .cloned()
@@ -46,7 +48,7 @@ impl MistralHandler {
             model_info,
             provider_name_enum: ProviderName::Mistral,
             request_timeout: config.request_timeout,
-        reasoning_effort: None,
+            reasoning_effort: None,
             streaming_enabled: None,
             include_max_tokens: None,
             extra_body_fields: None,
@@ -61,8 +63,8 @@ impl MistralHandler {
     pub fn from_settings(
         settings: &roo_types::provider_settings::ProviderSettings,
     ) -> Result<Self, roo_provider::ProviderError> {
-        let config =
-            MistralConfig::from_settings(settings).ok_or(roo_provider::ProviderError::ApiKeyRequired)?;
+        let config = MistralConfig::from_settings(settings)
+            .ok_or(roo_provider::ProviderError::ApiKeyRequired)?;
         Self::new(config)
     }
 }
@@ -85,10 +87,7 @@ impl Provider for MistralHandler {
         self.inner.get_model()
     }
 
-    async fn complete_prompt(
-        &self,
-        prompt: &str,
-    ) -> Result<String, roo_provider::ProviderError> {
+    async fn complete_prompt(&self, prompt: &str) -> Result<String, roo_provider::ProviderError> {
         self.inner.complete_prompt(prompt).await
     }
 
@@ -135,10 +134,7 @@ mod tests {
 
     #[test]
     fn test_mistral_config_default_url() {
-        assert_eq!(
-            MistralConfig::DEFAULT_BASE_URL,
-            "https://api.mistral.ai/v1"
-        );
+        assert_eq!(MistralConfig::DEFAULT_BASE_URL, "https://api.mistral.ai/v1");
     }
 
     #[test]
@@ -249,22 +245,32 @@ mod tests {
     #[test]
     fn test_codestral_has_large_context() {
         let all_models = models::models();
-        let codestral = all_models.get("codestral-latest").expect("codestral-latest should exist");
+        let codestral = all_models
+            .get("codestral-latest")
+            .expect("codestral-latest should exist");
         assert_eq!(codestral.context_window, 256_000);
     }
 
     #[test]
     fn test_vision_models_support_images() {
         let all_models = models::models();
-        let pixtral = all_models.get("pixtral-large-latest").expect("pixtral should exist");
+        let pixtral = all_models
+            .get("pixtral-large-latest")
+            .expect("pixtral should exist");
         assert!(pixtral.supports_images.unwrap_or(false));
-        let magistral = all_models.get("magistral-medium-latest").expect("magistral should exist");
+        let magistral = all_models
+            .get("magistral-medium-latest")
+            .expect("magistral should exist");
         assert!(magistral.supports_images.unwrap_or(false));
     }
 
     #[test]
     fn test_model_count() {
         let all_models = models::models();
-        assert!(all_models.len() >= 9, "Expected at least 9 models, got {}", all_models.len());
+        assert!(
+            all_models.len() >= 9,
+            "Expected at least 9 models, got {}",
+            all_models.len()
+        );
     }
 }

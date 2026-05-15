@@ -1,6 +1,5 @@
 /// RefreshTimer - A utility for executing a callback with configurable retry behavior.
 /// Mirrors packages/cloud/src/RefreshTimer.ts
-
 use std::time::Duration;
 use tokio::time::sleep;
 
@@ -74,7 +73,8 @@ impl RefreshTimer {
             self.attempt_count += 1;
             let delay = Duration::from_millis(self.current_backoff_ms);
             // Exponential backoff: double the backoff, capped at max
-            self.current_backoff_ms = (self.current_backoff_ms * 2).min(self.options.max_backoff_ms);
+            self.current_backoff_ms =
+                (self.current_backoff_ms * 2).min(self.options.max_backoff_ms);
             delay
         }
     }

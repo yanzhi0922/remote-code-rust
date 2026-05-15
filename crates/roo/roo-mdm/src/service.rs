@@ -34,7 +34,11 @@ impl MdmService {
 
         let mut violations = Vec::new();
 
-        if config.allowed_providers.as_ref().is_some_and(|p| p.is_empty()) {
+        if config
+            .allowed_providers
+            .as_ref()
+            .is_some_and(|p| p.is_empty())
+        {
             violations.push("No providers are allowed".to_string());
         }
 
@@ -59,9 +63,7 @@ impl MdmService {
             .as_ref()
             .and_then(|c| c.allowed_providers.as_ref())
             .map_or(true, |providers| {
-                providers
-                    .iter()
-                    .any(|p| p.eq_ignore_ascii_case(provider))
+                providers.iter().any(|p| p.eq_ignore_ascii_case(provider))
             })
     }
 
@@ -133,10 +135,7 @@ mod tests {
     fn test_load_config() {
         let mut svc = MdmService::new(MdmPlatform::Windows);
         svc.load_config(sample_config());
-        assert_eq!(
-            Some("Enterprise policy"),
-            svc.get_custom_instructions()
-        );
+        assert_eq!(Some("Enterprise policy"), svc.get_custom_instructions());
     }
 
     #[test]
@@ -289,9 +288,6 @@ mod tests {
         });
         let result = svc.is_compliant();
         assert!(!result.is_compliant);
-        assert!(result
-            .violations
-            .iter()
-            .any(|v| v.contains("No providers")));
+        assert!(result.violations.iter().any(|v| v.contains("No providers")));
     }
 }

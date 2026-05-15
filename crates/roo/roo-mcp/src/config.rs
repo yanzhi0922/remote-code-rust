@@ -9,16 +9,12 @@ use crate::error::McpError;
 
 // Error messages matching TS source exactly
 const TYPE_ERROR_MSG: &str = "Server type must be 'stdio', 'sse', or 'streamable-http'";
-const STDIO_FIELDS_ERROR_MSG: &str =
-    "For 'stdio' type servers, you must provide a 'command' field and can optionally include 'args' and 'env'";
+const STDIO_FIELDS_ERROR_MSG: &str = "For 'stdio' type servers, you must provide a 'command' field and can optionally include 'args' and 'env'";
 const SSE_FIELDS_ERROR_MSG: &str =
     "For 'sse' type servers, you must provide a 'url' field and can optionally include 'headers'";
-const STREAMABLE_HTTP_FIELDS_ERROR_MSG: &str =
-    "For 'streamable-http' type servers, you must provide a 'url' field and can optionally include 'headers'";
-const MIXED_FIELDS_ERROR_MSG: &str =
-    "Cannot mix 'stdio' and ('sse' or 'streamable-http') fields. For 'stdio' use 'command', 'args', and 'env'. For 'sse'/'streamable-http' use 'url' and 'headers'";
-const MISSING_FIELDS_ERROR_MSG: &str =
-    "Server configuration must include either 'command' (for stdio) or 'url' (for sse/streamable-http) and a corresponding 'type' if 'url' is used.";
+const STREAMABLE_HTTP_FIELDS_ERROR_MSG: &str = "For 'streamable-http' type servers, you must provide a 'url' field and can optionally include 'headers'";
+const MIXED_FIELDS_ERROR_MSG: &str = "Cannot mix 'stdio' and ('sse' or 'streamable-http') fields. For 'stdio' use 'command', 'args', and 'env'. For 'sse'/'streamable-http' use 'url' and 'headers'";
+const MISSING_FIELDS_ERROR_MSG: &str = "Server configuration must include either 'command' (for stdio) or 'url' (for sse/streamable-http) and a corresponding 'type' if 'url' is used.";
 
 /// The type of MCP server transport.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -151,9 +147,7 @@ impl ValidatedServerConfig {
         match self {
             ValidatedServerConfig::Stdio { watch_paths, .. }
             | ValidatedServerConfig::Sse { watch_paths, .. }
-            | ValidatedServerConfig::StreamableHttp { watch_paths, .. } => {
-                watch_paths.as_deref()
-            }
+            | ValidatedServerConfig::StreamableHttp { watch_paths, .. } => watch_paths.as_deref(),
         }
     }
 }
@@ -168,9 +162,9 @@ pub fn validate_server_config(
     config: &serde_json::Value,
     _server_name: Option<&str>,
 ) -> Result<ValidatedServerConfig, McpError> {
-    let obj = config
-        .as_object()
-        .ok_or_else(|| McpError::ConfigError("Server configuration must be a JSON object".to_string()))?;
+    let obj = config.as_object().ok_or_else(|| {
+        McpError::ConfigError("Server configuration must be a JSON object".to_string())
+    })?;
 
     let has_stdio_fields = obj.contains_key("command");
     let has_url_fields = obj.contains_key("url");
@@ -220,16 +214,11 @@ pub fn validate_server_config(
 
     // If neither command nor url is present
     if !has_stdio_fields && !has_url_fields {
-        return Err(McpError::ConfigError(
-            MISSING_FIELDS_ERROR_MSG.to_string(),
-        ));
+        return Err(McpError::ConfigError(MISSING_FIELDS_ERROR_MSG.to_string()));
     }
 
     // Now build the validated config based on the effective type
-    let timeout = obj
-        .get("timeout")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(60);
+    let timeout = obj.get("timeout").and_then(|v| v.as_u64()).unwrap_or(60);
     let timeout = timeout.clamp(1, 3600);
 
     let disabled = obj
@@ -294,7 +283,10 @@ pub fn validate_server_config(
                 })
                 .unwrap_or_default();
 
-            let cwd = obj.get("cwd").and_then(|v| v.as_str()).map(|s| s.to_string());
+            let cwd = obj
+                .get("cwd")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
 
             Ok(ValidatedServerConfig::Stdio {
                 command: command.to_string(),
@@ -315,9 +307,8 @@ pub fn validate_server_config(
                 .ok_or_else(|| McpError::ConfigError(SSE_FIELDS_ERROR_MSG.to_string()))?;
 
             // Validate URL format
-            url::Url::parse(url).map_err(|_| {
-                McpError::ConfigError("URL must be a valid URL format".to_string())
-            })?;
+            url::Url::parse(url)
+                .map_err(|_| McpError::ConfigError("URL must be a valid URL format".to_string()))?;
 
             let headers = obj
                 .get("headers")
@@ -340,17 +331,13 @@ pub fn validate_server_config(
             })
         }
         Some("streamable-http") => {
-            let url = obj
-                .get("url")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| {
-                    McpError::ConfigError(STREAMABLE_HTTP_FIELDS_ERROR_MSG.to_string())
-                })?;
+            let url = obj.get("url").and_then(|v| v.as_str()).ok_or_else(|| {
+                McpError::ConfigError(STREAMABLE_HTTP_FIELDS_ERROR_MSG.to_string())
+            })?;
 
             // Validate URL format
-            url::Url::parse(url).map_err(|_| {
-                McpError::ConfigError("URL must be a valid URL format".to_string())
-            })?;
+            url::Url::parse(url)
+                .map_err(|_| McpError::ConfigError("URL must be a valid URL format".to_string()))?;
 
             let headers = obj
                 .get("headers")
@@ -372,9 +359,7 @@ pub fn validate_server_config(
                 watch_paths,
             })
         }
-        _ => Err(McpError::ConfigError(
-            MISSING_FIELDS_ERROR_MSG.to_string(),
-        )),
+        _ => Err(McpError::ConfigError(MISSING_FIELDS_ERROR_MSG.to_string())),
     }
 }
 
@@ -403,7 +388,14 @@ mod tests {
         });
         let result = validate(config).unwrap();
         assert!(matches!(result, ValidatedServerConfig::Stdio { .. }));
-        if let ValidatedServerConfig::Stdio { command, args, env, timeout, .. } = result {
+        if let ValidatedServerConfig::Stdio {
+            command,
+            args,
+            env,
+            timeout,
+            ..
+        } = result
+        {
             assert_eq!(command, "node");
             assert!(args.is_empty());
             assert!(env.is_empty());
@@ -540,7 +532,10 @@ mod tests {
             "url": "http://localhost:3000"
         });
         let err = validate(config).unwrap_err();
-        assert!(err.to_string().contains("must be 'stdio', 'sse', or 'streamable-http'"));
+        assert!(
+            err.to_string()
+                .contains("must be 'stdio', 'sse', or 'streamable-http'")
+        );
     }
 
     #[test]

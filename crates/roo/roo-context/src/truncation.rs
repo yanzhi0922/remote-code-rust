@@ -1,4 +1,4 @@
-﻿//! Sliding window truncation.
+//! Sliding window truncation.
 //!
 //! Truncates a conversation by tagging messages as hidden instead of removing them,
 //! implementing non-destructive sliding window truncation that allows messages to be
@@ -81,8 +81,11 @@ pub fn truncate_conversation(
     }
 
     // Get the indices of visible messages to truncate (skip first visible, take next N)
-    let indices_to_truncate: std::collections::HashSet<usize> =
-        visible_indices[1..messages_to_remove + 1].iter().copied().collect();
+    let indices_to_truncate: std::collections::HashSet<usize> = visible_indices
+        [1..messages_to_remove + 1]
+        .iter()
+        .copied()
+        .collect();
 
     // Tag messages that are being "truncated" (hidden from API calls)
     let mut tagged_messages: Vec<ApiMessage> = messages
@@ -132,7 +135,7 @@ pub fn truncate_conversation(
         condense_parent: None,
         is_summary: None,
         condense_id: None,
-            reasoning_details: None,
+        reasoning_details: None,
     };
 
     // Insert marker at the boundary position

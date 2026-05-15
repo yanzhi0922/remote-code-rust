@@ -3,8 +3,10 @@
 //! Derived from `packages/types/src/providers/openai.ts` and
 //! `packages/types/src/providers/openai-codex.ts`.
 
+use roo_types::model::{
+    ModelInfo, ModelTier, ReasoningEffortExtended, ServiceTier, SupportsReasoningEffort,
+};
 use std::collections::HashMap;
-use roo_types::model::{ModelInfo, ModelTier, ReasoningEffortExtended, ServiceTier, SupportsReasoningEffort};
 
 // ---------------------------------------------------------------------------
 // OpenAI Native models
@@ -60,7 +62,9 @@ pub fn openai_native_models() -> HashMap<String, ModelInfo> {
             context_window: 1_050_000,
             supports_images: Some(true),
             supports_prompt_cache: true,
-            supports_reasoning_effort: Some(SupportsReasoningEffort::from(["none", "low", "medium", "high", "xhigh"])),
+            supports_reasoning_effort: Some(SupportsReasoningEffort::from([
+                "none", "low", "medium", "high", "xhigh",
+            ])),
             reasoning_effort: Some(ReasoningEffortExtended::None),
             input_price: Some(2.5),
             output_price: Some(15.0),
@@ -99,7 +103,9 @@ pub fn openai_native_models() -> HashMap<String, ModelInfo> {
             context_window: 400_000,
             supports_images: Some(true),
             supports_prompt_cache: true,
-            supports_reasoning_effort: Some(SupportsReasoningEffort::from(["none", "low", "medium", "high", "xhigh"])),
+            supports_reasoning_effort: Some(SupportsReasoningEffort::from([
+                "none", "low", "medium", "high", "xhigh",
+            ])),
             reasoning_effort: Some(ReasoningEffortExtended::None),
             input_price: Some(0.75),
             output_price: Some(4.5),
@@ -126,7 +132,10 @@ pub fn openai_native_models() -> HashMap<String, ModelInfo> {
                     cache_writes_price: None,
                 },
             ]),
-            description: Some("GPT-5.4 Mini: A faster, lower-cost GPT-5.4 model for coding and agentic workflows".to_string()),
+            description: Some(
+                "GPT-5.4 Mini: A faster, lower-cost GPT-5.4 model for coding and agentic workflows"
+                    .to_string(),
+            ),
             ..Default::default()
         },
     );
@@ -138,7 +147,9 @@ pub fn openai_native_models() -> HashMap<String, ModelInfo> {
             context_window: 400_000,
             supports_images: Some(true),
             supports_prompt_cache: true,
-            supports_reasoning_effort: Some(SupportsReasoningEffort::from(["none", "low", "medium", "high", "xhigh"])),
+            supports_reasoning_effort: Some(SupportsReasoningEffort::from([
+                "none", "low", "medium", "high", "xhigh",
+            ])),
             reasoning_effort: Some(ReasoningEffortExtended::None),
             input_price: Some(0.2),
             output_price: Some(1.25),
@@ -155,7 +166,10 @@ pub fn openai_native_models() -> HashMap<String, ModelInfo> {
                 cache_reads_price: Some(0.01),
                 cache_writes_price: None,
             }]),
-            description: Some("GPT-5.4 Nano: The smallest GPT-5.4 model for high-volume, low-latency tasks".to_string()),
+            description: Some(
+                "GPT-5.4 Nano: The smallest GPT-5.4 model for high-volume, low-latency tasks"
+                    .to_string(),
+            ),
             ..Default::default()
         },
     );
@@ -168,7 +182,9 @@ pub fn openai_native_models() -> HashMap<String, ModelInfo> {
             supports_images: Some(true),
             supports_prompt_cache: true,
             prompt_cache_retention: Some("24h".to_string()),
-            supports_reasoning_effort: Some(SupportsReasoningEffort::from(["none", "low", "medium", "high", "xhigh"])),
+            supports_reasoning_effort: Some(SupportsReasoningEffort::from([
+                "none", "low", "medium", "high", "xhigh",
+            ])),
             reasoning_effort: Some(ReasoningEffortExtended::Medium),
             input_price: Some(1.75),
             output_price: Some(14.0),
@@ -195,7 +211,10 @@ pub fn openai_native_models() -> HashMap<String, ModelInfo> {
                     cache_writes_price: None,
                 },
             ]),
-            description: Some("GPT-5.2: Our flagship model for coding and agentic tasks across industries".to_string()),
+            description: Some(
+                "GPT-5.2: Our flagship model for coding and agentic tasks across industries"
+                    .to_string(),
+            ),
             ..Default::default()
         },
     );
@@ -270,7 +289,9 @@ pub fn openai_native_models() -> HashMap<String, ModelInfo> {
             cache_reads_price: Some(0.175),
             included_tools: Some(vec!["apply_patch".to_string()]),
             excluded_tools: Some(vec!["apply_diff".to_string(), "write_to_file".to_string()]),
-            description: Some("GPT-5.2 Chat: Optimized for conversational AI and chat use cases".to_string()),
+            description: Some(
+                "GPT-5.2 Chat: Optimized for conversational AI and chat use cases".to_string(),
+            ),
             ..Default::default()
         },
     );
@@ -287,7 +308,9 @@ pub fn openai_native_models() -> HashMap<String, ModelInfo> {
             cache_reads_price: Some(0.175),
             included_tools: Some(vec!["apply_patch".to_string()]),
             excluded_tools: Some(vec!["apply_diff".to_string(), "write_to_file".to_string()]),
-            description: Some("GPT-5.3 Chat: Optimized for conversational AI and chat use cases".to_string()),
+            description: Some(
+                "GPT-5.3 Chat: Optimized for conversational AI and chat use cases".to_string(),
+            ),
             ..Default::default()
         },
     );
@@ -300,7 +323,9 @@ pub fn openai_native_models() -> HashMap<String, ModelInfo> {
             supports_images: Some(true),
             supports_prompt_cache: true,
             prompt_cache_retention: Some("24h".to_string()),
-            supports_reasoning_effort: Some(SupportsReasoningEffort::from(["none", "low", "medium", "high"])),
+            supports_reasoning_effort: Some(SupportsReasoningEffort::from([
+                "none", "low", "medium", "high",
+            ])),
             reasoning_effort: Some(ReasoningEffortExtended::Medium),
             input_price: Some(1.25),
             output_price: Some(10.0),
@@ -327,7 +352,9 @@ pub fn openai_native_models() -> HashMap<String, ModelInfo> {
                     cache_writes_price: None,
                 },
             ]),
-            description: Some("GPT-5.1: The best model for coding and agentic tasks across domains".to_string()),
+            description: Some(
+                "GPT-5.1: The best model for coding and agentic tasks across domains".to_string(),
+            ),
             ..Default::default()
         },
     );
@@ -340,7 +367,9 @@ pub fn openai_native_models() -> HashMap<String, ModelInfo> {
             supports_images: Some(true),
             supports_prompt_cache: true,
             prompt_cache_retention: Some("24h".to_string()),
-            supports_reasoning_effort: Some(SupportsReasoningEffort::from(["low", "medium", "high"])),
+            supports_reasoning_effort: Some(SupportsReasoningEffort::from([
+                "low", "medium", "high",
+            ])),
             reasoning_effort: Some(ReasoningEffortExtended::Medium),
             input_price: Some(1.25),
             output_price: Some(10.0),
@@ -356,7 +385,10 @@ pub fn openai_native_models() -> HashMap<String, ModelInfo> {
                 cache_reads_price: Some(0.25),
                 cache_writes_price: None,
             }]),
-            description: Some("GPT-5.1 Codex: A version of GPT-5.1 optimized for agentic coding in Codex".to_string()),
+            description: Some(
+                "GPT-5.1 Codex: A version of GPT-5.1 optimized for agentic coding in Codex"
+                    .to_string(),
+            ),
             ..Default::default()
         },
     );
@@ -369,7 +401,9 @@ pub fn openai_native_models() -> HashMap<String, ModelInfo> {
             supports_images: Some(true),
             supports_prompt_cache: true,
             prompt_cache_retention: Some("24h".to_string()),
-            supports_reasoning_effort: Some(SupportsReasoningEffort::from(["low", "medium", "high"])),
+            supports_reasoning_effort: Some(SupportsReasoningEffort::from([
+                "low", "medium", "high",
+            ])),
             reasoning_effort: Some(ReasoningEffortExtended::Medium),
             input_price: Some(0.25),
             output_price: Some(2.0),
@@ -377,7 +411,10 @@ pub fn openai_native_models() -> HashMap<String, ModelInfo> {
             supports_temperature: Some(false),
             included_tools: Some(vec!["apply_patch".to_string()]),
             excluded_tools: Some(vec!["apply_diff".to_string(), "write_to_file".to_string()]),
-            description: Some("GPT-5.1 Codex mini: A version of GPT-5.1 optimized for agentic coding in Codex".to_string()),
+            description: Some(
+                "GPT-5.1 Codex mini: A version of GPT-5.1 optimized for agentic coding in Codex"
+                    .to_string(),
+            ),
             ..Default::default()
         },
     );
@@ -389,7 +426,9 @@ pub fn openai_native_models() -> HashMap<String, ModelInfo> {
             context_window: 400_000,
             supports_images: Some(true),
             supports_prompt_cache: true,
-            supports_reasoning_effort: Some(SupportsReasoningEffort::from(["minimal", "low", "medium", "high"])),
+            supports_reasoning_effort: Some(SupportsReasoningEffort::from([
+                "minimal", "low", "medium", "high",
+            ])),
             reasoning_effort: Some(ReasoningEffortExtended::Medium),
             input_price: Some(1.25),
             output_price: Some(10.0),
@@ -416,7 +455,9 @@ pub fn openai_native_models() -> HashMap<String, ModelInfo> {
                     cache_writes_price: None,
                 },
             ]),
-            description: Some("GPT-5: The best model for coding and agentic tasks across domains".to_string()),
+            description: Some(
+                "GPT-5: The best model for coding and agentic tasks across domains".to_string(),
+            ),
             ..Default::default()
         },
     );
@@ -428,7 +469,9 @@ pub fn openai_native_models() -> HashMap<String, ModelInfo> {
             context_window: 400_000,
             supports_images: Some(true),
             supports_prompt_cache: true,
-            supports_reasoning_effort: Some(SupportsReasoningEffort::from(["minimal", "low", "medium", "high"])),
+            supports_reasoning_effort: Some(SupportsReasoningEffort::from([
+                "minimal", "low", "medium", "high",
+            ])),
             reasoning_effort: Some(ReasoningEffortExtended::Medium),
             input_price: Some(0.25),
             output_price: Some(2.0),
@@ -455,7 +498,10 @@ pub fn openai_native_models() -> HashMap<String, ModelInfo> {
                     cache_writes_price: None,
                 },
             ]),
-            description: Some("GPT-5 Mini: A faster, more cost-efficient version of GPT-5 for well-defined tasks".to_string()),
+            description: Some(
+                "GPT-5 Mini: A faster, more cost-efficient version of GPT-5 for well-defined tasks"
+                    .to_string(),
+            ),
             ..Default::default()
         },
     );
@@ -467,7 +513,9 @@ pub fn openai_native_models() -> HashMap<String, ModelInfo> {
             context_window: 400_000,
             supports_images: Some(true),
             supports_prompt_cache: true,
-            supports_reasoning_effort: Some(SupportsReasoningEffort::from(["low", "medium", "high"])),
+            supports_reasoning_effort: Some(SupportsReasoningEffort::from([
+                "low", "medium", "high",
+            ])),
             reasoning_effort: Some(ReasoningEffortExtended::Medium),
             input_price: Some(1.25),
             output_price: Some(10.0),
@@ -483,7 +531,9 @@ pub fn openai_native_models() -> HashMap<String, ModelInfo> {
                 cache_reads_price: Some(0.25),
                 cache_writes_price: None,
             }]),
-            description: Some("GPT-5-Codex: A version of GPT-5 optimized for agentic coding in Codex".to_string()),
+            description: Some(
+                "GPT-5-Codex: A version of GPT-5 optimized for agentic coding in Codex".to_string(),
+            ),
             ..Default::default()
         },
     );
@@ -495,7 +545,9 @@ pub fn openai_native_models() -> HashMap<String, ModelInfo> {
             context_window: 400_000,
             supports_images: Some(true),
             supports_prompt_cache: true,
-            supports_reasoning_effort: Some(SupportsReasoningEffort::from(["minimal", "low", "medium", "high"])),
+            supports_reasoning_effort: Some(SupportsReasoningEffort::from([
+                "minimal", "low", "medium", "high",
+            ])),
             reasoning_effort: Some(ReasoningEffortExtended::Medium),
             input_price: Some(0.05),
             output_price: Some(0.4),
@@ -512,7 +564,9 @@ pub fn openai_native_models() -> HashMap<String, ModelInfo> {
                 cache_reads_price: Some(0.0025),
                 cache_writes_price: None,
             }]),
-            description: Some("GPT-5 Nano: Fastest, most cost-efficient version of GPT-5".to_string()),
+            description: Some(
+                "GPT-5 Nano: Fastest, most cost-efficient version of GPT-5".to_string(),
+            ),
             ..Default::default()
         },
     );
@@ -529,7 +583,9 @@ pub fn openai_native_models() -> HashMap<String, ModelInfo> {
             cache_reads_price: Some(0.125),
             included_tools: Some(vec!["apply_patch".to_string()]),
             excluded_tools: Some(vec!["apply_diff".to_string(), "write_to_file".to_string()]),
-            description: Some("GPT-5 Chat: Optimized for conversational AI and non-reasoning tasks".to_string()),
+            description: Some(
+                "GPT-5 Chat: Optimized for conversational AI and non-reasoning tasks".to_string(),
+            ),
             ..Default::default()
         },
     );
@@ -623,7 +679,9 @@ pub fn openai_native_models() -> HashMap<String, ModelInfo> {
             input_price: Some(2.0),
             output_price: Some(8.0),
             cache_reads_price: Some(0.5),
-            supports_reasoning_effort: Some(SupportsReasoningEffort::from(["low", "medium", "high"])),
+            supports_reasoning_effort: Some(SupportsReasoningEffort::from([
+                "low", "medium", "high",
+            ])),
             reasoning_effort: Some(ReasoningEffortExtended::Medium),
             supports_temperature: Some(false),
             tiers: Some(vec![
@@ -690,7 +748,9 @@ pub fn openai_native_models() -> HashMap<String, ModelInfo> {
             input_price: Some(1.1),
             output_price: Some(4.4),
             cache_reads_price: Some(0.275),
-            supports_reasoning_effort: Some(SupportsReasoningEffort::from(["low", "medium", "high"])),
+            supports_reasoning_effort: Some(SupportsReasoningEffort::from([
+                "low", "medium", "high",
+            ])),
             reasoning_effort: Some(ReasoningEffortExtended::Medium),
             supports_temperature: Some(false),
             tiers: Some(vec![
@@ -757,7 +817,9 @@ pub fn openai_native_models() -> HashMap<String, ModelInfo> {
             input_price: Some(1.1),
             output_price: Some(4.4),
             cache_reads_price: Some(0.55),
-            supports_reasoning_effort: Some(SupportsReasoningEffort::from(["low", "medium", "high"])),
+            supports_reasoning_effort: Some(SupportsReasoningEffort::from([
+                "low", "medium", "high",
+            ])),
             reasoning_effort: Some(ReasoningEffortExtended::Medium),
             supports_temperature: Some(false),
             ..Default::default()
@@ -919,7 +981,9 @@ pub fn openai_native_models() -> HashMap<String, ModelInfo> {
             context_window: 400_000,
             supports_images: Some(true),
             supports_prompt_cache: true,
-            supports_reasoning_effort: Some(SupportsReasoningEffort::from(["minimal", "low", "medium", "high"])),
+            supports_reasoning_effort: Some(SupportsReasoningEffort::from([
+                "minimal", "low", "medium", "high",
+            ])),
             reasoning_effort: Some(ReasoningEffortExtended::Medium),
             input_price: Some(1.25),
             output_price: Some(10.0),
@@ -946,7 +1010,9 @@ pub fn openai_native_models() -> HashMap<String, ModelInfo> {
                     cache_writes_price: None,
                 },
             ]),
-            description: Some("GPT-5: The best model for coding and agentic tasks across domains".to_string()),
+            description: Some(
+                "GPT-5: The best model for coding and agentic tasks across domains".to_string(),
+            ),
             ..Default::default()
         },
     );
@@ -958,7 +1024,9 @@ pub fn openai_native_models() -> HashMap<String, ModelInfo> {
             context_window: 400_000,
             supports_images: Some(true),
             supports_prompt_cache: true,
-            supports_reasoning_effort: Some(SupportsReasoningEffort::from(["minimal", "low", "medium", "high"])),
+            supports_reasoning_effort: Some(SupportsReasoningEffort::from([
+                "minimal", "low", "medium", "high",
+            ])),
             reasoning_effort: Some(ReasoningEffortExtended::Medium),
             input_price: Some(0.25),
             output_price: Some(2.0),
@@ -985,7 +1053,10 @@ pub fn openai_native_models() -> HashMap<String, ModelInfo> {
                     cache_writes_price: None,
                 },
             ]),
-            description: Some("GPT-5 Mini: A faster, more cost-efficient version of GPT-5 for well-defined tasks".to_string()),
+            description: Some(
+                "GPT-5 Mini: A faster, more cost-efficient version of GPT-5 for well-defined tasks"
+                    .to_string(),
+            ),
             ..Default::default()
         },
     );
@@ -997,7 +1068,9 @@ pub fn openai_native_models() -> HashMap<String, ModelInfo> {
             context_window: 400_000,
             supports_images: Some(true),
             supports_prompt_cache: true,
-            supports_reasoning_effort: Some(SupportsReasoningEffort::from(["minimal", "low", "medium", "high"])),
+            supports_reasoning_effort: Some(SupportsReasoningEffort::from([
+                "minimal", "low", "medium", "high",
+            ])),
             reasoning_effort: Some(ReasoningEffortExtended::Medium),
             input_price: Some(0.05),
             output_price: Some(0.4),
@@ -1014,7 +1087,9 @@ pub fn openai_native_models() -> HashMap<String, ModelInfo> {
                 cache_reads_price: Some(0.0025),
                 cache_writes_price: None,
             }]),
-            description: Some("GPT-5 Nano: Fastest, most cost-efficient version of GPT-5".to_string()),
+            description: Some(
+                "GPT-5 Nano: Fastest, most cost-efficient version of GPT-5".to_string(),
+            ),
             ..Default::default()
         },
     );
@@ -1044,14 +1119,19 @@ pub fn openai_codex_models() -> HashMap<String, ModelInfo> {
             context_window: 400_000,
             supports_images: Some(true),
             supports_prompt_cache: true,
-            supports_reasoning_effort: Some(SupportsReasoningEffort::from(["low", "medium", "high", "xhigh"])),
+            supports_reasoning_effort: Some(SupportsReasoningEffort::from([
+                "low", "medium", "high", "xhigh",
+            ])),
             reasoning_effort: Some(ReasoningEffortExtended::Xhigh),
             input_price: Some(0.0),
             output_price: Some(0.0),
             supports_temperature: Some(false),
             included_tools: Some(vec!["apply_patch".to_string()]),
             excluded_tools: Some(vec!["apply_diff".to_string(), "write_to_file".to_string()]),
-            description: Some("GPT-5.1 Codex Max: Maximum capability coding model via ChatGPT subscription".to_string()),
+            description: Some(
+                "GPT-5.1 Codex Max: Maximum capability coding model via ChatGPT subscription"
+                    .to_string(),
+            ),
             ..Default::default()
         },
     );
@@ -1063,14 +1143,19 @@ pub fn openai_codex_models() -> HashMap<String, ModelInfo> {
             context_window: 400_000,
             supports_images: Some(true),
             supports_prompt_cache: true,
-            supports_reasoning_effort: Some(SupportsReasoningEffort::from(["low", "medium", "high", "xhigh"])),
+            supports_reasoning_effort: Some(SupportsReasoningEffort::from([
+                "low", "medium", "high", "xhigh",
+            ])),
             reasoning_effort: Some(ReasoningEffortExtended::Medium),
             input_price: Some(0.0),
             output_price: Some(0.0),
             supports_temperature: Some(false),
             included_tools: Some(vec!["apply_patch".to_string()]),
             excluded_tools: Some(vec!["apply_diff".to_string(), "write_to_file".to_string()]),
-            description: Some("GPT-5.3 Codex: OpenAI's flagship coding model via ChatGPT subscription".to_string()),
+            description: Some(
+                "GPT-5.3 Codex: OpenAI's flagship coding model via ChatGPT subscription"
+                    .to_string(),
+            ),
             ..Default::default()
         },
     );
@@ -1082,14 +1167,19 @@ pub fn openai_codex_models() -> HashMap<String, ModelInfo> {
             context_window: 128_000,
             supports_images: Some(false),
             supports_prompt_cache: true,
-            supports_reasoning_effort: Some(SupportsReasoningEffort::from(["low", "medium", "high", "xhigh"])),
+            supports_reasoning_effort: Some(SupportsReasoningEffort::from([
+                "low", "medium", "high", "xhigh",
+            ])),
             reasoning_effort: Some(ReasoningEffortExtended::Medium),
             input_price: Some(0.0),
             output_price: Some(0.0),
             supports_temperature: Some(false),
             included_tools: Some(vec!["apply_patch".to_string()]),
             excluded_tools: Some(vec!["apply_diff".to_string(), "write_to_file".to_string()]),
-            description: Some("GPT-5.3 Codex Spark: Fast, text-only coding model via ChatGPT subscription".to_string()),
+            description: Some(
+                "GPT-5.3 Codex Spark: Fast, text-only coding model via ChatGPT subscription"
+                    .to_string(),
+            ),
             ..Default::default()
         },
     );
@@ -1101,14 +1191,19 @@ pub fn openai_codex_models() -> HashMap<String, ModelInfo> {
             context_window: 400_000,
             supports_images: Some(true),
             supports_prompt_cache: true,
-            supports_reasoning_effort: Some(SupportsReasoningEffort::from(["low", "medium", "high", "xhigh"])),
+            supports_reasoning_effort: Some(SupportsReasoningEffort::from([
+                "low", "medium", "high", "xhigh",
+            ])),
             reasoning_effort: Some(ReasoningEffortExtended::Medium),
             input_price: Some(0.0),
             output_price: Some(0.0),
             supports_temperature: Some(false),
             included_tools: Some(vec!["apply_patch".to_string()]),
             excluded_tools: Some(vec!["apply_diff".to_string(), "write_to_file".to_string()]),
-            description: Some("GPT-5.2 Codex: OpenAI's flagship coding model via ChatGPT subscription".to_string()),
+            description: Some(
+                "GPT-5.2 Codex: OpenAI's flagship coding model via ChatGPT subscription"
+                    .to_string(),
+            ),
             ..Default::default()
         },
     );
@@ -1120,14 +1215,19 @@ pub fn openai_codex_models() -> HashMap<String, ModelInfo> {
             context_window: 400_000,
             supports_images: Some(true),
             supports_prompt_cache: true,
-            supports_reasoning_effort: Some(SupportsReasoningEffort::from(["low", "medium", "high"])),
+            supports_reasoning_effort: Some(SupportsReasoningEffort::from([
+                "low", "medium", "high",
+            ])),
             reasoning_effort: Some(ReasoningEffortExtended::Medium),
             input_price: Some(0.0),
             output_price: Some(0.0),
             supports_temperature: Some(false),
             included_tools: Some(vec!["apply_patch".to_string()]),
             excluded_tools: Some(vec!["apply_diff".to_string(), "write_to_file".to_string()]),
-            description: Some("GPT-5.1 Codex: GPT-5.1 optimized for agentic coding via ChatGPT subscription".to_string()),
+            description: Some(
+                "GPT-5.1 Codex: GPT-5.1 optimized for agentic coding via ChatGPT subscription"
+                    .to_string(),
+            ),
             ..Default::default()
         },
     );
@@ -1139,14 +1239,19 @@ pub fn openai_codex_models() -> HashMap<String, ModelInfo> {
             context_window: 400_000,
             supports_images: Some(true),
             supports_prompt_cache: true,
-            supports_reasoning_effort: Some(SupportsReasoningEffort::from(["low", "medium", "high"])),
+            supports_reasoning_effort: Some(SupportsReasoningEffort::from([
+                "low", "medium", "high",
+            ])),
             reasoning_effort: Some(ReasoningEffortExtended::Medium),
             input_price: Some(0.0),
             output_price: Some(0.0),
             supports_temperature: Some(false),
             included_tools: Some(vec!["apply_patch".to_string()]),
             excluded_tools: Some(vec!["apply_diff".to_string(), "write_to_file".to_string()]),
-            description: Some("GPT-5.1 Codex Mini: Faster version for coding tasks via ChatGPT subscription".to_string()),
+            description: Some(
+                "GPT-5.1 Codex Mini: Faster version for coding tasks via ChatGPT subscription"
+                    .to_string(),
+            ),
             ..Default::default()
         },
     );
@@ -1158,14 +1263,19 @@ pub fn openai_codex_models() -> HashMap<String, ModelInfo> {
             context_window: 400_000,
             supports_images: Some(true),
             supports_prompt_cache: true,
-            supports_reasoning_effort: Some(SupportsReasoningEffort::from(["low", "medium", "high"])),
+            supports_reasoning_effort: Some(SupportsReasoningEffort::from([
+                "low", "medium", "high",
+            ])),
             reasoning_effort: Some(ReasoningEffortExtended::Medium),
             input_price: Some(0.0),
             output_price: Some(0.0),
             supports_temperature: Some(false),
             included_tools: Some(vec!["apply_patch".to_string()]),
             excluded_tools: Some(vec!["apply_diff".to_string(), "write_to_file".to_string()]),
-            description: Some("GPT-5 Codex: GPT-5 optimized for agentic coding via ChatGPT subscription".to_string()),
+            description: Some(
+                "GPT-5 Codex: GPT-5 optimized for agentic coding via ChatGPT subscription"
+                    .to_string(),
+            ),
             ..Default::default()
         },
     );
@@ -1177,14 +1287,18 @@ pub fn openai_codex_models() -> HashMap<String, ModelInfo> {
             context_window: 400_000,
             supports_images: Some(true),
             supports_prompt_cache: true,
-            supports_reasoning_effort: Some(SupportsReasoningEffort::from(["low", "medium", "high"])),
+            supports_reasoning_effort: Some(SupportsReasoningEffort::from([
+                "low", "medium", "high",
+            ])),
             reasoning_effort: Some(ReasoningEffortExtended::Medium),
             input_price: Some(0.0),
             output_price: Some(0.0),
             supports_temperature: Some(false),
             included_tools: Some(vec!["apply_patch".to_string()]),
             excluded_tools: Some(vec!["apply_diff".to_string(), "write_to_file".to_string()]),
-            description: Some("GPT-5 Codex Mini: Faster coding model via ChatGPT subscription".to_string()),
+            description: Some(
+                "GPT-5 Codex Mini: Faster coding model via ChatGPT subscription".to_string(),
+            ),
             ..Default::default()
         },
     );
@@ -1196,7 +1310,9 @@ pub fn openai_codex_models() -> HashMap<String, ModelInfo> {
             context_window: 400_000,
             supports_images: Some(true),
             supports_prompt_cache: true,
-            supports_reasoning_effort: Some(SupportsReasoningEffort::from(["none", "low", "medium", "high"])),
+            supports_reasoning_effort: Some(SupportsReasoningEffort::from([
+                "none", "low", "medium", "high",
+            ])),
             reasoning_effort: Some(ReasoningEffortExtended::Medium),
             input_price: Some(0.0),
             output_price: Some(0.0),
@@ -1204,7 +1320,9 @@ pub fn openai_codex_models() -> HashMap<String, ModelInfo> {
             supports_temperature: Some(false),
             included_tools: Some(vec!["apply_patch".to_string()]),
             excluded_tools: Some(vec!["apply_diff".to_string(), "write_to_file".to_string()]),
-            description: Some("GPT-5.1: General GPT-5.1 model via ChatGPT subscription".to_string()),
+            description: Some(
+                "GPT-5.1: General GPT-5.1 model via ChatGPT subscription".to_string(),
+            ),
             ..Default::default()
         },
     );
@@ -1216,7 +1334,9 @@ pub fn openai_codex_models() -> HashMap<String, ModelInfo> {
             context_window: 400_000,
             supports_images: Some(true),
             supports_prompt_cache: true,
-            supports_reasoning_effort: Some(SupportsReasoningEffort::from(["minimal", "low", "medium", "high"])),
+            supports_reasoning_effort: Some(SupportsReasoningEffort::from([
+                "minimal", "low", "medium", "high",
+            ])),
             reasoning_effort: Some(ReasoningEffortExtended::Medium),
             input_price: Some(0.0),
             output_price: Some(0.0),
@@ -1236,7 +1356,9 @@ pub fn openai_codex_models() -> HashMap<String, ModelInfo> {
             context_window: 1_050_000,
             supports_images: Some(true),
             supports_prompt_cache: true,
-            supports_reasoning_effort: Some(SupportsReasoningEffort::from(["none", "low", "medium", "high", "xhigh"])),
+            supports_reasoning_effort: Some(SupportsReasoningEffort::from([
+                "none", "low", "medium", "high", "xhigh",
+            ])),
             reasoning_effort: Some(ReasoningEffortExtended::None),
             input_price: Some(0.0),
             output_price: Some(0.0),
@@ -1256,7 +1378,9 @@ pub fn openai_codex_models() -> HashMap<String, ModelInfo> {
             context_window: 400_000,
             supports_images: Some(true),
             supports_prompt_cache: true,
-            supports_reasoning_effort: Some(SupportsReasoningEffort::from(["none", "low", "medium", "high", "xhigh"])),
+            supports_reasoning_effort: Some(SupportsReasoningEffort::from([
+                "none", "low", "medium", "high", "xhigh",
+            ])),
             reasoning_effort: Some(ReasoningEffortExtended::None),
             input_price: Some(0.0),
             output_price: Some(0.0),
@@ -1264,7 +1388,9 @@ pub fn openai_codex_models() -> HashMap<String, ModelInfo> {
             supports_temperature: Some(false),
             included_tools: Some(vec!["apply_patch".to_string()]),
             excluded_tools: Some(vec!["apply_diff".to_string(), "write_to_file".to_string()]),
-            description: Some("GPT-5.4 Mini: Lower-cost GPT-5.4 model via ChatGPT subscription".to_string()),
+            description: Some(
+                "GPT-5.4 Mini: Lower-cost GPT-5.4 model via ChatGPT subscription".to_string(),
+            ),
             ..Default::default()
         },
     );
@@ -1276,7 +1402,9 @@ pub fn openai_codex_models() -> HashMap<String, ModelInfo> {
             context_window: 400_000,
             supports_images: Some(true),
             supports_prompt_cache: true,
-            supports_reasoning_effort: Some(SupportsReasoningEffort::from(["none", "low", "medium", "high", "xhigh"])),
+            supports_reasoning_effort: Some(SupportsReasoningEffort::from([
+                "none", "low", "medium", "high", "xhigh",
+            ])),
             reasoning_effort: Some(ReasoningEffortExtended::Medium),
             input_price: Some(0.0),
             output_price: Some(0.0),

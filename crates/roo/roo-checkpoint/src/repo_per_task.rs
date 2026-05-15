@@ -54,7 +54,11 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
 
-    fn default_options(task_id: &str, workspace_dir: &str, shadow_dir: &str) -> CheckpointServiceOptions {
+    fn default_options(
+        task_id: &str,
+        workspace_dir: &str,
+        shadow_dir: &str,
+    ) -> CheckpointServiceOptions {
         CheckpointServiceOptions {
             task_id: task_id.to_string(),
             workspace_dir: workspace_dir.to_string(),

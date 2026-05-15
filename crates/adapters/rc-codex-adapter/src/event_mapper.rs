@@ -317,7 +317,13 @@ fn map_server_notification(
                 tool_input,
             }];
             // CollabAgentToolCall maps to SubtaskStarted for parity with Claude/Roo.
-            if let ThreadItem::CollabAgentToolCall { id, prompt, receiver_thread_ids, .. } = &item.item {
+            if let ThreadItem::CollabAgentToolCall {
+                id,
+                prompt,
+                receiver_thread_ids,
+                ..
+            } = &item.item
+            {
                 let desc = prompt.clone().unwrap_or_else(|| format!("Agent task {id}"));
                 for rid in receiver_thread_ids {
                     events.push(UnifiedAgentEvent::SubtaskStarted {
@@ -339,7 +345,13 @@ fn map_server_notification(
                 result,
             }];
             // CollabAgentToolCall completion maps to SubtaskCompleted.
-            if let ThreadItem::CollabAgentToolCall { id, status, agents_states, .. } = &item.item {
+            if let ThreadItem::CollabAgentToolCall {
+                id,
+                status,
+                agents_states,
+                ..
+            } = &item.item
+            {
                 let task_result = serde_json::json!({
                     "id": id,
                     "status": status,
@@ -688,9 +700,10 @@ fn map_server_request(request: ServerRequest, session_id: &str) -> Vec<UnifiedAg
             "dynamic_tool".to_owned(),
             serde_json::to_value(params).unwrap_or(serde_json::Value::Null),
         ),
-        ServerRequest::ChatgptAuthTokensRefresh { params, .. } => {
-            ("chatgpt_auth_refresh".to_owned(), serde_json::to_value(params).unwrap_or(serde_json::Value::Null))
-        }
+        ServerRequest::ChatgptAuthTokensRefresh { params, .. } => (
+            "chatgpt_auth_refresh".to_owned(),
+            serde_json::to_value(params).unwrap_or(serde_json::Value::Null),
+        ),
     };
 
     vec![UnifiedAgentEvent::PermissionRequest {
@@ -790,7 +803,10 @@ mod tests {
                 assert_eq!(request_id, "req-1");
                 assert_eq!(tool_name, "chatgpt_auth_refresh");
                 assert_eq!(input["reason"], "unauthorized");
-                assert!(input.get("previousAccountId").is_none() || input["previousAccountId"].is_null());
+                assert!(
+                    input.get("previousAccountId").is_none()
+                        || input["previousAccountId"].is_null()
+                );
             }
             other => panic!("expected permission request, got {other:?}"),
         }
@@ -916,9 +932,7 @@ mod tests {
 
     #[test]
     fn turn_completed_extracts_agent_message_text() {
-        use codex_app_server_protocol::{
-            ThreadItem, Turn, TurnCompletedNotification, TurnStatus,
-        };
+        use codex_app_server_protocol::{ThreadItem, Turn, TurnCompletedNotification, TurnStatus};
         let notification = ServerNotification::TurnCompleted(TurnCompletedNotification {
             thread_id: "t".to_owned(),
             turn: Turn {
@@ -947,10 +961,7 @@ mod tests {
         let events = map_server_notification(notification, "s");
         assert_eq!(events.len(), 1);
         match &events[0] {
-            UnifiedAgentEvent::Completed {
-                session_id,
-                result,
-            } => {
+            UnifiedAgentEvent::Completed { session_id, result } => {
                 assert_eq!(session_id, "s");
                 assert_eq!(result.response_text, "hello world more text");
                 assert!(result.tool_calls.is_empty());
@@ -961,9 +972,7 @@ mod tests {
 
     #[test]
     fn turn_completed_with_web_search_tool_call() {
-        use codex_app_server_protocol::{
-            ThreadItem, Turn, TurnCompletedNotification, TurnStatus,
-        };
+        use codex_app_server_protocol::{ThreadItem, Turn, TurnCompletedNotification, TurnStatus};
         let notification = ServerNotification::TurnCompleted(TurnCompletedNotification {
             thread_id: "t".to_owned(),
             turn: Turn {
@@ -1057,8 +1066,8 @@ mod tests {
         use codex_app_server_protocol::{
             ThreadTokenUsage, ThreadTokenUsageUpdatedNotification, TokenUsageBreakdown,
         };
-        let notification = ServerNotification::ThreadTokenUsageUpdated(
-            ThreadTokenUsageUpdatedNotification {
+        let notification =
+            ServerNotification::ThreadTokenUsageUpdated(ThreadTokenUsageUpdatedNotification {
                 thread_id: "t".to_owned(),
                 turn_id: "t".to_owned(),
                 token_usage: ThreadTokenUsage {
@@ -1078,8 +1087,7 @@ mod tests {
                     },
                     model_context_window: Some(128000),
                 },
-            },
-        );
+            });
         let events = map_server_notification(notification, "s");
         // Should produce ContextUsage + codex_token_usage progress
         assert!(events.len() >= 1);
@@ -1102,11 +1110,10 @@ mod tests {
     #[test]
     fn context_compacted_produces_event() {
         use codex_app_server_protocol::ContextCompactedNotification;
-        let notification =
-            ServerNotification::ContextCompacted(ContextCompactedNotification {
-                thread_id: "t".to_owned(),
-                turn_id: "t".to_owned(),
-            });
+        let notification = ServerNotification::ContextCompacted(ContextCompactedNotification {
+            thread_id: "t".to_owned(),
+            turn_id: "t".to_owned(),
+        });
         let events = map_server_notification(notification, "s");
         assert_eq!(events.len(), 1);
         match &events[0] {
@@ -1205,7 +1212,9 @@ mod tests {
     #[test]
     fn request_id_string_passthrough() {
         assert_eq!(
-            request_id_to_string(&codex_app_server_protocol::RequestId::String("abc".to_owned())),
+            request_id_to_string(&codex_app_server_protocol::RequestId::String(
+                "abc".to_owned()
+            )),
             "abc",
         );
     }

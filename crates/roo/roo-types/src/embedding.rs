@@ -49,4 +49,5 @@ pub struct EmbeddingModelProfile {
 /// Embedding model profiles by provider.
 ///
 /// Source: `packages/types/src/embedding.ts` — `EmbeddingModelProfiles`
-pub type EmbeddingModelProfiles = std::collections::HashMap<String, std::collections::HashMap<String, EmbeddingModelProfile>>;
+pub type EmbeddingModelProfiles =
+    std::collections::HashMap<String, std::collections::HashMap<String, EmbeddingModelProfile>>;

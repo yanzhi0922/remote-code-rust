@@ -23,7 +23,11 @@ impl MessageQueueService {
     ///
     /// Returns `None` if both `text` is empty and `images` is `None` or empty.
     /// Otherwise returns the created `QueuedMessage`.
-    pub fn add_message(&mut self, text: &str, images: Option<Vec<String>>) -> Option<QueuedMessage> {
+    pub fn add_message(
+        &mut self,
+        text: &str,
+        images: Option<Vec<String>>,
+    ) -> Option<QueuedMessage> {
         if text.is_empty() && images.as_ref().map_or(true, |imgs| imgs.is_empty()) {
             return None;
         }

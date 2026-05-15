@@ -87,7 +87,9 @@ pub fn extract_tool_calls_from_chunks(chunks: &[ApiStreamChunk]) -> Vec<(String,
 ///
 /// Returns `None` if no usage information was found.
 pub fn extract_usage_from_chunks(chunks: &[ApiStreamChunk]) -> Option<&ApiStreamChunk> {
-    chunks.iter().find(|chunk| matches!(chunk, ApiStreamChunk::Usage { .. }))
+    chunks
+        .iter()
+        .find(|chunk| matches!(chunk, ApiStreamChunk::Usage { .. }))
 }
 
 /// Processes a stream of raw SSE JSON events into API stream chunks.
@@ -98,10 +100,7 @@ pub fn extract_usage_from_chunks(chunks: &[ApiStreamChunk]) -> Option<&ApiStream
 /// # Arguments
 /// * `stream` - Stream of raw JSON event payloads
 /// * `processor` - Function that converts each JSON event into optional chunks
-pub async fn process_json_stream<S, F>(
-    stream: S,
-    processor: F,
-) -> Result<Vec<ApiStreamChunk>>
+pub async fn process_json_stream<S, F>(stream: S, processor: F) -> Result<Vec<ApiStreamChunk>>
 where
     S: Stream<Item = Result<Value>>,
     F: Fn(&Value) -> Option<ApiStreamChunk>,
@@ -138,9 +137,9 @@ pub fn merge_partial_tool_calls(chunks: &[ApiStreamChunk]) -> Vec<ApiStreamChunk
                 ..
             } => {
                 if let Some(call_id) = id {
-                    let entry = pending.entry(call_id.clone()).or_insert_with(|| {
-                        (call_id.clone(), String::new(), String::new())
-                    });
+                    let entry = pending
+                        .entry(call_id.clone())
+                        .or_insert_with(|| (call_id.clone(), String::new(), String::new()));
                     if let Some(n) = name {
                         entry.1 = n.clone();
                     }
@@ -282,7 +281,9 @@ mod tests {
         ];
         let merged = merge_partial_tool_calls(&chunks);
         assert_eq!(merged.len(), 2); // 1 ToolCall + 1 Text
-        let tool_call = merged.iter().find(|c| matches!(c, ApiStreamChunk::ToolCall { .. }));
+        let tool_call = merged
+            .iter()
+            .find(|c| matches!(c, ApiStreamChunk::ToolCall { .. }));
         assert!(tool_call.is_some());
         if let Some(ApiStreamChunk::ToolCall { arguments, .. }) = tool_call {
             assert_eq!(arguments, "{\"q\":\"test\"}");

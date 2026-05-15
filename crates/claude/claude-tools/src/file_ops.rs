@@ -284,7 +284,10 @@ fn gather_hunks(
 
         for op in &ops[start..end] {
             match op {
-                DiffOp::Equal { old_idx, new_idx: _ } => {
+                DiffOp::Equal {
+                    old_idx,
+                    new_idx: _,
+                } => {
                     hunk_lines.push(format!(" {}", old_lines[*old_idx]));
                     old_count += 1;
                     new_count += 1;
@@ -741,12 +744,14 @@ pub fn read_file(input: &Value, context: &ToolExecutionContext) -> Result<ToolRe
     // File size pre-check: refuse to read files larger than 256 KB without
     // offset/limit, to avoid excessive token consumption. Matches TS MAX_OUTPUT_SIZE.
     if let Ok(metadata) = std::fs::metadata(&target)
-        && metadata.len() > 262_144 && limit.is_none() {
-            return Err(anyhow!(
-                "File too large ({} bytes). Use offset/limit to read portions.",
-                metadata.len()
-            ));
-        }
+        && metadata.len() > 262_144
+        && limit.is_none()
+    {
+        return Err(anyhow!(
+            "File too large ({} bytes). Use offset/limit to read portions.",
+            metadata.len()
+        ));
+    }
 
     if let Some(read_state) = context.read_file_state.get(&target)
         && !read_state.is_partial_view
@@ -809,18 +814,19 @@ pub fn read_file(input: &Value, context: &ToolExecutionContext) -> Result<ToolRe
 
         // Try pdftotext without page range as fallback
         if pages_param.is_some()
-            && let Ok(text) = extract_pdf_via_pdftotext(&target, None, file_size) {
-                if let Ok(timestamp) = file_mtime_ms(&target) {
-                    context.read_file_state.set(
-                        &target,
-                        FileState::read(text.clone(), timestamp, start_line, limit),
-                    );
-                }
-                return Ok(ToolResult {
-                    content: text,
-                    ..ToolResult::default()
-                });
+            && let Ok(text) = extract_pdf_via_pdftotext(&target, None, file_size)
+        {
+            if let Ok(timestamp) = file_mtime_ms(&target) {
+                context.read_file_state.set(
+                    &target,
+                    FileState::read(text.clone(), timestamp, start_line, limit),
+                );
             }
+            return Ok(ToolResult {
+                content: text,
+                ..ToolResult::default()
+            });
+        }
 
         return Err(anyhow!(
             "PDF reading requires `pdftotext` from poppler-utils. \
@@ -933,7 +939,11 @@ fn read_image_file(target: &Path, ext: &str) -> Result<ToolResult> {
             let max_dim = orig_w.max(orig_h);
 
             let (final_img, (w, h)) = if max_dim > MAX_IMAGE_DIMENSION {
-                let resized = img.resize(MAX_IMAGE_DIMENSION, MAX_IMAGE_DIMENSION, image::imageops::FilterType::Lanczos3);
+                let resized = img.resize(
+                    MAX_IMAGE_DIMENSION,
+                    MAX_IMAGE_DIMENSION,
+                    image::imageops::FilterType::Lanczos3,
+                );
                 let dims = (resized.width(), resized.height());
                 (resized, dims)
             } else {
@@ -942,10 +952,7 @@ fn read_image_file(target: &Path, ext: &str) -> Result<ToolResult> {
 
             // Re-encode as PNG for consistent base64 output
             let mut buf = Vec::new();
-            final_img.write_to(
-                &mut std::io::Cursor::new(&mut buf),
-                image::ImageFormat::Png,
-            )?;
+            final_img.write_to(&mut std::io::Cursor::new(&mut buf), image::ImageFormat::Png)?;
             let encoded = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &buf);
             (encoded, (w, h))
         }
@@ -968,11 +975,7 @@ fn read_image_file(target: &Path, ext: &str) -> Result<ToolResult> {
             data.len()
         )
     } else {
-        format!(
-            "Image file: {} ({} bytes)",
-            target.display(),
-            data.len()
-        )
+        format!("Image file: {} ({} bytes)", target.display(), data.len())
     };
 
     // Build the Anthropic API image content block
@@ -1107,11 +1110,7 @@ pub(crate) fn write_file(input: &Value, context: &ToolExecutionContext) -> Resul
                 let diff = compute_unified_diff(&old, &final_content, &path_display);
                 let mut result = format!(
                     "Wrote {}\n{} → {} lines (+{}/−{})",
-                    path_display,
-                    old_lines,
-                    new_lines,
-                    added,
-                    removed,
+                    path_display, old_lines, new_lines, added, removed,
                 );
                 if !diff.is_empty() {
                     result.push('\n');
@@ -1119,7 +1118,10 @@ pub(crate) fn write_file(input: &Value, context: &ToolExecutionContext) -> Resul
                 }
                 Ok(result)
             } else {
-                Ok(format!("Wrote {} (unchanged, {} lines)", path_display, new_lines))
+                Ok(format!(
+                    "Wrote {} (unchanged, {} lines)",
+                    path_display, new_lines
+                ))
             }
         }
         None => Ok(format!("Created {} ({} lines)", path_display, new_lines)),
@@ -1147,8 +1149,8 @@ pub(crate) fn replace_in_file(input: &Value, context: &ToolExecutionContext) -> 
     let target =
         resolve_workspace_path_for_operation(context, Some(path), FilesystemOperation::Write)?;
     // Read file bytes and handle UTF-16LE BOM encoding.
-    let raw_bytes = std::fs::read(&target)
-        .with_context(|| format!("failed to read {}", target.display()))?;
+    let raw_bytes =
+        std::fs::read(&target).with_context(|| format!("failed to read {}", target.display()))?;
     let mut is_utf16le = false;
     let original = if has_utf16le_bom(&raw_bytes) {
         is_utf16le = true;
@@ -1188,24 +1190,24 @@ pub(crate) fn replace_in_file(input: &Value, context: &ToolExecutionContext) -> 
 
     // Map the normalized match back to the original content to get the actual text.
     // We find the actual text from the original file using the same char-offset logic.
-    let actual_original_search =
-        if let Some(byte_index) = normalized_original.find(&actual_search) {
-            let char_offset = normalized_original[..byte_index].chars().count();
-            let char_len = actual_search.chars().count();
-            let start_ok = original.char_indices().nth(char_offset).map(|(b, _)| b);
-            let end_ok = original
-                .char_indices()
-                .nth(char_offset + char_len)
-                .map(|(b, _)| b)
-                .unwrap_or(original.len());
-            if let Some(start) = start_ok {
-                original[start..end_ok].to_owned()
-            } else {
-                actual_search.clone()
-            }
+    let actual_original_search = if let Some(byte_index) = normalized_original.find(&actual_search)
+    {
+        let char_offset = normalized_original[..byte_index].chars().count();
+        let char_len = actual_search.chars().count();
+        let start_ok = original.char_indices().nth(char_offset).map(|(b, _)| b);
+        let end_ok = original
+            .char_indices()
+            .nth(char_offset + char_len)
+            .map(|(b, _)| b)
+            .unwrap_or(original.len());
+        if let Some(start) = start_ok {
+            original[start..end_ok].to_owned()
         } else {
             actual_search.clone()
-        };
+        }
+    } else {
+        actual_search.clone()
+    };
 
     // Preserve curly quote style in the replacement when the file uses them.
     let actual_replace = preserve_quote_style(search, &actual_original_search, replace);
@@ -1280,13 +1282,14 @@ pub(crate) fn edit_file(input: &Value, context: &ToolExecutionContext) -> Result
     const MAX_EDIT_FILE_SIZE: u64 = 1024 * 1024 * 1024; // 1 GiB
     if target.exists()
         && let Ok(metadata) = std::fs::metadata(&target)
-            && metadata.len() > MAX_EDIT_FILE_SIZE {
-                return Err(anyhow!(
-                    "File is too large to edit ({} bytes). Maximum editable file size is {} GiB.",
-                    metadata.len(),
-                    MAX_EDIT_FILE_SIZE / (1024 * 1024 * 1024)
-                ));
-            }
+        && metadata.len() > MAX_EDIT_FILE_SIZE
+    {
+        return Err(anyhow!(
+            "File is too large to edit ({} bytes). Maximum editable file size is {} GiB.",
+            metadata.len(),
+            MAX_EDIT_FILE_SIZE / (1024 * 1024 * 1024)
+        ));
+    }
 
     let legacy_edits;
     let edits = if let Some(edits) = input.get("edits").and_then(Value::as_array) {
@@ -1541,7 +1544,10 @@ pub(crate) fn grep_files(input: &Value, context: &ToolExecutionContext) -> Resul
         Vec::new()
     };
     // `multiline` parameter: when true, `.` matches newlines (ripgrep --multiline-dotall)
-    let multiline = input.get("multiline").and_then(Value::as_bool).unwrap_or(false);
+    let multiline = input
+        .get("multiline")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     let output_mode = input
         .get("output_mode")
         .and_then(Value::as_str)
@@ -1629,10 +1635,13 @@ pub(crate) fn grep_files(input: &Value, context: &ToolExecutionContext) -> Resul
         let combined = if type_globs.len() == 1 {
             type_globs[0].clone()
         } else {
-            let alts: Vec<&str> = type_globs.iter().map(|s| {
-                // Strip the leading "*." — globset alternation expects bare extensions
-                s.strip_prefix("*.").unwrap_or(s)
-            }).collect();
+            let alts: Vec<&str> = type_globs
+                .iter()
+                .map(|s| {
+                    // Strip the leading "*." — globset alternation expects bare extensions
+                    s.strip_prefix("*.").unwrap_or(s)
+                })
+                .collect();
             format!("*.{{{}}}", alts.join(","))
         };
         GlobBuilder::new(&combined)
@@ -1729,7 +1738,10 @@ pub(crate) fn grep_files(input: &Value, context: &ToolExecutionContext) -> Resul
                                 let prefix = if line_idx == index { ">" } else { " " };
                                 let trimmed = context_line.trim_end();
                                 let truncated = if trimmed.len() > MAX_COLUMNS {
-                                    format!("{}...", &trimmed[..trimmed.ceil_char_boundary(MAX_COLUMNS)])
+                                    format!(
+                                        "{}...",
+                                        &trimmed[..trimmed.ceil_char_boundary(MAX_COLUMNS)]
+                                    )
                                 } else {
                                     trimmed.to_owned()
                                 };
@@ -1794,7 +1806,9 @@ pub(crate) fn grep_files(input: &Value, context: &ToolExecutionContext) -> Resul
                 .collect();
             let mut result = lines.join("\n");
             if truncated {
-                result.push_str("\n\nFiles still truncated. Consider using a more specific path or pattern.");
+                result.push_str(
+                    "\n\nFiles still truncated. Consider using a more specific path or pattern.",
+                );
             }
             result.push_str(&format!(
                 "\n\nFound {} total occurrences across {} files",

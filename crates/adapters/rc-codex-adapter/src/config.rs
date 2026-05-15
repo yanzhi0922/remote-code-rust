@@ -226,11 +226,17 @@ fn parse_approval_policy_core(
     Ok(parse_approval_policy(value)?.to_core())
 }
 
-pub(super) fn parse_sandbox_mode(value: &str) -> anyhow::Result<codex_app_server_protocol::SandboxMode> {
+pub(super) fn parse_sandbox_mode(
+    value: &str,
+) -> anyhow::Result<codex_app_server_protocol::SandboxMode> {
     let normalized = value.trim().to_ascii_lowercase();
     match normalized.as_str() {
-        "read-only" | "readonly" | "read_only" => Ok(codex_app_server_protocol::SandboxMode::ReadOnly),
-        "workspace-write" | "workspace_write" | "workspacewrite" => Ok(codex_app_server_protocol::SandboxMode::WorkspaceWrite),
+        "read-only" | "readonly" | "read_only" => {
+            Ok(codex_app_server_protocol::SandboxMode::ReadOnly)
+        }
+        "workspace-write" | "workspace_write" | "workspacewrite" => {
+            Ok(codex_app_server_protocol::SandboxMode::WorkspaceWrite)
+        }
         "danger-full-access" | "danger_full_access" | "dangerfullaccess" | "none" => {
             Ok(codex_app_server_protocol::SandboxMode::DangerFullAccess)
         }

@@ -64,10 +64,7 @@ mod tests {
         assert_eq!(config.allowed_providers, deserialized.allowed_providers);
         assert_eq!(config.blocked_tools, deserialized.blocked_tools);
         assert_eq!(config.require_approval, deserialized.require_approval);
-        assert_eq!(
-            config.custom_instructions,
-            deserialized.custom_instructions
-        );
+        assert_eq!(config.custom_instructions, deserialized.custom_instructions);
     }
 
     #[test]
@@ -119,11 +116,7 @@ mod tests {
 
     #[test]
     fn test_mdm_platform_serialization() {
-        let platforms = vec![
-            MdmPlatform::Windows,
-            MdmPlatform::Macos,
-            MdmPlatform::Linux,
-        ];
+        let platforms = vec![MdmPlatform::Windows, MdmPlatform::Macos, MdmPlatform::Linux];
         for p in platforms {
             let json = serde_json::to_string(&p).unwrap();
             let deserialized: MdmPlatform = serde_json::from_str(&json).unwrap();

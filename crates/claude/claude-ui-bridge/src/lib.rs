@@ -573,7 +573,7 @@ impl UiFrontend for NullFrontend {
 
 /// A frontend that collects all events into a Vec for assertion in tests.
 pub struct CollectingFrontend {
-    events: std::sync::Mutex<Vec<UiEvent>>,
+    events: parking_lot::Mutex<Vec<UiEvent>>,
 }
 
 impl CollectingFrontend {
@@ -581,26 +581,19 @@ impl CollectingFrontend {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            events: std::sync::Mutex::new(Vec::new()),
+            events: parking_lot::Mutex::new(Vec::new()),
         }
     }
 
     /// Get all collected events.
     #[must_use]
     pub fn events(&self) -> Vec<UiEvent> {
-        self.events
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone()
+        self.events.lock().clone()
     }
 
     /// Check if any collected event matches a predicate.
     pub fn has_event(&self, predicate: impl Fn(&UiEvent) -> bool) -> bool {
-        self.events
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .iter()
-            .any(predicate)
+        self.events.lock().iter().any(predicate)
     }
 }
 
@@ -613,10 +606,7 @@ impl Default for CollectingFrontend {
 #[async_trait]
 impl UiFrontend for CollectingFrontend {
     async fn render_event(&self, event: &UiEvent) -> Result<()> {
-        self.events
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .push(event.clone());
+        self.events.lock().push(event.clone());
         Ok(())
     }
 

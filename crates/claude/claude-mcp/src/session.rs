@@ -912,7 +912,6 @@ async fn shutdown_child(child: &mut Child) {
     let _ = child.wait().await;
 }
 
-
 // ---------------------------------------------------------------------------
 // Persistent MCP client (session reuse)
 // ---------------------------------------------------------------------------
@@ -1003,12 +1002,14 @@ impl McpClient {
             }
             McpTransportConfig::SseIde { url, .. } => {
                 let session =
-                    RemoteMcpSession::connect_sse(config, url, &BTreeMap::new(), client_info).await?;
+                    RemoteMcpSession::connect_sse(config, url, &BTreeMap::new(), client_info)
+                        .await?;
                 McpClientSession::Http(Box::new(session))
             }
             McpTransportConfig::WsIde { url, .. } => {
                 let session =
-                    WebSocketMcpSession::connect(config, url, &BTreeMap::new(), client_info).await?;
+                    WebSocketMcpSession::connect(config, url, &BTreeMap::new(), client_info)
+                        .await?;
                 McpClientSession::WebSocket(Box::new(session))
             }
             McpTransportConfig::Sdk { .. } | McpTransportConfig::ClaudeAiProxy { .. } => {
@@ -1039,7 +1040,9 @@ impl McpClient {
         let result = match self.session.as_mut() {
             Some(McpClientSession::Stdio(session)) => session.call_tool(tool_name, arguments).await,
             Some(McpClientSession::Http(session)) => session.call_tool(tool_name, arguments).await,
-            Some(McpClientSession::WebSocket(session)) => session.call_tool(tool_name, arguments).await,
+            Some(McpClientSession::WebSocket(session)) => {
+                session.call_tool(tool_name, arguments).await
+            }
             None => Err(McpRuntimeError::Protocol {
                 server: self.config.name.clone(),
                 phase: "call_tool",
@@ -1276,9 +1279,10 @@ impl RemoteMcpSession {
 
         // Resolve headers dynamically if a headers_helper is configured.
         let _resolved_headers = match &server.transport {
-            McpTransportConfig::Http { headers_helper: Some(_helper), .. } => {
-                resolve_headers_with_helper(&server.name, None, headers).await
-            }
+            McpTransportConfig::Http {
+                headers_helper: Some(_helper),
+                ..
+            } => resolve_headers_with_helper(&server.name, None, headers).await,
             _ => headers.clone(),
         };
 
@@ -1764,8 +1768,16 @@ async fn send_sse_request<T: Serialize>(
     phase: &'static str,
 ) -> Result<String, McpRuntimeError> {
     // Send the JSON-RPC request via HTTP POST.
-    let response = send_http_request(http, url, headers, request, timeout_secs, server_name, phase)
-        .await?;
+    let response = send_http_request(
+        http,
+        url,
+        headers,
+        request,
+        timeout_secs,
+        server_name,
+        phase,
+    )
+    .await?;
 
     // Check if the response is SSE (text/event-stream) or plain JSON.
     // If the response contains SSE `data:` lines, extract the first one.
@@ -1976,9 +1988,14 @@ impl WebSocketMcpSession {
             params: init_params,
         };
 
-        let init_result: McpInitializeResult =
-            send_websocket_request_inner(&mut ws, &init_request, &server.name, "initialize", request_timeout_secs)
-                .await?;
+        let init_result: McpInitializeResult = send_websocket_request_inner(
+            &mut ws,
+            &init_request,
+            &server.name,
+            "initialize",
+            request_timeout_secs,
+        )
+        .await?;
 
         // Send the initialized notification (fire-and-forget).
         let initialized_notification = JsonRpcNotification {
@@ -1986,13 +2003,14 @@ impl WebSocketMcpSession {
             method: "notifications/initialized",
             params: serde_json::json!({}),
         };
-        let notification_str = serde_json::to_string(&initialized_notification).map_err(
-            |source| McpRuntimeError::Serialize {
-                server: server.name.clone(),
-                phase: "ws-initialized-notification",
-                source,
-            },
-        )?;
+        let notification_str =
+            serde_json::to_string(&initialized_notification).map_err(|source| {
+                McpRuntimeError::Serialize {
+                    server: server.name.clone(),
+                    phase: "ws-initialized-notification",
+                    source,
+                }
+            })?;
         let _ = ws
             .send(tungstenite::Message::Text(notification_str.into()))
             .await;
@@ -2018,15 +2036,14 @@ impl WebSocketMcpSession {
             params: serde_json::json!({}),
         };
 
-        let tools_result: McpToolsListResult =
-            send_websocket_request_inner(
-                &mut self.ws,
-                &tools_request,
-                &self.server_name,
-                "tools/list",
-                self.request_timeout_secs,
-            )
-            .await?;
+        let tools_result: McpToolsListResult = send_websocket_request_inner(
+            &mut self.ws,
+            &tools_request,
+            &self.server_name,
+            "tools/list",
+            self.request_timeout_secs,
+        )
+        .await?;
 
         let resources = if self.supports_resources() {
             match self.list_resources().await {
@@ -2077,15 +2094,14 @@ impl WebSocketMcpSession {
             },
         };
 
-        let mut result: McpToolCallResult =
-            send_websocket_request_inner(
-                &mut self.ws,
-                &request,
-                &self.server_name,
-                "tools/call",
-                self.request_timeout_secs,
-            )
-            .await?;
+        let mut result: McpToolCallResult = send_websocket_request_inner(
+            &mut self.ws,
+            &request,
+            &self.server_name,
+            "tools/call",
+            self.request_timeout_secs,
+        )
+        .await?;
 
         // Truncate oversized tool results.
         crate::types::truncate_tool_call_result(&mut result);
@@ -2109,15 +2125,14 @@ impl WebSocketMcpSession {
             params: serde_json::json!({}),
         };
 
-        let result: McpResourcesListResult =
-            send_websocket_request_inner(
-                &mut self.ws,
-                &request,
-                &self.server_name,
-                "resources/list",
-                self.request_timeout_secs,
-            )
-            .await?;
+        let result: McpResourcesListResult = send_websocket_request_inner(
+            &mut self.ws,
+            &request,
+            &self.server_name,
+            "resources/list",
+            self.request_timeout_secs,
+        )
+        .await?;
 
         Ok(result
             .resources
@@ -2142,15 +2157,14 @@ impl WebSocketMcpSession {
             params: serde_json::json!({}),
         };
 
-        let result: McpPromptsListResult =
-            send_websocket_request_inner(
-                &mut self.ws,
-                &request,
-                &self.server_name,
-                "prompts/list",
-                self.request_timeout_secs,
-            )
-            .await?;
+        let result: McpPromptsListResult = send_websocket_request_inner(
+            &mut self.ws,
+            &request,
+            &self.server_name,
+            "prompts/list",
+            self.request_timeout_secs,
+        )
+        .await?;
 
         Ok(result
             .prompts
@@ -2181,15 +2195,14 @@ impl WebSocketMcpSession {
             },
         };
 
-        let result: McpPromptGetRpcResult =
-            send_websocket_request_inner(
-                &mut self.ws,
-                &request,
-                &self.server_name,
-                "prompts/get",
-                self.request_timeout_secs,
-            )
-            .await?;
+        let result: McpPromptGetRpcResult = send_websocket_request_inner(
+            &mut self.ws,
+            &request,
+            &self.server_name,
+            "prompts/get",
+            self.request_timeout_secs,
+        )
+        .await?;
 
         Ok(McpPromptGetResponse {
             server_name: self.server_name.clone(),
@@ -2215,15 +2228,14 @@ impl WebSocketMcpSession {
             },
         };
 
-        let result: McpResourceReadResult =
-            send_websocket_request_inner(
-                &mut self.ws,
-                &request,
-                &self.server_name,
-                "resources/read",
-                self.request_timeout_secs,
-            )
-            .await?;
+        let result: McpResourceReadResult = send_websocket_request_inner(
+            &mut self.ws,
+            &request,
+            &self.server_name,
+            "resources/read",
+            self.request_timeout_secs,
+        )
+        .await?;
 
         Ok(result.contents)
     }
@@ -2262,13 +2274,12 @@ async fn send_websocket_request_inner<T: Serialize, R: DeserializeOwned>(
     })?;
 
     // Extract the request ID for response matching.
-    let request_value: Value = serde_json::from_str(&payload).map_err(|source| {
-        McpRuntimeError::Decode {
+    let request_value: Value =
+        serde_json::from_str(&payload).map_err(|source| McpRuntimeError::Decode {
             server: server_name.to_owned(),
             phase,
             source,
-        }
-    })?;
+        })?;
     let request_id = request_value.get("id").cloned();
 
     // Send the message.
@@ -2293,7 +2304,10 @@ async fn send_websocket_request_inner<T: Serialize, R: DeserializeOwned>(
                 .map_err(|source| McpRuntimeError::Read {
                     server: server_name.to_owned(),
                     phase,
-                    source: std::io::Error::new(std::io::ErrorKind::UnexpectedEof, source.to_string()),
+                    source: std::io::Error::new(
+                        std::io::ErrorKind::UnexpectedEof,
+                        source.to_string(),
+                    ),
                 })?;
 
             let text = match msg {
@@ -2386,12 +2400,11 @@ async fn resolve_headers_with_helper(
 
     if let Some(config) = transport_config {
         // Try to get a headers_helper from the extended TransportConfig.
-        let helper_result = crate::headers::McpHeadersResolver::resolve_headers(
-            server_name,
-            config,
-            |key| std::env::var(key).ok(),
-        )
-        .await;
+        let helper_result =
+            crate::headers::McpHeadersResolver::resolve_headers(server_name, config, |key| {
+                std::env::var(key).ok()
+            })
+            .await;
 
         match helper_result {
             Ok(dynamic_headers) => {

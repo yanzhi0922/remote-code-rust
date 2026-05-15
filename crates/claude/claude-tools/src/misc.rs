@@ -176,7 +176,8 @@ pub(crate) async fn lsp_tool(input: &Value, context: &ToolExecutionContext) -> R
                 });
             if symbol.is_empty() {
                 // Position-based: try to find a symbol at the given line/character.
-                let locations = client.find_definitions_at(file_path, line as u32, character as u32)?;
+                let locations =
+                    client.find_definitions_at(file_path, line as u32, character as u32)?;
                 if locations.is_empty() {
                     Ok("No definitions found at the given position.".to_owned())
                 } else {
@@ -192,12 +193,10 @@ pub(crate) async fn lsp_tool(input: &Value, context: &ToolExecutionContext) -> R
             }
         }
         "findReferences" | "references" => {
-            let symbol = input
-                .get("symbol")
-                .and_then(Value::as_str)
-                .unwrap_or("");
+            let symbol = input.get("symbol").and_then(Value::as_str).unwrap_or("");
             if symbol.is_empty() {
-                let locations = client.find_references_at(file_path, line as u32, character as u32)?;
+                let locations =
+                    client.find_references_at(file_path, line as u32, character as u32)?;
                 if locations.is_empty() {
                     Ok("No references found at the given position.".to_owned())
                 } else {
@@ -213,10 +212,7 @@ pub(crate) async fn lsp_tool(input: &Value, context: &ToolExecutionContext) -> R
             }
         }
         "hover" => {
-            let symbol = input
-                .get("symbol")
-                .and_then(Value::as_str)
-                .unwrap_or("");
+            let symbol = input.get("symbol").and_then(Value::as_str).unwrap_or("");
             if symbol.is_empty() {
                 client.hover_at(file_path, line as u32, character as u32)
             } else {
@@ -232,10 +228,7 @@ pub(crate) async fn lsp_tool(input: &Value, context: &ToolExecutionContext) -> R
             }
         }
         "workspaceSymbol" => {
-            let query = input
-                .get("symbol")
-                .and_then(Value::as_str)
-                .unwrap_or("");
+            let query = input.get("symbol").and_then(Value::as_str).unwrap_or("");
             let symbols = client.workspace_symbols(query)?;
             if symbols.is_empty() {
                 Ok("No workspace symbols found.".to_owned())
@@ -244,12 +237,10 @@ pub(crate) async fn lsp_tool(input: &Value, context: &ToolExecutionContext) -> R
             }
         }
         "goToImplementation" => {
-            let symbol = input
-                .get("symbol")
-                .and_then(Value::as_str)
-                .unwrap_or("");
+            let symbol = input.get("symbol").and_then(Value::as_str).unwrap_or("");
             if symbol.is_empty() {
-                let locations = client.find_implementations_at(file_path, line as u32, character as u32)?;
+                let locations =
+                    client.find_implementations_at(file_path, line as u32, character as u32)?;
                 if locations.is_empty() {
                     Ok("No implementations found at the given position.".to_owned())
                 } else {

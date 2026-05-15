@@ -36,7 +36,9 @@ pub struct LiteLlmHandler {
 impl LiteLlmHandler {
     /// Create a new LiteLLM handler from configuration.
     pub fn new(config: LiteLlmConfig) -> Result<Self, roo_provider::ProviderError> {
-        let model_id = config.model_id.unwrap_or_else(|| models::default_model_id());
+        let model_id = config
+            .model_id
+            .unwrap_or_else(|| models::default_model_id());
         let model_info = models::models()
             .get(&model_id)
             .cloned()
@@ -60,7 +62,7 @@ impl LiteLlmHandler {
             model_info,
             provider_name_enum: ProviderName::LiteLlm,
             request_timeout: config.request_timeout,
-        reasoning_effort: None,
+            reasoning_effort: None,
             streaming_enabled: None,
             include_max_tokens: None,
             extra_body_fields: None,
@@ -213,10 +215,7 @@ impl Provider for LiteLlmHandler {
         self.resolve_model_info()
     }
 
-    async fn complete_prompt(
-        &self,
-        prompt: &str,
-    ) -> Result<String, roo_provider::ProviderError> {
+    async fn complete_prompt(&self, prompt: &str) -> Result<String, roo_provider::ProviderError> {
         self.inner.complete_prompt(prompt).await
     }
 
@@ -243,9 +242,21 @@ mod tests {
     #[test]
     fn test_all_models_have_required_fields() {
         for (id, info) in models::models() {
-            assert!(info.max_tokens.is_some(), "Model '{}' missing max_tokens", id);
-            assert!(info.input_price.is_some(), "Model '{}' missing input_price", id);
-            assert!(info.output_price.is_some(), "Model '{}' missing output_price", id);
+            assert!(
+                info.max_tokens.is_some(),
+                "Model '{}' missing max_tokens",
+                id
+            );
+            assert!(
+                info.input_price.is_some(),
+                "Model '{}' missing input_price",
+                id
+            );
+            assert!(
+                info.output_price.is_some(),
+                "Model '{}' missing output_price",
+                id
+            );
         }
     }
 

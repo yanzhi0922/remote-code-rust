@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 
-use roo_types::mode::{default_modes, get_mode_by_slug, ModeConfig, PromptComponent};
+use roo_types::mode::{ModeConfig, PromptComponent, default_modes, get_mode_by_slug};
 
 // ---------------------------------------------------------------------------
 // defaultModeSlug
@@ -222,7 +222,13 @@ mod tests {
         let prompts = default_prompts();
         let architect = prompts.get("architect").unwrap();
         assert!(architect.role_definition.is_some());
-        assert!(architect.role_definition.as_ref().unwrap().contains("technical leader"));
+        assert!(
+            architect
+                .role_definition
+                .as_ref()
+                .unwrap()
+                .contains("technical leader")
+        );
     }
 
     #[test]

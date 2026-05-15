@@ -134,7 +134,7 @@ The mobile build target shares the same `remote-code-gui` Tauri v2 application w
 - **Backend** (`mobile.rs`, ~400 lines): 20 Tauri commands gated behind `#[cfg(feature = "mobile")]` covering haptics, biometric auth, secure storage (JSON file), artifact download/share, push notifications (permission, display, FCM/APNs token registration), and deep linking (`remotecode://` scheme)
 - **Frontend** (`RemoteApp.tsx`, ~1,300 lines): the existing remote-control UI already has responsive layout (floating FABs, bottom sheets for mobile), making it directly reusable in the mobile WebView
 - **Config**: `Cargo.mobile.toml` overlays 6 Tauri mobile plugins; `capabilities/mobile.json` declares 15 platform permissions scoped to iOS/Android
-- **Status**: Rust backend is fully implemented; native `android/`/`ios/` projects have not been initialized yet (requires `tauri android init` / `tauri ios init`)
+- **Status**: Rust backend commands are implemented in the shared Tauri app; native `android/`/`ios/` projects have not been initialized yet (requires `tauri android init` / `tauri ios init`)
 
 ## Data Flow
 
@@ -677,15 +677,15 @@ Examples of disallowed direction:
 
 ## CI Expectations
 
-CI enforces on every push and PR:
+The intended CI gates for stable branches are:
 
-- workspace builds cleanly (Linux + Windows)
+- workspace or affected-crate builds complete on Linux and Windows
 - `cargo fmt --all -- --check` passes
-- `cargo clippy --workspace --all-targets -- -D warnings` passes
-- `cargo test --workspace` passes
+- `cargo clippy` passes for the checked workspace scope
+- `cargo test` passes for the checked workspace scope
 - platform-specific path and process tests do not regress
 
-Release builds are triggered by tags and produce binaries for 5 platforms.
+Release builds are expected to be tag-driven; exact target platforms are defined by the active release workflow.
 
 ## Known Limitations
 

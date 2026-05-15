@@ -1,7 +1,7 @@
 //! Fireworks AI model definitions.
 
-use std::collections::HashMap;
 use roo_types::model::ModelInfo;
+use std::collections::HashMap;
 
 /// Default Fireworks model ID.
 pub const DEFAULT_MODEL_ID: &str = "accounts/fireworks/models/kimi-k2-instruct-0905";
@@ -159,9 +159,7 @@ pub fn models() -> HashMap<String, ModelInfo> {
             supports_prompt_cache: false,
             input_price: Some(0.45),
             output_price: Some(1.8),
-            description: Some(
-                "Qwen3's most agentic code model to date.".to_string(),
-            ),
+            description: Some("Qwen3's most agentic code model to date.".to_string()),
             ..Default::default()
         },
     );

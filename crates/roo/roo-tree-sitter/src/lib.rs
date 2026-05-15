@@ -29,10 +29,10 @@ pub mod markdown_parser;
 pub mod queries;
 
 pub use language_parser::{
-    load_required_language_parsers, parse_file, process_captures,
-    LanguageParserError, LanguageParsers, LoadedParser,
+    LanguageParserError, LanguageParsers, LoadedParser, load_required_language_parsers, parse_file,
+    process_captures,
 };
 pub use markdown_parser::{
-    format_markdown_captures, is_supported_extension, parse_markdown,
-    parse_source_code_definitions, MarkdownCapture, SUPPORTED_EXTENSIONS,
+    MarkdownCapture, SUPPORTED_EXTENSIONS, format_markdown_captures, is_supported_extension,
+    parse_markdown, parse_source_code_definitions,
 };

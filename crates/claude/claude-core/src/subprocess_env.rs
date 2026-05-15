@@ -49,10 +49,8 @@ pub fn build_subprocess_env() -> Vec<(String, String)> {
         return current_env;
     }
 
-    let stripped_set: std::collections::HashSet<String> = STRIPPED_ENV_VARS
-        .iter()
-        .map(|s| s.to_string())
-        .collect();
+    let stripped_set: std::collections::HashSet<String> =
+        STRIPPED_ENV_VARS.iter().map(|s| s.to_string()).collect();
 
     current_env
         .into_iter()
@@ -66,10 +64,8 @@ pub fn strip_env_vars(env: &mut Vec<(String, String)>) {
         return;
     }
 
-    let stripped_set: std::collections::HashSet<String> = STRIPPED_ENV_VARS
-        .iter()
-        .map(|s| s.to_string())
-        .collect();
+    let stripped_set: std::collections::HashSet<String> =
+        STRIPPED_ENV_VARS.iter().map(|s| s.to_string()).collect();
 
     env.retain(|(key, _)| !stripped_set.contains(key));
 }

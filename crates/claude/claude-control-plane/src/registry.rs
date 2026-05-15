@@ -293,7 +293,10 @@ impl Registry {
             .collect()
     }
 
-    pub(crate) fn revoke_device(&mut self, device_id: Uuid) -> Result<TrustedDeviceRecord, ApiError> {
+    pub(crate) fn revoke_device(
+        &mut self,
+        device_id: Uuid,
+    ) -> Result<TrustedDeviceRecord, ApiError> {
         let removed = self
             .trusted_devices
             .remove(&device_id)
@@ -364,10 +367,9 @@ impl Registry {
         let access_hash = sha256_hex(&new_access_token);
         let expires_at = now + Duration::minutes(15);
 
-        let device = self
-            .trusted_devices
-            .get_mut(&device_id)
-            .ok_or_else(|| ApiError::internal("device disappeared during token refresh".to_owned()))?;
+        let device = self.trusted_devices.get_mut(&device_id).ok_or_else(|| {
+            ApiError::internal("device disappeared during token refresh".to_owned())
+        })?;
         device.access_token_hash = Some(access_hash);
         device.access_token_expires_at = Some(expires_at);
         device.last_seen_at = now;
@@ -384,7 +386,6 @@ pub(crate) struct DualTokenResponse {
 }
 
 impl Registry {
-
     pub(crate) fn bootstrap_claim(
         &mut self,
         expected_secret_hash: Option<&str>,
@@ -561,7 +562,11 @@ impl Registry {
     /// Check if a session belongs to the given user.
     /// Returns `true` when `owner_user_id` is `None` (admin — sees all)
     /// or when the session has no `owner_user_id` (legacy session).
-    pub(crate) fn session_visible_to(&self, session: &SessionRecord, owner_user_id: Option<&str>) -> bool {
+    pub(crate) fn session_visible_to(
+        &self,
+        session: &SessionRecord,
+        owner_user_id: Option<&str>,
+    ) -> bool {
         match owner_user_id {
             None => true,
             Some(uid) => session.owner_user_id.as_deref() == Some(uid),
@@ -572,13 +577,18 @@ impl Registry {
     pub(crate) fn list_runners_for_user(&self, owner_user_id: Option<&str>) -> Vec<RunnerSnapshot> {
         self.runners
             .values()
-            .filter(|snapshot| self.runner_visible_to(&snapshot.registration.runner_id, owner_user_id))
+            .filter(|snapshot| {
+                self.runner_visible_to(&snapshot.registration.runner_id, owner_user_id)
+            })
             .cloned()
             .collect()
     }
 
     /// List approvals visible to the given user (tenant-filtered).
-    pub(crate) fn list_approvals_for_user(&self, owner_user_id: Option<&str>) -> Vec<ApprovalRequestRecord> {
+    pub(crate) fn list_approvals_for_user(
+        &self,
+        owner_user_id: Option<&str>,
+    ) -> Vec<ApprovalRequestRecord> {
         self.approvals
             .values()
             .filter(|approval| {
@@ -594,7 +604,10 @@ impl Registry {
     }
 
     /// List artifacts visible to the given user (tenant-filtered).
-    pub(crate) fn list_artifacts_for_user(&self, owner_user_id: Option<&str>) -> Vec<ArtifactRecord> {
+    pub(crate) fn list_artifacts_for_user(
+        &self,
+        owner_user_id: Option<&str>,
+    ) -> Vec<ArtifactRecord> {
         self.artifacts
             .values()
             .filter(|artifact| {
@@ -644,7 +657,8 @@ impl Registry {
 
         // Track tenant ownership for data isolation.
         if let Some(user_id) = owner_user_id {
-            self.runner_owners.insert(runner_id.clone(), user_id.to_owned());
+            self.runner_owners
+                .insert(runner_id.clone(), user_id.to_owned());
         }
 
         // Recalculate session counts from existing sessions so that a
@@ -758,7 +772,11 @@ impl Registry {
             .ok_or_else(|| ApiError::not_found(format!("session `{session_id}` was not found")))
     }
 
-    pub(crate) fn list_sessions_filtered(&self, query: &ListSessionsQuery, owner_user_id: Option<&str>) -> Vec<SessionRecord> {
+    pub(crate) fn list_sessions_filtered(
+        &self,
+        query: &ListSessionsQuery,
+        owner_user_id: Option<&str>,
+    ) -> Vec<SessionRecord> {
         self.sessions
             .values()
             .filter(|session| {
@@ -776,9 +794,7 @@ impl Registry {
             .filter(|session| query.state.is_none_or(|state| session.state == state))
             // Tenant isolation: only return sessions belonging to the requesting user.
             .filter(|session| {
-                owner_user_id.is_none_or(|uid| {
-                    session.owner_user_id.as_deref() == Some(uid)
-                })
+                owner_user_id.is_none_or(|uid| session.owner_user_id.as_deref() == Some(uid))
             })
             .cloned()
             .collect()
@@ -1214,7 +1230,12 @@ impl Registry {
             .filter(|session| !skipped_session_ids.contains(&session.session_id))
             .filter_map(|session| {
                 let selected = self
-                    .select_runner(&session.workspace_id, None, lease_ttl_secs, session.owner_user_id.as_deref())
+                    .select_runner(
+                        &session.workspace_id,
+                        None,
+                        lease_ttl_secs,
+                        session.owner_user_id.as_deref(),
+                    )
                     .ok()?;
                 (selected.as_deref() == Some(runner_id)).then(|| PendingSessionDispatch {
                     session_id: session.session_id,

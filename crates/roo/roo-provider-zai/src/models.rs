@@ -1,7 +1,7 @@
 //! ZAI (Zhipu/GLM) model definitions.
 
-use std::collections::HashMap;
 use roo_types::model::{ModelInfo, SupportsReasoningEffort};
+use std::collections::HashMap;
 
 /// Default ZAI model ID.
 pub const DEFAULT_MODEL_ID: &str = "glm-4.6";

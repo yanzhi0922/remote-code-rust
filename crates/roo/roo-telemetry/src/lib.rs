@@ -9,5 +9,6 @@ pub use client::{BaseTelemetryClient, TelemetryClient, TelemetryClientError};
 pub use posthog_client::PostHogTelemetryClient;
 pub use service::TelemetryService;
 pub use types::{
-    SubscriptionType, TelemetryEvent, TelemetryEventName, TelemetryEventSubscription, TelemetrySetting,
+    SubscriptionType, TelemetryEvent, TelemetryEventName, TelemetryEventSubscription,
+    TelemetrySetting,
 };

@@ -221,27 +221,30 @@ mod tests {
 
     #[test]
     fn aggregate_collects_blocking_errors() {
-        let results = vec![HookResult {
-            message: Some("ok".into()),
-            blocking_error: None,
-            outcome: "success".into(),
-            prevent_continuation: false,
-            stop_reason: None,
-            permission_behavior: None,
-            updated_input: None,
-            additional_context: None,
-            system_message: None,
-        }, HookResult {
-            message: None,
-            blocking_error: Some("denied!".into()),
-            outcome: "blocking".into(),
-            prevent_continuation: true,
-            stop_reason: None,
-            permission_behavior: None,
-            updated_input: None,
-            additional_context: Some("ctx".into()),
-            system_message: None,
-        }];
+        let results = vec![
+            HookResult {
+                message: Some("ok".into()),
+                blocking_error: None,
+                outcome: "success".into(),
+                prevent_continuation: false,
+                stop_reason: None,
+                permission_behavior: None,
+                updated_input: None,
+                additional_context: None,
+                system_message: None,
+            },
+            HookResult {
+                message: None,
+                blocking_error: Some("denied!".into()),
+                outcome: "blocking".into(),
+                prevent_continuation: true,
+                stop_reason: None,
+                permission_behavior: None,
+                updated_input: None,
+                additional_context: Some("ctx".into()),
+                system_message: None,
+            },
+        ];
         let agg = aggregate_hook_results(results);
         assert_eq!(agg.message.as_deref(), Some("ok"));
         assert_eq!(agg.blocking_errors, vec!["denied!"]);

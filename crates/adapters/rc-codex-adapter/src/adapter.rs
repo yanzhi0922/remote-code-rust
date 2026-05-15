@@ -2,8 +2,8 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicI64, Ordering};
 
 use anyhow::Context;
 use async_trait::async_trait;
@@ -19,38 +19,38 @@ use rc_agent_protocol::types::{AgentCapability, AgentConfig, AgentInfo, AgentSta
 use codex_app_server_client::{AppServerClient, AppServerEvent, AppServerRequestHandle};
 use codex_app_server_protocol::{
     AppsListParams, AppsListResponse, AskForApproval, CancelLoginAccountParams,
-    CancelLoginAccountResponse, ClientRequest,
-    CommandExecResponse, CollaborationModeListParams, CollaborationModeListResponse,
-    CommandExecResizeParams, CommandExecResizeResponse, CommandExecTerminateParams,
-    CommandExecTerminateResponse, CommandExecWriteParams, CommandExecWriteResponse,
-    ConfigBatchWriteParams, ConfigReadParams, ConfigReadResponse, ConfigRequirementsReadResponse,
-    ConfigValueWriteParams, ConfigWriteResponse, DeviceKeyCreateParams, DeviceKeyCreateResponse,
-    DeviceKeyPublicParams, DeviceKeyPublicResponse, DeviceKeySignParams, DeviceKeySignResponse,
+    CancelLoginAccountResponse, ClientRequest, CollaborationModeListParams,
+    CollaborationModeListResponse, CommandExecResizeParams, CommandExecResizeResponse,
+    CommandExecResponse, CommandExecTerminateParams, CommandExecTerminateResponse,
+    CommandExecWriteParams, CommandExecWriteResponse, ConfigBatchWriteParams, ConfigReadParams,
+    ConfigReadResponse, ConfigRequirementsReadResponse, ConfigValueWriteParams,
+    ConfigWriteResponse, DeviceKeyCreateParams, DeviceKeyCreateResponse, DeviceKeyPublicParams,
+    DeviceKeyPublicResponse, DeviceKeySignParams, DeviceKeySignResponse,
     ExperimentalFeatureEnablementSetParams, ExperimentalFeatureEnablementSetResponse,
     ExperimentalFeatureListParams, ExperimentalFeatureListResponse,
     ExternalAgentConfigDetectParams, ExternalAgentConfigDetectResponse,
-    ExternalAgentConfigImportParams, ExternalAgentConfigImportResponse,
-    FeedbackUploadResponse, FsCopyParams, FsCopyResponse, FsCreateDirectoryParams,
-    FsCreateDirectoryResponse, FsGetMetadataParams, FsGetMetadataResponse, FsReadDirectoryParams,
-    FsReadDirectoryResponse, FsReadFileParams, FsReadFileResponse, FsRemoveParams, FsRemoveResponse,
-    FsUnwatchParams, FsUnwatchResponse, FsWatchParams, FsWatchResponse, FsWriteFileParams,
-    FsWriteFileResponse, FuzzyFileSearchParams, FuzzyFileSearchResponse,
-    FuzzyFileSearchSessionStartParams, FuzzyFileSearchSessionStartResponse,
-    FuzzyFileSearchSessionStopParams, FuzzyFileSearchSessionStopResponse,
-    FuzzyFileSearchSessionUpdateParams, FuzzyFileSearchSessionUpdateResponse, GetAccountParams,
-    GetAccountRateLimitsResponse, GetAccountResponse, JSONRPCErrorError, ListMcpServerStatusParams,
-    ListMcpServerStatusResponse, LoginAccountParams, LoginAccountResponse, LogoutAccountResponse,
-    MarketplaceAddParams, MarketplaceAddResponse, MarketplaceRemoveParams,
-    MarketplaceRemoveResponse, MarketplaceUpgradeParams, MarketplaceUpgradeResponse,
-    McpResourceReadParams, McpResourceReadResponse, McpServerOauthLoginParams,
-    McpServerOauthLoginResponse, McpServerRefreshResponse, McpServerStatusDetail,
-    McpServerToolCallParams, McpServerToolCallResponse, ModelListParams, ModelListResponse,
-    PluginInstallParams, PluginInstallResponse, PluginListParams, PluginListResponse,
-    PluginReadParams, PluginReadResponse, PluginUninstallParams, PluginUninstallResponse,
-    RequestId, Result as JsonRpcResult, ReviewDelivery, ReviewStartParams, ReviewStartResponse,
-    ReviewTarget, SandboxMode, SendAddCreditsNudgeEmailParams, SendAddCreditsNudgeEmailResponse,
-    SkillsConfigWriteParams, SkillsConfigWriteResponse, SkillsListParams,
-    SkillsListResponse, SortDirection, ThreadApproveGuardianDeniedActionParams,
+    ExternalAgentConfigImportParams, ExternalAgentConfigImportResponse, FeedbackUploadResponse,
+    FsCopyParams, FsCopyResponse, FsCreateDirectoryParams, FsCreateDirectoryResponse,
+    FsGetMetadataParams, FsGetMetadataResponse, FsReadDirectoryParams, FsReadDirectoryResponse,
+    FsReadFileParams, FsReadFileResponse, FsRemoveParams, FsRemoveResponse, FsUnwatchParams,
+    FsUnwatchResponse, FsWatchParams, FsWatchResponse, FsWriteFileParams, FsWriteFileResponse,
+    FuzzyFileSearchParams, FuzzyFileSearchResponse, FuzzyFileSearchSessionStartParams,
+    FuzzyFileSearchSessionStartResponse, FuzzyFileSearchSessionStopParams,
+    FuzzyFileSearchSessionStopResponse, FuzzyFileSearchSessionUpdateParams,
+    FuzzyFileSearchSessionUpdateResponse, GetAccountParams, GetAccountRateLimitsResponse,
+    GetAccountResponse, JSONRPCErrorError, ListMcpServerStatusParams, ListMcpServerStatusResponse,
+    LoginAccountParams, LoginAccountResponse, LogoutAccountResponse, MarketplaceAddParams,
+    MarketplaceAddResponse, MarketplaceRemoveParams, MarketplaceRemoveResponse,
+    MarketplaceUpgradeParams, MarketplaceUpgradeResponse, McpResourceReadParams,
+    McpResourceReadResponse, McpServerOauthLoginParams, McpServerOauthLoginResponse,
+    McpServerRefreshResponse, McpServerStatusDetail, McpServerToolCallParams,
+    McpServerToolCallResponse, ModelListParams, ModelListResponse, PluginInstallParams,
+    PluginInstallResponse, PluginListParams, PluginListResponse, PluginReadParams,
+    PluginReadResponse, PluginUninstallParams, PluginUninstallResponse, RequestId,
+    Result as JsonRpcResult, ReviewDelivery, ReviewStartParams, ReviewStartResponse, ReviewTarget,
+    SandboxMode, SendAddCreditsNudgeEmailParams, SendAddCreditsNudgeEmailResponse,
+    SkillsConfigWriteParams, SkillsConfigWriteResponse, SkillsListParams, SkillsListResponse,
+    SortDirection, ThreadApproveGuardianDeniedActionParams,
     ThreadApproveGuardianDeniedActionResponse, ThreadArchiveParams, ThreadArchiveResponse,
     ThreadBackgroundTerminalsCleanParams, ThreadBackgroundTerminalsCleanResponse,
     ThreadCompactStartParams, ThreadCompactStartResponse, ThreadDecrementElicitationParams,
@@ -58,21 +58,21 @@ use codex_app_server_protocol::{
     ThreadGoalClearParams, ThreadGoalClearResponse, ThreadGoalGetParams, ThreadGoalGetResponse,
     ThreadGoalSetParams, ThreadGoalSetResponse, ThreadGoalStatus, ThreadIncrementElicitationParams,
     ThreadIncrementElicitationResponse, ThreadInjectItemsParams, ThreadInjectItemsResponse,
-    ThreadListResponse, ThreadLoadedListParams, ThreadLoadedListResponse,
-    ThreadMemoryMode, ThreadMemoryModeSetParams, ThreadMemoryModeSetResponse,
-    ThreadMetadataUpdateParams, ThreadMetadataUpdateResponse, ThreadReadParams, ThreadReadResponse,
+    ThreadListResponse, ThreadLoadedListParams, ThreadLoadedListResponse, ThreadMemoryMode,
+    ThreadMemoryModeSetParams, ThreadMemoryModeSetResponse, ThreadMetadataUpdateParams,
+    ThreadMetadataUpdateResponse, ThreadReadParams, ThreadReadResponse,
     ThreadRealtimeAppendAudioParams, ThreadRealtimeAppendAudioResponse,
     ThreadRealtimeAppendTextParams, ThreadRealtimeAppendTextResponse,
-    ThreadRealtimeListVoicesParams, ThreadRealtimeListVoicesResponse,
-    ThreadRealtimeStartParams, ThreadRealtimeStartResponse, ThreadRealtimeStopParams,
-    ThreadRealtimeStopResponse, ThreadResumeParams, ThreadResumeResponse, ThreadRollbackParams,
-    ThreadRollbackResponse, ThreadSetNameParams, ThreadSetNameResponse,
-    ThreadShellCommandParams, ThreadShellCommandResponse,
-    ThreadStartParams, ThreadStartResponse, ThreadTurnsListParams, ThreadTurnsListResponse,
-    ThreadUnarchiveParams, ThreadUnarchiveResponse, ThreadUnsubscribeParams,
-    ThreadUnsubscribeResponse, TurnInterruptParams, TurnInterruptResponse, TurnStartParams,
-    TurnStartResponse, TurnSteerParams, TurnSteerResponse, UserInput as ProtocolUserInput,
-    WindowsSandboxSetupStartParams, WindowsSandboxSetupStartResponse,
+    ThreadRealtimeListVoicesParams, ThreadRealtimeListVoicesResponse, ThreadRealtimeStartParams,
+    ThreadRealtimeStartResponse, ThreadRealtimeStopParams, ThreadRealtimeStopResponse,
+    ThreadResumeParams, ThreadResumeResponse, ThreadRollbackParams, ThreadRollbackResponse,
+    ThreadSetNameParams, ThreadSetNameResponse, ThreadShellCommandParams,
+    ThreadShellCommandResponse, ThreadStartParams, ThreadStartResponse, ThreadTurnsListParams,
+    ThreadTurnsListResponse, ThreadUnarchiveParams, ThreadUnarchiveResponse,
+    ThreadUnsubscribeParams, ThreadUnsubscribeResponse, TurnInterruptParams, TurnInterruptResponse,
+    TurnStartParams, TurnStartResponse, TurnSteerParams, TurnSteerResponse,
+    UserInput as ProtocolUserInput, WindowsSandboxSetupStartParams,
+    WindowsSandboxSetupStartResponse,
 };
 use codex_exec_server::{EnvironmentManager, EnvironmentManagerArgs, ExecServerRuntimePaths};
 
@@ -81,15 +81,14 @@ use crate::config::{
     build_thread_config_overrides_json, isolated_codex_home, parse_approval_policy,
     parse_sandbox_mode,
 };
+use crate::event_mapper;
 use crate::request_routing::shared_feedback;
 use crate::types::{
     CodexExecRequest, CodexFeedbackRequest, CodexPluginRefRequest, CodexServerRequestResolution,
     CodexThreadGoalSetRequest, CodexThreadListRequest, CodexThreadRollbackRequest,
-    CodexTurnInterruptRequest, CodexTurnSteerRequest, EventPumpState,
-    PendingServerRequestKind, request_id_to_string, thread_list_params_from_request,
-    typed_server_request_response,
+    CodexTurnInterruptRequest, CodexTurnSteerRequest, EventPumpState, PendingServerRequestKind,
+    request_id_to_string, thread_list_params_from_request, typed_server_request_response,
 };
-use crate::event_mapper;
 
 /// In-process Codex adapter that wraps [`AppServerClient`].
 ///
@@ -265,9 +264,10 @@ impl CodexInProcessAdapter {
         // 0. If wire_api is "anthropic_messages", start the protocol translator proxy.
         let mut anthropic_proxy = None;
         if options.wire_api.as_deref() == Some("anthropic_messages") {
-            let upstream_url = options.upstream_url.clone().unwrap_or_else(|| {
-                options.base_url.clone().unwrap_or_default()
-            });
+            let upstream_url = options
+                .upstream_url
+                .clone()
+                .unwrap_or_else(|| options.base_url.clone().unwrap_or_default());
             let api_key = options.api_key.clone().unwrap_or_default();
             let model = options.model.clone();
 
@@ -552,13 +552,21 @@ impl CodexInProcessAdapter {
                         // Track token usage from ThreadTokenUsageUpdated notifications
                         // so we can populate Completed events with real numbers.
                         if let AppServerEvent::ServerNotification(
-                            codex_app_server_protocol::ServerNotification::ThreadTokenUsageUpdated(ref notification),
+                            codex_app_server_protocol::ServerNotification::ThreadTokenUsageUpdated(
+                                ref notification,
+                            ),
                         ) = event
                         {
                             let usage = rc_agent_protocol::events::UsageInfo {
-                                input_tokens: notification.token_usage.total.input_tokens.max(0) as u64,
-                                output_tokens: notification.token_usage.total.output_tokens.max(0) as u64,
-                                cache_read: notification.token_usage.total.cached_input_tokens.max(0) as u64,
+                                input_tokens: notification.token_usage.total.input_tokens.max(0)
+                                    as u64,
+                                output_tokens: notification.token_usage.total.output_tokens.max(0)
+                                    as u64,
+                                cache_read: notification
+                                    .token_usage
+                                    .total
+                                    .cached_input_tokens
+                                    .max(0) as u64,
                                 cache_write: 0,
                             };
                             let mut state = event_state.lock().await;
@@ -609,10 +617,13 @@ impl CodexInProcessAdapter {
                 "Codex event pump panicked",
                 panic_payload,
             );
-            tracing::error!("{}", match &event {
-                UnifiedAgentEvent::Error { message, .. } => message.clone(),
-                _ => unreachable!(),
-            });
+            tracing::error!(
+                "{}",
+                match &event {
+                    UnifiedAgentEvent::Error { message, .. } => message.clone(),
+                    _ => unreachable!(),
+                }
+            );
 
             // Try to deliver the error to the current consumer so the GUI
             // shows a clear message instead of silently stalling.
@@ -811,7 +822,11 @@ impl CodexInProcessAdapter {
             request_id: self.next_request_id(),
             params: ThreadGoalSetParams {
                 thread_id: request.thread_id,
-                objective: if request.text.is_empty() { None } else { Some(request.text) },
+                objective: if request.text.is_empty() {
+                    None
+                } else {
+                    Some(request.text)
+                },
                 status: parsed_status,
                 token_budget,
             },
@@ -826,15 +841,13 @@ impl CodexInProcessAdapter {
         status: Option<String>,
         token_budget: Option<i64>,
     ) -> anyhow::Result<serde_json::Value> {
-        let parsed_status = status
-            .as_deref()
-            .map(|s| match s {
-                "Active" | "active" => ThreadGoalStatus::Active,
-                "Paused" | "paused" => ThreadGoalStatus::Paused,
-                "BudgetLimited" | "budgetLimited" => ThreadGoalStatus::BudgetLimited,
-                "Complete" | "complete" => ThreadGoalStatus::Complete,
-                _ => ThreadGoalStatus::Active,
-            });
+        let parsed_status = status.as_deref().map(|s| match s {
+            "Active" | "active" => ThreadGoalStatus::Active,
+            "Paused" | "paused" => ThreadGoalStatus::Paused,
+            "BudgetLimited" | "budgetLimited" => ThreadGoalStatus::BudgetLimited,
+            "Complete" | "complete" => ThreadGoalStatus::Complete,
+            _ => ThreadGoalStatus::Active,
+        });
         let response: ThreadGoalSetResponse = self
             .request_typed(ClientRequest::ThreadGoalSet {
                 request_id: self.next_request_id(),
@@ -1847,9 +1860,13 @@ impl AgentAdapter for CodexInProcessAdapter {
         self.session_id = Some(session_id.clone());
 
         // Clone the Arc<Mutex<client>> for the event pump; keep our reference for resolve/reject.
-        let client = self.client.as_ref().ok_or_else(|| {
-            anyhow::anyhow!("Codex client not set — call set_client() before start()")
-        })?.clone();
+        let client = self
+            .client
+            .as_ref()
+            .ok_or_else(|| {
+                anyhow::anyhow!("Codex client not set — call set_client() before start()")
+            })?
+            .clone();
 
         // Request handle was already extracted in new()/set_client().
         let handle = self.event_state.clone();
@@ -1984,8 +2001,7 @@ impl AgentAdapter for CodexInProcessAdapter {
         {
             let mut state = self.event_state.lock().await;
             state.current_tx = None;
-            let pending_ids: Vec<String> =
-                state.pending_server_requests.keys().cloned().collect();
+            let pending_ids: Vec<String> = state.pending_server_requests.keys().cloned().collect();
             state.pending_server_requests.clear();
             drop(state);
 
@@ -2030,18 +2046,17 @@ impl AgentAdapter for CodexInProcessAdapter {
         if let Some(client_arc) = self.client.take() {
             if let Ok(client_guard) = Arc::try_unwrap(client_arc) {
                 let client = client_guard.into_inner();
-                match tokio::time::timeout(
-                    std::time::Duration::from_secs(5),
-                    client.shutdown(),
-                )
-                .await
+                match tokio::time::timeout(std::time::Duration::from_secs(5), client.shutdown())
+                    .await
                 {
                     Ok(Ok(())) => info!("Codex client shut down gracefully"),
                     Ok(Err(e)) => warn!(error = %e, "Codex client shutdown returned error"),
                     Err(_) => warn!("Codex client shutdown timed out after 5s"),
                 }
             } else {
-                warn!("Cannot take ownership of Codex client for graceful shutdown — other Arc references still exist");
+                warn!(
+                    "Cannot take ownership of Codex client for graceful shutdown — other Arc references still exist"
+                );
             }
         }
 

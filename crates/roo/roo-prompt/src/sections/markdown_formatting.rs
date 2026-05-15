@@ -33,6 +33,8 @@ mod tests {
     fn test_markdown_formatting_section_link_format() {
         let result = markdown_formatting_section();
         // Verify the link format example is present
-        assert!(result.contains("[`filename OR language.declaration()`](relative/file/path.ext:line)"));
+        assert!(
+            result.contains("[`filename OR language.declaration()`](relative/file/path.ext:line)")
+        );
     }
 }

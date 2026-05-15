@@ -322,7 +322,10 @@ pub async fn get_commit_info(hash: &str, cwd: &Path) -> String {
         info_lines.get(3).unwrap_or(&"").to_string(),
         info_lines.get(4).unwrap_or(&"").to_string(),
     );
-    let body = info_lines.get(5..).map(|s| s.join("\n")).unwrap_or_default();
+    let body = info_lines
+        .get(5..)
+        .map(|s| s.join("\n"))
+        .unwrap_or_default();
 
     // Get stats
     let stats_output = Command::new("git")
@@ -398,7 +401,11 @@ pub async fn get_working_state(cwd: &Path) -> String {
         _ => String::new(),
     };
 
-    let output = format!("Working directory changes:\n\n{}\n\n{}", status.trim(), diff);
+    let output = format!(
+        "Working directory changes:\n\n{}\n\n{}",
+        status.trim(),
+        diff
+    );
     truncate_output(&output, GIT_OUTPUT_LINE_LIMIT)
 }
 

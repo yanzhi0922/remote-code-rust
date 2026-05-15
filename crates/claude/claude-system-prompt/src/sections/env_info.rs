@@ -236,7 +236,11 @@ pub fn compute_env_info_xml(ctx: &PromptContext) -> String {
     let additional_dirs_line = if ctx.additional_dirs.is_empty() {
         String::new()
     } else {
-        let dirs: Vec<String> = ctx.additional_dirs.iter().map(|d| format!("{}", d.display())).collect();
+        let dirs: Vec<String> = ctx
+            .additional_dirs
+            .iter()
+            .map(|d| format!("{}", d.display()))
+            .collect();
         format!("Additional working directories: {}\n", dirs.join(", "))
     };
 
@@ -362,10 +366,7 @@ mod tests {
 
     #[test]
     fn knowledge_cutoff_opus_4_6() {
-        assert_eq!(
-            get_knowledge_cutoff("claude-opus-4-6"),
-            Some("May 2025")
-        );
+        assert_eq!(get_knowledge_cutoff("claude-opus-4-6"), Some("May 2025"));
     }
 
     #[test]

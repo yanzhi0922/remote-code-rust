@@ -79,32 +79,30 @@ pub async fn auto_import_settings(settings_path: Option<&str>) -> AutoImportResu
 
     // Attempt to read and validate the file as JSON
     match tokio::fs::read_to_string(&resolved_path).await {
-        Ok(content) => {
-            match serde_json::from_str::<serde_json::Value>(&content) {
-                Ok(_) => {
-                    info!(
-                        "[AutoImport] Successfully validated settings from {}",
+        Ok(content) => match serde_json::from_str::<serde_json::Value>(&content) {
+            Ok(_) => {
+                info!(
+                    "[AutoImport] Successfully validated settings from {}",
+                    resolved_path.display()
+                );
+                AutoImportResult {
+                    success: true,
+                    message: format!(
+                        "Successfully validated settings from {}",
                         resolved_path.display()
-                    );
-                    AutoImportResult {
-                        success: true,
-                        message: format!(
-                            "Successfully validated settings from {}",
-                            resolved_path.display()
-                        ),
-                        path: Some(resolved_path),
-                    }
-                }
-                Err(e) => {
-                    warn!("[AutoImport] Failed to parse settings JSON: {}", e);
-                    AutoImportResult {
-                        success: false,
-                        message: format!("Failed to parse settings JSON: {}", e),
-                        path: Some(resolved_path),
-                    }
+                    ),
+                    path: Some(resolved_path),
                 }
             }
-        }
+            Err(e) => {
+                warn!("[AutoImport] Failed to parse settings JSON: {}", e);
+                AutoImportResult {
+                    success: false,
+                    message: format!("Failed to parse settings JSON: {}", e),
+                    path: Some(resolved_path),
+                }
+            }
+        },
         Err(e) => {
             warn!("[AutoImport] Failed to read settings file: {}", e);
             AutoImportResult {
@@ -167,7 +165,10 @@ mod tests {
         // On Windows, "/absolute/..." resolves to "C:/absolute/..." (current drive prefix)
         // On Unix, it stays as "/absolute/..."
         assert!(path.is_absolute());
-        assert!(path.to_string_lossy().ends_with("absolute/path/settings.json"));
+        assert!(
+            path.to_string_lossy()
+                .ends_with("absolute/path/settings.json")
+        );
     }
 
     #[test]

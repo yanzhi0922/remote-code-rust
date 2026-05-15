@@ -123,9 +123,7 @@ impl<R> TagMatcher<R> {
 
             match self.state {
                 TagMatcherState::Text => {
-                    if ch == '<'
-                        && (self.pointer > self.position || self.matched)
-                    {
+                    if ch == '<' && (self.pointer > self.position || self.matched) {
                         self.state = TagMatcherState::TagOpen;
                         self.index = 0;
                     } else {
@@ -142,13 +140,10 @@ impl<R> TagMatcher<R> {
                         self.matched = true;
                     } else if self.index == 0 && ch == '/' {
                         self.state = TagMatcherState::TagClose;
-                    } else if ch == ' '
-                        && (self.index == 0 || self.index == tag_name_chars.len())
-                    {
+                    } else if ch == ' ' && (self.index == 0 || self.index == tag_name_chars.len()) {
                         // Skip spaces at start or end of tag name
                         continue;
-                    } else if self.index < tag_name_chars.len()
-                        && tag_name_chars[self.index] == ch
+                    } else if self.index < tag_name_chars.len() && tag_name_chars[self.index] == ch
                     {
                         self.index += 1;
                     } else {
@@ -164,12 +159,9 @@ impl<R> TagMatcher<R> {
                         if !self.matched {
                             self.cached.clear();
                         }
-                    } else if ch == ' '
-                        && (self.index == 0 || self.index == tag_name_chars.len())
-                    {
+                    } else if ch == ' ' && (self.index == 0 || self.index == tag_name_chars.len()) {
                         continue;
-                    } else if self.index < tag_name_chars.len()
-                        && tag_name_chars[self.index] == ch
+                    } else if self.index < tag_name_chars.len() && tag_name_chars[self.index] == ch
                     {
                         self.index += 1;
                     } else {

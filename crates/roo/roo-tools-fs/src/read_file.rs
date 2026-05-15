@@ -11,8 +11,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::helpers::*;
 use crate::image_processing::{
-    is_image_file, process_image_file, ImageSkipReason, DEFAULT_MAX_IMAGE_FILE_SIZE_MB,
-    DEFAULT_MAX_TOTAL_IMAGE_SIZE_MB,
+    DEFAULT_MAX_IMAGE_FILE_SIZE_MB, DEFAULT_MAX_TOTAL_IMAGE_SIZE_MB, ImageSkipReason,
+    is_image_file, process_image_file,
 };
 use crate::types::*;
 use roo_ignore::RooIgnoreController;
@@ -51,7 +51,9 @@ fn add_cumulative_image_bytes(size_bytes: u64) {
 /// Validate read_file parameters.
 pub fn validate_read_file_params(params: &ReadFileParams) -> Result<(), FsToolError> {
     if params.path.trim().is_empty() {
-        return Err(FsToolError::Validation("path must not be empty".to_string()));
+        return Err(FsToolError::Validation(
+            "path must not be empty".to_string(),
+        ));
     }
 
     // Check for path traversal
@@ -139,7 +141,10 @@ pub fn process_read_file(
 
     // Check file size
     if metadata.len() as usize > MAX_FILE_SIZE {
-        return Err(FsToolError::ContentTooLarge(metadata.len() as usize, MAX_FILE_SIZE));
+        return Err(FsToolError::ContentTooLarge(
+            metadata.len() as usize,
+            MAX_FILE_SIZE,
+        ));
     }
 
     // Read raw bytes for binary detection
@@ -204,10 +209,7 @@ pub fn process_read_file(
         }
 
         return Ok(ReadResult {
-            content: format!(
-                "(Binary file: {} bytes, not displaying)",
-                raw_data.len()
-            ),
+            content: format!("(Binary file: {} bytes, not displaying)", raw_data.len()),
             path: params.path.clone(),
             total_lines: 0,
             truncated: false,
@@ -228,11 +230,7 @@ pub fn process_read_file(
         }
         ReadFileMode::Indentation => {
             let indent_params = params.indentation.as_ref().unwrap();
-            build_read_result_indentation(
-                content,
-                &params.path,
-                indent_params,
-            )
+            build_read_result_indentation(content, &params.path, indent_params)
         }
     }
 }
@@ -536,10 +534,14 @@ fn find_header_end(lines: &[&str]) -> usize {
             continue;
         }
         // Import/use statements are part of header
-        if trimmed.starts_with("use ") || trimmed.starts_with("import ")
-            || trimmed.starts_with("mod ") || trimmed.starts_with("extern ")
-            || trimmed.starts_with("#[") || trimmed.starts_with("pub mod ")
-            || trimmed.starts_with("package ") || trimmed.starts_with("include!")
+        if trimmed.starts_with("use ")
+            || trimmed.starts_with("import ")
+            || trimmed.starts_with("mod ")
+            || trimmed.starts_with("extern ")
+            || trimmed.starts_with("#[")
+            || trimmed.starts_with("pub mod ")
+            || trimmed.starts_with("package ")
+            || trimmed.starts_with("include!")
             || trimmed.starts_with("macro_rules!")
         {
             header_end = i + 1;
@@ -943,11 +945,7 @@ struct Foo {
 
     #[test]
     fn test_find_header_end_no_header() {
-        let lines: Vec<&str> = vec![
-            "fn main() {",
-            "    println!();",
-            "}",
-        ];
+        let lines: Vec<&str> = vec!["fn main() {", "    println!();", "}"];
         let header_end = find_header_end(&lines);
         assert_eq!(header_end, 0); // No header lines
     }

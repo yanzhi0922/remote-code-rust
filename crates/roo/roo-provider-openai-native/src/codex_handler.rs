@@ -144,10 +144,7 @@ impl OpenAiCodexHandler {
             .http_client
             .post(&url)
             .header("Content-Type", "application/json")
-            .header(
-                "Authorization",
-                format!("Bearer {}", self.access_token),
-            )
+            .header("Authorization", format!("Bearer {}", self.access_token))
             .header("originator", "roo-code")
             .header("session_id", session_header)
             .header("User-Agent", "roo-code/rust (codex-handler)");
@@ -179,23 +176,21 @@ impl OpenAiCodexHandler {
         let stream = response
             .bytes_stream()
             .eventsource()
-            .map(move |event| {
-                match event {
-                    Ok(event) => {
-                        if event.data == "[DONE]" {
-                            return None;
-                        }
-                        match responses_api::parse_sse_event(&event.data, &provider_name) {
-                            Ok(Some(chunk)) => Some(Ok(chunk)),
-                            Ok(None) => None,
-                            Err(e) => Some(Err(e)),
-                        }
+            .map(move |event| match event {
+                Ok(event) => {
+                    if event.data == "[DONE]" {
+                        return None;
                     }
-                    Err(e) => Some(Err(ProviderError::StreamError(format!(
-                        "{}: SSE error: {}",
-                        provider_name, e
-                    )))),
+                    match responses_api::parse_sse_event(&event.data, &provider_name) {
+                        Ok(Some(chunk)) => Some(Ok(chunk)),
+                        Ok(None) => None,
+                        Err(e) => Some(Err(e)),
+                    }
                 }
+                Err(e) => Some(Err(ProviderError::StreamError(format!(
+                    "{}: SSE error: {}",
+                    provider_name, e
+                )))),
             })
             .filter_map(|item| async move { item });
 
@@ -304,10 +299,7 @@ impl Provider for OpenAiCodexHandler {
             .http_client
             .post(&url)
             .header("Content-Type", "application/json")
-            .header(
-                "Authorization",
-                format!("Bearer {}", self.access_token),
-            )
+            .header("Authorization", format!("Bearer {}", self.access_token))
             .header("originator", "roo-code")
             .header("session_id", &self.session_id);
 

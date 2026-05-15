@@ -1,6 +1,6 @@
 //! Effort level parameter configuration for API requests.
 //!
-//! Maps the user-facing effort level (low / medium / high) to the
+//! Maps the user-facing effort level (low / medium / high / max) to the
 //! Anthropic `output_config.effort` field and the corresponding
 //! `anthropic-beta` header.
 //!
@@ -9,38 +9,8 @@
 
 use serde_json::{Value, json};
 
-// ---------------------------------------------------------------------------
-// Effort levels
-// ---------------------------------------------------------------------------
-
-/// Well-known effort level values.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EffortLevel {
-    /// Low effort — fast, concise responses.
-    Low,
-    /// Medium effort — balanced.
-    Medium,
-    /// High effort — thorough, detailed responses.
-    High,
-}
-
-impl EffortLevel {
-    /// Return the wire representation sent to the API.
-    #[must_use]
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Low => "low",
-            Self::Medium => "medium",
-            Self::High => "high",
-        }
-    }
-}
-
-impl std::fmt::Display for EffortLevel {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
+// Re-export EffortLevel from the canonical definition in claude-context.
+pub use claude_context::effort::EffortLevel;
 
 // ---------------------------------------------------------------------------
 // Beta header constant

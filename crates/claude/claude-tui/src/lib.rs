@@ -57,11 +57,6 @@ use std::io;
 use std::sync::Arc;
 
 use anyhow::Result;
-use crossterm::terminal::{
-    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
-};
-use ratatui::Terminal;
-use ratatui::backend::CrosstermBackend;
 use claude_config::{RuntimeConfig, restamp_runtime_session};
 use claude_core::{ConversationEntry, Message, SystemMessageSubtype};
 use claude_permissions::PermissionBroker;
@@ -89,6 +84,11 @@ use claude_tools::{
     tasks::stop_and_clear_tracked_tasks,
     tool_result_storage,
 };
+use crossterm::terminal::{
+    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
+};
+use ratatui::Terminal;
+use ratatui::backend::CrosstermBackend;
 
 use app::{App, AppAction};
 use event::{convert_event, handle_event};
@@ -855,7 +855,7 @@ async fn run_conversation_turn_with_messages(
                 println!("{msg}");
             }
         })),
-        task_stack: std::sync::Arc::new(std::sync::Mutex::new(
+        task_stack: std::sync::Arc::new(parking_lot::Mutex::new(
             claude_core::task_stack::TaskStack::default(),
         )),
         read_file_state: claude_tools::FileStateCache::new(),

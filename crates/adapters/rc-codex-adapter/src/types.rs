@@ -13,15 +13,14 @@ use tokio::sync::mpsc;
 use rc_agent_protocol::events::UnifiedAgentEvent;
 use rc_agent_protocol::permission::PermissionDecision;
 
+use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::{
     CommandExecParams, DynamicToolCallOutputContentItem, DynamicToolCallResponse,
-    FeedbackUploadParams, FileChangeApprovalDecision,
-    GrantedPermissionProfile, McpServerElicitationAction, McpServerElicitationRequestResponse,
-    PermissionGrantScope, RequestId,
-    SortDirection, ThreadListCwdFilter, ThreadListParams,
-    ThreadSortKey, ThreadSourceKind,
+    FeedbackUploadParams, FileChangeApprovalDecision, GrantedPermissionProfile,
+    McpServerElicitationAction, McpServerElicitationRequestResponse, PermissionGrantScope,
+    RequestId, SortDirection, ThreadListCwdFilter, ThreadListParams, ThreadSortKey,
+    ThreadSourceKind,
 };
-use codex_app_server_protocol::ServerRequest;
 use codex_protocol::protocol::ReviewDecision;
 
 // ---------------------------------------------------------------------------
@@ -395,7 +394,7 @@ pub(crate) fn typed_server_request_response(
             if let Some(response) = resolution.response {
                 let _refresh_response: codex_app_server_protocol::ChatgptAuthTokensRefreshResponse =
                     serde_json::from_value(response.clone())
-                    .with_context(|| "Invalid ChatgptAuthTokensRefreshResponse in resolution")?;
+                        .with_context(|| "Invalid ChatgptAuthTokensRefreshResponse in resolution")?;
                 return Ok(Some(response));
             }
             return Ok(None);
@@ -453,9 +452,7 @@ fn default_tool_user_input_answers(
 // Thread list params conversion helpers
 // ---------------------------------------------------------------------------
 
-pub(crate) fn thread_list_params_from_request(
-    request: CodexThreadListRequest,
-) -> ThreadListParams {
+pub(crate) fn thread_list_params_from_request(request: CodexThreadListRequest) -> ThreadListParams {
     ThreadListParams {
         cursor: request.cursor,
         limit: request.limit,

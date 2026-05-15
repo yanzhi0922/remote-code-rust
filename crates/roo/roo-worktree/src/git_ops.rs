@@ -174,7 +174,10 @@ pub struct CreateWorktreeResult {
 /// - `git worktree add -b <branch> <path> [<base>]` (new branch)
 /// - `git worktree add <path> <branch>` (existing branch)
 /// - `git worktree add --detach <path>` (no branch)
-pub fn create_worktree(cwd: &Path, opts: &CreateWorktreeOptions) -> Result<CreateWorktreeResult, String> {
+pub fn create_worktree(
+    cwd: &Path,
+    opts: &CreateWorktreeOptions,
+) -> Result<CreateWorktreeResult, String> {
     let mut args: Vec<String> = vec!["worktree".to_string(), "add".to_string()];
 
     if opts.create_new_branch {

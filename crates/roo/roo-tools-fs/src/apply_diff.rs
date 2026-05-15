@@ -24,7 +24,9 @@ pub fn clean_diff_content(diff: &str, model_id: Option<&str>) -> String {
 /// Validate apply_diff parameters.
 pub fn validate_apply_diff_params(params: &ApplyDiffParams) -> Result<(), FsToolError> {
     if params.path.trim().is_empty() {
-        return Err(FsToolError::Validation("path must not be empty".to_string()));
+        return Err(FsToolError::Validation(
+            "path must not be empty".to_string(),
+        ));
     }
 
     if params.path.contains("..") {
@@ -178,12 +180,14 @@ pub fn parse_diff_blocks(diff: &str) -> Result<Vec<(String, String)>, FsToolErro
 
         let after_separator_raw = &after_header[separator_pos + "=======".len()..];
         // Skip the newline immediately after the separator
-        let after_separator = after_separator_raw.strip_prefix('\n').unwrap_or(after_separator_raw);
+        let after_separator = after_separator_raw
+            .strip_prefix('\n')
+            .unwrap_or(after_separator_raw);
 
         // Find the end marker
-        let end_pos = after_separator
-            .find(">>>>>>> REPLACE")
-            .ok_or_else(|| FsToolError::InvalidDiff("missing '>>>>>>> REPLACE' marker".to_string()))?;
+        let end_pos = after_separator.find(">>>>>>> REPLACE").ok_or_else(|| {
+            FsToolError::InvalidDiff("missing '>>>>>>> REPLACE' marker".to_string())
+        })?;
 
         let replace_content = after_separator[..end_pos].trim_end().to_string();
 
@@ -225,10 +229,7 @@ pub fn apply_diff_blocks(
                     ));
                 }
                 Err(_) => {
-                    warnings.push(format!(
-                        "Block {}: search content not found in file",
-                        i + 1
-                    ));
+                    warnings.push(format!("Block {}: search content not found in file", i + 1));
                 }
             }
         }
@@ -255,11 +256,7 @@ const FUZZY_THRESHOLD: f64 = 0.8;
 ///
 /// Uses [`roo_diff::fuzzy_search`] to find the best-matching region in the
 /// content, then checks whether the similarity score meets the threshold.
-fn apply_fuzzy_diff(
-    content: &str,
-    search: &str,
-    replace: &str,
-) -> Result<String, FsToolError> {
+fn apply_fuzzy_diff(content: &str, search: &str, replace: &str) -> Result<String, FsToolError> {
     let lines: Vec<String> = content.lines().map(|l| l.to_string()).collect();
     let search_line_count = search.lines().count();
 
@@ -315,7 +312,10 @@ fn verify_diff_result(content: &str) -> Result<(), String> {
     }
 
     // Check for leftover diff markers
-    if content.contains("<<<<<<< SEARCH") || content.contains(">>>>>>> REPLACE") || content.contains("=======") {
+    if content.contains("<<<<<<< SEARCH")
+        || content.contains(">>>>>>> REPLACE")
+        || content.contains("=======")
+    {
         issues.push("Leftover diff markers found in result".to_string());
     }
 
@@ -676,7 +676,10 @@ bar
     #[test]
     fn test_apply_diff_with_verification_warning() {
         let original = "fn main() {";
-        let blocks = vec![("fn main() {".to_string(), "fn main() {\n    // added\n".to_string())];
+        let blocks = vec![(
+            "fn main() {".to_string(),
+            "fn main() {\n    // added\n".to_string(),
+        )];
         let result = apply_diff_blocks(original, &blocks).unwrap();
         assert_eq!(result.blocks_applied, 1);
         // Should have a warning about unbalanced braces
@@ -743,7 +746,11 @@ bar
     #[test]
     fn test_apply_fuzzy_diff_search_longer_than_content() {
         let content = "short";
-        let result = apply_fuzzy_diff(content, "line1\nline2\nline3\nline4\nline5\nline6", "replacement");
+        let result = apply_fuzzy_diff(
+            content,
+            "line1\nline2\nline3\nline4\nline5\nline6",
+            "replacement",
+        );
         assert!(result.is_err());
     }
 

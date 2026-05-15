@@ -3,8 +3,8 @@
 //! Converts internal query-engine observer events into the unified agent event
 //! model used by the adapter protocol.
 
-use rc_agent_protocol::events::{AgentResult, UnifiedAgentEvent, UsageInfo};
 use claude_query_engine::QueryObserverEvent;
+use rc_agent_protocol::events::{AgentResult, UnifiedAgentEvent, UsageInfo};
 
 /// Map a [`QueryObserverEvent`] to an optional [`UnifiedAgentEvent`].
 ///
@@ -117,13 +117,13 @@ pub fn map_observer_event(
             },
         }),
 
-        QueryObserverEvent::QueryFailed { error, usage: _, .. } => {
-            Some(UnifiedAgentEvent::Error {
-                session_id: session_id.to_owned(),
-                message: error,
-                recoverable: true,
-            })
-        }
+        QueryObserverEvent::QueryFailed {
+            error, usage: _, ..
+        } => Some(UnifiedAgentEvent::Error {
+            session_id: session_id.to_owned(),
+            message: error,
+            recoverable: true,
+        }),
 
         QueryObserverEvent::BudgetExceeded { reason, .. } => Some(UnifiedAgentEvent::Error {
             session_id: session_id.to_owned(),
@@ -168,11 +168,9 @@ pub fn map_observer_event(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rc_engine_events::Usage;
     use claude_core::ToolCall;
-    use claude_query_engine::{
-        QueryCheckpoint, QueryCheckpointKind, QueryContextBudgetState,
-    };
+    use claude_query_engine::{QueryCheckpoint, QueryCheckpointKind, QueryContextBudgetState};
+    use rc_engine_events::Usage;
 
     const SID: &str = "test-session-001";
 
@@ -188,7 +186,11 @@ mod tests {
     }
 
     fn make_tool_call(id: &str, name: &str, input: serde_json::Value) -> ToolCall {
-        ToolCall { id: id.to_string(), name: name.to_string(), input }
+        ToolCall {
+            id: id.to_string(),
+            name: name.to_string(),
+            input,
+        }
     }
 
     // ── Streaming events ──────────────────────────────────────────
@@ -196,7 +198,9 @@ mod tests {
     #[test]
     fn streaming_text_delta_maps_to_message_delta() {
         let event = QueryObserverEvent::StreamingTextDelta {
-            turn: 1, delta: "Hello".into(), accumulated_text: "Hello".into(),
+            turn: 1,
+            delta: "Hello".into(),
+            accumulated_text: "Hello".into(),
         };
         let result = map_observer_event(event, SID);
         match result {
@@ -211,7 +215,9 @@ mod tests {
     #[test]
     fn streaming_thinking_delta_has_prefix() {
         let event = QueryObserverEvent::StreamingThinkingDelta {
-            turn: 1, delta: "reasoning".into(), accumulated_thinking: "reasoning".into(),
+            turn: 1,
+            delta: "reasoning".into(),
+            accumulated_thinking: "reasoning".into(),
         };
         let result = map_observer_event(event, SID).expect("should map");
         if let UnifiedAgentEvent::MessageDelta { delta, .. } = &result {
@@ -224,7 +230,9 @@ mod tests {
     #[test]
     fn streaming_tool_call_started_is_suppressed() {
         let event = QueryObserverEvent::StreamingToolCallStarted {
-            turn: 1, tool_call_id: "tc-1".into(), tool_name: "read_file".into(),
+            turn: 1,
+            tool_call_id: "tc-1".into(),
+            tool_name: "read_file".into(),
         };
         assert!(map_observer_event(event, SID).is_none());
     }
@@ -232,7 +240,9 @@ mod tests {
     #[test]
     fn streaming_tool_call_delta_maps_to_progress() {
         let event = QueryObserverEvent::StreamingToolCallDelta {
-            turn: 1, tool_call_id: "tc-1".into(), delta: "partial".into(),
+            turn: 1,
+            tool_call_id: "tc-1".into(),
+            delta: "partial".into(),
         };
         let result = map_observer_event(event, SID).expect("should map");
         if let UnifiedAgentEvent::ToolCallProgress { progress, .. } = &result {
@@ -245,7 +255,8 @@ mod tests {
     #[test]
     fn streaming_usage_updated_maps_to_context_usage() {
         let event = QueryObserverEvent::StreamingUsageUpdated {
-            turn: 1, usage: make_usage(100, 50, 150),
+            turn: 1,
+            usage: make_usage(100, 50, 150),
         };
         let result = map_observer_event(event, SID).expect("should map");
         if let UnifiedAgentEvent::ContextUsage { used, total, .. } = &result {
@@ -263,11 +274,17 @@ mod tests {
         let input = serde_json::json!({"path": "/tmp/test.txt"});
         let event = QueryObserverEvent::ToolCallStarted {
             tool_call: make_tool_call("tc-1", "read_file", input.clone()),
-            turn: 1, batch_size: 1, batch_index: 0,
+            turn: 1,
+            batch_size: 1,
+            batch_index: 0,
         };
         let result = map_observer_event(event, SID).expect("should map");
         match result {
-            UnifiedAgentEvent::ToolCallStarted { tool_name, tool_input, .. } => {
+            UnifiedAgentEvent::ToolCallStarted {
+                tool_name,
+                tool_input,
+                ..
+            } => {
                 assert_eq!(tool_name, "read_file");
                 assert_eq!(tool_input, input);
             }
@@ -281,13 +298,19 @@ mod tests {
         let event = QueryObserverEvent::ToolResultCommitted {
             tool_call,
             result: claude_core::ToolResult {
-                content: "contents".into(), is_error: false,
-                content_blocks: vec![], follow_up_user_blocks: vec![],
+                content: "contents".into(),
+                is_error: false,
+                content_blocks: vec![],
+                follow_up_user_blocks: vec![],
             },
-            turn: 1, total_messages: 5,
+            turn: 1,
+            total_messages: 5,
         };
         let result = map_observer_event(event, SID).expect("should map");
-        if let UnifiedAgentEvent::ToolCallCompleted { result, tool_name, .. } = &result {
+        if let UnifiedAgentEvent::ToolCallCompleted {
+            result, tool_name, ..
+        } = &result
+        {
             assert_eq!(tool_name, "read_file");
             assert_eq!(result["tool_call_id"], "tc-1");
             assert_eq!(result["is_error"], false);
@@ -302,10 +325,13 @@ mod tests {
         let event = QueryObserverEvent::ToolResultCommitted {
             tool_call,
             result: claude_core::ToolResult {
-                content: "command not found".into(), is_error: true,
-                content_blocks: vec![], follow_up_user_blocks: vec![],
+                content: "command not found".into(),
+                is_error: true,
+                content_blocks: vec![],
+                follow_up_user_blocks: vec![],
             },
-            turn: 1, total_messages: 5,
+            turn: 1,
+            total_messages: 5,
         };
         let result = map_observer_event(event, SID).expect("should map");
         if let UnifiedAgentEvent::ToolCallCompleted { result, .. } = &result {
@@ -320,14 +346,24 @@ mod tests {
     #[test]
     fn context_compaction_calculates_removed() {
         let event = QueryObserverEvent::ContextCompactionApplied {
-            turn: 2, before_messages: 50, after_messages: 20,
-            compacted_conversation: vec![], max_input_tokens: 200_000,
-            threshold_tokens: 160_000, usage_ratio_before: 0.85,
-            usage_ratio_after: 0.35, estimated_tokens_before: 170_000,
+            turn: 2,
+            before_messages: 50,
+            after_messages: 20,
+            compacted_conversation: vec![],
+            max_input_tokens: 200_000,
+            threshold_tokens: 160_000,
+            usage_ratio_before: 0.85,
+            usage_ratio_after: 0.35,
+            estimated_tokens_before: 170_000,
             estimated_tokens_after: 70_000,
         };
         let result = map_observer_event(event, SID).expect("should map");
-        if let UnifiedAgentEvent::ContextCompacted { entries_removed, usage_ratio, .. } = &result {
+        if let UnifiedAgentEvent::ContextCompacted {
+            entries_removed,
+            usage_ratio,
+            ..
+        } = &result
+        {
             assert_eq!(*entries_removed, 30);
             assert!((usage_ratio - 0.35).abs() < f64::EPSILON);
         } else {
@@ -340,8 +376,11 @@ mod tests {
         let event = QueryObserverEvent::ContextBudgetEvaluated {
             turn: 1,
             context: QueryContextBudgetState {
-                estimated_tokens: 80_000, max_input_tokens: 200_000,
-                threshold_tokens: 160_000, usage_ratio: 0.4, needs_compaction: false,
+                estimated_tokens: 80_000,
+                max_input_tokens: 200_000,
+                threshold_tokens: 160_000,
+                usage_ratio: 0.4,
+                needs_compaction: false,
             },
             message_count: 30,
         };
@@ -359,8 +398,10 @@ mod tests {
     #[test]
     fn query_finished_maps_to_completed() {
         let event = QueryObserverEvent::QueryFinished {
-            stop_reason: "end_turn".into(), turns: 3,
-            final_text: Some("Done!".into()), usage: make_usage(500, 200, 700),
+            stop_reason: "end_turn".into(),
+            turns: 3,
+            final_text: Some("Done!".into()),
+            usage: make_usage(500, 200, 700),
         };
         let result = map_observer_event(event, SID).expect("should map");
         match result {
@@ -376,8 +417,10 @@ mod tests {
     #[test]
     fn query_finished_no_text_maps_to_empty() {
         let event = QueryObserverEvent::QueryFinished {
-            stop_reason: "tool_use".into(), turns: 1,
-            final_text: None, usage: make_usage(100, 50, 150),
+            stop_reason: "tool_use".into(),
+            turns: 1,
+            final_text: None,
+            usage: make_usage(100, 50, 150),
         };
         let result = map_observer_event(event, SID).expect("should map");
         if let UnifiedAgentEvent::Completed { result, .. } = &result {
@@ -390,11 +433,18 @@ mod tests {
     #[test]
     fn query_failed_is_recoverable() {
         let event = QueryObserverEvent::QueryFailed {
-            error: "rate limit".into(), turns: 2,
-            consecutive_failures: 1, usage: make_usage(100, 0, 100),
+            error: "rate limit".into(),
+            turns: 2,
+            consecutive_failures: 1,
+            usage: make_usage(100, 0, 100),
         };
         let result = map_observer_event(event, SID).expect("should map");
-        if let UnifiedAgentEvent::Error { message, recoverable, .. } = &result {
+        if let UnifiedAgentEvent::Error {
+            message,
+            recoverable,
+            ..
+        } = &result
+        {
             assert_eq!(message, "rate limit");
             assert!(*recoverable);
         } else {
@@ -406,13 +456,20 @@ mod tests {
     fn budget_exceeded_is_not_recoverable() {
         let event = QueryObserverEvent::BudgetExceeded {
             budget: claude_query_engine::QueryBudgetState {
-                turn: 5, total_tokens: 100_000, max_turns: 5,
+                turn: 5,
+                total_tokens: 100_000,
+                max_turns: 5,
                 max_total_tokens: Some(100_000),
             },
             reason: "max turns".into(),
         };
         let result = map_observer_event(event, SID).expect("should map");
-        if let UnifiedAgentEvent::Error { message, recoverable, .. } = &result {
+        if let UnifiedAgentEvent::Error {
+            message,
+            recoverable,
+            ..
+        } = &result
+        {
             assert!(message.contains("Budget exceeded"));
             assert!(!recoverable);
         } else {
@@ -425,7 +482,9 @@ mod tests {
     #[test]
     fn query_started_returns_none() {
         let event = QueryObserverEvent::QueryStarted {
-            session_id: uuid::Uuid::new_v4().into(), existing_messages: 0, new_messages: 0,
+            session_id: uuid::Uuid::new_v4().into(),
+            existing_messages: 0,
+            new_messages: 0,
         };
         assert!(map_observer_event(event, SID).is_none());
     }
@@ -434,8 +493,12 @@ mod tests {
     fn checkpoint_created_returns_none() {
         let event = QueryObserverEvent::CheckpointCreated {
             checkpoint: QueryCheckpoint::new(
-                QueryCheckpointKind::ResumeBoundary, uuid::Uuid::new_v4().into(),
-                1, None, vec![], 5,
+                QueryCheckpointKind::ResumeBoundary,
+                uuid::Uuid::new_v4().into(),
+                1,
+                None,
+                vec![],
+                5,
             ),
         };
         assert!(map_observer_event(event, SID).is_none());
@@ -444,7 +507,9 @@ mod tests {
     #[test]
     fn max_tokens_escalate_returns_none() {
         let event = QueryObserverEvent::MaxTokensEscalate {
-            turn: 2, from_max_tokens: 4096, to_max_tokens: 16384,
+            turn: 2,
+            from_max_tokens: 4096,
+            to_max_tokens: 16384,
         };
         assert!(map_observer_event(event, SID).is_none());
     }

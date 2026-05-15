@@ -1,10 +1,10 @@
-﻿//! OpenRouter model definitions.
+//! OpenRouter model definitions.
 //!
 //! OpenRouter provides access to many models through a unified API.
 //! We define a subset of popular models with their pricing.
 
-use std::collections::HashMap;
 use roo_types::model::ModelInfo;
+use std::collections::HashMap;
 
 /// Default OpenRouter model ID.
 pub const DEFAULT_MODEL_ID: &str = "anthropic/claude-sonnet-4.5";

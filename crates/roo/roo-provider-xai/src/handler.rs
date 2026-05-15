@@ -20,7 +20,9 @@ pub struct XaiHandler {
 impl XaiHandler {
     /// Create a new xAI handler from configuration.
     pub fn new(config: XaiConfig) -> Result<Self, roo_provider::ProviderError> {
-        let model_id = config.model_id.unwrap_or_else(|| models::default_model_id());
+        let model_id = config
+            .model_id
+            .unwrap_or_else(|| models::default_model_id());
         let model_info = models::models()
             .get(&model_id)
             .cloned()
@@ -44,7 +46,7 @@ impl XaiHandler {
             model_info,
             provider_name_enum: ProviderName::Xai,
             request_timeout: config.request_timeout,
-        reasoning_effort: None,
+            reasoning_effort: None,
             streaming_enabled: None,
             include_max_tokens: None,
             extra_body_fields: None,
@@ -59,8 +61,8 @@ impl XaiHandler {
     pub fn from_settings(
         settings: &roo_types::provider_settings::ProviderSettings,
     ) -> Result<Self, roo_provider::ProviderError> {
-        let config =
-            XaiConfig::from_settings(settings).ok_or(roo_provider::ProviderError::ApiKeyRequired)?;
+        let config = XaiConfig::from_settings(settings)
+            .ok_or(roo_provider::ProviderError::ApiKeyRequired)?;
         Self::new(config)
     }
 }
@@ -83,10 +85,7 @@ impl Provider for XaiHandler {
         self.inner.get_model()
     }
 
-    async fn complete_prompt(
-        &self,
-        prompt: &str,
-    ) -> Result<String, roo_provider::ProviderError> {
+    async fn complete_prompt(&self, prompt: &str) -> Result<String, roo_provider::ProviderError> {
         self.inner.complete_prompt(prompt).await
     }
 
@@ -233,7 +232,9 @@ mod tests {
     #[test]
     fn test_mini_model_has_thinking() {
         let all_models = models::models();
-        let mini = all_models.get("grok-3-mini").expect("grok-3-mini should exist");
+        let mini = all_models
+            .get("grok-3-mini")
+            .expect("grok-3-mini should exist");
         assert_eq!(mini.supports_reasoning_budget, Some(true));
     }
 

@@ -19,15 +19,18 @@ pub mod tag_matcher;
 pub mod validate;
 
 // Re-export key types
-pub use build::{BuildToolsOptions, BuildToolsResult, build_native_tools_array, build_native_tools_array_with_restrictions};
+pub use build::{
+    BuildToolsOptions, BuildToolsResult, build_native_tools_array,
+    build_native_tools_array_with_restrictions,
+};
 pub use definition::{NativeToolsOptions, ToolDefinition, find_tool_by_name, get_native_tools};
 pub use filter::{
-    ModelToolCustomizationResult, FilterSettings, ModelToolInfo,
-    apply_tool_aliases, filter_mcp_tools_for_mode, filter_native_tools_for_mode,
-    get_tool_alias_group, is_tool_allowed_in_mode,
+    FilterSettings, ModelToolCustomizationResult, ModelToolInfo, apply_tool_aliases,
+    filter_mcp_tools_for_mode, filter_native_tools_for_mode, get_tool_alias_group,
+    is_tool_allowed_in_mode,
 };
 pub use groups::{
-    ToolGroupConfig, ALWAYS_AVAILABLE_TOOLS, TOOL_ALIASES, TOOL_DISPLAY_NAMES, TOOL_GROUPS,
+    ALWAYS_AVAILABLE_TOOLS, TOOL_ALIASES, TOOL_DISPLAY_NAMES, TOOL_GROUPS, ToolGroupConfig,
     get_group_name, get_group_options, get_tools_for_mode, is_always_available, resolve_tool_alias,
 };
 pub use repetition::ToolRepetitionDetector;

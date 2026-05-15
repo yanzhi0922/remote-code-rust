@@ -151,9 +151,8 @@ impl ApplyPatchDiffStrategy {
             });
 
             // Also try with trim-end matching
-            let found = found.or_else(|| {
-                seek_lines_trim_end(&result_lines, &chunk.old_lines, line_index)
-            });
+            let found =
+                found.or_else(|| seek_lines_trim_end(&result_lines, &chunk.old_lines, line_index));
 
             match found {
                 Some((idx, len)) => {
@@ -275,8 +274,7 @@ fn parse_update_chunks(patch: &str) -> Result<Vec<PatchChunk>, String> {
                     continue;
                 }
 
-                let (chunk, consumed) =
-                    parse_one_chunk(&content_lines[i..], first_chunk)?;
+                let (chunk, consumed) = parse_one_chunk(&content_lines[i..], first_chunk)?;
                 chunks.push(chunk);
                 first_chunk = false;
                 i += consumed;
@@ -394,11 +392,7 @@ fn find_line(lines: &[String], target: &str, start: usize) -> Option<usize> {
 
 /// Find a sequence of pattern lines within lines, starting at or after `start`.
 /// Returns (index, matched_length).
-fn seek_lines(
-    lines: &[String],
-    pattern: &[String],
-    start: usize,
-) -> Option<(usize, usize)> {
+fn seek_lines(lines: &[String], pattern: &[String], start: usize) -> Option<(usize, usize)> {
     if pattern.is_empty() {
         return Some((start, 0));
     }
@@ -511,7 +505,11 @@ mod tests {
  line3
 *** End Patch";
         let result = strategy.apply_diff(original, patch);
-        assert!(result.success, "Expected success, got error: {:?}", result.error);
+        assert!(
+            result.success,
+            "Expected success, got error: {:?}",
+            result.error
+        );
         assert_eq!(result.content.unwrap(), "line1\nLINE2\nline3\n");
     }
 
@@ -528,7 +526,11 @@ mod tests {
  line3
 *** End Patch";
         let result = strategy.apply_diff(original, patch);
-        assert!(result.success, "Expected success, got error: {:?}", result.error);
+        assert!(
+            result.success,
+            "Expected success, got error: {:?}",
+            result.error
+        );
         assert_eq!(result.content.unwrap(), "line1\nline2\nline3\n");
     }
 
@@ -545,7 +547,11 @@ mod tests {
  line3
 *** End Patch";
         let result = strategy.apply_diff(original, patch);
-        assert!(result.success, "Expected success, got error: {:?}", result.error);
+        assert!(
+            result.success,
+            "Expected success, got error: {:?}",
+            result.error
+        );
         assert_eq!(result.content.unwrap(), "line1\nline3\n");
     }
 
@@ -561,7 +567,11 @@ mod tests {
 +        return 42
 *** End Patch";
         let result = strategy.apply_diff(original, patch);
-        assert!(result.success, "Expected success, got error: {:?}", result.error);
+        assert!(
+            result.success,
+            "Expected success, got error: {:?}",
+            result.error
+        );
         let content = result.content.unwrap();
         assert!(content.contains("return 42"));
         assert!(!content.contains("pass"));
@@ -584,7 +594,11 @@ mod tests {
 +LINE5
 *** End Patch";
         let result = strategy.apply_diff(original, patch);
-        assert!(result.success, "Expected success, got error: {:?}", result.error);
+        assert!(
+            result.success,
+            "Expected success, got error: {:?}",
+            result.error
+        );
         assert_eq!(
             result.content.unwrap(),
             "LINE1\nline2\nline3\nline4\nLINE5\n"
@@ -651,7 +665,11 @@ mod tests {
  line3
 *** End Patch";
         let result = strategy.apply_diff(original, patch);
-        assert!(result.success, "Expected success, got error: {:?}", result.error);
+        assert!(
+            result.success,
+            "Expected success, got error: {:?}",
+            result.error
+        );
         assert_eq!(result.content.unwrap(), "line1\r\nLINE2\r\nline3\r\n");
     }
 

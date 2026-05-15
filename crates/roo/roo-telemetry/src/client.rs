@@ -2,7 +2,9 @@ use std::collections::HashMap;
 
 use serde_json::Value;
 
-use crate::types::{TelemetryEvent, TelemetryEventName, TelemetryEventSubscription, SubscriptionType};
+use crate::types::{
+    SubscriptionType, TelemetryEvent, TelemetryEventName, TelemetryEventSubscription,
+};
 
 /// Error type for telemetry client operations.
 #[derive(Debug, thiserror::Error)]
@@ -23,7 +25,11 @@ pub trait TelemetryClient: Send + Sync {
     fn capture(&self, event: TelemetryEvent);
 
     /// Capture an exception/error.
-    fn capture_exception(&self, error: &dyn std::error::Error, additional_properties: Option<HashMap<String, Value>>);
+    fn capture_exception(
+        &self,
+        error: &dyn std::error::Error,
+        additional_properties: Option<HashMap<String, Value>>,
+    );
 
     /// Update the telemetry state based on user preference.
     fn update_telemetry_state(&mut self, did_user_opt_in: bool);
@@ -114,13 +120,20 @@ impl TelemetryClient for BaseTelemetryClient {
         self.captured_events.lock().unwrap().push(event);
     }
 
-    fn capture_exception(&self, error: &dyn std::error::Error, additional_properties: Option<HashMap<String, Value>>) {
+    fn capture_exception(
+        &self,
+        error: &dyn std::error::Error,
+        additional_properties: Option<HashMap<String, Value>>,
+    ) {
         if !self.telemetry_enabled {
             return;
         }
 
         let mut properties = HashMap::new();
-        properties.insert("error_message".to_string(), Value::String(error.to_string()));
+        properties.insert(
+            "error_message".to_string(),
+            Value::String(error.to_string()),
+        );
 
         if let Some(additional) = additional_properties {
             properties.extend(additional);
@@ -215,7 +228,10 @@ mod tests {
     fn test_is_event_capturable_include_subscription() {
         let sub = TelemetryEventSubscription {
             subscription_type: SubscriptionType::Include,
-            events: vec![TelemetryEventName::TaskCreated, TelemetryEventName::TaskCompleted],
+            events: vec![
+                TelemetryEventName::TaskCreated,
+                TelemetryEventName::TaskCompleted,
+            ],
         };
         let client = BaseTelemetryClient::new(Some(sub), false);
         assert!(client.is_event_capturable(&TelemetryEventName::TaskCreated));
@@ -259,7 +275,10 @@ mod tests {
     #[test]
     fn test_capture_exception_disabled() {
         let client = BaseTelemetryClient::new(None, false);
-        client.capture_exception(&std::io::Error::new(std::io::ErrorKind::Other, "test"), None);
+        client.capture_exception(
+            &std::io::Error::new(std::io::ErrorKind::Other, "test"),
+            None,
+        );
         assert!(client.get_captured_events().is_empty());
     }
 
@@ -267,7 +286,10 @@ mod tests {
     fn test_capture_exception_enabled() {
         let mut client = BaseTelemetryClient::new(None, false);
         client.update_telemetry_state(true);
-        client.capture_exception(&std::io::Error::new(std::io::ErrorKind::Other, "test error"), None);
+        client.capture_exception(
+            &std::io::Error::new(std::io::ErrorKind::Other, "test error"),
+            None,
+        );
         let events = client.get_captured_events();
         assert_eq!(events.len(), 1);
     }

@@ -58,16 +58,26 @@ fn apply_long_context_pricing(
 
     // Apply multipliers
     let mut adjusted = model_info.clone();
-    if let (Some(price), Some(multiplier)) = (model_info.input_price, pricing.input_price_multiplier) {
+    if let (Some(price), Some(multiplier)) =
+        (model_info.input_price, pricing.input_price_multiplier)
+    {
         adjusted.input_price = Some(price * multiplier);
     }
-    if let (Some(price), Some(multiplier)) = (model_info.output_price, pricing.output_price_multiplier) {
+    if let (Some(price), Some(multiplier)) =
+        (model_info.output_price, pricing.output_price_multiplier)
+    {
         adjusted.output_price = Some(price * multiplier);
     }
-    if let (Some(price), Some(multiplier)) = (model_info.cache_writes_price, pricing.cache_writes_price_multiplier) {
+    if let (Some(price), Some(multiplier)) = (
+        model_info.cache_writes_price,
+        pricing.cache_writes_price_multiplier,
+    ) {
         adjusted.cache_writes_price = Some(price * multiplier);
     }
-    if let (Some(price), Some(multiplier)) = (model_info.cache_reads_price, pricing.cache_reads_price_multiplier) {
+    if let (Some(price), Some(multiplier)) = (
+        model_info.cache_reads_price,
+        pricing.cache_reads_price_multiplier,
+    ) {
         adjusted.cache_reads_price = Some(price * multiplier);
     }
 
@@ -88,8 +98,10 @@ fn calculate_cost_internal(
     cache_creation_tokens: u64,
     cache_read_tokens: u64,
 ) -> f64 {
-    let cache_writes_cost = model_info.cache_writes_price.unwrap_or(0.0) * cache_creation_tokens as f64 / 1_000_000.0;
-    let cache_reads_cost = model_info.cache_reads_price.unwrap_or(0.0) * cache_read_tokens as f64 / 1_000_000.0;
+    let cache_writes_cost =
+        model_info.cache_writes_price.unwrap_or(0.0) * cache_creation_tokens as f64 / 1_000_000.0;
+    let cache_reads_cost =
+        model_info.cache_reads_price.unwrap_or(0.0) * cache_read_tokens as f64 / 1_000_000.0;
     let base_input_cost = model_info.input_price.unwrap_or(0.0) * input_tokens as f64 / 1_000_000.0;
     let output_cost = model_info.output_price.unwrap_or(0.0) * output_tokens as f64 / 1_000_000.0;
 
@@ -156,7 +168,9 @@ pub fn calculate_api_cost_openai(
     let cache_read = cache_read_tokens.unwrap_or(0);
 
     // For OpenAI: input_tokens ALREADY includes all tokens (cached + non-cached)
-    let non_cached_input = input_tokens.saturating_sub(cache_creation).saturating_sub(cache_read);
+    let non_cached_input = input_tokens
+        .saturating_sub(cache_creation)
+        .saturating_sub(cache_read);
 
     let effective_model_info = apply_long_context_pricing(model_info, input_tokens, service_tier);
 

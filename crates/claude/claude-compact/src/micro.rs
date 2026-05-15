@@ -286,7 +286,9 @@ pub fn estimate_messages_tokens(messages: &[Message]) -> u64 {
 mod tests {
     use super::*;
     use claude_core::message::UserMessage;
-    use claude_core::{AssistantContentBlock, AssistantMessage, MessageBase, ToolUseSummaryMessage};
+    use claude_core::{
+        AssistantContentBlock, AssistantMessage, MessageBase, ToolUseSummaryMessage,
+    };
 
     // -- Helper constructors --
 

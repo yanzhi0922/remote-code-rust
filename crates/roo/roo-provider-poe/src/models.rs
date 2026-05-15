@@ -1,7 +1,7 @@
-﻿//! Poe model definitions.
+//! Poe model definitions.
 
-use std::collections::HashMap;
 use roo_types::model::ModelInfo;
+use std::collections::HashMap;
 
 /// Default Poe model ID.
 pub const DEFAULT_MODEL_ID: &str = "gpt-4o";

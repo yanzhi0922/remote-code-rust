@@ -20,7 +20,8 @@
 //! └──────────────────────────────────────────────────┘
 //! ```
 
-use std::sync::{Arc, RwLock};
+use parking_lot::RwLock;
+use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -244,7 +245,7 @@ impl AppStateManager {
     /// Returns an immutable snapshot that can be held without locking
     /// the manager.
     pub fn snapshot(&self) -> StateSnapshot {
-        let guard = self.inner.read().unwrap_or_else(|e| e.into_inner());
+        let guard = self.inner.read();
         StateSnapshot::new(guard.state.clone(), guard.version)
     }
 
@@ -252,7 +253,7 @@ impl AppStateManager {
     ///
     /// Increments the version counter and updates the timestamp.
     pub fn apply(&self, update: StateUpdate) {
-        let mut guard = self.inner.write().unwrap_or_else(|e| e.into_inner());
+        let mut guard = self.inner.write();
         guard.apply(update);
     }
 
@@ -261,7 +262,7 @@ impl AppStateManager {
     /// All updates are applied under a single write lock, ensuring
     /// no reader sees an intermediate state.
     pub fn batch_apply(&self, updates: Vec<StateUpdate>) {
-        let mut guard = self.inner.write().unwrap_or_else(|e| e.into_inner());
+        let mut guard = self.inner.write();
         for update in updates {
             guard.apply(update);
         }
@@ -269,25 +270,25 @@ impl AppStateManager {
 
     /// Return the current version number.
     pub fn version(&self) -> u64 {
-        let guard = self.inner.read().unwrap_or_else(|e| e.into_inner());
+        let guard = self.inner.read();
         guard.version
     }
 
     /// Return the last update timestamp.
     pub fn last_updated(&self) -> DateTime<Utc> {
-        let guard = self.inner.read().unwrap_or_else(|e| e.into_inner());
+        let guard = self.inner.read();
         guard.last_updated
     }
 
     /// Check if the manager has an active session.
     pub fn has_session(&self) -> bool {
-        let guard = self.inner.read().unwrap_or_else(|e| e.into_inner());
+        let guard = self.inner.read();
         guard.state.session_id.is_some()
     }
 
     /// Return the current message count.
     pub fn message_count(&self) -> usize {
-        let guard = self.inner.read().unwrap_or_else(|e| e.into_inner());
+        let guard = self.inner.read();
         guard.state.messages.len()
     }
 

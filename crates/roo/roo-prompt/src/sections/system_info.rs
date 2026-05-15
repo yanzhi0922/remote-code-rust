@@ -34,7 +34,8 @@ mod tests {
 
     #[test]
     fn test_get_system_info_section_basic() {
-        let result = get_system_info_section("Linux 6.1", "/bin/bash", "/home/user", "/home/user/project");
+        let result =
+            get_system_info_section("Linux 6.1", "/bin/bash", "/home/user", "/home/user/project");
         assert!(result.starts_with("====\n\nSYSTEM INFORMATION"));
         assert!(result.contains("Operating System: Linux 6.1"));
         assert!(result.contains("Default Shell: /bin/bash"));
@@ -58,8 +59,13 @@ mod tests {
 
     #[test]
     fn test_get_system_info_section_contains_workspace_description() {
-        let result = get_system_info_section("macOS 14.0", "/bin/zsh", "/Users/test", "/Users/test/dev");
-        assert!(result.contains("The Current Workspace Directory is the active VS Code project directory"));
+        let result =
+            get_system_info_section("macOS 14.0", "/bin/zsh", "/Users/test", "/Users/test/dev");
+        assert!(
+            result.contains(
+                "The Current Workspace Directory is the active VS Code project directory"
+            )
+        );
         assert!(result.contains("list_files tool"));
         assert!(result.contains("recursive parameter"));
     }

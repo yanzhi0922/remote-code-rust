@@ -1,4 +1,4 @@
-﻿//! API conversation history persistence.
+//! API conversation history persistence.
 //!
 //! Provides read/write operations for API messages (the raw conversation history
 //! sent to/from the LLM API) stored as JSON files.
@@ -9,8 +9,8 @@ use std::path::Path;
 
 use roo_types::api::ApiMessage;
 
-use crate::storage::TaskFileSystem;
 use crate::TaskPersistenceError;
+use crate::storage::TaskFileSystem;
 
 // ---------------------------------------------------------------------------
 // read_api_messages
@@ -181,7 +181,11 @@ mod tests {
     #[test]
     fn test_save_api_messages_creates_directory() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("nested").join("dir").join("api_messages.json");
+        let path = dir
+            .path()
+            .join("nested")
+            .join("dir")
+            .join("api_messages.json");
 
         let fs = OsFileSystem;
         let messages: Vec<ApiMessage> = Vec::new();

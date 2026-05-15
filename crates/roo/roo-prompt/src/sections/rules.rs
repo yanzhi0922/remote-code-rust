@@ -74,7 +74,11 @@ When asked about your creator, vendor, or company, respond with:
 /// Returns the rules section.
 ///
 /// Source: `src/core/prompts/sections/rules.ts` — `getRulesSection`
-pub fn get_rules_section(cwd: &str, shell: &str, settings: Option<&SystemPromptSettings>) -> String {
+pub fn get_rules_section(
+    cwd: &str,
+    shell: &str,
+    settings: Option<&SystemPromptSettings>,
+) -> String {
     let cwd_posix = to_posix(cwd);
     let chain_op = get_command_chain_operator(shell);
     let chain_note = get_command_chain_note(shell);
@@ -132,13 +136,19 @@ mod tests {
     fn test_get_command_chain_operator_powershell() {
         assert_eq!(get_command_chain_operator("powershell"), ";");
         assert_eq!(get_command_chain_operator("pwsh"), ";");
-        assert_eq!(get_command_chain_operator("C:\\Windows\\PowerShell\\v1.0\\powershell.exe"), ";");
+        assert_eq!(
+            get_command_chain_operator("C:\\Windows\\PowerShell\\v1.0\\powershell.exe"),
+            ";"
+        );
     }
 
     #[test]
     fn test_get_command_chain_operator_cmd() {
         assert_eq!(get_command_chain_operator("cmd.exe"), "&&");
-        assert_eq!(get_command_chain_operator("C:\\WINDOWS\\system32\\cmd.exe"), "&&");
+        assert_eq!(
+            get_command_chain_operator("C:\\WINDOWS\\system32\\cmd.exe"),
+            "&&"
+        );
     }
 
     #[test]

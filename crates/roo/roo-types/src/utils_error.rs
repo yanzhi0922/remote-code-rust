@@ -67,7 +67,10 @@ mod tests {
     #[test]
     fn test_organization_allow_list_violation_error() {
         let err = OrganizationAllowListViolationError::new("test model not allowed");
-        assert!(err.to_string().contains("Organization allow list violation"));
+        assert!(
+            err.to_string()
+                .contains("Organization allow list violation")
+        );
         assert!(err.to_string().contains("test model not allowed"));
     }
 

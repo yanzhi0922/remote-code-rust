@@ -649,7 +649,8 @@ mod tests {
                 always_allow: false,
             }],
         }];
-        let text = r#"{"type":"use_mcp_tool","server_name":"test-server","tool_name":"dangerous_tool"}"#;
+        let text =
+            r#"{"type":"use_mcp_tool","server_name":"test-server","tool_name":"dangerous_tool"}"#;
         let result = check_auto_approval(CheckAutoApprovalParams {
             state: &state,
             ask: &AskType::UseMcpServer,
@@ -667,7 +668,8 @@ mod tests {
             always_allow_mcp: true,
             ..Default::default()
         };
-        let text = r#"{"type":"access_mcp_resource","server_name":"test-server","uri":"test://resource"}"#;
+        let text =
+            r#"{"type":"access_mcp_resource","server_name":"test-server","uri":"test://resource"}"#;
         let result = check_auto_approval(CheckAutoApprovalParams {
             state: &state,
             ask: &AskType::UseMcpServer,
@@ -685,7 +687,8 @@ mod tests {
             always_allow_mcp: false,
             ..Default::default()
         };
-        let text = r#"{"type":"access_mcp_resource","server_name":"test-server","uri":"test://resource"}"#;
+        let text =
+            r#"{"type":"access_mcp_resource","server_name":"test-server","uri":"test://resource"}"#;
         let result = check_auto_approval(CheckAutoApprovalParams {
             state: &state,
             ask: &AskType::UseMcpServer,

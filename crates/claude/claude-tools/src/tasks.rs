@@ -1,16 +1,16 @@
 //! Shared task-list tools plus tracked background task persistence helpers.
 
+use parking_lot::Mutex;
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::fs::OpenOptions;
 use std::path::Path;
 use std::path::PathBuf;
-use std::sync::Mutex;
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
-use once_cell::sync::Lazy;
 use claude_ui_bridge::{UiTaskKind, UiTaskNode, UiTaskStatus};
+use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -220,7 +220,7 @@ pub fn allocate_task_id() -> String {
 
 #[cfg(test)]
 pub(crate) struct TaskTestGuard {
-    _guard: std::sync::MutexGuard<'static, ()>,
+    _guard: parking_lot::MutexGuard<'static, ()>,
 }
 
 #[cfg(test)]
@@ -232,46 +232,29 @@ impl Drop for TaskTestGuard {
 
 #[cfg(test)]
 pub(crate) fn test_guard_for_tests() -> TaskTestGuard {
-    let guard = TASK_TEST_GUARD
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let guard = TASK_TEST_GUARD.lock();
     reset_task_test_state();
     TaskTestGuard { _guard: guard }
 }
 
 #[cfg(test)]
 fn reset_task_test_state() {
-    TASK_STORE
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .clear();
-    *TASK_OUTPUT_DIR
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
-    *TASK_LIST_ID
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
-    *TASK_LIST_BASE_DIR
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
-    *LEADER_TEAM_NAME
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+    TASK_STORE.lock().clear();
+    *TASK_OUTPUT_DIR.lock() = None;
+    *TASK_LIST_ID.lock() = None;
+    *TASK_LIST_BASE_DIR.lock() = None;
+    *LEADER_TEAM_NAME.lock() = None;
 }
 
 pub fn configure_task_output_dir(path: Option<PathBuf>) -> Result<()> {
-    let mut output_dir = TASK_OUTPUT_DIR
-        .lock()
-        .map_err(|_| anyhow!("task output dir lock poisoned"))?;
+    let mut output_dir = TASK_OUTPUT_DIR.lock();
     *output_dir = path;
     Ok(())
 }
 
 #[must_use]
 pub fn task_snapshots() -> Vec<BackgroundTask> {
-    let store = TASK_STORE
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let store = TASK_STORE.lock();
     let mut tasks = store.values().cloned().collect::<Vec<_>>();
     tasks.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
     tasks
@@ -371,9 +354,7 @@ pub fn create_background_task(title: &str) -> Result<BackgroundTask> {
         created_at: now_timestamp(),
         updated_at: now_timestamp(),
     };
-    let mut store = TASK_STORE
-        .lock()
-        .map_err(|_| anyhow!("task store lock poisoned"))?;
+    let mut store = TASK_STORE.lock();
     store.insert(task.id.clone(), task.clone());
     drop(store);
     persist_task_if_configured(&task.id)?;
@@ -389,9 +370,7 @@ pub fn start_tracked_task(
     summary: Option<&str>,
 ) -> Result<BackgroundTask> {
     let now = now_timestamp();
-    let mut store = TASK_STORE
-        .lock()
-        .map_err(|_| anyhow!("task store lock poisoned"))?;
+    let mut store = TASK_STORE.lock();
     let task = store
         .entry(task_id.clone())
         .or_insert_with(|| BackgroundTask {
@@ -422,9 +401,7 @@ pub fn start_tracked_task(
 }
 
 pub fn update_task_progress(task_id: &str, summary: &str) -> Result<()> {
-    let mut store = TASK_STORE
-        .lock()
-        .map_err(|_| anyhow!("task store lock poisoned"))?;
+    let mut store = TASK_STORE.lock();
     let task = store
         .get_mut(task_id)
         .ok_or_else(|| anyhow!("task '{task_id}' not found"))?;
@@ -435,9 +412,7 @@ pub fn update_task_progress(task_id: &str, summary: &str) -> Result<()> {
 }
 
 pub fn mark_task_running(task_id: &str, output: Option<&str>) -> Result<()> {
-    let mut store = TASK_STORE
-        .lock()
-        .map_err(|_| anyhow!("task store lock poisoned"))?;
+    let mut store = TASK_STORE.lock();
     let task = store
         .get_mut(task_id)
         .ok_or_else(|| anyhow!("task '{task_id}' not found"))?;
@@ -460,9 +435,7 @@ pub fn finish_tracked_task(
     output: &str,
     turns_used: Option<u32>,
 ) -> Result<()> {
-    let mut store = TASK_STORE
-        .lock()
-        .map_err(|_| anyhow!("task store lock poisoned"))?;
+    let mut store = TASK_STORE.lock();
     let task = store
         .get_mut(task_id)
         .ok_or_else(|| anyhow!("task '{task_id}' not found"))?;
@@ -740,9 +713,7 @@ pub fn task_output(input: &Value) -> Result<String> {
         .as_str()
         .ok_or_else(|| anyhow!("task_id is required"))?;
 
-    let store = TASK_STORE
-        .lock()
-        .map_err(|_| anyhow!("task store lock poisoned"))?;
+    let store = TASK_STORE.lock();
 
     let task = store
         .get(task_id)
@@ -764,9 +735,10 @@ pub fn task_output(input: &Value) -> Result<String> {
     if let Some(ref output_path) = task.output_path {
         let path = PathBuf::from(output_path);
         if path.exists()
-            && let Ok(content) = std::fs::read_to_string(&path) {
-                result.push_str(&format!("\n\nOutput:\n{content}"));
-            }
+            && let Ok(content) = std::fs::read_to_string(&path)
+        {
+            result.push_str(&format!("\n\nOutput:\n{content}"));
+        }
     }
 
     Ok(result)
@@ -778,20 +750,18 @@ pub fn task_stop(input: &Value) -> Result<String> {
         .as_str()
         .ok_or_else(|| anyhow!("task_id is required"))?;
 
-    let output_dir = TASK_OUTPUT_DIR
-        .lock()
-        .map_err(|_| anyhow!("task output dir lock poisoned"))?
-        .clone();
+    let output_dir = TASK_OUTPUT_DIR.lock().clone();
 
-    let mut store = TASK_STORE
-        .lock()
-        .map_err(|_| anyhow!("task store lock poisoned"))?;
+    let mut store = TASK_STORE.lock();
 
     let task = store
         .get_mut(task_id)
         .ok_or_else(|| anyhow!("task '{task_id}' not found"))?;
 
-    if matches!(task.status, TaskStatus::Stopped | TaskStatus::Completed | TaskStatus::Failed) {
+    if matches!(
+        task.status,
+        TaskStatus::Stopped | TaskStatus::Completed | TaskStatus::Failed
+    ) {
         return Ok(format!(
             "Task '{}' is already {} (no action taken).",
             task_id,
@@ -828,14 +798,9 @@ pub fn task_stop(input: &Value) -> Result<String> {
 /// Returns an error if the task store is poisoned or persisted task metadata
 /// cannot be updated.
 pub fn stop_and_clear_tracked_tasks(stop_reason: &str) -> Result<Vec<BackgroundTask>> {
-    let output_dir = TASK_OUTPUT_DIR
-        .lock()
-        .map_err(|_| anyhow!("task output dir lock poisoned"))?
-        .clone();
+    let output_dir = TASK_OUTPUT_DIR.lock().clone();
 
-    let mut store = TASK_STORE
-        .lock()
-        .map_err(|_| anyhow!("task store lock poisoned"))?;
+    let mut store = TASK_STORE.lock();
 
     let mut snapshots = Vec::with_capacity(store.len());
     for task in store.values_mut() {
@@ -862,17 +827,12 @@ pub fn stop_and_clear_tracked_tasks(stop_reason: &str) -> Result<Vec<BackgroundT
 }
 
 fn persist_task_if_configured(task_id: &str) -> Result<()> {
-    let output_dir = TASK_OUTPUT_DIR
-        .lock()
-        .map_err(|_| anyhow!("task output dir lock poisoned"))?
-        .clone();
+    let output_dir = TASK_OUTPUT_DIR.lock().clone();
     let Some(output_dir) = output_dir else {
         return Ok(());
     };
 
-    let mut store = TASK_STORE
-        .lock()
-        .map_err(|_| anyhow!("task store lock poisoned"))?;
+    let mut store = TASK_STORE.lock();
     let task = store
         .get_mut(task_id)
         .ok_or_else(|| anyhow!("task '{task_id}' not found"))?;
@@ -882,10 +842,7 @@ fn persist_task_if_configured(task_id: &str) -> Result<()> {
 }
 
 fn persist_existing_task(task: &mut BackgroundTask) -> Result<()> {
-    let output_dir = TASK_OUTPUT_DIR
-        .lock()
-        .map_err(|_| anyhow!("task output dir lock poisoned"))?
-        .clone();
+    let output_dir = TASK_OUTPUT_DIR.lock().clone();
     let Some(output_dir) = output_dir else {
         return Ok(());
     };
@@ -899,33 +856,25 @@ pub fn configure_task_list_context(
     task_list_id: Option<String>,
     base_dir: Option<PathBuf>,
 ) -> Result<()> {
-    let mut configured_task_list_id = TASK_LIST_ID
-        .lock()
-        .map_err(|_| anyhow!("task list id lock poisoned"))?;
+    let mut configured_task_list_id = TASK_LIST_ID.lock();
     *configured_task_list_id = task_list_id
         .map(|value| value.trim().to_owned())
         .filter(|value| !value.is_empty());
     drop(configured_task_list_id);
 
-    let mut configured_base_dir = TASK_LIST_BASE_DIR
-        .lock()
-        .map_err(|_| anyhow!("task list base dir lock poisoned"))?;
+    let mut configured_base_dir = TASK_LIST_BASE_DIR.lock();
     *configured_base_dir = base_dir;
     Ok(())
 }
 
 pub fn configure_task_list_base_dir(base_dir: Option<PathBuf>) -> Result<()> {
-    let mut configured_base_dir = TASK_LIST_BASE_DIR
-        .lock()
-        .map_err(|_| anyhow!("task list base dir lock poisoned"))?;
+    let mut configured_base_dir = TASK_LIST_BASE_DIR.lock();
     *configured_base_dir = base_dir;
     Ok(())
 }
 
 pub fn set_leader_team_name(team_name: Option<String>) -> Result<()> {
-    let mut current = LEADER_TEAM_NAME
-        .lock()
-        .map_err(|_| anyhow!("leader team name lock poisoned"))?;
+    let mut current = LEADER_TEAM_NAME.lock();
     *current = team_name
         .map(|value| sanitize_task_path_component(value.trim()))
         .filter(|value| !value.is_empty());
@@ -933,10 +882,7 @@ pub fn set_leader_team_name(team_name: Option<String>) -> Result<()> {
 }
 
 pub fn leader_team_name() -> Result<Option<String>> {
-    LEADER_TEAM_NAME
-        .lock()
-        .map(|guard| guard.clone())
-        .map_err(|_| anyhow!("leader team name lock poisoned"))
+    Ok(LEADER_TEAM_NAME.lock().clone())
 }
 
 pub fn clear_leader_team_name() -> Result<()> {
@@ -947,8 +893,7 @@ pub fn clear_leader_team_name() -> Result<()> {
 pub fn task_list_base_dir() -> PathBuf {
     TASK_LIST_BASE_DIR
         .lock()
-        .ok()
-        .and_then(|guard| guard.clone())
+        .clone()
         .unwrap_or_else(|| claude_swarm::team_helpers::claude_config_home_dir().join("tasks"))
 }
 
@@ -973,15 +918,11 @@ pub fn current_task_list_id() -> String {
         }
     }
 
-    if let Ok(guard) = TASK_LIST_ID.lock()
-        && let Some(value) = guard.as_ref()
-    {
+    if let Some(value) = TASK_LIST_ID.lock().as_ref() {
         return value.clone();
     }
 
-    if let Ok(guard) = LEADER_TEAM_NAME.lock()
-        && let Some(value) = guard.as_ref()
-    {
+    if let Some(value) = LEADER_TEAM_NAME.lock().as_ref() {
         return value.clone();
     }
 

@@ -209,8 +209,14 @@ mod tests {
     #[test]
     fn test_serialize_todo_items() {
         let items = vec![
-            TodoItem { status: TodoStatus::Completed, text: "done".to_string() },
-            TodoItem { status: TodoStatus::Pending, text: "todo".to_string() },
+            TodoItem {
+                status: TodoStatus::Completed,
+                text: "done".to_string(),
+            },
+            TodoItem {
+                status: TodoStatus::Pending,
+                text: "todo".to_string(),
+            },
         ];
         let result = serialize_todo_items(&items);
         assert!(result.contains("[x] done"));

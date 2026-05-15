@@ -55,14 +55,15 @@ pub(crate) async fn web_fetch(input: &Value, _context: &ToolExecutionContext) ->
     let final_host = response.url().host_str().map(|h| h.to_owned());
 
     if let (Some(orig), Some(final_h)) = (&original_host, &final_host)
-        && !orig.eq_ignore_ascii_case(final_h) {
-            return Ok(format!(
-                "The URL redirected to a different host.\n\n\
+        && !orig.eq_ignore_ascii_case(final_h)
+    {
+        return Ok(format!(
+            "The URL redirected to a different host.\n\n\
                  Original URL: {url}\n\
                  Redirect URL: {final_url}\n\n\
                  Please make a new WebFetch request with the redirect URL to fetch the content.",
-            ));
-        }
+        ));
+    }
 
     let status = response.status();
     if !status.is_success() {
@@ -117,8 +118,10 @@ pub(crate) async fn web_fetch(input: &Value, _context: &ToolExecutionContext) ->
 /// Convert HTML to readable plain text by stripping tags and normalizing whitespace.
 fn html_to_readable_text(html: &str) -> String {
     // Remove script and style blocks entirely
-    let re_script = Regex::new(r"(?is)<script[^>]*>.*?</script>").unwrap_or_else(|_| Regex::new(".").expect("fallback regex"));
-    let re_style = Regex::new(r"(?is)<style[^>]*>.*?</style>").unwrap_or_else(|_| Regex::new(".").expect("fallback regex"));
+    let re_script = Regex::new(r"(?is)<script[^>]*>.*?</script>")
+        .unwrap_or_else(|_| Regex::new(".").expect("fallback regex"));
+    let re_style = Regex::new(r"(?is)<style[^>]*>.*?</style>")
+        .unwrap_or_else(|_| Regex::new(".").expect("fallback regex"));
     let no_scripts = re_script.replace_all(html, "");
     let no_style = re_style.replace_all(&no_scripts, "");
 
@@ -128,7 +131,8 @@ fn html_to_readable_text(html: &str) -> String {
     let with_breaks = re_block.replace_all(&no_style, "\n");
 
     // Strip remaining tags
-    let re_tag = Regex::new(r"<[^>]+>").unwrap_or_else(|_| Regex::new(".").expect("fallback regex"));
+    let re_tag =
+        Regex::new(r"<[^>]+>").unwrap_or_else(|_| Regex::new(".").expect("fallback regex"));
     let stripped = re_tag.replace_all(&with_breaks, "");
 
     // Decode common HTML entities
@@ -144,7 +148,11 @@ fn html_to_readable_text(html: &str) -> String {
         .replace("&hellip;", "…");
 
     // Collapse excessive whitespace while preserving structure
-    let lines: Vec<&str> = decoded.lines().map(|l| l.trim()).filter(|l| !l.is_empty()).collect();
+    let lines: Vec<&str> = decoded
+        .lines()
+        .map(|l| l.trim())
+        .filter(|l| !l.is_empty())
+        .collect();
     lines.join("\n")
 }
 

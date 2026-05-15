@@ -61,7 +61,12 @@ pub fn debug_log(message: &str, data: Option<&serde_json::Value>) {
     let timestamp = chrono::Utc::now().to_rfc3339();
 
     let entry = match data {
-        Some(d) => format!("[{}] {}: {}\n", timestamp, message, serde_json::to_string_pretty(d).unwrap_or_else(|_| d.to_string())),
+        Some(d) => format!(
+            "[{}] {}: {}\n",
+            timestamp,
+            message,
+            serde_json::to_string_pretty(d).unwrap_or_else(|_| d.to_string())
+        ),
         None => format!("[{}] {}\n", timestamp, message),
     };
 
@@ -104,21 +109,14 @@ impl DebugLogger {
 
     /// Log a warning.
     pub fn warn(&self, message: &str, data: Option<&serde_json::Value>) {
-        debug_log(
-            &format!("[{}] WARN: {}", self.component, message),
-            data,
-        );
+        debug_log(&format!("[{}] WARN: {}", self.component, message), data);
     }
 
     /// Log an error.
     pub fn error(&self, message: &str, data: Option<&serde_json::Value>) {
-        debug_log(
-            &format!("[{}] ERROR: {}", self.component, message),
-            data,
-        );
+        debug_log(&format!("[{}] ERROR: {}", self.component, message), data);
     }
 }
-
 
 // ---------------------------------------------------------------------------
 // Tests

@@ -23,7 +23,9 @@ pub struct SambaNovaHandler {
 impl SambaNovaHandler {
     /// Create a new SambaNova handler from configuration.
     pub fn new(config: SambaNovaConfig) -> Result<Self, roo_provider::ProviderError> {
-        let model_id = config.model_id.unwrap_or_else(|| models::default_model_id());
+        let model_id = config
+            .model_id
+            .unwrap_or_else(|| models::default_model_id());
         let model_info = models::models()
             .get(&model_id)
             .cloned()
@@ -46,7 +48,7 @@ impl SambaNovaHandler {
             model_info,
             provider_name_enum: ProviderName::SambaNova,
             request_timeout: config.request_timeout,
-        reasoning_effort: None,
+            reasoning_effort: None,
             streaming_enabled: None,
             include_max_tokens: None,
             extra_body_fields: None,
@@ -61,8 +63,8 @@ impl SambaNovaHandler {
     pub fn from_settings(
         settings: &roo_types::provider_settings::ProviderSettings,
     ) -> Result<Self, roo_provider::ProviderError> {
-        let config =
-            SambaNovaConfig::from_settings(settings).ok_or(roo_provider::ProviderError::ApiKeyRequired)?;
+        let config = SambaNovaConfig::from_settings(settings)
+            .ok_or(roo_provider::ProviderError::ApiKeyRequired)?;
         Self::new(config)
     }
 }
@@ -85,10 +87,7 @@ impl Provider for SambaNovaHandler {
         self.inner.get_model()
     }
 
-    async fn complete_prompt(
-        &self,
-        prompt: &str,
-    ) -> Result<String, roo_provider::ProviderError> {
+    async fn complete_prompt(&self, prompt: &str) -> Result<String, roo_provider::ProviderError> {
         self.inner.complete_prompt(prompt).await
     }
 
@@ -136,7 +135,9 @@ mod tests {
     #[test]
     fn test_deepseek_r1_has_thinking_enabled() {
         let all_models = models::models();
-        let r1 = all_models.get("DeepSeek-R1").expect("DeepSeek-R1 should exist");
+        let r1 = all_models
+            .get("DeepSeek-R1")
+            .expect("DeepSeek-R1 should exist");
         assert_eq!(r1.supports_reasoning_budget, Some(true));
     }
 
@@ -265,6 +266,10 @@ mod tests {
     #[test]
     fn test_model_count() {
         let all_models = models::models();
-        assert!(all_models.len() >= 8, "Expected at least 8 models, got {}", all_models.len());
+        assert!(
+            all_models.len() >= 8,
+            "Expected at least 8 models, got {}",
+            all_models.len()
+        );
     }
 }

@@ -37,9 +37,8 @@ pub enum ProviderSettingsError {
 // ---------------------------------------------------------------------------
 
 /// Model migrations mapping.
-const MODEL_MIGRATIONS: &[(&str, &str, &str)] = &[
-    ("roo", "roo/code-supernova", "roo/code-supernova-1-million"),
-];
+const MODEL_MIGRATIONS: &[(&str, &str, &str)] =
+    &[("roo", "roo/code-supernova", "roo/code-supernova-1-million")];
 
 /// Provider settings with an ID.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -140,11 +139,7 @@ impl ProviderSettingsManager {
     }
 
     /// Add or update a config.
-    pub fn upsert_config(
-        &mut self,
-        name: &str,
-        config: ProviderSettingsWithId,
-    ) {
+    pub fn upsert_config(&mut self, name: &str, config: ProviderSettingsWithId) {
         self.profiles.api_configs.insert(name.to_string(), config);
     }
 
@@ -164,13 +159,14 @@ impl ProviderSettingsManager {
         new_profiles: ProviderProfiles,
     ) -> Result<(), ProviderSettingsError> {
         // Merge api_configs
-        self.profiles
-            .api_configs
-            .extend(new_profiles.api_configs);
+        self.profiles.api_configs.extend(new_profiles.api_configs);
 
         // Update mode_api_configs if provided
         if let Some(new_modes) = new_profiles.mode_api_configs {
-            let modes = self.profiles.mode_api_configs.get_or_insert_with(HashMap::new);
+            let modes = self
+                .profiles
+                .mode_api_configs
+                .get_or_insert_with(HashMap::new);
             modes.extend(new_modes);
         }
 
@@ -205,9 +201,7 @@ impl ProviderSettingsManager {
 
     // -- Private helpers -------------------------------------------------------
 
-    async fn load_profiles(
-        path: &Path,
-    ) -> Result<ProviderProfiles, ProviderSettingsError> {
+    async fn load_profiles(path: &Path) -> Result<ProviderProfiles, ProviderSettingsError> {
         if !path.exists() {
             let default_id = Self::generate_id();
             return Ok(ProviderProfiles {

@@ -4,9 +4,10 @@
 //! `Content-Length` header followed by a JSON-RPC body, sent over the
 //! language server's stdin/stdout pipes.
 
+use parking_lot::Mutex;
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result, anyhow, bail};
 use serde_json::Value;
@@ -74,10 +75,7 @@ impl StdioTransport {
     pub async fn request(&self, method: &str, params: Option<Value>) -> Result<Value> {
         let id = self.next_id();
         let (tx, rx) = oneshot::channel();
-        self.pending
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .insert(id, tx);
+        self.pending.lock().insert(id, tx);
 
         let msg = serde_json::json!({
             "jsonrpc": "2.0",
@@ -87,7 +85,9 @@ impl StdioTransport {
         });
         self.write_message(&msg).await?;
 
-        let response = rx.await.map_err(|_| anyhow!("response channel closed for request {id}"))?;
+        let response = rx
+            .await
+            .map_err(|_| anyhow!("response channel closed for request {id}"))?;
 
         // Check for JSON-RPC error
         if let Some(error) = response.get("error") {
@@ -99,10 +99,7 @@ impl StdioTransport {
             bail!("LSP error {code}: {message}");
         }
 
-        Ok(response
-            .get("result")
-            .cloned()
-            .unwrap_or(Value::Null))
+        Ok(response.get("result").cloned().unwrap_or(Value::Null))
     }
 
     /// Send a JSON-RPC notification (no response expected).
@@ -122,7 +119,6 @@ impl StdioTransport {
         let mut stdin = self
             .stdin
             .lock()
-            .unwrap_or_else(|e| e.into_inner())
             .take()
             .ok_or_else(|| anyhow!("stdin already taken"))?;
 
@@ -137,10 +133,7 @@ impl StdioTransport {
         stdin.flush().await?;
 
         // Put stdin back
-        *self
-            .stdin
-            .lock()
-            .unwrap_or_else(|e| e.into_inner()) = Some(stdin);
+        *self.stdin.lock() = Some(stdin);
         Ok(())
     }
 
@@ -186,11 +179,7 @@ impl StdioTransport {
 
             // Route response to waiting request
             if let Some(id) = value.get("id").and_then(|v| v.as_u64()) {
-                if let Some(tx) = pending
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .remove(&id)
-                {
+                if let Some(tx) = pending.lock().remove(&id) {
                     let _ = tx.send(value);
                 }
             }
@@ -239,14 +228,26 @@ mod tests {
 
     #[test]
     fn parse_content_length_valid() {
-        assert_eq!(StdioTransport::parse_content_length("Content-Length: 42\r\n"), Some(42));
-        assert_eq!(StdioTransport::parse_content_length("Content-Length: 0\r\n"), Some(0));
-        assert_eq!(StdioTransport::parse_content_length("Content-Length : 100\r\n"), Some(100));
+        assert_eq!(
+            StdioTransport::parse_content_length("Content-Length: 42\r\n"),
+            Some(42)
+        );
+        assert_eq!(
+            StdioTransport::parse_content_length("Content-Length: 0\r\n"),
+            Some(0)
+        );
+        assert_eq!(
+            StdioTransport::parse_content_length("Content-Length : 100\r\n"),
+            Some(100)
+        );
     }
 
     #[test]
     fn parse_content_length_invalid() {
-        assert_eq!(StdioTransport::parse_content_length("X-Header: foo\r\n"), None);
+        assert_eq!(
+            StdioTransport::parse_content_length("X-Header: foo\r\n"),
+            None
+        );
         assert_eq!(StdioTransport::parse_content_length("garbage"), None);
     }
 }

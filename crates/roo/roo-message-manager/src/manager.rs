@@ -22,16 +22,11 @@ use crate::types::{ApiMessage, ClineMessage, ContextEventIds, RewindOptions};
 pub enum MessageManagerError {
     /// No cline message with the requested timestamp was found.
     #[error("Message with timestamp {ts} not found in clineMessages")]
-    TimestampNotFound {
-        ts: i64,
-    },
+    TimestampNotFound { ts: i64 },
 
     /// The requested index is out of bounds.
     #[error("Index {index} is out of bounds (len={len})")]
-    IndexOutOfBounds {
-        index: usize,
-        len: usize,
-    },
+    IndexOutOfBounds { index: usize, len: usize },
 }
 
 // ---------------------------------------------------------------------------
@@ -141,10 +136,7 @@ impl MessageManager {
             });
         }
 
-        let cutoff_ts = cline_messages
-            .get(to_index)
-            .map(|m| m.ts)
-            .unwrap_or(0);
+        let cutoff_ts = cline_messages.get(to_index).map(|m| m.ts).unwrap_or(0);
 
         Ok(self.perform_rewind(cline_messages, api_history, to_index, cutoff_ts, options))
     }
@@ -536,9 +528,8 @@ mod tests {
             truncation_ids: HashSet::new(),
         };
 
-        let result = MessageManager::truncate_api_history_with_cleanup(
-            &api, &cline, 300, &removed, false,
-        );
+        let result =
+            MessageManager::truncate_api_history_with_cleanup(&api, &cline, 300, &removed, false);
 
         // Summary with condense-1 should be removed (it was in removed_ids)
         assert!(!result.iter().any(|m| m.is_summary));
@@ -557,9 +548,8 @@ mod tests {
             truncation_ids: HashSet::from(["trunc-1".into()]),
         };
 
-        let result = MessageManager::truncate_api_history_with_cleanup(
-            &api, &cline, 300, &removed, false,
-        );
+        let result =
+            MessageManager::truncate_api_history_with_cleanup(&api, &cline, 300, &removed, false);
 
         assert!(!result.iter().any(|m| m.is_truncation_marker));
     }
@@ -578,9 +568,8 @@ mod tests {
         let cline: Vec<ClineMessage> = vec![];
         let removed = ContextEventIds::default();
 
-        let result = MessageManager::truncate_api_history_with_cleanup(
-            &api, &cline, 150, &removed, false,
-        );
+        let result =
+            MessageManager::truncate_api_history_with_cleanup(&api, &cline, 150, &removed, false);
 
         // Should keep messages with ts < 200 (the resolved cutoff)
         assert!(result.iter().all(|m| m.ts.unwrap_or(0) < 200));
@@ -624,9 +613,8 @@ mod tests {
             truncation_ids: HashSet::new(),
         };
 
-        let result = MessageManager::truncate_api_history_with_cleanup(
-            &api, &cline, 300, &removed, false,
-        );
+        let result =
+            MessageManager::truncate_api_history_with_cleanup(&api, &cline, 300, &removed, false);
 
         // Summary removed by step 3, then parent cleared by step 5
         assert!(result[0].condense_parent.is_none());

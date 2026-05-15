@@ -6,12 +6,12 @@
 
 use std::path::PathBuf;
 
-use directories::BaseDirs;
 use claude_agents::coordinator::is_coordinator_mode;
 use claude_agents::fork::is_fork_subagent_enabled;
 use claude_agents::loader::load_all_agents_with_context;
 use claude_context::RuntimeIdentityContext;
 use claude_mcp::normalization::mcp_info_from_string;
+use directories::BaseDirs;
 
 // ── Core tools (P0) ──────────────────────────────────────────────────────────
 

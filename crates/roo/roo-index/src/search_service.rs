@@ -72,7 +72,8 @@ impl CodeIndexSearchService {
         query: &str,
         directory_prefix: Option<&str>,
     ) -> Result<Vec<VectorStoreSearchResult>, IndexError> {
-        if !self.config_manager.is_feature_enabled() || !self.config_manager.is_feature_configured() {
+        if !self.config_manager.is_feature_enabled() || !self.config_manager.is_feature_configured()
+        {
             return Err(IndexError::GeneralError(
                 "Code index feature is disabled or not configured.".to_string(),
             ));
@@ -95,12 +96,13 @@ impl CodeIndexSearchService {
             .embeddings
             .into_iter()
             .next()
-            .ok_or_else(|| IndexError::GeneralError("Failed to generate embedding for query.".to_string()))?;
+            .ok_or_else(|| {
+                IndexError::GeneralError("Failed to generate embedding for query.".to_string())
+            })?;
 
         // Normalize directory prefix
-        let normalized_prefix = directory_prefix.map(|p| {
-            p.replace('\\', "/").trim_end_matches('/').to_string()
-        });
+        let normalized_prefix =
+            directory_prefix.map(|p| p.replace('\\', "/").trim_end_matches('/').to_string());
 
         // Perform search
         let results = self.vector_store.search(
@@ -185,7 +187,9 @@ impl VectorStore for InMemoryVectorStore {
 
                 // Filter by directory prefix
                 if let Some(prefix) = directory_prefix {
-                    let file_path = entry.payload.get("file_path")
+                    let file_path = entry
+                        .payload
+                        .get("file_path")
                         .and_then(|v| v.as_str())
                         .unwrap_or("");
                     if !file_path.starts_with(prefix) {
@@ -194,25 +198,37 @@ impl VectorStore for InMemoryVectorStore {
                 }
 
                 Some(VectorStoreSearchResult {
-                    file_path: entry.payload.get("file_path")
+                    file_path: entry
+                        .payload
+                        .get("file_path")
                         .and_then(|v| v.as_str())
                         .unwrap_or("")
                         .to_string(),
-                    line_number: entry.payload.get("line_number")
+                    line_number: entry
+                        .payload
+                        .get("line_number")
                         .and_then(|v| v.as_u64())
                         .map(|v| v as u32),
-                    content: entry.payload.get("content")
+                    content: entry
+                        .payload
+                        .get("content")
                         .and_then(|v| v.as_str())
                         .unwrap_or("")
                         .to_string(),
                     score,
-                    start_line: entry.payload.get("start_line")
+                    start_line: entry
+                        .payload
+                        .get("start_line")
                         .and_then(|v| v.as_u64())
                         .map(|v| v as u32),
-                    end_line: entry.payload.get("end_line")
+                    end_line: entry
+                        .payload
+                        .get("end_line")
                         .and_then(|v| v.as_u64())
                         .map(|v| v as u32),
-                    code_chunk: entry.payload.get("content")
+                    code_chunk: entry
+                        .payload
+                        .get("content")
                         .and_then(|v| v.as_str())
                         .map(|s| s.to_string()),
                 })
@@ -220,7 +236,11 @@ impl VectorStore for InMemoryVectorStore {
             .collect();
 
         // Sort by score descending
-        results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        results.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         results.truncate(max_results);
 
         Ok(results)
@@ -250,7 +270,9 @@ impl VectorStore for InMemoryVectorStore {
     fn delete_by_prefix(&self, prefix: &str) -> Result<(), IndexError> {
         let mut entries = self.entries.lock().unwrap();
         entries.retain(|e| {
-            let file_path = e.payload.get("file_path")
+            let file_path = e
+                .payload
+                .get("file_path")
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
             !file_path.starts_with(prefix)
@@ -292,15 +314,17 @@ mod tests {
         let store = InMemoryVectorStore::new(3);
         store.initialize().unwrap();
 
-        store.upsert(
-            &["id1".to_string()],
-            &[vec![1.0, 0.0, 0.0]],
-            &[serde_json::json!({
-                "file_path": "src/main.rs",
-                "content": "fn main() {}",
-                "line_number": 1
-            })],
-        ).unwrap();
+        store
+            .upsert(
+                &["id1".to_string()],
+                &[vec![1.0, 0.0, 0.0]],
+                &[serde_json::json!({
+                    "file_path": "src/main.rs",
+                    "content": "fn main() {}",
+                    "line_number": 1
+                })],
+            )
+            .unwrap();
 
         assert!(store.has_indexed_data().unwrap());
 
@@ -314,16 +338,20 @@ mod tests {
         let store = InMemoryVectorStore::new(3);
         store.initialize().unwrap();
 
-        store.upsert(
-            &["id1".to_string(), "id2".to_string()],
-            &[vec![1.0, 0.0, 0.0], vec![0.9, 0.1, 0.0]],
-            &[
-                serde_json::json!({"file_path": "src/main.rs", "content": "main"}),
-                serde_json::json!({"file_path": "lib/utils.rs", "content": "utils"}),
-            ],
-        ).unwrap();
+        store
+            .upsert(
+                &["id1".to_string(), "id2".to_string()],
+                &[vec![1.0, 0.0, 0.0], vec![0.9, 0.1, 0.0]],
+                &[
+                    serde_json::json!({"file_path": "src/main.rs", "content": "main"}),
+                    serde_json::json!({"file_path": "lib/utils.rs", "content": "utils"}),
+                ],
+            )
+            .unwrap();
 
-        let results = store.search(&[1.0, 0.0, 0.0], Some("src/"), 0.0, 10).unwrap();
+        let results = store
+            .search(&[1.0, 0.0, 0.0], Some("src/"), 0.0, 10)
+            .unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].file_path, "src/main.rs");
     }
@@ -333,11 +361,13 @@ mod tests {
         let store = InMemoryVectorStore::new(3);
         store.initialize().unwrap();
 
-        store.upsert(
-            &["id1".to_string()],
-            &[vec![1.0, 0.0, 0.0]],
-            &[serde_json::json!({"file_path": "src/main.rs", "content": "main"})],
-        ).unwrap();
+        store
+            .upsert(
+                &["id1".to_string()],
+                &[vec![1.0, 0.0, 0.0]],
+                &[serde_json::json!({"file_path": "src/main.rs", "content": "main"})],
+            )
+            .unwrap();
 
         store.delete_by_prefix("src/").unwrap();
         assert!(!store.has_indexed_data().unwrap());

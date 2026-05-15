@@ -1,5 +1,5 @@
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
 use claude_core::{
@@ -231,7 +231,14 @@ impl QueryEngine {
                 new_messages,
             })
             .await;
-        let result = run_query_loop(&self.config, &mut self.state, user_input, &context, self.interrupted.clone()).await;
+        let result = run_query_loop(
+            &self.config,
+            &mut self.state,
+            user_input,
+            &context,
+            self.interrupted.clone(),
+        )
+        .await;
         match &result {
             Ok(query_result) => {
                 // Transition to Idle via Finalizing
@@ -296,8 +303,10 @@ pub(crate) fn usage_from_accumulator(accumulator: &UsageAccumulator) -> Usage {
         total_tokens: accumulator.total_tokens(),
         server_tool_use_web_search_requests: accumulator.server_tool_use_web_search_requests,
         server_tool_use_web_fetch_requests: accumulator.server_tool_use_web_fetch_requests,
-        cache_creation_ephemeral_5m_input_tokens: accumulator.cache_creation_ephemeral_5m_input_tokens,
-        cache_creation_ephemeral_1h_input_tokens: accumulator.cache_creation_ephemeral_1h_input_tokens,
+        cache_creation_ephemeral_5m_input_tokens: accumulator
+            .cache_creation_ephemeral_5m_input_tokens,
+        cache_creation_ephemeral_1h_input_tokens: accumulator
+            .cache_creation_ephemeral_1h_input_tokens,
     }
 }
 
@@ -383,7 +392,10 @@ pub(crate) fn assistant_message_from_response_with_parent(
 }
 
 #[allow(dead_code)]
-pub(crate) fn tool_result_message(tool_call: &ToolCall, result: &claude_core::ToolResult) -> Message {
+pub(crate) fn tool_result_message(
+    tool_call: &ToolCall,
+    result: &claude_core::ToolResult,
+) -> Message {
     tool_result_message_with_parent(tool_call, result, None)
 }
 
@@ -415,9 +427,10 @@ pub(crate) fn budget_stop_message(reason: impl Into<String>) -> Message {
 
 #[cfg(test)]
 mod tests {
+    use parking_lot::Mutex;
     use std::collections::VecDeque;
+    use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::{Arc, Mutex};
 
     use anyhow::{Result, anyhow};
     use async_trait::async_trait;
@@ -425,9 +438,9 @@ mod tests {
         ConversationEntry, PermissionMode, ProviderResponse, SessionId, SubAgentCompletion,
         ToolCall, ToolResult, UsageSummary,
     };
-    use rc_engine_events::EngineEvent;
     use claude_provider::context::ContextWindowManager;
     use claude_provider::{ConversationBackend, StreamingCallbacks};
+    use rc_engine_events::EngineEvent;
     use serde_json::json;
     use tokio::sync::broadcast::Receiver;
 
@@ -506,10 +519,7 @@ mod tests {
         }
 
         fn contexts(&self) -> Vec<claude_provider::query_source::ProviderRequestContext> {
-            self.contexts
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .clone()
+            self.contexts.lock().clone()
         }
     }
 
@@ -552,17 +562,11 @@ mod tests {
     impl ConversationBackend for MockBackend {
         async fn complete(&self, _conversation: &[ConversationEntry]) -> Result<ProviderResponse> {
             self.complete_calls.fetch_add(1, Ordering::SeqCst);
-            if let Some(error) = self
-                .errors
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .pop_front()
-            {
+            if let Some(error) = self.errors.lock().pop_front() {
                 return Err(anyhow!(error));
             }
             self.responses
                 .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
                 .pop_front()
                 .ok_or_else(|| anyhow!("no more responses"))
         }
@@ -572,10 +576,7 @@ mod tests {
             conversation: &[ConversationEntry],
             context: &claude_provider::query_source::ProviderRequestContext,
         ) -> Result<ProviderResponse> {
-            self.contexts
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .push(context.clone());
+            self.contexts.lock().push(context.clone());
             self.complete(conversation).await
         }
 
@@ -585,11 +586,7 @@ mod tests {
             callbacks: Option<StreamingCallbacks>,
         ) -> Result<ProviderResponse> {
             self.complete_streaming_calls.fetch_add(1, Ordering::SeqCst);
-            if let Some(script) = self
-                .stream_scripts
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .pop_front()
+            if let Some(script) = self.stream_scripts.lock().pop_front()
                 && let Some(callbacks) = callbacks.as_ref()
             {
                 for event in script {
@@ -623,7 +620,6 @@ mod tests {
             }
             self.responses
                 .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
                 .pop_front()
                 .ok_or_else(|| anyhow!("no more responses for streaming call {conversation:?}"))
         }
@@ -634,10 +630,7 @@ mod tests {
             callbacks: Option<StreamingCallbacks>,
             context: &claude_provider::query_source::ProviderRequestContext,
         ) -> Result<ProviderResponse> {
-            self.contexts
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .push(context.clone());
+            self.contexts.lock().push(context.clone());
             self.complete_streaming(conversation, callbacks).await
         }
 
@@ -671,20 +664,14 @@ mod tests {
 
     impl RecordingObserver {
         fn snapshot(&self) -> Vec<QueryObserverEvent> {
-            self.events
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .clone()
+            self.events.lock().clone()
         }
     }
 
     #[async_trait]
     impl QueryObserver for RecordingObserver {
         async fn on_event(&self, event: QueryObserverEvent) -> Result<()> {
-            self.events
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .push(event);
+            self.events.lock().push(event);
             Ok(())
         }
     }
@@ -851,12 +838,13 @@ mod tests {
         );
         let mut context =
             ProcessUserInputContext::new(session_id, PermissionMode::Default, "mock-model");
-        context.task_budget = std::sync::Arc::new(std::sync::Mutex::new(Some(crate::TaskBudget {
-            max_turns: Some(0),
-            max_total_tokens: None,
-            consumed_tokens: 0,
-            max_budget_usd: None,
-        })));
+        context.task_budget =
+            std::sync::Arc::new(parking_lot::Mutex::new(Some(crate::TaskBudget {
+                max_turns: Some(0),
+                max_total_tokens: None,
+                consumed_tokens: 0,
+                max_budget_usd: None,
+            })));
 
         let error = engine
             .submit_message(
@@ -915,7 +903,7 @@ mod tests {
                         output_tokens: 5,
                         cache_read_input_tokens: 0,
                         cache_creation_input_tokens: 0,
-                    ..Default::default()
+                        ..Default::default()
                     },
                     stop_reason: "tool_use".to_owned(),
                     research: None,
@@ -932,7 +920,7 @@ mod tests {
                         output_tokens: 4,
                         cache_read_input_tokens: 0,
                         cache_creation_input_tokens: 0,
-                    ..Default::default()
+                        ..Default::default()
                     },
                     stop_reason: "end_turn".to_owned(),
                     research: None,
@@ -1146,7 +1134,7 @@ mod tests {
                 output_tokens: 1,
                 cache_read_input_tokens: 0,
                 cache_creation_input_tokens: 0,
-                    ..Default::default()
+                ..Default::default()
             },
             stop_reason: "end_turn".to_owned(),
             research: None,
@@ -1162,12 +1150,12 @@ mod tests {
         config.context_manager = ContextWindowManager::new(100, 20);
         let mut engine_events = config.event_stream.subscribe();
 
-        let mut existing_messages = vec![claude_core::Message::from(ConversationEntry::system("sys"))];
+        let mut existing_messages =
+            vec![claude_core::Message::from(ConversationEntry::system("sys"))];
         for index in 0..5 {
-            existing_messages.push(claude_core::Message::from(ConversationEntry::user(format!(
-                "user-{index}-{}",
-                "a".repeat(200)
-            ))));
+            existing_messages.push(claude_core::Message::from(ConversationEntry::user(
+                format!("user-{index}-{}", "a".repeat(200)),
+            )));
             existing_messages.push(claude_core::Message::from(ConversationEntry::assistant(
                 format!("assistant-{index}-{}", "b".repeat(200)),
             )));
@@ -1178,10 +1166,9 @@ mod tests {
             ProcessUserInputContext::new(session_id, PermissionMode::Default, "mock-model");
         let result = engine
             .submit_message(
-                vec![claude_core::Message::from(ConversationEntry::user(format!(
-                    "latest-{}",
-                    "c".repeat(200)
-                )))],
+                vec![claude_core::Message::from(ConversationEntry::user(
+                    format!("latest-{}", "c".repeat(200)),
+                ))],
                 context,
             )
             .await
@@ -1229,7 +1216,7 @@ mod tests {
                 output_tokens: 1,
                 cache_read_input_tokens: 0,
                 cache_creation_input_tokens: 0,
-                    ..Default::default()
+                ..Default::default()
             },
             stop_reason: "end_turn".to_owned(),
             research: None,
@@ -1249,12 +1236,12 @@ mod tests {
             })
         }));
 
-        let mut existing_messages = vec![claude_core::Message::from(ConversationEntry::system("sys"))];
+        let mut existing_messages =
+            vec![claude_core::Message::from(ConversationEntry::system("sys"))];
         for index in 0..5 {
-            existing_messages.push(claude_core::Message::from(ConversationEntry::user(format!(
-                "user-{index}-{}",
-                "a".repeat(200)
-            ))));
+            existing_messages.push(claude_core::Message::from(ConversationEntry::user(
+                format!("user-{index}-{}", "a".repeat(200)),
+            )));
             existing_messages.push(claude_core::Message::from(ConversationEntry::assistant(
                 format!("assistant-{index}-{}", "b".repeat(200)),
             )));
@@ -1265,10 +1252,9 @@ mod tests {
             ProcessUserInputContext::new(session_id, PermissionMode::Default, "mock-model");
         let result = engine
             .submit_message(
-                vec![claude_core::Message::from(ConversationEntry::user(format!(
-                    "latest-{}",
-                    "c".repeat(200)
-                )))],
+                vec![claude_core::Message::from(ConversationEntry::user(
+                    format!("latest-{}", "c".repeat(200)),
+                ))],
                 context,
             )
             .await
@@ -1300,7 +1286,7 @@ mod tests {
                 output_tokens: 1,
                 cache_read_input_tokens: 0,
                 cache_creation_input_tokens: 0,
-                    ..Default::default()
+                ..Default::default()
             },
             stop_reason: "end_turn".to_owned(),
             research: None,
@@ -1325,12 +1311,12 @@ mod tests {
         }));
         let mut engine_events = config.event_stream.subscribe();
 
-        let mut existing_messages = vec![claude_core::Message::from(ConversationEntry::system("sys"))];
+        let mut existing_messages =
+            vec![claude_core::Message::from(ConversationEntry::system("sys"))];
         for index in 0..5 {
-            existing_messages.push(claude_core::Message::from(ConversationEntry::user(format!(
-                "user-{index}-{}",
-                "a".repeat(200)
-            ))));
+            existing_messages.push(claude_core::Message::from(ConversationEntry::user(
+                format!("user-{index}-{}", "a".repeat(200)),
+            )));
             existing_messages.push(claude_core::Message::from(ConversationEntry::assistant(
                 format!("assistant-{index}-{}", "b".repeat(200)),
             )));
@@ -1341,10 +1327,9 @@ mod tests {
             ProcessUserInputContext::new(session_id, PermissionMode::Default, "mock-model");
         let result = engine
             .submit_message(
-                vec![claude_core::Message::from(ConversationEntry::user(format!(
-                    "latest-{}",
-                    "c".repeat(200)
-                )))],
+                vec![claude_core::Message::from(ConversationEntry::user(
+                    format!("latest-{}", "c".repeat(200)),
+                ))],
                 context,
             )
             .await
@@ -1381,7 +1366,7 @@ mod tests {
                 output_tokens: 1,
                 cache_read_input_tokens: 0,
                 cache_creation_input_tokens: 0,
-                    ..Default::default()
+                ..Default::default()
             },
             stop_reason: "end_turn".to_owned(),
             research: None,
@@ -1402,7 +1387,6 @@ mod tests {
             Box::pin(async move {
                 post_sampling_sequence
                     .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner())
                     .push(format!("post_sampling:{}", context.messages.len()));
                 Ok(())
             })
@@ -1411,14 +1395,11 @@ mod tests {
             move |context: ReplHookContext, request: StopHookRequest| {
                 let stop_hook_sequence = Arc::clone(&stop_hook_sequence);
                 Box::pin(async move {
-                    stop_hook_sequence
-                        .lock()
-                        .unwrap_or_else(|poisoned| poisoned.into_inner())
-                        .push(format!(
-                            "stop_hook:{}:{}",
-                            request.stop_reason,
-                            context.messages.len()
-                        ));
+                    stop_hook_sequence.lock().push(format!(
+                        "stop_hook:{}:{}",
+                        request.stop_reason,
+                        context.messages.len()
+                    ));
                     Ok(StopHookOutcome::Allow)
                 })
             },
@@ -1443,10 +1424,7 @@ mod tests {
             .expect("terminal query should succeed");
 
         assert_eq!(result.final_text.as_deref(), Some("done"));
-        let sequence = sequence
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .clone();
+        let sequence = sequence.lock().clone();
         assert_eq!(
             sequence,
             vec![

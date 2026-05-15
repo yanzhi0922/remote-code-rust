@@ -5,7 +5,9 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result, anyhow};
 use async_trait::async_trait;
-use claude_agents::builtins::{explore_agent, general_purpose_agent, plan_agent, verification_agent};
+use claude_agents::builtins::{
+    explore_agent, general_purpose_agent, plan_agent, verification_agent,
+};
 use claude_agents::constants::FORK_SUBAGENT_TYPE;
 use claude_agents::loader::load_all_agents;
 use claude_agents::{

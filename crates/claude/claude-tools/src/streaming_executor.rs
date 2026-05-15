@@ -6,7 +6,8 @@
 //! non-safe tools require exclusive access.  Results are buffered and emitted
 //! in the order tools were received.
 
-use std::sync::{Arc, Mutex};
+use parking_lot::Mutex;
+use std::sync::Arc;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -111,6 +112,12 @@ impl ToolRunner for FnToolRunner {
 /// Internal tracked state for each tool in the executor.
 struct TrackedTool {
     call: TrackedToolCall,
+    /// Shared reference to the tool input.
+    ///
+    /// Mirrors `call.input` but in `Arc<Value>` form so dispatch can hand a
+    /// cheap refcount-bump to the spawned task instead of deep-cloning the
+    /// JSON tree on every retry of `dispatch_queued`.
+    input_arc: Arc<Value>,
     result: Option<ToolExecutionResult>,
 }
 
@@ -206,27 +213,40 @@ impl StreamingToolExecutor {
     ///
     /// The tool is dispatched immediately if concurrency rules allow.
     pub fn add_tool(&self, id: &str, name: &str, input: &Value, is_concurrency_safe: bool) {
-        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let mut state = self.state.lock();
         if state.discarded {
             return;
         }
 
+        // Single deep-clone of the JSON tree at queue time. The dispatch
+        // path then reuses an Arc<Value> wrapper to hand the input to each
+        // spawned task without re-cloning.
+        let input_arc: Arc<Value> = Arc::new(input.clone());
+
         let call = TrackedToolCall {
             id: id.to_owned(),
             name: name.to_owned(),
-            input: input.clone(),
+            // Public record's `input` is filled lazily on `tracked_calls()`
+            // from the shared `input_arc`. We avoid populating it eagerly to
+            // keep the queue cheap; serializing a `TrackedToolCall` directly
+            // out of the queue is not a supported path.
+            input: Value::Null,
             is_concurrency_safe,
             status: ToolStatus::Queued,
         };
 
-        state.tools.push(TrackedTool { call, result: None });
+        state.tools.push(TrackedTool {
+            call,
+            input_arc,
+            result: None,
+        });
 
         self.try_dispatch(&mut state);
     }
 
     /// Discard all pending and in-progress tools.
     pub fn discard(&self) {
-        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let mut state = self.state.lock();
         state.discarded = true;
         for tool in state.tools.iter_mut() {
             if tool.call.status == ToolStatus::Queued {
@@ -246,7 +266,7 @@ impl StreamingToolExecutor {
 
     /// Return completed (but not yet yielded) results in order.
     pub fn completed_results(&self) -> Vec<ToolExecutionResult> {
-        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let mut state = self.state.lock();
         let mut out = Vec::new();
 
         for tool in state.tools.iter_mut() {
@@ -267,7 +287,7 @@ impl StreamingToolExecutor {
     pub async fn wait_for_remaining(&self) -> Vec<ToolExecutionResult> {
         loop {
             {
-                let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+                let state = self.state.lock();
                 let all_done = state
                     .tools
                     .iter()
@@ -284,7 +304,7 @@ impl StreamingToolExecutor {
     /// Whether any tool is still executing or queued.
     #[must_use]
     pub fn has_unfinished_tools(&self) -> bool {
-        let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let state = self.state.lock();
         state
             .tools
             .iter()
@@ -294,7 +314,7 @@ impl StreamingToolExecutor {
     /// Whether any tool is currently executing.
     #[must_use]
     pub fn has_executing_tools(&self) -> bool {
-        let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let state = self.state.lock();
         state
             .tools
             .iter()
@@ -304,39 +324,33 @@ impl StreamingToolExecutor {
     /// Number of tools in the executor (all statuses).
     #[must_use]
     pub fn tool_count(&self) -> usize {
-        self.state
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .tools
-            .len()
+        self.state.lock().tools.len()
     }
 
     /// Snapshot of all tracked tool calls and their statuses.
     pub fn tracked_calls(&self) -> Vec<TrackedToolCall> {
         self.state
             .lock()
-            .unwrap_or_else(|e| e.into_inner())
             .tools
             .iter()
-            .map(|t| t.call.clone())
+            .map(|t| {
+                let mut snapshot = t.call.clone();
+                // Lazily populate `input` from the shared Arc — see add_tool.
+                snapshot.input = (*t.input_arc).clone();
+                snapshot
+            })
             .collect()
     }
 
     /// Mark a tool as errored, which cancels sibling bash-like tools.
     pub fn mark_error(&self, _tool_description: &str) {
-        self.state
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .has_errored = true;
+        self.state.lock().has_errored = true;
     }
 
     /// Whether any tool has errored.
     #[must_use]
     pub fn has_errored(&self) -> bool {
-        self.state
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .has_errored
+        self.state.lock().has_errored
     }
 
     // -- internal dispatch --------------------------------------------------
@@ -388,7 +402,8 @@ impl StreamingToolExecutor {
 
             let id = tool.call.id.clone();
             let name = tool.call.name.clone();
-            let input = tool.call.input.clone();
+            // Cheap Arc clone instead of deep-cloning the JSON tree.
+            let input_arc: Arc<Value> = Arc::clone(&tool.input_arc);
             let runner = Arc::clone(&self.runner);
             let progress = self.progress.clone();
             let notify = Arc::clone(&self.notify);
@@ -402,10 +417,7 @@ impl StreamingToolExecutor {
                 let start = std::time::Instant::now();
 
                 // Check preconditions
-                let discarded = state_arc
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .discarded;
+                let discarded = state_arc.lock().discarded;
                 if discarded {
                     let r = ToolExecutionResult {
                         tool_call_id: id.clone(),
@@ -413,7 +425,7 @@ impl StreamingToolExecutor {
                         is_error: true,
                         duration: start.elapsed(),
                     };
-                    let mut s = state_arc.lock().unwrap_or_else(|e| e.into_inner());
+                    let mut s = state_arc.lock();
                     if let Some(tool) = s.tools.iter_mut().find(|t| t.call.id == id) {
                         tool.call.status = ToolStatus::Completed;
                         tool.result = Some(r);
@@ -432,10 +444,7 @@ impl StreamingToolExecutor {
                     return;
                 }
 
-                let has_errored = state_arc
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .has_errored;
+                let has_errored = state_arc.lock().has_errored;
                 if has_errored {
                     let r = ToolExecutionResult {
                         tool_call_id: id.clone(),
@@ -445,7 +454,7 @@ impl StreamingToolExecutor {
                         is_error: true,
                         duration: start.elapsed(),
                     };
-                    let mut s = state_arc.lock().unwrap_or_else(|e| e.into_inner());
+                    let mut s = state_arc.lock();
                     if let Some(tool) = s.tools.iter_mut().find(|t| t.call.id == id) {
                         tool.call.status = ToolStatus::Completed;
                         tool.result = Some(r);
@@ -465,7 +474,7 @@ impl StreamingToolExecutor {
                 }
 
                 // Run the tool
-                let handle = runner.run(&id, &name, &input, &progress);
+                let handle = runner.run(&id, &name, input_arc.as_ref(), &progress);
 
                 let result = if let Some(dur) = timeout {
                     match tokio::time::timeout(dur, handle).await {
@@ -480,7 +489,7 @@ impl StreamingToolExecutor {
                                 is_error: true,
                                 duration: start.elapsed(),
                             };
-                            let mut s = state_arc.lock().unwrap_or_else(|e| e.into_inner());
+                            let mut s = state_arc.lock();
                             if let Some(tool) = s.tools.iter_mut().find(|t| t.call.id == id) {
                                 tool.call.status = ToolStatus::Completed;
                                 tool.result = Some(r);
@@ -520,7 +529,7 @@ impl StreamingToolExecutor {
 
                 // Store result
                 {
-                    let mut s = state_arc.lock().unwrap_or_else(|e| e.into_inner());
+                    let mut s = state_arc.lock();
                     if let Some(tool) = s.tools.iter_mut().find(|t| t.call.id == id) {
                         tool.call.status = ToolStatus::Completed;
                         tool.result = Some(r);
@@ -553,7 +562,7 @@ impl StreamingToolExecutor {
         timeout: Option<Duration>,
         max_bytes: usize,
     ) {
-        let mut state = state_arc.lock().unwrap_or_else(|e| e.into_inner());
+        let mut state = state_arc.lock();
         let executing_count = state
             .tools
             .iter()
@@ -585,7 +594,8 @@ impl StreamingToolExecutor {
 
             let id = tool.call.id.clone();
             let name = tool.call.name.clone();
-            let input = tool.call.input.clone();
+            // Cheap Arc clone instead of deep-cloning the JSON tree.
+            let input_arc: Arc<Value> = Arc::clone(&tool.input_arc);
             let runner = Arc::clone(runner);
             let progress = progress.clone();
             let notify = Arc::clone(notify);
@@ -593,7 +603,7 @@ impl StreamingToolExecutor {
 
             tokio::spawn(async move {
                 let start = std::time::Instant::now();
-                let handle = runner.run(&id, &name, &input, &progress);
+                let handle = runner.run(&id, &name, input_arc.as_ref(), &progress);
 
                 let result = if let Some(dur) = timeout {
                     match tokio::time::timeout(dur, handle).await {
@@ -608,7 +618,7 @@ impl StreamingToolExecutor {
                                 is_error: true,
                                 duration: start.elapsed(),
                             };
-                            let mut s = state_arc.lock().unwrap_or_else(|e| e.into_inner());
+                            let mut s = state_arc.lock();
                             if let Some(tool) = s.tools.iter_mut().find(|t| t.call.id == id) {
                                 tool.call.status = ToolStatus::Completed;
                                 tool.result = Some(r);
@@ -646,7 +656,7 @@ impl StreamingToolExecutor {
                 }
 
                 {
-                    let mut s = state_arc.lock().unwrap_or_else(|e| e.into_inner());
+                    let mut s = state_arc.lock();
                     if let Some(tool) = s.tools.iter_mut().find(|t| t.call.id == id) {
                         tool.call.status = ToolStatus::Completed;
                         tool.result = Some(r);

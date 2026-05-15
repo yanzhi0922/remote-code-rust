@@ -7,8 +7,7 @@ use crate::paths::{get_global_roo_directory, get_project_roo_directory_for_cwd};
 use std::path::{Path, PathBuf};
 
 /// Separator used when merging global and project-specific configurations.
-const PROJECT_OVERRIDE_SEPARATOR: &str =
-    "\n\n# Project-specific rules (override global):\n\n";
+const PROJECT_OVERRIDE_SEPARATOR: &str = "\n\n# Project-specific rules (override global):\n\n";
 
 /// Result of loading configuration from multiple `.roo` directories.
 ///

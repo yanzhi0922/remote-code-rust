@@ -16,18 +16,19 @@ pub use cloud_api::{BridgeConfig, CloudApi, ShareResponse, ShareVisibility};
 pub use cloud_settings_service::CloudSettingsService;
 pub use cloud_share_service::CloudShareService;
 pub use config::{
-    get_clerk_base_url, get_roo_code_api_url, PRODUCTION_CLERK_BASE_URL, PRODUCTION_ROO_CODE_API_URL,
+    PRODUCTION_CLERK_BASE_URL, PRODUCTION_ROO_CODE_API_URL, get_clerk_base_url,
+    get_roo_code_api_url,
 };
 pub use refresh_timer::{RefreshTimer, RefreshTimerOptions};
-pub use retry_queue::{QueuedRequest, QueueStats, RequestType, RetryQueue, RetryQueueConfig};
+pub use retry_queue::{QueueStats, QueuedRequest, RequestType, RetryQueue, RetryQueueConfig};
 pub use service::CloudService;
 pub use static_settings_service::StaticSettingsService;
 pub use static_token_auth_service::StaticTokenAuthService;
 pub use telemetry_client::{TelemetryClient, TelemetryEvent};
 pub use types::{
-    AuthCredentials, AuthState, CloudError, CloudSettingsConfig, CloudUserInfo,
-    ExtensionSettings, OrganizationMembership, OrganizationSettings, OrganizationSettingsData,
-    UserFeatures, UserSettings, UserSettingsData,
+    AuthCredentials, AuthState, CloudError, CloudSettingsConfig, CloudUserInfo, ExtensionSettings,
+    OrganizationMembership, OrganizationSettings, OrganizationSettingsData, UserFeatures,
+    UserSettings, UserSettingsData,
 };
 pub use utils::get_user_agent;
 pub use web_auth_service::WebAuthService;

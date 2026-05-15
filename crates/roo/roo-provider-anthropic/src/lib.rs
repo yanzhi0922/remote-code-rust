@@ -17,5 +17,5 @@ pub use handler::AnthropicVertexHandler;
 pub use models::{default_model_id, models};
 pub use types::AnthropicConfig;
 pub use types::AnthropicVertexConfig;
-pub use types::anthropic_vertex_models;
 pub use types::anthropic_vertex_default_model_id;
+pub use types::anthropic_vertex_models;

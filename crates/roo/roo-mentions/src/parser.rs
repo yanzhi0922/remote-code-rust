@@ -5,7 +5,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
-use roo_command::{get_command, Command};
+use roo_command::{Command, get_command};
 
 use crate::file_content::get_file_or_folder_content;
 use crate::regex::{command_regex, is_git_hash, mention_regex};
@@ -214,20 +214,18 @@ mod tests {
     async fn test_parse_mentions_file_path() {
         let dir = tempfile::tempdir().unwrap();
         let file_path = dir.path().join("test.rs");
-        tokio::fs::write(&file_path, "fn main() {}")
-            .await
-            .unwrap();
+        tokio::fs::write(&file_path, "fn main() {}").await.unwrap();
 
-        let result = parse_mentions(
-            &format!("look at @/test.rs in the project",),
-            dir.path(),
-        )
-        .await;
+        let result =
+            parse_mentions(&format!("look at @/test.rs in the project",), dir.path()).await;
 
         assert!(result.text.contains("'test.rs'"));
         assert!(!result.text.contains("@/test.rs"));
         assert_eq!(result.content_blocks.len(), 1);
-        assert_eq!(result.content_blocks[0].block_type, crate::types::MentionBlockType::File);
+        assert_eq!(
+            result.content_blocks[0].block_type,
+            crate::types::MentionBlockType::File
+        );
         assert!(result.content_blocks[0].content.contains("fn main() {}"));
     }
 
@@ -243,20 +241,31 @@ mod tests {
 
         assert!(result.text.contains("'src/'"));
         assert_eq!(result.content_blocks.len(), 1);
-        assert_eq!(result.content_blocks[0].block_type, crate::types::MentionBlockType::Folder);
+        assert_eq!(
+            result.content_blocks[0].block_type,
+            crate::types::MentionBlockType::Folder
+        );
     }
 
     #[tokio::test]
     async fn test_parse_mentions_problems() {
         let result = parse_mentions("check @problems", Path::new("/tmp")).await;
-        assert!(result.text.contains("Workspace Problems (see below for diagnostics)"));
+        assert!(
+            result
+                .text
+                .contains("Workspace Problems (see below for diagnostics)")
+        );
         assert!(result.text.contains("<workspace_diagnostics>"));
     }
 
     #[tokio::test]
     async fn test_parse_mentions_git_changes() {
         let result = parse_mentions("see @git-changes", Path::new("/tmp")).await;
-        assert!(result.text.contains("Working directory changes (see below for details)"));
+        assert!(
+            result
+                .text
+                .contains("Working directory changes (see below for details)")
+        );
         assert!(result.text.contains("<git_working_state>"));
     }
 
@@ -270,7 +279,11 @@ mod tests {
     #[tokio::test]
     async fn test_parse_mentions_terminal() {
         let result = parse_mentions("check @terminal", Path::new("/tmp")).await;
-        assert!(result.text.contains("Terminal Output (see below for output)"));
+        assert!(
+            result
+                .text
+                .contains("Terminal Output (see below for output)")
+        );
         assert!(result.text.contains("<terminal_output>"));
     }
 
@@ -291,15 +304,9 @@ mod tests {
     async fn test_parse_mentions_multiple_mentions() {
         let dir = tempfile::tempdir().unwrap();
         let file_path = dir.path().join("test.rs");
-        tokio::fs::write(&file_path, "fn main() {}")
-            .await
-            .unwrap();
+        tokio::fs::write(&file_path, "fn main() {}").await.unwrap();
 
-        let result = parse_mentions(
-            "@/test.rs and @problems and @terminal",
-            dir.path(),
-        )
-        .await;
+        let result = parse_mentions("@/test.rs and @problems and @terminal", dir.path()).await;
 
         assert!(result.text.contains("'test.rs'"));
         assert!(result.text.contains("Workspace Problems"));

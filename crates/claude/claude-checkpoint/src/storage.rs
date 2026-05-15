@@ -4,7 +4,7 @@
 //! enabling fast queries by session, message index, or time range.
 
 use anyhow::Result;
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{Connection, OptionalExtension, params};
 use std::path::Path;
 use std::sync::Mutex;
 
@@ -38,7 +38,10 @@ impl CheckpointStore {
 
     /// Initialize the database schema.
     fn init_schema(&self) -> Result<()> {
-        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("lock error: {e}"))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("lock error: {e}"))?;
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS checkpoints (
                 id              TEXT PRIMARY KEY,
@@ -77,7 +80,10 @@ impl CheckpointStore {
 
     /// Save a complete checkpoint with its file changes.
     pub fn save_checkpoint(&self, checkpoint: &Checkpoint) -> Result<()> {
-        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("lock error: {e}"))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("lock error: {e}"))?;
 
         let stats_json = serde_json::to_string(&checkpoint.stats)?;
 
@@ -97,7 +103,10 @@ impl CheckpointStore {
 
         for change in &checkpoint.file_changes {
             // Reject paths that attempt directory traversal
-            if change.path.starts_with('/') || change.path.starts_with('\\') || change.path.contains("..") {
+            if change.path.starts_with('/')
+                || change.path.starts_with('\\')
+                || change.path.contains("..")
+            {
                 anyhow::bail!("unsafe path in checkpoint file change: {}", change.path);
             }
             conn.execute(
@@ -120,7 +129,10 @@ impl CheckpointStore {
 
     /// Store file content in the content cache (keyed by hash).
     pub fn cache_file_content(&self, hash: &str, content: &[u8]) -> Result<()> {
-        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("lock error: {e}"))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("lock error: {e}"))?;
         conn.execute(
             "INSERT OR IGNORE INTO file_content_cache (hash, content) VALUES (?1, ?2)",
             params![hash, content],
@@ -130,7 +142,10 @@ impl CheckpointStore {
 
     /// Retrieve cached file content by hash.
     pub fn get_cached_content(&self, hash: &str) -> Result<Option<Vec<u8>>> {
-        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("lock error: {e}"))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("lock error: {e}"))?;
         let result: Option<Vec<u8>> = conn
             .query_row(
                 "SELECT content FROM file_content_cache WHERE hash = ?1",
@@ -143,14 +158,27 @@ impl CheckpointStore {
 
     /// Get a specific checkpoint by ID.
     pub fn get_checkpoint(&self, id: &CheckpointId) -> Result<Option<Checkpoint>> {
-        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("lock error: {e}"))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("lock error: {e}"))?;
 
         let checkpoint_row: Option<(String, String, String, i64, String, String, String)> = conn
             .query_row(
                 "SELECT id, session_id, message_id, message_index, created_at, summary, stats_json
                  FROM checkpoints WHERE id = ?1",
                 params![id.as_str()],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?)),
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get(5)?,
+                        row.get(6)?,
+                    ))
+                },
             )
             .optional()?;
 
@@ -180,7 +208,10 @@ impl CheckpointStore {
 
     /// List all checkpoints for a session, ordered by message index.
     pub fn list_checkpoints(&self, session_id: &str) -> Result<Vec<CheckpointSummary>> {
-        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("lock error: {e}"))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("lock error: {e}"))?;
 
         let mut stmt = conn.prepare(
             "SELECT id, session_id, message_id, message_index, created_at, summary, stats_json
@@ -220,9 +251,18 @@ impl CheckpointStore {
 
     /// Delete a checkpoint and its associated file changes.
     pub fn delete_checkpoint(&self, id: &CheckpointId) -> Result<()> {
-        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("lock error: {e}"))?;
-        conn.execute("DELETE FROM file_changes WHERE checkpoint_id = ?1", params![id.as_str()])?;
-        conn.execute("DELETE FROM checkpoints WHERE id = ?1", params![id.as_str()])?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("lock error: {e}"))?;
+        conn.execute(
+            "DELETE FROM file_changes WHERE checkpoint_id = ?1",
+            params![id.as_str()],
+        )?;
+        conn.execute(
+            "DELETE FROM checkpoints WHERE id = ?1",
+            params![id.as_str()],
+        )?;
         Ok(())
     }
 
@@ -371,7 +411,9 @@ mod tests {
     #[test]
     fn test_get_nonexistent_checkpoint() {
         let store = CheckpointStore::open_in_memory().unwrap();
-        let result = store.get_checkpoint(&CheckpointId("nonexistent".into())).unwrap();
+        let result = store
+            .get_checkpoint(&CheckpointId("nonexistent".into()))
+            .unwrap();
         assert!(result.is_none());
     }
 }

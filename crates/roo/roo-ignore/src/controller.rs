@@ -392,15 +392,30 @@ mod tests {
     #[test]
     fn test_validate_command_all_reading_commands() {
         let reading_commands = [
-            "cat", "less", "more", "head", "tail", "grep", "awk", "sed",
-            "get-content", "gc", "type", "select-string", "sls",
+            "cat",
+            "less",
+            "more",
+            "head",
+            "tail",
+            "grep",
+            "awk",
+            "sed",
+            "get-content",
+            "gc",
+            "type",
+            "select-string",
+            "sls",
         ];
 
         for cmd in &reading_commands {
             let mut controller = RooIgnoreController::new("/project");
             controller.load_patterns("secret.txt");
             let result = controller.validate_command(&format!("{cmd} secret.txt"));
-            assert_eq!(result, Some("secret.txt".to_string()), "Failed for command: {cmd}");
+            assert_eq!(
+                result,
+                Some("secret.txt".to_string()),
+                "Failed for command: {cmd}"
+            );
         }
     }
 

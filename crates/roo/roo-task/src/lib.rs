@@ -18,58 +18,55 @@
 // Module declarations
 // ---------------------------------------------------------------------------
 
-pub mod types;
-pub mod state;
+pub mod agent_loop;
+pub mod ask_say;
+pub mod config;
+pub mod debug_log;
+pub mod engine;
 pub mod events;
 pub mod loop_control;
-pub mod config;
-pub mod engine;
-pub mod stream_parser;
-pub mod tool_dispatcher;
 pub mod message_builder;
-pub mod agent_loop;
-pub mod task_manager;
-pub mod ask_say;
 pub mod native_tool_call_parser;
-pub mod task_lifecycle;
-pub mod debug_log;
 pub mod present_assistant_message;
+pub mod state;
+pub mod stream_parser;
+pub mod task_lifecycle;
+pub mod task_manager;
+pub mod tool_dispatcher;
+pub mod types;
 
 // ---------------------------------------------------------------------------
 // Re-exports
 // ---------------------------------------------------------------------------
 
-pub use types::{
-    TaskConfig, TaskError, TaskResult, TaskState, StreamingState,
-    AssistantMessageContent, TextContent, ToolUse, McpToolUse,
-    ToolCallStreamEvent, StreamingToolCallState, RawChunkTrackerEntry,
-    StackItem, AttemptResult, DiffStrategy, StreamEvent,
-    is_mcp_tool_name, parse_mcp_tool_name, normalize_mcp_tool_name,
-    TOOL_PARAM_NAMES, is_valid_tool_param,
-};
-pub use state::StateMachine;
+pub use agent_loop::{AgentLoop, AgentLoopConfig};
+pub use ask_say::{AskIgnoredError, AskResponse, AskResult, AskSayHandler, SayOptions};
+pub use config::{DEFAULT_MAX_MISTAKES, DEFAULT_MODE, default_config, validate_config};
+pub use engine::TaskEngine;
 pub use events::{TaskEvent, TaskEventEmitter};
 pub use loop_control::LoopControl;
-pub use engine::TaskEngine;
-pub use config::{validate_config, default_config, DEFAULT_MAX_MISTAKES, DEFAULT_MODE};
-pub use stream_parser::{StreamParser, ParsedStreamContent, ParsedToolCall, StreamUsage};
-pub use native_tool_call_parser::NativeToolCallParser;
-pub use tool_dispatcher::{
-    ToolDispatcher, ToolExecutionResult, ToolContext, ToolHandler,
-    SubtaskConfig, SubtaskResult, execute_subtask, NEW_TASK_SENTINEL,
-};
 pub use message_builder::MessageBuilder;
-pub use agent_loop::{AgentLoop, AgentLoopConfig};
+pub use native_tool_call_parser::NativeToolCallParser;
+pub use state::StateMachine;
+pub use stream_parser::{ParsedStreamContent, ParsedToolCall, StreamParser, StreamUsage};
+pub use task_lifecycle::{ServiceRefs, TaskLifecycle};
 pub use task_manager::TaskManager;
-pub use ask_say::{AskSayHandler, AskResponse, AskResult, AskIgnoredError, SayOptions};
-pub use task_lifecycle::{TaskLifecycle, ServiceRefs};
+pub use tool_dispatcher::{
+    NEW_TASK_SENTINEL, SubtaskConfig, SubtaskResult, ToolContext, ToolDispatcher,
+    ToolExecutionResult, ToolHandler, execute_subtask,
+};
+pub use types::{
+    AssistantMessageContent, AttemptResult, DiffStrategy, McpToolUse, RawChunkTrackerEntry,
+    StackItem, StreamEvent, StreamingState, StreamingToolCallState, TOOL_PARAM_NAMES, TaskConfig,
+    TaskError, TaskResult, TaskState, TextContent, ToolCallStreamEvent, ToolUse, is_mcp_tool_name,
+    is_valid_tool_param, normalize_mcp_tool_name, parse_mcp_tool_name,
+};
 
-pub use debug_log::{set_debug_log_enabled, is_debug_log_enabled, debug_log, DebugLogger};
+pub use debug_log::{DebugLogger, debug_log, is_debug_log_enabled, set_debug_log_enabled};
 pub use present_assistant_message::{
-    PresentAssistantMessage, PresentAssistantMessageState, PresentAssistantMessageError,
-    ToolResult, ToolCallbacks, ApprovalFeedback, ImageBlock, BlockProcessingResult,
-    ToolDispatchAction, McpDispatchAction,
-    strip_thinking_tags, sanitize_tool_use_id, format_tool_error, format_tool_denied,
-    format_tool_denied_with_feedback, format_tool_approved_with_feedback, format_tool_result,
-    is_file_modifying_tool,
+    ApprovalFeedback, BlockProcessingResult, ImageBlock, McpDispatchAction,
+    PresentAssistantMessage, PresentAssistantMessageError, PresentAssistantMessageState,
+    ToolCallbacks, ToolDispatchAction, ToolResult, format_tool_approved_with_feedback,
+    format_tool_denied, format_tool_denied_with_feedback, format_tool_error, format_tool_result,
+    is_file_modifying_tool, sanitize_tool_use_id, strip_thinking_tags,
 };

@@ -10,7 +10,7 @@
 
 use roo_provider::error::{ProviderError, Result};
 use roo_types::api::ApiStreamChunk;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::types::ResponsesApiRequestBody;
 
@@ -35,7 +35,11 @@ pub fn ensure_all_required(schema: &Value) -> Value {
     let mut result = obj.clone();
     result.insert("additionalProperties".to_string(), json!(false));
 
-    if let Some(properties) = result.get("properties").and_then(|p| p.as_object()).cloned() {
+    if let Some(properties) = result
+        .get("properties")
+        .and_then(|p| p.as_object())
+        .cloned()
+    {
         let all_keys: Vec<String> = properties.keys().cloned().collect();
         result.insert("required".to_string(), json!(all_keys));
 
@@ -101,10 +105,10 @@ pub fn ensure_additional_properties_false(schema: &Value) -> Value {
             {
                 let mut updated_val = prop.clone();
                 if let Some(items) = prop.get("items").cloned() {
-                    updated_val
-                        .as_object_mut()
-                        .unwrap()
-                        .insert("items".to_string(), ensure_additional_properties_false(&items));
+                    updated_val.as_object_mut().unwrap().insert(
+                        "items".to_string(),
+                        ensure_additional_properties_false(&items),
+                    );
                 }
                 updated_val
             } else {
@@ -312,10 +316,11 @@ pub fn parse_sse_event(data: &str, provider_name: &str) -> Result<Option<ApiStre
         "response.content_part.added" | "response.content_part.done" => {
             let part = &event["part"];
             // TS checks both `part.text` (string) and `part.text.value` (object with value field)
-            let part_text = part
-                .get("text")
-                .and_then(|t| t.as_str())
-                .or_else(|| part.get("text").and_then(|t| t.get("value")).and_then(|v| v.as_str()));
+            let part_text = part.get("text").and_then(|t| t.as_str()).or_else(|| {
+                part.get("text")
+                    .and_then(|t| t.get("value"))
+                    .and_then(|v| v.as_str())
+            });
             if let Some(text) = part_text {
                 if !text.is_empty() {
                     return Ok(Some(ApiStreamChunk::Text {
@@ -384,9 +389,7 @@ pub fn parse_sse_event(data: &str, provider_name: &str) -> Result<Option<ApiStre
         }
 
         // Tool/function call completion
-        "response.function_call_arguments.done" | "response.tool_call_arguments.done" => {
-            Ok(None)
-        }
+        "response.function_call_arguments.done" | "response.tool_call_arguments.done" => Ok(None),
 
         // Output item events
         "response.output_item.added" | "response.output_item.done" => {
@@ -820,7 +823,9 @@ mod tests {
     fn test_parse_sse_event_reasoning_delta() {
         let data = r#"{"type":"response.reasoning_summary_text.delta","delta":"thinking..."}"#;
         let chunk = parse_sse_event(data, "test").unwrap().unwrap();
-        assert!(matches!(chunk, ApiStreamChunk::Reasoning { ref text, .. } if text == "thinking..."));
+        assert!(
+            matches!(chunk, ApiStreamChunk::Reasoning { ref text, .. } if text == "thinking...")
+        );
     }
 
     #[test]

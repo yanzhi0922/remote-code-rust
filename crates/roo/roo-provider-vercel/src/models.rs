@@ -1,7 +1,7 @@
-﻿//! Vercel AI Gateway model definitions.
+//! Vercel AI Gateway model definitions.
 
-use std::collections::HashMap;
 use roo_types::model::ModelInfo;
+use std::collections::HashMap;
 
 /// Default Vercel AI Gateway model ID.
 pub const DEFAULT_MODEL_ID: &str = "anthropic/claude-sonnet-4";

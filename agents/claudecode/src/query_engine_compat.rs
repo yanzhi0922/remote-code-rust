@@ -6,7 +6,6 @@ use std::time::Instant;
 
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
-use directories::BaseDirs;
 use claude_agents::definition::AgentDefinition;
 use claude_agents::loader::load_all_agents_with_context;
 use claude_agents::prompt::{format_agent_line, visible_agents};
@@ -67,6 +66,7 @@ use claude_tools::{
     with_tool_runtime_policy_overlay,
 };
 use claude_ui_bridge::UiRuntimeMcpServerStatus;
+use directories::BaseDirs;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 use uuid::Uuid;
@@ -764,7 +764,9 @@ fn runtime_agent_listing_delta_active() -> bool {
         .unwrap_or_else(runtime_agent_listing_delta_enabled)
 }
 
-fn extract_denied_agent_types(rules: &[claude_permissions::SourceAwarePermissionRule]) -> Vec<String> {
+fn extract_denied_agent_types(
+    rules: &[claude_permissions::SourceAwarePermissionRule],
+) -> Vec<String> {
     let mut denied = std::collections::BTreeSet::new();
     for rule in rules {
         if rule.action != claude_permissions::RuleAction::Deny {
@@ -832,7 +834,11 @@ fn build_runtime_identity_context_with_entrypoint(
     let is_non_interactive = config.print_mode
         || !matches!(config.output_format, claude_core::OutputFormat::Text)
         || entrypoint_is_non_interactive(env_entrypoint.as_deref());
-    let entrypoint = Some(resolved_runtime_entrypoint(config, is_non_interactive, env_entrypoint));
+    let entrypoint = Some(resolved_runtime_entrypoint(
+        config,
+        is_non_interactive,
+        env_entrypoint,
+    ));
     let user_type = runtime_user_type_from_env(std::env::var("USER_TYPE").ok().as_deref());
     let explicit_agent_team_opt_in = runtime_env_truthy("CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS")
         || std::env::args().any(|arg| arg == "--agent-teams");
@@ -1620,10 +1626,12 @@ impl QueryObserver for CompatObserver {
                 let mut discovered_before_compaction = self.shared.discovered_tool_scope.snapshot();
                 {
                     let conversation = self.shared.conversation.lock().await;
-                    discovered_before_compaction.extend(claude_tools::extract_discovered_tool_names(
-                        &conversation,
-                        &std::collections::BTreeSet::new(),
-                    ));
+                    discovered_before_compaction.extend(
+                        claude_tools::extract_discovered_tool_names(
+                            &conversation,
+                            &std::collections::BTreeSet::new(),
+                        ),
+                    );
                 }
 
                 if self.should_persist() {
@@ -1652,7 +1660,9 @@ impl QueryObserver for CompatObserver {
                             discovered_before_compaction.iter().cloned().collect();
                     }
                     self.store.append_transcript_entry(
-                        &claude_transcript::TranscriptEntry::compact_boundary_now(session_id, boundary),
+                        &claude_transcript::TranscriptEntry::compact_boundary_now(
+                            session_id, boundary,
+                        ),
                     )?;
                     clear_runtime_system_prompt_state(session_id);
                     for entry in &compacted_conversation {
@@ -2044,8 +2054,9 @@ impl ToolRunner for CompatToolRunner {
             .model
             .as_deref()
             .unwrap_or("unknown");
-        let truncated_content = claude_provider::context::ContextWindowManager::for_model(model_name)
-            .truncate_tool_output_default(&processed_result.content);
+        let truncated_content =
+            claude_provider::context::ContextWindowManager::for_model(model_name)
+                .truncate_tool_output_default(&processed_result.content);
         let result = ToolResult {
             content: truncated_content.clone(),
             is_error: raw_result.is_error,
@@ -2757,7 +2768,9 @@ mod tests {
         ConversationEntry, ConversationRole, InputFormat, Message, OutputFormat, PermissionMode,
         ProviderProtocol, ProviderResponse, SubAgentCompletion, ToolCall, UsageSummary,
     };
-    use claude_mcp::{McpCapabilityMatrix, McpServerConfig, McpServerInspection, McpTransportConfig};
+    use claude_mcp::{
+        McpCapabilityMatrix, McpServerConfig, McpServerInspection, McpTransportConfig,
+    };
     use claude_permissions::{
         LayeredPermissionBroker, PermissionBroker, PermissionDecision, PermissionRequest,
         StaticPermissionBroker,
@@ -2788,10 +2801,9 @@ mod tests {
         announced_deferred_tool_names, announced_mcp_instruction_names,
         augment_post_compact_conversation_for_runtime, build_agent_listing_delta_entry,
         build_mcp_instructions_delta_entry, build_runtime_identity_context,
-        build_runtime_identity_context_with_entrypoint,
-        refresh_runtime_system_prompt, run_no_persist_forked_query,
-        run_prompt_with_query_engine_compat, run_prompt_with_query_engine_compat_overrides,
-        runtime_delta_entry,
+        build_runtime_identity_context_with_entrypoint, refresh_runtime_system_prompt,
+        run_no_persist_forked_query, run_prompt_with_query_engine_compat,
+        run_prompt_with_query_engine_compat_overrides, runtime_delta_entry,
     };
     use crate::conversation::{PromptEventSink, PromptStreamEvent, initialize_conversation};
     use crate::hooks::{HookRunState, RuntimeHookDiscovery};
@@ -2876,7 +2888,7 @@ mod tests {
                 request_timeout_secs: Some(1),
                 metadata: BTreeMap::new(),
                 oauth: None,
-            tool_policy: Default::default(),
+                tool_policy: Default::default(),
             },
         }
     }
@@ -3357,7 +3369,7 @@ mod tests {
                     request_timeout_secs: Some(3),
                     metadata: BTreeMap::new(),
                     oauth: None,
-                tool_policy: Default::default(),
+                    tool_policy: Default::default(),
                 },
             }],
             shell_policy: Default::default(),
@@ -3833,7 +3845,7 @@ while True:
                 request_id: None,
                 usage: UsageSummary::default(),
                 stop_reason: "end_turn".to_owned(),
-            research: None,
+                research: None,
             })
         }
     }
@@ -3859,7 +3871,7 @@ while True:
                 request_id: None,
                 usage: UsageSummary::default(),
                 stop_reason: "end_turn".to_owned(),
-            research: None,
+                research: None,
             })
         }
 
@@ -3904,7 +3916,7 @@ while True:
                     request_id: None,
                     usage: UsageSummary::default(),
                     stop_reason: "tool_use".to_owned(),
-                research: None,
+                    research: None,
                 });
             }
 
@@ -3917,7 +3929,7 @@ while True:
                 request_id: None,
                 usage: UsageSummary::default(),
                 stop_reason: "end_turn".to_owned(),
-            research: None,
+                research: None,
             })
         }
 
@@ -3953,7 +3965,7 @@ while True:
                 request_id: None,
                 usage: UsageSummary::default(),
                 stop_reason: "end_turn".to_owned(),
-            research: None,
+                research: None,
             })
         }
 
@@ -3977,7 +3989,7 @@ while True:
                 request_id: None,
                 usage: UsageSummary::default(),
                 stop_reason: "end_turn".to_owned(),
-            research: None,
+                research: None,
             })
         }
 
@@ -4002,7 +4014,12 @@ while True:
             if let Some(callbacks) = callbacks
                 && let Some(on_usage) = callbacks.on_usage.as_ref()
             {
-                on_usage(claude_provider::streaming::StreamingUsageUpdate { input_tokens: 7, output_tokens: 4, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 });
+                on_usage(claude_provider::streaming::StreamingUsageUpdate {
+                    input_tokens: 7,
+                    output_tokens: 4,
+                    cache_read_input_tokens: 0,
+                    cache_creation_input_tokens: 0,
+                });
             }
             Err(anyhow::anyhow!("streaming backend failed"))
         }
@@ -4043,7 +4060,7 @@ while True:
                 request_id: None,
                 usage: UsageSummary::default(),
                 stop_reason: "end_turn".to_owned(),
-            research: None,
+                research: None,
             })
         }
 
@@ -4082,7 +4099,7 @@ while True:
                     request_id: None,
                     usage: UsageSummary::default(),
                     stop_reason: "end_turn".to_owned(),
-                research: None,
+                    research: None,
                 });
             }
 
@@ -4099,7 +4116,7 @@ while True:
                 request_id: None,
                 usage: UsageSummary::default(),
                 stop_reason: "tool_use".to_owned(),
-            research: None,
+                research: None,
             })
         }
 
@@ -4335,9 +4352,10 @@ while True:
 
     #[tokio::test]
     async fn compat_run_includes_coordinator_worker_tools_context_in_user_reminder() {
-        let _coordinator_mode =
-            CoordinatorModeTestGuard::enter(claude_agents::coordinator::CoordinatorMode::Coordinator)
-                .await;
+        let _coordinator_mode = CoordinatorModeTestGuard::enter(
+            claude_agents::coordinator::CoordinatorMode::Coordinator,
+        )
+        .await;
 
         let (_tempdir, config, store) = mock_config_and_store();
         let discovery = RuntimeHookDiscovery::default();
@@ -4556,7 +4574,8 @@ while True:
     #[tokio::test]
     async fn refresh_runtime_system_prompt_preserves_structured_blocks() {
         let _coordinator_mode =
-            CoordinatorModeTestGuard::enter(claude_agents::coordinator::CoordinatorMode::Normal).await;
+            CoordinatorModeTestGuard::enter(claude_agents::coordinator::CoordinatorMode::Normal)
+                .await;
         let (_tempdir, mut config, store) = mock_config_and_store();
         config.provider.protocol = ProviderProtocol::Anthropic;
         config.provider.base_url = Some("https://api.anthropic.com/v1/messages".to_owned());
@@ -4601,7 +4620,8 @@ while True:
     #[tokio::test]
     async fn agent_system_prompt_keeps_runtime_system_context() {
         let _coordinator_mode =
-            CoordinatorModeTestGuard::enter(claude_agents::coordinator::CoordinatorMode::Normal).await;
+            CoordinatorModeTestGuard::enter(claude_agents::coordinator::CoordinatorMode::Normal)
+                .await;
         let (_tempdir, mut config, store) = mock_config_and_store();
         config.provider.protocol = ProviderProtocol::Anthropic;
         config.provider.base_url = Some("https://api.anthropic.com/v1/messages".to_owned());
@@ -4641,7 +4661,8 @@ while True:
     #[tokio::test]
     async fn custom_system_prompt_skips_runtime_system_context() {
         let _coordinator_mode =
-            CoordinatorModeTestGuard::enter(claude_agents::coordinator::CoordinatorMode::Normal).await;
+            CoordinatorModeTestGuard::enter(claude_agents::coordinator::CoordinatorMode::Normal)
+                .await;
         let (_tempdir, mut config, store) = mock_config_and_store();
         config.provider.protocol = ProviderProtocol::Anthropic;
         config.provider.base_url = Some("https://api.anthropic.com/v1/messages".to_owned());
@@ -4681,7 +4702,8 @@ while True:
     #[tokio::test]
     async fn append_system_prompt_keeps_runtime_system_context() {
         let _coordinator_mode =
-            CoordinatorModeTestGuard::enter(claude_agents::coordinator::CoordinatorMode::Normal).await;
+            CoordinatorModeTestGuard::enter(claude_agents::coordinator::CoordinatorMode::Normal)
+                .await;
         let (_tempdir, mut config, store) = mock_config_and_store();
         config.provider.protocol = ProviderProtocol::Anthropic;
         config.provider.base_url = Some("https://api.anthropic.com/v1/messages".to_owned());
@@ -4721,7 +4743,8 @@ while True:
     #[tokio::test]
     async fn override_system_prompt_replaces_runtime_prompt_and_system_context() {
         let _coordinator_mode =
-            CoordinatorModeTestGuard::enter(claude_agents::coordinator::CoordinatorMode::Normal).await;
+            CoordinatorModeTestGuard::enter(claude_agents::coordinator::CoordinatorMode::Normal)
+                .await;
         let (_tempdir, mut config, store) = mock_config_and_store();
         config.provider.protocol = ProviderProtocol::Anthropic;
         config.provider.base_url = Some("https://api.anthropic.com/v1/messages".to_owned());
@@ -4768,7 +4791,8 @@ while True:
     #[tokio::test]
     async fn empty_custom_system_prompt_still_skips_default_prompt_and_system_context() {
         let _coordinator_mode =
-            CoordinatorModeTestGuard::enter(claude_agents::coordinator::CoordinatorMode::Normal).await;
+            CoordinatorModeTestGuard::enter(claude_agents::coordinator::CoordinatorMode::Normal)
+                .await;
         let (_tempdir, mut config, store) = mock_config_and_store();
         config.provider.protocol = ProviderProtocol::Anthropic;
         config.provider.base_url = Some("https://api.anthropic.com/v1/messages".to_owned());
@@ -4823,7 +4847,8 @@ while True:
     #[tokio::test]
     async fn whitespace_custom_system_prompt_skips_default_prompt_and_system_context() {
         let _coordinator_mode =
-            CoordinatorModeTestGuard::enter(claude_agents::coordinator::CoordinatorMode::Normal).await;
+            CoordinatorModeTestGuard::enter(claude_agents::coordinator::CoordinatorMode::Normal)
+                .await;
         let (_tempdir, mut config, store) = mock_config_and_store();
         config.provider.protocol = ProviderProtocol::Anthropic;
         config.provider.base_url = Some("https://api.anthropic.com/v1/messages".to_owned());
@@ -4916,7 +4941,7 @@ while True:
                     request_timeout_secs: Some(3),
                     oauth: None,
                     metadata: BTreeMap::new(),
-                tool_policy: Default::default(),
+                    tool_policy: Default::default(),
                 },
             }],
             shell_policy: Default::default(),

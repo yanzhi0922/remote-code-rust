@@ -134,7 +134,8 @@ impl CodeIndexStateManager {
             return;
         }
 
-        let progress_changed = processed_items != status.processed_items || total_items != status.total_items;
+        let progress_changed =
+            processed_items != status.processed_items || total_items != status.total_items;
 
         if progress_changed || status.system_status != IndexingState::Indexing {
             status.processed_items = processed_items;
@@ -179,7 +180,8 @@ impl CodeIndexStateManager {
             return;
         }
 
-        let progress_changed = processed_files != status.processed_items || total_files != status.total_items;
+        let progress_changed =
+            processed_files != status.processed_items || total_files != status.total_items;
 
         if progress_changed || status.system_status != IndexingState::Indexing {
             status.processed_items = processed_files;
@@ -297,7 +299,10 @@ mod tests {
         let updates_clone = updates.clone();
 
         let sm = CodeIndexStateManager::with_callback(Box::new(move |status| {
-            updates_clone.lock().unwrap().push(status.system_status.clone());
+            updates_clone
+                .lock()
+                .unwrap()
+                .push(status.system_status.clone());
         }));
 
         sm.set_system_state(IndexingState::Indexing, Some("Starting"));

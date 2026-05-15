@@ -47,20 +47,20 @@ mod unified_diff;
 mod validate;
 
 // Public exports — strategies
+pub use apply_patch::ApplyPatchDiffStrategy;
+pub use search_replace::SingleSearchReplaceDiffStrategy;
 pub use strategy::MultiSearchReplaceDiffStrategy;
 pub use unified_diff::UnifiedDiffStrategy;
-pub use search_replace::SingleSearchReplaceDiffStrategy;
-pub use apply_patch::ApplyPatchDiffStrategy;
 
 // Public exports — types
 pub use types::{DiffResult, ToolProgressStatus, ToolUse, ToolUseParams};
 
 // Utility function exports
+pub use similarity::{FuzzySearchResult, fuzzy_search, get_similarity};
 pub use text_utils::{
     add_line_numbers, every_line_has_line_numbers, normalize_string, strip_line_numbers,
 };
-pub use similarity::{get_similarity, fuzzy_search, FuzzySearchResult};
-pub use validate::{validate_marker_sequencing, ValidationResult};
+pub use validate::{ValidationResult, validate_marker_sequencing};
 
 // ---------------------------------------------------------------------------
 // DiffStrategy trait — unified interface for all diff strategies

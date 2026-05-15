@@ -117,58 +117,59 @@ pub fn resolve_command_sym_link<'a>(
     depth: usize,
 ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>> {
     Box::pin(async move {
-    if depth > MAX_DEPTH {
-        return;
-    }
-
-    // Read the symlink target
-    let link_target = match tokio::fs::read_link(symlink_path).await {
-        Ok(t) => t,
-        Err(_) => return,
-    };
-
-    // Resolve relative to the symlink's parent directory
-    let resolved_target = symlink_path
-        .parent()
-        .unwrap_or(Path::new("."))
-        .join(&link_target);
-
-    // Use lstat to detect nested symlinks
-    let stats = match tokio::fs::symlink_metadata(&resolved_target).await {
-        Ok(s) => s,
-        Err(_) => return,
-    };
-
-    if stats.is_file() {
-        if is_markdown_file(
-            resolved_target
-                .file_name()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .as_ref(),
-        ) {
-            file_infos.push(CommandFileInfo {
-                original_path: symlink_path.to_path_buf(),
-                resolved_path: resolved_target,
-            });
+        if depth > MAX_DEPTH {
+            return;
         }
-    } else if stats.is_dir() {
-        let mut entries = match tokio::fs::read_dir(&resolved_target).await {
-            Ok(rd) => rd,
+
+        // Read the symlink target
+        let link_target = match tokio::fs::read_link(symlink_path).await {
+            Ok(t) => t,
             Err(_) => return,
         };
-        loop {
-            let entry = match entries.next_entry().await {
-                Ok(Some(e)) => e,
-                Ok(None) => break,
-                Err(_) => continue,
+
+        // Resolve relative to the symlink's parent directory
+        let resolved_target = symlink_path
+            .parent()
+            .unwrap_or(Path::new("."))
+            .join(&link_target);
+
+        // Use lstat to detect nested symlinks
+        let stats = match tokio::fs::symlink_metadata(&resolved_target).await {
+            Ok(s) => s,
+            Err(_) => return,
+        };
+
+        if stats.is_file() {
+            if is_markdown_file(
+                resolved_target
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .as_ref(),
+            ) {
+                file_infos.push(CommandFileInfo {
+                    original_path: symlink_path.to_path_buf(),
+                    resolved_path: resolved_target,
+                });
+            }
+        } else if stats.is_dir() {
+            let mut entries = match tokio::fs::read_dir(&resolved_target).await {
+                Ok(rd) => rd,
+                Err(_) => return,
             };
-            resolve_command_directory_entry(&entry, &resolved_target, file_infos, depth + 1).await;
+            loop {
+                let entry = match entries.next_entry().await {
+                    Ok(Some(e)) => e,
+                    Ok(None) => break,
+                    Err(_) => continue,
+                };
+                resolve_command_directory_entry(&entry, &resolved_target, file_infos, depth + 1)
+                    .await;
+            }
+        } else if stats.is_symlink() {
+            // Nested symlink
+            resolve_command_sym_link(&resolved_target, file_infos, depth + 1).await;
         }
-    } else if stats.is_symlink() {
-        // Nested symlink
-        resolve_command_sym_link(&resolved_target, file_infos, depth + 1).await;
-    }
     })
 }
 
@@ -180,29 +181,29 @@ pub fn resolve_command_directory_entry<'a>(
     depth: usize,
 ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>> {
     Box::pin(async move {
-    if depth > MAX_DEPTH {
-        return;
-    }
-
-    let file_name = entry.file_name();
-    let name_str = file_name.to_string_lossy().to_string();
-    let full_path = dir_path.join(&file_name);
-
-    let file_type = match entry.file_type().await {
-        Ok(ft) => ft,
-        Err(_) => return,
-    };
-
-    if file_type.is_file() {
-        if is_markdown_file(&name_str) {
-            file_infos.push(CommandFileInfo {
-                original_path: full_path.clone(),
-                resolved_path: full_path,
-            });
+        if depth > MAX_DEPTH {
+            return;
         }
-    } else if file_type.is_symlink() {
-        resolve_command_sym_link(&full_path, file_infos, depth + 1).await;
-    }
+
+        let file_name = entry.file_name();
+        let name_str = file_name.to_string_lossy().to_string();
+        let full_path = dir_path.join(&file_name);
+
+        let file_type = match entry.file_type().await {
+            Ok(ft) => ft,
+            Err(_) => return,
+        };
+
+        if file_type.is_file() {
+            if is_markdown_file(&name_str) {
+                file_infos.push(CommandFileInfo {
+                    original_path: full_path.clone(),
+                    resolved_path: full_path,
+                });
+            }
+        } else if file_type.is_symlink() {
+            resolve_command_sym_link(&full_path, file_infos, depth + 1).await;
+        }
     })
 }
 
@@ -273,7 +274,11 @@ mod tests {
         fs::create_dir_all(&commands_dir).unwrap();
 
         create_md_file(&commands_dir, "hello.md", "Hello command body");
-        create_md_file(&commands_dir, "world.md", "---\ndescription: World command\n---\nWorld body");
+        create_md_file(
+            &commands_dir,
+            "world.md",
+            "---\ndescription: World command\n---\nWorld body",
+        );
 
         let mut commands = HashMap::new();
         scan_command_directory(&commands_dir, CommandSource::Global, &mut commands).await;
@@ -369,8 +374,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_try_resolve_symlinked_command_nonexistent() {
-        let result =
-            try_resolve_symlinked_command(Path::new("/nonexistent/file.md")).await;
+        let result = try_resolve_symlinked_command(Path::new("/nonexistent/file.md")).await;
         assert!(result.is_none());
     }
 

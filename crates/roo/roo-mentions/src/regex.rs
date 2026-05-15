@@ -31,8 +31,7 @@ pub fn mention_regex() -> &'static Regex {
 /// Matches `/` followed by a command name (alphanumeric, hyphens, underscores).
 pub fn command_regex() -> &'static Regex {
     static RE: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r"/([a-zA-Z0-9_-]+)")
-            .expect("Failed to compile command regex")
+        Regex::new(r"/([a-zA-Z0-9_-]+)").expect("Failed to compile command regex")
     });
     &RE
 }
@@ -51,7 +50,8 @@ pub fn is_git_hash(s: &str) -> bool {
     if len < 7 || len > 40 {
         return false;
     }
-    s.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+    s.chars()
+        .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
 }
 
 #[cfg(test)]

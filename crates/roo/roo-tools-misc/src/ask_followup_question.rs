@@ -31,7 +31,9 @@ pub fn validate_followup_params(params: &AskFollowupQuestionParams) -> Result<()
 }
 
 /// Process an ask_followup_question request.
-pub fn process_followup(params: &AskFollowupQuestionParams) -> Result<FollowupResult, MiscToolError> {
+pub fn process_followup(
+    params: &AskFollowupQuestionParams,
+) -> Result<FollowupResult, MiscToolError> {
     validate_followup_params(params)?;
 
     let suggestions: Vec<String> = params

@@ -222,9 +222,9 @@ mod tests {
     #[test]
     fn exhaustion_after_3_recoveries() {
         let mut recovery = MaxTokensRecovery::new();
-        let _ = recovery.handle_truncation(8192, false);   // escalation
-        let _ = recovery.handle_truncation(64_000, false);  // continuation 1
-        let _ = recovery.handle_truncation(64_000, false);  // continuation 2
+        let _ = recovery.handle_truncation(8192, false); // escalation
+        let _ = recovery.handle_truncation(64_000, false); // continuation 1
+        let _ = recovery.handle_truncation(64_000, false); // continuation 2
         // 4th attempt: exhausted
         let action = recovery.handle_truncation(64_000, false);
         assert!(matches!(action, Some(MaxTokensRecoveryAction::Exhausted)));

@@ -9,7 +9,9 @@ use crate::{ConnectionState, EndpointHealth, TransportConfig, TransportMetrics};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum TransportCommand {
-    SendPrompt { content: String },
+    SendPrompt {
+        content: String,
+    },
     Interrupt,
     RespondToApproval {
         approval_id: String,

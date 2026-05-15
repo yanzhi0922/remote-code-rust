@@ -88,11 +88,9 @@ fn check_is_openai_context_error(error: &ProviderError) -> bool {
 
     // Check for API error with code 400 and known substrings.
     match error {
-        ProviderError::ApiError(_, msg) => {
-            OPENAI_CONTEXT_ERROR_SUBSTRINGS
-                .iter()
-                .any(|substr| msg.contains(substr))
-        }
+        ProviderError::ApiError(_, msg) => OPENAI_CONTEXT_ERROR_SUBSTRINGS
+            .iter()
+            .any(|substr| msg.contains(substr)),
         ProviderError::ApiErrorResponse(_, status, msg) if *status == 400 => {
             OPENAI_CONTEXT_ERROR_SUBSTRINGS
                 .iter()
@@ -205,7 +203,8 @@ mod tests {
 
     #[test]
     fn test_openai_api_error_with_token() {
-        let error = ProviderError::ApiError("openai".to_string(), "max token limit reached".to_string());
+        let error =
+            ProviderError::ApiError("openai".to_string(), "max token limit reached".to_string());
         assert!(check_is_openai_context_error(&error));
     }
 
@@ -351,9 +350,7 @@ mod tests {
 
     #[test]
     fn test_anthropic_invalid_request_error_in_message() {
-        let error = ProviderError::Other(
-            "invalid_request_error: prompt is too long".to_string(),
-        );
+        let error = ProviderError::Other("invalid_request_error: prompt is too long".to_string());
         assert!(check_is_anthropic_context_error(&error));
     }
 

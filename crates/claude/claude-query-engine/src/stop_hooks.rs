@@ -11,8 +11,8 @@
 
 use std::collections::BTreeMap;
 use std::process::Stdio;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use claude_core::{AgentId, Message, SessionId};
@@ -350,11 +350,7 @@ impl StopHookPipeline {
     }
 
     /// Register a handler for a phase.
-    pub fn register_phase(
-        &mut self,
-        phase: StopHookPhase,
-        handler: Box<dyn StopHookPhaseHandler>,
-    ) {
+    pub fn register_phase(&mut self, phase: StopHookPhase, handler: Box<dyn StopHookPhaseHandler>) {
         self.handlers.push((phase, handler));
     }
 
@@ -368,10 +364,7 @@ impl StopHookPipeline {
     /// Execute all registered phases in order.
     /// Phases 1-2 are blocking. Phases 3-4 are fire-and-forget.
     /// Phases 5-6 are user-configured hooks.
-    pub async fn execute(
-        &self,
-        input: &StopHookBaseInput,
-    ) -> StopHookPipelineResult {
+    pub async fn execute(&self, input: &StopHookBaseInput) -> StopHookPipelineResult {
         let mut result = StopHookPipelineResult::default();
 
         for (phase, handler) in &self.handlers {
@@ -386,8 +379,7 @@ impl StopHookPipeline {
 
             match phase {
                 // Phases 1-2: Blocking — errors stop the pipeline
-                StopHookPhase::SaveCacheSafeParams
-                | StopHookPhase::JobClassification => {
+                StopHookPhase::SaveCacheSafeParams | StopHookPhase::JobClassification => {
                     if let Err(err) = handler.execute(input, &mut result).await {
                         result.blocking_errors.push(err.to_string());
                         if *phase == StopHookPhase::JobClassification {
@@ -411,8 +403,7 @@ impl StopHookPipeline {
                 }
 
                 // Phases 5-6: User-configured hooks — can inject messages
-                StopHookPhase::UserConfiguredStopHooks
-                | StopHookPhase::TeammateHooks => {
+                StopHookPhase::UserConfiguredStopHooks | StopHookPhase::TeammateHooks => {
                     if let Err(err) = handler.execute(input, &mut result).await {
                         tracing::warn!("Stop hook phase {phase} failed: {err:#}");
                     }
@@ -616,11 +607,8 @@ impl StopHookPhaseHandler for UserConfiguredStopHooksHandler {
             "Stop"
         };
 
-        let matching_hooks: Vec<&HookDefinition> = self
-            .hooks
-            .iter()
-            .filter(|h| h.event == event)
-            .collect();
+        let matching_hooks: Vec<&HookDefinition> =
+            self.hooks.iter().filter(|h| h.event == event).collect();
 
         if matching_hooks.is_empty() {
             return Ok(());
@@ -635,8 +623,7 @@ impl StopHookPhaseHandler for UserConfiguredStopHooksHandler {
             "agent_id": input.agent_id.as_ref().map(|id| id.to_string()),
             "query_source": format!("{:?}", input.query_source),
         });
-        let input_str = serde_json::to_string(&input_json)
-            .unwrap_or_else(|_| "{}".to_owned());
+        let input_str = serde_json::to_string(&input_json).unwrap_or_else(|_| "{}".to_owned());
 
         let mut hook_count = 0usize;
         let mut hook_errors: Vec<String> = Vec::new();
@@ -732,8 +719,7 @@ impl StopHookPhaseHandler for TeammateHooksHandler {
             "agent_id": agent_id.to_string(),
             "query_source": format!("{:?}", input.query_source),
         });
-        let input_str = serde_json::to_string(&input_json)
-            .unwrap_or_else(|_| "{}".to_owned());
+        let input_str = serde_json::to_string(&input_json).unwrap_or_else(|_| "{}".to_owned());
 
         let default_timeout = 60_000u64;
 
@@ -995,19 +981,19 @@ fn parse_hook_output(stdout: &str) -> (Option<String>, bool, Option<String>) {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     use claude_core::{AgentId, ConversationEntry, Message, PermissionMode, SessionId};
 
     use crate::config::{ProcessUserInputContext, QuerySource};
 
     use super::{
-        execute_hook_process, BackgroundFireAndForgetHandler, HookDefinition,
-        ReplHookContext, SaveCacheSafeParamsHandler, StopHookBaseInput, StopHookManager,
-        StopHookOutcome, StopHookPhase, StopHookPhaseHandler, StopHookPipeline,
-        StopHookPipelineResult, StopHookRequest, StopHookResult, TeammateHooksHandler,
-        UserConfiguredStopHooksHandler,
+        BackgroundFireAndForgetHandler, HookDefinition, ReplHookContext,
+        SaveCacheSafeParamsHandler, StopHookBaseInput, StopHookManager, StopHookOutcome,
+        StopHookPhase, StopHookPhaseHandler, StopHookPipeline, StopHookPipelineResult,
+        StopHookRequest, StopHookResult, TeammateHooksHandler, UserConfiguredStopHooksHandler,
+        execute_hook_process,
     };
 
     // ----- Existing tests (preserved) -----
@@ -1212,11 +1198,7 @@ mod tests {
         let hook = if cfg!(windows) {
             HookDefinition {
                 event: "Stop".to_owned(),
-                command: vec![
-                    "cmd".to_owned(),
-                    "/C".to_owned(),
-                    "exit 1".to_owned(),
-                ],
+                command: vec!["cmd".to_owned(), "/C".to_owned(), "exit 1".to_owned()],
                 timeout_ms: Some(5_000),
             }
         } else {
@@ -1268,10 +1250,7 @@ mod tests {
             "Expected prevent_continuation to be true, got message: {:?}",
             result.message
         );
-        assert_eq!(
-            result.stop_reason.as_deref(),
-            Some("hook says stop")
-        );
+        assert_eq!(result.stop_reason.as_deref(), Some("hook says stop"));
     }
 
     // ----- Phase handler tests -----
@@ -1404,10 +1383,7 @@ mod tests {
             StopHookPhase::SaveCacheSafeParams,
             Box::new(SaveCacheSafeParamsHandler),
         );
-        pipeline.register_phase(
-            StopHookPhase::Return,
-            Box::new(super::NoOpPhaseHandler),
-        );
+        pipeline.register_phase(StopHookPhase::Return, Box::new(super::NoOpPhaseHandler));
 
         // Abort before execution.
         signal.store(true, Ordering::Relaxed);
@@ -1442,12 +1418,11 @@ mod tests {
 
         pipeline.register_phase(
             StopHookPhase::SaveCacheSafeParams,
-            Box::new(AbortAfterFirstPhase { signal: signal.clone() }),
+            Box::new(AbortAfterFirstPhase {
+                signal: signal.clone(),
+            }),
         );
-        pipeline.register_phase(
-            StopHookPhase::Return,
-            Box::new(super::NoOpPhaseHandler),
-        );
+        pipeline.register_phase(StopHookPhase::Return, Box::new(super::NoOpPhaseHandler));
 
         let input = test_input(QuerySource::ReplMainThread, None);
         let result = pipeline.execute(&input).await;
@@ -1455,7 +1430,10 @@ mod tests {
         // First phase executed, but then abort was detected before second phase.
         assert!(result.prevent_continuation);
         assert_eq!(result.phases_executed.len(), 1);
-        assert_eq!(result.phases_executed[0], StopHookPhase::SaveCacheSafeParams);
+        assert_eq!(
+            result.phases_executed[0],
+            StopHookPhase::SaveCacheSafeParams
+        );
     }
 
     // ----- default_with_handlers integration test -----
@@ -1469,11 +1447,7 @@ mod tests {
         }];
         let teammate_hooks = vec![];
 
-        let pipeline = StopHookPipeline::default_with_handlers(
-            stop_hooks,
-            teammate_hooks,
-            None,
-        );
+        let pipeline = StopHookPipeline::default_with_handlers(stop_hooks, teammate_hooks, None);
 
         let input = test_input(QuerySource::ReplMainThread, None);
         let result = pipeline.execute(&input).await;
@@ -1481,15 +1455,21 @@ mod tests {
         // Should have executed SaveCacheSafeParams, BackgroundFireAndForget,
         // UserConfiguredStopHooks, and Return phases.
         assert!(!result.phases_executed.is_empty());
-        assert!(result
-            .phases_executed
-            .contains(&StopHookPhase::SaveCacheSafeParams));
-        assert!(result
-            .phases_executed
-            .contains(&StopHookPhase::BackgroundFireAndForget));
-        assert!(result
-            .phases_executed
-            .contains(&StopHookPhase::UserConfiguredStopHooks));
+        assert!(
+            result
+                .phases_executed
+                .contains(&StopHookPhase::SaveCacheSafeParams)
+        );
+        assert!(
+            result
+                .phases_executed
+                .contains(&StopHookPhase::BackgroundFireAndForget)
+        );
+        assert!(
+            result
+                .phases_executed
+                .contains(&StopHookPhase::UserConfiguredStopHooks)
+        );
         assert!(result.phases_executed.contains(&StopHookPhase::Return));
         assert_eq!(result.hook_count, 1);
     }
@@ -1514,11 +1494,7 @@ mod tests {
             },
         ];
 
-        let pipeline = StopHookPipeline::default_with_handlers(
-            stop_hooks,
-            teammate_hooks,
-            None,
-        );
+        let pipeline = StopHookPipeline::default_with_handlers(stop_hooks, teammate_hooks, None);
 
         let agent_id = AgentId::new(Some("teammate-agent"));
         let mut input = test_input(QuerySource::Agent, Some(agent_id));
@@ -1527,8 +1503,16 @@ mod tests {
         let result = pipeline.execute(&input).await;
 
         // Should have executed TeammateHooks with 2 hooks + SubagentStop with 1.
-        assert!(result.phases_executed.contains(&StopHookPhase::TeammateHooks));
-        assert!(result.phases_executed.contains(&StopHookPhase::UserConfiguredStopHooks));
+        assert!(
+            result
+                .phases_executed
+                .contains(&StopHookPhase::TeammateHooks)
+        );
+        assert!(
+            result
+                .phases_executed
+                .contains(&StopHookPhase::UserConfiguredStopHooks)
+        );
         // 1 SubagentStop + 2 Teammate hooks = 3 total.
         assert_eq!(result.hook_count, 3);
     }
@@ -1539,7 +1523,11 @@ mod tests {
     fn hook_definition_serializes_correctly() {
         let hook = HookDefinition {
             event: "Stop".to_owned(),
-            command: vec!["node".to_owned(), "script.js".to_owned(), "--arg".to_owned()],
+            command: vec![
+                "node".to_owned(),
+                "script.js".to_owned(),
+                "--arg".to_owned(),
+            ],
             timeout_ms: Some(30_000),
         };
 

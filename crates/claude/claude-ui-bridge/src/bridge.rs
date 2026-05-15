@@ -288,48 +288,86 @@ pub trait BridgeTransport: Send + Sync {
 // LocalBridge — in-process channel-based transport
 // ---------------------------------------------------------------------------
 
+/// Default capacity for [`LocalBridge`] events.
+///
+/// Bounded so a runaway producer cannot grow the queue without limit when the
+/// frontend stalls. Tuned to comfortably absorb token-by-token streaming for
+/// long bursts; if production rate exceeds this for a sustained period, the
+/// frontend is unhealthy and dropping events is preferable to OOM.
+pub const LOCAL_BRIDGE_DEFAULT_CAPACITY: usize = 4096;
+
 /// In-process bridge using Tokio MPSC channels.
 ///
 /// Suitable for connecting the core engine to a frontend running in the
 /// same process (e.g., TUI or embedded GUI).
+///
+/// The channel is **bounded**. Synchronous senders use `try_send` and surface
+/// a clear error when the queue is saturated; async senders fall back to
+/// `send().await` so producers naturally back off.
 pub struct LocalBridge {
-    sender: mpsc::UnboundedSender<BridgeEvent>,
-    receiver: Mutex<mpsc::UnboundedReceiver<BridgeEvent>>,
+    sender: mpsc::Sender<BridgeEvent>,
+    receiver: Mutex<mpsc::Receiver<BridgeEvent>>,
     connected: AtomicBool,
+    capacity: usize,
 }
 
 impl LocalBridge {
-    /// Create a new local bridge with unbounded channel capacity.
+    /// Create a new local bridge with the default bounded capacity.
     #[must_use]
     pub fn new() -> Self {
-        let (sender, receiver) = mpsc::unbounded_channel();
+        Self::with_capacity(LOCAL_BRIDGE_DEFAULT_CAPACITY)
+    }
+
+    /// Create a new local bridge with the given bounded capacity.
+    #[must_use]
+    pub fn with_capacity(capacity: usize) -> Self {
+        let capacity = capacity.max(1);
+        let (sender, receiver) = mpsc::channel(capacity);
         Self {
             sender,
             receiver: Mutex::new(receiver),
             connected: AtomicBool::new(false),
+            capacity,
         }
     }
 
     /// Get a clonable sender handle that can be shared across tasks.
     #[must_use]
-    pub fn sender(&self) -> mpsc::UnboundedSender<BridgeEvent> {
+    pub fn sender(&self) -> mpsc::Sender<BridgeEvent> {
         self.sender.clone()
     }
 
+    /// Configured channel capacity. Useful for diagnostics.
+    #[must_use]
+    pub fn capacity(&self) -> usize {
+        self.capacity
+    }
+
     /// Send an event synchronously through the internal sender.
+    ///
+    /// Returns an error if the receiver has been dropped or the queue is at
+    /// capacity. Callers that can tolerate dropping events should treat
+    /// `Err` as backpressure, not a fatal condition.
     ///
     /// Unlike the async [`BridgeTransport::send`], this method does not
     /// check the connection state and returns immediately.
     ///
     /// # Errors
-    /// Returns an error if the receiver has been dropped.
+    /// Returns an error if the receiver has been dropped or the channel is
+    /// at capacity.
     pub fn send_sync(&self, event: BridgeEvent) -> Result<()> {
-        self.sender.send(event).map_err(|e| {
-            anyhow::anyhow!(
-                "local bridge send failed: {}",
-                e.0.event_id().unwrap_or("unknown")
-            )
-        })
+        match self.sender.try_send(event) {
+            Ok(()) => Ok(()),
+            Err(mpsc::error::TrySendError::Full(event)) => Err(anyhow::anyhow!(
+                "local bridge channel saturated (cap={}): dropping event {}",
+                self.capacity,
+                event.event_id().unwrap_or("unknown")
+            )),
+            Err(mpsc::error::TrySendError::Closed(event)) => Err(anyhow::anyhow!(
+                "local bridge send failed: receiver dropped (event {})",
+                event.event_id().unwrap_or("unknown")
+            )),
+        }
     }
 }
 
@@ -346,9 +384,11 @@ impl BridgeTransport for LocalBridge {
             self.connected.load(Ordering::Relaxed),
             "local bridge is not connected"
         );
-        self.sender.send(event).map_err(|e| {
+        // `send().await` provides natural backpressure: when the queue is
+        // full, the producer suspends until a slot frees up.
+        self.sender.send(event).await.map_err(|e| {
             anyhow::anyhow!(
-                "local bridge send failed: {}",
+                "local bridge send failed: receiver dropped (event {})",
                 e.0.event_id().unwrap_or("unknown")
             )
         })?;
@@ -850,6 +890,7 @@ mod tests {
         let sender = bridge.sender();
         sender
             .send(BridgeEvent::message(BridgeOrigin::System, "from sender"))
+            .await
             .expect("sender send should succeed");
 
         let received = bridge

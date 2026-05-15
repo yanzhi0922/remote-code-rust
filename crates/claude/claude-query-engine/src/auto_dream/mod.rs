@@ -16,8 +16,9 @@ pub mod config;
 pub mod consolidation_lock;
 pub mod consolidation_prompt;
 
+use parking_lot::Mutex;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use config::AutoDreamConfig;
@@ -57,11 +58,7 @@ pub struct AutoDreamExecutor {
 
 impl AutoDreamExecutor {
     /// Create a new auto-dream executor.
-    pub fn new(
-        config: AutoDreamConfig,
-        memory_dir: PathBuf,
-        session_dir: Option<PathBuf>,
-    ) -> Self {
+    pub fn new(config: AutoDreamConfig, memory_dir: PathBuf, session_dir: Option<PathBuf>) -> Self {
         Self {
             config,
             state: Arc::new(Mutex::new(AutoDreamState::default())),
@@ -115,11 +112,11 @@ impl AutoDreamExecutor {
         }
 
         // Gate 3: Scan throttle
-        let minutes_since_scan = self.state.lock().map_or(None, |s| {
-            s.last_session_scan_at.map(|scan_ms| {
-                (now_ms.saturating_sub(scan_ms)) as f64 / 60_000.0
-            })
-        });
+        let minutes_since_scan = self
+            .state
+            .lock()
+            .last_session_scan_at
+            .map(|scan_ms| (now_ms.saturating_sub(scan_ms)) as f64 / 60_000.0);
         if !self.config.scan_throttle_passed(minutes_since_scan) {
             return false;
         }
@@ -127,10 +124,9 @@ impl AutoDreamExecutor {
         // Gate 4: Session gate — scan sessions
         let session_count = self.count_sessions_since(last_ms);
         {
-            if let Ok(mut state) = self.state.lock() {
-                state.last_session_scan_at = Some(now_ms);
-                state.last_session_count = session_count;
-            }
+            let mut state = self.state.lock();
+            state.last_session_scan_at = Some(now_ms);
+            state.last_session_count = session_count;
         }
         if !self.config.session_gate_passed(session_count) {
             return false;
@@ -205,12 +201,7 @@ impl AutoDreamExecutor {
     /// # Returns
     /// The child process PID on success, or an error if spawning fails.
     /// Lock rollback happens internally if the child exits with failure.
-    pub fn run(
-        &self,
-        claude_bin: &str,
-        model: &str,
-        timeout_secs: u64,
-    ) -> anyhow::Result<u32> {
+    pub fn run(&self, claude_bin: &str, model: &str, timeout_secs: u64) -> anyhow::Result<u32> {
         let prior_ms = {
             let lock = ConsolidationLock::new(&self.memory_dir);
             lock.read_last_consolidated_at()
@@ -295,11 +286,17 @@ impl AutoDreamExecutor {
 
 /// Extension trait for `std::process::Child` to support timeout on wait.
 trait ChildWaitTimeout {
-    fn wait_timeout(&mut self, timeout: std::time::Duration) -> std::io::Result<Option<std::process::ExitStatus>>;
+    fn wait_timeout(
+        &mut self,
+        timeout: std::time::Duration,
+    ) -> std::io::Result<Option<std::process::ExitStatus>>;
 }
 
 impl ChildWaitTimeout for std::process::Child {
-    fn wait_timeout(&mut self, timeout: std::time::Duration) -> std::io::Result<Option<std::process::ExitStatus>> {
+    fn wait_timeout(
+        &mut self,
+        timeout: std::time::Duration,
+    ) -> std::io::Result<Option<std::process::ExitStatus>> {
         // Poll-based timeout: check status every 100ms up to timeout
         let start = std::time::Instant::now();
         loop {
@@ -324,33 +321,24 @@ mod tests {
     #[test]
     fn executor_skips_sub_agents() {
         let dir = tempfile::tempdir().unwrap();
-        let executor = AutoDreamExecutor::new(
-            AutoDreamConfig::default(),
-            dir.path().to_path_buf(),
-            None,
-        );
+        let executor =
+            AutoDreamExecutor::new(AutoDreamConfig::default(), dir.path().to_path_buf(), None);
         assert!(!executor.should_trigger(false, true, Some("agent-123")));
     }
 
     #[test]
     fn executor_skips_remote_sessions() {
         let dir = tempfile::tempdir().unwrap();
-        let executor = AutoDreamExecutor::new(
-            AutoDreamConfig::default(),
-            dir.path().to_path_buf(),
-            None,
-        );
+        let executor =
+            AutoDreamExecutor::new(AutoDreamConfig::default(), dir.path().to_path_buf(), None);
         assert!(!executor.should_trigger(true, true, None));
     }
 
     #[test]
     fn executor_skips_when_auto_memory_disabled() {
         let dir = tempfile::tempdir().unwrap();
-        let executor = AutoDreamExecutor::new(
-            AutoDreamConfig::default(),
-            dir.path().to_path_buf(),
-            None,
-        );
+        let executor =
+            AutoDreamExecutor::new(AutoDreamConfig::default(), dir.path().to_path_buf(), None);
         assert!(!executor.should_trigger(false, false, None));
     }
 
@@ -370,22 +358,16 @@ mod tests {
     #[test]
     fn system_prompt_is_dream_prompt() {
         let dir = tempfile::tempdir().unwrap();
-        let executor = AutoDreamExecutor::new(
-            AutoDreamConfig::default(),
-            dir.path().to_path_buf(),
-            None,
-        );
+        let executor =
+            AutoDreamExecutor::new(AutoDreamConfig::default(), dir.path().to_path_buf(), None);
         assert!(executor.system_prompt().contains("Phase 4"));
     }
 
     #[test]
     fn session_count_with_no_dir() {
         let dir = tempfile::tempdir().unwrap();
-        let executor = AutoDreamExecutor::new(
-            AutoDreamConfig::default(),
-            dir.path().to_path_buf(),
-            None,
-        );
+        let executor =
+            AutoDreamExecutor::new(AutoDreamConfig::default(), dir.path().to_path_buf(), None);
         assert_eq!(executor.count_sessions_since(0), 0);
     }
 

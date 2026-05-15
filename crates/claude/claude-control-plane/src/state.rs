@@ -251,12 +251,10 @@ pub fn load_control_plane_config(
     let downloads_dir = overrides
         .downloads_dir
         .or_else(|| helpers::read_env("REMOTE_CODE_DOWNLOADS_DIR").map(PathBuf::from));
-    let quic_bind = overrides
-        .quic_bind
-        .or_else(|| {
-            helpers::read_env("REMOTE_CODE_CONTROL_PLANE_QUIC_BIND")
-                .and_then(|s| helpers::parse_socket_addr(&s).ok())
-        });
+    let quic_bind = overrides.quic_bind.or_else(|| {
+        helpers::read_env("REMOTE_CODE_CONTROL_PLANE_QUIC_BIND")
+            .and_then(|s| helpers::parse_socket_addr(&s).ok())
+    });
     let quic_cert_pem = overrides
         .quic_cert_pem
         .or_else(|| helpers::read_env("REMOTE_CODE_CONTROL_PLANE_QUIC_CERT").map(PathBuf::from));
@@ -497,7 +495,9 @@ fn load_persisted_events(
     }
     if let Some(kind) = query.kind {
         clauses.push("kind = ?".to_owned());
-        sql_params.push(SqlValue::Text(crate::helpers::event_kind_name(kind).to_owned()));
+        sql_params.push(SqlValue::Text(
+            crate::helpers::event_kind_name(kind).to_owned(),
+        ));
     }
     if query.approvals_only {
         clauses.push("is_approval = 1".to_owned());
@@ -518,7 +518,8 @@ fn load_persisted_events(
     }
 
     let mut statement = connection.prepare(&sql)?;
-    let payloads = statement.query_map(params_from_iter(sql_params), |row| row.get::<_, String>(0))?;
+    let payloads =
+        statement.query_map(params_from_iter(sql_params), |row| row.get::<_, String>(0))?;
     let mut events = Vec::new();
     for payload in payloads {
         let payload = payload?;
@@ -546,7 +547,9 @@ fn load_latest_persisted_event_sequence(
     }
     if let Some(kind) = query.kind {
         clauses.push("kind = ?".to_owned());
-        sql_params.push(SqlValue::Text(crate::helpers::event_kind_name(kind).to_owned()));
+        sql_params.push(SqlValue::Text(
+            crate::helpers::event_kind_name(kind).to_owned(),
+        ));
     }
     if query.approvals_only {
         clauses.push("is_approval = 1".to_owned());
@@ -559,7 +562,9 @@ fn load_latest_persisted_event_sequence(
     }
     sql.push_str(" ORDER BY sequence DESC LIMIT 1");
     let sequence = connection
-        .query_row(&sql, params_from_iter(sql_params), |row| row.get::<_, i64>(0))
+        .query_row(&sql, params_from_iter(sql_params), |row| {
+            row.get::<_, i64>(0)
+        })
         .optional()?;
     sequence
         .map(u64::try_from)

@@ -73,9 +73,10 @@ async fn handle_quic_connection(
     let auth: QuicAuthMessage = serde_json::from_slice(&auth_buf)?;
 
     // Validate auth token — QUIC requires auth (no anonymous access).
-    let expected = service.auth_token.as_deref().ok_or_else(|| {
-        anyhow::anyhow!("QUIC server requires auth_token to be configured")
-    })?;
+    let expected = service
+        .auth_token
+        .as_deref()
+        .ok_or_else(|| anyhow::anyhow!("QUIC server requires auth_token to be configured"))?;
     if !constant_time_eq(&auth.token, expected) {
         conn.close(1u32.into(), b"auth failed");
         return Err(anyhow::anyhow!("QUIC auth token mismatch"));
@@ -153,7 +154,10 @@ async fn dispatch_quic_command(
     let cmd: QuicClientCommand = serde_json::from_slice(payload)?;
 
     match cmd {
-        QuicClientCommand::SessionCommand { session_id, request } => {
+        QuicClientCommand::SessionCommand {
+            session_id,
+            request,
+        } => {
             // Look up session → runner → enqueue.
             let runner_id = {
                 let registry = service.registry.read().await;
@@ -167,9 +171,11 @@ async fn dispatch_quic_command(
 
             let runner = {
                 let registry = service.registry.read().await;
-                registry.runners.get(&runner_id).cloned().ok_or_else(|| {
-                    anyhow::anyhow!("runner `{runner_id}` was not found")
-                })?
+                registry
+                    .runners
+                    .get(&runner_id)
+                    .cloned()
+                    .ok_or_else(|| anyhow::anyhow!("runner `{runner_id}` was not found"))?
             };
 
             if helpers::runner_uses_pull_commands(&runner) {
@@ -204,12 +210,16 @@ async fn dispatch_quic_command(
                 "QUIC command dispatched to runner {runner_id} for session {session_id}"
             );
         }
-        QuicClientCommand::ApprovalDecision { approval_id, request } => {
+        QuicClientCommand::ApprovalDecision {
+            approval_id,
+            request,
+        } => {
             let (runner_id, _session_id) = {
                 let registry = service.registry.read().await;
-                let approval = registry.approvals.get(&approval_id).ok_or_else(|| {
-                    anyhow::anyhow!("approval `{approval_id}` was not found")
-                })?;
+                let approval = registry
+                    .approvals
+                    .get(&approval_id)
+                    .ok_or_else(|| anyhow::anyhow!("approval `{approval_id}` was not found"))?;
                 let session_id = approval.session_id;
                 let session = registry
                     .get_session(session_id)
@@ -239,10 +249,7 @@ async fn dispatch_quic_command(
     Ok(())
 }
 
-async fn send_quic_event(
-    conn: &quinn::Connection,
-    event: &TimelineEvent,
-) -> anyhow::Result<()> {
+async fn send_quic_event(conn: &quinn::Connection, event: &TimelineEvent) -> anyhow::Result<()> {
     let payload = serde_json::to_vec(event)?;
     let len = (payload.len() as u32).to_le_bytes();
 

@@ -9,32 +9,6 @@ use std::time::Instant;
 
 use anyhow::{Context, Result, anyhow};
 use async_trait::async_trait;
-use codex_app_server_protocol::{
-    CancelLoginAccountParams, CommandExecResizeParams, CommandExecTerminalSize,
-    CommandExecWriteParams, ConfigBatchWriteParams, ConfigEdit, ConfigValueWriteParams,
-    DeviceKeyCreateParams, DeviceKeyPublicParams, DeviceKeySignParams,
-    ExternalAgentConfigDetectParams, ExternalAgentConfigImportParams, FsCopyParams,
-    FsCreateDirectoryParams, FsGetMetadataParams, FsReadDirectoryParams, FsReadFileParams,
-    FsRemoveParams, FsUnwatchParams, FsWatchParams, FsWriteFileParams, FuzzyFileSearchParams,
-    FuzzyFileSearchSessionStartParams, FuzzyFileSearchSessionStopParams,
-    FuzzyFileSearchSessionUpdateParams, LoginAccountParams, McpServerStatusDetail, MergeStrategy,
-    SendAddCreditsNudgeEmailParams, ThreadApproveGuardianDeniedActionParams, ThreadForkParams,
-    ThreadInjectItemsParams, ThreadMetadataGitInfoUpdateParams, ThreadMetadataUpdateParams,
-    ThreadRealtimeAppendAudioParams, ThreadRealtimeAppendTextParams, ThreadRealtimeStartParams,
-    ThreadRealtimeStopParams, ThreadResumeParams, ThreadStartParams, TurnStartParams,
-    WindowsSandboxSetupStartParams,
-};
-use rc_agent_protocol::AgentAdapter;
-use rc_agent_protocol::permission::PermissionDecision as AgentPermissionDecision;
-use rc_agent_protocol::types::AgentType as ProtocolAgentType;
-use rc_codex_adapter::{
-    CodexAdapterOptions, CodexExecRequest, CodexFeedbackRequest, CodexInProcessAdapter,
-    CodexPluginRefRequest, CodexServerRequestResolution,
-    CodexThreadListRequest, CodexThreadRollbackRequest, CodexTurnInterruptRequest,
-    CodexTurnSteerRequest,
-};
-use rc_roo_adapter::RooInProcessAdapter;
-use rc_claude_adapter::ClaudeInProcessAdapter;
 use claude_config::{
     AppPaths, ProviderConfig as RuntimeProviderConfig, ProviderOverrides, RuntimeConfig,
     RuntimeOverrides, SettingSource, discover_env_providers, load_runtime_config,
@@ -71,9 +45,33 @@ use claude_tools::{
     tasks::load_persisted_ui_task_snapshots,
 };
 use claude_ui_bridge::{
-    UiProviderStatusSnapshot, UiRuntimeMcpServerStatus,
-    UiRuntimeStatusSnapshot,
+    UiProviderStatusSnapshot, UiRuntimeMcpServerStatus, UiRuntimeStatusSnapshot,
 };
+use codex_app_server_protocol::{
+    CancelLoginAccountParams, CommandExecResizeParams, CommandExecTerminalSize,
+    CommandExecWriteParams, ConfigBatchWriteParams, ConfigEdit, ConfigValueWriteParams,
+    DeviceKeyCreateParams, DeviceKeyPublicParams, DeviceKeySignParams,
+    ExternalAgentConfigDetectParams, ExternalAgentConfigImportParams, FsCopyParams,
+    FsCreateDirectoryParams, FsGetMetadataParams, FsReadDirectoryParams, FsReadFileParams,
+    FsRemoveParams, FsUnwatchParams, FsWatchParams, FsWriteFileParams, FuzzyFileSearchParams,
+    FuzzyFileSearchSessionStartParams, FuzzyFileSearchSessionStopParams,
+    FuzzyFileSearchSessionUpdateParams, LoginAccountParams, McpServerStatusDetail, MergeStrategy,
+    SendAddCreditsNudgeEmailParams, ThreadApproveGuardianDeniedActionParams, ThreadForkParams,
+    ThreadInjectItemsParams, ThreadMetadataGitInfoUpdateParams, ThreadMetadataUpdateParams,
+    ThreadRealtimeAppendAudioParams, ThreadRealtimeAppendTextParams, ThreadRealtimeStartParams,
+    ThreadRealtimeStopParams, ThreadResumeParams, ThreadStartParams, TurnStartParams,
+    WindowsSandboxSetupStartParams,
+};
+use rc_agent_protocol::AgentAdapter;
+use rc_agent_protocol::permission::PermissionDecision as AgentPermissionDecision;
+use rc_agent_protocol::types::AgentType as ProtocolAgentType;
+use rc_claude_adapter::ClaudeInProcessAdapter;
+use rc_codex_adapter::{
+    CodexAdapterOptions, CodexExecRequest, CodexFeedbackRequest, CodexInProcessAdapter,
+    CodexPluginRefRequest, CodexServerRequestResolution, CodexThreadListRequest,
+    CodexThreadRollbackRequest, CodexTurnInterruptRequest, CodexTurnSteerRequest,
+};
+use rc_roo_adapter::RooInProcessAdapter;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use tauri::{AppHandle, Emitter, State};
 use tauri_plugin_dialog::DialogExt;
@@ -85,6 +83,77 @@ use uuid::Uuid;
 use crate::dto::*;
 use crate::state::*;
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GitFileStatusDto {
+    path: String,
+    status: String,
+    is_staged: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GitStatusDto {
+    branch: Option<String>,
+    files: Vec<GitFileStatusDto>,
+    ahead: usize,
+    behind: usize,
+    has_changes: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GitBranchDto {
+    name: String,
+    is_current: bool,
+    is_remote: bool,
+    upstream: Option<String>,
+    ahead: usize,
+    behind: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GitCommitDto {
+    hash: String,
+    short_hash: String,
+    author: String,
+    email: String,
+    message: String,
+    timestamp: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GitCommitResultDto {
+    hash: String,
+    short_hash: String,
+    files_changed: usize,
+    insertions: usize,
+    deletions: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CheckpointStatsDto {
+    files_added: usize,
+    files_modified: usize,
+    files_deleted: usize,
+    lines_added: usize,
+    lines_removed: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CheckpointSummaryDto {
+    id: String,
+    session_id: String,
+    message_id: String,
+    message_index: usize,
+    created_at: String,
+    summary: String,
+    stats: CheckpointStatsDto,
+}
 
 fn codex_permission_decision(
     allowed: bool,
@@ -722,13 +791,10 @@ async fn build_gui_doctor_report(
             }
             network.push(github_probe);
         }
-        if !probe_provider
-            && let Some(url) = provider_endpoint_url(&config.provider)
-        {
+        if !probe_provider && let Some(url) = provider_endpoint_url(&config.provider) {
             let provider_network_probe =
                 run_doctor_probe("provider:network", url, &BTreeMap::new()).await;
-            if probe_is_warning(&provider_network_probe)
-                || probe_is_issue(&provider_network_probe)
+            if probe_is_warning(&provider_network_probe) || probe_is_issue(&provider_network_probe)
             {
                 warnings.push(format!(
                     "Network probe warning: {}",
@@ -1878,7 +1944,12 @@ fn codex_sandbox_from_permission_mode(mode: PermissionMode) -> String {
 fn build_mcp_server_entries(
     config: &RuntimeConfig,
     include_timeouts: bool,
-    format_url_transport: impl Fn(&mut serde_json::Map<String, serde_json::Value>, &str, &std::collections::BTreeMap<String, String>, &McpTransportConfig),
+    format_url_transport: impl Fn(
+        &mut serde_json::Map<String, serde_json::Value>,
+        &str,
+        &std::collections::BTreeMap<String, String>,
+        &McpTransportConfig,
+    ),
 ) -> HashMap<String, serde_json::Value> {
     let mut servers = HashMap::new();
     for entry in runtime_mcp_policy_entries(config, &config.mcp_config_paths) {
@@ -1991,9 +2062,10 @@ fn codex_adapter_options_from_runtime(
             .clone()
             .or_else(|| Some(codex_sandbox_from_permission_mode(config.permission_mode))),
         permission_profile: gui_settings.codex_permission_profile.clone(),
-        service_tier: gui_settings.codex_service_tier.as_ref().map(|v| {
-            serde_json::json!(v.to_lowercase())
-        }),
+        service_tier: gui_settings
+            .codex_service_tier
+            .as_ref()
+            .map(|v| serde_json::json!(v.to_lowercase())),
         persist_extended_history: gui_settings.codex_persist_extended_history.unwrap_or(true),
         ephemeral: gui_settings.codex_ephemeral,
         memories_enabled: gui_settings.codex_memories_enabled.or(Some(true)),
@@ -2466,7 +2538,11 @@ async fn forward_agent_events(
     agent_name: &str,
     permission_inserter: impl Fn(String, String) + Send, // (gui_request_id, request_id)
     permission_title: &str,
-    mut agent_specific: impl FnMut(&rc_agent_protocol::events::UnifiedAgentEvent, &mut String, &mut rc_agent_protocol::events::UsageInfo) -> Option<std::ops::ControlFlow<()>>,
+    mut agent_specific: impl FnMut(
+        &rc_agent_protocol::events::UnifiedAgentEvent,
+        &mut String,
+        &mut rc_agent_protocol::events::UsageInfo,
+    ) -> Option<std::ops::ControlFlow<()>>,
 ) -> std::result::Result<StreamLoopResult, String> {
     use rc_agent_protocol::events::UnifiedAgentEvent;
     use std::ops::ControlFlow;
@@ -2496,10 +2572,14 @@ async fn forward_agent_events(
         match event {
             UnifiedAgentEvent::MessageDelta { delta, .. } => {
                 final_text.push_str(&delta);
-                emit_event(app, APP_EVENT_STREAMING_DELTA, crate::dto::StreamingDeltaDto {
-                    session_id: session_id.to_string(),
-                    delta,
-                });
+                emit_event(
+                    app,
+                    APP_EVENT_STREAMING_DELTA,
+                    crate::dto::StreamingDeltaDto {
+                        session_id: session_id.to_string(),
+                        delta,
+                    },
+                );
             }
             UnifiedAgentEvent::ToolCallStarted {
                 tool_name,
@@ -2512,34 +2592,46 @@ async fn forward_agent_events(
                     name: tool_name.clone(),
                     input: tool_input,
                 });
-                emit_event(app, APP_EVENT_TOOL_START, crate::dto::ToolProgressDto {
-                    tool_call_id,
-                    tool_name,
-                    message: "started".to_owned(),
-                    active_form: None,
-                });
+                emit_event(
+                    app,
+                    APP_EVENT_TOOL_START,
+                    crate::dto::ToolProgressDto {
+                        tool_call_id,
+                        tool_name,
+                        message: "started".to_owned(),
+                        active_form: None,
+                    },
+                );
             }
             UnifiedAgentEvent::ToolCallProgress {
                 tool_name,
                 progress,
                 ..
             } => {
-                emit_event(app, APP_EVENT_TOOL_PROGRESS, crate::dto::ToolProgressDto {
-                    tool_call_id: String::new(),
-                    tool_name,
-                    message: progress,
-                    active_form: None,
-                });
+                emit_event(
+                    app,
+                    APP_EVENT_TOOL_PROGRESS,
+                    crate::dto::ToolProgressDto {
+                        tool_call_id: String::new(),
+                        tool_name,
+                        message: progress,
+                        active_form: None,
+                    },
+                );
             }
             UnifiedAgentEvent::ToolCallCompleted {
                 tool_name, result, ..
             } => {
-                emit_event(app, APP_EVENT_TOOL_RESULT, crate::dto::ToolResultDto {
-                    tool_call_id: String::new(),
-                    tool_name,
-                    is_error: false,
-                    output: result.to_string(),
-                });
+                emit_event(
+                    app,
+                    APP_EVENT_TOOL_RESULT,
+                    crate::dto::ToolResultDto {
+                        tool_call_id: String::new(),
+                        tool_name,
+                        is_error: false,
+                        output: result.to_string(),
+                    },
+                );
             }
             UnifiedAgentEvent::PermissionRequest {
                 request_id,
@@ -2549,76 +2641,104 @@ async fn forward_agent_events(
             } => {
                 let gui_request_id = Uuid::new_v4().to_string();
                 permission_inserter(gui_request_id.clone(), request_id);
-                emit_event(app, APP_EVENT_PERMISSION_REQUEST, crate::dto::PermissionRequestDto {
-                    request_id: gui_request_id,
-                    tool_name: tool_name.clone(),
-                    tool_use_id: String::new(),
-                    title: permission_title.to_owned(),
-                    description: format!("工具 {tool_name} 需要授权才能执行。"),
-                    input,
-                    blocked_path: None,
-                    permission_suggestions: vec![],
-                });
+                emit_event(
+                    app,
+                    APP_EVENT_PERMISSION_REQUEST,
+                    crate::dto::PermissionRequestDto {
+                        request_id: gui_request_id,
+                        tool_name: tool_name.clone(),
+                        tool_use_id: String::new(),
+                        title: permission_title.to_owned(),
+                        description: format!("工具 {tool_name} 需要授权才能执行。"),
+                        input,
+                        blocked_path: None,
+                        permission_suggestions: vec![],
+                    },
+                );
             }
             UnifiedAgentEvent::SubtaskStarted {
                 task_id,
                 description,
                 ..
             } => {
-                emit_event(app, APP_EVENT_SUBTASK_STARTED, crate::dto::SubtaskStartedDto {
-                    session_id: session_id.to_string(),
-                    task_id,
-                    parent_task_id: None,
-                    description,
-                    depth: 0,
-                });
+                emit_event(
+                    app,
+                    APP_EVENT_SUBTASK_STARTED,
+                    crate::dto::SubtaskStartedDto {
+                        session_id: session_id.to_string(),
+                        task_id,
+                        parent_task_id: None,
+                        description,
+                        depth: 0,
+                    },
+                );
             }
             UnifiedAgentEvent::SubtaskProgress {
                 task_id, progress, ..
             } => {
-                emit_event(app, APP_EVENT_SUBTASK_PROGRESS, crate::dto::SubtaskProgressDto {
-                    session_id: session_id.to_string(),
-                    task_id,
-                    turn: 0,
-                    max_turns: 0,
-                    summary: progress,
-                });
+                emit_event(
+                    app,
+                    APP_EVENT_SUBTASK_PROGRESS,
+                    crate::dto::SubtaskProgressDto {
+                        session_id: session_id.to_string(),
+                        task_id,
+                        turn: 0,
+                        max_turns: 0,
+                        summary: progress,
+                    },
+                );
             }
             UnifiedAgentEvent::SubtaskCompleted {
                 task_id, result, ..
             } => {
-                emit_event(app, APP_EVENT_SUBTASK_COMPLETED, crate::dto::SubtaskCompletedDto {
-                    session_id: session_id.to_string(),
-                    task_id,
-                    success: true,
-                    output_preview: result.to_string(),
-                    turns_used: 0,
-                });
+                emit_event(
+                    app,
+                    APP_EVENT_SUBTASK_COMPLETED,
+                    crate::dto::SubtaskCompletedDto {
+                        session_id: session_id.to_string(),
+                        task_id,
+                        success: true,
+                        output_preview: result.to_string(),
+                        turns_used: 0,
+                    },
+                );
             }
             UnifiedAgentEvent::ContextUsage { used, total, .. } => {
-                emit_event(app, APP_EVENT_CONTEXT_USAGE, serde_json::json!({
-                    "session_id": session_id,
-                    "used": used,
-                    "total": total,
-                }));
+                emit_event(
+                    app,
+                    APP_EVENT_CONTEXT_USAGE,
+                    serde_json::json!({
+                        "session_id": session_id,
+                        "used": used,
+                        "total": total,
+                    }),
+                );
             }
             UnifiedAgentEvent::ContextOverflow { used, total, .. } => {
-                emit_event(app, APP_EVENT_CONTEXT_OVERFLOW, serde_json::json!({
-                    "session_id": session_id,
-                    "used": used,
-                    "total": total,
-                }));
+                emit_event(
+                    app,
+                    APP_EVENT_CONTEXT_OVERFLOW,
+                    serde_json::json!({
+                        "session_id": session_id,
+                        "used": used,
+                        "total": total,
+                    }),
+                );
             }
             UnifiedAgentEvent::ContextCompacted {
                 entries_removed,
                 usage_ratio,
                 ..
             } => {
-                emit_event(app, APP_EVENT_CONTEXT_COMPACTED, serde_json::json!({
-                    "session_id": session_id,
-                    "entries_removed": entries_removed,
-                    "usage_ratio": usage_ratio,
-                }));
+                emit_event(
+                    app,
+                    APP_EVENT_CONTEXT_COMPACTED,
+                    serde_json::json!({
+                        "session_id": session_id,
+                        "entries_removed": entries_removed,
+                        "usage_ratio": usage_ratio,
+                    }),
+                );
             }
             UnifiedAgentEvent::Completed { result, .. } => {
                 if !result.response_text.is_empty() {
@@ -2646,12 +2766,17 @@ async fn forward_agent_events(
                 if let Ok(sid) = Uuid::parse_str(session_id) {
                     if !final_text.is_empty() {
                         let assistant_entry = ConversationEntry::assistant(final_text.clone());
-                        if let Err(error) = session_store.append_conversation_entry(sid, &assistant_entry) {
+                        if let Err(error) =
+                            session_store.append_conversation_entry(sid, &assistant_entry)
+                        {
                             tracing::warn!(%session_id, "Failed to persist {agent_name} assistant message: {error:#}");
                         }
                     }
                 } else {
-                    tracing::warn!(session_id, "Cannot persist {agent_name} assistant message: invalid UUID");
+                    tracing::warn!(
+                        session_id,
+                        "Cannot persist {agent_name} assistant message: invalid UUID"
+                    );
                 }
                 break 'stream;
             }
@@ -2746,7 +2871,10 @@ async fn run_codex_in_process_prompt(
             tracing::warn!(%session_id, "Failed to persist Codex user message: {error:#}");
         }
     } else {
-        tracing::warn!(session_id, "Cannot persist Codex user message: invalid UUID");
+        tracing::warn!(
+            session_id,
+            "Cannot persist Codex user message: invalid UUID"
+        );
     }
 
     // Forward events to the frontend. Drop the lock before streaming.
@@ -2761,7 +2889,12 @@ async fn run_codex_in_process_prompt(
         app,
         session_id,
         &mut rx,
-        move || codex_adapters_ref.try_lock().is_ok_and(|a| a.get(&sid_for_liveness).is_some_and(|adapter| adapter.is_alive())),
+        move || {
+            codex_adapters_ref.try_lock().is_ok_and(|a| {
+                a.get(&sid_for_liveness)
+                    .is_some_and(|adapter| adapter.is_alive())
+            })
+        },
         &session_store,
         "Codex",
         {
@@ -2783,7 +2916,11 @@ async fn run_codex_in_process_prompt(
         |event, _final_text, usage_info| {
             use rc_agent_protocol::events::UnifiedAgentEvent;
             match event {
-                UnifiedAgentEvent::ToolCallProgress { tool_name, progress, .. } => {
+                UnifiedAgentEvent::ToolCallProgress {
+                    tool_name,
+                    progress,
+                    ..
+                } => {
                     if tool_name == "codex_token_usage"
                         && let Ok(value) = serde_json::from_str::<serde_json::Value>(progress)
                         && let Some(next_usage) = usage_info_from_codex_token_usage(&value)
@@ -2793,25 +2930,40 @@ async fn run_codex_in_process_prompt(
                     None
                 }
                 UnifiedAgentEvent::CodexAppServerNotification { method, params, .. } => {
-                    emit_event(app, APP_EVENT_CODEX_APP_SERVER_NOTIFICATION, serde_json::json!({
-                        "session_id": session_id,
-                        "method": method,
-                        "params": params.clone(),
-                    }));
-                    emit_event(app, APP_EVENT_TOOL_PROGRESS, ToolProgressDto {
-                        tool_call_id: String::new(),
-                        tool_name: "codex_app_server_event".to_owned(),
-                        message: serde_json::json!({
+                    emit_event(
+                        app,
+                        APP_EVENT_CODEX_APP_SERVER_NOTIFICATION,
+                        serde_json::json!({
+                            "session_id": session_id,
                             "method": method,
-                            "params": params,
-                        })
-                        .to_string(),
-                        active_form: None,
-                    });
+                            "params": params.clone(),
+                        }),
+                    );
+                    emit_event(
+                        app,
+                        APP_EVENT_TOOL_PROGRESS,
+                        ToolProgressDto {
+                            tool_call_id: String::new(),
+                            tool_name: "codex_app_server_event".to_owned(),
+                            message: serde_json::json!({
+                                "method": method,
+                                "params": params,
+                            })
+                            .to_string(),
+                            active_form: None,
+                        },
+                    );
                     None
                 }
-                UnifiedAgentEvent::Error { recoverable: true, message, .. } => {
-                    emit_event(app, APP_EVENT_CODEX_RECOVERABLE_ERROR, serde_json::json!({
+                UnifiedAgentEvent::Error {
+                    recoverable: true,
+                    message,
+                    ..
+                } => {
+                    emit_event(
+                        app,
+                        APP_EVENT_CODEX_RECOVERABLE_ERROR,
+                        serde_json::json!({
                             "session_id": session_id,
                             "message": message,
                             "timestamp": chrono::Utc::now().timestamp_millis(),
@@ -2822,7 +2974,8 @@ async fn run_codex_in_process_prompt(
                 _ => None,
             }
         },
-    ).await?;
+    )
+    .await?;
 
     let _ = app.emit(
         APP_EVENT_PROMPT_DONE,
@@ -2932,7 +3085,12 @@ async fn run_roo_in_process_prompt(
         app,
         session_id,
         &mut rx,
-        move || roo_adapters_ref.try_lock().is_ok_and(|a| a.get(&sid_for_liveness).is_some_and(|adapter| adapter.is_alive())),
+        move || {
+            roo_adapters_ref.try_lock().is_ok_and(|a| {
+                a.get(&sid_for_liveness)
+                    .is_some_and(|adapter| adapter.is_alive())
+            })
+        },
         &session_store,
         "Roo",
         {
@@ -2952,7 +3110,8 @@ async fn run_roo_in_process_prompt(
         },
         "Roo 请求权限",
         |_event, _final_text, _usage_info| None,
-    ).await?;
+    )
+    .await?;
 
     let _ = app.emit(
         APP_EVENT_PROMPT_DONE,
@@ -2995,11 +3154,12 @@ async fn run_claude_in_process_prompt(
     {
         let mut adapters = claude_adapters.lock().await;
         if !adapters.contains_key(session_id) {
-            tracing::info!(session_id, "Creating new ClaudeInProcessAdapter with RuntimeConfig");
-            let mut adapter = ClaudeInProcessAdapter::new(
-                runtime_config.clone(),
-                session_store.clone(),
+            tracing::info!(
+                session_id,
+                "Creating new ClaudeInProcessAdapter with RuntimeConfig"
             );
+            let mut adapter =
+                ClaudeInProcessAdapter::new(runtime_config.clone(), session_store.clone());
             let agent_config = rc_agent_protocol::types::AgentConfig {
                 agent_type: ProtocolAgentType::RemoteClaude,
                 binary_path: None,
@@ -3037,7 +3197,10 @@ async fn run_claude_in_process_prompt(
             tracing::warn!(%session_id, "Failed to persist Claude user message: {error:#}");
         }
     } else {
-        tracing::warn!(session_id, "Cannot persist Claude user message: invalid UUID");
+        tracing::warn!(
+            session_id,
+            "Cannot persist Claude user message: invalid UUID"
+        );
     }
 
     // Forward events to the frontend. Drop the lock before streaming.
@@ -3052,7 +3215,12 @@ async fn run_claude_in_process_prompt(
         app,
         session_id,
         &mut rx,
-        move || claude_adapters_ref.try_lock().is_ok_and(|a| a.get(&sid_for_liveness).is_some_and(|adapter| adapter.is_alive())),
+        move || {
+            claude_adapters_ref.try_lock().is_ok_and(|a| {
+                a.get(&sid_for_liveness)
+                    .is_some_and(|adapter| adapter.is_alive())
+            })
+        },
         &session_store,
         "Claude",
         {
@@ -3072,7 +3240,8 @@ async fn run_claude_in_process_prompt(
         },
         "Claude 请求权限",
         |_event, _final_text, _usage_info| None,
-    ).await?;
+    )
+    .await?;
 
     let _ = app.emit(
         APP_EVENT_PROMPT_DONE,
@@ -3224,6 +3393,170 @@ async fn create_session(
     // No subprocess/bridge mode is used.
 
     Ok(config.session_id.to_string())
+}
+
+fn git_file_status_code(status: claude_git::FileStatus) -> &'static str {
+    match status {
+        claude_git::FileStatus::Modified => "M",
+        claude_git::FileStatus::Added => "A",
+        claude_git::FileStatus::Deleted => "D",
+        claude_git::FileStatus::Renamed => "R",
+        claude_git::FileStatus::Copied => "C",
+        claude_git::FileStatus::Untracked => "?",
+        claude_git::FileStatus::Ignored => "!",
+    }
+}
+
+fn open_git(project_path: String) -> std::result::Result<claude_git::GitOperations, String> {
+    let path =
+        normalize_existing_path(Path::new(&project_path)).map_err(|error| format!("{error:#}"))?;
+    claude_git::GitOperations::open(path).map_err(|error| format!("{error:#}"))
+}
+
+#[tauri::command]
+async fn git_status(project_path: String) -> std::result::Result<GitStatusDto, String> {
+    let repo = open_git(project_path)?;
+    let status = repo.status().map_err(|error| format!("{error:#}"))?;
+    Ok(GitStatusDto {
+        branch: status.branch,
+        files: status
+            .files
+            .into_iter()
+            .map(|file| GitFileStatusDto {
+                path: file.path,
+                status: git_file_status_code(file.status).to_owned(),
+                is_staged: file.is_staged,
+            })
+            .collect(),
+        ahead: status.ahead,
+        behind: status.behind,
+        has_changes: status.has_changes,
+    })
+}
+
+#[tauri::command]
+async fn git_branches(project_path: String) -> std::result::Result<Vec<GitBranchDto>, String> {
+    let repo = open_git(project_path)?;
+    let branches = repo.branches().map_err(|error| format!("{error:#}"))?;
+    Ok(branches
+        .into_iter()
+        .map(|branch| GitBranchDto {
+            name: branch.name,
+            is_current: branch.is_current,
+            is_remote: branch.is_remote,
+            upstream: branch.upstream,
+            ahead: branch.ahead,
+            behind: branch.behind,
+        })
+        .collect())
+}
+
+#[tauri::command]
+async fn git_log(
+    project_path: String,
+    max_count: Option<usize>,
+) -> std::result::Result<Vec<GitCommitDto>, String> {
+    let repo = open_git(project_path)?;
+    let commits = repo
+        .log(max_count.unwrap_or(50).min(500))
+        .map_err(|error| format!("{error:#}"))?;
+    Ok(commits
+        .into_iter()
+        .map(|commit| GitCommitDto {
+            hash: commit.hash,
+            short_hash: commit.short_hash,
+            author: commit.author,
+            email: commit.email,
+            message: commit.message,
+            timestamp: commit.timestamp,
+        })
+        .collect())
+}
+
+#[tauri::command]
+async fn git_stage(project_path: String, path: String) -> std::result::Result<(), String> {
+    if path.trim().is_empty() {
+        return Err("path cannot be empty".to_owned());
+    }
+    let repo = open_git(project_path)?;
+    repo.stage(&[path.as_str()])
+        .map_err(|error| format!("{error:#}"))
+}
+
+#[tauri::command]
+async fn git_commit(
+    project_path: String,
+    message: String,
+) -> std::result::Result<GitCommitResultDto, String> {
+    let message = message.trim();
+    if message.is_empty() {
+        return Err("commit message cannot be empty".to_owned());
+    }
+    let repo = open_git(project_path)?;
+    let result = repo.commit(message).map_err(|error| format!("{error:#}"))?;
+    Ok(GitCommitResultDto {
+        hash: result.hash,
+        short_hash: result.short_hash,
+        files_changed: result.files_changed,
+        insertions: result.insertions,
+        deletions: result.deletions,
+    })
+}
+
+#[tauri::command]
+async fn git_switch_branch(project_path: String, name: String) -> std::result::Result<(), String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("branch name cannot be empty".to_owned());
+    }
+    let repo = open_git(project_path)?;
+    repo.switch_branch(name)
+        .map_err(|error| format!("{error:#}"))
+}
+
+#[tauri::command]
+async fn checkpoint_list(
+    state: State<'_, AppState>,
+    session_id: String,
+) -> std::result::Result<Vec<CheckpointSummaryDto>, String> {
+    let session_id = session_id.trim();
+    if session_id.is_empty() {
+        return Err("sessionId cannot be empty".to_owned());
+    }
+
+    let db_path = {
+        let runtime = state.runtime.lock().await;
+        runtime.config.paths.state_db_path.clone()
+    };
+
+    if !db_path.exists() {
+        return Ok(Vec::new());
+    }
+
+    let store =
+        claude_checkpoint::CheckpointStore::open(&db_path).map_err(|error| format!("{error:#}"))?;
+    let checkpoints = store
+        .list_checkpoints(session_id)
+        .map_err(|error| format!("{error:#}"))?;
+
+    Ok(checkpoints
+        .into_iter()
+        .map(|checkpoint| CheckpointSummaryDto {
+            id: checkpoint.id.to_string(),
+            session_id: checkpoint.session_id,
+            message_id: checkpoint.message_id,
+            message_index: checkpoint.message_index,
+            created_at: checkpoint.created_at.to_rfc3339(),
+            summary: checkpoint.summary,
+            stats: CheckpointStatsDto {
+                files_added: checkpoint.stats.files_added,
+                files_modified: checkpoint.stats.files_modified,
+                files_deleted: checkpoint.stats.files_deleted,
+                lines_added: checkpoint.stats.lines_added,
+                lines_removed: checkpoint.stats.lines_removed,
+            },
+        })
+        .collect())
 }
 
 #[tauri::command]
@@ -3694,8 +4027,13 @@ async fn toggle_mcp_server(
     if_exists: bool,
 ) -> std::result::Result<McpMutationResultDto, String> {
     let runtime = state.runtime.lock().await;
-    let config_path = mcp_config_path_for_scope(&runtime.config, scope, project_path.as_deref(), &runtime.projects)
-        .map_err(|error| format!("{error:#}"))?;
+    let config_path = mcp_config_path_for_scope(
+        &runtime.config,
+        scope,
+        project_path.as_deref(),
+        &runtime.projects,
+    )
+    .map_err(|error| format!("{error:#}"))?;
     toggle_managed_mcp_server_at_path(&config_path, scope, &name, enabled, if_exists)
         .map_err(|error| format!("{error:#}"))
 }
@@ -3709,8 +4047,13 @@ async fn remove_mcp_server(
     if_exists: bool,
 ) -> std::result::Result<McpMutationResultDto, String> {
     let runtime = state.runtime.lock().await;
-    let config_path = mcp_config_path_for_scope(&runtime.config, scope, project_path.as_deref(), &runtime.projects)
-        .map_err(|error| format!("{error:#}"))?;
+    let config_path = mcp_config_path_for_scope(
+        &runtime.config,
+        scope,
+        project_path.as_deref(),
+        &runtime.projects,
+    )
+    .map_err(|error| format!("{error:#}"))?;
     remove_managed_mcp_server_at_path(&config_path, scope, &name, if_exists)
         .map_err(|error| format!("{error:#}"))
 }
@@ -3723,8 +4066,13 @@ async fn reset_mcp_servers(
     if_exists: bool,
 ) -> std::result::Result<McpMutationResultDto, String> {
     let runtime = state.runtime.lock().await;
-    let config_path = mcp_config_path_for_scope(&runtime.config, scope, project_path.as_deref(), &runtime.projects)
-        .map_err(|error| format!("{error:#}"))?;
+    let config_path = mcp_config_path_for_scope(
+        &runtime.config,
+        scope,
+        project_path.as_deref(),
+        &runtime.projects,
+    )
+    .map_err(|error| format!("{error:#}"))?;
     reset_managed_mcp_config_at_path(&config_path, scope, if_exists)
         .map_err(|error| format!("{error:#}"))
 }
@@ -3997,7 +4345,11 @@ async fn codex_thread_goal_set(
         } else {
             Some(request.thread_id.clone())
         };
-        let objective = if request.text.is_empty() { None } else { Some(request.text.clone()) };
+        let objective = if request.text.is_empty() {
+            None
+        } else {
+            Some(request.text.clone())
+        };
         let status = request.status.clone();
         let token_budget = request.token_budget;
         Box::pin(async move {
@@ -4024,8 +4376,7 @@ async fn codex_thread_goal_get(
         };
         Box::pin(async move {
             let tid = thread_id.ok_or_else(|| anyhow::anyhow!("No active thread"))?;
-            serde_json::to_value(adapter.get_thread_goal(tid).await?)
-                .map_err(anyhow::Error::from)
+            serde_json::to_value(adapter.get_thread_goal(tid).await?).map_err(anyhow::Error::from)
         })
     })
     .await
@@ -4045,8 +4396,7 @@ async fn codex_thread_goal_clear(
         };
         Box::pin(async move {
             let tid = thread_id.ok_or_else(|| anyhow::anyhow!("No active thread"))?;
-            serde_json::to_value(adapter.clear_thread_goal(tid).await?)
-                .map_err(anyhow::Error::from)
+            serde_json::to_value(adapter.clear_thread_goal(tid).await?).map_err(anyhow::Error::from)
         })
     })
     .await
@@ -6057,7 +6407,11 @@ async fn resolve_claude_permission_request(
             AgentPermissionDecision::Deny
         };
         adapter
-            .resolve_permission(&pending_claude.session_id, &pending_claude.request_id, decision)
+            .resolve_permission(
+                &pending_claude.session_id,
+                &pending_claude.request_id,
+                decision,
+            )
             .await
             .map_err(|error| format!("Failed to resolve Claude permission request: {error:#}"))?;
     }
@@ -6327,6 +6681,13 @@ pub fn run() {
             list_sessions,
             get_session_conversation,
             get_session_tasks,
+            git_status,
+            git_branches,
+            git_log,
+            git_stage,
+            git_commit,
+            git_switch_branch,
+            checkpoint_list,
             send_prompt,
             cancel_prompt,
             get_provider_info,
@@ -7053,10 +7414,16 @@ mod tests {
 
         let mut project_only = test_runtime_config(&project_dir, &profile_dir);
         project_only.allowed_setting_sources = vec![SettingSource::Project];
-        let list =
-            build_mcp_server_list(&project_only, ConfigScopeDto::Profile, None, &[], false, false)
-                .await
-                .expect("profile list should build");
+        let list = build_mcp_server_list(
+            &project_only,
+            ConfigScopeDto::Profile,
+            None,
+            &[],
+            false,
+            false,
+        )
+        .await
+        .expect("profile list should build");
         assert!(list.servers.is_empty());
         assert_eq!(list.warnings.len(), 1);
     }
@@ -7095,9 +7462,10 @@ mod tests {
         assert_eq!(saved.status, "created");
         assert_eq!(saved.enabled, Some(true));
 
-        let listed = build_mcp_server_list(&config, ConfigScopeDto::Profile, None, &[], false, true)
-            .await
-            .expect("list should succeed");
+        let listed =
+            build_mcp_server_list(&config, ConfigScopeDto::Profile, None, &[], false, true)
+                .await
+                .expect("list should succeed");
         assert_eq!(listed.servers.len(), 1);
         assert_eq!(listed.servers[0].name, "demo");
         assert_eq!(listed.servers[0].command.as_deref(), Some("demo-mcp"));
@@ -7298,9 +7666,7 @@ mod tests {
         // Keep channel open but empty. is_alive returns false, so when the
         // internal 30s timeout fires it should detect the dead worker.
 
-        let handle = tokio::spawn(async move {
-            recv_with_liveness_check(&mut rx, || false).await
-        });
+        let handle = tokio::spawn(async move { recv_with_liveness_check(&mut rx, || false).await });
 
         // Advance virtual time past the 30s internal timeout
         tokio::time::advance(std::time::Duration::from_secs(31)).await;
@@ -7333,9 +7699,7 @@ mod tests {
     fn codex_url_transport_uses_http_headers_key() {
         let mut server = serde_json::Map::new();
         let url = "https://mcp.example.com/sse";
-        let headers = BTreeMap::from([
-            ("Authorization".to_owned(), "Bearer token".to_owned()),
-        ]);
+        let headers = BTreeMap::from([("Authorization".to_owned(), "Bearer token".to_owned())]);
         let _transport = McpTransportConfig::Sse {
             url: url.to_owned(),
             headers: headers.clone(),
@@ -7349,7 +7713,10 @@ mod tests {
         let val = serde_json::Value::Object(server);
         assert_eq!(val["url"], "https://mcp.example.com/sse");
         assert_eq!(val["http_headers"]["Authorization"], "Bearer token");
-        assert!(val.get("type").is_none(), "Codex format should not have 'type'");
+        assert!(
+            val.get("type").is_none(),
+            "Codex format should not have 'type'"
+        );
     }
 
     #[test]
@@ -7415,9 +7782,7 @@ mod tests {
     fn roo_url_transport_uses_headers_key() {
         let mut server = serde_json::Map::new();
         let url = "https://mcp.example.com/sse";
-        let headers = BTreeMap::from([
-            ("X-Api-Key".to_owned(), "key123".to_owned()),
-        ]);
+        let headers = BTreeMap::from([("X-Api-Key".to_owned(), "key123".to_owned())]);
         server.insert("type".to_owned(), serde_json::json!("sse"));
         server.insert("url".to_owned(), serde_json::json!(url));
         if !headers.is_empty() {
@@ -7425,14 +7790,22 @@ mod tests {
         }
         let val = serde_json::Value::Object(server);
         assert_eq!(val["headers"]["X-Api-Key"], "key123");
-        assert!(val.get("http_headers").is_none(), "Roo format uses 'headers' not 'http_headers'");
+        assert!(
+            val.get("http_headers").is_none(),
+            "Roo format uses 'headers' not 'http_headers'"
+        );
     }
 
     #[test]
     fn stdio_transport_extracts_command_and_args() {
         let config = sample_stdio_mcp_server("test-server", true, "npx");
         match &config.transport {
-            McpTransportConfig::Stdio { command, args, cwd, env } => {
+            McpTransportConfig::Stdio {
+                command,
+                args,
+                cwd,
+                env,
+            } => {
                 assert_eq!(command, "npx");
                 assert_eq!(args, &vec!["--serve".to_owned()]);
                 assert!(cwd.is_none());
