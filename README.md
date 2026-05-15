@@ -46,6 +46,15 @@
 - 📈 **遥测与分析** — Datadog / 自有端点 / 文件导出三种方式
 - 🎤 **语音输入** — Web Speech API + 音频级别实时反馈
 
+## 部署边界
+
+生产部署采用“本地执行、云端中继”的边界：
+
+- 用户电脑运行独立桌面应用和本地 Runner，Agent、Provider Key、工作区文件、工具执行都留在用户电脑。
+- 云服务器只运行 `remote-code-control-plane`、Web/PWA 静态资源、认证/配对/事件中继和安装包下载，不运行 coding agent，不运行 `remote-code-runner`，不保存本地工作区。
+- 手机 App 或 PWA 连接控制平面后，通过已配对的本机 Runner 远程控制桌面软件。
+- 腾讯云部署材料位于 [`deploy/tencent-cloud`](deploy/tencent-cloud)，默认面向 `remote-code.yz520gzy.top`。
+
 ## 项目结构
 
 ```
@@ -94,8 +103,8 @@ remote-code-rust/
 | `remote-code` (claudecode) | Claude Code Rust 重写 — 交互式 / 无头 / 远程模式 |
 | `remote-code-gui` | 桌面 GUI（Tauri v2 + React 19） |
 | `remote-code-mobile` | 移动端（Tauri v2 iOS/Android，Rust 原生后端 + 响应式 React 前端） |
-| `remote-code-control-plane` | 控制平面服务器（HTTP + WebSocket） |
-| `remote-code-runner` | 远程 Runner 代理 |
+| `remote-code-control-plane` | 云端控制平面（HTTP + WebSocket），只做认证、配对、事件中继和下载 |
+| `remote-code-runner` | 本机 Runner 代理，运行在用户电脑或可信工作站，不部署到云服务器 |
 | `remote-code-migrate` | 数据迁移工具 |
 
 ### 库 Crate

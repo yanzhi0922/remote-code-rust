@@ -1,12 +1,25 @@
 # Tencent Cloud Bring-Up
 
-1. Build and upload `remote-code-control-plane` plus `apps/remote-code-gui/dist`.
+This deployment is relay-only. The Tencent Cloud host runs the control plane,
+serves the Web/PWA frontend, and stores downloadable app binaries. It must not
+run `remote-code-runner`, `remote-code`, Codex/Roo/Claude agent loops, workspace
+tools, or provider credentials.
+
+1. Build `remote-code-control-plane` and `apps/remote-code-gui/dist` on a trusted local build machine, then upload only the release binary and built static files.
    For the GUI, upload the built directory to a temporary path on the server and then run [deploy-remote-code-gui.sh](deploy-remote-code-gui.sh) so static files land with nginx-safe permissions:
    `sudo bash /opt/remote-code/deploy/tencent-cloud/deploy-remote-code-gui.sh /tmp/remote-code-gui-dist /opt/remote-code/frontend`
 2. Create user `remote-code`, then place the env file at `/etc/remote-code/control-plane.env`.
 3. Copy [remote-code-control-plane.service](remote-code-control-plane.service) to `/etc/systemd/system/`.
 4. Install [nginx-remote-code.conf.example](nginx-remote-code.conf.example) as the nginx site for `remote-code.yz520gzy.top`, or copy [Caddyfile.example](Caddyfile.example) into Caddy if nginx is not already bound to ports 80/443. Do not run both on 80/443.
 5. Before first boot, set a strong `REMOTE_CODE_CONTROL_PLANE_BOOTSTRAP_SECRET`, start the service, then run `remote-code remote auth bootstrap` from your trusted machine to mint the first device token.
+
+## Cloud Host Guardrails
+
+- [ ] `systemctl list-units '*remote-code*'` shows `remote-code-control-plane` only.
+- [ ] No `remote-code-runner`, `remote-code`, `cargo`, `rustc`, Codex, Roo, or Claude agent process is running on the cloud host.
+- [ ] `/opt/remote-code/src` is absent; deployment uploads release artifacts, not the full source tree.
+- [ ] Provider API keys and workspace paths are configured only on the user's desktop or trusted runner machine.
+- [ ] `/download` and `/downloads/*` are authenticated through the control plane unless intentionally exposed by a separate nginx rule.
 
 ---
 
