@@ -190,10 +190,22 @@ async fn pairing_offer_accept_adds_second_device_and_persists_across_restart() {
     assert!(!accepted.device.owner);
 
     let restarted = ControlPlaneService::new(config, "test-version").router();
+    let meta_response = restarted
+        .clone()
+        .oneshot(
+            Request::get("/v1/meta")
+                .header(AUTHORIZATION, format!("Bearer {}", accepted.access_token))
+                .body(Body::empty())
+                .expect("request should build"),
+        )
+        .await
+        .expect("meta request should succeed");
+    assert_eq!(meta_response.status(), StatusCode::OK);
+
     let devices_response = restarted
         .oneshot(
             Request::get("/v1/devices")
-                .header(AUTHORIZATION, format!("Bearer {}", accepted.access_token))
+                .header(AUTHORIZATION, format!("Bearer {}", bootstrap.access_token))
                 .body(Body::empty())
                 .expect("request should build"),
         )
@@ -212,15 +224,16 @@ async fn pairing_offer_accept_adds_second_device_and_persists_across_restart() {
 }
 
 #[tokio::test]
-async fn cors_preflight_allows_cross_origin_browser_and_mobile_clients() {
+async fn cors_preflight_only_allows_trusted_origins() {
     let app = ControlPlaneService::new(test_config(), "test-version").router();
 
-    let response = app
+    let trusted_response = app
+        .clone()
         .oneshot(
             Request::builder()
                 .method(Method::OPTIONS)
                 .uri("/v1/devices")
-                .header(ORIGIN, "tauri://localhost")
+                .header(ORIGIN, "https://remote.example.com")
                 .header(ACCESS_CONTROL_REQUEST_METHOD, "GET")
                 .body(Body::empty())
                 .expect("request should build"),
@@ -228,13 +241,34 @@ async fn cors_preflight_allows_cross_origin_browser_and_mobile_clients() {
         .await
         .expect("preflight should succeed");
 
-    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(trusted_response.status(), StatusCode::OK);
     assert_eq!(
-        response
+        trusted_response
             .headers()
             .get("access-control-allow-origin")
             .expect("allow origin header should exist"),
-        "*"
+        "https://remote.example.com"
+    );
+
+    let untrusted_response = app
+        .oneshot(
+            Request::builder()
+                .method(Method::OPTIONS)
+                .uri("/v1/devices")
+                .header(ORIGIN, "https://evil.example.com")
+                .header(ACCESS_CONTROL_REQUEST_METHOD, "GET")
+                .body(Body::empty())
+                .expect("request should build"),
+        )
+        .await
+        .expect("preflight should succeed");
+
+    assert_eq!(untrusted_response.status(), StatusCode::OK);
+    assert!(
+        untrusted_response
+            .headers()
+            .get("access-control-allow-origin")
+            .is_none()
     );
 }
 

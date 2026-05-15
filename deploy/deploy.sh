@@ -102,6 +102,7 @@ ensure_env() {
 
 ensure_env REMOTE_CODE_CONTROL_PLANE_BIND 127.0.0.1:8787
 ensure_env REMOTE_CODE_CONTROL_PLANE_PUBLIC_BASE_URL "https://${DOMAIN}"
+ensure_env REMOTE_CODE_CORS_ORIGINS "https://${DOMAIN},tauri://localhost,http://tauri.localhost"
 ensure_env REMOTE_CODE_PROFILE_DIR "$STATE_DIR"
 ensure_env REMOTE_CODE_DOWNLOADS_DIR "$REMOTE_DIR/downloads"
 
