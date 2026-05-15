@@ -206,7 +206,11 @@ mod tests {
 
         let project_commands = cwd.join(".roo").join("commands");
         fs::create_dir_all(&project_commands).unwrap();
-        create_md_file(&project_commands, "test-cmd.md", "---\ndescription: Test\n---\nTest body");
+        create_md_file(
+            &project_commands,
+            "test-cmd.md",
+            "---\ndescription: Test\n---\nTest body",
+        );
 
         let commands = get_commands(cwd).await;
         assert_eq!(commands.len(), 1);
@@ -286,12 +290,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_try_load_command_nonexistent_dir() {
-        let cmd = try_load_command(
-            Path::new("/nonexistent/dir"),
-            "test",
-            CommandSource::Global,
-        )
-        .await;
+        let cmd =
+            try_load_command(Path::new("/nonexistent/dir"), "test", CommandSource::Global).await;
         assert!(cmd.is_none());
     }
 

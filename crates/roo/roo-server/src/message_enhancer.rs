@@ -77,10 +77,7 @@ pub struct MessageEnhancerResult {
 ///
 /// # Returns
 /// A `MessageEnhancerResult` with the enhanced text or error.
-pub fn enhance_message<F>(
-    options: MessageEnhancerOptions,
-    enhance_fn: F,
-) -> MessageEnhancerResult
+pub fn enhance_message<F>(options: MessageEnhancerOptions, enhance_fn: F) -> MessageEnhancerResult
 where
     F: Fn(&str) -> Result<String, String>,
 {
@@ -103,7 +100,8 @@ where
     };
 
     // Create the enhancement prompt
-    let enhancement_prompt = create_enhancement_prompt(&prompt_to_enhance, options.custom_support_prompts.as_ref());
+    let enhancement_prompt =
+        create_enhancement_prompt(&prompt_to_enhance, options.custom_support_prompts.as_ref());
 
     // Call the enhancement function
     match enhance_fn(&enhancement_prompt) {
@@ -147,7 +145,14 @@ pub fn extract_task_history(messages: &[ClineMessage]) -> String {
         .collect();
 
     // Take last 10 messages
-    let relevant: Vec<&ClineMessage> = relevant.into_iter().rev().take(10).collect::<Vec<_>>().into_iter().rev().collect();
+    let relevant: Vec<&ClineMessage> = relevant
+        .into_iter()
+        .rev()
+        .take(10)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
 
     relevant
         .iter()
@@ -213,9 +218,7 @@ mod tests {
             include_task_history_in_enhance: false,
             current_cline_messages: vec![],
         };
-        let result = enhance_message(options, |prompt| {
-            Ok(format!("Enhanced: {prompt}"))
-        });
+        let result = enhance_message(options, |prompt| Ok(format!("Enhanced: {prompt}")));
         assert!(result.success);
         assert!(result.enhanced_text.is_some());
         assert!(result.enhanced_text.unwrap().contains("Enhanced"));
@@ -231,9 +234,7 @@ mod tests {
             include_task_history_in_enhance: false,
             current_cline_messages: vec![],
         };
-        let result = enhance_message(options, |_prompt| {
-            Err("API error".to_string())
-        });
+        let result = enhance_message(options, |_prompt| Err("API error".to_string()));
         assert!(!result.success);
         assert_eq!(result.error, Some("API error".to_string()));
     }

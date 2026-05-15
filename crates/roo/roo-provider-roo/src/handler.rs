@@ -10,9 +10,8 @@ use std::sync::RwLock;
 
 use async_trait::async_trait;
 use roo_provider::{
-    ApiStream, CreateMessageMetadata, OpenAiCompatibleConfig, OpenAiCompatibleProvider, Provider,
-    generate_image_with_provider,
-    ImageGenerationResult, ImageGenerationOptions,
+    ApiStream, CreateMessageMetadata, ImageGenerationOptions, ImageGenerationResult,
+    OpenAiCompatibleConfig, OpenAiCompatibleProvider, Provider, generate_image_with_provider,
 };
 use roo_types::api::ProviderName;
 use roo_types::model::{ModelInfo, ModelRecord};
@@ -72,7 +71,7 @@ impl RooHandler {
             model_info,
             provider_name_enum: ProviderName::Roo,
             request_timeout: config.request_timeout,
-        reasoning_effort: None,
+            reasoning_effort: None,
             streaming_enabled: None,
             include_max_tokens: None,
             extra_body_fields: None,
@@ -210,10 +209,7 @@ impl Provider for RooHandler {
         self.resolve_model_info()
     }
 
-    async fn complete_prompt(
-        &self,
-        prompt: &str,
-    ) -> Result<String, roo_provider::ProviderError> {
+    async fn complete_prompt(&self, prompt: &str) -> Result<String, roo_provider::ProviderError> {
         self.inner.complete_prompt(prompt).await
     }
 
@@ -267,7 +263,11 @@ mod tests {
     #[test]
     fn test_all_models_have_required_fields() {
         for (id, info) in models::models() {
-            assert!(info.max_tokens.is_some(), "Model '{}' missing max_tokens", id);
+            assert!(
+                info.max_tokens.is_some(),
+                "Model '{}' missing max_tokens",
+                id
+            );
             assert!(
                 info.input_price.is_some(),
                 "Model '{}' missing input_price",

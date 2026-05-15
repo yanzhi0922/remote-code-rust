@@ -12,14 +12,14 @@ pub mod selection;
 pub mod tools;
 
 // Re-export key types and functions
+pub use custom_modes_manager::{
+    CACHE_TTL_MS, CustomModesManager, ExportResult, ExportedModeConfig, ImportResult,
+    ROOMODES_FILENAME, RuleFile,
+};
 pub use helpers::{
     default_mode_slug, default_prompts, find_mode_by_slug, get_description, get_when_to_use,
     is_custom_mode,
 };
-pub use restriction::{check_file_restriction, FileRestrictionError};
-pub use selection::{get_mode_selection, ModeSelection};
+pub use restriction::{FileRestrictionError, check_file_restriction};
+pub use selection::{ModeSelection, get_mode_selection};
 pub use tools::{get_group_name, get_tools_for_mode};
-pub use custom_modes_manager::{
-    CustomModesManager, RuleFile, ExportedModeConfig, ExportResult, ImportResult,
-    ROOMODES_FILENAME, CACHE_TTL_MS,
-};

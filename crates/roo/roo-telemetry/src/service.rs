@@ -113,10 +113,22 @@ impl TelemetryService {
     ) {
         let mut props = HashMap::new();
         props.insert("taskId".to_string(), Value::String(task_id.to_string()));
-        props.insert("inputTokens".to_string(), Value::Number(input_tokens.into()));
-        props.insert("outputTokens".to_string(), Value::Number(output_tokens.into()));
-        props.insert("cacheWriteTokens".to_string(), Value::Number(cache_write_tokens.into()));
-        props.insert("cacheReadTokens".to_string(), Value::Number(cache_read_tokens.into()));
+        props.insert(
+            "inputTokens".to_string(),
+            Value::Number(input_tokens.into()),
+        );
+        props.insert(
+            "outputTokens".to_string(),
+            Value::Number(output_tokens.into()),
+        );
+        props.insert(
+            "cacheWriteTokens".to_string(),
+            Value::Number(cache_write_tokens.into()),
+        );
+        props.insert(
+            "cacheReadTokens".to_string(),
+            Value::Number(cache_read_tokens.into()),
+        );
         if let Some(c) = cost {
             props.insert("cost".to_string(), serde_json::json!(c));
         }

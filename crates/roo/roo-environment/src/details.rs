@@ -228,15 +228,15 @@ mod tests {
     #[test]
     fn test_recently_modified_files() {
         let mut input = default_input();
-        input.recently_modified_files = vec![
-            "modified1.ts".to_string(),
-            "modified2.ts".to_string(),
-        ];
+        input.recently_modified_files =
+            vec!["modified1.ts".to_string(), "modified2.ts".to_string()];
         let result = build_environment_details(&input);
         assert!(result.contains("# Recently Modified Files"));
         assert!(result.contains("modified1.ts"));
         assert!(result.contains("modified2.ts"));
-        assert!(result.contains("file was just edited so you may need to re-read it before editing"));
+        assert!(
+            result.contains("file was just edited so you may need to re-read it before editing")
+        );
     }
 
     #[test]

@@ -49,7 +49,11 @@ impl rustls::client::danger::ServerCertVerifier for FlexibleVerifier {
         // If fingerprints are pinned, verify the leaf cert matches.
         if !self.fingerprints.is_empty() {
             let fp = sha256_hex(end_entity.as_ref());
-            if self.fingerprints.iter().any(|p| p.eq_ignore_ascii_case(&fp)) {
+            if self
+                .fingerprints
+                .iter()
+                .any(|p| p.eq_ignore_ascii_case(&fp))
+            {
                 return Ok(rustls::client::danger::ServerCertVerified::assertion());
             }
             return Err(rustls::Error::General(
@@ -100,10 +104,6 @@ fn sha256_hex(data: &[u8]) -> String {
 
 mod hex {
     pub fn encode(bytes: impl AsRef<[u8]>) -> String {
-        bytes
-            .as_ref()
-            .iter()
-            .map(|b| format!("{b:02x}"))
-            .collect()
+        bytes.as_ref().iter().map(|b| format!("{b:02x}")).collect()
     }
 }

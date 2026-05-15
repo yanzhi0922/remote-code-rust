@@ -35,7 +35,10 @@ impl PoeConfig {
         Some(Self {
             api_key,
             base_url: settings.poe_base_url.clone(),
-            model_id: settings.poe_model_id.clone().or(settings.api_model_id.clone()),
+            model_id: settings
+                .poe_model_id
+                .clone()
+                .or(settings.api_model_id.clone()),
             temperature: settings.model_temperature.flatten(),
             max_thinking_tokens: settings.model_max_thinking_tokens,
             reasoning_effort: settings.model_reasoning_effort.clone(),

@@ -313,7 +313,9 @@ fn print_runtime_status(report: &RuntimeStatusReport) {
 mod tests {
     use super::{build_runtime_status_snapshot, collect_runtime_status};
     use claude_config::{ProviderOverrides, RuntimeOverrides, SettingSource, load_runtime_config};
-    use claude_core::{ConversationEntry, InputFormat, OutputFormat, PermissionMode, ProviderProtocol};
+    use claude_core::{
+        ConversationEntry, InputFormat, OutputFormat, PermissionMode, ProviderProtocol,
+    };
     use claude_session::SessionStore;
     use claude_session::resume_state::{PendingToolCall, ResumeState};
     use tempfile::tempdir;

@@ -1,4 +1,4 @@
-﻿//! DeepSeek R1 / Z.ai GLM message format conversion (merged module).
+//! DeepSeek R1 / Z.ai GLM message format conversion (merged module).
 //!
 //! Derived from `src/api/transform/r1-format.ts` and
 //! `src/api/transform/zai-format.ts`.  The two TypeScript modules are
@@ -14,7 +14,7 @@
 //!   into the last tool message (prevents reasoning_content from being
 //!   dropped when the provider sees a user message).
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use roo_types::api::{ApiMessage, ContentBlock, ImageSource, MessageRole, ToolResultContent};
 
@@ -149,9 +149,8 @@ fn process_user_message(
 
     // Handle text/image content after tool results
     if !text_parts.is_empty() || !image_parts.is_empty() {
-        let should_merge = options.merge_tool_result_text
-            && !tool_results.is_empty()
-            && image_parts.is_empty();
+        let should_merge =
+            options.merge_tool_result_text && !tool_results.is_empty() && image_parts.is_empty();
 
         if should_merge {
             // Merge text into the last tool message
@@ -371,7 +370,11 @@ mod tests {
         }
     }
 
-    fn make_message(role: MessageRole, content: Vec<ContentBlock>, reasoning: Option<&str>) -> ApiMessage {
+    fn make_message(
+        role: MessageRole,
+        content: Vec<ContentBlock>,
+        reasoning: Option<&str>,
+    ) -> ApiMessage {
         ApiMessage {
             role,
             content,
@@ -420,7 +423,10 @@ mod tests {
         let messages = vec![
             make_message(
                 MessageRole::Assistant,
-                vec![text_block("Let me check."), tool_use_block("call_1", "read_file", r#"{"path":"a.rs"}"#)],
+                vec![
+                    text_block("Let me check."),
+                    tool_use_block("call_1", "read_file", r#"{"path":"a.rs"}"#),
+                ],
                 None,
             ),
             make_message(MessageRole::Assistant, vec![text_block("Done")], None),

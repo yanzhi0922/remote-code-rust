@@ -49,7 +49,7 @@ pub fn parse_content_length_header(header: &str) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::{json, Value};
+    use serde_json::{Value, json};
 
     #[test]
     fn test_encode_message() {
@@ -107,10 +107,7 @@ mod tests {
     #[test]
     fn test_parse_content_length_header_valid() {
         assert_eq!(parse_content_length_header("Content-Length: 42"), Some(42));
-        assert_eq!(
-            parse_content_length_header("Content-Length: 0"),
-            Some(0)
-        );
+        assert_eq!(parse_content_length_header("Content-Length: 0"), Some(0));
         assert_eq!(
             parse_content_length_header("Content-Length: 999999"),
             Some(999999)

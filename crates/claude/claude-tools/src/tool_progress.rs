@@ -5,8 +5,9 @@
 //! token counts, search results, build output, test results, LSP diagnostics,
 //! MCP progress, and custom payloads.
 
+use parking_lot::Mutex;
 use std::fmt;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
@@ -337,7 +338,7 @@ impl ProgressStream {
 
     /// Emit a progress event for the given tool.
     pub fn emit(&self, tool_call_id: &str, data: ToolProgressData) {
-        let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let mut inner = self.inner.lock();
         if inner.closed {
             return;
         }
@@ -349,18 +350,14 @@ impl ProgressStream {
 
     /// Drain all buffered events, returning them as a vector.
     pub fn drain(&self) -> Vec<(String, ToolProgressData)> {
-        let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let mut inner = self.inner.lock();
         std::mem::take(&mut inner.events)
     }
 
     /// Return the number of buffered events.
     #[must_use]
     pub fn len(&self) -> usize {
-        self.inner
-            .lock()
-            .expect("progress stream lock poisoned")
-            .events
-            .len()
+        self.inner.lock().events.len()
     }
 
     /// Return `true` if no events have been buffered.
@@ -371,19 +368,13 @@ impl ProgressStream {
 
     /// Close the stream – subsequent [`emit`](Self::emit) calls are no-ops.
     pub fn close(&self) {
-        self.inner
-            .lock()
-            .expect("progress stream lock poisoned")
-            .closed = true;
+        self.inner.lock().closed = true;
     }
 
     /// Whether the stream has been closed.
     #[must_use]
     pub fn is_closed(&self) -> bool {
-        self.inner
-            .lock()
-            .expect("progress stream lock poisoned")
-            .closed
+        self.inner.lock().closed
     }
 }
 
@@ -583,10 +574,7 @@ mod tests {
         let collected: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
         let collected_clone = Arc::clone(&collected);
         let stream = ProgressStream::with_callback(Box::new(move |_id, data| {
-            collected_clone
-                .lock()
-                .expect("lock")
-                .push(data.kind_name().to_owned());
+            collected_clone.lock().push(data.kind_name().to_owned());
         }));
         stream.emit("tc-1", ToolProgressData::Spinner { message: None });
         stream.emit(
@@ -596,7 +584,7 @@ mod tests {
                 message: None,
             },
         );
-        let kinds = collected.lock().expect("lock");
+        let kinds = collected.lock();
         assert_eq!(&*kinds, &["spinner", "progress_bar"]);
     }
 

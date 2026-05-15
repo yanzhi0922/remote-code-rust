@@ -8,7 +8,7 @@ use roo_types::mode::ModeConfig;
 use roo_types::tool::{ToolGroup, ToolName};
 
 use crate::groups::{
-    get_group_name, get_group_options, is_always_available, resolve_tool_alias, TOOL_GROUPS,
+    TOOL_GROUPS, get_group_name, get_group_options, is_always_available, resolve_tool_alias,
 };
 
 // ---------------------------------------------------------------------------
@@ -19,18 +19,19 @@ use crate::groups::{
 #[derive(Debug, thiserror::Error)]
 pub enum ToolValidationError {
     /// The tool name is not recognized.
-    #[error("Unknown tool \"{0}\". This tool does not exist. Please use one of the available tools.")]
+    #[error(
+        "Unknown tool \"{0}\". This tool does not exist. Please use one of the available tools."
+    )]
     UnknownTool(String),
 
     /// The tool is not allowed in the current mode.
     #[error("Tool \"{tool}\" is not allowed in {mode} mode.")]
-    NotAllowedForMode {
-        tool: String,
-        mode: String,
-    },
+    NotAllowedForMode { tool: String, mode: String },
 
     /// The file path does not match the mode's file regex restriction.
-    #[error("File path \"{file_path}\" does not match the allowed pattern \"{regex}\" for {mode_name} mode. {description}")]
+    #[error(
+        "File path \"{file_path}\" does not match the allowed pattern \"{regex}\" for {mode_name} mode. {description}"
+    )]
     FileRestriction {
         mode_name: String,
         regex: String,
@@ -49,10 +50,7 @@ pub enum ToolValidationError {
 /// only that the tool actually exists.
 ///
 /// Source: `src/core/tools/validateToolUse.ts` — `isValidToolName`
-pub fn is_valid_tool_name(
-    tool_name: &str,
-    experiments: Option<&HashMap<String, bool>>,
-) -> bool {
+pub fn is_valid_tool_name(tool_name: &str, experiments: Option<&HashMap<String, bool>>) -> bool {
     // Check if it's a valid static tool
     if ToolName::all().iter().any(|t| t.as_str() == tool_name) {
         return true;
@@ -127,11 +125,7 @@ const EDIT_OPERATION_PARAMS: &[&str] = &[
 ];
 
 /// Patch file markers used to identify file operations in apply_patch format.
-const PATCH_FILE_MARKERS: &[&str] = &[
-    "*** Add File: ",
-    "*** Delete File: ",
-    "*** Update File: ",
-];
+const PATCH_FILE_MARKERS: &[&str] = &["*** Add File: ", "*** Delete File: ", "*** Update File: "];
 
 /// Extract file paths from apply_patch content.
 fn extract_file_paths_from_patch(patch_content: &str) -> Vec<String> {
@@ -298,10 +292,7 @@ pub fn is_tool_allowed_for_mode(
 }
 
 /// Find a mode configuration by slug.
-fn find_mode_by_slug<'a>(
-    slug: &str,
-    custom_modes: &'a [ModeConfig],
-) -> Option<ModeConfig> {
+fn find_mode_by_slug<'a>(slug: &str, custom_modes: &'a [ModeConfig]) -> Option<ModeConfig> {
     // Check custom modes first
     if let Some(mode) = custom_modes.iter().find(|m| m.slug == slug) {
         return Some(mode.clone());
@@ -340,65 +331,33 @@ mod tests {
     #[test]
     fn test_validate_tool_use_allowed() {
         // Code mode has read, edit, command groups
-        let result = validate_tool_use(
-            "read_file",
-            "code",
-            &[],
-            None,
-            None,
-            None,
-        );
+        let result = validate_tool_use("read_file", "code", &[], None, None, None);
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_validate_tool_use_unknown_tool() {
-        let result = validate_tool_use(
-            "nonexistent_tool",
-            "code",
-            &[],
-            None,
-            None,
-            None,
-        );
+        let result = validate_tool_use("nonexistent_tool", "code", &[], None, None, None);
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), ToolValidationError::UnknownTool(_)));
+        assert!(matches!(
+            result.unwrap_err(),
+            ToolValidationError::UnknownTool(_)
+        ));
     }
 
     #[test]
     fn test_validate_tool_use_not_allowed_for_mode() {
         // Ask mode should not have execute_command
-        let result = validate_tool_use(
-            "execute_command",
-            "ask",
-            &[],
-            None,
-            None,
-            None,
-        );
+        let result = validate_tool_use("execute_command", "ask", &[], None, None, None);
         assert!(result.is_err());
     }
 
     #[test]
     fn test_always_available_tools_pass() {
-        let result = validate_tool_use(
-            "ask_followup_question",
-            "ask",
-            &[],
-            None,
-            None,
-            None,
-        );
+        let result = validate_tool_use("ask_followup_question", "ask", &[], None, None, None);
         assert!(result.is_ok());
 
-        let result = validate_tool_use(
-            "attempt_completion",
-            "ask",
-            &[],
-            None,
-            None,
-            None,
-        );
+        let result = validate_tool_use("attempt_completion", "ask", &[], None, None, None);
         assert!(result.is_ok());
     }
 
@@ -456,18 +415,74 @@ mod tests {
 
     #[test]
     fn test_code_mode_allows_read_edit_command() {
-        assert!(is_tool_allowed_for_mode("read_file", "code", &[], None, None, None, None));
-        assert!(is_tool_allowed_for_mode("write_to_file", "code", &[], None, None, None, None));
-        assert!(is_tool_allowed_for_mode("execute_command", "code", &[], None, None, None, None));
-        assert!(is_tool_allowed_for_mode("apply_diff", "code", &[], None, None, None, None));
+        assert!(is_tool_allowed_for_mode(
+            "read_file",
+            "code",
+            &[],
+            None,
+            None,
+            None,
+            None
+        ));
+        assert!(is_tool_allowed_for_mode(
+            "write_to_file",
+            "code",
+            &[],
+            None,
+            None,
+            None,
+            None
+        ));
+        assert!(is_tool_allowed_for_mode(
+            "execute_command",
+            "code",
+            &[],
+            None,
+            None,
+            None,
+            None
+        ));
+        assert!(is_tool_allowed_for_mode(
+            "apply_diff",
+            "code",
+            &[],
+            None,
+            None,
+            None,
+            None
+        ));
     }
 
     #[test]
     fn test_architect_mode_allows_read_and_md_edit_but_not_command() {
-        assert!(is_tool_allowed_for_mode("read_file", "architect", &[], None, None, None, None));
+        assert!(is_tool_allowed_for_mode(
+            "read_file",
+            "architect",
+            &[],
+            None,
+            None,
+            None,
+            None
+        ));
         // Architect has edit group with file_regex "\.md$", so write_to_file is allowed
         // but only for .md files. Without file params, it's still allowed by group membership.
-        assert!(is_tool_allowed_for_mode("write_to_file", "architect", &[], None, None, None, None));
-        assert!(!is_tool_allowed_for_mode("execute_command", "architect", &[], None, None, None, None));
+        assert!(is_tool_allowed_for_mode(
+            "write_to_file",
+            "architect",
+            &[],
+            None,
+            None,
+            None,
+            None
+        ));
+        assert!(!is_tool_allowed_for_mode(
+            "execute_command",
+            "architect",
+            &[],
+            None,
+            None,
+            None,
+            None
+        ));
     }
 }

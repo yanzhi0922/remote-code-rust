@@ -1,4 +1,4 @@
-﻿//! MiniMax message format conversion.
+//! MiniMax message format conversion.
 //!
 //! Derived from `src/api/transform/minimax-format.ts`.
 //! MiniMax thinking models error when they receive a standalone user message
@@ -337,7 +337,9 @@ mod tests {
         // Last tool_result has merged text
         match &messages[0].content[1] {
             ContentBlock::ToolResult {
-                tool_use_id, content, ..
+                tool_use_id,
+                content,
+                ..
             } => {
                 assert_eq!(tool_use_id, "t2");
                 match &content[0] {

@@ -47,24 +47,26 @@ use rc_agent_protocol::permission::PermissionDecision;
 use rc_agent_protocol::types::{AgentConfig, AgentInfo, AgentStatus, AgentType};
 
 use roo_auto_approval::types::AutoApprovalState;
+use roo_context_tracking::{FileContextTracker, InMemoryMetadataStore};
+use roo_editor::diff_view::DiffViewProvider;
+use roo_ignore::RooIgnoreController;
 use roo_prompt::build_system_prompt;
+use roo_protect::RooProtectedController;
 use roo_provider::handler::Provider;
-use roo_task::tool_dispatcher::ToolDispatcher;
-use roo_task::message_builder::MessageBuilder;
-use roo_task::engine::TaskEngine;
-use roo_task::agent_loop::{AgentLoop, AgentLoopConfig};
-use roo_task::types::TaskConfig;
 use roo_task::TaskEvent as RooTaskEvent;
+use roo_task::agent_loop::{AgentLoop, AgentLoopConfig};
+use roo_task::engine::TaskEngine;
+use roo_task::message_builder::MessageBuilder;
+use roo_task::tool_dispatcher::ToolDispatcher;
+use roo_task::types::TaskConfig;
 use roo_terminal::TerminalRegistry;
 use roo_types::api::ApiMessage;
 use roo_types::mcp::McpServerConnection;
-use roo_ignore::RooIgnoreController;
-use roo_protect::RooProtectedController;
-use roo_context_tracking::{FileContextTracker, InMemoryMetadataStore};
-use roo_editor::diff_view::DiffViewProvider;
 
 /// Type alias for the nested approval channel used by the agent loop.
-type ApprovalSender = Arc<std::sync::Mutex<Option<Arc<std::sync::Mutex<Option<tokio::sync::oneshot::Sender<bool>>>>>>>;
+type ApprovalSender = Arc<
+    std::sync::Mutex<Option<Arc<std::sync::Mutex<Option<tokio::sync::oneshot::Sender<bool>>>>>>,
+>;
 
 // ---------------------------------------------------------------------------
 // Provider builder — mirrors roo-cli's build_handler()
@@ -78,8 +80,8 @@ fn build_handler(
 ) -> anyhow::Result<Box<dyn Provider>> {
     match provider_name {
         "anthropic" => {
-            let api_key = api_key
-                .ok_or_else(|| anyhow::anyhow!("api_key is required for anthropic"))?;
+            let api_key =
+                api_key.ok_or_else(|| anyhow::anyhow!("api_key is required for anthropic"))?;
             let cfg = roo_provider_anthropic::AnthropicConfig {
                 api_key: api_key.to_string(),
                 base_url: base_url
@@ -92,12 +94,14 @@ fn build_handler(
                 request_timeout: None,
                 enable_1m_context: false,
             };
-            Ok(Box::new(roo_provider_anthropic::AnthropicHandler::new(cfg)?))
+            Ok(Box::new(roo_provider_anthropic::AnthropicHandler::new(
+                cfg,
+            )?))
         }
 
         "openai" => {
-            let api_key = api_key
-                .ok_or_else(|| anyhow::anyhow!("api_key is required for openai"))?;
+            let api_key =
+                api_key.ok_or_else(|| anyhow::anyhow!("api_key is required for openai"))?;
             let cfg = roo_provider_openai::OpenAiConfig {
                 api_key: api_key.to_string(),
                 base_url: base_url
@@ -119,8 +123,8 @@ fn build_handler(
         }
 
         "openai-native" => {
-            let api_key = api_key
-                .ok_or_else(|| anyhow::anyhow!("api_key is required for openai-native"))?;
+            let api_key =
+                api_key.ok_or_else(|| anyhow::anyhow!("api_key is required for openai-native"))?;
             let cfg = roo_provider_openai_native::OpenAiNativeConfig {
                 api_key: api_key.to_string(),
                 base_url: base_url.map(|s| s.to_string()),
@@ -137,8 +141,8 @@ fn build_handler(
         }
 
         "openrouter" => {
-            let api_key = api_key
-                .ok_or_else(|| anyhow::anyhow!("api_key is required for openrouter"))?;
+            let api_key =
+                api_key.ok_or_else(|| anyhow::anyhow!("api_key is required for openrouter"))?;
             let cfg = roo_provider_openrouter::OpenRouterConfig {
                 api_key: api_key.to_string(),
                 base_url: base_url
@@ -148,12 +152,14 @@ fn build_handler(
                 temperature: None,
                 request_timeout: None,
             };
-            Ok(Box::new(roo_provider_openrouter::OpenRouterHandler::new(cfg)?))
+            Ok(Box::new(roo_provider_openrouter::OpenRouterHandler::new(
+                cfg,
+            )?))
         }
 
         "deepseek" => {
-            let api_key = api_key
-                .ok_or_else(|| anyhow::anyhow!("api_key is required for deepseek"))?;
+            let api_key =
+                api_key.ok_or_else(|| anyhow::anyhow!("api_key is required for deepseek"))?;
             let cfg = roo_provider_deepseek::DeepSeekConfig {
                 api_key: api_key.to_string(),
                 base_url: base_url
@@ -167,8 +173,8 @@ fn build_handler(
         }
 
         "gemini" | "google" => {
-            let api_key = api_key
-                .ok_or_else(|| anyhow::anyhow!("api_key is required for gemini"))?;
+            let api_key =
+                api_key.ok_or_else(|| anyhow::anyhow!("api_key is required for gemini"))?;
             let cfg = roo_provider_google::GoogleConfig {
                 api_key: api_key.to_string(),
                 base_url: base_url
@@ -210,8 +216,7 @@ fn build_handler(
         }
 
         "xai" => {
-            let api_key = api_key
-                .ok_or_else(|| anyhow::anyhow!("api_key is required for xai"))?;
+            let api_key = api_key.ok_or_else(|| anyhow::anyhow!("api_key is required for xai"))?;
             let cfg = roo_provider_xai::XaiConfig {
                 api_key: api_key.to_string(),
                 base_url: base_url
@@ -225,8 +230,8 @@ fn build_handler(
         }
 
         "mistral" => {
-            let api_key = api_key
-                .ok_or_else(|| anyhow::anyhow!("api_key is required for mistral"))?;
+            let api_key =
+                api_key.ok_or_else(|| anyhow::anyhow!("api_key is required for mistral"))?;
             let cfg = roo_provider_mistral::MistralConfig {
                 api_key: api_key.to_string(),
                 base_url: base_url
@@ -240,8 +245,8 @@ fn build_handler(
         }
 
         "fireworks" => {
-            let api_key = api_key
-                .ok_or_else(|| anyhow::anyhow!("api_key is required for fireworks"))?;
+            let api_key =
+                api_key.ok_or_else(|| anyhow::anyhow!("api_key is required for fireworks"))?;
             let cfg = roo_provider_fireworks::FireworksConfig {
                 api_key: api_key.to_string(),
                 base_url: base_url
@@ -251,7 +256,9 @@ fn build_handler(
                 temperature: None,
                 request_timeout: None,
             };
-            Ok(Box::new(roo_provider_fireworks::FireworksHandler::new(cfg)?))
+            Ok(Box::new(roo_provider_fireworks::FireworksHandler::new(
+                cfg,
+            )?))
         }
 
         "litellm" => {
@@ -270,8 +277,7 @@ fn build_handler(
         }
 
         "qwen" | "qwen-code" => {
-            let api_key = api_key
-                .ok_or_else(|| anyhow::anyhow!("api_key is required for qwen"))?;
+            let api_key = api_key.ok_or_else(|| anyhow::anyhow!("api_key is required for qwen"))?;
             let cfg = roo_provider_qwen::QwenConfig {
                 api_key: api_key.to_string(),
                 base_url: base_url
@@ -285,8 +291,8 @@ fn build_handler(
         }
 
         "minimax" => {
-            let api_key = api_key
-                .ok_or_else(|| anyhow::anyhow!("api_key is required for minimax"))?;
+            let api_key =
+                api_key.ok_or_else(|| anyhow::anyhow!("api_key is required for minimax"))?;
             let cfg = roo_provider_minimax::MiniMaxConfig {
                 api_key: api_key.to_string(),
                 base_url: base_url
@@ -301,8 +307,8 @@ fn build_handler(
         }
 
         "moonshot" => {
-            let api_key = api_key
-                .ok_or_else(|| anyhow::anyhow!("api_key is required for moonshot"))?;
+            let api_key =
+                api_key.ok_or_else(|| anyhow::anyhow!("api_key is required for moonshot"))?;
             let cfg = roo_provider_moonshot::MoonshotConfig {
                 api_key: api_key.to_string(),
                 base_url: base_url
@@ -316,8 +322,7 @@ fn build_handler(
         }
 
         "zai" => {
-            let api_key = api_key
-                .ok_or_else(|| anyhow::anyhow!("api_key is required for zai"))?;
+            let api_key = api_key.ok_or_else(|| anyhow::anyhow!("api_key is required for zai"))?;
             let cfg = roo_provider_zai::ZaiConfig {
                 api_key: api_key.to_string(),
                 base_url: base_url
@@ -331,8 +336,8 @@ fn build_handler(
         }
 
         "sambanova" => {
-            let api_key = api_key
-                .ok_or_else(|| anyhow::anyhow!("api_key is required for sambanova"))?;
+            let api_key =
+                api_key.ok_or_else(|| anyhow::anyhow!("api_key is required for sambanova"))?;
             let cfg = roo_provider_sambanova::SambaNovaConfig {
                 api_key: api_key.to_string(),
                 base_url: base_url
@@ -342,12 +347,14 @@ fn build_handler(
                 temperature: None,
                 request_timeout: None,
             };
-            Ok(Box::new(roo_provider_sambanova::SambaNovaHandler::new(cfg)?))
+            Ok(Box::new(roo_provider_sambanova::SambaNovaHandler::new(
+                cfg,
+            )?))
         }
 
         "baseten" => {
-            let api_key = api_key
-                .ok_or_else(|| anyhow::anyhow!("api_key is required for baseten"))?;
+            let api_key =
+                api_key.ok_or_else(|| anyhow::anyhow!("api_key is required for baseten"))?;
             let cfg = roo_provider_baseten::BasetenConfig {
                 api_key: api_key.to_string(),
                 base_url: base_url
@@ -361,8 +368,7 @@ fn build_handler(
         }
 
         "poe" => {
-            let api_key = api_key
-                .ok_or_else(|| anyhow::anyhow!("api_key is required for poe"))?;
+            let api_key = api_key.ok_or_else(|| anyhow::anyhow!("api_key is required for poe"))?;
             let cfg = roo_provider_poe::PoeConfig {
                 api_key: api_key.to_string(),
                 base_url: base_url.map(|s| s.to_string()),
@@ -376,8 +382,8 @@ fn build_handler(
         }
 
         "requesty" => {
-            let api_key = api_key
-                .ok_or_else(|| anyhow::anyhow!("api_key is required for requesty"))?;
+            let api_key =
+                api_key.ok_or_else(|| anyhow::anyhow!("api_key is required for requesty"))?;
             let cfg = roo_provider_requesty::RequestyConfig {
                 api_key: api_key.to_string(),
                 base_url: base_url
@@ -391,8 +397,8 @@ fn build_handler(
         }
 
         "unbound" => {
-            let api_key = api_key
-                .ok_or_else(|| anyhow::anyhow!("api_key is required for unbound"))?;
+            let api_key =
+                api_key.ok_or_else(|| anyhow::anyhow!("api_key is required for unbound"))?;
             let cfg = roo_provider_unbound::UnboundConfig {
                 api_key: api_key.to_string(),
                 base_url: None,
@@ -404,8 +410,8 @@ fn build_handler(
         }
 
         "vercel" | "vercel-ai-gateway" => {
-            let api_key = api_key
-                .ok_or_else(|| anyhow::anyhow!("api_key is required for vercel"))?;
+            let api_key =
+                api_key.ok_or_else(|| anyhow::anyhow!("api_key is required for vercel"))?;
             let cfg = roo_provider_vercel::VercelConfig {
                 api_key: api_key.to_string(),
                 base_url: base_url.map(|s| s.to_string()),
@@ -503,13 +509,13 @@ fn map_task_event(event: &RooTaskEvent, session_id: &str) -> Option<UnifiedAgent
         }
 
         // --- Tool use lifecycle ---
-        RooTaskEvent::StreamingToolUseStarted { tool_name, tool_id, .. } => {
-            Some(UnifiedAgentEvent::ToolCallStarted {
-                session_id: session_id.to_string(),
-                tool_name: tool_name.clone(),
-                tool_input: serde_json::json!({ "tool_id": tool_id }),
-            })
-        }
+        RooTaskEvent::StreamingToolUseStarted {
+            tool_name, tool_id, ..
+        } => Some(UnifiedAgentEvent::ToolCallStarted {
+            session_id: session_id.to_string(),
+            tool_name: tool_name.clone(),
+            tool_input: serde_json::json!({ "tool_id": tool_id }),
+        }),
 
         RooTaskEvent::StreamingToolUseDelta { tool_id, delta, .. } => {
             Some(UnifiedAgentEvent::ToolCallProgress {
@@ -602,13 +608,13 @@ fn map_task_event(event: &RooTaskEvent, session_id: &str) -> Option<UnifiedAgent
         }),
 
         // --- Subtask lifecycle ---
-        RooTaskEvent::TaskSpawned {
-            child_task_id, ..
-        } => Some(UnifiedAgentEvent::SubtaskStarted {
-            session_id: session_id.to_string(),
-            task_id: child_task_id.clone(),
-            description: String::new(),
-        }),
+        RooTaskEvent::TaskSpawned { child_task_id, .. } => {
+            Some(UnifiedAgentEvent::SubtaskStarted {
+                session_id: session_id.to_string(),
+                task_id: child_task_id.clone(),
+                description: String::new(),
+            })
+        }
 
         RooTaskEvent::TaskDelegationCompleted { summary, .. } => {
             Some(UnifiedAgentEvent::SubtaskCompleted {
@@ -648,7 +654,10 @@ fn map_task_event(event: &RooTaskEvent, session_id: &str) -> Option<UnifiedAgent
         } => Some(UnifiedAgentEvent::ToolCallProgress {
             session_id: session_id.to_string(),
             tool_name: "api_retry".to_string(),
-            progress: format!("retry delayed: {}s (attempt {})", delay_seconds, retry_attempt),
+            progress: format!(
+                "retry delayed: {}s (attempt {})",
+                delay_seconds, retry_attempt
+            ),
         }),
 
         // --- Streaming completed ---
@@ -662,7 +671,11 @@ fn map_task_event(event: &RooTaskEvent, session_id: &str) -> Option<UnifiedAgent
             Some(UnifiedAgentEvent::ToolCallProgress {
                 session_id: session_id.to_string(),
                 tool_name: tool_name.clone(),
-                progress: if *success { "completed".to_string() } else { "failed".to_string() },
+                progress: if *success {
+                    "completed".to_string()
+                } else {
+                    "failed".to_string()
+                },
             })
         }
 
@@ -752,7 +765,10 @@ impl RooInProcessAdapter {
 
     /// Set MCP servers discovered from the GUI's centralized configuration.
     /// These are merged with `.roo/mcp.json` servers in `load_mcp_servers()`.
-    pub fn set_external_mcp_servers(&mut self, servers: std::collections::HashMap<String, serde_json::Value>) {
+    pub fn set_external_mcp_servers(
+        &mut self,
+        servers: std::collections::HashMap<String, serde_json::Value>,
+    ) {
         self.external_mcp_servers = servers;
     }
 
@@ -824,7 +840,10 @@ impl RooInProcessAdapter {
                 return Ok(());
             }
         }
-        debug!(allowed, "No pending approval in AgentLoop (auto-approval mode or no handle)");
+        debug!(
+            allowed,
+            "No pending approval in AgentLoop (auto-approval mode or no handle)"
+        );
         Ok(())
     }
 
@@ -835,20 +854,20 @@ impl RooInProcessAdapter {
     /// server descriptions (tools, resources, etc.).
     async fn load_mcp_servers(&self) -> Vec<McpServerConnection> {
         let cwd_str = self.cwd.to_string_lossy().to_string();
-        let hub = roo_mcp::McpHub::new_with_paths(
-            Some(cwd_str.clone()),
-            None,
-        );
+        let hub = roo_mcp::McpHub::new_with_paths(Some(cwd_str.clone()), None);
 
         // 1. Load GUI-managed MCP servers (from centralized config: mcp.toml, .mcp.json).
         //    These are "global" scope — project-level config can override them.
         if !self.external_mcp_servers.is_empty() {
             let count = self.external_mcp_servers.len();
-            if let Err(e) = hub.update_server_connections(
-                &self.external_mcp_servers,
-                roo_mcp::McpSource::Global,
-                true,
-            ).await {
+            if let Err(e) = hub
+                .update_server_connections(
+                    &self.external_mcp_servers,
+                    roo_mcp::McpSource::Global,
+                    true,
+                )
+                .await
+            {
                 warn!("Failed to load GUI MCP servers: {}", e);
             } else {
                 info!("Loaded {} GUI-managed MCP servers", count);
@@ -857,36 +876,43 @@ impl RooInProcessAdapter {
 
         // 2. Load project-level MCP config (.roo/mcp.json).
         //    Project scope overrides global, so same-name servers will be replaced.
-        let mcp_path = std::path::Path::new(&cwd_str)
-            .join(".roo")
-            .join("mcp.json");
+        let mcp_path = std::path::Path::new(&cwd_str).join(".roo").join("mcp.json");
 
         if mcp_path.exists()
             && let Ok(content) = std::fs::read_to_string(&mcp_path)
             && let Ok(config) = serde_json::from_str::<serde_json::Value>(&content)
             && let Some(servers) = config.get("mcpServers").and_then(|v| v.as_object())
         {
-            let server_map: std::collections::HashMap<String, serde_json::Value> =
-                servers.into_iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+            let server_map: std::collections::HashMap<String, serde_json::Value> = servers
+                .into_iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect();
             let count = server_map.len();
-            if let Err(e) = hub.update_server_connections(
-                &server_map,
-                roo_mcp::McpSource::Project,
-                true,
-            ).await {
+            if let Err(e) = hub
+                .update_server_connections(&server_map, roo_mcp::McpSource::Project, true)
+                .await
+            {
                 warn!("Failed to load project MCP servers: {}", e);
             } else {
-                info!("Loaded {} project MCP servers from {}", count, mcp_path.display());
+                info!(
+                    "Loaded {} project MCP servers from {}",
+                    count,
+                    mcp_path.display()
+                );
             }
         }
 
         // Give servers a moment to connect (max 5 seconds per server, total 10s cap)
         let server_count = hub.get_servers().len();
         if server_count > 0 {
-            info!(count = server_count, "Waiting for MCP servers to connect...");
+            info!(
+                count = server_count,
+                "Waiting for MCP servers to connect..."
+            );
             tokio::time::sleep(std::time::Duration::from_millis(
-                (server_count as u64 * 2000).min(10000)
-            )).await;
+                (server_count as u64 * 2000).min(10000),
+            ))
+            .await;
         }
 
         hub.get_servers()
@@ -989,14 +1015,13 @@ impl RooInProcessAdapter {
         // server connections are collected before spawning the thread.
         // If MCP loading fails, we gracefully fall back to empty servers.
 
-        let mut agent_loop =
-            AgentLoop::new(engine, provider, message_builder, dispatcher)
-                .with_config(loop_config)
-                .with_roo_ignore_controller(ignore_controller)
-                .with_roo_protected_controller(protected_controller)
-                .with_file_context_tracker(context_tracker)
-                .with_diff_view_provider(diff_view_provider)
-                .with_mcp_servers(mcp_servers);
+        let mut agent_loop = AgentLoop::new(engine, provider, message_builder, dispatcher)
+            .with_config(loop_config)
+            .with_roo_ignore_controller(ignore_controller)
+            .with_roo_protected_controller(protected_controller)
+            .with_file_context_tracker(context_tracker)
+            .with_diff_view_provider(diff_view_provider)
+            .with_mcp_servers(mcp_servers);
 
         // Wire the adapter's cancellation token to the AgentLoop's internal token
         // so that cancel() from the GUI propagates into the running agent loop.
@@ -1152,9 +1177,7 @@ impl AgentAdapter for RooInProcessAdapter {
 
         // Build provider
         let provider = build_handler(
-            self.provider_name
-                .as_deref()
-                .unwrap_or("anthropic"),
+            self.provider_name.as_deref().unwrap_or("anthropic"),
             self.api_key.as_deref(),
             self.base_url.as_deref(),
             self.model.as_deref(),
@@ -1243,10 +1266,14 @@ impl AgentAdapter for RooInProcessAdapter {
                     "Roo agent panicked",
                     panic_payload,
                 );
-                tracing::error!(error = match &event {
-                    rc_agent_protocol::events::UnifiedAgentEvent::Error { message, .. } => message.clone(),
-                    _ => unreachable!(),
-                }, "Roo agent loop panicked — isolated to thread");
+                tracing::error!(
+                    error = match &event {
+                        rc_agent_protocol::events::UnifiedAgentEvent::Error { message, .. } =>
+                            message.clone(),
+                        _ => unreachable!(),
+                    },
+                    "Roo agent loop panicked — isolated to thread"
+                );
                 let _ = panic_tx.blocking_send(event);
             }
         });
@@ -1299,7 +1326,10 @@ impl AgentAdapter for RooInProcessAdapter {
         request_id: &str,
         decision: PermissionDecision,
     ) -> anyhow::Result<()> {
-        let approved = matches!(decision, PermissionDecision::Allow | PermissionDecision::AllowAll);
+        let approved = matches!(
+            decision,
+            PermissionDecision::Allow | PermissionDecision::AllowAll
+        );
         self.resolve_roo_approval(request_id, approved).await
     }
 
@@ -1323,10 +1353,11 @@ impl AgentAdapter for RooInProcessAdapter {
     }
 
     fn is_alive(&self) -> bool {
-        matches!(
-            self.status,
-            AgentStatus::Ready | AgentStatus::Busy
-        ) && self.worker_handle.as_ref().is_some_and(|h| !h.is_finished())
+        matches!(self.status, AgentStatus::Ready | AgentStatus::Busy)
+            && self
+                .worker_handle
+                .as_ref()
+                .is_some_and(|h| !h.is_finished())
     }
 
     fn info(&self) -> &AgentInfo {
@@ -1413,10 +1444,21 @@ mod tests {
             delta: "partial".into(),
         };
         let result = map_task_event(&event, SID).expect("should map");
-        if let UnifiedAgentEvent::ToolCallProgress { tool_name, progress, .. } = &result {
+        if let UnifiedAgentEvent::ToolCallProgress {
+            tool_name,
+            progress,
+            ..
+        } = &result
+        {
             assert_eq!(tool_name, "");
-            assert!(progress.contains("tc-1"), "progress should contain tool_id: {progress}");
-            assert!(progress.contains("partial"), "progress should contain delta: {progress}");
+            assert!(
+                progress.contains("tc-1"),
+                "progress should contain tool_id: {progress}"
+            );
+            assert!(
+                progress.contains("partial"),
+                "progress should contain delta: {progress}"
+            );
         } else {
             panic!("expected ToolCallProgress");
         }
@@ -1431,7 +1473,10 @@ mod tests {
             success: true,
         };
         let result = map_task_event(&event, SID).expect("should map");
-        if let UnifiedAgentEvent::ToolCallCompleted { tool_name, result, .. } = &result {
+        if let UnifiedAgentEvent::ToolCallCompleted {
+            tool_name, result, ..
+        } = &result
+        {
             assert_eq!(tool_name, "bash");
             assert_eq!(result["success"], true);
         } else {
@@ -1441,7 +1486,9 @@ mod tests {
 
     #[test]
     fn streaming_completed_returns_none() {
-        let event = RooTaskEvent::StreamingCompleted { task_id: "t1".into() };
+        let event = RooTaskEvent::StreamingCompleted {
+            task_id: "t1".into(),
+        };
         assert!(map_task_event(&event, SID).is_none());
     }
 
@@ -1449,7 +1496,9 @@ mod tests {
 
     #[test]
     fn task_started_maps_to_started_with_capabilities() {
-        let event = RooTaskEvent::TaskStarted { task_id: "t1".into() };
+        let event = RooTaskEvent::TaskStarted {
+            task_id: "t1".into(),
+        };
         let result = map_task_event(&event, SID).expect("should map");
         if let UnifiedAgentEvent::Started(info) = &result {
             assert!(info.capabilities.len() >= 5);
@@ -1477,7 +1526,12 @@ mod tests {
             reason: Some("user cancelled".into()),
         };
         let result = map_task_event(&event, SID).expect("should map");
-        if let UnifiedAgentEvent::Error { message, recoverable, .. } = &result {
+        if let UnifiedAgentEvent::Error {
+            message,
+            recoverable,
+            ..
+        } = &result
+        {
             assert_eq!(message, "user cancelled");
             assert!(!recoverable);
         } else {
@@ -1508,7 +1562,10 @@ mod tests {
             messages_removed: 15,
         };
         let result = map_task_event(&event, SID).expect("should map");
-        if let UnifiedAgentEvent::ContextCompacted { entries_removed, .. } = &result {
+        if let UnifiedAgentEvent::ContextCompacted {
+            entries_removed, ..
+        } = &result
+        {
             assert_eq!(*entries_removed, 15);
         } else {
             panic!("expected ContextCompacted");
@@ -1522,7 +1579,10 @@ mod tests {
             messages_removed: 30,
         };
         let result = map_task_event(&event, SID).expect("should map");
-        if let UnifiedAgentEvent::ContextCompacted { entries_removed, .. } = &result {
+        if let UnifiedAgentEvent::ContextCompacted {
+            entries_removed, ..
+        } = &result
+        {
             assert_eq!(*entries_removed, 30);
         } else {
             panic!("expected ContextCompacted");
@@ -1573,7 +1633,12 @@ mod tests {
         };
         let result = map_task_event(&event, SID).expect("should map");
         match result {
-            UnifiedAgentEvent::PermissionRequest { request_id, tool_name, input, .. } => {
+            UnifiedAgentEvent::PermissionRequest {
+                request_id,
+                tool_name,
+                input,
+                ..
+            } => {
                 assert_eq!(request_id, "tc-1");
                 assert_eq!(tool_name, "bash");
                 assert_eq!(input["reason"], "dangerous command");
@@ -1622,7 +1687,12 @@ mod tests {
             error: "something broke".into(),
         };
         let result = map_task_event(&event, SID).expect("should map");
-        if let UnifiedAgentEvent::Error { message, recoverable, .. } = &result {
+        if let UnifiedAgentEvent::Error {
+            message,
+            recoverable,
+            ..
+        } = &result
+        {
             assert_eq!(message, "something broke");
             assert!(recoverable);
         } else {
@@ -1638,7 +1708,12 @@ mod tests {
             error: "exit code 1".into(),
         };
         let result = map_task_event(&event, SID).expect("should map");
-        if let UnifiedAgentEvent::Error { message, recoverable, .. } = &result {
+        if let UnifiedAgentEvent::Error {
+            message,
+            recoverable,
+            ..
+        } = &result
+        {
             assert!(message.contains("bash"));
             assert!(message.contains("exit code 1"));
             assert!(recoverable);
@@ -1655,7 +1730,12 @@ mod tests {
             error: "file not found".into(),
         };
         let result = map_task_event(&event, SID).expect("should map");
-        if let UnifiedAgentEvent::Error { message, recoverable, .. } = &result {
+        if let UnifiedAgentEvent::Error {
+            message,
+            recoverable,
+            ..
+        } = &result
+        {
             assert!(message.contains("edit_file"));
             assert!(message.contains("file not found"));
             assert!(recoverable);
@@ -1674,7 +1754,12 @@ mod tests {
             retry_attempt: 2,
         };
         let result = map_task_event(&event, SID).expect("should map");
-        if let UnifiedAgentEvent::ToolCallProgress { tool_name, progress, .. } = &result {
+        if let UnifiedAgentEvent::ToolCallProgress {
+            tool_name,
+            progress,
+            ..
+        } = &result
+        {
             assert_eq!(tool_name, "api_retry");
             assert!(progress.contains("5s"));
             assert!(progress.contains("attempt 2"));
@@ -1696,7 +1781,9 @@ mod tests {
 
     #[test]
     fn api_request_started_returns_none() {
-        let event = RooTaskEvent::ApiRequestStarted { task_id: "t1".into() };
+        let event = RooTaskEvent::ApiRequestStarted {
+            task_id: "t1".into(),
+        };
         assert!(map_task_event(&event, SID).is_none());
     }
 
@@ -1752,13 +1839,17 @@ mod tests {
 
     #[test]
     fn task_created_returns_none() {
-        let event = RooTaskEvent::TaskCreated { task_id: "t1".into() };
+        let event = RooTaskEvent::TaskCreated {
+            task_id: "t1".into(),
+        };
         assert!(map_task_event(&event, SID).is_none());
     }
 
     #[test]
     fn mode_changed_returns_none() {
-        let event = RooTaskEvent::ModeChanged { mode: "architect".into() };
+        let event = RooTaskEvent::ModeChanged {
+            mode: "architect".into(),
+        };
         assert!(map_task_event(&event, SID).is_none());
     }
 
@@ -1825,11 +1916,12 @@ mod tests {
         // Now verify the recovery pattern used in resolve_roo_approval:
         //   handle.lock().unwrap_or_else(|e| e.into_inner())
         // This must succeed (not panic) and give access to the inner data.
-        let guard = handle
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let guard = handle.lock().unwrap_or_else(|e| e.into_inner());
         // The sender is still present; we just verify the guard is usable.
-        assert!(guard.is_some(), "sender should still be present after poisoning");
+        assert!(
+            guard.is_some(),
+            "sender should still be present after poisoning"
+        );
     }
 
     // ── TC-06: MCP server loading / merging ─────────────────────────
@@ -1901,7 +1993,10 @@ mod tests {
         let result = adapter
             .resolve_permission("sid", "req-1", PermissionDecision::Allow)
             .await;
-        assert!(result.is_ok(), "resolve_permission should succeed for Allow");
+        assert!(
+            result.is_ok(),
+            "resolve_permission should succeed for Allow"
+        );
 
         // The oneshot sender should have been consumed and sent `true`.
         let approved = rx.await.expect("receiver should get a value");
@@ -1921,7 +2016,10 @@ mod tests {
         let result = adapter
             .resolve_permission("sid", "req-1", PermissionDecision::AllowAll)
             .await;
-        assert!(result.is_ok(), "resolve_permission should succeed for AllowAll");
+        assert!(
+            result.is_ok(),
+            "resolve_permission should succeed for AllowAll"
+        );
 
         let approved = rx.await.expect("receiver should get a value");
         assert!(approved, "AllowAll decision should resolve as true");

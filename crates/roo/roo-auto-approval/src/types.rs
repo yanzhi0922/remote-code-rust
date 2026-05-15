@@ -152,7 +152,6 @@ pub struct AutoApprovalState {
     pub denied_commands: Vec<String>,
 
     // --- Limit fields (from GlobalState in TS) ---
-
     /// Maximum number of consecutive auto-approved API requests before
     /// requiring manual approval. Maps to `state?.allowedMaxRequests`.
     ///
@@ -166,7 +165,6 @@ pub struct AutoApprovalState {
     pub allowed_max_cost: Option<f64>,
 
     // --- Runtime tracking counters ---
-
     /// Current count of consecutive auto-approved requests.
     /// Updated by `check_auto_approval_limits()`.
     pub current_request_count: u32,

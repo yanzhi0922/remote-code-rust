@@ -51,7 +51,9 @@ impl CodeIndexServiceFactory {
                     .open_ai_options
                     .as_ref()
                     .and_then(|o| o.open_ai_native_api_key.clone())
-                    .ok_or_else(|| IndexError::GeneralError("OpenAI API key is required".to_string()))?,
+                    .ok_or_else(|| {
+                        IndexError::GeneralError("OpenAI API key is required".to_string())
+                    })?,
                 model_id: config.model_id.clone(),
             },
             EmbedderProvider::Ollama => EmbedderConfig::Ollama {
@@ -59,16 +61,17 @@ impl CodeIndexServiceFactory {
                     .ollama_options
                     .as_ref()
                     .and_then(|o| o.ollama_base_url.clone())
-                    .ok_or_else(|| IndexError::GeneralError("Ollama base URL is required".to_string()))?,
+                    .ok_or_else(|| {
+                        IndexError::GeneralError("Ollama base URL is required".to_string())
+                    })?,
                 model_id: config.model_id.clone(),
             },
             EmbedderProvider::OpenaiCompatible => {
-                let opts = config
-                    .open_ai_compatible_options
-                    .as_ref()
-                    .ok_or_else(|| {
-                        IndexError::GeneralError("OpenAI Compatible configuration is required".to_string())
-                    })?;
+                let opts = config.open_ai_compatible_options.as_ref().ok_or_else(|| {
+                    IndexError::GeneralError(
+                        "OpenAI Compatible configuration is required".to_string(),
+                    )
+                })?;
                 EmbedderConfig::OpenaiCompatible {
                     base_url: opts.base_url.clone(),
                     api_key: opts.api_key.clone(),
@@ -76,24 +79,21 @@ impl CodeIndexServiceFactory {
                 }
             }
             EmbedderProvider::Gemini => EmbedderConfig::Gemini {
-                api_key: config
-                    .gemini_api_key
-                    .clone()
-                    .ok_or_else(|| IndexError::GeneralError("Gemini API key is required".to_string()))?,
+                api_key: config.gemini_api_key.clone().ok_or_else(|| {
+                    IndexError::GeneralError("Gemini API key is required".to_string())
+                })?,
                 model_id: config.model_id.clone(),
             },
             EmbedderProvider::Mistral => EmbedderConfig::Mistral {
-                api_key: config
-                    .mistral_api_key
-                    .clone()
-                    .ok_or_else(|| IndexError::GeneralError("Mistral API key is required".to_string()))?,
+                api_key: config.mistral_api_key.clone().ok_or_else(|| {
+                    IndexError::GeneralError("Mistral API key is required".to_string())
+                })?,
                 model_id: config.model_id.clone(),
             },
             EmbedderProvider::Bedrock => {
-                let opts = config
-                    .bedrock_options
-                    .as_ref()
-                    .ok_or_else(|| IndexError::GeneralError("Bedrock configuration is required".to_string()))?;
+                let opts = config.bedrock_options.as_ref().ok_or_else(|| {
+                    IndexError::GeneralError("Bedrock configuration is required".to_string())
+                })?;
                 EmbedderConfig::Bedrock {
                     region: opts.region.clone(),
                     profile: opts.profile.clone(),
@@ -105,7 +105,9 @@ impl CodeIndexServiceFactory {
                     .open_router_options
                     .as_ref()
                     .map(|o| o.api_key.clone())
-                    .ok_or_else(|| IndexError::GeneralError("OpenRouter API key is required".to_string()))?,
+                    .ok_or_else(|| {
+                        IndexError::GeneralError("OpenRouter API key is required".to_string())
+                    })?,
                 model_id: config.model_id.clone(),
                 specific_provider: config
                     .open_router_options
@@ -114,10 +116,9 @@ impl CodeIndexServiceFactory {
             },
             EmbedderProvider::VercelAiGateway => {
                 // VercelAiGateway uses OpenAI-compatible endpoint
-                let api_key = config
-                    .vercel_ai_gateway_api_key
-                    .clone()
-                    .ok_or_else(|| IndexError::GeneralError("Vercel AI Gateway API key is required".to_string()))?;
+                let api_key = config.vercel_ai_gateway_api_key.clone().ok_or_else(|| {
+                    IndexError::GeneralError("Vercel AI Gateway API key is required".to_string())
+                })?;
                 EmbedderConfig::OpenaiCompatible {
                     base_url: "https://ai-gateway.vercel.com/v1".to_string(),
                     api_key,
@@ -205,11 +206,7 @@ mod tests {
         let mut cache_manager = CacheManager::new(&cache_dir, "/test/workspace");
         let _ = cache_manager.initialize();
 
-        CodeIndexServiceFactory::new(
-            config_manager,
-            "/test/workspace".to_string(),
-            cache_manager,
-        )
+        CodeIndexServiceFactory::new(config_manager, "/test/workspace".to_string(), cache_manager)
     }
 
     #[test]
@@ -231,7 +228,9 @@ mod tests {
     fn test_create_file_processor() {
         let factory = create_test_factory();
         let processor = factory.create_file_processor();
-        let result = processor.process_file("test.rs", "fn main() {\n    x();\n    y();\n}").unwrap();
+        let result = processor
+            .process_file("test.rs", "fn main() {\n    x();\n    y();\n}")
+            .unwrap();
         assert_eq!(result.file_path, "test.rs");
     }
 

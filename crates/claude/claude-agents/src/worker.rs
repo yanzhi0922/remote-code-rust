@@ -24,9 +24,7 @@ use crate::coordinator::{
 };
 use crate::definition::AgentDefinition;
 use crate::runner::{AgentRunConfig, AgentRunResult, UsageSummary};
-use crate::transcript::{
-    TranscriptMessage, persist_transcript, persist_transcript_from_result,
-};
+use crate::transcript::{TranscriptMessage, persist_transcript, persist_transcript_from_result};
 
 /// The worker agent type identifier.
 pub const WORKER_AGENT: &str = "worker";
@@ -300,7 +298,8 @@ impl WorkerAgent {
     /// Call this as messages arrive during the worker's execution so that
     /// the transcript is available when the worker finishes.
     pub fn add_transcript_message(&mut self, role: impl Into<String>, content: impl Into<String>) {
-        self.transcript_messages.push(TranscriptMessage::new(role, content));
+        self.transcript_messages
+            .push(TranscriptMessage::new(role, content));
     }
 
     /// Try to persist the transcript to disk.
@@ -748,7 +747,10 @@ mod tests {
 
         // Transcript file should exist
         let transcript_path = dir.path().join("transcripts").join("w-auto.json");
-        assert!(transcript_path.exists(), "transcript file should be created");
+        assert!(
+            transcript_path.exists(),
+            "transcript file should be created"
+        );
 
         let loaded: crate::transcript::SubagentTranscript =
             serde_json::from_str(&std::fs::read_to_string(&transcript_path).expect("read"))

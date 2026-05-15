@@ -17,9 +17,9 @@ use anyhow::{Context, Result, anyhow};
 use rc_agent_protocol::adapter::AgentAdapter;
 use rc_agent_protocol::events::UnifiedAgentEvent;
 use rc_agent_protocol::types::{AgentConfig, AgentType};
-use rc_engine_events::types::{RuntimeEventCreateRequest, RuntimeEventDetail};
 use rc_claude_adapter::ClaudeInProcessAdapter;
 use rc_codex_adapter::CodexInProcessAdapter;
+use rc_engine_events::types::{RuntimeEventCreateRequest, RuntimeEventDetail};
 use rc_roo_adapter::RooInProcessAdapter;
 use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Emitter, Manager};
@@ -29,9 +29,9 @@ use uuid::Uuid;
 
 use claude_control_plane::RunnerCommandPullResponse;
 use claude_runner::{
-    RunnerApi, RunnerApiEvent, RunnerConfig,
-    RunnerConfigOverrides, RunnerSessionCommandRequest, RunnerSessionRecord,
-    load_runner_config, register_with_control_plane, send_heartbeat,
+    RUNNER_EVENT_CHANNEL_CAPACITY, RunnerApi, RunnerApiEvent, RunnerConfig, RunnerConfigOverrides,
+    RunnerSessionCommandRequest, RunnerSessionRecord, load_runner_config,
+    register_with_control_plane, send_heartbeat,
 };
 
 // ─── Public API ─────────────────────────────────────────────────────────────
@@ -67,7 +67,8 @@ pub fn start_remote_service(app: AppHandle) {
 fn get_remote_password_hash(app: &AppHandle) -> Option<String> {
     let dir: std::path::PathBuf = app.path().app_config_dir().ok()?;
     let path = dir.join("remote_password_hash.txt");
-    std::fs::read_to_string(path).ok()
+    std::fs::read_to_string(path)
+        .ok()
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
 }
@@ -76,7 +77,8 @@ fn get_remote_password_hash(app: &AppHandle) -> Option<String> {
 fn get_remote_username(app: &AppHandle) -> Option<String> {
     let dir: std::path::PathBuf = app.path().app_config_dir().ok()?;
     let path = dir.join("remote_username.txt");
-    std::fs::read_to_string(path).ok()
+    std::fs::read_to_string(path)
+        .ok()
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
 }
@@ -96,7 +98,9 @@ fn derive_user_key(username: &str, password: &str) -> String {
 
 /// Save the remote control password (stored as SHA-256 hash).
 pub fn set_remote_password(app: &AppHandle, password: &str) -> Result<()> {
-    let dir: std::path::PathBuf = app.path().app_config_dir()
+    let dir: std::path::PathBuf = app
+        .path()
+        .app_config_dir()
         .context("failed to get app config dir")?;
     std::fs::create_dir_all(&dir)?;
     let path = dir.join("remote_password_hash.txt");
@@ -106,7 +110,9 @@ pub fn set_remote_password(app: &AppHandle, password: &str) -> Result<()> {
 
 /// Save the remote control username.
 pub fn set_remote_username(app: &AppHandle, username: &str) -> Result<()> {
-    let dir: std::path::PathBuf = app.path().app_config_dir()
+    let dir: std::path::PathBuf = app
+        .path()
+        .app_config_dir()
         .context("failed to get app config dir")?;
     std::fs::create_dir_all(&dir)?;
     let path = dir.join("remote_username.txt");
@@ -140,14 +146,17 @@ pub fn verify_remote_password(app: &AppHandle, provided: &str) -> bool {
 pub fn get_remote_user_key(app: &AppHandle) -> Option<String> {
     let dir: std::path::PathBuf = app.path().app_config_dir().ok()?;
     let path = dir.join("remote_user_key.txt");
-    std::fs::read_to_string(path).ok()
+    std::fs::read_to_string(path)
+        .ok()
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
 }
 
 /// Save the derived user_key for use as auth token.
 fn save_remote_user_key(app: &AppHandle, user_key: &str) -> Result<()> {
-    let dir: std::path::PathBuf = app.path().app_config_dir()
+    let dir: std::path::PathBuf = app
+        .path()
+        .app_config_dir()
         .context("failed to get app config dir")?;
     std::fs::create_dir_all(&dir)?;
     let path = dir.join("remote_user_key.txt");
@@ -207,7 +216,11 @@ pub fn remote_set_username(app: AppHandle, username: String) -> Result<(), Strin
 
 /// Set both username and password together, deriving the user_key.
 #[tauri::command]
-pub fn remote_set_credentials(app: AppHandle, username: String, password: String) -> Result<(), String> {
+pub fn remote_set_credentials(
+    app: AppHandle,
+    username: String,
+    password: String,
+) -> Result<(), String> {
     let username = username.trim().to_string();
     if username.is_empty() {
         return Err("Username cannot be empty".to_string());
@@ -253,7 +266,9 @@ async fn run_remote_service(app: AppHandle) -> Result<()> {
         .filter(|s| !s.is_empty());
 
     let config = load_runner_config(
-        std::env::var("REMOTE_CODE_PROFILE_DIR").ok().map(PathBuf::from),
+        std::env::var("REMOTE_CODE_PROFILE_DIR")
+            .ok()
+            .map(PathBuf::from),
         RunnerConfigOverrides {
             runner_id: std::env::var("REMOTE_CODE_RUNNER_ID").ok(),
             control_plane_url: std::env::var("REMOTE_CODE_CONTROL_PLANE_URL").ok(),
@@ -272,7 +287,7 @@ async fn run_remote_service(app: AppHandle) -> Result<()> {
     let cp_url = config.control_plane_url.clone().unwrap_or_default();
     let auth = config.auth_token.clone().unwrap_or_default();
 
-    let (event_tx, event_rx) = mpsc::unbounded_channel();
+    let (event_tx, event_rx) = mpsc::channel(RUNNER_EVENT_CHANNEL_CAPACITY);
     let api = RunnerApi::new(config.clone(), "remote-code-gui", env!("CARGO_PKG_VERSION"))
         .with_event_channel(event_tx);
 
@@ -283,26 +298,33 @@ async fn run_remote_service(app: AppHandle) -> Result<()> {
 
     // Control plane sync (registration + heartbeat).
     let cp_sync_shutdown = shutdown_tx.subscribe();
-    tokio::spawn(run_control_plane_sync(api.clone(), config.clone(), cp_sync_shutdown));
+    tokio::spawn(run_control_plane_sync(
+        api.clone(),
+        config.clone(),
+        cp_sync_shutdown,
+    ));
 
     // In-process session manager — uses the same adapters as the desktop GUI.
-    let manager = InProcessSessionManager::new(
-        app.clone(),
-        api.clone(),
-        profile_dir,
-        event_uploader,
-    );
+    let manager =
+        InProcessSessionManager::new(app.clone(), api.clone(), profile_dir, event_uploader);
     tokio::spawn(manager.run(event_rx, shutdown_tx.subscribe()));
 
     // Outbound poll loop.
     let poll_shutdown = shutdown_tx.subscribe();
-    tokio::spawn(run_outbound_poll_loop(api.clone(), config.clone(), poll_shutdown));
+    tokio::spawn(run_outbound_poll_loop(
+        api.clone(),
+        config.clone(),
+        poll_shutdown,
+    ));
 
     // Notify frontend that remote service is running.
-    let _ = app.emit("remote-service-status", serde_json::json!({
-        "status": "running",
-        "runner_id": config.runner_id,
-    }));
+    let _ = app.emit(
+        "remote-service-status",
+        serde_json::json!({
+            "status": "running",
+            "runner_id": config.runner_id,
+        }),
+    );
 
     // Keep alive until app shutdown.
     let mut wait_shutdown = shutdown_tx.subscribe();
@@ -333,7 +355,12 @@ struct InProcessSession {
 }
 
 impl InProcessSessionManager {
-    fn new(app: AppHandle, api: RunnerApi, profile_dir: PathBuf, event_uploader: Arc<EventUploader>) -> Self {
+    fn new(
+        app: AppHandle,
+        api: RunnerApi,
+        profile_dir: PathBuf,
+        event_uploader: Arc<EventUploader>,
+    ) -> Self {
         Self {
             app,
             api,
@@ -348,7 +375,7 @@ impl InProcessSessionManager {
 
     async fn run(
         self,
-        mut event_rx: mpsc::UnboundedReceiver<RunnerApiEvent>,
+        mut event_rx: mpsc::Receiver<RunnerApiEvent>,
         mut shutdown: watch::Receiver<bool>,
     ) {
         loop {
@@ -370,12 +397,11 @@ impl InProcessSessionManager {
 
     async fn handle_event(&self, event: RunnerApiEvent) -> Result<()> {
         match event {
-            RunnerApiEvent::SessionCreated(session) => {
-                self.create_session(session).await
-            }
-            RunnerApiEvent::SessionCommand { session_id, command } => {
-                self.forward_command(session_id, command).await
-            }
+            RunnerApiEvent::SessionCreated(session) => self.create_session(session).await,
+            RunnerApiEvent::SessionCommand {
+                session_id,
+                command,
+            } => self.forward_command(session_id, command).await,
             RunnerApiEvent::ApprovalResolved(approval) => {
                 info!("Remote approval resolved: {:?}", approval.approval_id);
                 Ok(())
@@ -391,12 +417,18 @@ impl InProcessSessionManager {
         // Password pairing verification.
         if let Some(provided) = session.metadata.get("pairing_password") {
             if !verify_remote_password(&self.app, provided) {
-                warn!("Remote session {} rejected: password mismatch", session.session_id);
+                warn!(
+                    "Remote session {} rejected: password mismatch",
+                    session.session_id
+                );
                 return Err(anyhow!("pairing password mismatch"));
             }
         } else if get_remote_password_hash(&self.app).is_some() {
             // Password is set on this PC but not provided by remote.
-            warn!("Remote session {} rejected: no password provided", session.session_id);
+            warn!(
+                "Remote session {} rejected: no password provided",
+                session.session_id
+            );
             return Err(anyhow!("pairing password required"));
         }
 
@@ -432,13 +464,19 @@ impl InProcessSessionManager {
             .unwrap_or("claude-sonnet-4-20250514")
             .to_string();
 
-        info!("Remote session {} ({:?}) for {}", sid, agent_type, workspace_dir.display());
+        info!(
+            "Remote session {} ({:?}) for {}",
+            sid,
+            agent_type,
+            workspace_dir.display()
+        );
 
         match agent_type {
             AgentType::RemoteClaude => {
                 let mut adapters = self.claude_adapters.lock().await;
                 if !adapters.contains_key(&sid) {
-                    let app_paths = claude_config::AppPaths::discover(Some(self.profile_dir.clone()))?;
+                    let app_paths =
+                        claude_config::AppPaths::discover(Some(self.profile_dir.clone()))?;
                     app_paths.ensure_exists()?;
                     let store = claude_session::SessionStore::open(app_paths.clone())?;
                     let runtime_config = claude_config::load_runtime_config(
@@ -448,7 +486,11 @@ impl InProcessSessionManager {
                         claude_core::PermissionMode::default(),
                         Default::default(),
                         Default::default(),
-                        false, false, false, false, 64,
+                        false,
+                        false,
+                        false,
+                        false,
+                        64,
                         claude_config::ProviderOverrides {
                             model: Some(model.clone()),
                             ..Default::default()
@@ -467,7 +509,10 @@ impl InProcessSessionManager {
                         api_key: None,
                         base_url: None,
                     };
-                    adapter.start(&agent_config).await.map_err(|e| anyhow!("Claude start: {e}"))?;
+                    adapter
+                        .start(&agent_config)
+                        .await
+                        .map_err(|e| anyhow!("Claude start: {e}"))?;
                     adapters.insert(sid.clone(), adapter);
                 }
             }
@@ -477,14 +522,19 @@ impl InProcessSessionManager {
                     let mut adapter = RooInProcessAdapter::new();
                     let agent_config = AgentConfig {
                         agent_type: AgentType::RemoteRoo,
-                        binary_path: None, args: Vec::new(), env: Vec::new(),
+                        binary_path: None,
+                        args: Vec::new(),
+                        env: Vec::new(),
                         working_dir: Some(workspace_dir.clone()),
                         model: Some(model.clone()),
                         provider: Some("anthropic".to_string()),
                         api_key: std::env::var("ANTHROPIC_API_KEY").ok(),
                         base_url: None,
                     };
-                    adapter.start(&agent_config).await.map_err(|e| anyhow!("Roo start: {e}"))?;
+                    adapter
+                        .start(&agent_config)
+                        .await
+                        .map_err(|e| anyhow!("Roo start: {e}"))?;
                     adapters.insert(sid.clone(), adapter);
                 }
             }
@@ -496,23 +546,30 @@ impl InProcessSessionManager {
                         model: Some(model.clone()),
                         ..Default::default()
                     };
-                    let adapter = CodexInProcessAdapter::start_in_process_with_options(options).await
+                    let adapter = CodexInProcessAdapter::start_in_process_with_options(options)
+                        .await
                         .map_err(|e| anyhow!("Codex start: {e}"))?;
                     adapters.insert(sid.clone(), adapter);
                 }
             }
         }
 
-        self.sessions.lock().await.insert(session.session_id, InProcessSession {
-            agent_type,
-            workspace_dir,
-            model,
-        });
+        self.sessions.lock().await.insert(
+            session.session_id,
+            InProcessSession {
+                agent_type,
+                workspace_dir,
+                model,
+            },
+        );
 
         // Notify frontend about new remote session.
-        let _ = self.app.emit("remote-session-created", serde_json::json!({
-            "session_id": sid,
-        }));
+        let _ = self.app.emit(
+            "remote-session-created",
+            serde_json::json!({
+                "session_id": sid,
+            }),
+        );
 
         Ok(())
     }
@@ -540,29 +597,41 @@ impl InProcessSessionManager {
 
         let agent_type = {
             let s = sessions_map.lock().await;
-            s.get(&session_id).map(|s| s.agent_type).unwrap_or(AgentType::RemoteClaude)
+            s.get(&session_id)
+                .map(|s| s.agent_type)
+                .unwrap_or(AgentType::RemoteClaude)
         };
 
         tokio::spawn(async move {
-            let result: Result<mpsc::Receiver<UnifiedAgentEvent>, anyhow::Error> = match agent_type {
+            let result: Result<mpsc::Receiver<UnifiedAgentEvent>, anyhow::Error> = match agent_type
+            {
                 AgentType::RemoteClaude => {
                     let mut adapters = claude_adapters.lock().await;
                     match adapters.get_mut(&sid) {
-                        Some(a) => a.send_message(&sid, &prompt).await.map_err(|e| anyhow!("{e}")),
+                        Some(a) => a
+                            .send_message(&sid, &prompt)
+                            .await
+                            .map_err(|e| anyhow!("{e}")),
                         None => Err(anyhow!("adapter not started")),
                     }
                 }
                 AgentType::RemoteRoo => {
                     let mut adapters = roo_adapters.lock().await;
                     match adapters.get_mut(&sid) {
-                        Some(a) => a.send_message(&sid, &prompt).await.map_err(|e| anyhow!("{e}")),
+                        Some(a) => a
+                            .send_message(&sid, &prompt)
+                            .await
+                            .map_err(|e| anyhow!("{e}")),
                         None => Err(anyhow!("adapter not started")),
                     }
                 }
                 AgentType::RemoteCodex => {
                     let mut adapters = codex_adapters.lock().await;
                     match adapters.get_mut(&sid) {
-                        Some(a) => a.send_message(&sid, &prompt).await.map_err(|e| anyhow!("{e}")),
+                        Some(a) => a
+                            .send_message(&sid, &prompt)
+                            .await
+                            .map_err(|e| anyhow!("{e}")),
                         None => Err(anyhow!("adapter not started")),
                     }
                 }
@@ -574,7 +643,9 @@ impl InProcessSessionManager {
                         // Broadcast to local direct-connect subscribers.
                         api.process_agent_event(session_id, &event);
                         // Upload to control plane for mobile relay.
-                        if let Some(detail) = rc_agent_protocol::unified_event_to_runtime_detail(&event) {
+                        if let Some(detail) =
+                            rc_agent_protocol::unified_event_to_runtime_detail(&event)
+                        {
                             uploader.upload(session_id, detail).await;
                         }
                         // Also emit to Tauri frontend so desktop user sees it too.
@@ -624,7 +695,9 @@ impl EventUploader {
             .client
             .post(&url)
             .header("authorization", format!("Bearer {}", self.auth))
-            .json(&RuntimeEventCreateRequest { detail: detail.clone() })
+            .json(&RuntimeEventCreateRequest {
+                detail: detail.clone(),
+            })
             .timeout(Duration::from_secs(10))
             .send()
             .await;
@@ -656,7 +729,9 @@ impl EventUploader {
     async fn flush(&self, session_id: Uuid) {
         let events: Vec<RuntimeEventDetail> = {
             let mut buf = self.buffer.lock().await;
-            buf.remove(&session_id).map(|q| q.into_iter().collect()).unwrap_or_default()
+            buf.remove(&session_id)
+                .map(|q| q.into_iter().collect())
+                .unwrap_or_default()
         };
 
         for detail in events {
@@ -668,7 +743,9 @@ impl EventUploader {
                 .client
                 .post(&url)
                 .header("authorization", format!("Bearer {}", self.auth))
-                .json(&RuntimeEventCreateRequest { detail: detail.clone() })
+                .json(&RuntimeEventCreateRequest {
+                    detail: detail.clone(),
+                })
                 .timeout(Duration::from_secs(10))
                 .send()
                 .await;
@@ -693,7 +770,10 @@ async fn run_outbound_poll_loop(
 ) {
     let cp_url = match &config.control_plane_url {
         Some(url) => url.clone(),
-        None => { error!("no control_plane_url"); return; }
+        None => {
+            error!("no control_plane_url");
+            return;
+        }
     };
     let runner_id = &config.runner_id;
     let client = reqwest::Client::new();
@@ -702,7 +782,9 @@ async fn run_outbound_poll_loop(
     let mut retry_delay = Duration::from_secs(1);
 
     loop {
-        if shutdown.has_changed().unwrap_or(true) { break; }
+        if shutdown.has_changed().unwrap_or(true) {
+            break;
+        }
 
         let url = format!(
             "{cp_url}/v1/runners/{runner_id}/commands/pull?timeout={}",
@@ -722,7 +804,9 @@ async fn run_outbound_poll_loop(
                     retry_delay = Duration::from_secs(1);
                     if let Ok(body) = response.text().await {
                         if !body.is_empty() {
-                            if let Ok(cmd_response) = serde_json::from_str::<RunnerCommandPullResponse>(&body) {
+                            if let Ok(cmd_response) =
+                                serde_json::from_str::<RunnerCommandPullResponse>(&body)
+                            {
                                 if let Err(e) = apply_pulled_commands(&api, cmd_response).await {
                                     warn!("command processing failed: {e:#}");
                                 }
@@ -752,11 +836,18 @@ async fn apply_pulled_commands(api: &RunnerApi, response: RunnerCommandPullRespo
             RunnerQueuedCommandBody::CreateSession { request } => {
                 api.create_session_direct(request).await?;
             }
-            RunnerQueuedCommandBody::SessionCommand { session_id, request } => {
+            RunnerQueuedCommandBody::SessionCommand {
+                session_id,
+                request,
+            } => {
                 api.post_session_command_direct(session_id, request).await?;
             }
-            RunnerQueuedCommandBody::ApplyApprovalDecision { approval_id, request } => {
-                api.apply_approval_decision_direct(approval_id, request).await?;
+            RunnerQueuedCommandBody::ApplyApprovalDecision {
+                approval_id,
+                request,
+            } => {
+                api.apply_approval_decision_direct(approval_id, request)
+                    .await?;
             }
             _ => {}
         }

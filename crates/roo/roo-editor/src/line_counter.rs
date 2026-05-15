@@ -1,6 +1,5 @@
 /// Line counting utilities for files.
 /// Mirrors src/integrations/misc/line-counter.ts
-
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
@@ -117,7 +116,8 @@ mod tests {
     #[test]
     fn test_count_lines_and_tokens() {
         let file = create_test_file("hello world\nthis is a test\n");
-        let result = count_file_lines_and_tokens(file.path(), LineAndTokenCountOptions::default()).unwrap();
+        let result =
+            count_file_lines_and_tokens(file.path(), LineAndTokenCountOptions::default()).unwrap();
         assert_eq!(2, result.line_count);
         assert!(result.complete);
     }

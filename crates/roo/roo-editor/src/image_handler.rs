@@ -92,10 +92,7 @@ pub async fn save_image_to_temp(
 }
 
 /// Save image data to a specified file path.
-pub async fn save_image_to_file(
-    file_path: &Path,
-    data: &[u8],
-) -> Result<(), ImageHandlerError> {
+pub async fn save_image_to_file(file_path: &Path, data: &[u8]) -> Result<(), ImageHandlerError> {
     if let Some(parent) = file_path.parent() {
         tokio::fs::create_dir_all(parent).await?;
     }

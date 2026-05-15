@@ -54,19 +54,13 @@ impl SigV4Signer {
             "content-type:application/json\nhost:{}\nx-amz-content-sha256:{}\nx-amz-date:{}\n",
             host, payload_hash, amz_date
         );
-        let signed_headers =
-            "content-type;host;x-amz-content-sha256;x-amz-date".to_string();
+        let signed_headers = "content-type;host;x-amz-content-sha256;x-amz-date".to_string();
 
         let canonical_querystring = query.as_deref().unwrap_or("");
 
         let canonical_request = format!(
             "{}\n{}\n{}\n{}\n{}\n{}",
-            method,
-            path,
-            canonical_querystring,
-            canonical_headers,
-            signed_headers,
-            payload_hash
+            method, path, canonical_querystring, canonical_headers, signed_headers, payload_hash
         );
 
         // Step 2: Create string to sign
@@ -82,12 +76,8 @@ impl SigV4Signer {
         );
 
         // Step 3: Calculate signature
-        let signing_key = get_signature_key(
-            &self.secret_key,
-            &date_stamp,
-            &self.region,
-            &self.service,
-        );
+        let signing_key =
+            get_signature_key(&self.secret_key, &date_stamp, &self.region, &self.service);
         let signature = hmac_sha256(&signing_key, string_to_sign.as_bytes());
         let signature_hex = hex_encode(&signature);
 
@@ -142,13 +132,11 @@ fn hmac_sha256(key: &[u8], data: &[u8]) -> Vec<u8> {
     mac.finalize().into_bytes().to_vec()
 }
 
-fn get_signature_key(
-    secret_key: &str,
-    date_stamp: &str,
-    region: &str,
-    service: &str,
-) -> Vec<u8> {
-    let k_date = hmac_sha256(format!("AWS4{}", secret_key).as_bytes(), date_stamp.as_bytes());
+fn get_signature_key(secret_key: &str, date_stamp: &str, region: &str, service: &str) -> Vec<u8> {
+    let k_date = hmac_sha256(
+        format!("AWS4{}", secret_key).as_bytes(),
+        date_stamp.as_bytes(),
+    );
     let k_region = hmac_sha256(&k_date, region.as_bytes());
     let k_service = hmac_sha256(&k_region, service.as_bytes());
     hmac_sha256(&k_service, b"aws4_request")
@@ -234,9 +222,8 @@ mod tests {
 
     #[test]
     fn test_parse_url_with_query() {
-        let (host, path, query) = parse_url(
-            "https://bedrock-runtime.us-east-1.amazonaws.com/model/test?foo=bar",
-        );
+        let (host, path, query) =
+            parse_url("https://bedrock-runtime.us-east-1.amazonaws.com/model/test?foo=bar");
         assert_eq!(host, "bedrock-runtime.us-east-1.amazonaws.com");
         assert_eq!(path, "/model/test");
         assert_eq!(query, Some("foo=bar".to_string()));

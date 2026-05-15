@@ -65,12 +65,77 @@ export interface SessionExportResult {
   path: string;
 }
 
+// ── Git Panel (native) ──────────────────────────────────────────────
+
+export type GitFileStatusCode = 'M' | 'A' | 'D' | 'R' | 'C' | '?' | '!';
+
+export interface GitFileStatusInfo {
+  path: string;
+  status: GitFileStatusCode;
+  isStaged: boolean;
+}
+
+export interface GitStatusInfo {
+  branch: string | null;
+  files: GitFileStatusInfo[];
+  ahead: number;
+  behind: number;
+  hasChanges: boolean;
+}
+
+export interface GitBranchInfo {
+  name: string;
+  isCurrent: boolean;
+  isRemote: boolean;
+  upstream: string | null;
+  ahead: number;
+  behind: number;
+}
+
+export interface GitCommitInfo {
+  hash: string;
+  shortHash: string;
+  author: string;
+  email: string;
+  message: string;
+  timestamp: number;
+}
+
+export interface GitCommitResult {
+  hash: string;
+  shortHash: string;
+  filesChanged: number;
+  insertions: number;
+  deletions: number;
+}
+
+// ── Checkpoints (native) ────────────────────────────────────────────
+
+export interface CheckpointStatsInfo {
+  filesAdded: number;
+  filesModified: number;
+  filesDeleted: number;
+  linesAdded: number;
+  linesRemoved: number;
+}
+
+export interface CheckpointSummaryInfo {
+  id: string;
+  sessionId: string;
+  messageId: string;
+  messageIndex: number;
+  createdAt: string;
+  summary: string;
+  stats: CheckpointStatsInfo;
+}
+
 export type DoctorProbeOutcome =
   | 'reachable'
   | 'auth_rejected'
   | 'rate_limited'
   | 'server_error'
   | 'transport_error';
+
 
 export interface DoctorProbeInfo {
   label: string;

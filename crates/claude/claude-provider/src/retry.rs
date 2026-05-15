@@ -18,10 +18,11 @@
 //! - **529 Overloaded**: Retryable up to `max_529_retries` consecutive times.
 
 use anyhow::{Result, anyhow};
+use parking_lot::Mutex;
 use rand::Rng;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::time::sleep;
 use tracing::warn;
@@ -137,30 +138,27 @@ impl RetryContext {
 
     /// Set the `x-should-retry` response hint.
     pub fn set_should_retry(&self, value: bool) {
-        if let Ok(mut hints) = self.response_hints.lock() {
-            hints.should_retry = Some(value);
-        }
+        let mut hints = self.response_hints.lock();
+        hints.should_retry = Some(value);
     }
 
     /// Set the rate-limit wait duration hint.
     pub fn set_rate_limit_wait(&self, duration: Duration) {
-        if let Ok(mut hints) = self.response_hints.lock() {
-            hints.rate_limit_wait = Some(duration);
-        }
+        let mut hints = self.response_hints.lock();
+        hints.rate_limit_wait = Some(duration);
     }
 
     /// Populate response hints from an HTTP response's headers.
     pub fn populate_from_headers(&self, headers: &reqwest::header::HeaderMap) {
-        if let Ok(mut hints) = self.response_hints.lock() {
-            hints.should_retry = should_retry_from_header(headers);
-            hints.rate_limit_wait = get_rate_limit_wait_duration(headers);
-        }
+        let mut hints = self.response_hints.lock();
+        hints.should_retry = should_retry_from_header(headers);
+        hints.rate_limit_wait = get_rate_limit_wait_duration(headers);
     }
 }
 
 /// Helper to read a field from `SharedResponseHints` without panicking.
 fn read_hint<T>(hints: &SharedResponseHints, f: impl FnOnce(&ResponseHints) -> T) -> T {
-    let guard = hints.lock().unwrap_or_else(|e| e.into_inner());
+    let guard = hints.lock();
     f(&guard)
 }
 
@@ -291,9 +289,8 @@ pub fn is_persistent_retry_enabled() -> bool {
 ///
 /// The callback is invoked when a 401 Unauthorized error is encountered,
 /// allowing the caller to refresh OAuth tokens before the next retry attempt.
-pub type OAuthRefreshCallback = Box<
-    dyn Fn() -> Pin<Box<dyn Future<Output = Result<()>> + Send>> + Send + Sync,
->;
+pub type OAuthRefreshCallback =
+    Box<dyn Fn() -> Pin<Box<dyn Future<Output = Result<()>> + Send>> + Send + Sync>;
 
 // ---------------------------------------------------------------------------
 // Retry options (aggregated for with_retry_ext)
@@ -340,10 +337,7 @@ impl RetryOptions {
     #[must_use]
     pub fn with_auth_callback(
         mut self,
-        callback: impl Fn() -> Pin<Box<dyn Future<Output = Result<()>> + Send>>
-            + Send
-            + Sync
-            + 'static,
+        callback: impl Fn() -> Pin<Box<dyn Future<Output = Result<()>> + Send>> + Send + Sync + 'static,
     ) -> Self {
         self.on_auth_error = Some(Arc::new(Box::new(callback)));
         self
@@ -772,7 +766,9 @@ pub fn parse_max_tokens_overflow(body: &str) -> Option<u64> {
     let input_tokens: u64 = caps[1].parse().ok()?;
     let context_limit: u64 = caps[3].parse().ok()?;
     // New max_tokens = context_limit - input_tokens - buffer
-    let new_max = context_limit.saturating_sub(input_tokens).saturating_sub(1000);
+    let new_max = context_limit
+        .saturating_sub(input_tokens)
+        .saturating_sub(1000);
     if new_max < FLOOR_OUTPUT_TOKENS {
         return None;
     }
@@ -925,7 +921,8 @@ where
     for attempt in 0..=config.max_retries {
         context.attempt = attempt + 1;
         // Reset response hints for each attempt.
-        if let Ok(mut hints) = context.response_hints.lock() {
+        {
+            let mut hints = context.response_hints.lock();
             *hints = ResponseHints::default();
         }
 
@@ -1009,14 +1006,11 @@ where
                 }
 
                 // --- Gap 1: Fast mode cooldown on 429/529 ---
-                let is_529 = error_str.contains("529")
-                    || is_overloaded_error_body(error_str.as_bytes());
+                let is_529 =
+                    error_str.contains("529") || is_overloaded_error_body(error_str.as_bytes());
                 let is_429 = error_str.contains("429");
 
-                if was_fast_mode_active
-                    && !is_persistent_retry_enabled()
-                    && (is_429 || is_529)
-                {
+                if was_fast_mode_active && !is_persistent_retry_enabled() && (is_429 || is_529) {
                     // Check for a retry-after hint.
                     let retry_after_ms = read_hint(&context.response_hints, |h| {
                         h.rate_limit_wait.map(|d| d.as_millis() as u64)
@@ -1036,16 +1030,14 @@ where
                     }
 
                     // Long or unknown retry-after: enter cooldown.
-                    let cooldown_ms = std::cmp::max(
-                        retry_after_ms.unwrap_or(MIN_COOLDOWN_MS),
-                        MIN_COOLDOWN_MS,
-                    );
+                    let cooldown_ms =
+                        std::cmp::max(retry_after_ms.unwrap_or(MIN_COOLDOWN_MS), MIN_COOLDOWN_MS);
                     warn!(
                         attempt = attempt + 1,
-                        cooldown_ms,
-                        "fast mode: entering cooldown, switching to standard speed"
+                        cooldown_ms, "fast mode: entering cooldown, switching to standard speed"
                     );
-                    fast_mode_state.trigger_cooldown(Instant::now() + Duration::from_millis(cooldown_ms));
+                    fast_mode_state
+                        .trigger_cooldown(Instant::now() + Duration::from_millis(cooldown_ms));
                     context.fast_mode = false;
                     continue;
                 }
@@ -1098,19 +1090,20 @@ where
                 if error_str.contains("400")
                     && (error_str.contains("context limit")
                         || error_str.contains("prompt_too_long"))
-                    && let Some(new_max) = parse_max_tokens_overflow(&error_str) {
-                        warn!(
-                            attempt = attempt + 1,
-                            new_max_tokens = new_max,
-                            "context overflow detected, adjusting max_tokens"
-                        );
-                        context.max_tokens_override = Some(new_max as u32);
-                        if attempt < config.max_retries {
-                            let delay = compute_retry_delay(config, attempt, None);
-                            sleep(delay).await;
-                            continue;
-                        }
+                    && let Some(new_max) = parse_max_tokens_overflow(&error_str)
+                {
+                    warn!(
+                        attempt = attempt + 1,
+                        new_max_tokens = new_max,
+                        "context overflow detected, adjusting max_tokens"
+                    );
+                    context.max_tokens_override = Some(new_max as u32);
+                    if attempt < config.max_retries {
+                        let delay = compute_retry_delay(config, attempt, None);
+                        sleep(delay).await;
+                        continue;
                     }
+                }
 
                 // --- Gap 4: Persistent retry mode ---
                 let persistent = is_persistent_retry_enabled() && (is_429 || is_529);
@@ -1131,20 +1124,22 @@ where
 
                 let delay = if persistent {
                     persistent_attempt += 1;
-                    let base_delay = compute_retry_delay(
-                        config,
-                        persistent_attempt,
-                        retry_after_hint,
-                    );
+                    let base_delay =
+                        compute_retry_delay(config, persistent_attempt, retry_after_hint);
                     // Use persistent-specific max backoff.
-                    let capped = std::cmp::min(base_delay, Duration::from_millis(PERSISTENT_MAX_BACKOFF_MS));
+                    let capped =
+                        std::cmp::min(base_delay, Duration::from_millis(PERSISTENT_MAX_BACKOFF_MS));
                     std::cmp::min(capped, Duration::from_millis(PERSISTENT_RESET_CAP_MS))
                 } else {
                     compute_retry_delay(config, attempt, retry_after_hint)
                 };
 
                 warn!(
-                    attempt = if persistent { persistent_attempt } else { attempt + 1 },
+                    attempt = if persistent {
+                        persistent_attempt
+                    } else {
+                        attempt + 1
+                    },
                     max = config.max_retries,
                     delay_ms = delay.as_millis(),
                     persistent,
@@ -1220,8 +1215,8 @@ where
                 // Determine retryability: first check the overloaded body
                 // fallback (API may return non-529 status with overloaded_error
                 // in the body), then check standard retryable status codes.
-                let is_retryable = is_retryable_http_status(status)
-                    || is_overloaded_error_body(body.as_bytes());
+                let is_retryable =
+                    is_retryable_http_status(status) || is_overloaded_error_body(body.as_bytes());
 
                 if is_retryable && attempt < config.max_retries {
                     // For 429, prefer the rate-limit reset header over
@@ -1638,7 +1633,10 @@ mod tests {
             }
         })
         .await;
-        assert_eq!(result.expect("should succeed after header-forced retry"), "recovered");
+        assert_eq!(
+            result.expect("should succeed after header-forced retry"),
+            "recovered"
+        );
     }
 
     #[test]
@@ -1745,7 +1743,10 @@ mod tests {
         // NOTE: This test assumes CLAUDE_CODE_SUBSCRIBER is not set in test env.
         let tier = get_subscriber_tier();
         // The default is Free unless the env var is explicitly set.
-        assert!(matches!(tier, SubscriberTier::Free | SubscriberTier::Pro | SubscriberTier::Enterprise));
+        assert!(matches!(
+            tier,
+            SubscriberTier::Free | SubscriberTier::Pro | SubscriberTier::Enterprise
+        ));
     }
 
     #[test]
@@ -1797,8 +1798,7 @@ mod tests {
             ..RetryConfig::default()
         };
         let opts = RetryOptions::default();
-        let result =
-            with_retry_ext(&config, "test-model", opts, |_ctx| async { Ok(42) }).await;
+        let result = with_retry_ext(&config, "test-model", opts, |_ctx| async { Ok(42) }).await;
         assert_eq!(result.expect("should succeed"), 42);
     }
 

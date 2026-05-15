@@ -1,6 +1,7 @@
+use parking_lot::RwLock;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
@@ -108,23 +109,14 @@ impl RuntimePlanModeController {
             plans_dir: config.paths.profile_dir.join("plans"),
             state: RwLock::new(state),
         });
-        if controller
-            .state
-            .read()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .plan_slug
-            .is_some()
-        {
+        if controller.state.read().plan_slug.is_some() {
             controller.ensure_plan_paths_if_needed()?;
         }
         Ok(controller)
     }
 
     pub fn current_mode(&self) -> PermissionMode {
-        self.state
-            .read()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .current_permission_mode
+        self.state.read().current_permission_mode
     }
 
     pub fn plan_file_matches_request(&self, request: &PermissionRequest) -> bool {
@@ -140,10 +132,7 @@ impl RuntimePlanModeController {
     }
 
     pub fn plan_file_matches_path(&self, raw_path: &str) -> bool {
-        let state = self
-            .state
-            .read()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let state = self.state.read();
         let Some(plan_file_path) = state.plan_file_path.as_ref() else {
             return false;
         };
@@ -151,17 +140,11 @@ impl RuntimePlanModeController {
     }
 
     pub fn snapshot_state(&self) -> PlanModeState {
-        self.state
-            .read()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .clone()
+        self.state.read().clone()
     }
 
     pub fn activate_for_slash_command(&self, objective: Option<&str>) -> Result<()> {
-        let mut state = self
-            .state
-            .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut state = self.state.write();
         self.ensure_plan_descriptor_locked(&mut state)?;
         if !state.is_plan_mode() {
             state.pre_plan_permission_mode = Some(state.current_permission_mode);
@@ -205,12 +188,7 @@ impl RuntimePlanModeController {
     }
 
     fn persist_plan_snapshot_inner(&self) -> Result<()> {
-        let plan_file_path = self
-            .state
-            .read()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .plan_file_path
-            .clone();
+        let plan_file_path = self.state.read().plan_file_path.clone();
         let Some(plan_file_path) = plan_file_path else {
             return Ok(());
         };
@@ -218,10 +196,7 @@ impl RuntimePlanModeController {
     }
 
     fn ensure_plan_paths_if_needed(&self) -> Result<()> {
-        let mut state = self
-            .state
-            .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut state = self.state.write();
         let changed = self.ensure_plan_descriptor_locked(&mut state)?;
         if changed {
             self.persist_locked(&mut state)?;
@@ -321,10 +296,7 @@ impl PlanModeRuntime for RuntimePlanModeController {
             return Err(anyhow!("objective cannot be empty"));
         }
 
-        let mut state = self
-            .state
-            .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut state = self.state.write();
         self.ensure_plan_descriptor_locked(&mut state)?;
         if !state.is_plan_mode() {
             state.pre_plan_permission_mode = Some(state.current_permission_mode);
@@ -337,10 +309,7 @@ impl PlanModeRuntime for RuntimePlanModeController {
     }
 
     fn exit_plan_mode(&self, input: ExitPlanModeInput) -> Result<String> {
-        let mut state = self
-            .state
-            .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut state = self.state.write();
         if !state.is_plan_mode() {
             return Err(anyhow!(
                 "You are not in plan mode. This tool is only for exiting plan mode after writing a plan. If your plan was already approved, continue with implementation."
@@ -378,10 +347,7 @@ impl PlanModeRuntime for RuntimePlanModeController {
     }
 
     fn snapshot(&self) -> PlanModeRuntimeSnapshot {
-        let state = self
-            .state
-            .read()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let state = self.state.read();
         PlanModeRuntimeSnapshot {
             permission_mode: state.current_permission_mode,
             plan_file_path: state.plan_file_path.clone(),

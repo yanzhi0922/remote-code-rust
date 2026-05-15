@@ -1,6 +1,8 @@
 use std::collections::{HashMap, HashSet};
 
-use crate::types::{CodeIndexConfig, IndexError, IndexStats, IndexingState, VectorStoreSearchResult};
+use crate::types::{
+    CodeIndexConfig, IndexError, IndexStats, IndexingState, VectorStoreSearchResult,
+};
 
 /// Manager for building and querying a code index.
 ///
@@ -169,7 +171,11 @@ impl CodeIndexManager {
             }
         }
 
-        results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        results.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         results.truncate(limit);
         results
     }
@@ -216,11 +222,7 @@ impl CodeIndexManager {
     ///
     /// Skips include/exclude pattern checks so that callers have full control
     /// over what is indexed.
-    pub fn add_file_content(
-        &mut self,
-        path: &str,
-        content: &str,
-    ) -> Result<(), IndexError> {
+    pub fn add_file_content(&mut self, path: &str, content: &str) -> Result<(), IndexError> {
         if self.state == IndexingState::NotInitialized {
             return Err(IndexError::NotInitialized);
         }
@@ -230,7 +232,8 @@ impl CodeIndexManager {
         }
 
         self.indexed_files.insert(path.to_string());
-        self.file_contents.insert(path.to_string(), content.to_string());
+        self.file_contents
+            .insert(path.to_string(), content.to_string());
 
         self.stats.indexed_files = self.indexed_files.len();
         self.stats.total_files = self.stats.total_files.max(self.indexed_files.len());
@@ -357,7 +360,10 @@ impl CodeIndexManager {
 
     /// Handle settings changes that may require re-indexing.
     /// Corresponds to TS: `CodeIndexManager.handleSettingsChange()`
-    pub fn handle_settings_change(&mut self, new_config: CodeIndexConfig) -> Result<bool, IndexError> {
+    pub fn handle_settings_change(
+        &mut self,
+        new_config: CodeIndexConfig,
+    ) -> Result<bool, IndexError> {
         let requires_restart = self.config != new_config;
         self.config = new_config;
 
@@ -483,10 +489,7 @@ fn compute_filename_score(path_lower: &str, terms: &[String]) -> f64 {
 /// - `score` is a term-frequency-based relevance score
 /// - `line_number` is the 1-based line number of the best match
 /// - `code_chunk` is the extracted code around the best match
-fn compute_content_score(
-    content: &str,
-    terms: &[String],
-) -> (f64, Option<usize>, Option<String>) {
+fn compute_content_score(content: &str, terms: &[String]) -> (f64, Option<usize>, Option<String>) {
     if content.is_empty() || terms.is_empty() {
         return (0.0, None, None);
     }
@@ -850,7 +853,8 @@ mod tests {
     #[test]
     fn test_filename_score_partial_match() {
         // "main" is found in path but does NOT match basename "main_helper"
-        let score_without_bonus = compute_filename_score("src/main_helper.rs", &["main".to_string()]);
+        let score_without_bonus =
+            compute_filename_score("src/main_helper.rs", &["main".to_string()]);
         // "main" IS found → base_score = 1.0, but no basename bonus
         assert!(score_without_bonus > 0.0);
 
@@ -867,8 +871,10 @@ mod tests {
 
     #[test]
     fn test_filename_score_multi_term() {
-        let score =
-            compute_filename_score("src/main_handler.rs", &["main".to_string(), "handler".to_string()]);
+        let score = compute_filename_score(
+            "src/main_handler.rs",
+            &["main".to_string(), "handler".to_string()],
+        );
         assert!(score > 0.0);
     }
 
@@ -911,7 +917,8 @@ mod tests {
 
     #[test]
     fn test_content_score_best_line_selection() {
-        let content = "fn foo() {}\nfn bar() {}\nfn search_query() {\n    // best match\n}\nfn baz() {}\n";
+        let content =
+            "fn foo() {}\nfn bar() {}\nfn search_query() {\n    // best match\n}\nfn baz() {}\n";
         let (_score, line, _chunk) =
             compute_content_score(content, &["search".to_string(), "query".to_string()]);
         // Line 3 has both terms, should be the best match
@@ -945,11 +952,8 @@ mod tests {
             "fn main() {\n    println!(\"hello world\");\n}\n",
         )
         .unwrap();
-        mgr.add_file_content(
-            "src/lib.rs",
-            "pub fn library_func() -> i32 { 42 }\n",
-        )
-        .unwrap();
+        mgr.add_file_content("src/lib.rs", "pub fn library_func() -> i32 { 42 }\n")
+            .unwrap();
 
         let results = mgr.search("hello", 10);
         assert_eq!(1, results.len());
@@ -965,12 +969,19 @@ mod tests {
         let mut mgr = default_manager();
         mgr.initialize().unwrap();
         mgr.add_file_content("src/main.rs", "old content").unwrap();
-        mgr.add_file_content("src/main.rs", "new content with search_term").unwrap();
+        mgr.add_file_content("src/main.rs", "new content with search_term")
+            .unwrap();
         // Should only be one file indexed
         assert_eq!(1, mgr.get_stats().indexed_files);
         let results = mgr.search("search_term", 10);
         assert_eq!(1, results.len());
-        assert!(results[0].code_chunk.as_ref().unwrap().contains("search_term"));
+        assert!(
+            results[0]
+                .code_chunk
+                .as_ref()
+                .unwrap()
+                .contains("search_term")
+        );
     }
 
     #[test]

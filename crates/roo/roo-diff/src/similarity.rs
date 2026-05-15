@@ -179,10 +179,7 @@ mod tests {
 
     #[test]
     fn test_get_similarity_smart_quotes() {
-        let sim = get_similarity(
-            "\u{201C}hello\u{201D}",
-            "\"hello\"",
-        );
+        let sim = get_similarity("\u{201C}hello\u{201D}", "\"hello\"");
         assert!((sim - 1.0).abs() < f64::EPSILON);
     }
 

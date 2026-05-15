@@ -357,7 +357,7 @@ impl PromptStreamEvent {
         match self {
             Self::MessageDelta { delta } => Some(RuntimeEventDetail::MessageDelta {
                 role: MessageRole::Assistant,
-                delta: delta.clone(),
+                delta: delta.clone().into(),
                 message_id: None,
             }),
             Self::MessageCommitted { text } => Some(RuntimeEventDetail::MessageCommitted {
@@ -369,17 +369,17 @@ impl PromptStreamEvent {
                 tool_call_id,
                 tool_name,
             } => Some(RuntimeEventDetail::ToolStarted {
-                tool_call_id: tool_call_id.clone(),
-                tool_name: tool_name.clone(),
+                tool_call_id: tool_call_id.clone().into(),
+                tool_name: tool_name.clone().into(),
             }),
             Self::ToolProgress {
                 tool_call_id,
                 delta,
                 elapsed_time_seconds,
             } => Some(RuntimeEventDetail::ToolProgress {
-                tool_call_id: tool_call_id.clone(),
+                tool_call_id: tool_call_id.clone().map(Into::into),
                 tool_name: None,
-                delta: delta.clone(),
+                delta: delta.clone().into(),
                 elapsed_time_seconds: *elapsed_time_seconds,
             }),
             Self::ToolFinished {
@@ -388,8 +388,8 @@ impl PromptStreamEvent {
                 is_error,
                 summary,
             } => Some(RuntimeEventDetail::ToolFinished {
-                tool_call_id: tool_call_id.clone(),
-                tool_name: tool_name.clone(),
+                tool_call_id: tool_call_id.clone().into(),
+                tool_name: tool_name.clone().into(),
                 is_error: *is_error,
                 summary: summary.clone(),
             }),
@@ -532,7 +532,7 @@ fn build_streaming_callbacks(
                     return;
                 }
                 text_sink(PromptStreamEvent::MessageDelta {
-                    delta: delta.to_owned(),
+                    delta: delta.to_owned().into(),
                 });
             }) as Box<dyn Fn(&str) + Send + Sync>
         }),
@@ -542,7 +542,7 @@ fn build_streaming_callbacks(
             }
             start_sink(PromptStreamEvent::ToolStarted {
                 tool_call_id: tool_call_id.to_owned(),
-                tool_name: tool_name.to_owned(),
+                tool_name: tool_name.to_owned().into(),
             });
         })),
         on_tool_call_delta: Some(Box::new(move |tool_call_id: &str, delta: &str| {
@@ -551,7 +551,7 @@ fn build_streaming_callbacks(
             }
             progress_sink(PromptStreamEvent::ToolProgress {
                 tool_call_id: Some(tool_call_id.to_owned()),
-                delta: Some(delta.to_owned()),
+                delta: Some(delta.to_owned().into()),
                 elapsed_time_seconds: None,
             });
         })),
@@ -590,7 +590,12 @@ pub(crate) fn reapply_cli_overrides(
     if let Some(model) = &cli.model {
         config.provider.model = Some(model.clone());
     }
-    if let Some(effort) = cli.effort.as_deref().map(str::trim).filter(|value| !value.is_empty()) {
+    if let Some(effort) = cli
+        .effort
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
         config.effort = Some(effort.to_owned());
     }
     if let Some(fallback_model) = cli
@@ -902,7 +907,7 @@ async fn run_prompt_legacy(
             read_file_state.clone(),
         )),
         progress_cb,
-        task_stack: std::sync::Arc::new(std::sync::Mutex::new(
+        task_stack: std::sync::Arc::new(parking_lot::Mutex::new(
             claude_core::task_stack::TaskStack::default(),
         )),
         read_file_state,
@@ -1002,13 +1007,18 @@ async fn run_prompt_legacy(
         usage.cache_creation_input_tokens += response.usage.cache_creation_input_tokens;
         // Handle max_tokens stop reason — log warning and annotate response.
         let lowered_stop = response.stop_reason.to_ascii_lowercase();
-        if lowered_stop == "max_tokens" || lowered_stop == "max_tokens_reached" || lowered_stop == "length" {
+        if lowered_stop == "max_tokens"
+            || lowered_stop == "max_tokens_reached"
+            || lowered_stop == "length"
+        {
             tracing::warn!(
                 "Legacy prompt loop: response truncated (stop_reason={}), output may be incomplete",
                 response.stop_reason
             );
             if !response.text.is_empty() {
-                response.text.push_str("\n\n[Output truncated — max output token limit reached.]");
+                response
+                    .text
+                    .push_str("\n\n[Output truncated — max output token limit reached.]");
             }
         }
         total_tool_calls += response.tool_calls.len();
@@ -1151,9 +1161,13 @@ async fn run_prompt_legacy(
                 // Capture tool execution errors as error tool results instead of
                 // propagating, to keep conversation state consistent for the next
                 // provider call.  This matches the TUI error-recovery pattern.
-                match claude_tools::with_runtime_fork_snapshot_provider(fork_snapshot_provider, async {
-                    execute_tool_call(&effective_tool_call, &tool_context, broker.as_ref()).await
-                })
+                match claude_tools::with_runtime_fork_snapshot_provider(
+                    fork_snapshot_provider,
+                    async {
+                        execute_tool_call(&effective_tool_call, &tool_context, broker.as_ref())
+                            .await
+                    },
+                )
                 .await
                 {
                     Ok(result) => result,
@@ -1234,7 +1248,7 @@ async fn run_prompt_legacy(
             if let Some(event_sink) = event_sink.as_ref() {
                 event_sink(PromptStreamEvent::ToolFinished {
                     tool_call_id: effective_tool_call.id.clone(),
-                    tool_name: effective_tool_call.name.clone(),
+                    tool_name: effective_tool_call.name.clone().into(),
                     is_error: tool_result.is_error,
                     summary: Some(tool_preview.clone()),
                 });
@@ -1342,7 +1356,6 @@ pub(crate) async fn run_oneshot_text(
     println!("{}", response.text);
     Ok(())
 }
-
 
 pub(crate) fn run_migrate(
     config: &RuntimeConfig,
@@ -1740,14 +1753,14 @@ mod tests {
     #[test]
     fn prompt_stream_event_maps_message_delta_to_shared_runtime_event() {
         let event = PromptStreamEvent::MessageDelta {
-            delta: "hello".to_owned(),
+            delta: "hello".to_owned().into(),
         };
 
         assert_eq!(
             event.runtime_event_detail(),
             Some(RuntimeEventDetail::MessageDelta {
                 role: MessageRole::Assistant,
-                delta: "hello".to_owned(),
+                delta: "hello".to_owned().into(),
                 message_id: None,
             })
         );
@@ -1782,7 +1795,10 @@ mod tests {
         );
         assert_eq!(resolved.api_key.as_deref(), Some("secret"));
         assert_eq!(resolved.model.as_deref(), Some("glm-5.1"));
-        assert_eq!(resolved.protocol, Some(claude_core::ProviderProtocol::OpenAi));
+        assert_eq!(
+            resolved.protocol,
+            Some(claude_core::ProviderProtocol::OpenAi)
+        );
     }
 
     #[test]
@@ -1831,7 +1847,10 @@ mod tests {
         ]);
         reapply_cli_overrides(&cli, &ResolvedPromptOverrides::default(), &mut config, true);
 
-        assert_eq!(config.permission_mode, claude_core::PermissionMode::AcceptEdits);
+        assert_eq!(
+            config.permission_mode,
+            claude_core::PermissionMode::AcceptEdits
+        );
     }
 
     #[test]
@@ -1859,7 +1878,12 @@ mod tests {
             "--dangerously-skip-permissions",
             "resume prompt",
         ]);
-        reapply_cli_overrides(&cli, &ResolvedPromptOverrides::default(), &mut config, false);
+        reapply_cli_overrides(
+            &cli,
+            &ResolvedPromptOverrides::default(),
+            &mut config,
+            false,
+        );
 
         assert_eq!(config.effort.as_deref(), Some("high"));
         assert_eq!(config.fallback_model.as_deref(), Some("minimax-m2.7"));

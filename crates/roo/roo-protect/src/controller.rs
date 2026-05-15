@@ -105,7 +105,8 @@ impl RooProtectedController {
 
 /// Returns `true` for absolute Unix (`/…`) or Windows (`C:\…`) paths.
 fn is_absolute_path(s: &str) -> bool {
-    s.starts_with('/') || (s.len() > 2 && s.as_bytes()[1] == b':' && s.as_bytes()[2] == b'\\')
+    s.starts_with('/')
+        || (s.len() > 2 && s.as_bytes()[1] == b':' && s.as_bytes()[2] == b'\\')
         || (s.len() > 2 && s.as_bytes()[1] == b':' && s.as_bytes()[2] == b'/')
 }
 
@@ -168,15 +169,32 @@ mod tests {
     #[test]
     fn test_annotate_paths() {
         let ctrl = RooProtectedController::new(TEST_CWD);
-        let files = ["src/index.ts", ".rooignore", ".roo/config.json", "package.json"];
+        let files = [
+            "src/index.ts",
+            ".rooignore",
+            ".roo/config.json",
+            "package.json",
+        ];
         let annotated = ctrl.annotate_paths_with_protection(&files);
         assert_eq!(
             annotated,
             vec![
-                PathAnnotation { path: "src/index.ts".into(), is_protected: false },
-                PathAnnotation { path: ".rooignore".into(), is_protected: true },
-                PathAnnotation { path: ".roo/config.json".into(), is_protected: true },
-                PathAnnotation { path: "package.json".into(), is_protected: false },
+                PathAnnotation {
+                    path: "src/index.ts".into(),
+                    is_protected: false
+                },
+                PathAnnotation {
+                    path: ".rooignore".into(),
+                    is_protected: true
+                },
+                PathAnnotation {
+                    path: ".roo/config.json".into(),
+                    is_protected: true
+                },
+                PathAnnotation {
+                    path: "package.json".into(),
+                    is_protected: false
+                },
             ]
         );
     }

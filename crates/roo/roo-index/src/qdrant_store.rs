@@ -270,7 +270,9 @@ impl QdrantVectorStore {
 
     // -- Collection management ----------------------------------------------
 
-    async fn get_collection_info_async(&self) -> Result<Option<CollectionInfoResponse>, IndexError> {
+    async fn get_collection_info_async(
+        &self,
+    ) -> Result<Option<CollectionInfoResponse>, IndexError> {
         let path = format!("/collections/{}", self.collection_name);
         let resp = self
             .request_builder(reqwest::Method::GET, &path)
@@ -295,9 +297,7 @@ impl QdrantVectorStore {
         resp.json::<CollectionInfoResponse>()
             .await
             .map(Some)
-            .map_err(|e| {
-                IndexError::GeneralError(format!("Failed to parse collection info: {e}"))
-            })
+            .map_err(|e| IndexError::GeneralError(format!("Failed to parse collection info: {e}")))
     }
 
     async fn create_collection_async(&self) -> Result<(), IndexError> {
@@ -320,7 +320,9 @@ impl QdrantVectorStore {
             .json(&body)
             .send()
             .await
-            .map_err(|e| IndexError::GeneralError(format!("Qdrant createCollection failed: {e}")))?;
+            .map_err(|e| {
+                IndexError::GeneralError(format!("Qdrant createCollection failed: {e}"))
+            })?;
 
         if !resp.status().is_success() {
             let status = resp.status();
@@ -338,7 +340,9 @@ impl QdrantVectorStore {
             .request_builder(reqwest::Method::DELETE, &path)
             .send()
             .await
-            .map_err(|e| IndexError::GeneralError(format!("Qdrant deleteCollection failed: {e}")))?;
+            .map_err(|e| {
+                IndexError::GeneralError(format!("Qdrant deleteCollection failed: {e}"))
+            })?;
 
         if !resp.status().is_success() {
             let status = resp.status();
@@ -389,10 +393,7 @@ impl QdrantVectorStore {
         field_name: &str,
         field_schema: &str,
     ) -> Result<(), IndexError> {
-        let path = format!(
-            "/collections/{}/index",
-            self.collection_name
-        );
+        let path = format!("/collections/{}/index", self.collection_name);
         let body = CreateFieldIndexRequest {
             field_name: field_name.to_string(),
             field_schema: field_schema.to_string(),
@@ -573,8 +574,15 @@ impl QdrantVectorStore {
             .zip(vectors.iter())
             .zip(payloads.iter())
             .map(|((id, vector), payload)| {
-                let enriched_payload = if let Some(file_path) = payload.get("filePath").or_else(|| payload.get("file_path")).and_then(|v| v.as_str()) {
-                    let segments: Vec<&str> = file_path.split(|c: char| c == '/' || c == '\\').filter(|s| !s.is_empty()).collect();
+                let enriched_payload = if let Some(file_path) = payload
+                    .get("filePath")
+                    .or_else(|| payload.get("file_path"))
+                    .and_then(|v| v.as_str())
+                {
+                    let segments: Vec<&str> = file_path
+                        .split(|c: char| c == '/' || c == '\\')
+                        .filter(|s| !s.is_empty())
+                        .collect();
                     let path_segments: serde_json::Map<String, serde_json::Value> = segments
                         .iter()
                         .enumerate()
@@ -647,10 +655,7 @@ impl QdrantVectorStore {
         let filter = json!({ "must": must_conditions });
 
         let path = format!("/collections/{}/points/delete", self.collection_name);
-        let body = DeleteByFilterRequest {
-            filter,
-            wait: true,
-        };
+        let body = DeleteByFilterRequest { filter, wait: true };
 
         let resp = self
             .request_builder(reqwest::Method::POST, &path)
@@ -679,9 +684,7 @@ impl QdrantVectorStore {
 
     /// Marks the indexing process as complete by upserting a metadata point.
     pub fn mark_indexing_complete(&self) -> Result<(), IndexError> {
-        Self::block_on_async(async {
-            self.mark_indexing_complete_async().await
-        })
+        Self::block_on_async(async { self.mark_indexing_complete_async().await })
     }
 
     async fn mark_indexing_complete_async(&self) -> Result<(), IndexError> {
@@ -724,9 +727,7 @@ impl QdrantVectorStore {
 
     /// Marks the indexing process as incomplete (in progress).
     pub fn mark_indexing_incomplete(&self) -> Result<(), IndexError> {
-        Self::block_on_async(async {
-            self.mark_indexing_incomplete_async().await
-        })
+        Self::block_on_async(async { self.mark_indexing_incomplete_async().await })
     }
 
     async fn mark_indexing_incomplete_async(&self) -> Result<(), IndexError> {
@@ -886,8 +887,7 @@ impl QdrantVectorStore {
         let metadata_id = Self::metadata_point_id();
         let path = format!(
             "/collections/{}/points/{}",
-            self.collection_name,
-            metadata_id
+            self.collection_name, metadata_id
         );
 
         let resp = self
@@ -903,7 +903,9 @@ impl QdrantVectorStore {
 
                 if let Some(point) = retrieved.result.first() {
                     if let Some(ref payload) = point.payload {
-                        if let Some(complete) = payload.get("indexing_complete").and_then(|v| v.as_bool()) {
+                        if let Some(complete) =
+                            payload.get("indexing_complete").and_then(|v| v.as_bool())
+                        {
                             return Ok(complete);
                         }
                     }
@@ -1011,10 +1013,7 @@ mod tests {
         assert!(filter.get("must_not").is_some());
         let must_not = filter.get("must_not").unwrap().as_array().unwrap();
         assert_eq!(must_not.len(), 1);
-        assert_eq!(
-            must_not[0]["key"].as_str().unwrap(),
-            "type"
-        );
+        assert_eq!(must_not[0]["key"].as_str().unwrap(), "type");
     }
 
     #[test]
@@ -1056,12 +1055,7 @@ mod tests {
 
     #[test]
     fn test_new_constructor() {
-        let store = QdrantVectorStore::new(
-            "/test/workspace",
-            "http://localhost:6333",
-            1536,
-            None,
-        );
+        let store = QdrantVectorStore::new("/test/workspace", "http://localhost:6333", 1536, None);
         assert!(store.collection_name.starts_with("ws-"));
         assert_eq!(store.vector_size, 1536);
     }

@@ -125,10 +125,7 @@ pub async fn generate_image_with_images_api(
     http_client: &reqwest::Client,
     opts: &ImagesApiOptions,
 ) -> ImageGenerationResult {
-    let url = format!(
-        "{}/images/generations",
-        opts.base_url.trim_end_matches('/')
-    );
+    let url = format!("{}/images/generations", opts.base_url.trim_end_matches('/'));
 
     let mut body = serde_json::json!({
         "model": opts.model,
@@ -190,10 +187,7 @@ pub async fn generate_image_with_images_api(
         .and_then(|d| d.get("url"))
         .and_then(|v| v.as_str())
     {
-        return ImageGenerationResult::ok(
-            image_url.to_string(),
-            "png".to_string(),
-        );
+        return ImageGenerationResult::ok(image_url.to_string(), "png".to_string());
     }
 
     ImageGenerationResult::err("No image data found in response")

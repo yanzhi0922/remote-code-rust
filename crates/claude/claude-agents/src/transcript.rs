@@ -20,8 +20,8 @@ use anyhow::Result;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::worker::{WorkerResult, WorkerStatus};
 use crate::runner::UsageSummary;
+use crate::worker::{WorkerResult, WorkerStatus};
 
 /// Subdirectory within the session directory for transcript files.
 const TRANSCRIPT_DIR: &str = "transcripts";
@@ -233,10 +233,7 @@ pub fn persist_transcript(
 /// messages are available.
 ///
 /// Constructs a minimal transcript from the worker result's output field.
-pub fn persist_transcript_from_result(
-    session_dir: &Path,
-    result: &WorkerResult,
-) -> Result<()> {
+pub fn persist_transcript_from_result(session_dir: &Path, result: &WorkerResult) -> Result<()> {
     let mut messages = Vec::new();
 
     // Include the task description as a user message if available.
@@ -338,7 +335,10 @@ mod tests {
     fn get_transcript_path_format() {
         let session_dir = PathBuf::from("/tmp/session");
         let path = get_transcript_path(&session_dir, "worker-abc");
-        assert_eq!(path, PathBuf::from("/tmp/session/transcripts/worker-abc.json"));
+        assert_eq!(
+            path,
+            PathBuf::from("/tmp/session/transcripts/worker-abc.json")
+        );
     }
 
     #[test]
@@ -521,10 +521,12 @@ mod tests {
 
         // Directory and file should now exist
         assert!(session_dir.join("transcripts").exists());
-        assert!(session_dir
-            .join("transcripts")
-            .join("worker-test-123.json")
-            .exists());
+        assert!(
+            session_dir
+                .join("transcripts")
+                .join("worker-test-123.json")
+                .exists()
+        );
     }
 
     #[test]

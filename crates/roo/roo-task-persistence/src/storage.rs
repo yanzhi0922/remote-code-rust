@@ -6,8 +6,8 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::types::DirEntry;
 use crate::TaskPersistenceError;
+use crate::types::DirEntry;
 
 // ---------------------------------------------------------------------------
 // TaskFileSystem trait
@@ -88,14 +88,8 @@ impl TaskFileSystem for OsFileSystem {
         }
         for entry in std::fs::read_dir(path)? {
             let entry = entry?;
-            let file_name = entry
-                .file_name()
-                .to_string_lossy()
-                .to_string();
-            let is_dir = entry
-                .file_type()
-                .map(|ft| ft.is_dir())
-                .unwrap_or(false);
+            let file_name = entry.file_name().to_string_lossy().to_string();
+            let is_dir = entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false);
             entries.push(DirEntry {
                 path: entry.path(),
                 file_name,
@@ -176,14 +170,20 @@ mod tests {
     fn test_messages_path() {
         let base = Path::new("/data/storage");
         let path = messages_path(base, "abc-123");
-        assert_eq!(path, PathBuf::from("/data/storage/tasks/abc-123/messages.json"));
+        assert_eq!(
+            path,
+            PathBuf::from("/data/storage/tasks/abc-123/messages.json")
+        );
     }
 
     #[test]
     fn test_api_messages_path() {
         let base = Path::new("/data/storage");
         let path = api_messages_path(base, "abc-123");
-        assert_eq!(path, PathBuf::from("/data/storage/tasks/abc-123/api_conversation_history.json"));
+        assert_eq!(
+            path,
+            PathBuf::from("/data/storage/tasks/abc-123/api_conversation_history.json")
+        );
     }
 
     #[test]
@@ -244,7 +244,8 @@ mod tests {
 
         // Create some files
         fs.write_file(&dir.path().join("a.txt"), "12345").unwrap(); // 5 bytes
-        fs.write_file(&dir.path().join("b.txt"), "1234567890").unwrap(); // 10 bytes
+        fs.write_file(&dir.path().join("b.txt"), "1234567890")
+            .unwrap(); // 10 bytes
 
         let size = fs.dir_size(dir.path()).unwrap();
         assert_eq!(size, 15);

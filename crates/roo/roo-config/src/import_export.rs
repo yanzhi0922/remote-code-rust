@@ -72,10 +72,7 @@ pub struct ExportData {
 /// Sanitize a provider config by resetting invalid/removed apiProvider values.
 ///
 /// Source: `importExport.ts` — `sanitizeProviderConfig`
-pub fn sanitize_provider_config(
-    config_name: &str,
-    api_config: &Value,
-) -> (Value, Option<String>) {
+pub fn sanitize_provider_config(config_name: &str, api_config: &Value) -> (Value, Option<String>) {
     if !api_config.is_object() {
         return (api_config.clone(), None);
     }
@@ -84,10 +81,31 @@ pub fn sanitize_provider_config(
 
     // Valid provider names
     let valid_providers = [
-        "anthropic", "openai", "bedrock", "vertex", "google", "ollama",
-        "openrouter", "deepseek", "xai", "minimax", "moonshot", "qwen",
-        "mistral", "fireworks", "sambanova", "baseten", "poe", "litellm",
-        "requesty", "unbound", "roo", "vercel", "lmstudio", "vscode-lm", "zai",
+        "anthropic",
+        "openai",
+        "bedrock",
+        "vertex",
+        "google",
+        "ollama",
+        "openrouter",
+        "deepseek",
+        "xai",
+        "minimax",
+        "moonshot",
+        "qwen",
+        "mistral",
+        "fireworks",
+        "sambanova",
+        "baseten",
+        "poe",
+        "litellm",
+        "requesty",
+        "unbound",
+        "roo",
+        "vercel",
+        "lmstudio",
+        "vscode-lm",
+        "zai",
     ];
 
     if let Some(api_provider) = obj.get("apiProvider").and_then(|v| v.as_str()) {
@@ -118,9 +136,9 @@ pub async fn import_settings_from_path(
     let raw_value: Value = serde_json::from_str(&raw_data)?;
 
     // Extract provider profiles
-    let raw_profiles = raw_value
-        .get("providerProfiles")
-        .ok_or_else(|| ImportExportError::ValidationError("Missing providerProfiles".to_string()))?;
+    let raw_profiles = raw_value.get("providerProfiles").ok_or_else(|| {
+        ImportExportError::ValidationError("Missing providerProfiles".to_string())
+    })?;
 
     let raw_configs = raw_profiles
         .get("apiConfigs")
@@ -271,9 +289,7 @@ mod tests {
             mode_api_configs: None,
         };
 
-        export_settings(&file_path, &profiles, None)
-            .await
-            .unwrap();
+        export_settings(&file_path, &profiles, None).await.unwrap();
 
         assert!(file_path.exists());
 

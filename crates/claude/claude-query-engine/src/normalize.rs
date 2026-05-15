@@ -50,10 +50,12 @@ mod tests {
         let user_msg = &messages[2];
         assert_eq!(user_msg["role"], "user");
         let content = user_msg["content"].as_array().unwrap();
-        assert!(content
-            .iter()
-            .any(|b| b["type"].as_str() == Some("tool_result")
-                && b["tool_use_id"].as_str() == Some("tool-1")));
+        assert!(
+            content
+                .iter()
+                .any(|b| b["type"].as_str() == Some("tool_result")
+                    && b["tool_use_id"].as_str() == Some("tool-1"))
+        );
     }
 
     #[test]
@@ -95,8 +97,7 @@ mod tests {
         normalize_messages_for_api(&mut messages);
         let content = messages[0]["content"].as_array().unwrap();
         assert!(content.iter().all(|b| {
-            b["type"].as_str() != Some("text")
-                || b["text"].as_str().is_none_or(|s| !s.is_empty())
+            b["type"].as_str() != Some("text") || b["text"].as_str().is_none_or(|s| !s.is_empty())
         }));
     }
 
@@ -122,7 +123,11 @@ mod tests {
         normalize_messages_for_api(&mut messages);
         let content = messages[0]["content"].as_array().unwrap();
         // unknown_type should be replaced with a text block
-        assert!(content.iter().all(|b| b["type"].as_str() != Some("unknown_type")));
+        assert!(
+            content
+                .iter()
+                .all(|b| b["type"].as_str() != Some("unknown_type"))
+        );
     }
 
     #[test]

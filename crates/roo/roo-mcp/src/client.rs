@@ -156,9 +156,10 @@ impl McpClient {
         )?;
 
         let server_info: ImplementationInfo = serde_json::from_value(
-            result_obj.get("serverInfo").cloned().unwrap_or_else(|| {
-                serde_json::json!({"name": "unknown", "version": "0.0.0"})
-            }),
+            result_obj
+                .get("serverInfo")
+                .cloned()
+                .unwrap_or_else(|| serde_json::json!({"name": "unknown", "version": "0.0.0"})),
         )?;
 
         let protocol_version = result_obj
@@ -248,12 +249,10 @@ impl McpClient {
             });
         }
 
-        let result = response.result.ok_or_else(|| {
-            McpError::ToolCallFailed {
-                server_name: String::new(),
-                tool_name: name.to_string(),
-                error: "Response missing 'result' field".to_string(),
-            }
+        let result = response.result.ok_or_else(|| McpError::ToolCallFailed {
+            server_name: String::new(),
+            tool_name: name.to_string(),
+            error: "Response missing 'result' field".to_string(),
         })?;
 
         let is_error = result
@@ -320,13 +319,13 @@ impl McpClient {
             });
         }
 
-        let result = response.result.ok_or_else(|| {
-            McpError::ResourceReadFailed {
+        let result = response
+            .result
+            .ok_or_else(|| McpError::ResourceReadFailed {
                 server_name: String::new(),
                 uri: uri.to_string(),
                 error: "Response missing 'result' field".to_string(),
-            }
-        })?;
+            })?;
 
         let contents: Vec<McpResourceContent> = serde_json::from_value(
             result
@@ -391,7 +390,8 @@ impl McpClient {
         expected_id: u64,
     ) -> McpResult<JsonRpcMessage> {
         // Default timeout of 60 seconds, matching TS: `(parsedConfig.timeout ?? 60) * 1000`.
-        Self::read_response_with_timeout(transport, expected_id, std::time::Duration::from_secs(60)).await
+        Self::read_response_with_timeout(transport, expected_id, std::time::Duration::from_secs(60))
+            .await
     }
 
     /// Read a response with a custom timeout.

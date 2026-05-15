@@ -12,7 +12,9 @@ use crate::types::*;
 use roo_types::tool::AttemptCompletionParams;
 
 /// Validate attempt_completion parameters.
-pub fn validate_attempt_completion_params(params: &AttemptCompletionParams) -> Result<(), MiscToolError> {
+pub fn validate_attempt_completion_params(
+    params: &AttemptCompletionParams,
+) -> Result<(), MiscToolError> {
     validate_completion_result(&params.result)
 }
 
@@ -326,7 +328,8 @@ mod tests {
         };
         let images = vec!["data:image/png;base64,abc".to_string()];
         let result =
-            process_attempt_completion_with_images(&params, &[], images.clone(), false, false).unwrap();
+            process_attempt_completion_with_images(&params, &[], images.clone(), false, false)
+                .unwrap();
         let data = result.attempt_completion_result.unwrap();
         assert_eq!(data.images, images);
     }
@@ -348,7 +351,13 @@ mod tests {
         assert!(result.has_command);
         assert!(result.todo_warning.is_some());
         assert!(result.todo_warning.as_ref().unwrap().contains("0 pending"));
-        assert!(result.todo_warning.as_ref().unwrap().contains("1 in progress"));
+        assert!(
+            result
+                .todo_warning
+                .as_ref()
+                .unwrap()
+                .contains("1 in progress")
+        );
         let data = result.attempt_completion_result.unwrap();
         assert_eq!(data.images.len(), 1);
     }

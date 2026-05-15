@@ -5,8 +5,8 @@
 //! Resolves version-keyed settings based on the current plugin version.
 //! Finds the highest version key that is ≤ the current version.
 
-use std::collections::HashMap;
 use serde_json::Value;
+use std::collections::HashMap;
 
 /// Compares two semantic version strings.
 ///
@@ -66,7 +66,10 @@ pub fn resolve_versioned_settings(
     current_version: &str,
 ) -> Value {
     if let Some(version) = find_highest_matching_version(versioned_settings, current_version) {
-        versioned_settings.get(&version).cloned().unwrap_or(Value::Object(Default::default()))
+        versioned_settings
+            .get(&version)
+            .cloned()
+            .unwrap_or(Value::Object(Default::default()))
     } else {
         Value::Object(Default::default())
     }
@@ -79,12 +82,18 @@ mod tests {
 
     #[test]
     fn test_compare_semver_equal() {
-        assert_eq!(compare_semver("3.36.4", "3.36.4"), std::cmp::Ordering::Equal);
+        assert_eq!(
+            compare_semver("3.36.4", "3.36.4"),
+            std::cmp::Ordering::Equal
+        );
     }
 
     #[test]
     fn test_compare_semver_greater() {
-        assert_eq!(compare_semver("3.37.0", "3.36.4"), std::cmp::Ordering::Greater);
+        assert_eq!(
+            compare_semver("3.37.0", "3.36.4"),
+            std::cmp::Ordering::Greater
+        );
     }
 
     #[test]
@@ -94,7 +103,10 @@ mod tests {
 
     #[test]
     fn test_compare_semver_prerelease() {
-        assert_eq!(compare_semver("3.36.4-beta.1", "3.36.4"), std::cmp::Ordering::Equal);
+        assert_eq!(
+            compare_semver("3.36.4-beta.1", "3.36.4"),
+            std::cmp::Ordering::Equal
+        );
     }
 
     #[test]
@@ -111,10 +123,7 @@ mod tests {
             find_highest_matching_version(&settings, "3.36.0"),
             Some("3.35.0".to_string())
         );
-        assert_eq!(
-            find_highest_matching_version(&settings, "3.34.0"),
-            None
-        );
+        assert_eq!(find_highest_matching_version(&settings, "3.34.0"), None);
     }
 
     #[test]

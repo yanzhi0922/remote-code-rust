@@ -162,7 +162,10 @@ async fn permission_request_response_cycle() {
         .await
         .expect("should read response");
     assert!(response.is_resolved());
-    assert_eq!(response.decision, Some(claude_swarm::PermissionDecision::Allow));
+    assert_eq!(
+        response.decision,
+        Some(claude_swarm::PermissionDecision::Allow)
+    );
 
     claude_swarm::team_helpers::set_base_dir_override(None);
 }
@@ -354,6 +357,7 @@ fn spawn_config_construction() {
 
     // Verify serialization round-trip
     let json = serde_json::to_string(&config).expect("should serialize");
-    let decoded: claude_swarm::SpawnConfig = serde_json::from_str(&json).expect("should deserialize");
+    let decoded: claude_swarm::SpawnConfig =
+        serde_json::from_str(&json).expect("should deserialize");
     assert_eq!(decoded, config);
 }

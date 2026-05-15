@@ -219,7 +219,8 @@ impl ModelCache {
 
     /// Stores a model list for the given provider with the current timestamp.
     pub fn set(&mut self, provider: &str, models: ModelRecord) {
-        self.cache.insert(provider.to_string(), (models, Instant::now()));
+        self.cache
+            .insert(provider.to_string(), (models, Instant::now()));
     }
 
     /// Invalidates the cache entry for a specific provider.

@@ -1,5 +1,6 @@
+use parking_lot::Mutex;
 use std::collections::BTreeSet;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use anyhow::Result;
 use async_trait::async_trait;
@@ -16,16 +17,12 @@ pub struct DiscoveredToolScope {
 impl DiscoveredToolScope {
     #[must_use]
     pub fn snapshot(&self) -> BTreeSet<String> {
-        self.inner
-            .lock()
-            .map(|state| state.clone())
-            .unwrap_or_default()
+        self.inner.lock().clone()
     }
 
     pub fn replace(&self, discovered_tools: BTreeSet<String>) {
-        if let Ok(mut state) = self.inner.lock() {
-            *state = discovered_tools;
-        }
+        let mut state = self.inner.lock();
+        *state = discovered_tools;
     }
 }
 

@@ -405,12 +405,7 @@ impl LspClient {
                 let re = regex::Regex::new(pattern).unwrap();
                 if let Some(cap) = re.captures(trimmed) {
                     if let Some(name) = cap.get(1) {
-                        results.push(format!(
-                            "[{}] {} (line {})",
-                            kind,
-                            name.as_str(),
-                            idx + 1
-                        ));
+                        results.push(format!("[{}] {} (line {})", kind, name.as_str(), idx + 1));
                     }
                 }
             }
@@ -433,15 +428,15 @@ impl LspClient {
 
         let escaped = regex::escape(query);
         let patterns = [
-            (format!(r"(?:pub\s+)?(?:async\s+)?fn\s+({escaped})\b"), "function"),
+            (
+                format!(r"(?:pub\s+)?(?:async\s+)?fn\s+({escaped})\b"),
+                "function",
+            ),
             (format!(r"(?:pub\s+)?struct\s+({escaped})\b"), "struct"),
             (format!(r"(?:pub\s+)?enum\s+({escaped})\b"), "enum"),
             (format!(r"impl\s+(?:<[^>]*>\s+)?({escaped})\b"), "impl"),
             (format!(r"(?:pub\s+)?trait\s+({escaped})\b"), "trait"),
-            (
-                format!(r"\b({escaped}\w*)\b"),
-                "identifier",
-            ),
+            (format!(r"\b({escaped}\w*)\b"), "identifier"),
         ];
 
         let mut results = Vec::new();
@@ -622,8 +617,8 @@ impl LspClient {
         // call sites.
         let escaped = regex::escape(&symbol);
         let call_pattern = format!(r"\b{escaped}\s*\(");
-        let re = regex::Regex::new(&call_pattern)
-            .context("invalid call pattern for incoming_calls")?;
+        let re =
+            regex::Regex::new(&call_pattern).context("invalid call pattern for incoming_calls")?;
 
         let mut results = Vec::new();
         for entry in WalkDir::new(&self.workspace_root)
@@ -647,12 +642,7 @@ impl LspClient {
                 .to_string();
             for (idx, l) in contents.lines().enumerate() {
                 if re.is_match(l) {
-                    results.push(format!(
-                        "{}:{}: {}",
-                        relative,
-                        idx + 1,
-                        l.trim()
-                    ));
+                    results.push(format!("{}:{}: {}", relative, idx + 1, l.trim()));
                     if results.len() >= 50 {
                         return Ok(results);
                     }
@@ -714,9 +704,9 @@ impl LspClient {
 
         // Filter out control flow keywords and the function's own name.
         let keywords = [
-            "if", "else", "match", "while", "for", "loop", "return", "let",
-            "fn", "pub", "async", "unsafe", "impl", "struct", "enum", "trait",
-            "use", "mod", "where", "as", "super", "self", "Self", "crate",
+            "if", "else", "match", "while", "for", "loop", "return", "let", "fn", "pub", "async",
+            "unsafe", "impl", "struct", "enum", "trait", "use", "mod", "where", "as", "super",
+            "self", "Self", "crate",
         ];
 
         let mut seen = std::collections::HashSet::new();

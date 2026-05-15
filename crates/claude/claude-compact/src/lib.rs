@@ -137,9 +137,8 @@ pub use strategy::{
 
 pub use engine::{
     CompactSessionState, FullCompactStrategy, PartialCompactStrategy,
-    annotate_boundary_with_preserved_segment, build_post_compact_messages,
-    compact_conversation, create_compact_boundary_message, merge_hook_instructions,
-    partial_compact_conversation,
+    annotate_boundary_with_preserved_segment, build_post_compact_messages, compact_conversation,
+    create_compact_boundary_message, merge_hook_instructions, partial_compact_conversation,
 };
 
 // ---------------------------------------------------------------------------
@@ -218,9 +217,8 @@ pub use attachment::{
 // ---------------------------------------------------------------------------
 
 pub use post_compact::{
-    CleanupCallback, CleanupEntry, CompactWarningManager, CompactWarningState,
-    CleanupCriteria, PostCompactCleanupRegistry, PostCompactResult,
-    run_post_compact_cleanup, re_read_recent_files,
+    CleanupCallback, CleanupCriteria, CleanupEntry, CompactWarningManager, CompactWarningState,
+    PostCompactCleanupRegistry, PostCompactResult, re_read_recent_files, run_post_compact_cleanup,
 };
 
 // ---------------------------------------------------------------------------

@@ -71,7 +71,7 @@ impl VercelHandler {
             model_info,
             provider_name_enum: ProviderName::VercelAiGateway,
             request_timeout: config.request_timeout,
-        reasoning_effort: None,
+            reasoning_effort: None,
             streaming_enabled: None,
             include_max_tokens: None,
             extra_body_fields: None,
@@ -118,11 +118,7 @@ impl VercelHandler {
         let url = format!("{}/models", self.base_url.trim_end_matches('/'));
 
         let client = reqwest::Client::new();
-        let response = client
-            .get(&url)
-            .bearer_auth(&self.api_key)
-            .send()
-            .await?;
+        let response = client.get(&url).bearer_auth(&self.api_key).send().await?;
 
         if !response.status().is_success() {
             let status = response.status().as_u16();
@@ -199,10 +195,7 @@ impl Provider for VercelHandler {
         self.resolve_model_info()
     }
 
-    async fn complete_prompt(
-        &self,
-        prompt: &str,
-    ) -> Result<String, roo_provider::ProviderError> {
+    async fn complete_prompt(&self, prompt: &str) -> Result<String, roo_provider::ProviderError> {
         self.inner.complete_prompt(prompt).await
     }
 
@@ -229,7 +222,11 @@ mod tests {
     #[test]
     fn test_all_models_have_required_fields() {
         for (id, info) in models::models() {
-            assert!(info.max_tokens.is_some(), "Model '{}' missing max_tokens", id);
+            assert!(
+                info.max_tokens.is_some(),
+                "Model '{}' missing max_tokens",
+                id
+            );
             assert!(
                 info.input_price.is_some(),
                 "Model '{}' missing input_price",

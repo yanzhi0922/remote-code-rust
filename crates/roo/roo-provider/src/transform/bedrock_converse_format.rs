@@ -1,10 +1,10 @@
-﻿//! AWS Bedrock Converse message format conversion.
+//! AWS Bedrock Converse message format conversion.
 //!
 //! Derived from `src/api/transform/bedrock-converse-format.ts`.
 //! Converts Anthropic-style [`ApiMessage`] into AWS Bedrock Converse format,
 //! handling image bytes, tool use/result renaming, and video support.
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use roo_types::api::{ApiMessage, ContentBlock, ImageSource, MessageRole, ToolResultContent};
 
@@ -20,14 +20,12 @@ const VALID_IMAGE_FORMATS: &[&str] = &["png", "jpeg", "gif", "webp"];
 
 /// Base64 decoding table.
 const B64_DECODE_TABLE: [i8; 128] = [
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 62, -1, -1, -1, 63,
-    52, 53, 54, 55, 56, 57, 58, 59, 60, 61, -1, -1, -1, -1, -1, -1,
-    -1,  0,  1,  2,  3,  4,  5,  6,  7,  8,  9, 10, 11, 12, 13, 14,
-    15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, -1, -1, -1, -1, -1,
-    -1, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40,
-    41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 62, -1, -1, -1, 63,
+    52, 53, 54, 55, 56, 57, 58, 59, 60, 61, -1, -1, -1, -1, -1, -1, -1, 0, 1, 2, 3, 4, 5, 6, 7, 8,
+    9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, -1, -1, -1, -1, -1, -1, 26,
+    27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50,
+    51, -1, -1, -1, -1, -1,
 ];
 
 // ---------------------------------------------------------------------------
@@ -46,7 +44,13 @@ pub fn sanitize_openai_call_id(id: &str) -> String {
     // Step 1: sanitize characters
     let sanitized: String = id
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect();
 
     // Step 2: truncate if needed

@@ -34,10 +34,10 @@ pub mod e2e;
 
 pub mod transport;
 
-pub use transport::{CommandAck, HealthStatus, RemoteTransport, TransportCommand};
-pub use reconnect::ReconnectPolicy;
 #[cfg(feature = "quic")]
 pub use quic_transport::QuicTransport;
+pub use reconnect::ReconnectPolicy;
+pub use transport::{CommandAck, HealthStatus, RemoteTransport, TransportCommand};
 
 use serde::{Deserialize, Serialize};
 

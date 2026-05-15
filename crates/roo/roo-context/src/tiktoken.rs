@@ -337,6 +337,9 @@ mod tests {
     #[test]
     fn test_bpe_initializer_succeeds() {
         // Verify that the BPE tokenizer initialized successfully
-        assert!(BPE.is_some(), "BPE tokenizer should initialize successfully");
+        assert!(
+            BPE.is_some(),
+            "BPE tokenizer should initialize successfully"
+        );
     }
 }

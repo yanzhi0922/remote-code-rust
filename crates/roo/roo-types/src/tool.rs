@@ -145,13 +145,12 @@ impl ToolName {
     pub fn group(&self) -> ToolGroup {
         match self {
             // Read group
-            | Self::ReadFile
-            | Self::SearchFiles
-            | Self::ListFiles
-            | Self::CodebaseSearch => ToolGroup::Read,
+            Self::ReadFile | Self::SearchFiles | Self::ListFiles | Self::CodebaseSearch => {
+                ToolGroup::Read
+            }
 
             // Edit group (tools + custom_tools + alias search_and_replace→edit)
-            | Self::WriteToFile
+            Self::WriteToFile
             | Self::ApplyDiff
             | Self::GenerateImage
             | Self::Edit
@@ -161,15 +160,13 @@ impl ToolName {
             | Self::SearchAndReplace => ToolGroup::Edit,
 
             // Command group
-            | Self::ExecuteCommand
-            | Self::ReadCommandOutput => ToolGroup::Command,
+            Self::ExecuteCommand | Self::ReadCommandOutput => ToolGroup::Command,
 
             // Mcp group
-            | Self::UseMcpTool
-            | Self::AccessMcpResource => ToolGroup::Mcp,
+            Self::UseMcpTool | Self::AccessMcpResource => ToolGroup::Mcp,
 
             // Modes group (always_available) + always-available tools not in a named group
-            | Self::SwitchMode
+            Self::SwitchMode
             | Self::NewTask
             | Self::AskFollowupQuestion
             | Self::AttemptCompletion
@@ -255,9 +252,7 @@ pub enum DiffResult {
         details: Option<Vec<DiffItem>>,
     },
     #[serde(rename = "error")]
-    Error {
-        message: String,
-    },
+    Error { message: String },
     #[serde(rename = "partial")]
     Partial {
         content: String,
@@ -311,7 +306,10 @@ pub enum AskApproval {
     #[serde(rename = "edit_file")]
     EditFile { path: String },
     #[serde(rename = "use_mcp_tool")]
-    UseMcpTool { server_name: String, tool_name: String },
+    UseMcpTool {
+        server_name: String,
+        tool_name: String,
+    },
     #[serde(rename = "access_mcp_resource")]
     AccessMcpResource { server_name: String, uri: String },
     #[serde(rename = "switch_mode")]

@@ -2,7 +2,9 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use claude_config::RuntimeConfig;
-use claude_tools::tasks::{BackgroundTask, load_persisted_task, load_persisted_tasks, task_snapshots};
+use claude_tools::tasks::{
+    BackgroundTask, load_persisted_task, load_persisted_tasks, task_snapshots,
+};
 
 pub fn dispatch(input: &str, config: &RuntimeConfig) {
     let mut parts = input.split_whitespace();

@@ -1,12 +1,12 @@
 use std::collections::BTreeMap;
 
 use anyhow::{Result, anyhow};
-use once_cell::sync::Lazy;
 use claude_mcp::{
     McpClientInfo, McpListChangedSurface, McpServerConfig, McpServerInspection, inspect_server,
     normalization::{build_mcp_prompt_command_name, build_mcp_tool_name, normalize_name_for_mcp},
 };
 use claude_ui_bridge::UiRuntimeMcpServerStatus;
+use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::sync::Mutex;
@@ -410,11 +410,11 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::Mutex as StdMutex;
 
-    use once_cell::sync::Lazy;
     use claude_mcp::{
         McpCapabilityMatrix, McpListChangedSurface, McpPeerInfo, McpServerConfig,
         McpServerInspection, McpToolDescriptor, McpTransportConfig,
     };
+    use once_cell::sync::Lazy;
     use serde_json::json;
 
     use super::{

@@ -13,7 +13,9 @@ use roo_types::tool::WriteToFileParams;
 /// Validate write_to_file parameters.
 pub fn validate_write_to_file_params(params: &WriteToFileParams) -> Result<(), FsToolError> {
     if params.path.trim().is_empty() {
-        return Err(FsToolError::Validation("path must not be empty".to_string()));
+        return Err(FsToolError::Validation(
+            "path must not be empty".to_string(),
+        ));
     }
 
     if params.path.contains("..") {
@@ -207,7 +209,8 @@ mod tests {
             path: file_path.to_str().unwrap().to_string(),
             content: "hello\nworld".to_string(),
         };
-        let result = process_write_to_file(&params, std::path::Path::new("."), None, None, None).unwrap();
+        let result =
+            process_write_to_file(&params, std::path::Path::new("."), None, None, None).unwrap();
         assert!(result.is_new_file);
         assert_eq!(result.lines_written, 2);
 
@@ -225,7 +228,8 @@ mod tests {
             path: file_path.to_str().unwrap().to_string(),
             content: "new content".to_string(),
         };
-        let result = process_write_to_file(&params, std::path::Path::new("."), None, None, None).unwrap();
+        let result =
+            process_write_to_file(&params, std::path::Path::new("."), None, None, None).unwrap();
         assert!(!result.is_new_file);
 
         let written = std::fs::read_to_string(&file_path).unwrap();
@@ -241,7 +245,8 @@ mod tests {
             path: file_path.to_str().unwrap().to_string(),
             content: "deep content".to_string(),
         };
-        let result = process_write_to_file(&params, std::path::Path::new("."), None, None, None).unwrap();
+        let result =
+            process_write_to_file(&params, std::path::Path::new("."), None, None, None).unwrap();
         assert!(result.is_new_file);
         assert!(file_path.exists());
     }
@@ -273,7 +278,10 @@ mod tests {
 
         let backup_path = dir.path().join("test.txt.bak");
         assert!(backup_path.exists());
-        assert_eq!(std::fs::read_to_string(&backup_path).unwrap(), "original content");
+        assert_eq!(
+            std::fs::read_to_string(&backup_path).unwrap(),
+            "original content"
+        );
     }
 
     #[test]
@@ -303,7 +311,10 @@ mod tests {
         // Backup should have old content
         let backup_path = dir.path().join("existing.txt.bak");
         assert!(backup_path.exists());
-        assert_eq!(std::fs::read_to_string(&backup_path).unwrap(), "old content");
+        assert_eq!(
+            std::fs::read_to_string(&backup_path).unwrap(),
+            "old content"
+        );
     }
 
     #[test]
@@ -328,10 +339,7 @@ mod tests {
     fn test_clean_content_unescapes_html_entities() {
         // Build HTML entity string at runtime to avoid tool unescaping
         let content = format!("if (x {}lt; 10 {}amp;{}amp; y {}gt; 5)", '&', '&', '&', '&');
-        assert_eq!(
-            clean_write_content(&content, None),
-            "if (x < 10 && y > 5)"
-        );
+        assert_eq!(clean_write_content(&content, None), "if (x < 10 && y > 5)");
     }
 
     #[test]
@@ -422,15 +430,9 @@ mod tests {
             content
         );
         // With non-Claude model ID → should unescape
-        assert_eq!(
-            clean_write_content(&content, Some("gpt-4o")),
-            "if (x < 10)"
-        );
+        assert_eq!(clean_write_content(&content, Some("gpt-4o")), "if (x < 10)");
         // With no model ID → should unescape (default behavior)
-        assert_eq!(
-            clean_write_content(&content, None),
-            "if (x < 10)"
-        );
+        assert_eq!(clean_write_content(&content, None), "if (x < 10)");
     }
 
     #[test]
@@ -444,7 +446,14 @@ mod tests {
             content: entity_content.clone(),
         };
         // With Claude model → entities preserved
-        process_write_to_file(&params, std::path::Path::new("."), None, None, Some("claude-3.5-sonnet")).unwrap();
+        process_write_to_file(
+            &params,
+            std::path::Path::new("."),
+            None,
+            None,
+            Some("claude-3.5-sonnet"),
+        )
+        .unwrap();
         let written = std::fs::read_to_string(&file_path).unwrap();
         assert_eq!(written, entity_content);
     }

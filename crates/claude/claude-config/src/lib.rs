@@ -860,9 +860,7 @@ fn build_request_metadata(session_id: Option<Uuid>) -> BTreeMap<String, String> 
 /// Get or create a persistent device ID, matching the official CLI's
 /// `getOrCreateUserID()` behavior (64-char hex string persisted in config).
 fn get_or_create_device_id() -> String {
-    let config_path = default_profile_dir()
-        .ok()
-        .map(|dir| dir.join("device_id"));
+    let config_path = default_profile_dir().ok().map(|dir| dir.join("device_id"));
 
     if let Some(ref path) = config_path
         && let Ok(existing) = fs::read_to_string(path)
@@ -2087,8 +2085,12 @@ mod tests {
         // Isolate from host environment variables that would add extra setting_sources.
         let prev_base = std::env::var("ANTHROPIC_BASE_URL").ok();
         let prev_key = std::env::var("ANTHROPIC_API_KEY").ok();
-        unsafe { std::env::remove_var("ANTHROPIC_BASE_URL"); }
-        unsafe { std::env::remove_var("ANTHROPIC_API_KEY"); }
+        unsafe {
+            std::env::remove_var("ANTHROPIC_BASE_URL");
+        }
+        unsafe {
+            std::env::remove_var("ANTHROPIC_API_KEY");
+        }
 
         let config = load_runtime_config(
             Some(cwd),
@@ -2115,8 +2117,16 @@ mod tests {
         assert_eq!(config.setting_sources, vec!["cli:provider".to_owned()]);
 
         // Restore env vars for subsequent tests.
-        if let Some(v) = prev_base { unsafe { std::env::set_var("ANTHROPIC_BASE_URL", v); } }
-        if let Some(v) = prev_key { unsafe { std::env::set_var("ANTHROPIC_API_KEY", v); } }
+        if let Some(v) = prev_base {
+            unsafe {
+                std::env::set_var("ANTHROPIC_BASE_URL", v);
+            }
+        }
+        if let Some(v) = prev_key {
+            unsafe {
+                std::env::set_var("ANTHROPIC_API_KEY", v);
+            }
+        }
     }
 
     #[test]

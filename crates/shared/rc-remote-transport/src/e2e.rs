@@ -5,7 +5,7 @@
 //! sees only encrypted blobs.
 
 use aes_gcm::aead::{Aead, KeyInit, OsRng};
-use aes_gcm::{Aes256Gcm, Nonce, AeadCore};
+use aes_gcm::{AeadCore, Aes256Gcm, Nonce};
 use x25519_dalek::{EphemeralSecret, PublicKey};
 
 /// An E2E encryption session between two endpoints.
@@ -16,10 +16,7 @@ pub struct E2eSession {
 impl E2eSession {
     /// Perform a Diffie-Hellman key exchange using the peer's public key
     /// and our ephemeral secret. Returns the session.
-    pub fn from_secret_and_public(
-        secret: EphemeralSecret,
-        peer_public: &PublicKey,
-    ) -> Self {
+    pub fn from_secret_and_public(secret: EphemeralSecret, peer_public: &PublicKey) -> Self {
         let shared = secret.diffie_hellman(peer_public);
         let key = aes_gcm::Key::<Aes256Gcm>::from_slice(shared.as_bytes());
         let cipher = Aes256Gcm::new(key);

@@ -78,7 +78,10 @@ fn en_translations() -> HashMap<String, String> {
     m.insert("refresh".into(), "Refresh".into());
     m.insert("welcome".into(), "Welcome, {{name}}!".into());
     m.insert("items_count".into(), "{{count}} items".into());
-    m.insert("no_workspace".into(), "Please open a project folder first".into());
+    m.insert(
+        "no_workspace".into(),
+        "Please open a project folder first".into(),
+    );
     m.insert("not_git_repo".into(), "Not a git repository".into());
     m.insert("extension_name".into(), "Roo Code".into());
     m.insert(

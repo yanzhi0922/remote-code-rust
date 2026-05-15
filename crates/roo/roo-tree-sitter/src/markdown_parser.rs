@@ -247,10 +247,7 @@ pub fn is_supported_extension(ext: &str) -> bool {
 ///
 /// This is the main entry point for parsing a file and extracting
 /// source code definitions.
-pub fn parse_source_code_definitions(
-    file_path: &Path,
-    file_content: &str,
-) -> Option<String> {
+pub fn parse_source_code_definitions(file_path: &Path, file_content: &str) -> Option<String> {
     let ext = file_path
         .extension()
         .and_then(|e| e.to_str())
@@ -275,12 +272,11 @@ pub fn parse_source_code_definitions(
     }
 
     // For other file types, use tree-sitter
-    let mut language_parsers = match crate::language_parser::load_required_language_parsers(&[
-        file_path,
-    ]) {
-        Ok(parsers) => parsers,
-        Err(_) => return None,
-    };
+    let mut language_parsers =
+        match crate::language_parser::load_required_language_parsers(&[file_path]) {
+            Ok(parsers) => parsers,
+            Err(_) => return None,
+        };
 
     let definitions =
         crate::language_parser::parse_file(file_content, &ext, &mut language_parsers).ok()?;
@@ -306,7 +302,8 @@ mod tests {
 
     #[test]
     fn test_parse_markdown_atx_headers() {
-        let content = "# Header 1\nSome content\n## Header 2\nMore content\n### Header 3\nEven more";
+        let content =
+            "# Header 1\nSome content\n## Header 2\nMore content\n### Header 3\nEven more";
         let captures = parse_markdown(content);
 
         // Should have 3 headers * 2 captures each = 6 captures

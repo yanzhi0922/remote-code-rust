@@ -3,9 +3,9 @@
 //! Provides utilities for tracking API rate limits and parsing rate-limit
 //! headers from HTTP responses (X-RateLimit-* style).
 
+use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -91,20 +91,13 @@ impl RateLimitTracker {
 
     /// Update the rate-limit info for a provider.
     pub fn update(&self, provider: &str, info: RateLimitInfo) {
-        self.limits
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .insert(provider.to_string(), info);
+        self.limits.lock().insert(provider.to_string(), info);
     }
 
     /// Get the current rate-limit info for a provider.
     #[must_use]
     pub fn get(&self, provider: &str) -> Option<RateLimitInfo> {
-        self.limits
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .get(provider)
-            .cloned()
+        self.limits.lock().get(provider).cloned()
     }
 
     /// Check whether a provider is currently rate-limited.
@@ -130,21 +123,13 @@ impl RateLimitTracker {
 
     /// Clear all tracked rate limits.
     pub fn clear(&self) {
-        self.limits
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clear();
+        self.limits.lock().clear();
     }
 
     /// List all tracked provider names.
     #[must_use]
     pub fn providers(&self) -> Vec<String> {
-        self.limits
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .keys()
-            .cloned()
-            .collect()
+        self.limits.lock().keys().cloned().collect()
     }
 }
 

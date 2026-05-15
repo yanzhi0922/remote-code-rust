@@ -23,7 +23,10 @@ fn memory_type_dir_names() {
         claude_utils::memory_types::MemoryType::Project.dir_name(),
         "project"
     );
-    assert_eq!(claude_utils::memory_types::MemoryType::User.dir_name(), "user");
+    assert_eq!(
+        claude_utils::memory_types::MemoryType::User.dir_name(),
+        "user"
+    );
     assert_eq!(
         claude_utils::memory_types::MemoryType::Agent.dir_name(),
         "agent"
@@ -36,7 +39,10 @@ fn memory_type_display() {
         claude_utils::memory_types::MemoryType::Project.to_string(),
         "project"
     );
-    assert_eq!(claude_utils::memory_types::MemoryType::User.to_string(), "user");
+    assert_eq!(
+        claude_utils::memory_types::MemoryType::User.to_string(),
+        "user"
+    );
     assert_eq!(
         claude_utils::memory_types::MemoryType::Agent.to_string(),
         "agent"
@@ -127,8 +133,10 @@ fn memory_entry_serialization_round_trip() {
 #[test]
 fn memory_dir_layout() {
     let base = PathBuf::from("/tmp/project");
-    let dir =
-        claude_utils::memory_types::memory_dir(&base, claude_utils::memory_types::MemoryType::Project);
+    let dir = claude_utils::memory_types::memory_dir(
+        &base,
+        claude_utils::memory_types::MemoryType::Project,
+    );
     assert_eq!(
         dir,
         PathBuf::from("/tmp/project/.remote-code/memory/project")
@@ -306,10 +314,18 @@ fn memory_store_list_all_memories() {
         claude_utils::memory_types::MemoryType::Project,
         vec![],
     ));
-    ok(store.save_memory("u1", "U1", claude_utils::memory_types::MemoryType::User, vec![]));
+    ok(store.save_memory(
+        "u1",
+        "U1",
+        claude_utils::memory_types::MemoryType::User,
+        vec![],
+    ));
 
     let all = ok(store.list_all_memories());
-    assert_eq!(all[&claude_utils::memory_types::MemoryType::Project].len(), 1);
+    assert_eq!(
+        all[&claude_utils::memory_types::MemoryType::Project].len(),
+        1
+    );
     assert_eq!(all[&claude_utils::memory_types::MemoryType::User].len(), 1);
     assert_eq!(all[&claude_utils::memory_types::MemoryType::Agent].len(), 0);
 }
@@ -419,7 +435,8 @@ fn memory_store_update_existing() {
         vec!["v2".to_owned()],
     ));
 
-    let loaded = ok(store.load_memory("updatable", claude_utils::memory_types::MemoryType::Project));
+    let loaded =
+        ok(store.load_memory("updatable", claude_utils::memory_types::MemoryType::Project));
     assert_eq!(loaded.entry.content, "updated content");
     assert!(loaded.entry.has_tag("v2"));
     assert!(!loaded.entry.has_tag("v1"));

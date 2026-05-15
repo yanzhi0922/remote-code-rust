@@ -25,9 +25,10 @@
 //! hub.finish_span(span, None);
 //! ```
 
+use parking_lot::{Mutex, RwLock};
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, RwLock};
 use std::time::Instant;
 
 use anyhow::Result;
@@ -282,32 +283,25 @@ impl Histogram {
 
     /// Record a value observation.
     pub fn observe(&self, value: u64) {
-        self.buckets
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .push(value);
+        self.buckets.lock().push(value);
     }
 
     /// Get the number of observations.
     #[must_use]
     pub fn count(&self) -> usize {
-        self.buckets.lock().unwrap_or_else(|e| e.into_inner()).len()
+        self.buckets.lock().len()
     }
 
     /// Get the sum of all observations.
     #[must_use]
     pub fn sum(&self) -> u64 {
-        self.buckets
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .iter()
-            .sum()
+        self.buckets.lock().iter().sum()
     }
 
     /// Get the average of all observations (0 if empty).
     #[must_use]
     pub fn avg(&self) -> f64 {
-        let guard = self.buckets.lock().unwrap_or_else(|e| e.into_inner());
+        let guard = self.buckets.lock();
         if guard.is_empty() {
             return 0.0;
         }
@@ -317,7 +311,7 @@ impl Histogram {
     /// Get the p50 (median) of all observations.
     #[must_use]
     pub fn p50(&self) -> u64 {
-        let mut guard = self.buckets.lock().unwrap_or_else(|e| e.into_inner());
+        let mut guard = self.buckets.lock();
         if guard.is_empty() {
             return 0;
         }
@@ -328,7 +322,7 @@ impl Histogram {
     /// Get the p99 of all observations.
     #[must_use]
     pub fn p99(&self) -> u64 {
-        let mut guard = self.buckets.lock().unwrap_or_else(|e| e.into_inner());
+        let mut guard = self.buckets.lock();
         if guard.is_empty() {
             return 0;
         }
@@ -467,10 +461,7 @@ impl TelemetryHub {
             attributes: HashMap::new(),
             parent_id,
         };
-        self.active_spans
-            .write()
-            .unwrap_or_else(|e| e.into_inner())
-            .insert(id.0, span);
+        self.active_spans.write().insert(id.0, span);
 
         self.notify_subscribers(|sub| sub.on_span_start(id, kind, name));
         id
@@ -478,7 +469,7 @@ impl TelemetryHub {
 
     /// Add an attribute to an active span.
     pub fn span_attr(&self, span_id: SpanId, key: &str, value: &str) {
-        let mut guard = self.active_spans.write().unwrap_or_else(|e| e.into_inner());
+        let mut guard = self.active_spans.write();
         if let Some(span) = guard.get_mut(&span_id.0) {
             span.attributes.insert(key.to_owned(), value.to_owned());
         }
@@ -486,7 +477,7 @@ impl TelemetryHub {
 
     /// Finish a span, recording its duration.
     pub fn finish_span(&self, span_id: SpanId, error: Option<&str>) {
-        let mut guard = self.active_spans.write().unwrap_or_else(|e| e.into_inner());
+        let mut guard = self.active_spans.write();
         if let Some(span) = guard.remove(&span_id.0) {
             let duration = span.start.elapsed();
             let completed = CompletedSpan {
@@ -518,10 +509,7 @@ impl TelemetryHub {
             }
 
             self.notify_subscribers(|sub| sub.on_span_finish(&completed));
-            self.completed_spans
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .push(completed);
+            self.completed_spans.lock().push(completed);
         }
     }
 
@@ -548,10 +536,7 @@ impl TelemetryHub {
             attributes,
         };
         self.notify_subscribers(|sub| sub.on_event(&event));
-        self.events
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .push(event);
+        self.events.lock().push(event);
     }
 
     // ── Well-known metric shortcuts ──────────────────────────────────────
@@ -589,30 +574,21 @@ impl TelemetryHub {
     /// Create a new counter metric.
     pub fn create_counter(&self, name: &str, labels: HashMap<String, String>) -> Arc<Counter> {
         let counter = Arc::new(Counter::new(name.to_owned(), labels));
-        self.counters
-            .write()
-            .unwrap_or_else(|e| e.into_inner())
-            .push(counter.clone());
+        self.counters.write().push(counter.clone());
         counter
     }
 
     /// Create a new gauge metric.
     pub fn create_gauge(&self, name: &str, labels: HashMap<String, String>) -> Arc<Gauge> {
         let gauge = Arc::new(Gauge::new(name.to_owned(), labels));
-        self.gauges
-            .write()
-            .unwrap_or_else(|e| e.into_inner())
-            .push(gauge.clone());
+        self.gauges.write().push(gauge.clone());
         gauge
     }
 
     /// Create a new histogram metric.
     pub fn create_histogram(&self, name: &str, labels: HashMap<String, String>) -> Arc<Histogram> {
         let histogram = Arc::new(Histogram::new(name.to_owned(), labels));
-        self.histograms
-            .write()
-            .unwrap_or_else(|e| e.into_inner())
-            .push(histogram.clone());
+        self.histograms.write().push(histogram.clone());
         histogram
     }
 
@@ -620,14 +596,11 @@ impl TelemetryHub {
 
     /// Add a telemetry subscriber for real-time event streaming.
     pub fn subscribe(&self, subscriber: Box<dyn TelemetrySubscriber + Send + Sync>) {
-        self.subscribers
-            .write()
-            .unwrap_or_else(|e| e.into_inner())
-            .push(subscriber);
+        self.subscribers.write().push(subscriber);
     }
 
     fn notify_subscribers(&self, f: impl Fn(&dyn TelemetrySubscriber)) {
-        let guard = self.subscribers.read().unwrap_or_else(|e| e.into_inner());
+        let guard = self.subscribers.read();
         for sub in guard.iter() {
             f(sub.as_ref());
         }
@@ -650,17 +623,9 @@ impl TelemetryHub {
             tool_latency_p99_ms: self.tool_latency.p99(),
             compaction_count: self.compaction_count.get(),
             error_count: self.error_count.get(),
-            completed_spans: self
-                .completed_spans
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .len(),
-            active_spans: self
-                .active_spans
-                .read()
-                .unwrap_or_else(|e| e.into_inner())
-                .len(),
-            event_count: self.events.lock().unwrap_or_else(|e| e.into_inner()).len(),
+            completed_spans: self.completed_spans.lock().len(),
+            active_spans: self.active_spans.read().len(),
+            event_count: self.events.lock().len(),
         }
     }
 
@@ -731,17 +696,14 @@ impl TelemetryHub {
     /// Get recent events (last N).
     #[must_use]
     pub fn recent_events(&self, limit: usize) -> Vec<TelemetryEvent> {
-        let guard = self.events.lock().unwrap_or_else(|e| e.into_inner());
+        let guard = self.events.lock();
         guard.iter().rev().take(limit).cloned().collect()
     }
 
     /// Get recent completed spans (last N).
     #[must_use]
     pub fn recent_spans(&self, limit: usize) -> Vec<CompletedSpan> {
-        let guard = self
-            .completed_spans
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let guard = self.completed_spans.lock();
         guard.iter().rev().take(limit).cloned().collect()
     }
 }
@@ -1033,16 +995,10 @@ mod tests {
         impl TelemetrySubscriber for TestSubscriber {
             fn on_span_start(&self, _id: SpanId, _kind: SpanKind, _name: &str) {}
             fn on_span_finish(&self, span: &CompletedSpan) {
-                self.events
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .push(format!("span:{}", span.name));
+                self.events.lock().push(format!("span:{}", span.name));
             }
             fn on_event(&self, event: &TelemetryEvent) {
-                self.events
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .push(format!("event:{}", event.message));
+                self.events.lock().push(format!("event:{}", event.message));
             }
         }
 
@@ -1057,7 +1013,7 @@ mod tests {
         let id = hub.start_span(SpanKind::Custom, "my-span");
         hub.finish_span(id, None);
 
-        let guard = events_arc.lock().unwrap_or_else(|e| e.into_inner());
+        let guard = events_arc.lock();
         assert!(guard.iter().any(|e: &String| e.contains("event:hello")));
         assert!(guard.iter().any(|e: &String| e.contains("span:my-span")));
     }

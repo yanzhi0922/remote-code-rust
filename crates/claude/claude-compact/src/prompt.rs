@@ -356,8 +356,7 @@ pub fn build_partial_compact_prompt(
         ),
     };
 
-    let mut prompt =
-        format!("{NO_TOOLS_PREAMBLE}{template}{analysis}\n\n{sections}");
+    let mut prompt = format!("{NO_TOOLS_PREAMBLE}{template}{analysis}\n\n{sections}");
 
     if let Some(instructions) = custom_instructions {
         let trimmed = instructions.trim();

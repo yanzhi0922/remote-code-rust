@@ -15,7 +15,10 @@ use crate::types::{ApiMessage, ClineMessage};
 /// Each message timestamp (both cline and API) is stringified and added to the
 /// set. Artifact files whose names do not appear in this set are considered
 /// orphaned.
-pub fn compute_valid_ids(cline_messages: &[ClineMessage], api_messages: &[ApiMessage]) -> HashSet<String> {
+pub fn compute_valid_ids(
+    cline_messages: &[ClineMessage],
+    api_messages: &[ApiMessage],
+) -> HashSet<String> {
     let mut ids = HashSet::new();
 
     for msg in cline_messages {
@@ -68,10 +71,7 @@ mod tests {
     #[test]
     fn compute_valid_ids_from_api_messages() {
         let cline: Vec<ClineMessage> = vec![];
-        let api = vec![
-            ApiMessage::user(100),
-            ApiMessage::assistant(200),
-        ];
+        let api = vec![ApiMessage::user(100), ApiMessage::assistant(200)];
 
         let ids = compute_valid_ids(&cline, &api);
         assert!(ids.contains("100"));
@@ -80,10 +80,7 @@ mod tests {
 
     #[test]
     fn compute_valid_ids_skips_api_messages_without_ts() {
-        let api = vec![
-            ApiMessage::new(None, "user"),
-            ApiMessage::assistant(200),
-        ];
+        let api = vec![ApiMessage::new(None, "user"), ApiMessage::assistant(200)];
         let ids = compute_valid_ids(&[], &api);
         assert!(!ids.contains("None")); // should not stringify None
         assert!(ids.contains("200"));

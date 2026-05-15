@@ -2,7 +2,7 @@
 //!
 //! Supports undo (revert last interaction) and restore (jump to any checkpoint).
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use std::path::PathBuf;
 
 use crate::storage::CheckpointStore;
@@ -12,7 +12,10 @@ use crate::types::*;
 ///
 /// Rejects paths containing `..` components, leading `/` or `\`, or that
 /// resolve outside the workspace via canonicalization.
-fn validate_path_within_workspace(workspace_root: &std::path::Path, relative: &str) -> Result<PathBuf> {
+fn validate_path_within_workspace(
+    workspace_root: &std::path::Path,
+    relative: &str,
+) -> Result<PathBuf> {
     if relative.is_empty() {
         bail!("empty path in checkpoint file change");
     }
@@ -21,7 +24,10 @@ fn validate_path_within_workspace(workspace_root: &std::path::Path, relative: &s
     }
     for component in std::path::Path::new(relative).components() {
         if matches!(component, std::path::Component::ParentDir) {
-            bail!("path traversal detected (..) in checkpoint file change: {}", relative);
+            bail!(
+                "path traversal detected (..) in checkpoint file change: {}",
+                relative
+            );
         }
     }
     let resolved = workspace_root.join(relative);
@@ -91,7 +97,8 @@ impl RestoreEngine {
         let mut files_restored = Vec::new();
 
         for change in &target.file_changes {
-            let file_path = match validate_path_within_workspace(&self.workspace_root, &change.path) {
+            let file_path = match validate_path_within_workspace(&self.workspace_root, &change.path)
+            {
                 Ok(p) => p,
                 Err(e) => {
                     tracing::error!("Skipping unsafe path in checkpoint restore: {e}");
@@ -188,7 +195,9 @@ mod tests {
 
         // Cache the "after" content
         let after_hash = "hash_after";
-        store.cache_file_content(after_hash, b"fn main() {}").unwrap();
+        store
+            .cache_file_content(after_hash, b"fn main() {}")
+            .unwrap();
 
         // Create a checkpoint that marks the file as created
         let cp = Checkpoint {
@@ -312,25 +321,24 @@ mod tests {
 
     #[test]
     fn test_path_traversal_blocked() {
-        assert!(validate_path_within_workspace(
-            std::path::Path::new("/workspace"),
-            "../etc/passwd"
-        )
-        .is_err());
-        assert!(validate_path_within_workspace(
-            std::path::Path::new("/workspace"),
-            "sub/../../etc/passwd"
-        )
-        .is_err());
-        assert!(validate_path_within_workspace(
-            std::path::Path::new("/workspace"),
-            "/etc/passwd"
-        )
-        .is_err());
-        assert!(validate_path_within_workspace(
-            std::path::Path::new("/workspace"),
-            "normal/file.rs"
-        )
-        .is_ok());
+        assert!(
+            validate_path_within_workspace(std::path::Path::new("/workspace"), "../etc/passwd")
+                .is_err()
+        );
+        assert!(
+            validate_path_within_workspace(
+                std::path::Path::new("/workspace"),
+                "sub/../../etc/passwd"
+            )
+            .is_err()
+        );
+        assert!(
+            validate_path_within_workspace(std::path::Path::new("/workspace"), "/etc/passwd")
+                .is_err()
+        );
+        assert!(
+            validate_path_within_workspace(std::path::Path::new("/workspace"), "normal/file.rs")
+                .is_ok()
+        );
     }
 }

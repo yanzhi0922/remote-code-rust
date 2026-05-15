@@ -73,10 +73,7 @@ impl TerminalRegistry {
     /// Get a reference to a terminal by its ID.
     ///
     /// Returns `None` if no terminal with the given ID exists.
-    pub async fn get_terminal(
-        &self,
-        id: TerminalId,
-    ) -> Option<Arc<Mutex<DefaultTerminal>>> {
+    pub async fn get_terminal(&self, id: TerminalId) -> Option<Arc<Mutex<DefaultTerminal>>> {
         self.terminals.lock().await.get(&id).cloned()
     }
 

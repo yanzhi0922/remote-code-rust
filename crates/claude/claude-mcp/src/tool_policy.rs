@@ -159,11 +159,7 @@ mod tests {
 
     #[test]
     fn filter_tools_returns_allowed_subset() {
-        let tools = vec![
-            make_tool("search"),
-            make_tool("read"),
-            make_tool("delete"),
-        ];
+        let tools = vec![make_tool("search"), make_tool("read"), make_tool("delete")];
         let policy = McpToolPolicy::allow_only(["search", "read"]);
         let filtered = policy.filter_tools(&tools);
         assert_eq!(filtered.len(), 2);
@@ -181,11 +177,7 @@ mod tests {
 
     #[test]
     fn filter_tools_denylist_removes_matching() {
-        let tools = vec![
-            make_tool("search"),
-            make_tool("delete"),
-            make_tool("drop"),
-        ];
+        let tools = vec![make_tool("search"), make_tool("delete"), make_tool("drop")];
         let policy = McpToolPolicy::deny_only(["delete", "drop"]);
         let filtered = policy.filter_tools(&tools);
         assert_eq!(filtered.len(), 1);

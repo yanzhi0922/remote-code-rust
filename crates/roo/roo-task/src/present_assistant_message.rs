@@ -535,7 +535,8 @@ impl PresentAssistantMessage {
 
         // --- Step 4: Bounds check ---
         // Source: TS lines 74-85
-        if self.state.current_streaming_content_index >= self.state.assistant_message_content.len() {
+        if self.state.current_streaming_content_index >= self.state.assistant_message_content.len()
+        {
             // This may happen if the last content block was completed before
             // streaming could finish. If streaming is finished, and we're out
             // of bounds then this means we already presented/executed the last
@@ -577,20 +578,13 @@ impl PresentAssistantMessage {
     /// Process a single content block based on its type.
     ///
     /// Source: TS `switch (block.type) { case "mcp_tool_use": ... case "text": ... case "tool_use": ... }`
-    fn process_block(
-        &mut self,
-        block: &AssistantMessageContent,
-    ) -> BlockProcessingResult {
+    fn process_block(&mut self, block: &AssistantMessageContent) -> BlockProcessingResult {
         match block {
-            AssistantMessageContent::McpToolUse(mcp_block) => {
-                self.process_mcp_tool_use(mcp_block)
-            }
+            AssistantMessageContent::McpToolUse(mcp_block) => self.process_mcp_tool_use(mcp_block),
             AssistantMessageContent::Text { content, partial } => {
                 self.process_text(content, *partial)
             }
-            AssistantMessageContent::ToolUse(tool_block) => {
-                self.process_tool_use(tool_block)
-            }
+            AssistantMessageContent::ToolUse(tool_block) => self.process_tool_use(tool_block),
         }
     }
 
@@ -611,10 +605,7 @@ impl PresentAssistantMessage {
     /// 6. Resolve sanitized server name back to original
     /// 7. Create synthetic `ToolUse<"use_mcp_tool">` block
     /// 8. Delegate to `useMcpToolTool.handle()`
-    fn process_mcp_tool_use(
-        &mut self,
-        block: &McpToolUse,
-    ) -> BlockProcessingResult {
+    fn process_mcp_tool_use(&mut self, block: &McpToolUse) -> BlockProcessingResult {
         // --- Step 1: Check didRejectTool ---
         // Source: TS lines 111-127
         if self.state.did_reject_tool {
@@ -686,11 +677,7 @@ impl PresentAssistantMessage {
     /// 1. If `didRejectTool || didAlreadyUseTool` → break
     /// 2. Strip `<thinking>` tags from content
     /// 3. Call `cline.say("text", content, undefined, block.partial)`
-    fn process_text(
-        &mut self,
-        content: &str,
-        partial: bool,
-    ) -> BlockProcessingResult {
+    fn process_text(&mut self, content: &str, partial: bool) -> BlockProcessingResult {
         // --- Step 1: Skip if rejected or already used tool ---
         // Source: TS lines 280-282
         if self.state.did_reject_tool || self.state.did_already_use_tool {
@@ -732,10 +719,7 @@ impl PresentAssistantMessage {
     /// 7. Validate tool use (validateToolUse)
     /// 8. Check tool repetition
     /// 9. Dispatch to specific tool handler (switch on tool name)
-    fn process_tool_use(
-        &mut self,
-        block: &ToolUse,
-    ) -> BlockProcessingResult {
+    fn process_tool_use(&mut self, block: &ToolUse) -> BlockProcessingResult {
         // --- Step 1: Validate tool_call_id ---
         // Source: TS lines 301-321
         let tool_call_id = &block.id;
@@ -887,10 +871,7 @@ impl PresentAssistantMessage {
     /// Tools that need checkpointing (per TS `checkpointSaveAndMark` calls):
     /// - write_to_file, apply_diff, edit, search_and_replace, search_replace,
     ///   edit_file, apply_patch, new_task, generate_image
-    fn dispatch_tool(
-        &mut self,
-        block: &ToolUse,
-    ) -> BlockProcessingResult {
+    fn dispatch_tool(&mut self, block: &ToolUse) -> BlockProcessingResult {
         let tool_call_id = block.id.clone();
         let tool_name = block.name.clone();
         let params = block.params.clone();
@@ -1098,7 +1079,8 @@ impl PresentAssistantMessage {
             "read_file" => {
                 // Source: TS lines 332-337
                 // Prefer native typed args when available; fall back to legacy params
-                let path = block.native_args
+                let path = block
+                    .native_args
                     .as_ref()
                     .and_then(|a| a.get("path"))
                     .and_then(|v| v.as_str())
@@ -1124,7 +1106,9 @@ impl PresentAssistantMessage {
                 // Source: TS lines 343-346
                 let regex = get_param("regex").unwrap_or("?");
                 match get_param("file_pattern") {
-                    Some(fp) if !fp.is_empty() => format!("[search_files for '{}' in '{}']", regex, fp),
+                    Some(fp) if !fp.is_empty() => {
+                        format!("[search_files for '{}' in '{}']", regex, fp)
+                    }
                     _ => format!("[search_files for '{}']", regex),
                 }
             }
@@ -1189,7 +1173,9 @@ impl PresentAssistantMessage {
                 // Source: TS lines 368-369
                 let mode = get_param("mode_slug").unwrap_or("?");
                 match get_param("reason") {
-                    Some(r) if !r.is_empty() => format!("[switch_mode to '{}' because: {}]", mode, r),
+                    Some(r) if !r.is_empty() => {
+                        format!("[switch_mode to '{}' because: {}]", mode, r)
+                    }
                     _ => format!("[switch_mode to '{}']", mode),
                 }
             }
@@ -1221,7 +1207,9 @@ impl PresentAssistantMessage {
                 // Source: TS lines 380-381
                 let cmd = get_param("command").unwrap_or("?");
                 match get_param("args") {
-                    Some(a) if !a.is_empty() => format!("[run_slash_command for '{}' with args: {}]", cmd, a),
+                    Some(a) if !a.is_empty() => {
+                        format!("[run_slash_command for '{}' with args: {}]", cmd, a)
+                    }
                     _ => format!("[run_slash_command for '{}']", cmd),
                 }
             }
@@ -1265,82 +1253,134 @@ impl PresentAssistantMessage {
         match block.name.as_str() {
             "write_to_file" => {
                 if get_param_str(&block.params, "path").is_none()
-                    && block.native_args.as_ref().and_then(|a| a.get("path")).is_none()
+                    && block
+                        .native_args
+                        .as_ref()
+                        .and_then(|a| a.get("path"))
+                        .is_none()
                 {
                     return Some("write_to_file requires a 'path' parameter.".to_string());
                 }
             }
             "apply_diff" => {
                 if get_param_str(&block.params, "path").is_none()
-                    && block.native_args.as_ref().and_then(|a| a.get("path")).is_none()
+                    && block
+                        .native_args
+                        .as_ref()
+                        .and_then(|a| a.get("path"))
+                        .is_none()
                 {
                     return Some("apply_diff requires a 'path' parameter.".to_string());
                 }
             }
             "read_file" => {
                 if get_param_str(&block.params, "path").is_none()
-                    && block.native_args.as_ref().and_then(|a| a.get("path")).is_none()
+                    && block
+                        .native_args
+                        .as_ref()
+                        .and_then(|a| a.get("path"))
+                        .is_none()
                 {
                     return Some("read_file requires a 'path' parameter.".to_string());
                 }
             }
             "execute_command" => {
                 if get_param_str(&block.params, "command").is_none()
-                    && block.native_args.as_ref().and_then(|a| a.get("command")).is_none()
+                    && block
+                        .native_args
+                        .as_ref()
+                        .and_then(|a| a.get("command"))
+                        .is_none()
                 {
                     return Some("execute_command requires a 'command' parameter.".to_string());
                 }
             }
             "search_files" => {
                 if get_param_str(&block.params, "regex").is_none()
-                    && block.native_args.as_ref().and_then(|a| a.get("regex")).is_none()
+                    && block
+                        .native_args
+                        .as_ref()
+                        .and_then(|a| a.get("regex"))
+                        .is_none()
                 {
                     return Some("search_files requires a 'regex' parameter.".to_string());
                 }
             }
             "list_files" => {
                 if get_param_str(&block.params, "path").is_none()
-                    && block.native_args.as_ref().and_then(|a| a.get("path")).is_none()
+                    && block
+                        .native_args
+                        .as_ref()
+                        .and_then(|a| a.get("path"))
+                        .is_none()
                 {
                     return Some("list_files requires a 'path' parameter.".to_string());
                 }
             }
             "use_mcp_tool" => {
                 if get_param_str(&block.params, "server_name").is_none()
-                    && block.native_args.as_ref().and_then(|a| a.get("server_name")).is_none()
+                    && block
+                        .native_args
+                        .as_ref()
+                        .and_then(|a| a.get("server_name"))
+                        .is_none()
                 {
                     return Some("use_mcp_tool requires a 'server_name' parameter.".to_string());
                 }
                 if get_param_str(&block.params, "tool_name").is_none()
-                    && block.native_args.as_ref().and_then(|a| a.get("tool_name")).is_none()
+                    && block
+                        .native_args
+                        .as_ref()
+                        .and_then(|a| a.get("tool_name"))
+                        .is_none()
                 {
                     return Some("use_mcp_tool requires a 'tool_name' parameter.".to_string());
                 }
             }
             "access_mcp_resource" => {
                 if get_param_str(&block.params, "server_name").is_none()
-                    && block.native_args.as_ref().and_then(|a| a.get("server_name")).is_none()
+                    && block
+                        .native_args
+                        .as_ref()
+                        .and_then(|a| a.get("server_name"))
+                        .is_none()
                 {
-                    return Some("access_mcp_resource requires a 'server_name' parameter.".to_string());
+                    return Some(
+                        "access_mcp_resource requires a 'server_name' parameter.".to_string(),
+                    );
                 }
             }
             "ask_followup_question" => {
                 if get_param_str(&block.params, "question").is_none()
-                    && block.native_args.as_ref().and_then(|a| a.get("question")).is_none()
+                    && block
+                        .native_args
+                        .as_ref()
+                        .and_then(|a| a.get("question"))
+                        .is_none()
                 {
-                    return Some("ask_followup_question requires a 'question' parameter.".to_string());
+                    return Some(
+                        "ask_followup_question requires a 'question' parameter.".to_string(),
+                    );
                 }
             }
             "switch_mode" => {
                 if get_param_str(&block.params, "mode_slug").is_none()
-                    && block.native_args.as_ref().and_then(|a| a.get("mode_slug")).is_none()
+                    && block
+                        .native_args
+                        .as_ref()
+                        .and_then(|a| a.get("mode_slug"))
+                        .is_none()
                 {
                     return Some("switch_mode requires a 'mode_slug' parameter.".to_string());
                 }
             }
             "codebase_search" => {
                 if get_param_str(&block.params, "query").is_none()
-                    && block.native_args.as_ref().and_then(|a| a.get("query")).is_none()
+                    && block
+                        .native_args
+                        .as_ref()
+                        .and_then(|a| a.get("query"))
+                        .is_none()
                 {
                     return Some("codebase_search requires a 'query' parameter.".to_string());
                 }
@@ -1414,7 +1454,9 @@ impl PresentAssistantMessage {
             // Source: TS line 957
             self.state.current_streaming_content_index += 1;
 
-            if self.state.current_streaming_content_index < self.state.assistant_message_content.len() {
+            if self.state.current_streaming_content_index
+                < self.state.assistant_message_content.len()
+            {
                 // There are already more content blocks to stream, so we'll call
                 // this function ourselves.
                 // Source: TS lines 959-963
@@ -1899,7 +1941,10 @@ mod tests {
         pam.set_assistant_message_content(vec![make_text_block("Hello world", false)]);
 
         let result = pam.present(false).unwrap();
-        assert!(matches!(result, Some(BlockProcessingResult::SayText { .. })));
+        assert!(matches!(
+            result,
+            Some(BlockProcessingResult::SayText { .. })
+        ));
         if let Some(BlockProcessingResult::SayText { content, partial }) = result {
             assert_eq!(content, "Hello world");
             assert!(!partial);
@@ -1913,7 +1958,10 @@ mod tests {
         pam.set_assistant_message_content(vec![make_text_block("Hello...", true)]);
 
         let result = pam.present(false).unwrap();
-        assert!(matches!(result, Some(BlockProcessingResult::SayText { partial: true, .. })));
+        assert!(matches!(
+            result,
+            Some(BlockProcessingResult::SayText { partial: true, .. })
+        ));
     }
 
     // ---- Test 3: Lock mechanism ----
@@ -1955,7 +2003,10 @@ mod tests {
         pam.set_assistant_message_content(vec![AssistantMessageContent::ToolUse(tool_block)]);
 
         let result = pam.present(false).unwrap();
-        assert!(matches!(result, Some(BlockProcessingResult::InvalidToolCall)));
+        assert!(matches!(
+            result,
+            Some(BlockProcessingResult::InvalidToolCall)
+        ));
         assert!(pam.state.did_already_use_tool);
     }
 
@@ -1975,7 +2026,10 @@ mod tests {
         pam.state.did_reject_tool = true;
 
         let result = pam.present(false).unwrap();
-        assert!(matches!(result, Some(BlockProcessingResult::ToolRejected { .. })));
+        assert!(matches!(
+            result,
+            Some(BlockProcessingResult::ToolRejected { .. })
+        ));
     }
 
     // ---- Test 7: Strip thinking tags ----
@@ -2052,7 +2106,10 @@ mod tests {
             original_name: None,
             used_legacy_format: false,
         };
-        assert_eq!(pam.get_tool_description(&tool), "[execute_command for 'ls -la']");
+        assert_eq!(
+            pam.get_tool_description(&tool),
+            "[execute_command for 'ls -la']"
+        );
 
         let mut params2 = HashMap::new();
         params2.insert("path".to_string(), "/test.rs".to_string());
@@ -2066,7 +2123,10 @@ mod tests {
             original_name: None,
             used_legacy_format: false,
         };
-        assert_eq!(pam.get_tool_description(&tool2), "[read_file for '/test.rs']");
+        assert_eq!(
+            pam.get_tool_description(&tool2),
+            "[read_file for '/test.rs']"
+        );
     }
 
     // ---- Test 13: Reset for new message ----
@@ -2100,7 +2160,10 @@ mod tests {
     // ---- Test 15: Format utility functions ----
     #[test]
     fn test_format_utilities() {
-        assert_eq!(format_tool_error("something failed"), "Error: something failed");
+        assert_eq!(
+            format_tool_error("something failed"),
+            "Error: something failed"
+        );
         assert_eq!(format_tool_denied(), "Tool execution was denied by user.");
         assert!(format_tool_denied_with_feedback("try again").contains("try again"));
         assert!(format_tool_approved_with_feedback("looks good").contains("looks good"));
@@ -2118,7 +2181,10 @@ mod tests {
         )]);
 
         let result = pam.present(false).unwrap();
-        assert!(matches!(result, Some(BlockProcessingResult::ExecuteMcpTool(_))));
+        assert!(matches!(
+            result,
+            Some(BlockProcessingResult::ExecuteMcpTool(_))
+        ));
         if let Some(BlockProcessingResult::ExecuteMcpTool(action)) = result {
             assert_eq!(action.tool_call_id, "mcp-1");
             assert_eq!(action.server_name, "my_server");
@@ -2139,7 +2205,10 @@ mod tests {
         pam.state.did_reject_tool = true;
 
         let result = pam.present(false).unwrap();
-        assert!(matches!(result, Some(BlockProcessingResult::McpToolRejected { .. })));
+        assert!(matches!(
+            result,
+            Some(BlockProcessingResult::McpToolRejected { .. })
+        ));
     }
 
     // ---- Test 18: Tool dispatch with checkpoint ----
@@ -2157,7 +2226,10 @@ mod tests {
         )]);
 
         let result = pam.present(false).unwrap();
-        assert!(matches!(result, Some(BlockProcessingResult::CheckpointAndExecute(_))));
+        assert!(matches!(
+            result,
+            Some(BlockProcessingResult::CheckpointAndExecute(_))
+        ));
         if let Some(BlockProcessingResult::CheckpointAndExecute(action)) = result {
             assert_eq!(action.tool_name, "write_to_file");
             assert!(action.needs_checkpoint);
@@ -2178,7 +2250,10 @@ mod tests {
         )]);
 
         let result = pam.present(false).unwrap();
-        assert!(matches!(result, Some(BlockProcessingResult::ExecuteTool(_))));
+        assert!(matches!(
+            result,
+            Some(BlockProcessingResult::ExecuteTool(_))
+        ));
         if let Some(BlockProcessingResult::ExecuteTool(action)) = result {
             assert_eq!(action.tool_name, "read_file");
             assert!(!action.needs_checkpoint);
@@ -2205,7 +2280,10 @@ mod tests {
         })]);
 
         let result = pam.present(false).unwrap();
-        assert!(matches!(result, Some(BlockProcessingResult::UnknownTool { .. })));
+        assert!(matches!(
+            result,
+            Some(BlockProcessingResult::UnknownTool { .. })
+        ));
     }
 
     // ---- Test 21: Missing nativeArgs ----
@@ -2225,7 +2303,10 @@ mod tests {
         })]);
 
         let result = pam.present(false).unwrap();
-        assert!(matches!(result, Some(BlockProcessingResult::MissingNativeArgs { .. })));
+        assert!(matches!(
+            result,
+            Some(BlockProcessingResult::MissingNativeArgs { .. })
+        ));
     }
 
     // ---- Test 22: Text skipped when rejected ----
@@ -2344,22 +2425,12 @@ mod tests {
         let mut pam = PresentAssistantMessage::new();
         let mut has_tool_result = false;
 
-        let pushed1 = pam.push_tool_result_with_feedback(
-            "tool-1",
-            "first",
-            &[],
-            None,
-            &mut has_tool_result,
-        );
+        let pushed1 =
+            pam.push_tool_result_with_feedback("tool-1", "first", &[], None, &mut has_tool_result);
         assert!(pushed1);
 
-        let pushed2 = pam.push_tool_result_with_feedback(
-            "tool-1",
-            "second",
-            &[],
-            None,
-            &mut has_tool_result,
-        );
+        let pushed2 =
+            pam.push_tool_result_with_feedback("tool-1", "second", &[], None, &mut has_tool_result);
         assert!(!pushed2);
     }
 
@@ -2396,7 +2467,10 @@ mod tests {
         let mut params = HashMap::new();
         params.insert("file_path".to_string(), "/test.txt".to_string());
         let mut native_args = serde_json::Map::new();
-        native_args.insert("file_path".to_string(), Value::String("/test.txt".to_string()));
+        native_args.insert(
+            "file_path".to_string(),
+            Value::String("/test.txt".to_string()),
+        );
         pam.set_assistant_message_content(vec![AssistantMessageContent::ToolUse(ToolUse {
             content_type: "tool_use".to_string(),
             name: "search_replace".to_string(),
@@ -2409,7 +2483,10 @@ mod tests {
         })]);
 
         let result = pam.present(false).unwrap();
-        assert!(matches!(result, Some(BlockProcessingResult::CheckpointAndExecute(_))));
+        assert!(matches!(
+            result,
+            Some(BlockProcessingResult::CheckpointAndExecute(_))
+        ));
     }
 
     // ---- Test 35: Tool description for all tools ----
@@ -2431,7 +2508,10 @@ mod tests {
             original_name: None,
             used_legacy_format: false,
         };
-        assert_eq!(pam.get_tool_description(&tool), "[search_files for 'pattern' in '*.rs']");
+        assert_eq!(
+            pam.get_tool_description(&tool),
+            "[search_files for 'pattern' in '*.rs']"
+        );
 
         // switch_mode with reason
         let mut params2 = HashMap::new();
@@ -2447,7 +2527,10 @@ mod tests {
             original_name: None,
             used_legacy_format: false,
         };
-        assert_eq!(pam.get_tool_description(&tool2), "[switch_mode to 'architect' because: need design]");
+        assert_eq!(
+            pam.get_tool_description(&tool2),
+            "[switch_mode to 'architect' because: need design]"
+        );
 
         // new_task
         let mut params3 = HashMap::new();
@@ -2463,6 +2546,9 @@ mod tests {
             original_name: None,
             used_legacy_format: false,
         };
-        assert_eq!(pam.get_tool_description(&tool3), "[new_task in code mode: 'fix bug']");
+        assert_eq!(
+            pam.get_tool_description(&tool3),
+            "[new_task in code mode: 'fix bug']"
+        );
     }
 }

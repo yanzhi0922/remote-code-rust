@@ -47,7 +47,9 @@ pub async fn safe_write_json(
     options: Option<SafeWriteJsonOptions>,
 ) -> Result<(), SafeWriteJsonError> {
     let opts = options.unwrap_or_default();
-    let absolute_file_path = file_path.canonicalize().unwrap_or_else(|_| file_path.to_path_buf());
+    let absolute_file_path = file_path
+        .canonicalize()
+        .unwrap_or_else(|_| file_path.to_path_buf());
 
     // Ensure directory structure exists
     let dir_path = absolute_file_path

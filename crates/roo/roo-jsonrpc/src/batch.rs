@@ -33,10 +33,9 @@ pub fn decode_batch(data: &str) -> Result<Vec<Message>, BatchError> {
         Ok(vec![msg])
     } else {
         // Try parsing as array first, then as single
-        Err(BatchError::Serialization(serde_json::from_str::<
-            serde_json::Value,
-        >(data)
-        .unwrap_err()))
+        Err(BatchError::Serialization(
+            serde_json::from_str::<serde_json::Value>(data).unwrap_err(),
+        ))
     }
 }
 

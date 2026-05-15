@@ -2,15 +2,13 @@
 
 use axum::body::Body;
 use axum::extract::{Path, State};
-use axum::http::{header, StatusCode};
+use axum::http::{StatusCode, header};
 use axum::response::{Html, IntoResponse, Response};
 
 use crate::state::ControlPlaneService;
 
 /// Serve the download page listing all available files.
-pub(crate) async fn download_page(
-    State(service): State<ControlPlaneService>,
-) -> impl IntoResponse {
+pub(crate) async fn download_page(State(service): State<ControlPlaneService>) -> impl IntoResponse {
     let Some(dir) = &service.downloads_dir else {
         return Html(render_empty_page("Downloads not configured."));
     };
@@ -31,9 +29,7 @@ pub(crate) async fn download_page(
             .unwrap_or_default()
             .to_string_lossy()
             .to_string();
-        let size = std::fs::metadata(&path)
-            .map(|m| m.len())
-            .unwrap_or(0);
+        let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
         let icon = match name.rsplit('.').next() {
             Some("apk") => "📱",
             Some("ipa") => "🍎",
@@ -121,9 +117,7 @@ fn human_size(bytes: u64) -> String {
 }
 
 fn render_empty_page(msg: &str) -> String {
-    render_page_body(&format!(
-        r#"<div class="empty"><p>{msg}</p></div>"#
-    ))
+    render_page_body(&format!(r#"<div class="empty"><p>{msg}</p></div>"#))
 }
 
 fn render_download_page(files: &[FileEntry]) -> String {
@@ -151,9 +145,7 @@ fn render_download_page(files: &[FileEntry]) -> String {
         })
         .collect();
 
-    render_page_body(&format!(
-        r#"<div class="files">{rows}</div>"#
-    ))
+    render_page_body(&format!(r#"<div class="files">{rows}</div>"#))
 }
 
 fn render_page_body(body: &str) -> String {

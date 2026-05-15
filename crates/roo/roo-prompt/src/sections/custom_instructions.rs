@@ -165,7 +165,10 @@ fn collect_files_recursive(
                     let resolved = if target.is_absolute() {
                         target
                     } else {
-                        original_path.parent().unwrap_or(Path::new(".")).join(target)
+                        original_path
+                            .parent()
+                            .unwrap_or(Path::new("."))
+                            .join(target)
                     };
                     if resolved.is_dir() {
                         if let Ok(sub_entries) = fs::read_dir(&resolved) {
@@ -339,10 +342,7 @@ pub fn load_rule_files(cwd: &str, enable_subfolder_rules: bool) -> String {
 
     // If we found rules in .roo/rules/ directories, return them
     if !rules.is_empty() {
-        return format!(
-            "\n# Rules from .roo directories:\n\n{}",
-            rules.join("\n\n")
-        );
+        return format!("\n# Rules from .roo directories:\n\n{}", rules.join("\n\n"));
     }
 
     // Fall back to existing behavior for legacy .roorules/.clinerules files
@@ -386,10 +386,7 @@ fn load_mode_rule_files(cwd: &str, mode: &str, enable_subfolder_rules: bool) -> 
     // If we found mode-specific rules in .roo/rules-${mode}/ directories, use them
     if !mode_rules.is_empty() {
         let used_rule_file = format!("rules-{} directories", mode);
-        return (
-            format!("\n{}", mode_rules.join("\n\n")),
-            used_rule_file,
-        );
+        return (format!("\n{}", mode_rules.join("\n\n")), used_rule_file);
     }
 
     // Fall back to existing behavior for legacy files
@@ -411,11 +408,7 @@ fn load_mode_rule_files(cwd: &str, mode: &str, enable_subfolder_rules: bool) -> 
 /// Load AGENTS.md or AGENT.md file from a specific directory.
 ///
 /// Source: `src/core/prompts/sections/custom-instructions.ts` — `loadAgentRulesFileFromDirectory`
-fn load_agent_rules_file_from_directory(
-    directory: &Path,
-    show_path: bool,
-    cwd: &str,
-) -> String {
+fn load_agent_rules_file_from_directory(directory: &Path, show_path: bool, cwd: &str) -> String {
     let filenames = ["AGENTS.md", "AGENT.md"];
     let mut results: Vec<String> = Vec::new();
     let display_path = Path::new(directory)
@@ -471,8 +464,7 @@ fn load_all_agent_rules_files(cwd: &str, enable_subfolder_rules: bool) -> String
     let mut agent_rules: Vec<String> = Vec::new();
 
     if !enable_subfolder_rules {
-        let content =
-            load_agent_rules_file_from_directory(Path::new(cwd), false, cwd);
+        let content = load_agent_rules_file_from_directory(Path::new(cwd), false, cwd);
         let trimmed = content.trim();
         if !trimmed.is_empty() {
             agent_rules.push(trimmed.to_string());
@@ -526,12 +518,8 @@ pub fn add_custom_instructions(
 ) -> String {
     let mut sections: Vec<String> = Vec::new();
 
-    let enable_subfolder_rules = settings
-        .map(|s| s.enable_subfolder_rules)
-        .unwrap_or(false);
-    let use_agent_rules = settings
-        .map(|s| s.use_agent_rules)
-        .unwrap_or(true);
+    let enable_subfolder_rules = settings.map(|s| s.enable_subfolder_rules).unwrap_or(false);
+    let use_agent_rules = settings.map(|s| s.use_agent_rules).unwrap_or(true);
 
     // Load mode-specific rules if mode is provided
     let (mode_rule_content, used_rule_file) = if !mode.is_empty() {
@@ -573,12 +561,17 @@ pub fn add_custom_instructions(
         // contain this substring, so this check always fails (matching TS behavior).
         let roo_rules_mode_unix = format!(".roo/rules-{}", mode);
         let roo_rules_mode_win = format!(".roo\\rules-{}", mode);
-        if used_rule_file.contains(&roo_rules_mode_unix) || used_rule_file.contains(&roo_rules_mode_win) {
+        if used_rule_file.contains(&roo_rules_mode_unix)
+            || used_rule_file.contains(&roo_rules_mode_win)
+        {
             rules.push(mode_rule_trimmed.to_string());
         } else {
             // TS uses untrimmed modeRuleContent (which starts with \n for directory rules),
             // preserving the leading newline for consistent formatting.
-            rules.push(format!("# Rules from {}:\n{}", used_rule_file, mode_rule_content));
+            rules.push(format!(
+                "# Rules from {}:\n{}",
+                used_rule_file, mode_rule_content
+            ));
         }
     }
 
@@ -644,29 +637,14 @@ mod tests {
 
     #[test]
     fn test_add_custom_instructions_empty() {
-        let result = add_custom_instructions(
-            "",
-            "",
-            "/tmp/test",
-            "code",
-            None,
-            None,
-            None,
-        );
+        let result = add_custom_instructions("", "", "/tmp/test", "code", None, None, None);
         assert!(result.is_empty() || result.trim().is_empty());
     }
 
     #[test]
     fn test_add_custom_instructions_with_language() {
-        let result = add_custom_instructions(
-            "",
-            "",
-            "/tmp/test",
-            "code",
-            Some("zh-CN"),
-            None,
-            None,
-        );
+        let result =
+            add_custom_instructions("", "", "/tmp/test", "code", Some("zh-CN"), None, None);
         assert!(result.contains("Language Preference"));
         assert!(result.contains("zh-CN"));
     }

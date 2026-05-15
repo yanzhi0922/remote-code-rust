@@ -259,10 +259,7 @@ pub struct MessageHandleResult {
 ///
 /// # Returns
 /// A `MessageHandleResult` indicating success or failure.
-pub fn route_message(
-    message: &WebviewMessage,
-    handlers: &MessageHandlers,
-) -> MessageHandleResult {
+pub fn route_message(message: &WebviewMessage, handlers: &MessageHandlers) -> MessageHandleResult {
     let msg_type = message.msg_type.to_lowercase();
 
     debug!("Routing webview message: {}", msg_type);
@@ -293,7 +290,9 @@ pub fn route_message(
         "settingsupdate" | "updatesettings" => (handlers.handle_settings_update)(message),
         "saveapiconfig" | "saveapiconfiguration" => (handlers.handle_save_api_config)(message),
         "loadapiconfig" | "loadapiconfiguration" => (handlers.handle_load_api_config)(message),
-        "deleteapiconfig" | "deleteapiconfiguration" => (handlers.handle_delete_api_config)(message),
+        "deleteapiconfig" | "deleteapiconfiguration" => {
+            (handlers.handle_delete_api_config)(message)
+        }
         "listapiconfigs" | "getlistapiconfiguration" => (handlers.handle_list_api_configs)(message),
         "upsertapiconfiguration" => noop_handler(message),
         "renameapiconfiguration" => noop_handler(message),
@@ -608,10 +607,7 @@ pub fn find_message_indices(
 /// Finds the first API history index at or after a timestamp.
 ///
 /// Source: `src/core/webview/webviewMessageHandler.ts` — `findFirstApiIndexAtOrAfter`
-pub fn find_first_api_index_at_or_after(
-    ts: u64,
-    api_history: &[(u64, bool)],
-) -> isize {
+pub fn find_first_api_index_at_or_after(ts: u64, api_history: &[(u64, bool)]) -> isize {
     api_history
         .iter()
         .position(|(msg_ts, _)| *msg_ts >= ts)
@@ -670,7 +666,12 @@ mod tests {
     #[test]
     fn test_find_message_indices() {
         let cline_messages = vec![(100u64, false), (200u64, false), (300u64, false)];
-        let api_history = vec![(100u64, false), (200u64, true), (200u64, false), (300u64, false)];
+        let api_history = vec![
+            (100u64, false),
+            (200u64, true),
+            (200u64, false),
+            (300u64, false),
+        ];
 
         let (msg_idx, api_idx) = find_message_indices(200, &cline_messages, &api_history);
         assert_eq!(msg_idx, 1);

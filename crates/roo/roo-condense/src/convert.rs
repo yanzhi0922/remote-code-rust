@@ -21,7 +21,8 @@ pub fn tool_use_to_text(name: &str, input: &serde_json::Value) -> String {
                 obj.iter()
                     .map(|(key, value)| {
                         let formatted_value = if value.is_object() || value.is_array() {
-                            serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string())
+                            serde_json::to_string_pretty(value)
+                                .unwrap_or_else(|_| value.to_string())
                         } else {
                             match value {
                                 serde_json::Value::String(s) => s.clone(),
@@ -82,9 +83,7 @@ pub fn convert_tool_blocks_to_text(content: &[ContentBlock]) -> Vec<ContentBlock
                 text: tool_use_to_text(name, input),
             },
             ContentBlock::ToolResult {
-                content,
-                is_error,
-                ..
+                content, is_error, ..
             } => ContentBlock::Text {
                 text: tool_result_to_text(content, *is_error),
             },
@@ -196,9 +195,13 @@ mod tests {
         // First block unchanged
         assert!(matches!(&result[0], ContentBlock::Text { text } if text == "hello"));
         // Tool use converted to text
-        assert!(matches!(&result[1], ContentBlock::Text { text } if text.contains("[Tool Use: read_file]")));
+        assert!(
+            matches!(&result[1], ContentBlock::Text { text } if text.contains("[Tool Use: read_file]"))
+        );
         // Tool result converted to text
-        assert!(matches!(&result[2], ContentBlock::Text { text } if text.contains("[Tool Result]")));
+        assert!(
+            matches!(&result[2], ContentBlock::Text { text } if text.contains("[Tool Result]"))
+        );
     }
 
     #[test]

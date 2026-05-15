@@ -85,7 +85,10 @@ impl TaskState {
             TaskState::Idle => matches!(target, TaskState::Running),
             TaskState::Running => matches!(
                 target,
-                TaskState::Paused | TaskState::Completed | TaskState::Aborted | TaskState::Delegated
+                TaskState::Paused
+                    | TaskState::Completed
+                    | TaskState::Aborted
+                    | TaskState::Delegated
             ),
             TaskState::Paused => matches!(target, TaskState::Running | TaskState::Aborted),
             TaskState::Delegated => matches!(target, TaskState::Running),
@@ -98,10 +101,7 @@ impl TaskState {
     /// Note: `Delegated` is NOT terminal because it can transition back to
     /// `Running` via `resumeAfterDelegation()`. This matches the TS behavior.
     pub fn is_terminal(&self) -> bool {
-        matches!(
-            self,
-            TaskState::Completed | TaskState::Aborted
-        )
+        matches!(self, TaskState::Completed | TaskState::Aborted)
     }
 
     /// Returns `true` if the task is currently active.
@@ -666,19 +666,11 @@ impl AssistantMessageContent {
 #[derive(Debug, Clone)]
 pub enum ToolCallStreamEvent {
     /// A new tool call has started.
-    Start {
-        id: String,
-        name: String,
-    },
+    Start { id: String, name: String },
     /// A delta of arguments has been received for an active tool call.
-    Delta {
-        id: String,
-        delta: String,
-    },
+    Delta { id: String, delta: String },
     /// A tool call has ended (stream finished).
-    End {
-        id: String,
-    },
+    End { id: String },
 }
 
 // ---------------------------------------------------------------------------
@@ -712,7 +704,11 @@ pub enum StreamEvent {
     ToolCallEnd { id: String },
 
     /// A complete tool call (non-streaming provider, all-at-once).
-    ToolCallComplete { id: String, name: String, arguments: String },
+    ToolCallComplete {
+        id: String,
+        name: String,
+        arguments: String,
+    },
 
     /// A raw partial tool call chunk (index-based, needs NativeToolCallParser processing).
     ToolCallPartial {
@@ -733,7 +729,9 @@ pub enum StreamEvent {
     },
 
     /// Grounding sources (Gemini search-augmented models).
-    Grounding { sources: Vec<roo_types::api::GroundingSource> },
+    Grounding {
+        sources: Vec<roo_types::api::GroundingSource>,
+    },
 
     /// Thinking block completed with signature (Anthropic extended thinking).
     ThinkingComplete { signature: String },
@@ -807,9 +805,7 @@ pub enum StackItem {
         tool_name: String,
     },
     /// The agent is waiting for user input (ask response).
-    AskResponse {
-        ask_type: String,
-    },
+    AskResponse { ask_type: String },
     /// The agent is processing a sub-task (new_task delegation).
     SubTask {
         parent_task_id: String,
@@ -834,26 +830,15 @@ pub enum AttemptResult {
     /// The API request completed successfully and the task is done.
     Completed,
     /// The task was aborted (user cancelled, rate limit, etc.).
-    Aborted {
-        reason: Option<String>,
-    },
+    Aborted { reason: Option<String> },
     /// The task was delegated to a sub-task.
-    Delegated {
-        child_task_id: String,
-    },
+    Delegated { child_task_id: String },
     /// The context window was exceeded and needs truncation.
-    ContextWindowExceeded {
-        retry_count: usize,
-    },
+    ContextWindowExceeded { retry_count: usize },
     /// A rate limit was hit; back off and retry.
-    RateLimited {
-        retry_after_ms: Option<u64>,
-    },
+    RateLimited { retry_after_ms: Option<u64> },
     /// An API error occurred.
-    ApiError {
-        error: String,
-        retryable: bool,
-    },
+    ApiError { error: String, retryable: bool },
     /// The user paused the task.
     Paused,
     /// No response from the API (empty response).
@@ -1086,7 +1071,10 @@ mod tests {
                 TaskState::Aborted,
                 TaskState::Delegated,
             ] {
-                assert!(!terminal.can_transition_to(&target), "{terminal:?} should not transition to {target:?}");
+                assert!(
+                    !terminal.can_transition_to(&target),
+                    "{terminal:?} should not transition to {target:?}"
+                );
             }
         }
         assert!(TaskState::Delegated.can_transition_to(&TaskState::Running));
@@ -1124,8 +1112,14 @@ mod tests {
         assert!(!config.auto_approval);
         assert!(config.max_iterations.is_none());
         assert!(config.enable_checkpoints);
-        assert_eq!(config.checkpoint_timeout, DEFAULT_CHECKPOINT_TIMEOUT_SECONDS);
-        assert_eq!(config.consecutive_mistake_limit, crate::config::DEFAULT_MAX_MISTAKES);
+        assert_eq!(
+            config.checkpoint_timeout,
+            DEFAULT_CHECKPOINT_TIMEOUT_SECONDS
+        );
+        assert_eq!(
+            config.consecutive_mistake_limit,
+            crate::config::DEFAULT_MAX_MISTAKES
+        );
         assert!(config.task_text.is_none());
         assert!(config.images.is_empty());
         assert!(config.history_item_id.is_none());
@@ -1399,17 +1393,33 @@ mod tests {
         assert!(AttemptResult::ContextWindowExceeded { retry_count: 0 }.should_continue());
         assert!(!AttemptResult::Completed.should_continue());
         assert!(!AttemptResult::Aborted { reason: None }.should_continue());
-        assert!(!AttemptResult::RateLimited { retry_after_ms: None }.should_continue());
+        assert!(
+            !AttemptResult::RateLimited {
+                retry_after_ms: None
+            }
+            .should_continue()
+        );
     }
 
     #[test]
     fn test_attempt_result_is_terminal() {
         assert!(AttemptResult::Completed.is_terminal());
         assert!(AttemptResult::Aborted { reason: None }.is_terminal());
-        assert!(AttemptResult::Delegated { child_task_id: "c1".into() }.is_terminal());
+        assert!(
+            AttemptResult::Delegated {
+                child_task_id: "c1".into()
+            }
+            .is_terminal()
+        );
         assert!(AttemptResult::Paused.is_terminal());
         assert!(!AttemptResult::Continue.is_terminal());
-        assert!(!AttemptResult::ApiError { error: "err".into(), retryable: true }.is_terminal());
+        assert!(
+            !AttemptResult::ApiError {
+                error: "err".into(),
+                retryable: true
+            }
+            .is_terminal()
+        );
     }
 
     // --- MCP tool name utilities tests ---
@@ -1488,7 +1498,9 @@ mod tests {
 
     #[test]
     fn test_tool_call_stream_event_end() {
-        let event = ToolCallStreamEvent::End { id: "call_1".into() };
+        let event = ToolCallStreamEvent::End {
+            id: "call_1".into(),
+        };
         match &event {
             ToolCallStreamEvent::End { id } => {
                 assert_eq!(id, "call_1");
@@ -1529,7 +1541,10 @@ mod tests {
             tool_name: "read_file".into(),
         };
         match &item {
-            StackItem::ToolResult { tool_use_id, tool_name } => {
+            StackItem::ToolResult {
+                tool_use_id,
+                tool_name,
+            } => {
                 assert_eq!(tool_use_id, "call_1");
                 assert_eq!(tool_name, "read_file");
             }
@@ -1557,7 +1572,10 @@ mod tests {
             child_task_id: "c1".into(),
         };
         match &item {
-            StackItem::SubTask { parent_task_id, child_task_id } => {
+            StackItem::SubTask {
+                parent_task_id,
+                child_task_id,
+            } => {
                 assert_eq!(parent_task_id, "p1");
                 assert_eq!(child_task_id, "c1");
             }

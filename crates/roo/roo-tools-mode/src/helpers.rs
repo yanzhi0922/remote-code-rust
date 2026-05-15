@@ -116,10 +116,7 @@ mod tests {
 
     #[test]
     fn test_process_message_multiple_escapes() {
-        assert_eq!(
-            process_task_message("a\\nb\\tc"),
-            "a\nb\tc"
-        );
+        assert_eq!(process_task_message("a\\nb\\tc"), "a\nb\tc");
     }
 
     // ---- ModeSwitchResult tests ----

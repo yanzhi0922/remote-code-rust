@@ -138,13 +138,15 @@ mod tests {
 
     #[test]
     fn test_diagnostics_result_with_messages() {
-        let result = DiagnosticsResult::with_messages(
-            "test.rs",
-            vec!["error: something broke".to_string()],
-        );
+        let result =
+            DiagnosticsResult::with_messages("test.rs", vec!["error: something broke".to_string()]);
         assert!(result.ran);
         assert!(result.has_problems());
-        assert!(result.to_problems_string().contains("New problems detected"));
+        assert!(
+            result
+                .to_problems_string()
+                .contains("New problems detected")
+        );
         assert!(result.to_problems_string().contains("something broke"));
     }
 
@@ -158,7 +160,9 @@ mod tests {
 
     #[test]
     fn test_is_error_line() {
-        assert!(is_error_line("src/main.rs:10:5: error[E0425]: cannot find value"));
+        assert!(is_error_line(
+            "src/main.rs:10:5: error[E0425]: cannot find value"
+        ));
         assert!(is_error_line("error: could not compile `foo`"));
         assert!(!is_error_line("warning: unused variable: `x`"));
         assert!(!is_error_line("    Checking foo v0.1.0"));

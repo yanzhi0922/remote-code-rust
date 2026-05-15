@@ -35,7 +35,9 @@ pub struct MiniMaxHandler {
 impl MiniMaxHandler {
     /// Create a new MiniMax handler from configuration.
     pub fn new(config: MiniMaxConfig) -> Result<Self, roo_provider::ProviderError> {
-        let model_id = config.model_id.unwrap_or_else(|| models::default_model_id());
+        let model_id = config
+            .model_id
+            .unwrap_or_else(|| models::default_model_id());
         let model_info = models::models()
             .get(&model_id)
             .cloned()
@@ -63,8 +65,7 @@ impl MiniMaxHandler {
             enable_1m_context: false,
         };
 
-        let inner = AnthropicHandler::new(anthropic_config)?
-            .with_model_info(model_info);
+        let inner = AnthropicHandler::new(anthropic_config)?.with_model_info(model_info);
 
         Ok(Self {
             inner,
@@ -76,8 +77,8 @@ impl MiniMaxHandler {
     pub fn from_settings(
         settings: &roo_types::provider_settings::ProviderSettings,
     ) -> Result<Self, roo_provider::ProviderError> {
-        let config =
-            MiniMaxConfig::from_settings(settings).ok_or(roo_provider::ProviderError::ApiKeyRequired)?;
+        let config = MiniMaxConfig::from_settings(settings)
+            .ok_or(roo_provider::ProviderError::ApiKeyRequired)?;
         Self::new(config)
     }
 }
@@ -106,10 +107,7 @@ impl Provider for MiniMaxHandler {
         self.inner.get_model()
     }
 
-    async fn complete_prompt(
-        &self,
-        prompt: &str,
-    ) -> Result<String, roo_provider::ProviderError> {
+    async fn complete_prompt(&self, prompt: &str) -> Result<String, roo_provider::ProviderError> {
         self.inner.complete_prompt(prompt).await
     }
 
@@ -327,7 +325,11 @@ mod tests {
     #[test]
     fn test_model_count() {
         let all_models = models::models();
-        assert!(all_models.len() >= 8, "Expected at least 8 models, got {}", all_models.len());
+        assert!(
+            all_models.len() >= 8,
+            "Expected at least 8 models, got {}",
+            all_models.len()
+        );
     }
 
     #[test]

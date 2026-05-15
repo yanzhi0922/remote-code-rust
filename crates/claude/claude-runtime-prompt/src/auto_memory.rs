@@ -360,7 +360,9 @@ pub fn agent_memory_dir(
             .join(".claude")
             .join("agent-memory")
             .join(dir_name),
-        claude_agents::definition::AgentMemoryScope::Local => local_agent_memory_dir(config, &dir_name),
+        claude_agents::definition::AgentMemoryScope::Local => {
+            local_agent_memory_dir(config, &dir_name)
+        }
     }
 }
 
@@ -1041,7 +1043,11 @@ pub(crate) fn truncate_entrypoint_content(raw: &str) -> String {
 
     if truncated.len() > MAX_ENTRYPOINT_BYTES {
         if let Some(cut_at) = truncated[..MAX_ENTRYPOINT_BYTES].rfind('\n') {
-            truncated.truncate(if cut_at > 0 { cut_at } else { MAX_ENTRYPOINT_BYTES });
+            truncated.truncate(if cut_at > 0 {
+                cut_at
+            } else {
+                MAX_ENTRYPOINT_BYTES
+            });
         } else {
             truncated.truncate(MAX_ENTRYPOINT_BYTES);
         }

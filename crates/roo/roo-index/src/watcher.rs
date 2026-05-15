@@ -12,8 +12,8 @@ use std::time::Duration;
 
 use notify::event::{CreateKind, ModifyKind, RemoveKind, RenameMode};
 use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
-use tokio::sync::mpsc;
 use tokio::sync::Mutex;
+use tokio::sync::mpsc;
 use tracing::{debug, error, info};
 
 use crate::manager::CodeIndexManager;
@@ -32,10 +32,10 @@ pub enum FileEventType {
 /// Supported file extensions for indexing.
 /// Mirrors the TS `scannerExtensions` list from `shared/supported-extensions`.
 const SUPPORTED_EXTENSIONS: &[&str] = &[
-    ".rs", ".ts", ".tsx", ".js", ".jsx", ".py", ".go", ".java", ".c", ".cpp", ".h", ".hpp",
-    ".cs", ".rb", ".php", ".swift", ".kt", ".scala", ".sh", ".bash", ".zsh", ".fish",
-    ".yaml", ".yml", ".json", ".toml", ".xml", ".html", ".css", ".scss", ".less",
-    ".md", ".txt", ".sql", ".proto", ".graphql", ".vue", ".svelte",
+    ".rs", ".ts", ".tsx", ".js", ".jsx", ".py", ".go", ".java", ".c", ".cpp", ".h", ".hpp", ".cs",
+    ".rb", ".php", ".swift", ".kt", ".scala", ".sh", ".bash", ".zsh", ".fish", ".yaml", ".yml",
+    ".json", ".toml", ".xml", ".html", ".css", ".scss", ".less", ".md", ".txt", ".sql", ".proto",
+    ".graphql", ".vue", ".svelte",
 ];
 
 /// Debounce delay in milliseconds.
@@ -220,22 +220,26 @@ impl FileWatcher {
                     let key = path_str.to_string();
                     // Insert or update. Delete takes precedence if already deleted,
                     // otherwise the latest event type wins.
-                    inner.accumulated_events.entry(key).and_modify(|existing| {
-                        // If it was deleted and now created/changed, treat as change.
-                        // If it was created/changed and now deleted, treat as delete.
-                        match (&existing, &file_event_type) {
-                            (FileEventType::Delete, FileEventType::Create) => {
-                                *existing = FileEventType::Change;
+                    inner
+                        .accumulated_events
+                        .entry(key)
+                        .and_modify(|existing| {
+                            // If it was deleted and now created/changed, treat as change.
+                            // If it was created/changed and now deleted, treat as delete.
+                            match (&existing, &file_event_type) {
+                                (FileEventType::Delete, FileEventType::Create) => {
+                                    *existing = FileEventType::Change;
+                                }
+                                (FileEventType::Delete, FileEventType::Change) => {
+                                    *existing = FileEventType::Change;
+                                }
+                                (_, FileEventType::Delete) => {
+                                    *existing = FileEventType::Delete;
+                                }
+                                _ => {} // Keep the existing event type for create/change
                             }
-                            (FileEventType::Delete, FileEventType::Change) => {
-                                *existing = FileEventType::Change;
-                            }
-                            (_, FileEventType::Delete) => {
-                                *existing = FileEventType::Delete;
-                            }
-                            _ => {} // Keep the existing event type for create/change
-                        }
-                    }).or_insert(file_event_type.clone());
+                        })
+                        .or_insert(file_event_type.clone());
                 }
             }
         }
@@ -325,11 +329,14 @@ mod tests {
         use std::collections::HashMap;
         let mut events: HashMap<String, FileEventType> = HashMap::new();
         events.insert("test.rs".to_string(), FileEventType::Delete);
-        events.entry("test.rs".to_string()).and_modify(|e| {
-            if let FileEventType::Delete = e {
-                *e = FileEventType::Change;
-            }
-        }).or_insert(FileEventType::Create);
+        events
+            .entry("test.rs".to_string())
+            .and_modify(|e| {
+                if let FileEventType::Delete = e {
+                    *e = FileEventType::Change;
+                }
+            })
+            .or_insert(FileEventType::Create);
         assert_eq!(events.get("test.rs"), Some(&FileEventType::Change));
     }
 }

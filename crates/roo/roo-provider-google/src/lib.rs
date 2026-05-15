@@ -15,7 +15,6 @@ mod types;
 
 pub use handler::{GoogleHandler, VertexHandler};
 pub use models::{
-    default_model_id, models, vertex_default_model_id, vertex_models,
-    VERTEX_DEFAULT_MODEL_ID,
+    VERTEX_DEFAULT_MODEL_ID, default_model_id, models, vertex_default_model_id, vertex_models,
 };
 pub use types::{GoogleConfig, VertexConfig};

@@ -135,11 +135,13 @@ where
     let ts_str = message_ts.to_string();
     match (callbacks.checkpoint_restore)(&ts_str, &checkpoint.hash) {
         Ok(()) => {
-            info!("Checkpoint restored successfully for {} operation", 
+            info!(
+                "Checkpoint restored successfully for {} operation",
                 match operation {
                     CheckpointOperation::Delete => "delete",
                     CheckpointOperation::Edit => "edit",
-                });
+                }
+            );
         }
         Err(e) => {
             error!("Failed to restore checkpoint: {}", e);
@@ -206,10 +208,7 @@ type FnSetPendingEdit = Box<dyn Fn(&str, &PendingEditOperation)>;
 ///
 /// # Returns
 /// `true` if initialization completed within the timeout, `false` otherwise.
-pub async fn wait_for_initialization(
-    check_fn: impl Fn() -> bool,
-    timeout_ms: u64,
-) -> bool {
+pub async fn wait_for_initialization(check_fn: impl Fn() -> bool, timeout_ms: u64) -> bool {
     let start = std::time::Instant::now();
     let timeout = std::time::Duration::from_millis(timeout_ms);
 
@@ -220,7 +219,10 @@ pub async fn wait_for_initialization(
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
 
-    warn!("Timed out waiting for initialization after {}ms", timeout_ms);
+    warn!(
+        "Timed out waiting for initialization after {}ms",
+        timeout_ms
+    );
     false
 }
 

@@ -1,7 +1,7 @@
 //! Configuration types for OpenAI Native and Codex providers.
 
-use serde::{Deserialize, Serialize};
 use roo_types::provider_settings::ProviderSettings;
+use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
 // OpenAI Native (Responses API with API key auth)

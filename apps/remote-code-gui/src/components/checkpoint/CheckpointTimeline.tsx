@@ -1,4 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { checkpointList } from '../../lib/tauri';
+import type { CheckpointSummaryInfo } from '../../lib/types';
 
 /**
  * Checkpoint Timeline component inspired by ZCode's conversation-level version control.
@@ -8,22 +10,6 @@ import React, { useState, useEffect, useCallback } from 'react';
  * - Undo the last interaction
  * - Restore to any historical checkpoint
  */
-
-interface CheckpointSummary {
-  id: string;
-  sessionId: string;
-  messageId: string;
-  messageIndex: number;
-  createdAt: string;
-  summary: string;
-  stats: {
-    filesAdded: number;
-    filesModified: number;
-    filesDeleted: number;
-    linesAdded: number;
-    linesRemoved: number;
-  };
-}
 
 interface CheckpointTimelineProps {
   sessionId: string | null;
@@ -40,15 +26,19 @@ export const CheckpointTimeline: React.FC<CheckpointTimelineProps> = ({
   onReview,
   className = '',
 }) => {
-  const [checkpoints, setCheckpoints] = useState<CheckpointSummary[]>([]);
+  const [checkpoints, setCheckpoints] = useState<CheckpointSummaryInfo[]>([]);
   const [loading, setLoading] = useState(false);
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   const loadCheckpoints = useCallback(async () => {
     if (!sessionId) return;
     setLoading(true);
+    setError(null);
     try {
-      // TODO: Call Tauri backend checkpoint_list command
+      setCheckpoints(await checkpointList(sessionId));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
       setCheckpoints([]);
     } finally {
       setLoading(false);
@@ -68,7 +58,7 @@ export const CheckpointTimeline: React.FC<CheckpointTimelineProps> = ({
     }
   };
 
-  const formatStats = (stats: CheckpointSummary['stats']) => {
+  const formatStats = (stats: CheckpointSummaryInfo['stats']) => {
     const parts: string[] = [];
     if (stats.filesAdded > 0) parts.push(`+${stats.filesAdded} added`);
     if (stats.filesModified > 0) parts.push(`~${stats.filesModified} modified`);
@@ -76,7 +66,7 @@ export const CheckpointTimeline: React.FC<CheckpointTimelineProps> = ({
     return parts.length > 0 ? parts.join(', ') : 'No changes';
   };
 
-  const totalChanges = (stats: CheckpointSummary['stats']) =>
+  const totalChanges = (stats: CheckpointSummaryInfo['stats']) =>
     stats.filesAdded + stats.filesModified + stats.filesDeleted;
 
   if (!sessionId) {
@@ -115,7 +105,11 @@ export const CheckpointTimeline: React.FC<CheckpointTimelineProps> = ({
 
       {/* Timeline */}
       <div className="flex-1 overflow-y-auto">
-        {loading ? (
+        {error ? (
+          <div className="text-xs text-red-400 text-center py-4 px-3">
+            {error}
+          </div>
+        ) : loading ? (
           <div className="text-xs text-[var(--color-text-muted)] text-center py-4">
             Loading checkpoints...
           </div>

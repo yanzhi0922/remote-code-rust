@@ -54,21 +54,13 @@ pub enum BedrockEvent {
         metrics: Option<BedrockMetrics>,
     },
     /// An internal error from the stream.
-    InternalServerException {
-        message: String,
-    },
+    InternalServerException { message: String },
     /// A service unavailable error.
-    ServiceUnavailableException {
-        message: String,
-    },
+    ServiceUnavailableException { message: String },
     /// Throttling error.
-    ThrottlingException {
-        message: String,
-    },
+    ThrottlingException { message: String },
     /// Validation error.
-    ValidationException {
-        message: String,
-    },
+    ValidationException { message: String },
     /// Prompt router trace event.
     /// Source: TS bedrock.ts — `streamEvent?.trace?.promptRouter?.invokedModelId`
     PromptRouter {
@@ -76,10 +68,7 @@ pub enum BedrockEvent {
         usage: Option<BedrockUsage>,
     },
     /// Unknown event type (graceful degradation).
-    Unknown {
-        event_type: String,
-        payload: Value,
-    },
+    Unknown { event_type: String, payload: Value },
 }
 
 /// Content block start data.
@@ -111,9 +100,7 @@ pub enum ContentBlockStartData {
 pub enum ContentBlockDeltaData {
     /// Text delta.
     #[serde(rename = "textDelta")]
-    TextDelta {
-        text: String,
-    },
+    TextDelta { text: String },
     /// Tool use delta (input JSON).
     #[serde(rename = "toolUseDelta")]
     ToolUseDelta {
@@ -123,14 +110,10 @@ pub enum ContentBlockDeltaData {
     },
     /// Reasoning text delta.
     #[serde(rename = "reasoningContentDelta")]
-    ReasoningTextDelta {
-        text: String,
-    },
+    ReasoningTextDelta { text: String },
     /// Reasoning signature delta.
     #[serde(rename = "reasoningContentSignatureDelta")]
-    ReasoningSignatureDelta {
-        signature: String,
-    },
+    ReasoningSignatureDelta { signature: String },
 }
 
 /// Usage metadata from Bedrock.
@@ -241,14 +224,12 @@ fn parse_headers(data: &[u8]) -> (String, String) {
                 if offset + 2 > data.len() {
                     break;
                 }
-                let str_len =
-                    u16::from_be_bytes([data[offset], data[offset + 1]]) as usize;
+                let str_len = u16::from_be_bytes([data[offset], data[offset + 1]]) as usize;
                 offset += 2;
                 if offset + str_len > data.len() {
                     break;
                 }
-                let value =
-                    String::from_utf8_lossy(&data[offset..offset + str_len]).to_string();
+                let value = String::from_utf8_lossy(&data[offset..offset + str_len]).to_string();
                 offset += str_len;
 
                 if name == ":event-type" {
@@ -284,8 +265,7 @@ fn parse_headers(data: &[u8]) -> (String, String) {
                 if offset + 2 > data.len() {
                     break;
                 }
-                let bytes_len =
-                    u16::from_be_bytes([data[offset], data[offset + 1]]) as usize;
+                let bytes_len = u16::from_be_bytes([data[offset], data[offset + 1]]) as usize;
                 offset += 2 + bytes_len;
             }
             8 => {
@@ -328,7 +308,10 @@ fn parse_event(event_type: &str, payload: &[u8]) -> Option<BedrockEvent> {
             let start = payload_json.get("start")?;
             let content_block: ContentBlockStartData =
                 serde_json::from_value(start.clone()).ok()?;
-            Some(BedrockEvent::ContentBlockStart { index, content_block })
+            Some(BedrockEvent::ContentBlockStart {
+                index,
+                content_block,
+            })
         }
         "contentBlockDelta" => {
             let index = payload_json
@@ -336,8 +319,7 @@ fn parse_event(event_type: &str, payload: &[u8]) -> Option<BedrockEvent> {
                 .and_then(|v| v.as_u64())
                 .unwrap_or(0) as usize;
             let delta_value = payload_json.get("delta")?;
-            let delta: ContentBlockDeltaData =
-                serde_json::from_value(delta_value.clone()).ok()?;
+            let delta: ContentBlockDeltaData = serde_json::from_value(delta_value.clone()).ok()?;
             Some(BedrockEvent::ContentBlockDelta { index, delta })
         }
         "contentBlockStop" => {
@@ -352,9 +334,7 @@ fn parse_event(event_type: &str, payload: &[u8]) -> Option<BedrockEvent> {
                 .get("stopReason")
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string());
-            let additional = payload_json
-                .get("additionalModelResponseFields")
-                .cloned();
+            let additional = payload_json.get("additionalModelResponseFields").cloned();
             Some(BedrockEvent::MessageStop {
                 stop_reason,
                 additional_model_response_fields: additional,
@@ -527,10 +507,7 @@ mod tests {
             } => {
                 assert_eq!(*index, 1);
                 match content_block {
-                    ContentBlockStartData::ToolUse {
-                        tool_use_id,
-                        name,
-                    } => {
+                    ContentBlockStartData::ToolUse { tool_use_id, name } => {
                         assert_eq!(tool_use_id, "call_123");
                         assert_eq!(name, "read_file");
                     }
@@ -543,7 +520,8 @@ mod tests {
 
     #[test]
     fn test_parse_metadata_event() {
-        let payload = br#"{"usage":{"inputTokens":100,"outputTokens":50},"metrics":{"latencyMs":1234}}"#;
+        let payload =
+            br#"{"usage":{"inputTokens":100,"outputTokens":50},"metrics":{"latencyMs":1234}}"#;
         let frame = build_frame("metadata", payload);
 
         let events = parse_bedrock_event_stream(&frame);
@@ -562,12 +540,11 @@ mod tests {
     #[test]
     fn test_parse_multiple_events() {
         let frame1 = build_frame("messageStart", br#"{"role":"assistant"}"#);
-        let frame2 =
-            build_frame("contentBlockDelta", br#"{"contentBlockIndex":0,"delta":{"type":"textDelta","text":"Hi"}}"#);
-        let frame3 = build_frame(
-            "messageStop",
-            br#"{"stopReason":"end_turn"}"#,
+        let frame2 = build_frame(
+            "contentBlockDelta",
+            br#"{"contentBlockIndex":0,"delta":{"type":"textDelta","text":"Hi"}}"#,
         );
+        let frame3 = build_frame("messageStop", br#"{"stopReason":"end_turn"}"#);
 
         let mut data = Vec::new();
         data.extend_from_slice(&frame1);

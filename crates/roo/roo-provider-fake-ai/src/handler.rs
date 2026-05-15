@@ -9,8 +9,8 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use async_trait::async_trait;
-use futures::stream;
 use futures::StreamExt;
+use futures::stream;
 
 use roo_provider::error::{ProviderError, Result};
 use roo_provider::{ApiStream, CreateMessageMetadata, Provider};
@@ -93,9 +93,7 @@ impl FakeAiHandler {
         match pattern {
             ResponsePattern::Text { text } => {
                 vec![
-                    ApiStreamChunk::Text {
-                        text: text.clone(),
-                    },
+                    ApiStreamChunk::Text { text: text.clone() },
                     ApiStreamChunk::Usage {
                         input_tokens: 10,
                         output_tokens: text.len() as u64 / 4,
@@ -211,10 +209,7 @@ impl Provider for FakeAiHandler {
         (self.config.model_id.clone(), self.model_info.clone())
     }
 
-    async fn count_tokens(
-        &self,
-        _content: &[roo_types::api::ContentBlock],
-    ) -> Result<u64> {
+    async fn count_tokens(&self, _content: &[roo_types::api::ContentBlock]) -> Result<u64> {
         self.maybe_delay().await;
         Ok(self.config.fake_token_count)
     }
@@ -313,7 +308,11 @@ mod tests {
         let chunks: Vec<_> = stream.collect::<Vec<_>>().await;
         assert_eq!(chunks.len(), 2);
         match &chunks[0] {
-            Ok(ApiStreamChunk::ToolCall { id, name, arguments }) => {
+            Ok(ApiStreamChunk::ToolCall {
+                id,
+                name,
+                arguments,
+            }) => {
                 assert_eq!(id, "call_1");
                 assert_eq!(name, "read_file");
                 assert_eq!(arguments, r#"{"path":"/tmp/x"}"#);

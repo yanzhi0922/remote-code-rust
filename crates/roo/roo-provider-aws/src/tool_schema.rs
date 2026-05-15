@@ -38,27 +38,16 @@ pub fn normalize_tool_schema(schema: &mut Value) {
                     let has_null = types.iter().any(|t| t.as_str() == Some("null"));
                     if has_null && non_null.len() == 1 {
                         let non_null_val = non_null.into_iter().next().unwrap();
-                        map.insert(
-                            "type".to_string(),
-                            non_null_val.clone(),
-                        );
+                        map.insert("type".to_string(), non_null_val.clone());
                         map.entry("anyOf".to_string()).or_insert_with(|| {
-                            vec![
-                                non_null_val,
-                                Value::String("null".to_string()),
-                            ]
-                            .into()
+                            vec![non_null_val, Value::String("null".to_string())].into()
                         });
                     }
                 }
             }
 
             // Set additionalProperties: false on objects
-            if map
-                .get("type")
-                .and_then(|t| t.as_str())
-                == Some("object")
-            {
+            if map.get("type").and_then(|t| t.as_str()) == Some("object") {
                 map.entry("additionalProperties".to_string())
                     .or_insert(Value::Bool(false));
             }
@@ -138,10 +127,7 @@ mod tests {
             "format": "date-time"
         });
         normalize_tool_schema(&mut schema);
-        assert_eq!(
-            schema.get("format"),
-            Some(&json!("date-time"))
-        );
+        assert_eq!(schema.get("format"), Some(&json!("date-time")));
     }
 
     #[test]
@@ -161,9 +147,7 @@ mod tests {
         // Top-level should have additionalProperties: false
         assert_eq!(schema.get("additionalProperties"), Some(&json!(false)));
         // Nested object should also have additionalProperties: false
-        let nested = schema
-            .pointer("/properties/nested")
-            .unwrap();
+        let nested = schema.pointer("/properties/nested").unwrap();
         assert_eq!(nested.get("additionalProperties"), Some(&json!(false)));
         // Unsupported format should be stripped from deep nesting
         let deep = schema

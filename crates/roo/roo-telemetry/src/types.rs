@@ -117,7 +117,10 @@ mod tests {
             TelemetryEventName::TelemetrySettingsChanged,
         ];
         // Verify we have at least 20 variants
-        assert!(variants.len() >= 20, "Expected at least 20 event name variants");
+        assert!(
+            variants.len() >= 20,
+            "Expected at least 20 event name variants"
+        );
 
         // Verify all serialize and deserialize correctly
         for variant in &variants {
@@ -173,7 +176,10 @@ mod tests {
     fn test_subscription_type_serialization() {
         let sub = TelemetryEventSubscription {
             subscription_type: SubscriptionType::Include,
-            events: vec![TelemetryEventName::TaskCreated, TelemetryEventName::TaskCompleted],
+            events: vec![
+                TelemetryEventName::TaskCreated,
+                TelemetryEventName::TaskCompleted,
+            ],
         };
         let json = serde_json::to_string(&sub).unwrap();
         let deserialized: TelemetryEventSubscription = serde_json::from_str(&json).unwrap();
@@ -194,8 +200,14 @@ mod tests {
 
     #[test]
     fn test_telemetry_event_name_equality() {
-        assert_eq!(TelemetryEventName::TaskCreated, TelemetryEventName::TaskCreated);
-        assert_ne!(TelemetryEventName::TaskCreated, TelemetryEventName::TaskCompleted);
+        assert_eq!(
+            TelemetryEventName::TaskCreated,
+            TelemetryEventName::TaskCreated
+        );
+        assert_ne!(
+            TelemetryEventName::TaskCreated,
+            TelemetryEventName::TaskCompleted
+        );
     }
 
     #[test]

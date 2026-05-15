@@ -1,8 +1,8 @@
+use parking_lot::Mutex;
 use std::fs;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
@@ -126,10 +126,7 @@ impl SessionMemoryState {
 pub fn wait_for_session_memory_extraction(state: &Mutex<SessionMemoryState>) {
     let wait_started_at = Instant::now();
     loop {
-        let extraction_started_at = state
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .extraction_started_at;
+        let extraction_started_at = state.lock().extraction_started_at;
         let Some(extraction_started_at) = extraction_started_at else {
             return;
         };
@@ -498,8 +495,9 @@ fn rough_token_count_estimation(text: &str) -> usize {
 
 #[cfg(test)]
 mod tests {
+    use parking_lot::Mutex;
     use std::path::PathBuf;
-    use std::sync::{Mutex, OnceLock};
+    use std::sync::OnceLock;
 
     use claude_config::load_runtime_config;
     use claude_config::settings_layers::RuntimeOverrides;
@@ -515,7 +513,7 @@ mod tests {
     };
 
     struct TestRuntime {
-        _env_guard: std::sync::MutexGuard<'static, ()>,
+        _env_guard: parking_lot::MutexGuard<'static, ()>,
         _tempdir: TempDir,
         config: RuntimeConfig,
         cleanup_project_dir: PathBuf,
@@ -527,9 +525,7 @@ mod tests {
     }
 
     fn test_runtime() -> TestRuntime {
-        let env_guard = env_lock()
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let env_guard = env_lock().lock();
         let tempdir = tempdir().expect("tempdir");
         let cwd = tempdir.path().join("workspace");
         let profile = tempdir.path().join(".remote-code-rust");

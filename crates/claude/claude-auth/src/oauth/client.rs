@@ -363,8 +363,8 @@ pub async fn run_oauth_flow(
     )
     .await?;
 
-    let expires_at =
-        chrono::Utc::now().timestamp_millis() + (token_response.expires_in as i64).saturating_mul(1000);
+    let expires_at = chrono::Utc::now().timestamp_millis()
+        + (token_response.expires_in as i64).saturating_mul(1000);
 
     let tokens = OAuthTokens {
         access_token: token_response.access_token.clone(),

@@ -1,7 +1,7 @@
 //! SambaNova model definitions.
 
-use std::collections::HashMap;
 use roo_types::model::ModelInfo;
+use std::collections::HashMap;
 
 /// Default SambaNova model ID.
 pub const DEFAULT_MODEL_ID: &str = "Meta-Llama-3.3-70B-Instruct";
@@ -20,8 +20,7 @@ pub fn models() -> HashMap<String, ModelInfo> {
             input_price: Some(0.1),
             output_price: Some(0.2),
             description: Some(
-                "Meta Llama 3.1 8B Instruct model with 16K context window."
-                    .to_string(),
+                "Meta Llama 3.1 8B Instruct model with 16K context window.".to_string(),
             ),
             ..Default::default()
         },
@@ -37,8 +36,7 @@ pub fn models() -> HashMap<String, ModelInfo> {
             input_price: Some(0.6),
             output_price: Some(1.2),
             description: Some(
-                "Meta Llama 3.3 70B Instruct model with 128K context window."
-                    .to_string(),
+                "Meta Llama 3.3 70B Instruct model with 128K context window.".to_string(),
             ),
             ..Default::default()
         },
@@ -54,10 +52,7 @@ pub fn models() -> HashMap<String, ModelInfo> {
             supports_reasoning_budget: Some(true),
             input_price: Some(5.0),
             output_price: Some(7.0),
-            description: Some(
-                "DeepSeek R1 reasoning model with 32K context window."
-                    .to_string(),
-            ),
+            description: Some("DeepSeek R1 reasoning model with 32K context window.".to_string()),
             ..Default::default()
         },
     );
@@ -71,10 +66,7 @@ pub fn models() -> HashMap<String, ModelInfo> {
             supports_prompt_cache: false,
             input_price: Some(3.0),
             output_price: Some(4.5),
-            description: Some(
-                "DeepSeek V3 model with 32K context window."
-                    .to_string(),
-            ),
+            description: Some("DeepSeek V3 model with 32K context window.".to_string()),
             ..Default::default()
         },
     );
@@ -88,10 +80,7 @@ pub fn models() -> HashMap<String, ModelInfo> {
             supports_prompt_cache: false,
             input_price: Some(3.0),
             output_price: Some(4.5),
-            description: Some(
-                "DeepSeek V3.1 model with 32K context window."
-                    .to_string(),
-            ),
+            description: Some("DeepSeek V3.1 model with 32K context window.".to_string()),
             ..Default::default()
         },
     );
@@ -122,10 +111,7 @@ pub fn models() -> HashMap<String, ModelInfo> {
             supports_prompt_cache: false,
             input_price: Some(0.4),
             output_price: Some(0.8),
-            description: Some(
-                "Alibaba Qwen 3 32B model with 8K context window."
-                    .to_string(),
-            ),
+            description: Some("Alibaba Qwen 3 32B model with 8K context window.".to_string()),
             ..Default::default()
         },
     );
@@ -139,10 +125,7 @@ pub fn models() -> HashMap<String, ModelInfo> {
             supports_prompt_cache: false,
             input_price: Some(0.22),
             output_price: Some(0.59),
-            description: Some(
-                "OpenAI gpt oss 120b model with 128k context window."
-                    .to_string(),
-            ),
+            description: Some("OpenAI gpt oss 120b model with 128k context window.".to_string()),
             ..Default::default()
         },
     );

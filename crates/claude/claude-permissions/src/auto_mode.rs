@@ -4,7 +4,7 @@
 //! Manages the state of the auto permission mode, including
 //! classifier decisions and cooldown tracking.
 
-use std::sync::Mutex;
+use parking_lot::Mutex;
 use std::time::Instant;
 
 use crate::classifier::ClassifierResult;
@@ -104,38 +104,29 @@ impl AutoModeManager {
 
     /// Activate auto mode.
     pub fn activate(&self) {
-        self.state
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .activate();
+        self.state.lock().activate();
     }
 
     /// Deactivate auto mode.
     pub fn deactivate(&self) {
-        self.state
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .deactivate();
+        self.state.lock().deactivate();
     }
 
     /// Check if auto mode is active.
     #[must_use]
     pub fn is_active(&self) -> bool {
-        self.state.lock().unwrap_or_else(|e| e.into_inner()).active
+        self.state.lock().active
     }
 
     /// Record a classifier result.
     pub fn record_result(&self, result: &ClassifierResult) {
-        self.state
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .record_result(result);
+        self.state.lock().record_result(result);
     }
 
     /// Get a snapshot of the current state.
     #[must_use]
     pub fn snapshot(&self) -> AutoModeState {
-        self.state.lock().unwrap_or_else(|e| e.into_inner()).clone()
+        self.state.lock().clone()
     }
 }
 

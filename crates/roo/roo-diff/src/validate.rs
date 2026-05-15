@@ -2,7 +2,6 @@
 ///
 /// Port of `validateMarkerSequencing` from `multi-search-replace.ts`.
 /// All error messages must match the TypeScript source exactly.
-
 use regex::Regex;
 
 /// State machine states for marker validation.
@@ -130,10 +129,7 @@ pub fn validate_marker_sequencing(diff_content: &str) -> ValidationResult {
         .filter(|l| search_pattern.is_match(l.trim()))
         .count();
     let sep_count = lines.iter().filter(|l| l.trim() == SEP).count();
-    let replace_count = lines
-        .iter()
-        .filter(|l| l.trim() == REPLACE)
-        .count();
+    let replace_count = lines.iter().filter(|l| l.trim() == REPLACE).count();
 
     let likely_bad_structure = search_count != replace_count || sep_count < search_count;
 

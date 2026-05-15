@@ -72,9 +72,7 @@ impl UnifiedDiffStrategy {
         };
 
         if hunks.is_empty() {
-            return DiffResult::fail(
-                "No hunks found in the unified diff".to_string(),
-            );
+            return DiffResult::fail("No hunks found in the unified diff".to_string());
         }
 
         // Detect line ending
@@ -128,10 +126,8 @@ impl UnifiedDiffStrategy {
                 let end0 = start0 + old_lines.len();
                 if end0 <= result_lines.len() {
                     let original_chunk = &result_lines[start0..end0];
-                    let similarity = get_similarity(
-                        &original_chunk.join("\n"),
-                        &old_lines.join("\n"),
-                    );
+                    let similarity =
+                        get_similarity(&original_chunk.join("\n"), &old_lines.join("\n"));
                     if similarity >= self.fuzzy_threshold {
                         Some(start0)
                     } else {
@@ -281,7 +277,10 @@ fn parse_hunk_header(line: &str) -> Option<HunkHeader> {
         (start, 1)
     };
 
-    Some(HunkHeader { old_start, old_count })
+    Some(HunkHeader {
+        old_start,
+        old_count,
+    })
 }
 
 /// Parse the body of a hunk (the lines following the @@ header).
@@ -383,7 +382,11 @@ mod tests {
 +LINE2
  line3";
         let result = strategy.apply_diff(original, diff);
-        assert!(result.success, "Expected success, got error: {:?}", result.error);
+        assert!(
+            result.success,
+            "Expected success, got error: {:?}",
+            result.error
+        );
         assert_eq!(result.content.unwrap(), "line1\nLINE2\nline3\n");
     }
 
@@ -399,7 +402,11 @@ mod tests {
 +line2
  line3";
         let result = strategy.apply_diff(original, diff);
-        assert!(result.success, "Expected success, got error: {:?}", result.error);
+        assert!(
+            result.success,
+            "Expected success, got error: {:?}",
+            result.error
+        );
         assert_eq!(result.content.unwrap(), "line1\nline2\nline3\n");
     }
 
@@ -415,7 +422,11 @@ mod tests {
 -line2
  line3";
         let result = strategy.apply_diff(original, diff);
-        assert!(result.success, "Expected success, got error: {:?}", result.error);
+        assert!(
+            result.success,
+            "Expected success, got error: {:?}",
+            result.error
+        );
         assert_eq!(result.content.unwrap(), "line1\nline3\n");
     }
 
@@ -435,7 +446,11 @@ mod tests {
 -line5
 +LINE5";
         let result = strategy.apply_diff(original, diff);
-        assert!(result.success, "Expected success, got error: {:?}", result.error);
+        assert!(
+            result.success,
+            "Expected success, got error: {:?}",
+            result.error
+        );
         assert_eq!(
             result.content.unwrap(),
             "LINE1\nline2\nline3\nline4\nLINE5\n"
@@ -464,7 +479,11 @@ mod tests {
 +    console.log(\"hello\");
  }";
         let result = strategy.apply_diff(original, diff);
-        assert!(result.success, "Expected success, got error: {:?}", result.error);
+        assert!(
+            result.success,
+            "Expected success, got error: {:?}",
+            result.error
+        );
     }
 
     #[test]
@@ -507,7 +526,11 @@ mod tests {
 +LINE2
  line3";
         let result = strategy.apply_diff(original, diff);
-        assert!(result.success, "Expected success, got error: {:?}", result.error);
+        assert!(
+            result.success,
+            "Expected success, got error: {:?}",
+            result.error
+        );
         assert_eq!(result.content.unwrap(), "line1\r\nLINE2\r\nline3\r\n");
     }
 }

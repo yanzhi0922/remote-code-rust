@@ -2,7 +2,7 @@
 //!
 //! Source: `src/shared/modes.ts` — `getModeSelection`, `ModeSelection`
 
-use roo_types::mode::{default_modes, ModeConfig, PromptComponent};
+use roo_types::mode::{ModeConfig, PromptComponent, default_modes};
 
 // ---------------------------------------------------------------------------
 // ModeSelection
@@ -62,8 +62,11 @@ pub fn get_mode_selection(
 
     // 2. Check built-in modes
     let defaults = default_modes();
-    let base_mode = find_mode_by_slug(mode, Some(&defaults))
-        .unwrap_or_else(|| defaults.first().expect("at least one default mode must exist"));
+    let base_mode = find_mode_by_slug(mode, Some(&defaults)).unwrap_or_else(|| {
+        defaults
+            .first()
+            .expect("at least one default mode must exist")
+    });
 
     // 3. Apply prompt_component overrides
     ModeSelection {

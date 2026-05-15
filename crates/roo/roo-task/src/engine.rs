@@ -9,14 +9,14 @@
 use std::collections::HashMap;
 
 use crate::config::validate_config;
-use roo_task_persistence::TaskFileSystem;
 use crate::events::TaskEventEmitter;
 use crate::loop_control::LoopControl;
 use crate::state::StateMachine;
 use crate::types::{
-    AssistantMessageContent, DiffStrategy, StreamingState, TaskConfig, TaskError, TaskResult,
-    TaskState, MAX_EXPONENTIAL_BACKOFF_SECONDS,
+    AssistantMessageContent, DiffStrategy, MAX_EXPONENTIAL_BACKOFF_SECONDS, StreamingState,
+    TaskConfig, TaskError, TaskResult, TaskState,
 };
+use roo_task_persistence::TaskFileSystem;
 use roo_types::experiment::Experiments;
 use roo_types::todo::TodoItem;
 
@@ -214,7 +214,6 @@ pub struct TaskEngine {
     // =================================================================
     // New fields — matching TS Task class properties (R22-B1 additions)
     // =================================================================
-
     /// API configuration (provider settings).
     ///
     /// Source: `src/core/task/Task.ts` line 284 — `apiConfiguration: ProviderSettings`
@@ -237,7 +236,6 @@ pub struct TaskEngine {
     // responsibilities (webview state, MCP hub, etc.) are handled through the
     // [`TaskEventEmitter`] event system and by the `AgentLoop` which owns the
     // `Arc<dyn Provider>`. No weak reference is needed at the engine layer.
-
     /// Global storage path for task persistence.
     ///
     /// Source: `src/core/task/Task.ts` line 267 — `globalStoragePath: string`
@@ -403,9 +401,10 @@ impl TaskEngine {
         // Validate tool_result IDs for user messages with tool_result content.
         // Source: `src/core/task/validateToolResultIds.ts` — `validateAndFixToolResultIds()`
         if message.role == roo_types::api::MessageRole::User {
-            let has_tool_results = message.content.iter().any(|b| {
-                matches!(b, roo_types::api::ContentBlock::ToolResult { .. })
-            });
+            let has_tool_results = message
+                .content
+                .iter()
+                .any(|b| matches!(b, roo_types::api::ContentBlock::ToolResult { .. }));
             if has_tool_results {
                 // Push the message first, then validate the entire history
                 self.api_conversation_history.push(message);
@@ -649,7 +648,11 @@ impl TaskEngine {
     ///
     /// Source: `src/core/task/Task.ts` — streaming tool call finalization
     /// replaces partial tool_use blocks with complete ones at tracked indices.
-    pub fn update_assistant_message_content(&mut self, index: usize, content: AssistantMessageContent) {
+    pub fn update_assistant_message_content(
+        &mut self,
+        index: usize,
+        content: AssistantMessageContent,
+    ) {
         if index < self.assistant_message_content.len() {
             self.assistant_message_content[index] = content;
         }
@@ -700,7 +703,12 @@ impl TaskEngine {
     /// Push a tool result to user message content, preventing duplicates.
     ///
     /// Source: `src/core/task/Task.ts` lines 370-383 — `pushToolResultToUserContent`
-    pub fn push_tool_result_to_user_content(&mut self, tool_use_id: &str, content: &str, is_error: bool) -> bool {
+    pub fn push_tool_result_to_user_content(
+        &mut self,
+        tool_use_id: &str,
+        content: &str,
+        is_error: bool,
+    ) -> bool {
         // Check for duplicate
         let exists = self.user_message_content.iter().any(|block| {
             if let Some(obj) = block.as_object() {
@@ -768,7 +776,10 @@ impl TaskEngine {
     }
 
     /// Set the API configuration.
-    pub fn set_api_configuration(&mut self, config: roo_types::provider_settings::ProviderSettings) {
+    pub fn set_api_configuration(
+        &mut self,
+        config: roo_types::provider_settings::ProviderSettings,
+    ) {
         self.api_configuration = Some(config);
     }
 
@@ -816,17 +827,24 @@ impl TaskEngine {
     /// Get a reference to the auto-approval handler, if any.
     ///
     /// Source: `src/core/task/Task.ts` line 287 — `autoApprovalHandler`
-    pub fn auto_approval_handler(&self) -> Option<&roo_auto_approval::approval::AutoApprovalHandler> {
+    pub fn auto_approval_handler(
+        &self,
+    ) -> Option<&roo_auto_approval::approval::AutoApprovalHandler> {
         self.auto_approval_handler.as_ref()
     }
 
     /// Get a mutable reference to the auto-approval handler, if any.
-    pub fn auto_approval_handler_mut(&mut self) -> Option<&mut roo_auto_approval::approval::AutoApprovalHandler> {
+    pub fn auto_approval_handler_mut(
+        &mut self,
+    ) -> Option<&mut roo_auto_approval::approval::AutoApprovalHandler> {
         self.auto_approval_handler.as_mut()
     }
 
     /// Set the auto-approval handler.
-    pub fn set_auto_approval_handler(&mut self, handler: roo_auto_approval::approval::AutoApprovalHandler) {
+    pub fn set_auto_approval_handler(
+        &mut self,
+        handler: roo_auto_approval::approval::AutoApprovalHandler,
+    ) {
         self.auto_approval_handler = Some(handler);
     }
 
@@ -869,7 +887,10 @@ impl TaskEngine {
     /// Set the on_created callback.
     ///
     /// Source: `src/core/task/Task.ts` line 155 — `onCreated?: (task: Task) => void`
-    pub fn set_on_created_callback(&mut self, callback: Box<dyn FnOnce(&TaskEngine) + Send + Sync>) {
+    pub fn set_on_created_callback(
+        &mut self,
+        callback: Box<dyn FnOnce(&TaskEngine) + Send + Sync>,
+    ) {
         self.on_created_callback = Some(callback);
     }
 
@@ -967,17 +988,18 @@ impl TaskEngine {
     /// Record a tool execution.
     pub fn record_tool_execution(&mut self, tool_name: &str, success: bool) {
         self.result.record_tool_usage(tool_name);
-        self.state_machine.emitter().emit_tool_executed(tool_name, success);
+        self.state_machine
+            .emitter()
+            .emit_tool_executed(tool_name, success);
 
         if success {
             self.loop_control.reset_mistake_count();
         } else {
             let exceeded = self.loop_control.record_mistake();
             if exceeded {
-                self.state_machine.emitter().emit_state_changed(
-                    self.state_machine.current(),
-                    TaskState::Aborted,
-                );
+                self.state_machine
+                    .emitter()
+                    .emit_state_changed(self.state_machine.current(), TaskState::Aborted);
             }
         }
     }
@@ -999,7 +1021,9 @@ impl TaskEngine {
 
     /// Update token usage in the result.
     pub fn update_token_usage(&mut self, usage: roo_types::message::TokenUsage) {
-        self.state_machine.emitter().emit_token_usage_updated(usage.clone());
+        self.state_machine
+            .emitter()
+            .emit_token_usage_updated(usage.clone());
         self.result.token_usage = usage;
     }
 
@@ -1124,30 +1148,36 @@ impl TaskEngine {
         if let Some(last_msg) = self.api_conversation_history.last_mut() {
             if last_msg.role == roo_types::api::MessageRole::User {
                 last_msg.content.push(roo_types::api::ContentBlock::Text {
-                    text: format!("\n\n<environment_details>\n{}\n</environment_details>", details),
+                    text: format!(
+                        "\n\n<environment_details>\n{}\n</environment_details>",
+                        details
+                    ),
                 });
                 return;
             }
         }
         // No last user message — create a new one
-        self.api_conversation_history.push(roo_types::api::ApiMessage {
-            role: roo_types::api::MessageRole::User,
-            content: vec![roo_types::api::ContentBlock::Text {
-                text: format!("<environment_details>\n{}\n</environment_details>", details),
-            }],
-            reasoning: None,
-            ts: Some(std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis() as f64),
-            truncation_parent: None,
-            is_truncation_marker: None,
-            truncation_id: None,
-            condense_parent: None,
-            is_summary: None,
-            condense_id: None,
-            reasoning_details: None,
-        });
+        self.api_conversation_history
+            .push(roo_types::api::ApiMessage {
+                role: roo_types::api::MessageRole::User,
+                content: vec![roo_types::api::ContentBlock::Text {
+                    text: format!("<environment_details>\n{}\n</environment_details>", details),
+                }],
+                reasoning: None,
+                ts: Some(
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis() as f64,
+                ),
+                truncation_parent: None,
+                is_truncation_marker: None,
+                truncation_id: None,
+                condense_parent: None,
+                is_summary: None,
+                condense_id: None,
+                reasoning_details: None,
+            });
     }
 
     // -----------------------------------------------------------------------
@@ -1224,7 +1254,9 @@ impl TaskEngine {
         let storage_path = match &self.config.storage_path {
             Some(p) => p,
             None => {
-                tracing::debug!("save_api_conversation_history: no storage_path configured, skipping");
+                tracing::debug!(
+                    "save_api_conversation_history: no storage_path configured, skipping"
+                );
                 return Ok(());
             }
         };
@@ -1240,7 +1272,9 @@ impl TaskEngine {
         );
 
         roo_task_persistence::save_api_messages(&fs, &path, &self.api_conversation_history)
-            .map_err(|e| TaskError::General(format!("Failed to save API conversation history: {}", e)))?;
+            .map_err(|e| {
+                TaskError::General(format!("Failed to save API conversation history: {}", e))
+            })?;
 
         Ok(())
     }
@@ -1252,7 +1286,9 @@ impl TaskEngine {
         let storage_path = match &self.config.storage_path {
             Some(p) => p,
             None => {
-                tracing::debug!("load_api_conversation_history: no storage_path configured, skipping");
+                tracing::debug!(
+                    "load_api_conversation_history: no storage_path configured, skipping"
+                );
                 return Ok(());
             }
         };
@@ -1263,10 +1299,14 @@ impl TaskEngine {
 
         tracing::debug!(path = %path.display(), "load_api_conversation_history");
 
-        let messages = roo_task_persistence::read_api_messages(&fs, &path)
-            .map_err(|e| TaskError::General(format!("Failed to load API conversation history: {}", e)))?;
+        let messages = roo_task_persistence::read_api_messages(&fs, &path).map_err(|e| {
+            TaskError::General(format!("Failed to load API conversation history: {}", e))
+        })?;
 
-        tracing::debug!(count = messages.len(), "load_api_conversation_history: loaded");
+        tracing::debug!(
+            count = messages.len(),
+            "load_api_conversation_history: loaded"
+        );
         self.api_conversation_history = messages;
 
         Ok(())
@@ -1329,7 +1369,9 @@ impl TaskEngine {
 ///
 /// This bridges the gap between the task engine's state enum and the
 /// persistence layer's status enum.
-fn task_state_to_persistence_status(state: TaskState) -> roo_task_persistence::PersistenceTaskStatus {
+fn task_state_to_persistence_status(
+    state: TaskState,
+) -> roo_task_persistence::PersistenceTaskStatus {
     match state {
         TaskState::Idle | TaskState::Running | TaskState::Paused => {
             roo_task_persistence::PersistenceTaskStatus::Active
@@ -1534,8 +1576,8 @@ mod tests {
 
     #[test]
     fn test_engine_event_emission() {
-        use std::sync::atomic::{AtomicUsize, Ordering};
         use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
 
         let mut engine = make_engine();
         let count = Arc::new(AtomicUsize::new(0));
@@ -1643,7 +1685,10 @@ mod tests {
 
         assert!(engine.diff_strategy().is_none());
         engine.set_diff_strategy(Some(DiffStrategy::MultiSearchReplace));
-        assert_eq!(engine.diff_strategy(), Some(DiffStrategy::MultiSearchReplace));
+        assert_eq!(
+            engine.diff_strategy(),
+            Some(DiffStrategy::MultiSearchReplace)
+        );
     }
 
     // --- Cached streaming model tests ---
@@ -1705,7 +1750,9 @@ mod tests {
         assert!(engine.user_message_content().is_empty());
         assert!(!engine.user_message_content_ready());
 
-        engine.user_message_content_mut().push(serde_json::json!({"type": "text", "text": "hello"}));
+        engine
+            .user_message_content_mut()
+            .push(serde_json::json!({"type": "text", "text": "hello"}));
         assert_eq!(engine.user_message_content().len(), 1);
 
         engine.set_user_message_content_ready(true);
@@ -1780,7 +1827,10 @@ mod tests {
         assert_eq!(TaskEngine::calculate_backoff_delay(1), 2000); // 2s
         assert_eq!(TaskEngine::calculate_backoff_delay(2), 4000); // 4s
         assert_eq!(TaskEngine::calculate_backoff_delay(3), 8000); // 8s
-        assert_eq!(TaskEngine::calculate_backoff_delay(10), MAX_EXPONENTIAL_BACKOFF_SECONDS * 1000); // capped
+        assert_eq!(
+            TaskEngine::calculate_backoff_delay(10),
+            MAX_EXPONENTIAL_BACKOFF_SECONDS * 1000
+        ); // capped
     }
 
     // --- Resume after delegation tests ---

@@ -105,7 +105,10 @@ mod tests {
     #[test]
     fn test_cache_set_and_get() {
         let cache = ModelEndpointCache::new();
-        cache.set("openrouter_gpt-4o", json!({"endpoint": "https://api.example.com"}));
+        cache.set(
+            "openrouter_gpt-4o",
+            json!({"endpoint": "https://api.example.com"}),
+        );
 
         let value = cache.get("openrouter_gpt-4o").unwrap();
         assert_eq!(value["endpoint"], "https://api.example.com");

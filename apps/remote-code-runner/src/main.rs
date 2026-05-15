@@ -13,10 +13,10 @@ use claude_control_plane::{
 };
 use claude_runner::{
     ApprovalCreateRequest, ApprovalDecision, ApprovalDecisionRequest, ApprovalRequestRecord,
-    RunnerApi, RunnerApiEvent, RunnerConfig, RunnerConfigOverrides, RunnerSessionCommandRequest,
-    RunnerSessionRecord, RunnerSessionStateUpdateRequest, SessionState as RunnerSessionState,
-    describe_status, load_runner_config, register_with_control_plane, send_heartbeat,
-    validate_runner_config,
+    RUNNER_EVENT_CHANNEL_CAPACITY, RunnerApi, RunnerApiEvent, RunnerConfig, RunnerConfigOverrides,
+    RunnerSessionCommandRequest, RunnerSessionRecord, RunnerSessionStateUpdateRequest,
+    SessionState as RunnerSessionState, describe_status, load_runner_config,
+    register_with_control_plane, send_heartbeat, validate_runner_config,
 };
 use claude_telemetry::install_tracing;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -144,7 +144,7 @@ impl HostedSessionManager {
 
     async fn run(
         self,
-        mut event_rx: mpsc::UnboundedReceiver<RunnerApiEvent>,
+        mut event_rx: mpsc::Receiver<RunnerApiEvent>,
         mut shutdown: watch::Receiver<bool>,
     ) {
         loop {
@@ -262,7 +262,11 @@ impl HostedSessionManager {
         let stdout_handle_for_spawn = handle.clone();
         let stdout_join: tokio::task::JoinHandle<()> = tokio::spawn(async move {
             if let Err(error) = manager
-                .read_hosted_session_stdout(session.session_id, child_stdout, stdout_handle_for_spawn)
+                .read_hosted_session_stdout(
+                    session.session_id,
+                    child_stdout,
+                    stdout_handle_for_spawn,
+                )
                 .await
             {
                 warn!(
@@ -374,7 +378,8 @@ impl HostedSessionManager {
                 if let Some(detail) = runtime_event_detail_from_stream_json_value(&value) {
                     self.post_runtime_event(session_id, detail.clone()).await?;
                 }
-                self.handle_tool_finished(session_id, &value, handle).await?;
+                self.handle_tool_finished(session_id, &value, handle)
+                    .await?;
             }
             _ => {
                 if let Some(detail) = runtime_event_detail_from_stream_json_value(&value) {
@@ -683,7 +688,9 @@ impl HostedSessionManager {
                 "{}/v1/sessions/{session_id}/events",
                 self.control_plane_url.trim_end_matches('/')
             ))
-            .json(&RuntimeEventCreateRequest { detail: detail.clone() })
+            .json(&RuntimeEventCreateRequest {
+                detail: detail.clone(),
+            })
             .send()
             .await
             .context("control-plane runtime event request failed")?
@@ -701,7 +708,9 @@ impl HostedSessionManager {
                 let buf = buffer.entry(session_id).or_default();
                 if buf.len() >= MAX_EVENT_BUFFER_PER_SESSION {
                     let dropped = buf.drain(..buf.len() / 2).count();
-                    warn!("event buffer cap hit for session {session_id}, dropped {dropped} oldest events");
+                    warn!(
+                        "event buffer cap hit for session {session_id}, dropped {dropped} oldest events"
+                    );
                 }
                 buf.push_back(detail);
                 Ok(())
@@ -714,7 +723,11 @@ impl HostedSessionManager {
     async fn flush_event_buffer(&self, session_id: Uuid) {
         let events: Vec<RuntimeEventDetail> = {
             let mut buffer = self.event_buffer.lock().await;
-            buffer.remove(&session_id).unwrap_or_default().into_iter().collect()
+            buffer
+                .remove(&session_id)
+                .unwrap_or_default()
+                .into_iter()
+                .collect()
         };
         for detail in events {
             if self
@@ -918,9 +931,7 @@ impl HostedSessionManager {
         } else {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
-            warn!(
-                "artifact upload rejected for session {session_id}: {status} — {body}"
-            );
+            warn!("artifact upload rejected for session {session_id}: {status} — {body}");
         }
         Ok(())
     }
@@ -1235,8 +1246,12 @@ async fn run_outbound_poll_loop(
                     retry_delay = Duration::from_secs(1);
                     if let Ok(body) = response.text().await {
                         if !body.is_empty() {
-                            if let Ok(cmd_response) = serde_json::from_str::<RunnerCommandPullResponse>(&body) {
-                                if let Err(e) = apply_pulled_runner_commands(&api, cmd_response).await {
+                            if let Ok(cmd_response) =
+                                serde_json::from_str::<RunnerCommandPullResponse>(&body)
+                            {
+                                if let Err(e) =
+                                    apply_pulled_runner_commands(&api, cmd_response).await
+                                {
                                     tracing::warn!("outbound command processing failed: {e:#}");
                                 }
                             }
@@ -1291,7 +1306,7 @@ async fn main() -> Result<()> {
                 anyhow::bail!(blocking_issues.join("; "));
             }
             let bind = config.bind;
-            let (event_tx, event_rx) = mpsc::unbounded_channel();
+            let (event_tx, event_rx) = mpsc::channel(RUNNER_EVENT_CHANNEL_CAPACITY);
             let api = RunnerApi::new(
                 config.clone(),
                 "remote-code-runner",
@@ -1330,7 +1345,8 @@ async fn main() -> Result<()> {
                     remote_code_bin,
                     config.profile_dir.profile_dir.clone(),
                 );
-                let manager_task = tokio::spawn(hosted_manager.run(event_rx, shutdown_tx.subscribe()));
+                let manager_task =
+                    tokio::spawn(hosted_manager.run(event_rx, shutdown_tx.subscribe()));
                 // Monitor the manager task for unexpected termination.
                 let mut monitor_shutdown = shutdown_tx.subscribe();
                 tokio::spawn(async move {
@@ -1454,7 +1470,7 @@ mod tests {
             },
         )
         .expect("config should load");
-        let (event_tx, mut event_rx) = mpsc::unbounded_channel();
+        let (event_tx, mut event_rx) = mpsc::channel(RUNNER_EVENT_CHANNEL_CAPACITY);
         let api =
             RunnerApi::new(config, "remote-code-runner", "0.1.0").with_event_channel(event_tx);
 
@@ -1650,7 +1666,7 @@ mod tests {
             .expect("runner listener addr should exist");
         let runner_base_url = format!("http://{runner_addr}");
 
-        let (event_tx, event_rx) = mpsc::unbounded_channel();
+        let (event_tx, event_rx) = mpsc::channel(RUNNER_EVENT_CHANNEL_CAPACITY);
         let runner_config = load_runner_config(
             Some(profile_dir.clone()),
             RunnerConfigOverrides {

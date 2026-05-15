@@ -2,7 +2,10 @@
 /// (codex, deno, v8, claude-core, claude-provider, etc.) which don't
 /// compile for Android targets.
 
-#[cfg_attr(any(target_os = "android", target_os = "ios"), tauri::mobile_entry_point)]
+#[cfg_attr(
+    any(target_os = "android", target_os = "ios"),
+    tauri::mobile_entry_point
+)]
 pub fn run() {
     let default_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {

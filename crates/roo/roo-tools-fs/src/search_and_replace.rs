@@ -127,7 +127,9 @@ impl std::error::Error for SearchReplaceError {}
 /// 2. `old_string` must be non-empty.
 /// 3. `new_string` must be provided.
 /// 4. `old_string` must differ from `new_string`.
-pub fn validate_search_replace_params(params: &SearchReplaceParams) -> Result<(), SearchReplaceError> {
+pub fn validate_search_replace_params(
+    params: &SearchReplaceParams,
+) -> Result<(), SearchReplaceError> {
     if params.file_path.is_empty() {
         return Err(SearchReplaceError::MissingFilePath);
     }
@@ -146,7 +148,9 @@ pub fn validate_search_replace_params(params: &SearchReplaceParams) -> Result<()
 }
 
 /// Validate search_replace parameters including path safety checks.
-pub fn validate_search_replace_params_full(params: &SearchReplaceParams) -> Result<(), FsToolError> {
+pub fn validate_search_replace_params_full(
+    params: &SearchReplaceParams,
+) -> Result<(), FsToolError> {
     if params.file_path.trim().is_empty() {
         return Err(FsToolError::Validation(
             "file_path must not be empty".to_string(),

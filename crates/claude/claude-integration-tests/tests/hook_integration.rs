@@ -148,7 +148,10 @@ fn match_tool_name_exact_match() {
 
 #[test]
 fn match_tool_name_none_matcher_matches_all() {
-    assert!(claude_core::hook_matcher::match_tool_name(Some("Bash"), None));
+    assert!(claude_core::hook_matcher::match_tool_name(
+        Some("Bash"),
+        None
+    ));
     assert!(claude_core::hook_matcher::match_tool_name(None, None));
 }
 
@@ -174,7 +177,8 @@ fn match_hooks_returns_matched_hooks() {
         matcher: Some("Bash".to_owned()),
         hooks: vec![make_command_hook("lint.sh")],
     }];
-    let result = claude_core::hook_matcher::match_hooks(&matchers, Some("Bash"), Some("Bash"), None);
+    let result =
+        claude_core::hook_matcher::match_hooks(&matchers, Some("Bash"), Some("Bash"), None);
     assert_eq!(result.hooks.len(), 1);
 }
 
@@ -184,7 +188,8 @@ fn match_hooks_skips_non_matching() {
         matcher: Some("Write".to_owned()),
         hooks: vec![make_command_hook("check.sh")],
     }];
-    let result = claude_core::hook_matcher::match_hooks(&matchers, Some("Bash"), Some("Bash"), None);
+    let result =
+        claude_core::hook_matcher::match_hooks(&matchers, Some("Bash"), Some("Bash"), None);
     assert!(result.hooks.is_empty());
 }
 
@@ -199,14 +204,15 @@ fn hook_definition_command_type() {
 
 #[test]
 fn hook_definition_prompt_type() {
-    let hook = claude_core::hook_types::HookDefinition::Prompt(claude_core::hook_types::HookPrompt {
-        prompt: "review code".to_owned(),
-        model: None,
-        timeout: None,
-        if_condition: None,
-        status_message: None,
-        once: true,
-    });
+    let hook =
+        claude_core::hook_types::HookDefinition::Prompt(claude_core::hook_types::HookPrompt {
+            prompt: "review code".to_owned(),
+            model: None,
+            timeout: None,
+            if_condition: None,
+            status_message: None,
+            once: true,
+        });
     assert_eq!(hook.hook_type(), claude_core::hook_types::HookType::Prompt);
     assert!(hook.is_once());
 }
@@ -382,7 +388,9 @@ fn ssrf_metadata_endpoint_blocked() {
 
 #[test]
 fn ssrf_invalid_url_blocked() {
-    assert!(!claude_core::hook_executor::is_url_safe_for_hook("not-a-url"));
+    assert!(!claude_core::hook_executor::is_url_safe_for_hook(
+        "not-a-url"
+    ));
 }
 
 // ─── Deduplication ───────────────────────────────────────────────────────

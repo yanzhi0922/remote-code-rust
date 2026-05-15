@@ -3,8 +3,8 @@
 //! Corresponds to `src/utils/permissions/denialTracking.ts`.
 //! Tracks permission denials to detect patterns and prevent repeated prompts.
 
+use parking_lot::Mutex;
 use std::collections::HashMap;
-use std::sync::Mutex;
 use std::time::Instant;
 
 /// A single denial record.
@@ -130,45 +130,30 @@ impl SharedDenialTracker {
 
     /// Record a denial.
     pub fn record_denial(&self, tool_name: &str, reason: &str) {
-        self.inner
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .record_denial(tool_name, reason);
+        self.inner.lock().record_denial(tool_name, reason);
     }
 
     /// Record an approval.
     pub fn record_approval(&self, tool_name: &str) {
-        self.inner
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .record_approval(tool_name);
+        self.inner.lock().record_approval(tool_name);
     }
 
     /// Get consecutive denial count.
     #[must_use]
     pub fn consecutive_denials(&self, tool_name: &str) -> u32 {
-        self.inner
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .consecutive_denials(tool_name)
+        self.inner.lock().consecutive_denials(tool_name)
     }
 
     /// Check if should auto-skip.
     #[must_use]
     pub fn should_auto_skip(&self, tool_name: &str, threshold: u32) -> bool {
-        self.inner
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .should_auto_skip(tool_name, threshold)
+        self.inner.lock().should_auto_skip(tool_name, threshold)
     }
 
     /// Check if should fall back to prompting.
     #[must_use]
     pub fn should_fallback_to_prompting(&self) -> bool {
-        self.inner
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .should_fallback_to_prompting()
+        self.inner.lock().should_fallback_to_prompting()
     }
 }
 

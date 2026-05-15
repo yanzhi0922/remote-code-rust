@@ -1,11 +1,11 @@
-﻿//! Mistral message format conversion.
+//! Mistral message format conversion.
 //!
 //! Derived from `src/api/transform/mistral-format.ts`.
 //! Converts Anthropic-style [`ApiMessage`] into Mistral-compatible JSON objects.
 //! Mistral has strict requirements on tool-call IDs (exactly 9 alphanumeric
 //! characters) and message ordering (user → assistant → tool → assistant).
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use roo_types::api::{ApiMessage, ContentBlock, ImageSource, MessageRole, ToolResultContent};
 
@@ -286,7 +286,7 @@ mod tests {
                 condense_parent: None,
                 is_summary: None,
                 condense_id: None,
-            reasoning_details: None,
+                reasoning_details: None,
             },
             ApiMessage {
                 role: MessageRole::Assistant,
@@ -299,7 +299,7 @@ mod tests {
                 condense_parent: None,
                 is_summary: None,
                 condense_id: None,
-            reasoning_details: None,
+                reasoning_details: None,
             },
         ];
 
@@ -329,7 +329,7 @@ mod tests {
                 condense_parent: None,
                 is_summary: None,
                 condense_id: None,
-            reasoning_details: None,
+                reasoning_details: None,
             },
             // User with tool_result
             ApiMessage {
@@ -343,7 +343,7 @@ mod tests {
                 condense_parent: None,
                 is_summary: None,
                 condense_id: None,
-            reasoning_details: None,
+                reasoning_details: None,
             },
         ];
 
@@ -354,7 +354,10 @@ mod tests {
         assert_eq!(result[0]["role"], "assistant");
         let tool_calls = result[0]["toolCalls"].as_array().unwrap();
         assert_eq!(tool_calls.len(), 1);
-        assert_eq!(tool_calls[0]["id"], normalize_mistral_tool_call_id("call_abc123"));
+        assert_eq!(
+            tool_calls[0]["id"],
+            normalize_mistral_tool_call_id("call_abc123")
+        );
 
         // Tool message
         assert_eq!(result[1]["role"], "tool");

@@ -40,7 +40,8 @@ fn code_reviewer() -> SpecializedAgent {
 - 🟡 Warning（建议修复）
 - 🟢 Info（改进建议）
 
-对每个发现，给出文件路径、行号、问题描述和修复建议。"#.into(),
+对每个发现，给出文件路径、行号、问题描述和修复建议。"#
+            .into(),
         scope: AgentScope::BuiltIn,
     }
 }
@@ -72,7 +73,8 @@ fn bug_analyzer() -> SpecializedAgent {
 - 根因：[简述]
 - 位置：`file:line`
 - 修复：[代码片段]
-- 测试：[测试用例]"#.into(),
+- 测试：[测试用例]"#
+            .into(),
         scope: AgentScope::BuiltIn,
     }
 }
@@ -105,7 +107,8 @@ fn dev_planner() -> SpecializedAgent {
 - 涉及文件：[列表]
 - 预计工作量：[估算]
 - 依赖：[前置任务]
-- 优先级：P0/P1/P2"#.into(),
+- 优先级：P0/P1/P2"#
+            .into(),
         scope: AgentScope::BuiltIn,
     }
 }
@@ -135,7 +138,8 @@ fn architect() -> SpecializedAgent {
 - 架构图：使用 ASCII 或 Mermaid 语法
 - 模块说明：每个模块的职责和接口
 - 数据流：关键数据在系统中的流转路径
-- 技术选型：推荐的技术和理由"#.into(),
+- 技术选型：推荐的技术和理由"#
+            .into(),
         scope: AgentScope::BuiltIn,
     }
 }
@@ -174,7 +178,8 @@ fn test_writer() -> SpecializedAgent {
 输出格式：
 - 测试文件路径
 - 测试用例列表
-- 覆盖率评估"#.into(),
+- 覆盖率评估"#
+            .into(),
         scope: AgentScope::BuiltIn,
     }
 }

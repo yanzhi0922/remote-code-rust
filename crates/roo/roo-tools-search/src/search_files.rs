@@ -6,8 +6,8 @@
 
 use crate::helpers::*;
 use crate::types::*;
-use roo_types::tool::SearchFilesParams;
 use roo_ignore::RooIgnoreController;
+use roo_types::tool::SearchFilesParams;
 use std::path::Path;
 use std::process::Command;
 
@@ -97,7 +97,9 @@ pub fn search_files(
 
     // Try ripgrep first
     if is_ripgrep_available() {
-        if let Ok(results) = search_with_ripgrep(&params.regex, &search_path, params.file_pattern.as_deref()) {
+        if let Ok(results) =
+            search_with_ripgrep(&params.regex, &search_path, params.file_pattern.as_deref())
+        {
             return Ok(results);
         }
     }
@@ -131,9 +133,9 @@ fn search_with_ripgrep(
         }
     }
 
-    let output = cmd.output().map_err(|e| {
-        SearchToolError::Validation(format!("Failed to execute ripgrep: {}", e))
-    })?;
+    let output = cmd
+        .output()
+        .map_err(|e| SearchToolError::Validation(format!("Failed to execute ripgrep: {}", e)))?;
 
     if !output.status.success() && !output.status.code().map_or(false, |c| c == 1) {
         // Exit code 1 means no matches, which is fine.
@@ -257,7 +259,10 @@ fn parse_ripgrep_output(output: &str) -> Result<Vec<FileMatch>, SearchToolError>
 
     // Handle any remaining pending entries (if no `end` marker was seen)
     if !pending.is_empty() {
-        let file_path = pending.first().map(|(f, _, _, _)| f.clone()).unwrap_or_default();
+        let file_path = pending
+            .first()
+            .map(|(f, _, _, _)| f.clone())
+            .unwrap_or_default();
         let match_indices: Vec<usize> = pending
             .iter()
             .enumerate()
@@ -375,16 +380,15 @@ fn search_in_dir_pure(
                     }
                     if re.is_match(line) {
                         // Gather context lines before the match
-                        let context_before: Vec<String> =
-                            (i.saturating_sub(DEFAULT_CONTEXT_LINES)..i)
-                                .filter_map(|idx| all_lines.get(idx).map(|l| l.to_string()))
-                                .collect();
+                        let context_before: Vec<String> = (i.saturating_sub(DEFAULT_CONTEXT_LINES)
+                            ..i)
+                            .filter_map(|idx| all_lines.get(idx).map(|l| l.to_string()))
+                            .collect();
 
                         // Gather context lines after the match
-                        let context_after: Vec<String> =
-                            ((i + 1)..(i + 1 + DEFAULT_CONTEXT_LINES))
-                                .filter_map(|idx| all_lines.get(idx).map(|l| l.to_string()))
-                                .collect();
+                        let context_after: Vec<String> = ((i + 1)..(i + 1 + DEFAULT_CONTEXT_LINES))
+                            .filter_map(|idx| all_lines.get(idx).map(|l| l.to_string()))
+                            .collect();
 
                         results.push(FileMatch {
                             file_path: path.to_string_lossy().to_string(),
@@ -667,7 +671,10 @@ mod tests {
         assert!(result.is_err());
         let err = format!("{}", result.unwrap_err());
         assert!(err.contains("[invalid"), "Error should include the pattern");
-        assert!(err.contains("regex syntax"), "Error should mention regex syntax");
+        assert!(
+            err.contains("regex syntax"),
+            "Error should mention regex syntax"
+        );
     }
 
     #[test]
@@ -680,6 +687,9 @@ mod tests {
         let result = validate_search_files_params(&params);
         assert!(result.is_err());
         let err = format!("{}", result.unwrap_err());
-        assert!(err.contains("Trailing backslash"), "Error should hint about trailing backslash");
+        assert!(
+            err.contains("Trailing backslash"),
+            "Error should hint about trailing backslash"
+        );
     }
 }

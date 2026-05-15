@@ -122,10 +122,8 @@ pub fn generate_folded_file_context(
         };
 
         // Get the folded definitions using tree-sitter
-        let definitions = roo_tree_sitter::parse_source_code_definitions(
-            &absolute_path,
-            &file_content,
-        );
+        let definitions =
+            roo_tree_sitter::parse_source_code_definitions(&absolute_path, &file_content);
 
         match definitions {
             Some(defs) if !is_tree_sitter_error_string(&defs) => {
@@ -147,8 +145,10 @@ pub fn generate_folded_file_context(
 
                     // Truncate the definitions to fit within the system-reminder block
                     let truncated_defs_len = remaining_chars.saturating_sub(100);
-                    let truncated_definitions =
-                        format!("{}...\n... (truncated)", &defs[..truncated_defs_len.min(defs.len())]);
+                    let truncated_definitions = format!(
+                        "{}...\n... (truncated)",
+                        &defs[..truncated_defs_len.min(defs.len())]
+                    );
                     let truncated_content = format!(
                         "<system-reminder>\n## File Context: {}\n{}\n</system-reminder>",
                         file_path, truncated_definitions
@@ -157,9 +157,8 @@ pub fn generate_folded_file_context(
                     result.files_processed += 1;
 
                     // Stop processing more files since we've hit the limit
-                    let remaining = file_paths.len()
-                        - result.files_processed
-                        - result.files_skipped;
+                    let remaining =
+                        file_paths.len() - result.files_processed - result.files_skipped;
                     result.files_skipped += remaining;
                     break;
                 }
@@ -177,11 +176,7 @@ pub fn generate_folded_file_context(
 
     // Log failed files as a single batch summary instead of per-file errors
     if !failed_files.is_empty() {
-        let display_files: Vec<&str> = failed_files
-            .iter()
-            .take(5)
-            .map(|s| s.as_str())
-            .collect();
+        let display_files: Vec<&str> = failed_files.iter().take(5).map(|s| s.as_str()).collect();
         let suffix = if failed_files.len() > 5 {
             format!(" and {} more", failed_files.len() - 5)
         } else {
@@ -234,10 +229,7 @@ mod tests {
             cwd: "/tmp".to_string(),
             max_characters: 50_000,
         };
-        let result = generate_folded_file_context(
-            &["/nonexistent/file.rs".to_string()],
-            &options,
-        );
+        let result = generate_folded_file_context(&["/nonexistent/file.rs".to_string()], &options);
         assert_eq!(result.files_processed, 0);
         assert_eq!(result.files_skipped, 1);
     }
@@ -307,7 +299,11 @@ impl MyStruct {
         };
 
         let file_paths: Vec<String> = (0..5)
-            .map(|i| dir.join(format!("file{}.rs", i)).to_string_lossy().to_string())
+            .map(|i| {
+                dir.join(format!("file{}.rs", i))
+                    .to_string_lossy()
+                    .to_string()
+            })
             .collect();
 
         let result = generate_folded_file_context(&file_paths, &options);

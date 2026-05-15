@@ -23,7 +23,9 @@ pub struct MoonshotHandler {
 impl MoonshotHandler {
     /// Create a new Moonshot handler from configuration.
     pub fn new(config: MoonshotConfig) -> Result<Self, roo_provider::ProviderError> {
-        let model_id = config.model_id.unwrap_or_else(|| models::default_model_id());
+        let model_id = config
+            .model_id
+            .unwrap_or_else(|| models::default_model_id());
         let model_info = models::models()
             .get(&model_id)
             .cloned()
@@ -47,7 +49,7 @@ impl MoonshotHandler {
             model_info,
             provider_name_enum: ProviderName::Moonshot,
             request_timeout: config.request_timeout,
-        reasoning_effort: None,
+            reasoning_effort: None,
             streaming_enabled: None,
             include_max_tokens: None,
             extra_body_fields: None,
@@ -62,8 +64,8 @@ impl MoonshotHandler {
     pub fn from_settings(
         settings: &roo_types::provider_settings::ProviderSettings,
     ) -> Result<Self, roo_provider::ProviderError> {
-        let config =
-            MoonshotConfig::from_settings(settings).ok_or(roo_provider::ProviderError::ApiKeyRequired)?;
+        let config = MoonshotConfig::from_settings(settings)
+            .ok_or(roo_provider::ProviderError::ApiKeyRequired)?;
         Self::new(config)
     }
 }
@@ -86,10 +88,7 @@ impl Provider for MoonshotHandler {
         self.inner.get_model()
     }
 
-    async fn complete_prompt(
-        &self,
-        prompt: &str,
-    ) -> Result<String, roo_provider::ProviderError> {
+    async fn complete_prompt(&self, prompt: &str) -> Result<String, roo_provider::ProviderError> {
         self.inner.complete_prompt(prompt).await
     }
 
@@ -137,7 +136,9 @@ mod tests {
     #[test]
     fn test_kimi_k2_thinking_has_thinking_enabled() {
         let all_models = models::models();
-        let thinking = all_models.get("kimi-k2-thinking").expect("kimi-k2-thinking should exist");
+        let thinking = all_models
+            .get("kimi-k2-thinking")
+            .expect("kimi-k2-thinking should exist");
         assert_eq!(thinking.supports_reasoning_budget, Some(true));
     }
 
@@ -272,7 +273,9 @@ mod tests {
     #[test]
     fn test_kimi_k2_context_window() {
         let all_models = models::models();
-        let model = all_models.get("kimi-k2-0905-preview").expect("kimi-k2-0905-preview should exist");
+        let model = all_models
+            .get("kimi-k2-0905-preview")
+            .expect("kimi-k2-0905-preview should exist");
         assert_eq!(model.context_window, 262_144);
     }
 
@@ -280,6 +283,10 @@ mod tests {
     fn test_model_count() {
         let all_models = models::models();
         // Should have at least 5 models
-        assert!(all_models.len() >= 5, "Expected at least 5 models, got {}", all_models.len());
+        assert!(
+            all_models.len() >= 5,
+            "Expected at least 5 models, got {}",
+            all_models.len()
+        );
     }
 }

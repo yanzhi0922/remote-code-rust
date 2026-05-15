@@ -28,24 +28,18 @@ pub mod versioned_settings;
 pub mod vertex_auth;
 
 // Re-export key types
+pub use base_provider::{BaseProvider, convert_tool_schema_for_openai, convert_tools_for_openai};
 pub use error::{ProviderError, Result};
-pub use handler::{ApiStream, CreateMessageMetadata, Provider, build_api_handler, register_provider, ProviderFactoryFn};
-pub use base_provider::{
-    BaseProvider,
-    convert_tools_for_openai,
-    convert_tool_schema_for_openai,
-};
-pub use openai_compatible::{
-    OpenAiCompatibleConfig,
-    OpenAiCompatibleProvider,
-    process_usage_metrics,
+pub use handler::{
+    ApiStream, CreateMessageMetadata, Provider, ProviderFactoryFn, build_api_handler,
+    register_provider,
 };
 pub use image_generation::{
-    ImageGenerationResult,
-    ImageGenerationOptions,
-    ImagesApiOptions,
-    generate_image_with_provider,
-    generate_image_with_images_api,
+    ImageGenerationOptions, ImageGenerationResult, ImagesApiOptions,
+    generate_image_with_images_api, generate_image_with_provider,
+};
+pub use openai_compatible::{
+    OpenAiCompatibleConfig, OpenAiCompatibleProvider, process_usage_metrics,
 };
 
 pub use protocol::get_api_protocol;

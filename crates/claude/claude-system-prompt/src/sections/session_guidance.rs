@@ -32,8 +32,8 @@ impl SystemPromptSection for SessionGuidanceSection {
         let has_agent = ctx.enabled_tools.contains(AGENT_TOOL_NAME);
         let has_skills = ctx.features.user_invocable_skills_available
             && ctx.enabled_tools.contains(SKILL_TOOL_NAME);
-        let has_discover_skills = has_skills
-            && ctx.enabled_tools.contains(DISCOVER_SKILLS_TOOL_NAME);
+        let has_discover_skills =
+            has_skills && ctx.enabled_tools.contains(DISCOVER_SKILLS_TOOL_NAME);
         let search_tools = if ctx.features.embedded_search_tools {
             format!("`find` or `grep` via the {BASH_TOOL_NAME} tool")
         } else {

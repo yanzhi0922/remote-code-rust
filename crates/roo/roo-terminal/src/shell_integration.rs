@@ -152,9 +152,15 @@ impl ShellIntegrationManager {
         match &self.shell_integration_base_path {
             Some(base) => {
                 // Use the configured base path
-                Some(base.join("vs").join("workbench").join("contrib")
-                    .join("terminal").join("common").join("scripts")
-                    .join(filename))
+                Some(
+                    base.join("vs")
+                        .join("workbench")
+                        .join("contrib")
+                        .join("terminal")
+                        .join("common")
+                        .join("scripts")
+                        .join(filename),
+                )
             }
             None => {
                 // Try to find VSCode's app root
@@ -193,7 +199,11 @@ impl ShellIntegrationManager {
                         .join("common")
                         .join("scripts")
                         .join(filename);
-                    if vscode_insiders_path.parent().map(|p| p.exists()).unwrap_or(false) {
+                    if vscode_insiders_path
+                        .parent()
+                        .map(|p| p.exists())
+                        .unwrap_or(false)
+                    {
                         return Some(vscode_insiders_path);
                     }
 
@@ -244,10 +254,7 @@ impl ShellIntegrationManager {
         env: &mut HashMap<String, String>,
     ) -> Result<PathBuf, String> {
         // Create a temporary directory
-        let tmp_dir = std::env::temp_dir().join(format!(
-            "roo-zdotdir-{}",
-            rand::random::<u32>()
-        ));
+        let tmp_dir = std::env::temp_dir().join(format!("roo-zdotdir-{}", rand::random::<u32>()));
 
         // Save original ZDOTDIR
         if let Ok(original_zdotdir) = std::env::var("ZDOTDIR") {
@@ -360,11 +367,7 @@ unset ROO_ZDOTDIR
     ///
     /// Returns a map of environment variable changes needed for the given
     /// shell type.
-    pub fn get_shell_env(
-        &mut self,
-        terminal_id: u32,
-        shell: ShellType,
-    ) -> HashMap<String, String> {
+    pub fn get_shell_env(&mut self, terminal_id: u32, shell: ShellType) -> HashMap<String, String> {
         let mut env = HashMap::new();
 
         match shell {
@@ -684,7 +687,11 @@ mod tests {
         // Should return a valid shell type
         assert!(matches!(
             shell,
-            ShellType::Bash | ShellType::Zsh | ShellType::Fish | ShellType::PowerShell | ShellType::Cmd
+            ShellType::Bash
+                | ShellType::Zsh
+                | ShellType::Fish
+                | ShellType::PowerShell
+                | ShellType::Cmd
         ));
     }
 }

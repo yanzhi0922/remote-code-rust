@@ -24,14 +24,16 @@ pub mod types;
 
 // Re-export the main public API at the crate root.
 pub use approval::{
-    check_auto_approval, is_mcp_tool_always_allowed, AutoApprovalHandler, CheckAutoApprovalParams,
+    AutoApprovalHandler, CheckAutoApprovalParams, check_auto_approval, is_mcp_tool_always_allowed,
 };
 pub use commands::{
     contains_dangerous_substitution, find_longest_prefix_match, get_command_decision,
-    get_single_command_decision, is_auto_approved_single_command,
-    is_auto_denied_single_command, parse_command_chain,
+    get_single_command_decision, is_auto_approved_single_command, is_auto_denied_single_command,
+    parse_command_chain,
 };
-pub use tools::{is_read_only_tool_action, is_read_only_tool_name, is_write_tool_action, is_write_tool_name};
+pub use tools::{
+    is_read_only_tool_action, is_read_only_tool_name, is_write_tool_action, is_write_tool_name,
+};
 pub use types::{
     ApprovalLimitType, AskType, AutoApprovalLimitResult, AutoApprovalState,
     CheckAutoApprovalResult, CommandDecision, McpServer, McpServerUse, McpTool, ToolAction,

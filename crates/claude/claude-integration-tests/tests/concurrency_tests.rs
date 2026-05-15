@@ -322,7 +322,9 @@ fn concurrent_session_store_writes() {
 
 #[test]
 fn concurrent_denial_tracker() {
-    let tracker = Arc::new(std::sync::Mutex::new(claude_permissions::DenialTracker::new()));
+    let tracker = Arc::new(std::sync::Mutex::new(
+        claude_permissions::DenialTracker::new(),
+    ));
 
     let mut handles = vec![];
     for i in 0..10 {

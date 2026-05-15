@@ -8,7 +8,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 use streaming_iterator::StreamingIterator;
-use tree_sitter::{Language, Parser, Query, QueryCursor, Node};
+use tree_sitter::{Language, Node, Parser, Query, QueryCursor};
 
 use crate::queries;
 
@@ -150,10 +150,7 @@ pub fn load_required_language_parsers(
             ))
         })?;
 
-        parsers.insert(
-            parser_key.clone(),
-            LoadedParser { parser, query },
-        );
+        parsers.insert(parser_key.clone(), LoadedParser { parser, query });
         extensions_loaded.insert(ext.clone(), parser_key);
     }
 
@@ -184,10 +181,7 @@ pub fn parse_file(
     };
 
     let loaded = language_parsers.get_mut(parser_key).ok_or_else(|| {
-        LanguageParserError::ParserNotFound(format!(
-            "No parser loaded for extension '{}'",
-            ext
-        ))
+        LanguageParserError::ParserNotFound(format!("No parser loaded for extension '{}'", ext))
     })?;
 
     // Parse the file content into an AST
@@ -202,11 +196,7 @@ pub fn parse_file(
     let mut cursor = QueryCursor::new();
     let mut captures: Vec<ProcessedCapture<'_>> = Vec::new();
 
-    let mut matches_iter = cursor.matches(
-        &loaded.query,
-        tree.root_node(),
-        file_content.as_bytes(),
-    );
+    let mut matches_iter = cursor.matches(&loaded.query, tree.root_node(), file_content.as_bytes());
 
     while let Some(match_item) = matches_iter.next() {
         for capture in match_item.captures {
@@ -258,10 +248,9 @@ pub fn process_captures(
         if !needs_html_filtering {
             return true;
         }
-        let html_elements_re = regex::Regex::new(
-            r"^[^A-Z]*<\/?(?:div|span|button|input|h[1-6]|p|a|img|ul|li|form)\b",
-        )
-        .unwrap();
+        let html_elements_re =
+            regex::Regex::new(r"^[^A-Z]*<\/?(?:div|span|button|input|h[1-6]|p|a|img|ul|li|form)\b")
+                .unwrap();
         let trimmed = line.trim();
         !html_elements_re.is_match(trimmed)
     };
@@ -344,13 +333,11 @@ pub fn process_captures(
                         let context_span = context_end - parent.start_position().row + 1;
 
                         if context_span >= DEFAULT_MIN_COMPONENT_LINES {
-                            let range_key = format!(
-                                "{}-{}",
-                                parent.start_position().row,
-                                context_end
-                            );
+                            let range_key =
+                                format!("{}-{}", parent.start_position().row, context_end);
                             if !processed_lines.contains(&range_key) {
-                                let parent_line = lines.get(parent.start_position().row).unwrap_or(&"");
+                                let parent_line =
+                                    lines.get(parent.start_position().row).unwrap_or(&"");
                                 formatted_output.push_str(&format!(
                                     "{}--{} | {}\n",
                                     parent.start_position().row + 1,

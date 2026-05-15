@@ -106,7 +106,10 @@ fn transport_config_websocket() {
         headers: BTreeMap::new(),
         headers_helper: None,
     };
-    assert_eq!(config.kind(), claude_mcp::transport::McpTransport::WebSocket);
+    assert_eq!(
+        config.kind(),
+        claude_mcp::transport::McpTransport::WebSocket
+    );
 }
 
 // ─── Reconnect scheduler ────────────────────────────────────────────────────
@@ -293,19 +296,22 @@ fn connection_state_transitions() {
         request_timeout_secs: None,
         oauth: None,
         metadata: BTreeMap::new(),
-    tool_policy: Default::default(),
+        tool_policy: Default::default(),
     };
-    let scoped =
-        claude_mcp::scope::ScopedMcpServerConfig::new(config, claude_mcp::scope::ConfigScope::Local);
+    let scoped = claude_mcp::scope::ScopedMcpServerConfig::new(
+        config,
+        claude_mcp::scope::ConfigScope::Local,
+    );
 
     // Connected
-    let connected = claude_mcp::McpServerConnection::Connected(claude_mcp::connection::ConnectedServer {
-        name: "test".to_owned(),
-        capabilities: claude_mcp::McpCapabilityMatrix::default(),
-        server_info: None,
-        instructions: None,
-        config: scoped.clone(),
-    });
+    let connected =
+        claude_mcp::McpServerConnection::Connected(claude_mcp::connection::ConnectedServer {
+            name: "test".to_owned(),
+            capabilities: claude_mcp::McpCapabilityMatrix::default(),
+            server_info: None,
+            instructions: None,
+            config: scoped.clone(),
+        });
     assert!(connected.is_connected());
     assert_eq!(connected.name(), "test");
     assert_eq!(connected.connection_type(), "connected");
@@ -330,18 +336,20 @@ fn connection_state_transitions() {
     assert_eq!(pending.connection_type(), "pending");
 
     // Needs auth
-    let needs_auth = claude_mcp::McpServerConnection::NeedsAuth(claude_mcp::connection::NeedsAuthServer {
-        name: "test".to_owned(),
-        config: scoped.clone(),
-    });
+    let needs_auth =
+        claude_mcp::McpServerConnection::NeedsAuth(claude_mcp::connection::NeedsAuthServer {
+            name: "test".to_owned(),
+            config: scoped.clone(),
+        });
     assert!(!needs_auth.is_connected());
     assert_eq!(needs_auth.connection_type(), "needs-auth");
 
     // Disabled
-    let disabled = claude_mcp::McpServerConnection::Disabled(claude_mcp::connection::DisabledServer {
-        name: "test".to_owned(),
-        config: scoped,
-    });
+    let disabled =
+        claude_mcp::McpServerConnection::Disabled(claude_mcp::connection::DisabledServer {
+            name: "test".to_owned(),
+            config: scoped,
+        });
     assert!(!disabled.is_connected());
     assert_eq!(disabled.connection_type(), "disabled");
 }
@@ -400,17 +408,19 @@ fn batch_queue_operations() {
         request_timeout_secs: None,
         oauth: None,
         metadata: BTreeMap::new(),
-    tool_policy: Default::default(),
+        tool_policy: Default::default(),
     };
     let scoped =
         claude_mcp::scope::ScopedMcpServerConfig::new(config, claude_mcp::scope::ConfigScope::User);
 
     queue.enqueue(claude_mcp::BatchUpdate {
         server_name: "server-1".to_owned(),
-        connection: claude_mcp::McpServerConnection::Disabled(claude_mcp::connection::DisabledServer {
-            name: "server-1".to_owned(),
-            config: scoped,
-        }),
+        connection: claude_mcp::McpServerConnection::Disabled(
+            claude_mcp::connection::DisabledServer {
+                name: "server-1".to_owned(),
+                config: scoped,
+            },
+        ),
         tools: None,
         resources: None,
     });

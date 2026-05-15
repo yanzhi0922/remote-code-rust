@@ -3,7 +3,7 @@
 //! Converts a custom tool definition into the OpenAI function calling format.
 //! Mirrors `formatNative.ts`.
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::types::CustomToolDefinition;
 
@@ -105,7 +105,10 @@ mod tests {
         assert_eq!(result["function"]["description"], "A test tool");
         assert_eq!(result["function"]["strict"], true);
         assert_eq!(result["function"]["parameters"]["type"], "object");
-        assert_eq!(result["function"]["parameters"]["required"], json!(["input"]));
+        assert_eq!(
+            result["function"]["parameters"]["required"],
+            json!(["input"])
+        );
     }
 
     #[test]

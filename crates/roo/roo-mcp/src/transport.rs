@@ -185,8 +185,8 @@ impl McpTransport for StdioTransport {
 
         let (command, args) = if is_windows {
             // On Windows, wrap commands with cmd.exe to handle non-exe executables
-            let is_already_wrapped = self.command.to_lowercase() == "cmd.exe"
-                || self.command.to_lowercase() == "cmd";
+            let is_already_wrapped =
+                self.command.to_lowercase() == "cmd.exe" || self.command.to_lowercase() == "cmd";
 
             if is_already_wrapped {
                 (self.command.clone(), self.args.clone())
@@ -219,15 +219,18 @@ impl McpTransport for StdioTransport {
             McpError::ConnectionFailed(format!("Failed to spawn process '{}': {}", command, e))
         })?;
 
-        let stdin = child.stdin.take().ok_or_else(|| {
-            McpError::ConnectionFailed("Failed to open stdin pipe".to_string())
-        })?;
-        let stdout = child.stdout.take().ok_or_else(|| {
-            McpError::ConnectionFailed("Failed to open stdout pipe".to_string())
-        })?;
-        let stderr = child.stderr.take().ok_or_else(|| {
-            McpError::ConnectionFailed("Failed to open stderr pipe".to_string())
-        })?;
+        let stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| McpError::ConnectionFailed("Failed to open stdin pipe".to_string()))?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| McpError::ConnectionFailed("Failed to open stdout pipe".to_string()))?;
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| McpError::ConnectionFailed("Failed to open stderr pipe".to_string()))?;
 
         // Spawn a background task to read stderr lines and forward them to a channel
         let (stderr_tx, stderr_rx) = mpsc::channel::<String>(100);
@@ -449,19 +452,17 @@ impl SseTransport {
 
         // Parse the base URL and join the relative path
         match url::Url::parse(base_url) {
-            Ok(base) => {
-                match base.join(endpoint_data) {
-                    Ok(resolved) => resolved.to_string(),
-                    Err(e) => {
-                        tracing::warn!(
-                            "Failed to resolve relative endpoint '{}': {}. Using as-is.",
-                            endpoint_data,
-                            e
-                        );
-                        endpoint_data.to_string()
-                    }
+            Ok(base) => match base.join(endpoint_data) {
+                Ok(resolved) => resolved.to_string(),
+                Err(e) => {
+                    tracing::warn!(
+                        "Failed to resolve relative endpoint '{}': {}. Using as-is.",
+                        endpoint_data,
+                        e
+                    );
+                    endpoint_data.to_string()
                 }
-            }
+            },
             Err(e) => {
                 tracing::warn!(
                     "Failed to parse base URL '{}': {}. Using endpoint as-is.",
@@ -562,14 +563,11 @@ impl McpTransport for SseTransport {
 
     async fn send(&mut self, message: &JsonRpcMessage) -> McpResult<()> {
         // POST the message to the discovered endpoint (not the SSE URL)
-        let post_url = self
-            .post_endpoint
-            .as_ref()
-            .ok_or_else(|| {
-                McpError::TransportError(
-                    "SSE transport not connected: no POST endpoint discovered yet".to_string(),
-                )
-            })?;
+        let post_url = self.post_endpoint.as_ref().ok_or_else(|| {
+            McpError::TransportError(
+                "SSE transport not connected: no POST endpoint discovered yet".to_string(),
+            )
+        })?;
 
         let mut request = self.http_client.post(post_url);
         for (key, value) in &self.headers {
@@ -578,9 +576,10 @@ impl McpTransport for SseTransport {
 
         request = request.json(message);
 
-        let response = request.send().await.map_err(|e| {
-            McpError::TransportError(format!("SSE send error: {}", e))
-        })?;
+        let response = request
+            .send()
+            .await
+            .map_err(|e| McpError::TransportError(format!("SSE send error: {}", e)))?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -657,8 +656,8 @@ impl SseTransport {
                     // Matches TS: ReconnectingEventSource retries indefinitely.
                     attempt += 1;
 
-                    let delay_ms = (initial_delay_ms * 2u64.pow(attempt - 1))
-                        .min(max_reconnect_delay_ms);
+                    let delay_ms =
+                        (initial_delay_ms * 2u64.pow(attempt - 1)).min(max_reconnect_delay_ms);
                     tracing::info!(
                         "SSE stream ended. Reconnecting in {}ms (attempt {})",
                         delay_ms,
@@ -669,8 +668,8 @@ impl SseTransport {
                 Err(e) => {
                     attempt += 1;
 
-                    let delay_ms = (initial_delay_ms * 2u64.pow(attempt - 1))
-                        .min(max_reconnect_delay_ms);
+                    let delay_ms =
+                        (initial_delay_ms * 2u64.pow(attempt - 1)).min(max_reconnect_delay_ms);
                     tracing::warn!(
                         "SSE error: {}. Reconnecting in {}ms (attempt {})",
                         e,
@@ -707,9 +706,10 @@ impl SseTransport {
             request = request.header(key.as_str(), value.as_str());
         }
 
-        let response = request.send().await.map_err(|e| {
-            McpError::TransportError(format!("SSE connect error: {}", e))
-        })?;
+        let response = request
+            .send()
+            .await
+            .map_err(|e| McpError::TransportError(format!("SSE connect error: {}", e)))?;
 
         use eventsource_stream::Eventsource;
         use futures::StreamExt;
@@ -725,10 +725,7 @@ impl SseTransport {
                     if sse_event.event == "endpoint" {
                         let endpoint_data = sse_event.data.trim().to_string();
                         if !endpoint_data.is_empty() && !*endpoint_signaled {
-                            tracing::info!(
-                                "SSE received endpoint event: {}",
-                                endpoint_data
-                            );
+                            tracing::info!("SSE received endpoint event: {}", endpoint_data);
                             if let Some(sender) = endpoint_tx.take() {
                                 let _ = sender.send(endpoint_data).await;
                                 *endpoint_signaled = true;
@@ -868,9 +865,10 @@ impl McpTransport for StreamableHttpTransport {
 
         request = request.json(message);
 
-        let response = request.send().await.map_err(|e| {
-            McpError::TransportError(format!("StreamableHTTP send error: {}", e))
-        })?;
+        let response = request
+            .send()
+            .await
+            .map_err(|e| McpError::TransportError(format!("StreamableHTTP send error: {}", e)))?;
 
         // Update session ID if the server sends a new one
         if let Some(sid) = response
@@ -911,9 +909,7 @@ impl McpTransport for StreamableHttpTransport {
             while let Some(event) = event_stream.next().await {
                 match event {
                     Ok(sse_event) => {
-                        if let Ok(msg) =
-                            serde_json::from_str::<JsonRpcMessage>(&sse_event.data)
-                        {
+                        if let Ok(msg) = serde_json::from_str::<JsonRpcMessage>(&sse_event.data) {
                             self.pending_messages.push(msg);
                         }
                     }
@@ -932,9 +928,7 @@ impl McpTransport for StreamableHttpTransport {
             if !body.is_empty() {
                 // The response could be a single message or an array
                 if body.trim_start().starts_with('[') {
-                    if let Ok(messages) =
-                        serde_json::from_str::<Vec<JsonRpcMessage>>(&body)
-                    {
+                    if let Ok(messages) = serde_json::from_str::<Vec<JsonRpcMessage>>(&body) {
                         self.pending_messages.extend(messages);
                     }
                 } else if let Ok(msg) = serde_json::from_str::<JsonRpcMessage>(&body) {
@@ -1014,7 +1008,8 @@ mod tests {
 
     #[test]
     fn test_json_rpc_deserialization_error() {
-        let json_str = r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32600,"message":"Invalid Request"}}"#;
+        let json_str =
+            r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32600,"message":"Invalid Request"}}"#;
         let msg: JsonRpcMessage = serde_json::from_str(json_str).unwrap();
         assert!(msg.is_error());
         assert_eq!(msg.error.as_ref().unwrap().code, -32600);
@@ -1049,12 +1044,7 @@ mod tests {
 
     #[test]
     fn test_stdio_transport_stderr_initially_empty() {
-        let mut transport = StdioTransport::new(
-            "node".to_string(),
-            vec![],
-            HashMap::new(),
-            None,
-        );
+        let mut transport = StdioTransport::new("node".to_string(), vec![], HashMap::new(), None);
         // Not connected, so no stderr
         assert!(transport.try_read_stderr().is_none());
         assert!(transport.read_all_stderr().is_empty());
@@ -1062,13 +1052,16 @@ mod tests {
 
     #[test]
     fn test_sse_transport_creation() {
-        let transport = SseTransport::new(
-            "http://localhost:8080/sse".to_string(),
-            HashMap::new(),
-        );
+        let transport = SseTransport::new("http://localhost:8080/sse".to_string(), HashMap::new());
         assert!(!transport.is_connected());
-        assert_eq!(transport.max_reconnect_delay_ms, SSE_DEFAULT_MAX_RECONNECT_DELAY_MS);
-        assert_eq!(transport.initial_reconnect_delay_ms, SSE_DEFAULT_INITIAL_RECONNECT_DELAY_MS);
+        assert_eq!(
+            transport.max_reconnect_delay_ms,
+            SSE_DEFAULT_MAX_RECONNECT_DELAY_MS
+        );
+        assert_eq!(
+            transport.initial_reconnect_delay_ms,
+            SSE_DEFAULT_INITIAL_RECONNECT_DELAY_MS
+        );
     }
 
     #[test]
@@ -1085,10 +1078,8 @@ mod tests {
 
     #[test]
     fn test_streamable_http_transport_creation() {
-        let transport = StreamableHttpTransport::new(
-            "http://localhost:8080/mcp".to_string(),
-            HashMap::new(),
-        );
+        let transport =
+            StreamableHttpTransport::new("http://localhost:8080/mcp".to_string(), HashMap::new());
         assert!(!transport.is_connected());
     }
 }

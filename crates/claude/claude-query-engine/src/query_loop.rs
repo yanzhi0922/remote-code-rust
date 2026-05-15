@@ -1,26 +1,25 @@
+use parking_lot::Mutex;
 use std::collections::HashSet;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
 
 use anyhow::{Result, anyhow};
 use claude_core::{ConversationEntry, Message, ToolResult};
+use claude_provider::{
+    ErrorCategory, StreamingCallbacks, extract_provider_error,
+    query_source::{ProviderRequestContext, ProviderTaskBudget},
+};
 use rc_engine_events::{
     CompactionResult, EngineEvent, EngineStateSnapshot, ToolError, ToolResult as EventToolResult,
     Usage,
 };
-use claude_provider::{
-    ErrorCategory,
-    extract_provider_error,
-    StreamingCallbacks,
-    query_source::{ProviderRequestContext, ProviderTaskBudget},
-};
 use serde_json::json;
 
-/// Lock a Mutex, recovering from poison instead of panicking.
-/// A poisoned mutex means another thread panicked while holding the lock,
-/// but the data is still readable — we recover it rather than cascading the crash.
-fn lock_unpoison<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(|e| e.into_inner())
+/// Lock a Mutex from `parking_lot`. parking_lot mutexes do not poison, so
+/// the wrapper is purely for parity with the old `std::sync::Mutex` API
+/// and to keep call sites uniform during the migration.
+fn lock_unpoison<T>(mutex: &Mutex<T>) -> parking_lot::MutexGuard<'_, T> {
+    mutex.lock()
 }
 use tokio::sync::mpsc;
 
@@ -28,14 +27,13 @@ use crate::config::{
     ProcessUserInputContext, ProviderInvocationMode, QueryEngineConfig, QuerySource, ToolRunResult,
 };
 use crate::engine::{
-    EngineError, EngineState, QueryResult,
-    assistant_message_from_response_with_parent, budget_stop_message,
-    tool_result_message_with_parent, usage_from_accumulator,
+    EngineError, EngineState, QueryResult, assistant_message_from_response_with_parent,
+    budget_stop_message, tool_result_message_with_parent, usage_from_accumulator,
 };
 use crate::max_tokens_recovery::{MaxTokensRecovery, MaxTokensRecoveryAction};
 use crate::observer::{
-    AttachmentEvent, QueryBudgetState, QueryCheckpoint, QueryCheckpointKind, QueryContextBudgetState,
-    QueryObserverEvent, TokenBudgetContinuationEvent,
+    AttachmentEvent, QueryBudgetState, QueryCheckpoint, QueryCheckpointKind,
+    QueryContextBudgetState, QueryObserverEvent, TokenBudgetContinuationEvent,
 };
 use crate::preprocessing::PreprocessingPipeline;
 use crate::reactive_compact::ReactiveCompactHandler;
@@ -163,11 +161,11 @@ pub async fn run_query_loop(
             preprocessing_pipeline.run(&mut state.messages, context_usage, max_context);
 
         let mut legacy_conversation = state.legacy_conversation();
-        let had_compaction = maybe_compact_conversation(config, state, &mut legacy_conversation).await;
+        let had_compaction =
+            maybe_compact_conversation(config, state, &mut legacy_conversation).await;
 
         let mut api_conversation = {
-            let sliced =
-                crate::message_utils::get_messages_after_compact_boundary(&state.messages);
+            let sliced = crate::message_utils::get_messages_after_compact_boundary(&state.messages);
             sliced
                 .iter()
                 .filter_map(|m| m.as_conversation_entry())
@@ -182,10 +180,9 @@ pub async fn run_query_loop(
         {
             let snapshot = config.context_manager.budget_snapshot(&api_conversation);
             if snapshot.usage_ratio >= 1.0 {
-                let stop_message =
-                    crate::message_utils::create_error_message(
-                        "Prompt is too long: context window exceeded. Run /compact to reduce context size.",
-                    );
+                let stop_message = crate::message_utils::create_error_message(
+                    "Prompt is too long: context window exceeded. Run /compact to reduce context size.",
+                );
                 state.messages.push(stop_message.clone());
                 let _ = config
                     .observer
@@ -425,7 +422,9 @@ pub async fn run_query_loop(
                     // then fall back to the configured fallback model.
                     let fallback_from_error = error
                         .chain()
-                        .filter_map(|e| e.downcast_ref::<claude_provider::retry::ModelFallbackSuggested>())
+                        .filter_map(|e| {
+                            e.downcast_ref::<claude_provider::retry::ModelFallbackSuggested>()
+                        })
                         .find_map(|s| s.fallback_model.clone());
                     let fallback = fallback_from_error
                         .as_deref()
@@ -438,10 +437,11 @@ pub async fn run_query_loop(
                         // receiving tool_result blocks, the conversation has orphaned tool_use
                         // entries. We fill them with synthetic tool results so the fallback
                         // model sees a valid conversation.
-                        let missing_results = crate::message_utils::yield_missing_tool_result_messages(
-                            &state.messages,
-                            "Model fallback triggered — previous response was interrupted",
-                        );
+                        let missing_results =
+                            crate::message_utils::yield_missing_tool_result_messages(
+                                &state.messages,
+                                "Model fallback triggered — previous response was interrupted",
+                            );
                         for msg in &missing_results {
                             state.messages.push(msg.clone());
                             let _ = config
@@ -477,9 +477,7 @@ pub async fn run_query_loop(
 
                             // If Ant user, strip signature blocks before retry
                             if std::env::var("USER_TYPE").unwrap_or_default() == "ant" {
-                                crate::message_utils::strip_signature_blocks(
-                                    &mut state.messages,
-                                );
+                                crate::message_utils::strip_signature_blocks(&mut state.messages);
                             }
 
                             let _ = config
@@ -492,9 +490,9 @@ pub async fn run_query_loop(
                                 .await;
 
                             // Append a warning system message
-                            let warn_msg = crate::message_utils::create_info_message(
-                                &format!("Switched to fallback model: {fallback}"),
-                            );
+                            let warn_msg = crate::message_utils::create_info_message(&format!(
+                                "Switched to fallback model: {fallback}"
+                            ));
                             state.messages.push(warn_msg.clone());
                             let _ = config
                                 .observer
@@ -531,10 +529,9 @@ pub async fn run_query_loop(
         }
         if is_max_tokens_truncated(&current_stop_reason) {
             let current_max_tokens = estimate_current_max_tokens(&state.usage);
-            if let Some(action) = max_tokens_recovery.handle_truncation(
-                current_max_tokens,
-                user_has_max_tokens_override,
-            ) {
+            if let Some(action) = max_tokens_recovery
+                .handle_truncation(current_max_tokens, user_has_max_tokens_override)
+            {
                 match action {
                     MaxTokensRecoveryAction::Escalate { new_max_tokens } => {
                         context.max_output_tokens_override =
@@ -609,10 +606,8 @@ pub async fn run_query_loop(
             .as_ref()
             .and_then(|b| b.max_budget_usd);
         if let Some(budget_usd) = max_budget_usd {
-            let turn_cost = claude_core::model_cost::calculate_usd_cost(
-                &context.model,
-                &response.usage,
-            );
+            let turn_cost =
+                claude_core::model_cost::calculate_usd_cost(&context.model, &response.usage);
             state.accumulated_usd_cost += turn_cost;
             if state.accumulated_usd_cost >= budget_usd {
                 let reason = format!(
@@ -709,8 +704,7 @@ pub async fn run_query_loop(
                     session_id: context.session_id.clone(),
                     turn: state.turn,
                     stop_reason: response.stop_reason.clone(),
-                    final_text: (!response.text.trim().is_empty())
-                        .then_some(response.text.clone()),
+                    final_text: (!response.text.trim().is_empty()).then_some(response.text.clone()),
                     agent_id: context.agent_id.clone(),
                     query_source: context.query_source,
                     messages: state.messages.clone(),
@@ -855,7 +849,9 @@ pub async fn run_query_loop(
 
             // ---- Token budget continuation check (TS lines 1308–1355) ----
             // Only on main thread (no agent_id). Uses per-turn output tokens.
-            let budget_total = lock_unpoison(&context.task_budget).as_ref().and_then(|b| b.max_total_tokens);
+            let budget_total = lock_unpoison(&context.task_budget)
+                .as_ref()
+                .and_then(|b| b.max_total_tokens);
             if context.agent_id.is_none()
                 && let Some(budget_total) = budget_total
             {
@@ -959,9 +955,8 @@ pub async fn run_query_loop(
                         input: Arc::new(tool_call.input.clone()),
                     });
 
-                    let handle = tokio::spawn(async move {
-                        runner.run_tool(&tool_call, &ctx).await
-                    });
+                    let handle =
+                        tokio::spawn(async move { runner.run_tool(&tool_call, &ctx).await });
                     handles.push((local_idx, handle));
                 }
 
@@ -1062,7 +1057,9 @@ pub async fn run_query_loop(
         if interrupted.load(Ordering::SeqCst) {
             state.stop_reason = Some("interrupted".to_owned());
             state.state_machine.force_set(EnginePhase::Idle);
-            return Err(EngineError::Stopped("query interrupted by user after tool execution".to_owned()));
+            return Err(EngineError::Stopped(
+                "query interrupted by user after tool execution".to_owned(),
+            ));
         }
 
         // Clear checkpoints after tool execution
@@ -1274,13 +1271,21 @@ fn checkpoints_for_tool_batch(
     ]
 }
 
+/// Capacity for the streaming-observer event forwarding channel.
+///
+/// Bounded to keep memory predictable when the observer (typically a UI
+/// rendering loop or a session writer) stalls. Streaming token deltas can be
+/// dropped on overflow without breaking correctness — the final assistant
+/// message is delivered through the `Completed` event regardless.
+const STREAMING_OBSERVER_CHANNEL_CAPACITY: usize = 4096;
+
 async fn complete_with_streaming_observer(
     config: &QueryEngineConfig,
     context: &ProcessUserInputContext,
     conversation: &[ConversationEntry],
     turn: u32,
 ) -> anyhow::Result<claude_core::ProviderResponse> {
-    let (tx, mut rx) = mpsc::unbounded_channel();
+    let (tx, mut rx) = mpsc::channel(STREAMING_OBSERVER_CHANNEL_CAPACITY);
     let observer = Arc::clone(&config.observer);
     let forwarder = tokio::spawn(async move {
         while let Some(event) = rx.recv().await {
@@ -1333,39 +1338,40 @@ fn provider_request_context(context: &ProcessUserInputContext) -> ProviderReques
         .with_max_output_tokens(context.max_output_tokens_override)
         .with_effort(context.requested_effort.clone())
         .with_fast_mode(context.fast_mode)
-        .with_task_budget(
-            {
-                let guard = lock_unpoison(&context.task_budget);
-                guard
+        .with_task_budget({
+            let guard = lock_unpoison(&context.task_budget);
+            guard
                 .as_ref()
                 .and_then(|budget| budget.max_total_tokens)
                 .map(|total| ProviderTaskBudget {
                     total,
                     remaining: guard.as_ref().and_then(|b| b.remaining()),
                 })
-            },
-        );
+        });
     provider_context
 }
 
 fn build_streaming_callbacks(
-    tx: mpsc::UnboundedSender<QueryObserverEvent>,
+    tx: mpsc::Sender<QueryObserverEvent>,
     turn: u32,
 ) -> StreamingCallbacks {
     let accumulated_text = Arc::new(Mutex::new(String::new()));
     let started_tool_calls = Arc::new(Mutex::new(HashSet::<String>::new()));
 
+    // Synchronous callbacks emit through `try_send`; if the observer falls
+    // behind we drop the delta silently. The terminal `Completed` event
+    // still carries the full assistant message so partial deltas are
+    // recoverable from the consumer's perspective.
+
     let text_tx = tx.clone();
     let text_accumulated = Arc::clone(&accumulated_text);
     let on_text_delta = Box::new(move |delta: &str| {
         let accumulated_text = {
-            let mut accumulated = text_accumulated
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let mut accumulated = text_accumulated.lock();
             accumulated.push_str(delta);
             accumulated.clone()
         };
-        let _ = text_tx.send(QueryObserverEvent::StreamingTextDelta {
+        let _ = text_tx.try_send(QueryObserverEvent::StreamingTextDelta {
             turn,
             delta: delta.to_owned(),
             accumulated_text,
@@ -1376,13 +1382,11 @@ fn build_streaming_callbacks(
     let tool_started = Arc::clone(&started_tool_calls);
     let on_tool_call_start = Box::new(move |tool_call_id: &str, tool_name: &str| {
         let should_emit = {
-            let mut started = tool_started
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let mut started = tool_started.lock();
             started.insert(tool_call_id.to_owned())
         };
         if should_emit {
-            let _ = tool_start_tx.send(QueryObserverEvent::StreamingToolCallStarted {
+            let _ = tool_start_tx.try_send(QueryObserverEvent::StreamingToolCallStarted {
                 turn,
                 tool_call_id: tool_call_id.to_owned(),
                 tool_name: tool_name.to_owned(),
@@ -1392,7 +1396,7 @@ fn build_streaming_callbacks(
 
     let tool_delta_tx = tx.clone();
     let on_tool_call_delta = Box::new(move |tool_call_id: &str, delta: &str| {
-        let _ = tool_delta_tx.send(QueryObserverEvent::StreamingToolCallDelta {
+        let _ = tool_delta_tx.try_send(QueryObserverEvent::StreamingToolCallDelta {
             turn,
             tool_call_id: tool_call_id.to_owned(),
             delta: delta.to_owned(),
@@ -1403,35 +1407,35 @@ fn build_streaming_callbacks(
     let thinking_accumulated = Arc::new(Mutex::new(String::new()));
     let on_thinking_delta = Box::new(move |delta: &str| {
         let accumulated_thinking = {
-            let mut accumulated = thinking_accumulated
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let mut accumulated = thinking_accumulated.lock();
             accumulated.push_str(delta);
             accumulated.clone()
         };
-        let _ = thinking_tx.send(QueryObserverEvent::StreamingThinkingDelta {
+        let _ = thinking_tx.try_send(QueryObserverEvent::StreamingThinkingDelta {
             turn,
             delta: delta.to_owned(),
             accumulated_thinking,
         });
     });
 
-    let on_usage = Box::new(move |update: claude_provider::streaming::StreamingUsageUpdate| {
-        let _ = tx.send(QueryObserverEvent::StreamingUsageUpdated {
-            turn,
-            usage: Usage {
-                input_tokens: update.input_tokens,
-                output_tokens: update.output_tokens,
-                cache_creation_input_tokens: update.cache_creation_input_tokens,
-                cache_read_input_tokens: update.cache_read_input_tokens,
-                total_tokens: update.input_tokens
-                    + update.output_tokens
-                    + update.cache_creation_input_tokens
-                    + update.cache_read_input_tokens,
-                ..Default::default()
-            },
-        });
-    });
+    let on_usage = Box::new(
+        move |update: claude_provider::streaming::StreamingUsageUpdate| {
+            let _ = tx.try_send(QueryObserverEvent::StreamingUsageUpdated {
+                turn,
+                usage: Usage {
+                    input_tokens: update.input_tokens,
+                    output_tokens: update.output_tokens,
+                    cache_creation_input_tokens: update.cache_creation_input_tokens,
+                    cache_read_input_tokens: update.cache_read_input_tokens,
+                    total_tokens: update.input_tokens
+                        + update.output_tokens
+                        + update.cache_creation_input_tokens
+                        + update.cache_read_input_tokens,
+                    ..Default::default()
+                },
+            });
+        },
+    );
 
     StreamingCallbacks {
         on_text_delta: Some(on_text_delta),
@@ -1576,10 +1580,10 @@ fn strip_largest_image_blocks(messages: &mut [Message]) -> usize {
                 attachments.sort_by(|a, b| b.data.len().cmp(&a.data.len()));
                 // Strip images that are larger than the median size.
                 let median_idx = attachments.len() / 2;
-                let (keep, remove): (Vec<_>, Vec<_>) =
-                    attachments.into_iter().enumerate().partition(|(i, a)| {
-                        *i < median_idx || !a.media_type.is_image()
-                    });
+                let (keep, remove): (Vec<_>, Vec<_>) = attachments
+                    .into_iter()
+                    .enumerate()
+                    .partition(|(i, a)| *i < median_idx || !a.media_type.is_image());
                 stripped += remove.len();
                 user_msg.attachments = keep.into_iter().map(|(_, a)| a).collect();
             }
@@ -1838,9 +1842,11 @@ async fn commit_tool_result(
             .await;
     }
     let last_uuid = state.messages.last().map(|m| m.base().uuid);
-    state
-        .messages
-        .push(tool_result_message_with_parent(tool_call, &tool_run.result, last_uuid));
+    state.messages.push(tool_result_message_with_parent(
+        tool_call,
+        &tool_run.result,
+        last_uuid,
+    ));
     let _ = config
         .observer
         .on_event(QueryObserverEvent::ToolResultCommitted {
@@ -2045,28 +2051,31 @@ mod tests {
 
     #[test]
     fn strip_image_blocks_removes_all_images() {
-        let mut messages = vec![
-            make_user_msg_with_attachments("hello", vec![
+        let mut messages = vec![make_user_msg_with_attachments(
+            "hello",
+            vec![
                 make_image_attachment(100),
                 make_pdf_attachment(),
                 make_image_attachment(200),
-            ]),
-        ];
+            ],
+        )];
         let stripped = strip_image_blocks(&mut messages);
         assert_eq!(stripped, 2);
         if let Message::User(user) = &messages[0] {
             assert_eq!(user.attachments.len(), 1);
-            assert!(matches!(user.attachments[0].media_type, AttachmentMediaType::ApplicationPdf));
+            assert!(matches!(
+                user.attachments[0].media_type,
+                AttachmentMediaType::ApplicationPdf
+            ));
         }
     }
 
     #[test]
     fn strip_image_blocks_preserves_non_image_attachments() {
-        let mut messages = vec![
-            make_user_msg_with_attachments("hello", vec![
-                make_pdf_attachment(),
-            ]),
-        ];
+        let mut messages = vec![make_user_msg_with_attachments(
+            "hello",
+            vec![make_pdf_attachment()],
+        )];
         let stripped = strip_image_blocks(&mut messages);
         assert_eq!(stripped, 0);
         if let Message::User(user) = &messages[0] {
@@ -2077,13 +2086,11 @@ mod tests {
     #[test]
     fn strip_image_blocks_handles_multiple_messages() {
         let mut messages = vec![
-            make_user_msg_with_attachments("msg1", vec![
-                make_image_attachment(100),
-            ]),
-            make_user_msg_with_attachments("msg2", vec![
-                make_image_attachment(200),
-                make_image_attachment(300),
-            ]),
+            make_user_msg_with_attachments("msg1", vec![make_image_attachment(100)]),
+            make_user_msg_with_attachments(
+                "msg2",
+                vec![make_image_attachment(200), make_image_attachment(300)],
+            ),
         ];
         let stripped = strip_image_blocks(&mut messages);
         assert_eq!(stripped, 3);
@@ -2100,14 +2107,15 @@ mod tests {
 
     #[test]
     fn strip_largest_image_blocks_removes_larger_half() {
-        let mut messages = vec![
-            make_user_msg_with_attachments("msg", vec![
-                make_image_attachment(100),   // small
-                make_image_attachment(500),   // large
-                make_image_attachment(1000),  // larger
-                make_image_attachment(2000),  // largest
-            ]),
-        ];
+        let mut messages = vec![make_user_msg_with_attachments(
+            "msg",
+            vec![
+                make_image_attachment(100),  // small
+                make_image_attachment(500),  // large
+                make_image_attachment(1000), // larger
+                make_image_attachment(2000), // largest
+            ],
+        )];
         let stripped = strip_largest_image_blocks(&mut messages);
         // Median index is 2, so indices 2 and 3 (above median) get stripped.
         assert!(stripped >= 1, "should strip at least the largest image");
@@ -2115,11 +2123,12 @@ mod tests {
 
     #[test]
     fn strip_largest_image_blocks_preserves_small_images() {
-        let mut messages = vec![
-            make_user_msg_with_attachments("msg", vec![
-                make_image_attachment(50),    // very small
-            ]),
-        ];
+        let mut messages = vec![make_user_msg_with_attachments(
+            "msg",
+            vec![
+                make_image_attachment(50), // very small
+            ],
+        )];
         let stripped = strip_largest_image_blocks(&mut messages);
         // With only 1 image, it may or may not be stripped depending on median.
         // This is mainly testing it doesn't panic.
@@ -2131,25 +2140,25 @@ mod tests {
     #[test]
     fn count_image_blocks_counts_correctly() {
         let messages = vec![
-            make_user_msg_with_attachments("msg1", vec![
-                make_image_attachment(100),
-                make_pdf_attachment(),
-                make_image_attachment(200),
-            ]),
-            make_user_msg_with_attachments("msg2", vec![
-                make_image_attachment(300),
-            ]),
+            make_user_msg_with_attachments(
+                "msg1",
+                vec![
+                    make_image_attachment(100),
+                    make_pdf_attachment(),
+                    make_image_attachment(200),
+                ],
+            ),
+            make_user_msg_with_attachments("msg2", vec![make_image_attachment(300)]),
         ];
         assert_eq!(count_image_blocks(&messages), 3);
     }
 
     #[test]
     fn count_image_blocks_no_images() {
-        let messages = vec![
-            make_user_msg_with_attachments("msg1", vec![
-                make_pdf_attachment(),
-            ]),
-        ];
+        let messages = vec![make_user_msg_with_attachments(
+            "msg1",
+            vec![make_pdf_attachment()],
+        )];
         assert_eq!(count_image_blocks(&messages), 0);
     }
 

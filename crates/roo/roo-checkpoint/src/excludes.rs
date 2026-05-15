@@ -41,44 +41,10 @@ pub const BUILD_ARTIFACT_PATTERNS: &[&str] = &[
 /// Media file extensions (images, audio, video).
 /// Matches `getMediaFilePatterns()` from the TS source.
 pub const MEDIA_FILE_PATTERNS: &[&str] = &[
-    "*.jpg",
-    "*.jpeg",
-    "*.png",
-    "*.gif",
-    "*.bmp",
-    "*.ico",
-    "*.webp",
-    "*.tiff",
-    "*.tif",
-    "*.raw",
-    "*.heic",
-    "*.avif",
-    "*.eps",
-    "*.psd",
-    "*.3gp",
-    "*.aac",
-    "*.aiff",
-    "*.asf",
-    "*.avi",
-    "*.divx",
-    "*.flac",
-    "*.m4a",
-    "*.m4v",
-    "*.mkv",
-    "*.mov",
-    "*.mp3",
-    "*.mp4",
-    "*.mpeg",
-    "*.mpg",
-    "*.ogg",
-    "*.opus",
-    "*.rm",
-    "*.rmvb",
-    "*.vob",
-    "*.wav",
-    "*.webm",
-    "*.wma",
-    "*.wmv",
+    "*.jpg", "*.jpeg", "*.png", "*.gif", "*.bmp", "*.ico", "*.webp", "*.tiff", "*.tif", "*.raw",
+    "*.heic", "*.avif", "*.eps", "*.psd", "*.3gp", "*.aac", "*.aiff", "*.asf", "*.avi", "*.divx",
+    "*.flac", "*.m4a", "*.m4v", "*.mkv", "*.mov", "*.mp3", "*.mp4", "*.mpeg", "*.mpg", "*.ogg",
+    "*.opus", "*.rm", "*.rmvb", "*.vob", "*.wav", "*.webm", "*.wma", "*.wmv",
 ];
 
 /// Cache, temporary, and system file patterns.
@@ -108,30 +74,13 @@ pub const CACHE_FILE_PATTERNS: &[&str] = &[
 
 /// Configuration and environment file patterns.
 /// Matches `getConfigFilePatterns()` from the TS source.
-pub const CONFIG_FILE_PATTERNS: &[&str] = &[
-    "*.env*",
-    "*.local",
-    "*.development",
-    "*.production",
-];
+pub const CONFIG_FILE_PATTERNS: &[&str] = &["*.env*", "*.local", "*.development", "*.production"];
 
 /// Large data and binary archive patterns.
 /// Matches `getLargeDataFilePatterns()` from the TS source.
 pub const LARGE_DATA_FILE_PATTERNS: &[&str] = &[
-    "*.zip",
-    "*.tar",
-    "*.gz",
-    "*.rar",
-    "*.7z",
-    "*.iso",
-    "*.bin",
-    "*.exe",
-    "*.dll",
-    "*.so",
-    "*.dylib",
-    "*.dat",
-    "*.dmg",
-    "*.msi",
+    "*.zip", "*.tar", "*.gz", "*.rar", "*.7z", "*.iso", "*.bin", "*.exe", "*.dll", "*.so",
+    "*.dylib", "*.dat", "*.dmg", "*.msi",
 ];
 
 /// Database file patterns.

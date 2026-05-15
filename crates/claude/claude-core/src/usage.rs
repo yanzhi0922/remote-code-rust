@@ -43,8 +43,10 @@ impl UsageAccumulator {
         self.cache_creation_input_tokens += summary.cache_creation_input_tokens;
         self.server_tool_use_web_search_requests += summary.server_tool_use_web_search_requests;
         self.server_tool_use_web_fetch_requests += summary.server_tool_use_web_fetch_requests;
-        self.cache_creation_ephemeral_5m_input_tokens += summary.cache_creation_ephemeral_5m_input_tokens;
-        self.cache_creation_ephemeral_1h_input_tokens += summary.cache_creation_ephemeral_1h_input_tokens;
+        self.cache_creation_ephemeral_5m_input_tokens +=
+            summary.cache_creation_ephemeral_5m_input_tokens;
+        self.cache_creation_ephemeral_1h_input_tokens +=
+            summary.cache_creation_ephemeral_1h_input_tokens;
         self.requests += 1;
     }
 
@@ -56,8 +58,10 @@ impl UsageAccumulator {
         self.cache_creation_input_tokens += other.cache_creation_input_tokens;
         self.server_tool_use_web_search_requests += other.server_tool_use_web_search_requests;
         self.server_tool_use_web_fetch_requests += other.server_tool_use_web_fetch_requests;
-        self.cache_creation_ephemeral_5m_input_tokens += other.cache_creation_ephemeral_5m_input_tokens;
-        self.cache_creation_ephemeral_1h_input_tokens += other.cache_creation_ephemeral_1h_input_tokens;
+        self.cache_creation_ephemeral_5m_input_tokens +=
+            other.cache_creation_ephemeral_5m_input_tokens;
+        self.cache_creation_ephemeral_1h_input_tokens +=
+            other.cache_creation_ephemeral_1h_input_tokens;
         self.requests += other.requests;
     }
 }

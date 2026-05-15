@@ -43,9 +43,7 @@ pub struct RunSlashCommandResult {
 /// Validate `run_slash_command` parameters.
 ///
 /// Returns an error message if the `command` field is missing or empty.
-pub fn validate_run_slash_command_params(
-    params: &RunSlashCommandParams,
-) -> Result<(), String> {
+pub fn validate_run_slash_command_params(params: &RunSlashCommandParams) -> Result<(), String> {
     if params.command.trim().is_empty() {
         return Err("command must not be empty".to_string());
     }
@@ -145,7 +143,8 @@ pub fn resolve_slash_command(
 
         // 3. Not found — list available commands and skills
         let skill_names: Vec<&str> = relevant_skills.iter().map(|s| s.name.as_str()).collect();
-        let mut available: Vec<String> = BUILTIN_COMMANDS.iter().map(|s| format!("/{}", s)).collect();
+        let mut available: Vec<String> =
+            BUILTIN_COMMANDS.iter().map(|s| format!("/{}", s)).collect();
         available.extend(skill_names.iter().map(|s| format!("/{}", s)));
         let available_str = if available.is_empty() {
             "(none)".to_string()
@@ -212,7 +211,10 @@ pub fn format_slash_command_result(result: &RunSlashCommandResult) -> String {
         output.push_str(&format!("\nSource: {}", source));
     }
 
-    output.push_str(&format!("\n\n--- Command Content ---\n\n{}", result.content));
+    output.push_str(&format!(
+        "\n\n--- Command Content ---\n\n{}",
+        result.content
+    ));
 
     output
 }

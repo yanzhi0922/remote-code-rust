@@ -24,10 +24,7 @@ pub fn format_active_terminals(terminals: &[TerminalInfo]) -> String {
     let mut details = String::from("\n\n# Actively Running Terminals");
 
     for terminal in terminals {
-        details.push_str(&format!(
-            "\n## Terminal {} (Active)",
-            terminal.id
-        ));
+        details.push_str(&format!("\n## Terminal {} (Active)", terminal.id));
         details.push_str(&format!(
             "\n### Working Directory: `{}`",
             terminal.working_directory
@@ -65,11 +62,7 @@ pub fn format_inactive_terminals(terminals: &[InactiveTerminalInfo]) -> String {
     // Only include terminals that actually have completed processes with output.
     let terminals_with_output: Vec<&InactiveTerminalInfo> = terminals
         .iter()
-        .filter(|t| {
-            t.completed_processes
-                .iter()
-                .any(|p| !p.output.is_empty())
-        })
+        .filter(|t| t.completed_processes.iter().any(|p| !p.output.is_empty()))
         .collect();
 
     if terminals_with_output.is_empty() {
@@ -84,18 +77,12 @@ pub fn format_inactive_terminals(terminals: &[InactiveTerminalInfo]) -> String {
         for process in &terminal.completed_processes {
             if !process.output.is_empty() {
                 let compressed = compress_terminal_output(&process.output);
-                terminal_outputs.push(format!(
-                    "Command: `{}`\n{}",
-                    process.command, compressed
-                ));
+                terminal_outputs.push(format!("Command: `{}`\n{}", process.command, compressed));
             }
         }
 
         if !terminal_outputs.is_empty() {
-            details.push_str(&format!(
-                "\n## Terminal {} (Inactive)",
-                terminal.id
-            ));
+            details.push_str(&format!("\n## Terminal {} (Inactive)", terminal.id));
             details.push_str(&format!(
                 "\n### Working Directory: `{}`",
                 terminal.working_directory
@@ -147,7 +134,9 @@ fn compress_terminal_output_with_limits(
 fn strip_ansi_escapes(input: &str) -> String {
     use regex::Regex;
     // Match ANSI escape sequences: ESC [ ... letter, or ESC ] ... BEL/ST
-    let re = Regex::new(r"\x1b\[[0-9;]*[A-Za-z]|\x1b\][^\x07]*\x07|\x1b\][^\x1b]*\x1b\\|\x1b[^\[\]].?").unwrap();
+    let re =
+        Regex::new(r"\x1b\[[0-9;]*[A-Za-z]|\x1b\][^\x07]*\x07|\x1b\][^\x1b]*\x1b\\|\x1b[^\[\]].?")
+            .unwrap();
     re.replace_all(input, "").to_string()
 }
 
@@ -210,7 +199,10 @@ fn apply_run_length_encoding(content: &str) -> String {
 /// Flush a repeated line group, using compression description when beneficial.
 fn flush_repeated(result: &mut String, line: &str, repeat_count: usize) {
     if repeat_count > 0 {
-        let compression_desc = format!("<previous line repeated {} additional times>\n", repeat_count);
+        let compression_desc = format!(
+            "<previous line repeated {} additional times>\n",
+            repeat_count
+        );
         // Only compress if the description is shorter than the repeated content
         if compression_desc.len() < line.len() * (repeat_count + 1) {
             result.push_str(line);
@@ -263,7 +255,12 @@ fn truncate_output(content: &str, line_limit: usize, character_limit: usize) -> 
 
     let lines: Vec<&str> = content.lines().collect();
     let start_section: Vec<&str> = lines.iter().take(before_limit).copied().collect();
-    let end_section: Vec<&str> = lines.iter().rev().take(after_limit).copied().collect::<Vec<_>>();
+    let end_section: Vec<&str> = lines
+        .iter()
+        .rev()
+        .take(after_limit)
+        .copied()
+        .collect::<Vec<_>>();
     let omitted_lines = total_lines - line_limit;
 
     let mut result = start_section.join("\n");

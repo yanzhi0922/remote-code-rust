@@ -96,7 +96,8 @@ impl CacheManager {
 
     /// Updates the hash for a file path.
     pub fn update_hash(&mut self, file_path: &str, hash: &str) {
-        self.file_hashes.insert(file_path.to_string(), hash.to_string());
+        self.file_hashes
+            .insert(file_path.to_string(), hash.to_string());
         self.dirty = true;
     }
 

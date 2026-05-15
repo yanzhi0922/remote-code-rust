@@ -106,9 +106,7 @@ pub trait SkillsManager: Send + Sync {
 /// Handles the requestSkills message - returns all skills metadata.
 ///
 /// Source: `src/core/webview/skillsMessageHandler.ts` — `handleRequestSkills`
-pub fn handle_request_skills(
-    skills_manager: Option<&dyn SkillsManager>,
-) -> Vec<SkillMetadata> {
+pub fn handle_request_skills(skills_manager: Option<&dyn SkillsManager>) -> Vec<SkillMetadata> {
     match skills_manager {
         Some(manager) => manager.get_skills_metadata(),
         None => vec![],
@@ -129,7 +127,7 @@ pub fn handle_create_skill(
                 success: false,
                 skills: vec![],
                 error: Some("Missing skill name".to_string()),
-            }
+            };
         }
     };
 
@@ -140,7 +138,7 @@ pub fn handle_create_skill(
                 success: false,
                 skills: vec![],
                 error: Some("Missing skill source".to_string()),
-            }
+            };
         }
     };
 
@@ -151,7 +149,7 @@ pub fn handle_create_skill(
                 success: false,
                 skills: vec![],
                 error: Some("Missing skill description".to_string()),
-            }
+            };
         }
     };
 
@@ -162,7 +160,7 @@ pub fn handle_create_skill(
                 success: false,
                 skills: vec![],
                 error: Some("Skills manager unavailable".to_string()),
-            }
+            };
         }
     };
 
@@ -203,7 +201,7 @@ pub fn handle_delete_skill(
                 success: false,
                 skills: vec![],
                 error: Some("Missing skill name".to_string()),
-            }
+            };
         }
     };
 
@@ -214,7 +212,7 @@ pub fn handle_delete_skill(
                 success: false,
                 skills: vec![],
                 error: Some("Missing skill source".to_string()),
-            }
+            };
         }
     };
 
@@ -225,7 +223,7 @@ pub fn handle_delete_skill(
                 success: false,
                 skills: vec![],
                 error: Some("Skills manager unavailable".to_string()),
-            }
+            };
         }
     };
 
@@ -266,7 +264,7 @@ pub fn handle_move_skill(
                 success: false,
                 skills: vec![],
                 error: Some("Missing skill name".to_string()),
-            }
+            };
         }
     };
 
@@ -277,7 +275,7 @@ pub fn handle_move_skill(
                 success: false,
                 skills: vec![],
                 error: Some("Missing skill source".to_string()),
-            }
+            };
         }
     };
 
@@ -288,7 +286,7 @@ pub fn handle_move_skill(
                 success: false,
                 skills: vec![],
                 error: Some("Missing new skill mode".to_string()),
-            }
+            };
         }
     };
 
@@ -299,16 +297,11 @@ pub fn handle_move_skill(
                 success: false,
                 skills: vec![],
                 error: Some("Skills manager unavailable".to_string()),
-            }
+            };
         }
     };
 
-    match manager.move_skill(
-        skill_name,
-        source,
-        message.skill_mode.as_deref(),
-        new_mode,
-    ) {
+    match manager.move_skill(skill_name, source, message.skill_mode.as_deref(), new_mode) {
         Ok(()) => {
             let skills = manager.get_skills_metadata();
             SkillsOperationResult {
@@ -339,7 +332,7 @@ pub fn handle_update_skill_modes(
                 success: false,
                 skills: vec![],
                 error: Some("Missing skill name".to_string()),
-            }
+            };
         }
     };
 
@@ -350,7 +343,7 @@ pub fn handle_update_skill_modes(
                 success: false,
                 skills: vec![],
                 error: Some("Missing skill source".to_string()),
-            }
+            };
         }
     };
 
@@ -361,15 +354,11 @@ pub fn handle_update_skill_modes(
                 success: false,
                 skills: vec![],
                 error: Some("Skills manager unavailable".to_string()),
-            }
+            };
         }
     };
 
-    match manager.update_skill_modes(
-        skill_name,
-        source,
-        message.new_skill_mode_slugs.as_deref(),
-    ) {
+    match manager.update_skill_modes(skill_name, source, message.new_skill_mode_slugs.as_deref()) {
         Ok(()) => {
             let skills = manager.get_skills_metadata();
             SkillsOperationResult {

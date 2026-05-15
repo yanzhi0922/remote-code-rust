@@ -293,7 +293,10 @@ impl PermissionBroker for StaticPermissionBroker {
         }
         let requires_explicit_confirmation = request.working_directory.is_some()
             && request.blocked_path.is_some()
-            && !matches!(self.mode, Some(claude_core::PermissionMode::BypassPermissions));
+            && !matches!(
+                self.mode,
+                Some(claude_core::PermissionMode::BypassPermissions)
+            );
         if requires_explicit_confirmation {
             return PermissionDecision::deny("Permission denied by static broker");
         }
@@ -316,10 +319,10 @@ impl PermissionBroker for StaticPermissionBroker {
 pub struct LayeredPermissionBroker<B> {
     fallback: B,
     rules: Vec<SourceAwarePermissionRule>,
-    session_rules: std::sync::RwLock<Vec<SourceAwarePermissionRule>>,
-    session_mode: std::sync::RwLock<Option<claude_core::PermissionMode>>,
-    session_additional_dirs: std::sync::RwLock<Vec<PathBuf>>,
-    audit: std::sync::Mutex<Vec<PermissionAuditRecord>>,
+    session_rules: parking_lot::RwLock<Vec<SourceAwarePermissionRule>>,
+    session_mode: parking_lot::RwLock<Option<claude_core::PermissionMode>>,
+    session_additional_dirs: parking_lot::RwLock<Vec<PathBuf>>,
+    audit: parking_lot::Mutex<Vec<PermissionAuditRecord>>,
 }
 
 impl<B: PermissionBroker> LayeredPermissionBroker<B> {
@@ -327,10 +330,10 @@ impl<B: PermissionBroker> LayeredPermissionBroker<B> {
         Self {
             fallback,
             rules,
-            session_rules: std::sync::RwLock::new(Vec::new()),
-            session_mode: std::sync::RwLock::new(None),
-            session_additional_dirs: std::sync::RwLock::new(Vec::new()),
-            audit: std::sync::Mutex::new(Vec::new()),
+            session_rules: parking_lot::RwLock::new(Vec::new()),
+            session_mode: parking_lot::RwLock::new(None),
+            session_additional_dirs: parking_lot::RwLock::new(Vec::new()),
+            audit: parking_lot::Mutex::new(Vec::new()),
         }
     }
 
@@ -339,14 +342,11 @@ impl<B: PermissionBroker> LayeredPermissionBroker<B> {
     }
 
     pub fn audit_records(&self) -> Vec<PermissionAuditRecord> {
-        self.audit.lock().unwrap_or_else(|e| e.into_inner()).clone()
+        self.audit.lock().clone()
     }
 
     fn push_audit(&self, record: PermissionAuditRecord) {
-        self.audit
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .push(record);
+        self.audit.lock().push(record);
     }
 
     fn matching_rule_for_action(
@@ -355,7 +355,7 @@ impl<B: PermissionBroker> LayeredPermissionBroker<B> {
         action_filter: Option<RuleAction>,
     ) -> Option<SourceAwarePermissionRule> {
         {
-            let session = self.session_rules.read().unwrap_or_else(|e| e.into_inner());
+            let session = self.session_rules.read();
             if let Some(rule) = session
                 .iter()
                 .filter(|rule| action_filter.is_none_or(|action| rule.action == action))
@@ -411,13 +411,7 @@ impl<B: PermissionBroker + std::fmt::Debug> PermissionBroker for LayeredPermissi
             };
         }
 
-        let session_mode = {
-            self.session_mode
-                .read()
-                .unwrap_or_else(|e| e.into_inner())
-                .as_ref()
-                .copied()
-        };
+        let session_mode = { self.session_mode.read().as_ref().copied() };
         if let Some(session_mode) = session_mode {
             let resolved_class = request.resolved_permission_class();
             if request.blocked_path.is_none() && auto_allows(session_mode, resolved_class) {
@@ -466,10 +460,7 @@ impl<B: PermissionBroker + std::fmt::Debug> PermissionBroker for LayeredPermissi
     }
 
     fn add_session_rule(&self, action: RuleAction, tool_pattern: String) -> Result<()> {
-        let mut session = self
-            .session_rules
-            .write()
-            .unwrap_or_else(|e| e.into_inner());
+        let mut session = self.session_rules.write();
         session.push(SourceAwarePermissionRule {
             action,
             tool_pattern,
@@ -479,10 +470,7 @@ impl<B: PermissionBroker + std::fmt::Debug> PermissionBroker for LayeredPermissi
     }
 
     fn clear_session_rules(&self) -> Result<usize> {
-        let mut session = self
-            .session_rules
-            .write()
-            .unwrap_or_else(|e| e.into_inner());
+        let mut session = self.session_rules.write();
         let count = session.len();
         session.clear();
         Ok(count)
@@ -525,10 +513,7 @@ impl<B: PermissionBroker + std::fmt::Debug> PermissionBroker for LayeredPermissi
                         .iter()
                         .map(permission_rule_value_to_pattern)
                         .collect::<Vec<_>>();
-                    let mut session = self
-                        .session_rules
-                        .write()
-                        .unwrap_or_else(|e| e.into_inner());
+                    let mut session = self.session_rules.write();
                     let original_len = session.len();
                     session.retain(|existing| {
                         !(existing.action == action
@@ -541,8 +526,7 @@ impl<B: PermissionBroker + std::fmt::Debug> PermissionBroker for LayeredPermissi
                 PermissionUpdate::SetMode { destination, mode }
                     if *destination == PermissionUpdateDestination::Session =>
                 {
-                    let mut session_mode =
-                        self.session_mode.write().unwrap_or_else(|e| e.into_inner());
+                    let mut session_mode = self.session_mode.write();
                     let mapped_mode = extended_permission_mode_to_core_mode(*mode);
                     if session_mode.as_ref() != Some(&mapped_mode) {
                         *session_mode = Some(mapped_mode);
@@ -553,10 +537,7 @@ impl<B: PermissionBroker + std::fmt::Debug> PermissionBroker for LayeredPermissi
                     destination,
                     directories,
                 } if *destination == PermissionUpdateDestination::Session => {
-                    let mut session_dirs = self
-                        .session_additional_dirs
-                        .write()
-                        .unwrap_or_else(|e| e.into_inner());
+                    let mut session_dirs = self.session_additional_dirs.write();
                     for directory in directories {
                         let normalized = normalize_session_directory(directory);
                         if !session_dirs.iter().any(|existing| {
@@ -580,10 +561,7 @@ impl<B: PermissionBroker + std::fmt::Debug> PermissionBroker for LayeredPermissi
                             ))
                         })
                         .collect::<Vec<_>>();
-                    let mut session_dirs = self
-                        .session_additional_dirs
-                        .write()
-                        .unwrap_or_else(|e| e.into_inner());
+                    let mut session_dirs = self.session_additional_dirs.write();
                     let original_len = session_dirs.len();
                     session_dirs.retain(|existing| {
                         let existing_normalized = filesystem::normalize_for_comparison(existing);
@@ -600,13 +578,13 @@ impl<B: PermissionBroker + std::fmt::Debug> PermissionBroker for LayeredPermissi
     }
 
     fn audit_records(&self) -> Vec<PermissionAuditRecord> {
-        self.audit.lock().unwrap_or_else(|e| e.into_inner()).clone()
+        self.audit.lock().clone()
     }
 
     fn layered_rules(&self) -> Vec<SourceAwarePermissionRule> {
         // Clone is required by the trait API (returns owned Vec).
         // Optimisation: avoid double-allocation when one source is empty.
-        let session = self.session_rules.read().unwrap_or_else(|e| e.into_inner());
+        let session = self.session_rules.read();
         if session.is_empty() {
             return self.rules.clone();
         }
@@ -621,17 +599,13 @@ impl<B: PermissionBroker + std::fmt::Debug> PermissionBroker for LayeredPermissi
     fn mode(&self) -> Option<claude_core::PermissionMode> {
         self.session_mode
             .read()
-            .unwrap_or_else(|e| e.into_inner())
             .as_ref()
             .copied()
             .or_else(|| self.fallback.mode())
     }
 
     fn additional_working_directories(&self) -> Vec<PathBuf> {
-        self.session_additional_dirs
-            .read()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone()
+        self.session_additional_dirs.read().clone()
     }
 
     /// Single-pass rule matching with priority: Deny > Ask > Allow.
@@ -678,7 +652,7 @@ impl<B: PermissionBroker + std::fmt::Debug> PermissionBroker for LayeredPermissi
 
         // Session rules take precedence over file-based rules.
         {
-            let session = self.session_rules.read().unwrap_or_else(|e| e.into_inner());
+            let session = self.session_rules.read();
             if process_rules(&session) {
                 return best;
             }
@@ -712,17 +686,15 @@ fn extended_permission_mode_to_core_mode(
     match mode {
         crate::mode::ExtendedPermissionMode::Default => claude_core::PermissionMode::Default,
         crate::mode::ExtendedPermissionMode::Plan => claude_core::PermissionMode::Plan,
-        crate::mode::ExtendedPermissionMode::AcceptEdits => claude_core::PermissionMode::AcceptEdits,
+        crate::mode::ExtendedPermissionMode::AcceptEdits => {
+            claude_core::PermissionMode::AcceptEdits
+        }
         crate::mode::ExtendedPermissionMode::BypassPermissions => {
             claude_core::PermissionMode::BypassPermissions
         }
         crate::mode::ExtendedPermissionMode::DontAsk => claude_core::PermissionMode::DontAsk,
-        crate::mode::ExtendedPermissionMode::Auto => {
-            claude_core::PermissionMode::Auto
-        }
-        crate::mode::ExtendedPermissionMode::Bubble => {
-            claude_core::PermissionMode::Default
-        }
+        crate::mode::ExtendedPermissionMode::Auto => claude_core::PermissionMode::Auto,
+        crate::mode::ExtendedPermissionMode::Bubble => claude_core::PermissionMode::Default,
     }
 }
 

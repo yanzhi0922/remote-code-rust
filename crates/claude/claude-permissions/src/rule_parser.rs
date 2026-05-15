@@ -187,7 +187,11 @@ pub fn find_first_unescaped_char(s: &str, ch: char) -> Option<usize> {
     for (i, c) in s.char_indices() {
         if c == ch {
             let bytes_before = &s[..i];
-            let backslash_count = bytes_before.chars().rev().take_while(|&c| c == '\\').count();
+            let backslash_count = bytes_before
+                .chars()
+                .rev()
+                .take_while(|&c| c == '\\')
+                .count();
             if backslash_count % 2 == 0 {
                 return Some(i);
             }
@@ -201,7 +205,11 @@ pub fn find_last_unescaped_char(s: &str, ch: char) -> Option<usize> {
     for (i, c) in s.char_indices() {
         if c == ch {
             let bytes_before = &s[..i];
-            let backslash_count = bytes_before.chars().rev().take_while(|&c| c == '\\').count();
+            let backslash_count = bytes_before
+                .chars()
+                .rev()
+                .take_while(|&c| c == '\\')
+                .count();
             if backslash_count % 2 == 0 {
                 last = Some(i);
             }
@@ -250,16 +258,18 @@ pub fn parse_permission_rule_value(input: &str) -> Option<PermissionRuleValue> {
             if input.is_empty() {
                 return None;
             }
-            Some(PermissionRuleValue::tool_only(normalize_legacy_tool_name(input)))
+            Some(PermissionRuleValue::tool_only(normalize_legacy_tool_name(
+                input,
+            )))
         }
         (Some(oi), Some(ci)) => {
             if ci <= oi || ci != input.len() - 1 {
                 if input.is_empty() {
                     return None;
                 }
-                return Some(PermissionRuleValue::tool_only(
-                    normalize_legacy_tool_name(input),
-                ));
+                return Some(PermissionRuleValue::tool_only(normalize_legacy_tool_name(
+                    input,
+                )));
             }
             let tool_name = &input[..oi];
             let raw_content = &input[oi + 1..ci];
@@ -267,14 +277,14 @@ pub fn parse_permission_rule_value(input: &str) -> Option<PermissionRuleValue> {
                 if input.is_empty() {
                     return None;
                 }
-                return Some(PermissionRuleValue::tool_only(
-                    normalize_legacy_tool_name(input),
-                ));
+                return Some(PermissionRuleValue::tool_only(normalize_legacy_tool_name(
+                    input,
+                )));
             }
             if raw_content.is_empty() || raw_content == "*" {
-                return Some(PermissionRuleValue::tool_only(
-                    normalize_legacy_tool_name(tool_name),
-                ));
+                return Some(PermissionRuleValue::tool_only(normalize_legacy_tool_name(
+                    tool_name,
+                )));
             }
             let rule_content = unescape_rule_content(raw_content);
             Some(PermissionRuleValue::new(
@@ -305,10 +315,10 @@ mod tests {
     use crate::rules::{RuleAction, RuleSource};
 
     use super::{
-        classify_settings_rule_source, discover_permission_rule_files,
-        escape_rule_content, find_first_unescaped_char, find_last_unescaped_char,
-        load_permission_rules_from_file, normalize_legacy_tool_name, parse_permission_rule_value,
-        permission_rule_value_to_string, unescape_rule_content,
+        classify_settings_rule_source, discover_permission_rule_files, escape_rule_content,
+        find_first_unescaped_char, find_last_unescaped_char, load_permission_rules_from_file,
+        normalize_legacy_tool_name, parse_permission_rule_value, permission_rule_value_to_string,
+        unescape_rule_content,
     };
 
     #[test]
@@ -558,20 +568,12 @@ mod tests {
     #[test]
     fn to_string_escapes_backslash() {
         let v = PermissionRuleValue::new("Bash", Some("echo \\\\n".to_string()));
-        assert_eq!(
-            permission_rule_value_to_string(&v),
-            "Bash(echo \\\\\\\\n)"
-        );
+        assert_eq!(permission_rule_value_to_string(&v), "Bash(echo \\\\\\\\n)");
     }
 
     #[test]
     fn parse_to_string_roundtrip() {
-        let cases = [
-            "Bash",
-            "Bash(npm install)",
-            "Read(src/**)",
-            "Bash(git *)",
-        ];
+        let cases = ["Bash", "Bash(npm install)", "Read(src/**)", "Bash(git *)"];
         for case in cases {
             let parsed = parse_permission_rule_value(case).unwrap();
             let back = permission_rule_value_to_string(&parsed);

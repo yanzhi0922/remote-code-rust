@@ -1,6 +1,5 @@
 /// Cloud API client for making authenticated requests to the Roo Code cloud.
 /// Mirrors packages/cloud/src/CloudAPI.ts
-
 use crate::config::get_roo_code_api_url;
 use crate::types::CloudError;
 use crate::utils::get_user_agent;
@@ -77,8 +76,8 @@ impl CloudApi {
 
         let response = self.post("/api/extension/share", Some(body), token).await?;
 
-        let share_response: ShareResponse =
-            serde_json::from_value(response).map_err(|e| CloudError::SerializationError(e.to_string()))?;
+        let share_response: ShareResponse = serde_json::from_value(response)
+            .map_err(|e| CloudError::SerializationError(e.to_string()))?;
 
         Ok(share_response)
     }
@@ -87,8 +86,8 @@ impl CloudApi {
     pub async fn bridge_config(&self, token: &str) -> Result<BridgeConfig, CloudError> {
         let response = self.get("/api/extension/bridge/config", token).await?;
 
-        let config: BridgeConfig =
-            serde_json::from_value(response).map_err(|e| CloudError::SerializationError(e.to_string()))?;
+        let config: BridgeConfig = serde_json::from_value(response)
+            .map_err(|e| CloudError::SerializationError(e.to_string()))?;
 
         Ok(config)
     }
@@ -149,14 +148,19 @@ impl CloudApi {
                     if endpoint.contains("/share") {
                         Err(CloudError::TaskNotFound("Task not found".to_string()))
                     } else {
-                        Err(CloudError::ApiError(format!(
-                            "Resource not found: {}",
-                            endpoint
-                        ), 404, Some(body_text)))
+                        Err(CloudError::ApiError(
+                            format!("Resource not found: {}", endpoint),
+                            404,
+                            Some(body_text),
+                        ))
                     }
                 }
                 _ => Err(CloudError::ApiError(
-                    format!("HTTP {}: {}", status.as_u16(), status.canonical_reason().unwrap_or("Unknown")),
+                    format!(
+                        "HTTP {}: {}",
+                        status.as_u16(),
+                        status.canonical_reason().unwrap_or("Unknown")
+                    ),
                     status.as_u16(),
                     Some(body_text),
                 )),
@@ -198,7 +202,10 @@ mod tests {
         let json = r#"{"success": true, "shareUrl": "https://example.com/share/123", "taskId": "task-123"}"#;
         let resp: ShareResponse = serde_json::from_str(json).unwrap();
         assert!(resp.success);
-        assert_eq!(Some("https://example.com/share/123".to_string()), resp.share_url);
+        assert_eq!(
+            Some("https://example.com/share/123".to_string()),
+            resp.share_url
+        );
         assert_eq!(Some("task-123".to_string()), resp.task_id);
     }
 

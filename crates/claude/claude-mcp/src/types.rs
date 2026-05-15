@@ -388,25 +388,33 @@ mod tests {
     #[test]
     fn mcp_tool_result_max_chars_default() {
         // Ensure the env var is not set for this test.
-        unsafe { std::env::remove_var("MAX_MCP_OUTPUT_TOKENS"); }
+        unsafe {
+            std::env::remove_var("MAX_MCP_OUTPUT_TOKENS");
+        }
         assert_eq!(super::mcp_tool_result_max_chars(), 50_000);
     }
 
     #[test]
     fn truncate_tool_result_content_uses_env_var() {
         // Set the env var to 100 tokens => 400 chars budget.
-        unsafe { std::env::set_var("MAX_MCP_OUTPUT_TOKENS", "100"); }
+        unsafe {
+            std::env::set_var("MAX_MCP_OUTPUT_TOKENS", "100");
+        }
         let long = "a".repeat(500);
         let truncated = super::truncate_tool_result_content(&long);
         assert!(truncated.len() <= 500);
         assert!(truncated.contains("[Output truncated"));
         // Clean up.
-        unsafe { std::env::remove_var("MAX_MCP_OUTPUT_TOKENS"); }
+        unsafe {
+            std::env::remove_var("MAX_MCP_OUTPUT_TOKENS");
+        }
     }
 
     #[test]
     fn truncate_tool_result_content_short_passthrough() {
-        unsafe { std::env::remove_var("MAX_MCP_OUTPUT_TOKENS"); }
+        unsafe {
+            std::env::remove_var("MAX_MCP_OUTPUT_TOKENS");
+        }
         let short = "hello";
         assert_eq!(super::truncate_tool_result_content(short), short);
     }

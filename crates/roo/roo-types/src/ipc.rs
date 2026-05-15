@@ -75,23 +75,15 @@ pub struct SendMessageData {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "commandName", rename_all = "PascalCase")]
 pub enum TaskCommand {
-    StartNewTask {
-        data: StartNewTaskData,
-    },
+    StartNewTask { data: StartNewTaskData },
     CancelTask,
     CloseTask,
-    ResumeTask {
-        data: String,
-    },
-    SendMessage {
-        data: SendMessageData,
-    },
+    ResumeTask { data: String },
+    SendMessage { data: SendMessageData },
     GetCommands,
     GetModes,
     GetModels,
-    DeleteQueuedMessage {
-        data: String,
-    },
+    DeleteQueuedMessage { data: String },
 }
 
 /// IPC message — the top-level envelope for all IPC communication.

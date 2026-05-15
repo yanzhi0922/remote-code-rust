@@ -7,16 +7,8 @@ use std::sync::LazyLock;
 
 use serde::{Deserialize, Serialize};
 
-/// Effort level for model reasoning.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum EffortLevel {
-    Low,
-    #[default]
-    Medium,
-    High,
-    Max,
-}
+// Re-export EffortLevel from the canonical definition in claude-context.
+pub use claude_context::effort::EffortLevel;
 
 /// Capability set for a specific model.
 #[derive(Debug, Clone, Serialize, Deserialize)]

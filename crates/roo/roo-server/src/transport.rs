@@ -9,8 +9,8 @@
 
 use std::io::{self, BufRead, BufReader, Read, Write};
 
-use roo_jsonrpc::types::Message;
 use crate::error::{ServerError, ServerResult};
+use roo_jsonrpc::types::Message;
 
 // ---------------------------------------------------------------------------
 // Transport Trait
@@ -98,7 +98,9 @@ impl StdioTransport {
         }
 
         if content_length == 0 {
-            return Err(ServerError::Internal("Missing Content-Length header".into()));
+            return Err(ServerError::Internal(
+                "Missing Content-Length header".into(),
+            ));
         }
 
         // Read the body
@@ -179,15 +181,18 @@ impl MemoryTransport {
 
 impl Transport for MemoryTransport {
     async fn receive(&mut self) -> ServerResult<Option<Message>> {
-        self.inbox.recv().await.map(Some).ok_or_else(|| {
-            ServerError::Internal("Memory transport channel closed".into())
-        })
+        self.inbox
+            .recv()
+            .await
+            .map(Some)
+            .ok_or_else(|| ServerError::Internal("Memory transport channel closed".into()))
     }
 
     async fn send(&mut self, message: &Message) -> ServerResult<()> {
-        self.outbox.send(message.clone()).await.map_err(|e| {
-            ServerError::Internal(format!("Failed to send message: {}", e))
-        })
+        self.outbox
+            .send(message.clone())
+            .await
+            .map_err(|e| ServerError::Internal(format!("Failed to send message: {}", e)))
     }
 }
 
@@ -200,16 +205,19 @@ pub struct MemoryTransportClient {
 impl MemoryTransportClient {
     /// Send a message to the server.
     pub async fn send(&self, message: Message) -> ServerResult<()> {
-        self.outbox.send(message).await.map_err(|e| {
-            ServerError::Internal(format!("Failed to send message: {}", e))
-        })
+        self.outbox
+            .send(message)
+            .await
+            .map_err(|e| ServerError::Internal(format!("Failed to send message: {}", e)))
     }
 
     /// Receive a message from the server.
     pub async fn receive(&mut self) -> ServerResult<Option<Message>> {
-        self.inbox.recv().await.map(Some).ok_or_else(|| {
-            ServerError::Internal("Memory transport channel closed".into())
-        })
+        self.inbox
+            .recv()
+            .await
+            .map(Some)
+            .ok_or_else(|| ServerError::Internal("Memory transport channel closed".into()))
     }
 }
 
@@ -237,10 +245,7 @@ mod tests {
         assert_eq!(received.id, request.id);
 
         // Server sends a response
-        let response = Message::response(
-            serde_json::Value::Number(1.into()),
-            json!("pong"),
-        );
+        let response = Message::response(serde_json::Value::Number(1.into()), json!("pong"));
         server.send(&response).await.unwrap();
 
         // Client receives it

@@ -1,6 +1,5 @@
 /// Retry queue for cloud requests that failed due to network issues.
 /// Mirrors packages/cloud/src/retry-queue/RetryQueue.ts and types.ts
-
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -132,7 +131,10 @@ impl RetryQueue {
                 .unwrap_or_default()
                 .as_millis(),
             self.queue.len() as u32,
-            SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().subsec_nanos()
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .subsec_nanos()
         );
 
         let request = QueuedRequest {
@@ -218,7 +220,10 @@ impl RetryQueue {
 
     /// Check if the queue is paused.
     pub fn is_paused(&self) -> bool {
-        self.is_paused || self.paused_until.map_or(false, |until| Instant::now() < until)
+        self.is_paused
+            || self
+                .paused_until
+                .map_or(false, |until| Instant::now() < until)
     }
 
     /// Set processing state.
@@ -272,7 +277,11 @@ impl RetryQueue {
 
     /// Serialize the queue for persistence.
     pub fn serialize(&self) -> Result<String, serde_json::Error> {
-        let requests: Vec<&QueuedRequest> = self.order.iter().filter_map(|id| self.queue.get(id)).collect();
+        let requests: Vec<&QueuedRequest> = self
+            .order
+            .iter()
+            .filter_map(|id| self.queue.get(id))
+            .collect();
         serde_json::to_string(&requests)
     }
 
@@ -318,9 +327,30 @@ mod tests {
         };
         let mut queue = RetryQueue::new(Some(config));
 
-        let id1 = queue.enqueue("url1".to_string(), "GET".to_string(), None, None, RequestType::Other, None);
-        let _id2 = queue.enqueue("url2".to_string(), "GET".to_string(), None, None, RequestType::Other, None);
-        let _id3 = queue.enqueue("url3".to_string(), "GET".to_string(), None, None, RequestType::Other, None);
+        let id1 = queue.enqueue(
+            "url1".to_string(),
+            "GET".to_string(),
+            None,
+            None,
+            RequestType::Other,
+            None,
+        );
+        let _id2 = queue.enqueue(
+            "url2".to_string(),
+            "GET".to_string(),
+            None,
+            None,
+            RequestType::Other,
+            None,
+        );
+        let _id3 = queue.enqueue(
+            "url3".to_string(),
+            "GET".to_string(),
+            None,
+            None,
+            RequestType::Other,
+            None,
+        );
 
         // Should have evicted the first one
         assert_eq!(2, queue.len());
@@ -330,7 +360,14 @@ mod tests {
     #[test]
     fn test_mark_success() {
         let mut queue = RetryQueue::new(None);
-        let id = queue.enqueue("url".to_string(), "GET".to_string(), None, None, RequestType::Other, None);
+        let id = queue.enqueue(
+            "url".to_string(),
+            "GET".to_string(),
+            None,
+            None,
+            RequestType::Other,
+            None,
+        );
 
         queue.mark_success(&id);
         assert!(queue.is_empty());
@@ -343,7 +380,14 @@ mod tests {
             ..Default::default()
         };
         let mut queue = RetryQueue::new(Some(config));
-        let id = queue.enqueue("url".to_string(), "GET".to_string(), None, None, RequestType::Other, None);
+        let id = queue.enqueue(
+            "url".to_string(),
+            "GET".to_string(),
+            None,
+            None,
+            RequestType::Other,
+            None,
+        );
 
         let should_keep = queue.mark_failure(&id, "network error".to_string());
         assert!(should_keep);
@@ -357,7 +401,14 @@ mod tests {
             ..Default::default()
         };
         let mut queue = RetryQueue::new(Some(config));
-        let id = queue.enqueue("url".to_string(), "GET".to_string(), None, None, RequestType::Other, None);
+        let id = queue.enqueue(
+            "url".to_string(),
+            "GET".to_string(),
+            None,
+            None,
+            RequestType::Other,
+            None,
+        );
 
         queue.mark_failure(&id.clone(), "error1".to_string());
         queue.mark_failure(&id, "error2".to_string());
@@ -380,8 +431,22 @@ mod tests {
     #[test]
     fn test_clear() {
         let mut queue = RetryQueue::new(None);
-        queue.enqueue("url1".to_string(), "GET".to_string(), None, None, RequestType::Other, None);
-        queue.enqueue("url2".to_string(), "GET".to_string(), None, None, RequestType::Other, None);
+        queue.enqueue(
+            "url1".to_string(),
+            "GET".to_string(),
+            None,
+            None,
+            RequestType::Other,
+            None,
+        );
+        queue.enqueue(
+            "url2".to_string(),
+            "GET".to_string(),
+            None,
+            None,
+            RequestType::Other,
+            None,
+        );
 
         queue.clear();
         assert!(queue.is_empty());
@@ -390,8 +455,22 @@ mod tests {
     #[test]
     fn test_stats() {
         let mut queue = RetryQueue::new(None);
-        queue.enqueue("url1".to_string(), "GET".to_string(), None, None, RequestType::ApiCall, None);
-        queue.enqueue("url2".to_string(), "GET".to_string(), None, None, RequestType::Telemetry, None);
+        queue.enqueue(
+            "url1".to_string(),
+            "GET".to_string(),
+            None,
+            None,
+            RequestType::ApiCall,
+            None,
+        );
+        queue.enqueue(
+            "url2".to_string(),
+            "GET".to_string(),
+            None,
+            None,
+            RequestType::Telemetry,
+            None,
+        );
 
         let stats = queue.stats();
         assert_eq!(2, stats.total_queued);
@@ -402,8 +481,22 @@ mod tests {
     #[test]
     fn test_serialize_deserialize() {
         let mut queue = RetryQueue::new(None);
-        queue.enqueue("url1".to_string(), "POST".to_string(), Some("body".to_string()), None, RequestType::ApiCall, Some("op".to_string()));
-        queue.enqueue("url2".to_string(), "GET".to_string(), None, None, RequestType::Telemetry, None);
+        queue.enqueue(
+            "url1".to_string(),
+            "POST".to_string(),
+            Some("body".to_string()),
+            None,
+            RequestType::ApiCall,
+            Some("op".to_string()),
+        );
+        queue.enqueue(
+            "url2".to_string(),
+            "GET".to_string(),
+            None,
+            None,
+            RequestType::Telemetry,
+            None,
+        );
 
         let serialized = queue.serialize().unwrap();
 
@@ -419,7 +512,14 @@ mod tests {
             ..Default::default()
         };
         let mut queue = RetryQueue::new(Some(config));
-        let id = queue.enqueue("url".to_string(), "GET".to_string(), None, None, RequestType::Other, None);
+        let id = queue.enqueue(
+            "url".to_string(),
+            "GET".to_string(),
+            None,
+            None,
+            RequestType::Other,
+            None,
+        );
 
         for _ in 0..100 {
             let should_keep = queue.mark_failure(&id, "error".to_string());

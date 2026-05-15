@@ -416,7 +416,11 @@ mod tests {
     fn test_all_prompt_types_have_templates() {
         for pt in SupportPromptType::all() {
             let tmpl = default_template(*pt);
-            assert!(!tmpl.is_empty(), "Template for {:?} should not be empty", pt);
+            assert!(
+                !tmpl.is_empty(),
+                "Template for {:?} should not be empty",
+                pt
+            );
         }
     }
 
@@ -551,7 +555,10 @@ mod tests {
         assert_eq!(SupportPromptType::Fix.key(), "FIX");
         assert_eq!(SupportPromptType::Improve.key(), "IMPROVE");
         assert_eq!(SupportPromptType::AddToContext.key(), "ADD_TO_CONTEXT");
-        assert_eq!(SupportPromptType::TerminalAddToContext.key(), "TERMINAL_ADD_TO_CONTEXT");
+        assert_eq!(
+            SupportPromptType::TerminalAddToContext.key(),
+            "TERMINAL_ADD_TO_CONTEXT"
+        );
         assert_eq!(SupportPromptType::TerminalFix.key(), "TERMINAL_FIX");
         assert_eq!(SupportPromptType::TerminalExplain.key(), "TERMINAL_EXPLAIN");
         assert_eq!(SupportPromptType::NewTask.key(), "NEW_TASK");

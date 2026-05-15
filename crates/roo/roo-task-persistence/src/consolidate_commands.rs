@@ -56,8 +56,7 @@ pub fn consolidate_commands(messages: &[ClineMessage]) -> Vec<ClineMessage> {
         if msg.r#type == MessageType::Ask && msg.ask == Some(ClineAsk::UseMcpServer) {
             if i + 1 < messages.len() {
                 let next = &messages[i + 1];
-                if next.r#type == MessageType::Say
-                    && next.say == Some(ClineSay::McpServerResponse)
+                if next.r#type == MessageType::Say && next.say == Some(ClineSay::McpServerResponse)
                 {
                     // Merge: combine the response text into the use_mcp_server message
                     let mut merged = msg.clone();
@@ -115,8 +114,10 @@ pub fn consolidate_api_requests(messages: &[ClineMessage]) -> Vec<ClineMessage> 
                     match (started_obj, finished_obj) {
                         (Some(mut s), Some(f)) => {
                             // Merge finished into started (started values take precedence)
-                            if let (serde_json::Value::Object(s_map), serde_json::Value::Object(f_map)) =
-                                (&mut s, f)
+                            if let (
+                                serde_json::Value::Object(s_map),
+                                serde_json::Value::Object(f_map),
+                            ) = (&mut s, f)
                             {
                                 for (k, v) in f_map {
                                     s_map.entry(k).or_insert(v);
@@ -167,7 +168,12 @@ pub fn combine_messages(messages: &[ClineMessage]) -> Vec<ClineMessage> {
 mod tests {
     use super::*;
 
-    fn make_ask_message(ts: f64, ask: ClineAsk, say: Option<ClineSay>, text: Option<&str>) -> ClineMessage {
+    fn make_ask_message(
+        ts: f64,
+        ask: ClineAsk,
+        say: Option<ClineSay>,
+        text: Option<&str>,
+    ) -> ClineMessage {
         ClineMessage {
             ts,
             r#type: MessageType::Ask,
@@ -213,12 +219,20 @@ mod tests {
     fn test_consolidate_commands_merges_command_and_output() {
         let messages = vec![
             make_ask_message(1.0, ClineAsk::Command, None, Some("ls -la")),
-            make_ask_message(2.0, ClineAsk::CommandOutput, Some(ClineSay::CommandOutput), Some("file1.txt\nfile2.txt")),
+            make_ask_message(
+                2.0,
+                ClineAsk::CommandOutput,
+                Some(ClineSay::CommandOutput),
+                Some("file1.txt\nfile2.txt"),
+            ),
         ];
         let result = consolidate_commands(&messages);
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].ask, Some(ClineAsk::Command));
-        assert_eq!(result[0].text.as_deref(), Some("ls -la\nfile1.txt\nfile2.txt"));
+        assert_eq!(
+            result[0].text.as_deref(),
+            Some("ls -la\nfile1.txt\nfile2.txt")
+        );
     }
 
     #[test]
@@ -230,7 +244,10 @@ mod tests {
         let result = consolidate_commands(&messages);
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].ask, Some(ClineAsk::UseMcpServer));
-        assert_eq!(result[0].text.as_deref(), Some("request data\nresponse data"));
+        assert_eq!(
+            result[0].text.as_deref(),
+            Some("request data\nresponse data")
+        );
     }
 
     #[test]
@@ -246,7 +263,11 @@ mod tests {
     #[test]
     fn test_consolidate_api_requests_merges_pair() {
         let messages = vec![
-            make_say_message(1.0, ClineSay::ApiReqStarted, Some(r#"{"tokensIn":10,"cost":0.005}"#)),
+            make_say_message(
+                1.0,
+                ClineSay::ApiReqStarted,
+                Some(r#"{"tokensIn":10,"cost":0.005}"#),
+            ),
             make_say_message(2.0, ClineSay::ApiReqFinished, Some(r#"{"tokensOut":20}"#)),
         ];
         let result = consolidate_api_requests(&messages);
@@ -274,7 +295,12 @@ mod tests {
     fn test_combine_messages_chains_both() {
         let messages = vec![
             make_ask_message(1.0, ClineAsk::Command, None, Some("ls")),
-            make_ask_message(2.0, ClineAsk::CommandOutput, Some(ClineSay::CommandOutput), Some("output")),
+            make_ask_message(
+                2.0,
+                ClineAsk::CommandOutput,
+                Some(ClineSay::CommandOutput),
+                Some("output"),
+            ),
             make_say_message(3.0, ClineSay::ApiReqStarted, Some(r#"{"tokensIn":10}"#)),
             make_say_message(4.0, ClineSay::ApiReqFinished, Some(r#"{"tokensOut":20}"#)),
         ];

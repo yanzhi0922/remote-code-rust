@@ -117,7 +117,10 @@ pub fn build_codebase_search_result(
 /// ```
 pub fn format_codebase_search_output(result: &CodebaseSearchResult) -> String {
     if result.total_results == 0 {
-        return format!("No relevant code snippets found for the query: \"{}\"", result.query);
+        return format!(
+            "No relevant code snippets found for the query: \"{}\"",
+            result.query
+        );
     }
 
     let mut output = format!("Query: {}\nResults:\n", result.query);
@@ -196,7 +199,12 @@ mod tests {
         };
         let result = process_codebase_search(&params, &mgr, 10).unwrap();
         // Should only find files under src/utils
-        assert!(result.results.iter().all(|m| m.file_path.starts_with("src/utils")));
+        assert!(
+            result
+                .results
+                .iter()
+                .all(|m| m.file_path.starts_with("src/utils"))
+        );
     }
 
     #[test]
@@ -260,15 +268,13 @@ mod tests {
 
     #[test]
     fn test_build_result() {
-        let matches = vec![
-            CodebaseMatch {
-                file_path: "src/main.rs".to_string(),
-                score: 0.99,
-                start_line: 1,
-                end_line: 5,
-                code_chunk: "fn main() {}".to_string(),
-            },
-        ];
+        let matches = vec![CodebaseMatch {
+            file_path: "src/main.rs".to_string(),
+            score: 0.99,
+            start_line: 1,
+            end_line: 5,
+            code_chunk: "fn main() {}".to_string(),
+        }];
         let result = build_codebase_search_result("fn main", Some("src"), matches);
         assert_eq!(result.total_results, 1);
         assert_eq!(result.query, "fn main");
@@ -391,7 +397,12 @@ mod tests {
         };
         let result = process_codebase_search(&params, &mgr, 10).unwrap();
         // All results should be under src/utils
-        assert!(result.results.iter().all(|m| m.file_path.starts_with("src/utils")));
+        assert!(
+            result
+                .results
+                .iter()
+                .all(|m| m.file_path.starts_with("src/utils"))
+        );
     }
 
     #[test]
@@ -432,7 +443,12 @@ mod tests {
         };
         let result = process_codebase_search(&params, &mgr, 10).unwrap();
         // Should find helpers.rs which has format_output function
-        assert!(result.results.iter().any(|m| m.file_path == "src/utils/helpers.rs"));
+        assert!(
+            result
+                .results
+                .iter()
+                .any(|m| m.file_path == "src/utils/helpers.rs")
+        );
     }
 
     #[test]

@@ -93,7 +93,8 @@ pub struct CustomModesManager {
     is_writing: bool,
     /// Queue of pending write operations.
     #[allow(dead_code)]
-    write_queue: Vec<Box<dyn FnOnce() -> Pin<Box<dyn std::future::Future<Output = ()> + Send>> + Send>>,
+    write_queue:
+        Vec<Box<dyn FnOnce() -> Pin<Box<dyn std::future::Future<Output = ()> + Send>> + Send>>,
 }
 
 // We need Pin for async boxed futures
@@ -105,10 +106,7 @@ impl CustomModesManager {
     /// # Arguments
     /// * `global_settings_path` - Path to the global custom modes YAML file
     /// * `project_roomodes_path` - Optional path to the project `.roomodes` file
-    pub fn new(
-        global_settings_path: PathBuf,
-        project_roomodes_path: Option<PathBuf>,
-    ) -> Self {
+    pub fn new(global_settings_path: PathBuf, project_roomodes_path: Option<PathBuf>) -> Self {
         Self {
             global_settings_path,
             project_roomodes_path,
@@ -215,11 +213,7 @@ impl CustomModesManager {
         let content = match std::fs::read_to_string(file_path) {
             Ok(c) => c,
             Err(e) => {
-                tracing::error!(
-                    "Failed to read modes from {}: {}",
-                    file_path.display(),
-                    e
-                );
+                tracing::error!("Failed to read modes from {}: {}", file_path.display(), e);
                 return Vec::new();
             }
         };
@@ -339,11 +333,7 @@ impl CustomModesManager {
     /// Update or add a custom mode.
     ///
     /// Mirrors the TS `updateCustomMode()` method.
-    pub fn update_custom_mode(
-        &mut self,
-        slug: &str,
-        config: ModeConfig,
-    ) -> Result<(), String> {
+    pub fn update_custom_mode(&mut self, slug: &str, config: ModeConfig) -> Result<(), String> {
         // Validate the mode configuration
         if config.slug.is_empty() {
             return Err("Mode slug cannot be empty".to_string());
@@ -360,11 +350,7 @@ impl CustomModesManager {
         let target_path = if is_project_mode {
             match &self.project_roomodes_path {
                 Some(path) => path.clone(),
-                None => {
-                    return Err(
-                        "No workspace folder found for project mode".to_string(),
-                    )
-                }
+                None => return Err("No workspace folder found for project mode".to_string()),
             }
         } else {
             self.global_settings_path.clone()
@@ -372,10 +358,8 @@ impl CustomModesManager {
 
         // Update modes in the target file
         self.update_modes_in_file(&target_path, |modes| {
-            let mut updated: Vec<ModeConfig> = modes
-                .into_iter()
-                .filter(|m| m.slug != slug)
-                .collect();
+            let mut updated: Vec<ModeConfig> =
+                modes.into_iter().filter(|m| m.slug != slug).collect();
 
             let mut mode_with_source = config.clone();
             mode_with_source.source = Some(if is_project_mode {
@@ -455,11 +439,7 @@ impl CustomModesManager {
     /// Update modes in a file using a transformation function.
     ///
     /// Mirrors the TS `updateModesInFile()` method.
-    fn update_modes_in_file<F>(
-        &self,
-        file_path: &Path,
-        operation: F,
-    ) -> Result<(), String>
+    fn update_modes_in_file<F>(&self, file_path: &Path, operation: F) -> Result<(), String>
     where
         F: FnOnce(Vec<ModeConfig>) -> Vec<ModeConfig>,
     {
@@ -480,9 +460,12 @@ impl CustomModesManager {
         }
 
         // Extract and transform modes
-        let modes_value = parsed.get("customModes").cloned().unwrap_or(serde_yaml::Value::Null);
-        let existing_modes: Vec<ModeConfig> = serde_yaml::from_value(modes_value)
-            .unwrap_or_default();
+        let modes_value = parsed
+            .get("customModes")
+            .cloned()
+            .unwrap_or(serde_yaml::Value::Null);
+        let existing_modes: Vec<ModeConfig> =
+            serde_yaml::from_value(modes_value).unwrap_or_default();
 
         let updated_modes = operation(existing_modes);
 
@@ -527,12 +510,10 @@ impl CustomModesManager {
                 let home = dirs::home_dir().unwrap_or_default();
                 home.join(".roo").join(format!("rules-{}", slug))
             }
-            Some(ModeSource::Project) => {
-                match workspace_path {
-                    Some(wp) => wp.join(".roo").join(format!("rules-{}", slug)),
-                    None => return false,
-                }
-            }
+            Some(ModeSource::Project) => match workspace_path {
+                Some(wp) => wp.join(".roo").join(format!("rules-{}", slug)),
+                None => return false,
+            },
             None => return false,
         };
 
@@ -578,7 +559,7 @@ impl CustomModesManager {
                     success: false,
                     yaml: None,
                     error: Some("Mode not found".to_string()),
-                }
+                };
             }
         };
 
@@ -588,24 +569,22 @@ impl CustomModesManager {
                 let home = dirs::home_dir().unwrap_or_default();
                 home.join(format!("rules-{}", slug))
             }
-            Some(ModeSource::Project) => {
-                match workspace_path {
-                    Some(wp) => wp.join(".roo").join(format!("rules-{}", slug)),
-                    None => {
-                        return ExportResult {
-                            success: false,
-                            yaml: None,
-                            error: Some("No workspace found".to_string()),
-                        }
-                    }
+            Some(ModeSource::Project) => match workspace_path {
+                Some(wp) => wp.join(".roo").join(format!("rules-{}", slug)),
+                None => {
+                    return ExportResult {
+                        success: false,
+                        yaml: None,
+                        error: Some("No workspace found".to_string()),
+                    };
                 }
-            }
+            },
             None => {
                 return ExportResult {
                     success: false,
                     yaml: None,
                     error: Some("Mode source unknown".to_string()),
-                }
+                };
             }
         };
 
@@ -701,7 +680,7 @@ impl CustomModesManager {
                     success: false,
                     slug: None,
                     error: Some(format!("Invalid YAML format: {}", e)),
-                }
+                };
             }
         };
 
@@ -713,10 +692,9 @@ impl CustomModesManager {
                     success: false,
                     slug: None,
                     error: Some(
-                        "Invalid import format: Expected 'customModes' array in YAML"
-                            .to_string(),
+                        "Invalid import format: Expected 'customModes' array in YAML".to_string(),
                     ),
-                }
+                };
             }
         };
 
@@ -747,7 +725,7 @@ impl CustomModesManager {
                         success: false,
                         slug: None,
                         error: Some(format!("Invalid mode configuration: {}", e)),
-                    }
+                    };
                 }
             };
 
@@ -804,12 +782,10 @@ impl CustomModesManager {
                 let home = dirs::home_dir().unwrap_or_default();
                 home.join(format!("rules-{}", slug))
             }
-            ModeSource::Project => {
-                match workspace_path {
-                    Some(wp) => wp.join(".roo").join(format!("rules-{}", slug)),
-                    None => return Err("No workspace path".to_string()),
-                }
-            }
+            ModeSource::Project => match workspace_path {
+                Some(wp) => wp.join(".roo").join(format!("rules-{}", slug)),
+                None => return Err("No workspace path".to_string()),
+            },
         };
 
         // Remove existing rules folder
@@ -833,7 +809,9 @@ impl CustomModesManager {
             let target_path = rules_folder.join(&normalized);
 
             // Ensure the resolved path stays within the rules folder
-            let _canonical_rules = rules_folder.canonicalize().unwrap_or_else(|_| rules_folder.clone());
+            let _canonical_rules = rules_folder
+                .canonicalize()
+                .unwrap_or_else(|_| rules_folder.clone());
             let parent_dir = target_path.parent().unwrap_or_else(|| Path::new("."));
             std::fs::create_dir_all(parent_dir)
                 .map_err(|e| format!("Failed to create directory: {}", e))?;

@@ -253,7 +253,9 @@ impl ImageGenerationProvider for OpenRouterImageProvider {
             .json(&body)
             .send()
             .await
-            .map_err(|e| ImageGenerationError::ProviderError(format!("HTTP request failed: {}", e)))?;
+            .map_err(|e| {
+                ImageGenerationError::ProviderError(format!("HTTP request failed: {}", e))
+            })?;
 
         let status = response.status();
         if !status.is_success() {
@@ -281,10 +283,9 @@ impl ImageGenerationProvider for OpenRouterImageProvider {
             });
         }
 
-        let result: serde_json::Value = response
-            .json()
-            .await
-            .map_err(|e| ImageGenerationError::ProviderError(format!("Failed to parse response JSON: {}", e)))?;
+        let result: serde_json::Value = response.json().await.map_err(|e| {
+            ImageGenerationError::ProviderError(format!("Failed to parse response JSON: {}", e))
+        })?;
 
         // Check for top-level error in the response body
         if let Some(error_obj) = result.get("error") {
@@ -301,7 +302,9 @@ impl ImageGenerationProvider for OpenRouterImageProvider {
         // Extract the generated image from: choices[0].message.images[0].image_url.url
         let images = result["choices"][0]["message"]["images"]
             .as_array()
-            .ok_or_else(|| ImageGenerationError::ProviderError("No images in response".to_string()))?;
+            .ok_or_else(|| {
+                ImageGenerationError::ProviderError("No images in response".to_string())
+            })?;
 
         if images.is_empty() {
             return Ok(ImageProviderResponse {
@@ -311,9 +314,9 @@ impl ImageGenerationProvider for OpenRouterImageProvider {
             });
         }
 
-        let image_data = images[0]["image_url"]["url"]
-            .as_str()
-            .ok_or_else(|| ImageGenerationError::ProviderError("Invalid image data in response".to_string()))?;
+        let image_data = images[0]["image_url"]["url"].as_str().ok_or_else(|| {
+            ImageGenerationError::ProviderError("Invalid image data in response".to_string())
+        })?;
 
         Ok(ImageProviderResponse {
             success: true,
@@ -413,7 +416,9 @@ impl ImageGenerationProvider for RooImageProvider {
             .json(&body)
             .send()
             .await
-            .map_err(|e| ImageGenerationError::ProviderError(format!("HTTP request failed: {}", e)))?;
+            .map_err(|e| {
+                ImageGenerationError::ProviderError(format!("HTTP request failed: {}", e))
+            })?;
 
         let status = response.status();
         if !status.is_success() {
@@ -440,10 +445,9 @@ impl ImageGenerationProvider for RooImageProvider {
             });
         }
 
-        let result: serde_json::Value = response
-            .json()
-            .await
-            .map_err(|e| ImageGenerationError::ProviderError(format!("Failed to parse response JSON: {}", e)))?;
+        let result: serde_json::Value = response.json().await.map_err(|e| {
+            ImageGenerationError::ProviderError(format!("Failed to parse response JSON: {}", e))
+        })?;
 
         // Check for top-level error
         if let Some(error_obj) = result.get("error") {
@@ -460,7 +464,9 @@ impl ImageGenerationProvider for RooImageProvider {
         // Extract the generated image from: choices[0].message.images[0].image_url.url
         let images = result["choices"][0]["message"]["images"]
             .as_array()
-            .ok_or_else(|| ImageGenerationError::ProviderError("No images in response".to_string()))?;
+            .ok_or_else(|| {
+                ImageGenerationError::ProviderError("No images in response".to_string())
+            })?;
 
         if images.is_empty() {
             return Ok(ImageProviderResponse {
@@ -470,9 +476,9 @@ impl ImageGenerationProvider for RooImageProvider {
             });
         }
 
-        let image_data = images[0]["image_url"]["url"]
-            .as_str()
-            .ok_or_else(|| ImageGenerationError::ProviderError("Invalid image data in response".to_string()))?;
+        let image_data = images[0]["image_url"]["url"].as_str().ok_or_else(|| {
+            ImageGenerationError::ProviderError("Invalid image data in response".to_string())
+        })?;
 
         Ok(ImageProviderResponse {
             success: true,
@@ -498,7 +504,9 @@ pub const SUPPORTED_IMAGE_FORMATS: &[&str] = &["png", "jpg", "jpeg", "gif", "web
 /// Matches TS `GenerateImageTool.execute` validation:
 /// 1. `prompt` must be non-empty.
 /// 2. `path` must be non-empty.
-pub fn validate_generate_image_params(params: &GenerateImageParams) -> Result<(), ImageGenerationError> {
+pub fn validate_generate_image_params(
+    params: &GenerateImageParams,
+) -> Result<(), ImageGenerationError> {
     if params.prompt.is_empty() {
         return Err(ImageGenerationError::MissingParam("prompt".to_string()));
     }
@@ -608,9 +616,7 @@ fn base64_decode(input: &str) -> Option<Vec<u8>> {
     let input = input.trim_end_matches('=');
     let bytes: Vec<u8> = input
         .bytes()
-        .filter_map(|b| {
-            CHARSET.iter().position(|&c| c == b).map(|pos| pos as u8)
-        })
+        .filter_map(|b| CHARSET.iter().position(|&c| c == b).map(|pos| pos as u8))
         .collect();
 
     for chunk in bytes.chunks(4) {
@@ -981,7 +987,8 @@ mod tests {
     #[tokio::test]
     async fn test_openrouter_provider_empty_api_key() {
         let provider = OpenRouterImageProvider::new();
-        let result = provider.generate_image("sunset", "model", None, Some(""))
+        let result = provider
+            .generate_image("sunset", "model", None, Some(""))
             .await;
         assert!(result.is_err());
     }
@@ -989,7 +996,8 @@ mod tests {
     #[tokio::test]
     async fn test_openrouter_provider_empty_prompt() {
         let provider = OpenRouterImageProvider::new();
-        let result = provider.generate_image("", "model", None, Some("key"))
+        let result = provider
+            .generate_image("", "model", None, Some("key"))
             .await;
         assert!(result.is_err());
     }

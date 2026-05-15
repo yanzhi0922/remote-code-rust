@@ -442,7 +442,8 @@ Guidelines:
 - You MUST respond with a <block> tag containing exactly "yes" or "no""#;
 
 /// XML suffix for Stage 1 (fast) classification prompt.
-pub const XML_S1_SUFFIX: &str = "\n\nErr on the side of blocking. Respond with <block>yes</block> or <block>no</block>.";
+pub const XML_S1_SUFFIX: &str =
+    "\n\nErr on the side of blocking. Respond with <block>yes</block> or <block>no</block>.";
 
 /// XML suffix for Stage 2 (thinking) classification prompt.
 pub const XML_S2_SUFFIX: &str = "\n\nThink carefully about the security implications. Respond with <block>yes</block> or <block>no</block>.";
@@ -457,9 +458,17 @@ pub enum TranscriptBlock {
     /// Text content.
     Text { text: String },
     /// Tool use block.
-    ToolUse { id: String, name: String, input: serde_json::Value },
+    ToolUse {
+        id: String,
+        name: String,
+        input: serde_json::Value,
+    },
     /// Tool result block.
-    ToolResult { id: String, content: String, is_error: bool },
+    ToolResult {
+        id: String,
+        content: String,
+        is_error: bool,
+    },
     /// Thinking block (stripped before sending to classifier).
     Thinking { text: String },
 }
@@ -477,20 +486,23 @@ pub struct TranscriptEntry {
 ///
 /// Mirrors TS `buildTranscriptEntries`. Converts messages into a simplified
 /// format for the classifier LLM context, stripping thinking blocks.
-pub fn build_transcript_entries(
-    messages: &[serde_json::Value],
-) -> Vec<TranscriptEntry> {
+pub fn build_transcript_entries(messages: &[serde_json::Value]) -> Vec<TranscriptEntry> {
     let mut entries = Vec::new();
 
     for msg in messages {
-        let role = msg.get("role").and_then(|v| v.as_str()).unwrap_or("unknown");
+        let role = msg
+            .get("role")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown");
 
         let mut blocks = Vec::new();
 
         // Handle content as either a string or array of blocks
         if let Some(content) = msg.get("content") {
             if let Some(text) = content.as_str() {
-                blocks.push(TranscriptBlock::Text { text: text.to_owned() });
+                blocks.push(TranscriptBlock::Text {
+                    text: text.to_owned(),
+                });
             } else if let Some(content_arr) = content.as_array() {
                 for block in content_arr {
                     let block_type = block.get("type").and_then(|v| v.as_str()).unwrap_or("");
@@ -498,21 +510,45 @@ pub fn build_transcript_entries(
                     match block_type {
                         "text" => {
                             if let Some(text) = block.get("text").and_then(|v| v.as_str()) {
-                                blocks.push(TranscriptBlock::Text { text: text.to_owned() });
+                                blocks.push(TranscriptBlock::Text {
+                                    text: text.to_owned(),
+                                });
                             }
                         }
                         "tool_use" => {
                             blocks.push(TranscriptBlock::ToolUse {
-                                id: block.get("id").and_then(|v| v.as_str()).unwrap_or("").to_owned(),
-                                name: block.get("name").and_then(|v| v.as_str()).unwrap_or("").to_owned(),
-                                input: block.get("input").cloned().unwrap_or(serde_json::Value::Null),
+                                id: block
+                                    .get("id")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("")
+                                    .to_owned(),
+                                name: block
+                                    .get("name")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("")
+                                    .to_owned(),
+                                input: block
+                                    .get("input")
+                                    .cloned()
+                                    .unwrap_or(serde_json::Value::Null),
                             });
                         }
                         "tool_result" => {
                             blocks.push(TranscriptBlock::ToolResult {
-                                id: block.get("tool_use_id").and_then(|v| v.as_str()).unwrap_or("").to_owned(),
-                                content: block.get("content").and_then(|v| v.as_str()).unwrap_or("").to_owned(),
-                                is_error: block.get("is_error").and_then(|v| v.as_bool()).unwrap_or(false),
+                                id: block
+                                    .get("tool_use_id")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("")
+                                    .to_owned(),
+                                content: block
+                                    .get("content")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("")
+                                    .to_owned(),
+                                is_error: block
+                                    .get("is_error")
+                                    .and_then(|v| v.as_bool())
+                                    .unwrap_or(false),
                             });
                         }
                         "thinking" => {
@@ -525,7 +561,10 @@ pub fn build_transcript_entries(
         }
 
         if !blocks.is_empty() {
-            entries.push(TranscriptEntry { role: role.to_owned(), blocks });
+            entries.push(TranscriptEntry {
+                role: role.to_owned(),
+                blocks,
+            });
         }
     }
 
@@ -553,13 +592,29 @@ pub fn build_transcript_for_classifier(
                 }
                 TranscriptBlock::ToolUse { name, input, .. } => {
                     let input_str = serde_json::to_string(input).unwrap_or_default();
-                    let truncated = if input_str.len() > 300 { &input_str[..300] } else { &input_str };
-                    xml.push_str(&format!("    <tool_use name=\"{name}\">{truncated}</tool_use>\n"));
+                    let truncated = if input_str.len() > 300 {
+                        &input_str[..300]
+                    } else {
+                        &input_str
+                    };
+                    xml.push_str(&format!(
+                        "    <tool_use name=\"{name}\">{truncated}</tool_use>\n"
+                    ));
                 }
-                TranscriptBlock::ToolResult { content, is_error, .. } => {
-                    let tag = if *is_error { "tool_error" } else { "tool_result" };
-                    let truncated = if content.len() > 300 { &content[..300] } else { content };
-                    xml.push_str(&format!("    <{tag}>{truncated}</{tag}>\n", ));
+                TranscriptBlock::ToolResult {
+                    content, is_error, ..
+                } => {
+                    let tag = if *is_error {
+                        "tool_error"
+                    } else {
+                        "tool_result"
+                    };
+                    let truncated = if content.len() > 300 {
+                        &content[..300]
+                    } else {
+                        content
+                    };
+                    xml.push_str(&format!("    <{tag}>{truncated}</{tag}>\n",));
                 }
                 TranscriptBlock::Thinking { .. } => {
                     // Stripped — never included in classifier context
@@ -571,7 +626,11 @@ pub fn build_transcript_for_classifier(
 
     // Append the tool invocation being classified
     let input_str = serde_json::to_string(tool_input).unwrap_or_default();
-    let truncated_input = if input_str.len() > 500 { &input_str[..500] } else { &input_str };
+    let truncated_input = if input_str.len() > 500 {
+        &input_str[..500]
+    } else {
+        &input_str
+    };
     xml.push_str(&format!(
         "  <classify tool=\"{tool_name}\">{truncated_input}</classify>\n"
     ));
@@ -811,9 +870,9 @@ impl YoloLlmClassifier {
                 if let Some(decision) = parse_block_xml(&stage2_text) {
                     let result = match decision {
                         BlockDecision::Allow => YoloClassifierResult::Allow,
-                        BlockDecision::Block => {
-                            YoloClassifierResult::Deny("LLM classifier blocked the operation".to_owned())
-                        }
+                        BlockDecision::Block => YoloClassifierResult::Deny(
+                            "LLM classifier blocked the operation".to_owned(),
+                        ),
                     };
                     Some(YoloClassifierFullResult {
                         decision: result,
@@ -902,7 +961,11 @@ fn extract_thinking_text(text: &str) -> Option<String> {
         }
     }
 
-    if thinking.is_empty() { None } else { Some(thinking) }
+    if thinking.is_empty() {
+        None
+    } else {
+        Some(thinking)
+    }
 }
 
 /// Parse `<block>yes</block>` or `<block>no</block>` from LLM output.
@@ -929,11 +992,7 @@ fn parse_block_xml(text: &str) -> Option<BlockDecision> {
         }
 
         // Handle unclosed block — take content until newline or end
-        let content = after_open
-            .lines()
-            .next()
-            .unwrap_or("")
-            .trim();
+        let content = after_open.lines().next().unwrap_or("").trim();
         if !content.is_empty() {
             return match content {
                 "yes" | "allow" | "safe" | "true" => Some(BlockDecision::Allow),
@@ -1157,12 +1216,18 @@ mod tests {
 
     #[test]
     fn parse_block_xml_yes() {
-        assert_eq!(parse_block_xml("<block>yes</block>"), Some(BlockDecision::Allow));
+        assert_eq!(
+            parse_block_xml("<block>yes</block>"),
+            Some(BlockDecision::Allow)
+        );
     }
 
     #[test]
     fn parse_block_xml_no() {
-        assert_eq!(parse_block_xml("<block>no</block>"), Some(BlockDecision::Block));
+        assert_eq!(
+            parse_block_xml("<block>no</block>"),
+            Some(BlockDecision::Block)
+        );
     }
 
     #[test]
@@ -1173,7 +1238,10 @@ mod tests {
 
     #[test]
     fn parse_block_xml_case_insensitive() {
-        assert_eq!(parse_block_xml("<Block>YES</Block>"), Some(BlockDecision::Allow));
+        assert_eq!(
+            parse_block_xml("<Block>YES</Block>"),
+            Some(BlockDecision::Allow)
+        );
     }
 
     #[test]
@@ -1195,15 +1263,30 @@ mod tests {
 
     #[test]
     fn parse_block_xml_allow_aliases() {
-        assert_eq!(parse_block_xml("<block>allow</block>"), Some(BlockDecision::Allow));
-        assert_eq!(parse_block_xml("<block>safe</block>"), Some(BlockDecision::Allow));
+        assert_eq!(
+            parse_block_xml("<block>allow</block>"),
+            Some(BlockDecision::Allow)
+        );
+        assert_eq!(
+            parse_block_xml("<block>safe</block>"),
+            Some(BlockDecision::Allow)
+        );
     }
 
     #[test]
     fn parse_block_xml_block_aliases() {
-        assert_eq!(parse_block_xml("<block>block</block>"), Some(BlockDecision::Block));
-        assert_eq!(parse_block_xml("<block>deny</block>"), Some(BlockDecision::Block));
-        assert_eq!(parse_block_xml("<block>unsafe</block>"), Some(BlockDecision::Block));
+        assert_eq!(
+            parse_block_xml("<block>block</block>"),
+            Some(BlockDecision::Block)
+        );
+        assert_eq!(
+            parse_block_xml("<block>deny</block>"),
+            Some(BlockDecision::Block)
+        );
+        assert_eq!(
+            parse_block_xml("<block>unsafe</block>"),
+            Some(BlockDecision::Block)
+        );
     }
 
     #[test]
@@ -1214,8 +1297,14 @@ mod tests {
 
     #[test]
     fn parse_block_xml_true_false() {
-        assert_eq!(parse_block_xml("<block>true</block>"), Some(BlockDecision::Allow));
-        assert_eq!(parse_block_xml("<block>false</block>"), Some(BlockDecision::Block));
+        assert_eq!(
+            parse_block_xml("<block>true</block>"),
+            Some(BlockDecision::Allow)
+        );
+        assert_eq!(
+            parse_block_xml("<block>false</block>"),
+            Some(BlockDecision::Block)
+        );
     }
 
     #[test]
@@ -1327,12 +1416,12 @@ mod tests {
 
     #[test]
     fn build_transcript_for_classifier_produces_xml() {
-        let entries = vec![
-            TranscriptEntry {
-                role: "user".to_owned(),
-                blocks: vec![TranscriptBlock::Text { text: "Hello".to_owned() }],
-            },
-        ];
+        let entries = vec![TranscriptEntry {
+            role: "user".to_owned(),
+            blocks: vec![TranscriptBlock::Text {
+                text: "Hello".to_owned(),
+            }],
+        }];
         let xml = build_transcript_for_classifier(
             "Read",
             &serde_json::json!({"path": "src/lib.rs"}),
@@ -1365,7 +1454,9 @@ mod tests {
     fn resolve_yolo_model_defaults_to_main() {
         // Clear env var to ensure no override
         #[allow(unsafe_code)]
-        unsafe { std::env::remove_var("CLAUDE_CODE_AUTO_MODE_MODEL"); }
+        unsafe {
+            std::env::remove_var("CLAUDE_CODE_AUTO_MODE_MODEL");
+        }
         assert_eq!(resolve_yolo_model("claude-sonnet-4-6"), "claude-sonnet-4-6");
     }
 
@@ -1384,7 +1475,8 @@ mod tests {
             fn classify(
                 &self,
                 _request: YoloLlmRequest,
-            ) -> Pin<Box<dyn Future<Output = anyhow::Result<YoloLlmResponse>> + Send + '_>> {
+            ) -> Pin<Box<dyn Future<Output = anyhow::Result<YoloLlmResponse>> + Send + '_>>
+            {
                 // Should never be called for read-only tools
                 Box::pin(async { panic!("should not call LLM for read-only tools") })
             }
@@ -1403,12 +1495,15 @@ mod tests {
             fn classify(
                 &self,
                 request: YoloLlmRequest,
-            ) -> Pin<Box<dyn Future<Output = anyhow::Result<YoloLlmResponse>> + Send + '_>> {
+            ) -> Pin<Box<dyn Future<Output = anyhow::Result<YoloLlmResponse>> + Send + '_>>
+            {
                 let max_tokens = request.max_tokens;
                 Box::pin(async move {
                     // Stage 1 (max_tokens=64) returns allow
                     if max_tokens == 64 {
-                        Ok(YoloLlmResponse { text: "<block>yes</block>".to_owned() })
+                        Ok(YoloLlmResponse {
+                            text: "<block>yes</block>".to_owned(),
+                        })
                     } else {
                         panic!("stage 2 should not be called when stage 1 allows")
                     }
@@ -1429,16 +1524,20 @@ mod tests {
             fn classify(
                 &self,
                 request: YoloLlmRequest,
-            ) -> Pin<Box<dyn Future<Output = anyhow::Result<YoloLlmResponse>> + Send + '_>> {
+            ) -> Pin<Box<dyn Future<Output = anyhow::Result<YoloLlmResponse>> + Send + '_>>
+            {
                 let max_tokens = request.max_tokens;
                 Box::pin(async move {
                     if max_tokens == 64 {
                         // Stage 1 returns block → escalate to stage 2
-                        Ok(YoloLlmResponse { text: "<block>no</block>".to_owned() })
+                        Ok(YoloLlmResponse {
+                            text: "<block>no</block>".to_owned(),
+                        })
                     } else {
                         // Stage 2 confirms block with reasoning
                         Ok(YoloLlmResponse {
-                            text: "This command is dangerous because...\n<block>no</block>".to_owned(),
+                            text: "This command is dangerous because...\n<block>no</block>"
+                                .to_owned(),
                         })
                     }
                 })
@@ -1458,9 +1557,12 @@ mod tests {
             fn classify(
                 &self,
                 _request: YoloLlmRequest,
-            ) -> Pin<Box<dyn Future<Output = anyhow::Result<YoloLlmResponse>> + Send + '_>> {
+            ) -> Pin<Box<dyn Future<Output = anyhow::Result<YoloLlmResponse>> + Send + '_>>
+            {
                 Box::pin(async {
-                    Ok(YoloLlmResponse { text: "I cannot determine...".to_owned() })
+                    Ok(YoloLlmResponse {
+                        text: "I cannot determine...".to_owned(),
+                    })
                 })
             }
         }

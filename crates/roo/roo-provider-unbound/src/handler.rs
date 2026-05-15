@@ -34,7 +34,9 @@ pub struct UnboundHandler {
 impl UnboundHandler {
     /// Create a new Unbound handler from configuration.
     pub fn new(config: UnboundConfig) -> Result<Self, roo_provider::ProviderError> {
-        let model_id = config.model_id.unwrap_or_else(|| models::default_model_id());
+        let model_id = config
+            .model_id
+            .unwrap_or_else(|| models::default_model_id());
         let model_info = models::models()
             .get(&model_id)
             .cloned()
@@ -58,7 +60,7 @@ impl UnboundHandler {
             model_info,
             provider_name_enum: ProviderName::Unbound,
             request_timeout: config.request_timeout,
-        reasoning_effort: None,
+            reasoning_effort: None,
             streaming_enabled: None,
             include_max_tokens: None,
             extra_body_fields: None,
@@ -78,9 +80,8 @@ impl UnboundHandler {
     pub fn from_settings(
         settings: &roo_types::provider_settings::ProviderSettings,
     ) -> Result<Self, roo_provider::ProviderError> {
-        let config = UnboundConfig::from_settings(settings).ok_or_else(|| {
-            roo_provider::ProviderError::ApiKeyRequired
-        })?;
+        let config = UnboundConfig::from_settings(settings)
+            .ok_or_else(|| roo_provider::ProviderError::ApiKeyRequired)?;
         Self::new(config)
     }
 
@@ -96,14 +97,13 @@ impl UnboundHandler {
             }
         }
 
-        let url = format!("{}/models", UnboundConfig::DEFAULT_BASE_URL.trim_end_matches('/'));
+        let url = format!(
+            "{}/models",
+            UnboundConfig::DEFAULT_BASE_URL.trim_end_matches('/')
+        );
 
         let client = reqwest::Client::new();
-        let response = client
-            .get(&url)
-            .bearer_auth(&self.api_key)
-            .send()
-            .await?;
+        let response = client.get(&url).bearer_auth(&self.api_key).send().await?;
 
         if !response.status().is_success() {
             let status = response.status().as_u16();
@@ -180,10 +180,7 @@ impl Provider for UnboundHandler {
         self.resolve_model_info()
     }
 
-    async fn complete_prompt(
-        &self,
-        prompt: &str,
-    ) -> Result<String, roo_provider::ProviderError> {
+    async fn complete_prompt(&self, prompt: &str) -> Result<String, roo_provider::ProviderError> {
         self.inner.complete_prompt(prompt).await
     }
 
@@ -206,13 +203,20 @@ mod tests {
     #[test]
     fn test_all_models_have_required_fields() {
         for (id, info) in models::models() {
-            assert!(info.max_tokens.is_some(), "Model '{}' missing max_tokens", id);
+            assert!(
+                info.max_tokens.is_some(),
+                "Model '{}' missing max_tokens",
+                id
+            );
         }
     }
 
     #[test]
     fn test_default_url() {
-        assert_eq!(UnboundConfig::DEFAULT_BASE_URL, "https://api.getunbound.ai/v1");
+        assert_eq!(
+            UnboundConfig::DEFAULT_BASE_URL,
+            "https://api.getunbound.ai/v1"
+        );
     }
 
     #[test]

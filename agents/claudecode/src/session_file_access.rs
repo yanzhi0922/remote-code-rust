@@ -181,7 +181,11 @@ mod tests {
 
     use super::handle_session_file_access_post_tool;
 
-    fn config_and_store() -> (tempfile::TempDir, claude_config::RuntimeConfig, SessionStore) {
+    fn config_and_store() -> (
+        tempfile::TempDir,
+        claude_config::RuntimeConfig,
+        SessionStore,
+    ) {
         let temp = tempdir().expect("tempdir");
         let cwd = temp.path().join("cwd");
         let profile = temp.path().join("profile");
@@ -300,8 +304,9 @@ mod tests {
         else {
             return;
         };
-        let Some(team_dir) = claude_runtime_prompt::team_memory_path_with_features(&config, &features)
-            .expect("team memory")
+        let Some(team_dir) =
+            claude_runtime_prompt::team_memory_path_with_features(&config, &features)
+                .expect("team memory")
         else {
             return;
         };

@@ -1,7 +1,7 @@
-﻿//! Requesty model definitions.
+//! Requesty model definitions.
 
-use std::collections::HashMap;
 use roo_types::model::ModelInfo;
+use std::collections::HashMap;
 
 /// Default Requesty model ID.
 pub const DEFAULT_MODEL_ID: &str = "coding/claude-4-sonnet";

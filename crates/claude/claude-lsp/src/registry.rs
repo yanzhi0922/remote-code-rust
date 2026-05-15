@@ -3,8 +3,9 @@
 //! Manages multiple LSP server instances, each associated with one or more
 //! programming languages. Handles starting, stopping, and querying servers.
 
+use parking_lot::RwLock;
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -141,20 +142,17 @@ impl LspServerManager {
         let instance = LspServerInstance::from_config(&config, &self.root_uri);
 
         // Update language mapping
-        let mut lang_map = self.language_map.write().unwrap_or_else(|e| e.into_inner());
+        let mut lang_map = self.language_map.write();
         for lang in &config.languages {
             lang_map.insert(lang.to_lowercase(), id.to_string());
         }
 
-        self.instances
-            .write()
-            .unwrap_or_else(|e| e.into_inner())
-            .insert(id.to_string(), instance);
+        self.instances.write().insert(id.to_string(), instance);
     }
 
     /// Start a registered server by ID.
     pub fn start_server(&self, id: &str) -> Result<()> {
-        let mut instances = self.instances.write().unwrap_or_else(|e| e.into_inner());
+        let mut instances = self.instances.write();
         let instance = instances
             .get_mut(id)
             .ok_or_else(|| anyhow::anyhow!("Server '{id}' not registered"))?;
@@ -171,7 +169,7 @@ impl LspServerManager {
 
     /// Stop a running server by ID.
     pub fn stop_server(&self, id: &str) -> Result<()> {
-        let mut instances = self.instances.write().unwrap_or_else(|e| e.into_inner());
+        let mut instances = self.instances.write();
         let instance = instances
             .get_mut(id)
             .ok_or_else(|| anyhow::anyhow!("Server '{id}' not registered"))?;
@@ -188,42 +186,28 @@ impl LspServerManager {
     /// Get the server instance for a given language.
     #[must_use]
     pub fn get_server_for_language(&self, language: &str) -> Option<Arc<LspClient>> {
-        let lang_map = self.language_map.read().unwrap_or_else(|e| e.into_inner());
+        let lang_map = self.language_map.read();
         let server_id = lang_map.get(&language.to_lowercase())?;
-        let instances = self.instances.read().unwrap_or_else(|e| e.into_inner());
+        let instances = self.instances.read();
         instances.get(server_id).map(|inst| inst.client.clone())
     }
 
     /// Get the status of a server.
     #[must_use]
     pub fn server_status(&self, id: &str) -> Option<ServerStatus> {
-        self.instances
-            .read()
-            .unwrap_or_else(|e| e.into_inner())
-            .get(id)
-            .map(|i| i.status)
+        self.instances.read().get(id).map(|i| i.status)
     }
 
     /// List all registered server IDs.
     #[must_use]
     pub fn server_ids(&self) -> Vec<String> {
-        self.instances
-            .read()
-            .unwrap_or_else(|e| e.into_inner())
-            .keys()
-            .cloned()
-            .collect()
+        self.instances.read().keys().cloned().collect()
     }
 
     /// List all registered languages.
     #[must_use]
     pub fn languages(&self) -> Vec<String> {
-        self.language_map
-            .read()
-            .unwrap_or_else(|e| e.into_inner())
-            .keys()
-            .cloned()
-            .collect()
+        self.language_map.read().keys().cloned().collect()
     }
 
     /// Stop all running servers.
@@ -237,10 +221,7 @@ impl LspServerManager {
     /// Number of registered servers.
     #[must_use]
     pub fn server_count(&self) -> usize {
-        self.instances
-            .read()
-            .unwrap_or_else(|e| e.into_inner())
-            .len()
+        self.instances.read().len()
     }
 }
 

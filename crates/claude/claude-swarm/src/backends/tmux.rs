@@ -6,6 +6,7 @@
 use async_trait::async_trait;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::sync::Mutex;
 
 use crate::backends::PaneBackend;
@@ -118,7 +119,7 @@ pub fn build_list_panes_command(session_name: &str) -> TmuxCommand {
 pub struct TmuxBackend {
     session_name: String,
     panes: Arc<Mutex<HashMap<PaneId, bool>>>,
-    counter: Arc<Mutex<usize>>,
+    counter: AtomicUsize,
 }
 
 impl TmuxBackend {
@@ -128,7 +129,7 @@ impl TmuxBackend {
         Self {
             session_name: tmux_session_name(team_name),
             panes: Arc::new(Mutex::new(HashMap::new())),
-            counter: Arc::new(Mutex::new(0)),
+            counter: AtomicUsize::new(0),
         }
     }
 
@@ -140,9 +141,8 @@ impl TmuxBackend {
 
     /// Build the command that would create a new pane.
     pub async fn build_create_command(&self, config: &PaneConfig) -> (TmuxCommand, PaneId) {
-        let mut counter = self.counter.lock().await;
-        *counter += 1;
-        let pane_id = format!("tmux-pane-{}", counter);
+        let n = self.counter.fetch_add(1, Ordering::Relaxed) + 1;
+        let pane_id = format!("tmux-pane-{n}");
         let cmd = build_create_pane_command(
             &self.session_name,
             &config.name,

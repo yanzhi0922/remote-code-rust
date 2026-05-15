@@ -169,10 +169,7 @@ fn process_single_event(
             .and_then(|v| v.as_str())
             .unwrap_or("");
 
-        let delta = event
-            .get("delta")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
+        let delta = event.get("delta").and_then(|v| v.as_str()).unwrap_or("");
 
         let index = event["index"].as_u64().unwrap_or(0);
 

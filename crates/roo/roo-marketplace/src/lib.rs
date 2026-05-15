@@ -4,7 +4,7 @@ pub mod simple_installer;
 pub mod types;
 
 pub use marketplace::MarketplaceManager;
-pub use remote_config_loader::{RemoteConfigLoader, RemoteConfigError};
+pub use remote_config_loader::{RemoteConfigError, RemoteConfigLoader};
 pub use simple_installer::{
     InstallError, InstallOptions, InstallResult, InstallTarget, SimpleInstaller,
 };

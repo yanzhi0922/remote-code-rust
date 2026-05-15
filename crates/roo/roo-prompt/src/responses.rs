@@ -404,7 +404,8 @@ mod tests {
 
     #[test]
     fn test_tool_error() {
-        let result: Value = serde_json::from_str(&tool_error(Some("something went wrong"))).unwrap();
+        let result: Value =
+            serde_json::from_str(&tool_error(Some("something went wrong"))).unwrap();
         assert_eq!(result["status"], "error");
         assert_eq!(result["error"], "something went wrong");
     }
@@ -506,9 +507,21 @@ mod tests {
     #[test]
     fn test_format_files_list_numeric_sort() {
         let entries = vec![
-            FileEntry { relative_path: "file10.txt".to_string(), is_ignored: false, is_protected: false },
-            FileEntry { relative_path: "file2.txt".to_string(), is_ignored: false, is_protected: false },
-            FileEntry { relative_path: "file1.txt".to_string(), is_ignored: false, is_protected: false },
+            FileEntry {
+                relative_path: "file10.txt".to_string(),
+                is_ignored: false,
+                is_protected: false,
+            },
+            FileEntry {
+                relative_path: "file2.txt".to_string(),
+                is_ignored: false,
+                is_protected: false,
+            },
+            FileEntry {
+                relative_path: "file1.txt".to_string(),
+                is_ignored: false,
+                is_protected: false,
+            },
         ];
         let result = format_files_list(&entries, false);
         // Should be sorted: file1, file2, file10 (numeric order)
@@ -532,21 +545,24 @@ mod tests {
 
     #[test]
     fn test_tool_denied_with_feedback() {
-        let result: Value = serde_json::from_str(&tool_denied_with_feedback(Some("try again"))).unwrap();
+        let result: Value =
+            serde_json::from_str(&tool_denied_with_feedback(Some("try again"))).unwrap();
         assert_eq!(result["status"], "denied");
         assert_eq!(result["feedback"], "try again");
     }
 
     #[test]
     fn test_tool_approved_with_feedback() {
-        let result: Value = serde_json::from_str(&tool_approved_with_feedback(Some("looks good"))).unwrap();
+        let result: Value =
+            serde_json::from_str(&tool_approved_with_feedback(Some("looks good"))).unwrap();
         assert_eq!(result["status"], "approved");
         assert_eq!(result["feedback"], "looks good");
     }
 
     #[test]
     fn test_invalid_mcp_tool_argument_error() {
-        let result: Value = serde_json::from_str(&invalid_mcp_tool_argument_error("server1", "tool1")).unwrap();
+        let result: Value =
+            serde_json::from_str(&invalid_mcp_tool_argument_error("server1", "tool1")).unwrap();
         assert_eq!(result["status"], "error");
         assert_eq!(result["type"], "invalid_argument");
         assert_eq!(result["server"], "server1");
@@ -555,9 +571,12 @@ mod tests {
 
     #[test]
     fn test_unknown_mcp_tool_error() {
-        let result: Value = serde_json::from_str(
-            &unknown_mcp_tool_error("server1", "tool1", &[String::from("tool2")])
-        ).unwrap();
+        let result: Value = serde_json::from_str(&unknown_mcp_tool_error(
+            "server1",
+            "tool1",
+            &[String::from("tool2")],
+        ))
+        .unwrap();
         assert_eq!(result["status"], "error");
         assert_eq!(result["type"], "unknown_tool");
         assert_eq!(result["server"], "server1");
@@ -566,9 +585,11 @@ mod tests {
 
     #[test]
     fn test_unknown_mcp_server_error() {
-        let result: Value = serde_json::from_str(
-            &unknown_mcp_server_error("server1", &[String::from("server2")])
-        ).unwrap();
+        let result: Value = serde_json::from_str(&unknown_mcp_server_error(
+            "server1",
+            &[String::from("server2")],
+        ))
+        .unwrap();
         assert_eq!(result["status"], "error");
         assert_eq!(result["type"], "unknown_server");
         assert_eq!(result["server"], "server1");

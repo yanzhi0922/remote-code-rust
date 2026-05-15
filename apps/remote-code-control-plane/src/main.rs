@@ -88,9 +88,11 @@ async fn main() -> Result<()> {
             let service = ControlPlaneService::new(config.clone(), env!("CARGO_PKG_VERSION"));
 
             // Optionally start the QUIC listener alongside HTTP.
-            if let (Some(quic_bind), Some(cert_path), Some(key_path)) =
-                (&config.quic_bind, &config.quic_cert_pem, &config.quic_key_pem)
-            {
+            if let (Some(quic_bind), Some(cert_path), Some(key_path)) = (
+                &config.quic_bind,
+                &config.quic_cert_pem,
+                &config.quic_key_pem,
+            ) {
                 let cert_pem = std::fs::read(cert_path)
                     .with_context(|| format!("reading QUIC cert from {}", cert_path.display()))?;
                 let key_pem = std::fs::read(key_path)

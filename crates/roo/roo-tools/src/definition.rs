@@ -2,7 +2,7 @@
 //!
 //! Corresponds to `src/core/prompts/tools/native-tools/*.ts`.
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use roo_types::tool::ToolName;
 
@@ -464,20 +464,38 @@ mod tests {
     #[test]
     fn test_all_tool_names_unique() {
         let tools = get_native_tools(NativeToolsOptions::default());
-        let names: std::collections::HashSet<&str> = tools.iter().map(|t| t.name.as_str()).collect();
+        let names: std::collections::HashSet<&str> =
+            tools.iter().map(|t| t.name.as_str()).collect();
         assert_eq!(names.len(), 21);
     }
 
     #[test]
     fn test_expected_tool_names_present() {
         let tools = get_native_tools(NativeToolsOptions::default());
-        let names: std::collections::HashSet<&str> = tools.iter().map(|t| t.name.as_str()).collect();
+        let names: std::collections::HashSet<&str> =
+            tools.iter().map(|t| t.name.as_str()).collect();
         let expected = [
-            "access_mcp_resource", "apply_diff", "apply_patch", "ask_followup_question",
-            "attempt_completion", "codebase_search", "execute_command", "generate_image",
-            "list_files", "new_task", "read_command_output", "read_file",
-            "run_slash_command", "skill", "search_replace", "edit_file",
-            "edit", "search_files", "switch_mode", "update_todo_list", "write_to_file",
+            "access_mcp_resource",
+            "apply_diff",
+            "apply_patch",
+            "ask_followup_question",
+            "attempt_completion",
+            "codebase_search",
+            "execute_command",
+            "generate_image",
+            "list_files",
+            "new_task",
+            "read_command_output",
+            "read_file",
+            "run_slash_command",
+            "skill",
+            "search_replace",
+            "edit_file",
+            "edit",
+            "search_files",
+            "switch_mode",
+            "update_todo_list",
+            "write_to_file",
         ];
         for name in &expected {
             assert!(names.contains(name), "Missing tool: {name}");
@@ -489,26 +507,57 @@ mod tests {
         let tools = get_native_tools(NativeToolsOptions::default());
         for tool in &tools {
             assert!(!tool.name.is_empty());
-            assert!(!tool.description.is_empty(), "Tool {} has empty description", tool.name);
-            assert!(tool.parameters.get("type").is_some(), "Tool {} missing type", tool.name);
-            assert!(tool.parameters.get("properties").is_some(), "Tool {} missing properties", tool.name);
-            assert!(tool.parameters.get("required").is_some(), "Tool {} missing required", tool.name);
+            assert!(
+                !tool.description.is_empty(),
+                "Tool {} has empty description",
+                tool.name
+            );
+            assert!(
+                tool.parameters.get("type").is_some(),
+                "Tool {} missing type",
+                tool.name
+            );
+            assert!(
+                tool.parameters.get("properties").is_some(),
+                "Tool {} missing properties",
+                tool.name
+            );
+            assert!(
+                tool.parameters.get("required").is_some(),
+                "Tool {} missing required",
+                tool.name
+            );
         }
     }
 
     #[test]
     fn test_read_file_supports_images_option() {
-        let tools_no = get_native_tools(NativeToolsOptions { supports_images: false });
-        let tools_yes = get_native_tools(NativeToolsOptions { supports_images: true });
+        let tools_no = get_native_tools(NativeToolsOptions {
+            supports_images: false,
+        });
+        let tools_yes = get_native_tools(NativeToolsOptions {
+            supports_images: true,
+        });
         let rf_no = tools_no.iter().find(|t| t.name == "read_file").unwrap();
         let rf_yes = tools_yes.iter().find(|t| t.name == "read_file").unwrap();
-        assert!(rf_yes.description.contains("PNG, JPG, JPEG, GIF, BMP, SVG, WEBP, ICO, AVIF"));
-        assert!(!rf_no.description.contains("PNG, JPG, JPEG, GIF, BMP, SVG, WEBP, ICO, AVIF"));
+        assert!(
+            rf_yes
+                .description
+                .contains("PNG, JPG, JPEG, GIF, BMP, SVG, WEBP, ICO, AVIF")
+        );
+        assert!(
+            !rf_no
+                .description
+                .contains("PNG, JPG, JPEG, GIF, BMP, SVG, WEBP, ICO, AVIF")
+        );
     }
 
     #[test]
     fn test_find_tool_by_name() {
-        assert_eq!(find_tool_by_name("execute_command"), Some(ToolName::ExecuteCommand));
+        assert_eq!(
+            find_tool_by_name("execute_command"),
+            Some(ToolName::ExecuteCommand)
+        );
         assert_eq!(find_tool_by_name("read_file"), Some(ToolName::ReadFile));
         assert_eq!(find_tool_by_name("unknown_tool"), None);
     }

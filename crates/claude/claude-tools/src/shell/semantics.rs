@@ -41,12 +41,14 @@ pub fn analyze_command(
     let changes_directory = command_changes_directory(kind, command);
 
     // Run the full bash security check suite matching TS bashSecurity.ts.
-    let SecurityCheckResult { safe: security_safe, reasons: security_flags } =
-        if kind == ShellKind::Bash {
-            bash_security::check_bash_security(command)
-        } else {
-            SecurityCheckResult::safe()
-        };
+    let SecurityCheckResult {
+        safe: security_safe,
+        reasons: security_flags,
+    } = if kind == ShellKind::Bash {
+        bash_security::check_bash_security(command)
+    } else {
+        SecurityCheckResult::safe()
+    };
 
     let dangerous = destructive_git || contains_dangerous_pattern(&normalized) || !security_safe;
     let semantic = if dangerous {

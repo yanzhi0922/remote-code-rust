@@ -7,8 +7,8 @@
 use async_trait::async_trait;
 use tokio::sync::mpsc;
 
-use crate::transport::{CommandAck, HealthStatus, RemoteTransport, TransportCommand};
 use crate::reconnect::ReconnectPolicy;
+use crate::transport::{CommandAck, HealthStatus, RemoteTransport, TransportCommand};
 use crate::{ConnectionState, TransportConfig, TransportEvent, TransportMetrics};
 
 /// Outbound polling transport — mobile connects to control plane,
@@ -43,9 +43,10 @@ impl OutboundPollTransport {
 impl RemoteTransport for OutboundPollTransport {
     async fn connect(&mut self, config: TransportConfig) -> anyhow::Result<()> {
         let (cp_url, poll_ms) = match &config.strategy {
-            crate::TransportStrategy::OutboundPolling { control_plane_url, poll_interval_ms } => {
-                (control_plane_url.clone(), *poll_interval_ms)
-            }
+            crate::TransportStrategy::OutboundPolling {
+                control_plane_url,
+                poll_interval_ms,
+            } => (control_plane_url.clone(), *poll_interval_ms),
             _ => anyhow::bail!("OutboundPollTransport requires OutboundPolling strategy"),
         };
 
@@ -77,16 +78,22 @@ impl RemoteTransport for OutboundPollTransport {
     }
 
     async fn send_command(&self, command: TransportCommand) -> anyhow::Result<CommandAck> {
-        let config = self.config.as_ref().ok_or_else(|| anyhow::anyhow!("not connected"))?;
+        let config = self
+            .config
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("not connected"))?;
         let cp_url = match &config.strategy {
-            crate::TransportStrategy::OutboundPolling { control_plane_url, .. } => control_plane_url,
+            crate::TransportStrategy::OutboundPolling {
+                control_plane_url, ..
+            } => control_plane_url,
             _ => anyhow::bail!("internal error: strategy mismatch, expected OutboundPolling"),
         };
 
         let (path, body) = super::direct_ws::command_to_request(&command, &config.session_id);
         let url = format!("{cp_url}{path}");
 
-        let response = self.client
+        let response = self
+            .client
             .post(&url)
             .bearer_auth(&config.auth_token)
             .json(&body)
@@ -94,11 +101,17 @@ impl RemoteTransport for OutboundPollTransport {
             .await?;
 
         if response.status().is_success() {
-            Ok(CommandAck { accepted: true, message: "ok".into() })
+            Ok(CommandAck {
+                accepted: true,
+                message: "ok".into(),
+            })
         } else {
             let status = response.status();
             let text = response.text().await.unwrap_or_default();
-            Ok(CommandAck { accepted: false, message: format!("HTTP {status}: {text}") })
+            Ok(CommandAck {
+                accepted: false,
+                message: format!("HTTP {status}: {text}"),
+            })
         }
     }
 
@@ -106,8 +119,15 @@ impl RemoteTransport for OutboundPollTransport {
         let config = self.config.as_ref();
         if let Some(config) = config {
             let cp_url = match &config.strategy {
-                crate::TransportStrategy::OutboundPolling { control_plane_url, .. } => control_plane_url,
-                _ => return HealthStatus { endpoints: vec![], recommended_strategy: None },
+                crate::TransportStrategy::OutboundPolling {
+                    control_plane_url, ..
+                } => control_plane_url,
+                _ => {
+                    return HealthStatus {
+                        endpoints: vec![],
+                        recommended_strategy: None,
+                    };
+                }
             };
             let health_url = format!("{cp_url}/healthz");
             let health = crate::health::probe_endpoint(
@@ -121,7 +141,10 @@ impl RemoteTransport for OutboundPollTransport {
                 recommended_strategy: Some("outbound_polling".into()),
             }
         } else {
-            HealthStatus { endpoints: vec![], recommended_strategy: None }
+            HealthStatus {
+                endpoints: vec![],
+                recommended_strategy: None,
+            }
         }
     }
 
@@ -217,7 +240,8 @@ async fn poll_events_loop(
 fn update_after_param(url: &str, new_after: u64) -> String {
     let (base, query) = url.split_once('?').unwrap_or((url, ""));
     if query.contains("after=") {
-        let updated = query.split('&')
+        let updated = query
+            .split('&')
             .map(|pair| {
                 if pair.starts_with("after=") {
                     format!("after={new_after}")

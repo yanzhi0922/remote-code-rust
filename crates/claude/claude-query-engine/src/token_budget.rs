@@ -108,11 +108,7 @@ impl BudgetTracker {
             self.last_delta_tokens = delta_since_last;
             self.last_global_turn_tokens = global_turn_tokens;
 
-            let nudge_message = budget_continuation_message(
-                pct,
-                turn_tokens,
-                budget,
-            );
+            let nudge_message = budget_continuation_message(pct, turn_tokens, budget);
 
             return TokenBudgetDecision::ContinueWithNudge {
                 nudge_message,
@@ -237,11 +233,14 @@ mod tests {
     fn continuation_below_90_percent() {
         let mut tracker = BudgetTracker::new(10, None);
         let decision = tracker.check_continuation(
-            None,             // no agent_id → main thread
-            Some(100_000),    // budget
-            10_000,           // 10% used
+            None,          // no agent_id → main thread
+            Some(100_000), // budget
+            10_000,        // 10% used
         );
-        assert!(matches!(decision, TokenBudgetDecision::ContinueWithNudge { .. }));
+        assert!(matches!(
+            decision,
+            TokenBudgetDecision::ContinueWithNudge { .. }
+        ));
         assert_eq!(tracker.continuation_count, 1);
     }
 
@@ -289,14 +288,20 @@ mod tests {
         // 3 continuations with small deltas
         for _ in 0..3 {
             let decision = tracker.check_continuation(None, budget, 10_000);
-            assert!(matches!(decision, TokenBudgetDecision::ContinueWithNudge { .. }));
+            assert!(matches!(
+                decision,
+                TokenBudgetDecision::ContinueWithNudge { .. }
+            ));
         }
 
         // 4th check: last_delta_tokens was set to a small value (0),
         // and this delta is also small (0) → diminishing returns triggers
         let decision = tracker.check_continuation(None, budget, 10_000);
         assert!(matches!(decision, TokenBudgetDecision::Stop { .. }));
-        if let TokenBudgetDecision::Stop { completion_event, .. } = decision {
+        if let TokenBudgetDecision::Stop {
+            completion_event, ..
+        } = decision
+        {
             let event = completion_event.expect("should have completion event");
             assert!(event.diminishing_returns);
         }
@@ -309,7 +314,10 @@ mod tests {
         // Now go above 90% on second check
         let decision = tracker.check_continuation(None, Some(100_000), 95_000);
         assert!(matches!(decision, TokenBudgetDecision::Stop { .. }));
-        if let TokenBudgetDecision::Stop { completion_event, .. } = decision {
+        if let TokenBudgetDecision::Stop {
+            completion_event, ..
+        } = decision
+        {
             assert!(completion_event.is_some());
             let event = completion_event.unwrap();
             assert_eq!(event.continuation_count, 1);
@@ -322,7 +330,9 @@ mod tests {
         let tracker = BudgetTracker::new(10, None);
         let decision = tracker.evaluate_hard_limits(10, 0);
         match decision {
-            TokenBudgetDecision::Stop { completion_event, .. } => {
+            TokenBudgetDecision::Stop {
+                completion_event, ..
+            } => {
                 assert!(completion_event.is_none());
             }
             _ => panic!("expected Stop"),

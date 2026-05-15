@@ -33,14 +33,9 @@ pub enum DecisionReason {
     /// Decision from an async agent.
     AsyncAgent { reason: String },
     /// Decision due to sandbox override (excluded command or disabled sandbox).
-    SandboxOverride {
-        reason: SandboxOverrideReason,
-    },
+    SandboxOverride { reason: SandboxOverrideReason },
     /// Decision from a bash classifier.
-    Classifier {
-        classifier: String,
-        reason: String,
-    },
+    Classifier { classifier: String, reason: String },
     /// Decision based on working directory scope.
     WorkingDir { reason: String },
     /// Decision from a safety check (sensitive paths, Windows bypass, bridge).

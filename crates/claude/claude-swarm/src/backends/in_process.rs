@@ -7,6 +7,7 @@
 use async_trait::async_trait;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::sync::Mutex;
 
 use crate::backends::types::{CreatePaneResult, PaneConfig, PaneId, PaneStatus};
@@ -31,7 +32,7 @@ struct PaneState {
 #[derive(Debug)]
 pub struct InProcessBackend {
     panes: Arc<Mutex<HashMap<PaneId, PaneState>>>,
-    counter: Arc<Mutex<usize>>,
+    counter: AtomicUsize,
 }
 
 impl InProcessBackend {
@@ -40,15 +41,14 @@ impl InProcessBackend {
     pub fn new() -> Self {
         Self {
             panes: Arc::new(Mutex::new(HashMap::new())),
-            counter: Arc::new(Mutex::new(0)),
+            counter: AtomicUsize::new(0),
         }
     }
 
     /// Generate a unique pane ID.
-    async fn next_pane_id(&self) -> PaneId {
-        let mut counter = self.counter.lock().await;
-        *counter += 1;
-        format!("in-process-pane-{}", counter)
+    fn next_pane_id(&self) -> PaneId {
+        let n = self.counter.fetch_add(1, Ordering::Relaxed) + 1;
+        format!("in-process-pane-{n}")
     }
 }
 
@@ -65,7 +65,7 @@ impl PaneBackend for InProcessBackend {
     }
 
     async fn create_pane(&self, config: &PaneConfig) -> SwarmResult<CreatePaneResult> {
-        let pane_id = self.next_pane_id().await;
+        let pane_id = self.next_pane_id();
         let is_first = {
             let panes = self.panes.lock().await;
             panes.is_empty()

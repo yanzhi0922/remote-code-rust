@@ -102,10 +102,7 @@ pub fn parse_command_content(content: &str) -> ParsedCommand {
 
     let frontmatter = parse_frontmatter_str(frontmatter_str);
 
-    ParsedCommand {
-        frontmatter,
-        body,
-    }
+    ParsedCommand { frontmatter, body }
 }
 
 /// Parse a frontmatter string into a [`CommandFrontMatter`].
@@ -186,7 +183,10 @@ mod tests {
     fn test_description_only() {
         let content = "---\ndescription: My command description\n---\nBody content.";
         let parsed = parse_command_content(content);
-        assert_eq!(parsed.frontmatter.description.as_deref(), Some("My command description"));
+        assert_eq!(
+            parsed.frontmatter.description.as_deref(),
+            Some("My command description")
+        );
         assert!(parsed.frontmatter.argument_hint.is_none());
         assert!(parsed.frontmatter.mode.is_none());
         assert_eq!(parsed.body, "Body content.");
@@ -196,8 +196,14 @@ mod tests {
     fn test_all_fields() {
         let content = "---\ndescription: A test command\nargument-hint: <file-path>\nmode: code\n---\nDo something useful.";
         let parsed = parse_command_content(content);
-        assert_eq!(parsed.frontmatter.description.as_deref(), Some("A test command"));
-        assert_eq!(parsed.frontmatter.argument_hint.as_deref(), Some("<file-path>"));
+        assert_eq!(
+            parsed.frontmatter.description.as_deref(),
+            Some("A test command")
+        );
+        assert_eq!(
+            parsed.frontmatter.argument_hint.as_deref(),
+            Some("<file-path>")
+        );
         assert_eq!(parsed.frontmatter.mode.as_deref(), Some("code"));
         assert_eq!(parsed.body, "Do something useful.");
     }

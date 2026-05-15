@@ -655,7 +655,7 @@ async fn run_single_delegation(
 ) -> Result<String> {
     // Determine current delegation depth from the task stack.
     let depth = {
-        let stack = context.task_stack.lock().unwrap_or_else(|e| e.into_inner());
+        let stack = context.task_stack.lock();
         stack.depth()
     };
 
@@ -718,7 +718,7 @@ async fn run_batch_delegation(
     let broker: Arc<dyn PermissionBroker> = Arc::new(StaticPermissionBroker::new(true));
 
     let (batch_depth, parent_task_id) = {
-        let stack = context.task_stack.lock().unwrap_or_else(|e| e.into_inner());
+        let stack = context.task_stack.lock();
         if let Some(frame) = stack.current() {
             (frame.depth.saturating_add(1), Some(frame.task_id.clone()))
         } else {
@@ -1284,7 +1284,7 @@ fn start_agent_tracking(
     title: &str,
 ) -> Result<(String, Option<String>, u32)> {
     let (parent_task_id, depth) = {
-        let stack = context.task_stack.lock().unwrap_or_else(|e| e.into_inner());
+        let stack = context.task_stack.lock();
         if let Some(frame) = stack.current() {
             (Some(frame.task_id.clone()), frame.depth.saturating_add(1))
         } else {
@@ -1331,8 +1331,9 @@ fn truncate_str(text: &str, max_bytes: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use parking_lot::Mutex as StdMutex;
     use std::path::PathBuf;
-    use std::sync::{Arc, Mutex as StdMutex};
+    use std::sync::Arc;
 
     use claude_core::{ProviderResponse, UsageSummary};
     use claude_mcp::serialization::{McpCliState, SerializedClient, SerializedTool};
@@ -1362,7 +1363,7 @@ mod tests {
             &self,
             request: SubAgentExecutionRequest,
         ) -> Result<claude_core::SubAgentExecutionResult> {
-            self.requests.lock().expect("requests lock").push(request);
+            self.requests.lock().push(request);
             Ok(self.result.clone())
         }
     }
@@ -1488,12 +1489,12 @@ mod tests {
         let payload: Value = serde_json::from_str(&result).expect("background payload");
         assert_eq!(payload["status"], "async_launched");
         for _ in 0..20 {
-            if requests.lock().expect("requests lock").len() == 1 {
+            if requests.lock().len() == 1 {
                 break;
             }
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
-        let requests = requests.lock().expect("requests lock");
+        let requests = requests.lock();
         assert_eq!(requests.len(), 1);
         let request = &requests[0];
         assert_eq!(request.agent_type, "verification");
@@ -1552,7 +1553,7 @@ mod tests {
         .expect("agent tool should succeed");
 
         assert_eq!(result, "implemented");
-        let requests = requests.lock().expect("requests lock");
+        let requests = requests.lock();
         assert_eq!(requests.len(), 1);
         let request = &requests[0];
         assert_eq!(request.agent_type, "general-purpose");
@@ -1586,7 +1587,9 @@ mod tests {
         let runtime_context = crate::RuntimeAgentPromptContext::default();
         let fork_snapshot = claude_core::SubAgentForkSnapshot {
             fork_context_messages: vec![
-                claude_core::Message::from(claude_core::ConversationEntry::system("Parent system prompt.")),
+                claude_core::Message::from(claude_core::ConversationEntry::system(
+                    "Parent system prompt.",
+                )),
                 claude_core::Message::from(claude_core::ConversationEntry::user(
                     "Investigate the code path and make the required change.",
                 )),
@@ -1621,12 +1624,12 @@ mod tests {
         let payload: Value = serde_json::from_str(&result).expect("background payload");
         assert_eq!(payload["status"], "async_launched");
         for _ in 0..20 {
-            if requests.lock().expect("requests lock").len() == 1 {
+            if requests.lock().len() == 1 {
                 break;
             }
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
-        let requests = requests.lock().expect("requests lock");
+        let requests = requests.lock();
         assert_eq!(requests.len(), 1);
         let request = &requests[0];
         assert_eq!(request.agent_type, "fork");
@@ -1649,9 +1652,9 @@ mod tests {
         });
         let context = test_context(Some(runtime));
         let fork_snapshot = claude_core::SubAgentForkSnapshot {
-            fork_context_messages: vec![claude_core::Message::from(claude_core::ConversationEntry::user(
-                "Parent prompt.",
-            ))],
+            fork_context_messages: vec![claude_core::Message::from(
+                claude_core::ConversationEntry::user("Parent prompt."),
+            )],
             system_prompt: Some("Parent system prompt.".to_owned()),
             user_context: std::collections::BTreeMap::new(),
             system_context: std::collections::BTreeMap::new(),
@@ -1677,12 +1680,12 @@ mod tests {
         let payload: Value = serde_json::from_str(&result).expect("background payload");
         assert_eq!(payload["status"], "async_launched");
         for _ in 0..20 {
-            if requests.lock().expect("requests lock").len() == 1 {
+            if requests.lock().len() == 1 {
                 break;
             }
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
-        let requests = requests.lock().expect("requests lock");
+        let requests = requests.lock();
         assert_eq!(requests.len(), 1);
         let request = &requests[0];
         assert_eq!(request.agent_type, "fork");
@@ -1703,21 +1706,23 @@ mod tests {
         });
         let context = test_context(Some(runtime));
         let fork_snapshot = claude_core::SubAgentForkSnapshot {
-            fork_context_messages: vec![claude_core::Message::from(claude_core::ConversationEntry {
-                uuid: uuid::Uuid::new_v4(),
-                role: claude_core::ConversationRole::User,
-                text: String::new(),
-                history_text: None,
-                content_blocks: vec![json!({
-                    "type": "text",
-                    "text": "<fork-boilerplate>already a fork</fork-boilerplate>\n\nYour directive: stay focused"
-                })],
-                tool_calls: Vec::new(),
-                attachments: Vec::new(),
-                tool_call_id: None,
-                name: None,
-                is_error: false,
-            })],
+            fork_context_messages: vec![claude_core::Message::from(
+                claude_core::ConversationEntry {
+                    uuid: uuid::Uuid::new_v4(),
+                    role: claude_core::ConversationRole::User,
+                    text: String::new(),
+                    history_text: None,
+                    content_blocks: vec![json!({
+                        "type": "text",
+                        "text": "<fork-boilerplate>already a fork</fork-boilerplate>\n\nYour directive: stay focused"
+                    })],
+                    tool_calls: Vec::new(),
+                    attachments: Vec::new(),
+                    tool_call_id: None,
+                    name: None,
+                    is_error: false,
+                },
+            )],
             system_prompt: Some("Parent system prompt.".to_owned()),
             user_context: std::collections::BTreeMap::new(),
             system_context: std::collections::BTreeMap::new(),
@@ -1936,7 +1941,8 @@ mod tests {
 
         tokio::spawn(async move {
             tokio::time::sleep(Duration::from_millis(25)).await;
-            if let Ok(mut snapshot) = state_for_update.lock() {
+            {
+                let mut snapshot = state_for_update.lock();
                 snapshot.clients = vec![serialized_client("context7", "connected")];
                 snapshot.tools = vec![serialized_tool("mcp__context7__query_docs")];
             }
@@ -1961,7 +1967,8 @@ mod tests {
 
         tokio::spawn(async move {
             tokio::time::sleep(Duration::from_millis(25)).await;
-            if let Ok(mut snapshot) = state_for_update.lock() {
+            {
+                let mut snapshot = state_for_update.lock();
                 snapshot.clients = vec![serialized_client("context7", "failed")];
             }
         });
@@ -2052,7 +2059,7 @@ mod tests {
     }
 
     fn live_mcp_provider(state: Arc<StdMutex<McpCliState>>) -> Arc<crate::RuntimeMcpStateProvider> {
-        Arc::new(move || state.lock().expect("mcp state lock").clone())
+        Arc::new(move || state.lock().clone())
     }
 
     fn serialized_client(name: &str, connection_type: &str) -> SerializedClient {
@@ -2138,7 +2145,7 @@ mod tests {
         .expect("custom project agent should succeed");
 
         assert_eq!(result, "reviewed");
-        let requests = requests.lock().expect("requests lock");
+        let requests = requests.lock();
         assert_eq!(requests.len(), 1);
         let request = &requests[0];
         assert_eq!(request.agent_type, "reviewer");
@@ -2213,7 +2220,7 @@ mod tests {
         .expect("custom project agent should succeed");
 
         assert_eq!(result, "reviewed");
-        let requests = requests.lock().expect("requests lock");
+        let requests = requests.lock();
         assert_eq!(requests.len(), 1);
         let request = &requests[0];
         assert!(!request.skip_transcript);
@@ -2257,7 +2264,7 @@ mod tests {
 
         assert_eq!(result, "planned");
         {
-            let requests = requests.lock().expect("requests lock");
+            let requests = requests.lock();
             let request = &requests[0];
             assert_eq!(request.agent_name.as_deref(), Some("planner"));
             assert_eq!(request.team_name.as_deref(), Some("alpha-team"));
@@ -2271,7 +2278,10 @@ mod tests {
             .find_member("planner")
             .expect("planner member should exist");
         assert_eq!(member.mode, Some(PermissionMode::Plan));
-        assert_eq!(member.backend_type, Some(claude_swarm::BackendType::InProcess));
+        assert_eq!(
+            member.backend_type,
+            Some(claude_swarm::BackendType::InProcess)
+        );
         assert_eq!(member.is_active, Some(false));
 
         team_helpers::set_base_dir_override(None);
@@ -2307,7 +2317,7 @@ mod tests {
         .expect("agent run should succeed");
 
         assert_eq!(result, "done");
-        let requests = requests.lock().expect("requests lock");
+        let requests = requests.lock();
         let request = &requests[0];
         assert_eq!(request.working_dir, nested);
     }

@@ -158,14 +158,8 @@ mod tests {
 
     #[test]
     fn test_file_restriction_error_message_without_description() {
-        let err = check_file_restriction(
-            "architect",
-            r"\.md$",
-            None,
-            "src/main.rs",
-            None,
-        )
-        .unwrap_err();
+        let err =
+            check_file_restriction("architect", r"\.md$", None, "src/main.rs", None).unwrap_err();
 
         let msg = err.to_string();
         assert!(!msg.contains("()"));

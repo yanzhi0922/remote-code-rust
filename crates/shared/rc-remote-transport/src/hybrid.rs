@@ -1,11 +1,9 @@
 //! Strategy 4: Hybrid — direct preferred, server relay fallback with auto-switching.
 
-use async_trait::async_trait;
-use crate::transport::{CommandAck, HealthStatus, RemoteTransport, TransportCommand};
 use crate::reconnect::ReconnectPolicy;
-use crate::{
-    ConnectionState, TransportConfig, TransportMetrics,
-};
+use crate::transport::{CommandAck, HealthStatus, RemoteTransport, TransportCommand};
+use crate::{ConnectionState, TransportConfig, TransportMetrics};
+use async_trait::async_trait;
 
 /// Active sub-strategy in hybrid mode.
 #[derive(Debug, Clone, PartialEq)]
@@ -49,9 +47,10 @@ impl HybridTransport {
 impl RemoteTransport for HybridTransport {
     async fn connect(&mut self, config: TransportConfig) -> anyhow::Result<()> {
         let (runner_url, cp_url) = match &config.strategy {
-            crate::TransportStrategy::Hybrid { runner_url, control_plane_url } => {
-                (runner_url.clone(), control_plane_url.clone())
-            }
+            crate::TransportStrategy::Hybrid {
+                runner_url,
+                control_plane_url,
+            } => (runner_url.clone(), control_plane_url.clone()),
             _ => anyhow::bail!("HybridTransport requires Hybrid strategy"),
         };
 
@@ -95,7 +94,9 @@ impl RemoteTransport for HybridTransport {
 
         // Fall back to relay.
         let relay_config = TransportConfig {
-            strategy: crate::TransportStrategy::ServerRelay { control_plane_url: cp_url },
+            strategy: crate::TransportStrategy::ServerRelay {
+                control_plane_url: cp_url,
+            },
             ..config
         };
         self.relay.connect(relay_config).await?;
@@ -123,10 +124,16 @@ impl RemoteTransport for HybridTransport {
         let config = self.direct.config.as_ref().or(self.relay.config.as_ref());
         if let Some(config) = config {
             let (runner_url, cp_url) = match &config.strategy {
-                crate::TransportStrategy::Hybrid { runner_url, control_plane_url } => {
-                    (runner_url.clone(), control_plane_url.clone())
+                crate::TransportStrategy::Hybrid {
+                    runner_url,
+                    control_plane_url,
+                } => (runner_url.clone(), control_plane_url.clone()),
+                _ => {
+                    return HealthStatus {
+                        endpoints: vec![],
+                        recommended_strategy: None,
+                    };
                 }
-                _ => return HealthStatus { endpoints: vec![], recommended_strategy: None },
             };
 
             let runner_health_url = format!("{runner_url}/healthz");
@@ -142,7 +149,10 @@ impl RemoteTransport for HybridTransport {
             )
             .await;
 
-            let recommended = if endpoints.first().is_some_and(|e| e.reachable && e.auth_valid) {
+            let recommended = if endpoints
+                .first()
+                .is_some_and(|e| e.reachable && e.auth_valid)
+            {
                 "direct_websocket"
             } else {
                 "server_relay"
@@ -153,7 +163,10 @@ impl RemoteTransport for HybridTransport {
                 recommended_strategy: Some(recommended.into()),
             }
         } else {
-            HealthStatus { endpoints: vec![], recommended_strategy: None }
+            HealthStatus {
+                endpoints: vec![],
+                recommended_strategy: None,
+            }
         }
     }
 

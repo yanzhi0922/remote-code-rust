@@ -1,7 +1,7 @@
-﻿//! VS Code Language Model API model definitions.
+//! VS Code Language Model API model definitions.
 
-use std::collections::HashMap;
 use roo_types::model::ModelInfo;
+use std::collections::HashMap;
 
 /// Default VS Code LM model ID.
 pub const DEFAULT_MODEL_ID: &str = "claude-3.5-sonnet";
@@ -37,9 +37,7 @@ pub fn models() -> HashMap<String, ModelInfo> {
             supports_prompt_cache: false,
             input_price: Some(0.0),
             output_price: Some(0.0),
-            description: Some(
-                "Default VS Code Language Model (discovered at runtime)".to_string(),
-            ),
+            description: Some("Default VS Code Language Model (discovered at runtime)".to_string()),
             ..Default::default()
         },
     );

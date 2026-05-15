@@ -22,8 +22,8 @@
 //! 6c. **filterUnavailableToolUseBlocks** — remove tool_use blocks for tools not in the
 //!     available set (gated by `available_tool_names`).
 
-use std::collections::HashSet;
 use serde_json::{Value, json};
+use std::collections::HashSet;
 
 // ---------------------------------------------------------------------------
 // Public entry point
@@ -74,7 +74,11 @@ pub fn normalize_messages_for_api_with_config(
     // Pass 3: strip empty text content blocks
     strip_empty_content_blocks(messages);
     // Pass 3b: strip tool_reference blocks from tool_result content
-    strip_tool_reference_blocks(messages, config.tool_search_enabled, config.available_tool_names);
+    strip_tool_reference_blocks(
+        messages,
+        config.tool_search_enabled,
+        config.available_tool_names,
+    );
     // Pass 3c: strip advisor blocks (server_tool_use with name "advisor" and advisor_tool_result)
     // The API rejects these unless the advisor beta header is present.
     strip_advisor_blocks(messages);
@@ -140,14 +144,16 @@ fn ensure_tool_result_pairing(messages: &mut Vec<Value>) {
         let mut covered = std::collections::HashSet::new();
         if let Some(next) = messages.get(i + 1)
             && next["role"].as_str() == Some("user")
-                && let Some(content) = next["content"].as_array() {
-                    for block in content {
-                        if block["type"].as_str() == Some("tool_result")
-                            && let Some(id) = block["tool_use_id"].as_str() {
-                                covered.insert(id.to_owned());
-                            }
-                    }
+            && let Some(content) = next["content"].as_array()
+        {
+            for block in content {
+                if block["type"].as_str() == Some("tool_result")
+                    && let Some(id) = block["tool_use_id"].as_str()
+                {
+                    covered.insert(id.to_owned());
                 }
+            }
+        }
 
         let missing: Vec<&str> = tool_use_ids
             .iter()
@@ -187,9 +193,10 @@ fn ensure_tool_result_pairing(messages: &mut Vec<Value>) {
                     let text = next_msg["content"].take();
                     let mut new_blocks = synthetic_blocks;
                     if let Some(t) = text.as_str()
-                        && !t.is_empty() {
-                            new_blocks.push(json!({"type": "text", "text": t}));
-                        }
+                        && !t.is_empty()
+                    {
+                        new_blocks.push(json!({"type": "text", "text": t}));
+                    }
                     next_msg["content"] = Value::Array(new_blocks);
                 }
             } else {
@@ -252,9 +259,7 @@ fn merge_consecutive_same_role(messages: &mut Vec<Value>) {
             // Remove duplicate text blocks (exact duplicates within merged content)
             merged = dedup_content_blocks(&merged);
 
-            prev["content"] = if merged.len() == 1
-                && merged[0]["type"].as_str() == Some("text")
-            {
+            prev["content"] = if merged.len() == 1 && merged[0]["type"].as_str() == Some("text") {
                 // Single text block — use string form
                 merged.remove(0)["text"].take()
             } else {
@@ -370,10 +375,11 @@ fn filter_whitespace_only_assistant_messages(messages: &mut Vec<Value>) {
     let mut i = 0;
     while i < messages.len() {
         if messages[i]["role"].as_str() == Some("assistant")
-            && is_whitespace_only_assistant(&messages[i]) {
-                messages.remove(i);
-                continue;
-            }
+            && is_whitespace_only_assistant(&messages[i])
+        {
+            messages.remove(i);
+            continue;
+        }
         i += 1;
     }
 }
@@ -381,9 +387,7 @@ fn filter_whitespace_only_assistant_messages(messages: &mut Vec<Value>) {
 fn is_whitespace_only_assistant(msg: &Value) -> bool {
     let Some(blocks) = msg["content"].as_array() else {
         // String content
-        return msg["content"]
-            .as_str()
-            .is_some_and(|s| s.trim().is_empty());
+        return msg["content"].as_str().is_some_and(|s| s.trim().is_empty());
     };
 
     if blocks.is_empty() {
@@ -519,15 +523,16 @@ fn strip_empty_content_blocks(messages: &mut [Value]) {
 /// message.  If the first message is not a user message, insert a placeholder.
 fn ensure_first_message_is_user(messages: &mut Vec<Value>) {
     if let Some(first) = messages.first()
-        && first["role"].as_str() != Some("user") {
-            messages.insert(
-                0,
-                json!({
-                    "role": "user",
-                    "content": [{"type": "text", "text": "[Conversation start]"}]
-                }),
-            );
-        }
+        && first["role"].as_str() != Some("user")
+    {
+        messages.insert(
+            0,
+            json!({
+                "role": "user",
+                "content": [{"type": "text", "text": "[Conversation start]"}]
+            }),
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -658,9 +663,10 @@ fn reorder_attachments_for_api(messages: &mut Vec<Value>) {
             // Check if this is a stopping point
             let is_stopping_point = msg["role"].as_str() == Some("assistant")
                 || (msg["role"].as_str() == Some("user")
-                    && msg["content"]
-                        .as_array()
-                        .is_some_and(|c| c.first().is_some_and(|b| b["type"].as_str() == Some("tool_result"))));
+                    && msg["content"].as_array().is_some_and(|c| {
+                        c.first()
+                            .is_some_and(|b| b["type"].as_str() == Some("tool_result"))
+                    }));
 
             if is_stopping_point && !pending_attachments.is_empty() {
                 // Hit a stopping point — attachments stop here (go after the stopping point).
@@ -700,7 +706,8 @@ fn reorder_attachments_for_api(messages: &mut Vec<Value>) {
 fn convert_system_local_command_to_user(messages: &mut Vec<Value>) {
     for msg in messages.iter_mut() {
         if msg["role"].as_str() == Some("system")
-            && msg.get("subtype")
+            && msg
+                .get("subtype")
                 .or_else(|| msg.get("sub_type"))
                 .and_then(|v| v.as_str())
                 == Some("local_command")
@@ -780,7 +787,8 @@ fn strip_error_triggered_attachments(messages: &mut Vec<Value>) {
                     for j in (0..i).rev() {
                         let candidate = &messages[j];
                         if candidate["role"].as_str() == Some("user")
-                            && candidate.get("isMeta")
+                            && candidate
+                                .get("isMeta")
                                 .or_else(|| candidate.get("is_meta"))
                                 .and_then(|v| v.as_bool())
                                 == Some(true)
@@ -822,7 +830,9 @@ fn strip_error_triggered_attachments(messages: &mut Vec<Value>) {
             });
             // If all content was stripped, leave a placeholder text block
             if content.is_empty() {
-                content.push(json!({"type": "text", "text": "[Content removed due to API size limit]"}));
+                content.push(
+                    json!({"type": "text", "text": "[Content removed due to API size limit]"}),
+                );
             }
         }
     }
@@ -857,14 +867,11 @@ fn is_user_with_error_tool_result(msg: &Value) -> bool {
     if msg["role"].as_str() != Some("user") {
         return false;
     }
-    msg["content"]
-        .as_array()
-        .is_some_and(|content| {
-            content.iter().any(|b| {
-                b["type"].as_str() == Some("tool_result")
-                    && b["is_error"].as_bool() == Some(true)
-            })
+    msg["content"].as_array().is_some_and(|content| {
+        content.iter().any(|b| {
+            b["type"].as_str() == Some("tool_result") && b["is_error"].as_bool() == Some(true)
         })
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -923,8 +930,7 @@ fn is_advisor_block(block: &Value) -> bool {
     if block_type == "advisor_tool_result" {
         return true;
     }
-    block_type == "server_tool_use"
-        && block.get("name").and_then(Value::as_str) == Some("advisor")
+    block_type == "server_tool_use" && block.get("name").and_then(Value::as_str) == Some("advisor")
 }
 
 // ---------------------------------------------------------------------------
@@ -1044,7 +1050,10 @@ fn normalize_legacy_tool_name(name: &str) -> String {
 /// Filter out `tool_use` blocks in assistant messages where the tool name is
 /// NOT in the available tool set.  This prevents sending tool calls for tools
 /// that don't exist in the current session (e.g., MCP server was disconnected).
-fn filter_unavailable_tool_use_blocks(messages: &mut [Value], available_tool_names: &HashSet<String>) {
+fn filter_unavailable_tool_use_blocks(
+    messages: &mut [Value],
+    available_tool_names: &HashSet<String>,
+) {
     for msg in messages.iter_mut() {
         if msg["role"].as_str() != Some("assistant") {
             continue;
@@ -1122,9 +1131,12 @@ mod tests {
         // Should have injected synthetic tool_result
         assert_eq!(messages[1]["role"], "user");
         let content = messages[1]["content"].as_array().unwrap();
-        assert!(content
-            .iter()
-            .any(|b| b["type"].as_str() == Some("tool_result") && b["tool_use_id"].as_str() == Some("tool-1")));
+        assert!(
+            content
+                .iter()
+                .any(|b| b["type"].as_str() == Some("tool_result")
+                    && b["tool_use_id"].as_str() == Some("tool-1"))
+        );
     }
 
     #[test]
@@ -1197,12 +1209,10 @@ mod tests {
 
     #[test]
     fn test_keep_assistant_with_mixed_content() {
-        let mut messages = vec![
-            json!({"role": "assistant", "content": [
-                {"type": "thinking", "thinking": "hmm", "signature": "abc"},
-                {"type": "text", "text": "result"}
-            ]}),
-        ];
+        let mut messages = vec![json!({"role": "assistant", "content": [
+            {"type": "thinking", "thinking": "hmm", "signature": "abc"},
+            {"type": "text", "text": "result"}
+        ]})];
         filter_orphaned_thinking_only(&mut messages);
         assert_eq!(messages.len(), 1);
     }
@@ -1345,7 +1355,12 @@ mod tests {
         assert_eq!(messages.len(), 2);
         assert_eq!(messages[0]["role"], "user");
         let content = messages[0]["content"].as_array().unwrap();
-        assert!(content[0]["text"].as_str().unwrap().contains("Conversation start"));
+        assert!(
+            content[0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("Conversation start")
+        );
     }
 
     #[test]
@@ -1367,7 +1382,12 @@ mod tests {
         validate_content_block_types(&mut messages);
         let content = messages[0]["content"].as_array().unwrap();
         assert_eq!(content[1]["type"], "text");
-        assert!(content[1]["text"].as_str().unwrap().contains("unknown_type"));
+        assert!(
+            content[1]["text"]
+                .as_str()
+                .unwrap()
+                .contains("unknown_type")
+        );
     }
 
     #[test]
@@ -1436,10 +1456,20 @@ mod tests {
         assert_eq!(inner[0]["text"], "Error occurred");
         // Image replaced
         assert_eq!(inner[1]["type"], "text");
-        assert!(inner[1]["text"].as_str().unwrap().contains("image content removed from error result"));
+        assert!(
+            inner[1]["text"]
+                .as_str()
+                .unwrap()
+                .contains("image content removed from error result")
+        );
         // Document replaced
         assert_eq!(inner[2]["type"], "text");
-        assert!(inner[2]["text"].as_str().unwrap().contains("document content removed from error result"));
+        assert!(
+            inner[2]["text"]
+                .as_str()
+                .unwrap()
+                .contains("document content removed from error result")
+        );
     }
 
     #[test]
@@ -1556,14 +1586,26 @@ mod tests {
         ];
         reorder_attachments_for_api(&mut messages);
         // Attachment should appear after the assistant message
-        let att_idx = messages.iter().position(|m| m["role"].as_str() == Some("attachment")).unwrap();
-        let asst_idx = messages.iter().position(|m| m["role"].as_str() == Some("assistant")).unwrap();
+        let att_idx = messages
+            .iter()
+            .position(|m| m["role"].as_str() == Some("attachment"))
+            .unwrap();
+        let asst_idx = messages
+            .iter()
+            .position(|m| m["role"].as_str() == Some("assistant"))
+            .unwrap();
         assert!(att_idx > asst_idx, "attachment should be after assistant");
         // Followup user should be after attachment
-        let followup_idx = messages.iter().position(|m| {
-            m["role"].as_str() == Some("user") && m["content"].as_str() == Some("followup")
-        }).unwrap();
-        assert!(followup_idx > att_idx, "followup should be after attachment");
+        let followup_idx = messages
+            .iter()
+            .position(|m| {
+                m["role"].as_str() == Some("user") && m["content"].as_str() == Some("followup")
+            })
+            .unwrap();
+        assert!(
+            followup_idx > att_idx,
+            "followup should be after attachment"
+        );
     }
 
     #[test]
@@ -1577,12 +1619,24 @@ mod tests {
         ];
         reorder_attachments_for_api(&mut messages);
         // Attachment should appear after the tool_result user message
-        let att_idx = messages.iter().position(|m| m["role"].as_str() == Some("attachment")).unwrap();
-        let tr_idx = messages.iter().position(|m| {
-            m["role"].as_str() == Some("user")
-                && m["content"].as_array().is_some_and(|c| c.first().is_some_and(|b| b["type"].as_str() == Some("tool_result")))
-        }).unwrap();
-        assert!(att_idx > tr_idx, "attachment should be after tool_result user");
+        let att_idx = messages
+            .iter()
+            .position(|m| m["role"].as_str() == Some("attachment"))
+            .unwrap();
+        let tr_idx = messages
+            .iter()
+            .position(|m| {
+                m["role"].as_str() == Some("user")
+                    && m["content"].as_array().is_some_and(|c| {
+                        c.first()
+                            .is_some_and(|b| b["type"].as_str() == Some("tool_result"))
+                    })
+            })
+            .unwrap();
+        assert!(
+            att_idx > tr_idx,
+            "attachment should be after tool_result user"
+        );
     }
 
     #[test]
@@ -1611,7 +1665,8 @@ mod tests {
         ];
         reorder_attachments_for_api(&mut messages);
         // att1 and att2 should be after "response" (stopping point) in original order
-        let atts: Vec<&str> = messages.iter()
+        let atts: Vec<&str> = messages
+            .iter()
             .filter(|m| m["role"].as_str() == Some("attachment"))
             .filter_map(|m| m["content"].as_str())
             .collect();
@@ -1637,9 +1692,8 @@ mod tests {
 
     #[test]
     fn test_convert_system_local_command_with_sub_type_variant() {
-        let mut messages = vec![
-            json!({"role": "system", "sub_type": "local_command", "content": "pwd"}),
-        ];
+        let mut messages =
+            vec![json!({"role": "system", "sub_type": "local_command", "content": "pwd"})];
         convert_system_local_command_to_user(&mut messages);
         assert_eq!(messages[0]["role"], "user");
         assert!(messages[0].get("sub_type").is_none());
@@ -1647,9 +1701,7 @@ mod tests {
 
     #[test]
     fn test_convert_system_non_local_command_unchanged() {
-        let mut messages = vec![
-            json!({"role": "system", "subtype": "other", "content": "info"}),
-        ];
+        let mut messages = vec![json!({"role": "system", "subtype": "other", "content": "info"})];
         convert_system_local_command_to_user(&mut messages);
         assert_eq!(messages[0]["role"], "system");
     }
@@ -1751,7 +1803,12 @@ mod tests {
         // All content stripped — placeholder should remain
         assert_eq!(content.len(), 1);
         assert_eq!(content[0]["type"], "text");
-        assert!(content[0]["text"].as_str().unwrap().contains("Content removed"));
+        assert!(
+            content[0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("Content removed")
+        );
     }
 
     #[test]
@@ -1841,7 +1898,12 @@ mod tests {
         // All content removed — placeholder should be there
         assert_eq!(inner.len(), 1);
         assert_eq!(inner[0]["type"], "text");
-        assert!(inner[0]["text"].as_str().unwrap().contains("tool search not enabled"));
+        assert!(
+            inner[0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("tool search not enabled")
+        );
     }
 
     #[test]
@@ -1891,7 +1953,12 @@ mod tests {
         let inner = content[0]["content"].as_array().unwrap();
         // All unavailable — placeholder
         assert_eq!(inner.len(), 1);
-        assert!(inner[0]["text"].as_str().unwrap().contains("tools no longer available"));
+        assert!(
+            inner[0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("tools no longer available")
+        );
     }
 
     #[test]
@@ -1938,8 +2005,11 @@ mod tests {
         strip_tool_reference_blocks(&mut messages, true, Some(&available));
         let content = messages[0]["content"].as_array().unwrap();
         // Should NOT add a duplicate boundary
-        let boundary_count = content.iter()
-            .filter(|b| b["type"].as_str() == Some("text") && b["text"].as_str() == Some("Tool loaded."))
+        let boundary_count = content
+            .iter()
+            .filter(|b| {
+                b["type"].as_str() == Some("text") && b["text"].as_str() == Some("Tool loaded.")
+            })
             .count();
         assert_eq!(boundary_count, 1);
     }
@@ -1976,7 +2046,9 @@ mod tests {
 
     #[test]
     fn test_filter_unavailable_tool_use_blocks_removes_unknown() {
-        let available: HashSet<String> = ["Read".to_string(), "Write".to_string()].into_iter().collect();
+        let available: HashSet<String> = ["Read".to_string(), "Write".to_string()]
+            .into_iter()
+            .collect();
         let mut messages = vec![json!({
             "role": "assistant",
             "content": [
@@ -1990,7 +2062,8 @@ mod tests {
         let content = messages[0]["content"].as_array().unwrap();
         // UnknownTool should be removed
         assert_eq!(content.len(), 3);
-        let tool_names: Vec<&str> = content.iter()
+        let tool_names: Vec<&str> = content
+            .iter()
             .filter(|b| b["type"].as_str() == Some("tool_use"))
             .filter_map(|b| b["name"].as_str())
             .collect();
@@ -2071,7 +2144,10 @@ mod tests {
             .filter(|b| b["type"].as_str() == Some("tool_use"))
             .filter_map(|b| b["name"].as_str())
             .collect();
-        assert!(!tool_use_names.contains(&"UnknownTool"), "UnknownTool should have been filtered out");
+        assert!(
+            !tool_use_names.contains(&"UnknownTool"),
+            "UnknownTool should have been filtered out"
+        );
         assert!(tool_use_names.contains(&"Read"), "Read should be kept");
     }
 
@@ -2097,10 +2173,14 @@ mod tests {
         normalize_messages_for_api_with_config(&mut messages, config);
 
         // tool_reference blocks should have been stripped
-        let has_tool_ref = messages.iter()
+        let has_tool_ref = messages
+            .iter()
             .flat_map(|m| m["content"].as_array().into_iter().flatten())
             .any(|b| b["type"].as_str() == Some("tool_reference"));
-        assert!(!has_tool_ref, "tool_reference blocks should be stripped when tool search is disabled");
+        assert!(
+            !has_tool_ref,
+            "tool_reference blocks should be stripped when tool search is disabled"
+        );
     }
 
     #[test]
@@ -2146,8 +2226,13 @@ mod tests {
 
         // The document block should have been stripped from the meta user message
         let first_content = messages[0]["content"].as_array().unwrap();
-        let has_document = first_content.iter().any(|b| b["type"].as_str() == Some("document"));
-        assert!(!has_document, "document block should have been stripped from meta user message");
+        let has_document = first_content
+            .iter()
+            .any(|b| b["type"].as_str() == Some("document"));
+        assert!(
+            !has_document,
+            "document block should have been stripped from meta user message"
+        );
     }
 }
 
@@ -2212,7 +2297,9 @@ fn smoosh_system_reminder_siblings(messages: &mut [Value]) {
             continue;
         };
 
-        let has_tool_result = content.iter().any(|b| b["type"].as_str() == Some("tool_result"));
+        let has_tool_result = content
+            .iter()
+            .any(|b| b["type"].as_str() == Some("tool_result"));
         if !has_tool_result {
             continue;
         }
@@ -2231,7 +2318,8 @@ fn smoosh_system_reminder_siblings(messages: &mut [Value]) {
         let mut kept: Vec<Value> = Vec::new();
         for block in content.drain(..) {
             if block["type"].as_str() == Some("text")
-                && block.get("text")
+                && block
+                    .get("text")
                     .and_then(|t| t.as_str())
                     .is_some_and(|t| t.starts_with("<system-reminder>"))
             {
@@ -2246,7 +2334,9 @@ fn smoosh_system_reminder_siblings(messages: &mut [Value]) {
             continue;
         }
 
-        let last_tr_idx = kept.iter().rposition(|b| b["type"].as_str() == Some("tool_result"));
+        let last_tr_idx = kept
+            .iter()
+            .rposition(|b| b["type"].as_str() == Some("tool_result"));
         let Some(tr_idx) = last_tr_idx else {
             kept.extend(sr_texts);
             *content = kept;
@@ -2256,7 +2346,10 @@ fn smoosh_system_reminder_siblings(messages: &mut [Value]) {
         // Guard: don't smoosh into tool_results that contain tool_reference blocks.
         // Mixing text with tool_reference inside a tool_result is a server ValueError.
         if let Some(tr_content) = kept[tr_idx].get("content").and_then(|c| c.as_array()) {
-            if tr_content.iter().any(|b| b["type"].as_str() == Some("tool_reference")) {
+            if tr_content
+                .iter()
+                .any(|b| b["type"].as_str() == Some("tool_reference"))
+            {
                 kept.extend(sr_texts);
                 *content = kept;
                 continue;
@@ -2275,7 +2368,11 @@ fn smoosh_system_reminder_siblings(messages: &mut [Value]) {
                 inner.extend(sr_texts);
             }
             None => {
-                let text = tr.get("content").and_then(|c| c.as_str()).unwrap_or("").to_owned();
+                let text = tr
+                    .get("content")
+                    .and_then(|c| c.as_str())
+                    .unwrap_or("")
+                    .to_owned();
                 let mut arr = vec![json!({"type": "text", "text": text})];
                 arr.extend(sr_texts);
                 tr["content"] = json!(arr);

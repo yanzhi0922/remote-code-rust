@@ -16,9 +16,9 @@ use std::collections::HashMap;
 use roo_types::api::{ApiStreamChunk, ContentBlock, GroundingSource};
 
 use crate::types::{
-    AssistantMessageContent, McpToolUse, RawChunkTrackerEntry, StreamingToolCallState, ToolUse,
-    ToolCallStreamEvent, is_mcp_tool_name, normalize_mcp_tool_name, parse_mcp_tool_name,
-    is_valid_tool_param,
+    AssistantMessageContent, McpToolUse, RawChunkTrackerEntry, StreamingToolCallState,
+    ToolCallStreamEvent, ToolUse, is_mcp_tool_name, is_valid_tool_param, normalize_mcp_tool_name,
+    parse_mcp_tool_name,
 };
 
 // ---------------------------------------------------------------------------
@@ -42,7 +42,8 @@ impl ParsedToolCall {
     /// Returns an empty JSON object `{}` if parsing fails, since the Anthropic
     /// API requires `tool_use.input` to be a valid dictionary (not null).
     pub fn parse_arguments(&self) -> serde_json::Value {
-        serde_json::from_str(&self.arguments).unwrap_or(serde_json::Value::Object(Default::default()))
+        serde_json::from_str(&self.arguments)
+            .unwrap_or(serde_json::Value::Object(Default::default()))
     }
 }
 
@@ -298,7 +299,10 @@ impl StreamParser {
     /// Emits end events when `finish_reason` is `"tool_calls"`.
     ///
     /// Source: `NativeToolCallParser.ts` — `processFinishReason()`
-    pub fn process_finish_reason(&mut self, finish_reason: Option<&str>) -> Vec<ToolCallStreamEvent> {
+    pub fn process_finish_reason(
+        &mut self,
+        finish_reason: Option<&str>,
+    ) -> Vec<ToolCallStreamEvent> {
         let mut events = Vec::new();
 
         if finish_reason == Some("tool_calls") && !self.raw_chunk_tracker.is_empty() {
@@ -376,7 +380,7 @@ impl StreamParser {
     /// Source: `NativeToolCallParser.ts` — `processStreamingChunk()`
     pub fn process_streaming_chunk(&mut self, id: &str, chunk: &str) -> Option<ToolUse> {
         let tool_call = self.streaming_tool_calls.get_mut(id)?;
-        
+
         // Accumulate the JSON string
         tool_call.arguments_accumulator.push_str(chunk);
 
@@ -388,12 +392,12 @@ impl StreamParser {
         // Try to parse whatever we can from the incomplete JSON
         // In the TS version, this uses partial-json-parser. Here we use
         // a simpler approach: try full parse, return None if it fails.
-        if let Ok(partial_args) = serde_json::from_str::<serde_json::Value>(
-            &tool_call.arguments_accumulator,
-        ) {
+        if let Ok(partial_args) =
+            serde_json::from_str::<serde_json::Value>(&tool_call.arguments_accumulator)
+        {
             let empty_map = serde_json::Map::new();
             let partial_obj = partial_args.as_object().unwrap_or(&empty_map);
-            
+
             // Build stringified params
             let mut params = HashMap::new();
             for (key, value) in partial_obj {
@@ -538,7 +542,12 @@ impl StreamParser {
         name: &str,
         arguments: &str,
     ) -> Option<AssistantMessageContent> {
-        let args: serde_json::Value = serde_json::from_str(if arguments.is_empty() { "{}" } else { arguments }).unwrap_or_default();
+        let args: serde_json::Value = serde_json::from_str(if arguments.is_empty() {
+            "{}"
+        } else {
+            arguments
+        })
+        .unwrap_or_default();
 
         let normalized_name = normalize_mcp_tool_name(name);
         let parsed = parse_mcp_tool_name(&normalized_name)?;
@@ -668,14 +677,14 @@ impl StreamParser {
                 arguments,
             } => {
                 // Handle partial tool calls from providers that use index-based tracking
-                let entry = self
-                    .pending_tool_calls
-                    .entry(*index)
-                    .or_insert_with(|| PendingToolCall {
-                        id: String::new(),
-                        name: String::new(),
-                        arguments: String::new(),
-                    });
+                let entry =
+                    self.pending_tool_calls
+                        .entry(*index)
+                        .or_insert_with(|| PendingToolCall {
+                            id: String::new(),
+                            name: String::new(),
+                            arguments: String::new(),
+                        });
 
                 if let Some(id) = id {
                     entry.id = id.clone();
@@ -913,9 +922,7 @@ mod tests {
             id: "tc_1".into(),
             delta: r#"{"path":"a.rs"}"#.into(),
         });
-        parser.feed_chunk(&ApiStreamChunk::ToolCallEnd {
-            id: "tc_1".into(),
-        });
+        parser.feed_chunk(&ApiStreamChunk::ToolCallEnd { id: "tc_1".into() });
 
         let content = parser.finalize();
         assert_eq!(content.tool_calls.len(), 1);
@@ -957,7 +964,11 @@ mod tests {
         let content = parser.finalize();
         assert_eq!(content.tool_calls.len(), 2);
 
-        let names: Vec<&str> = content.tool_calls.iter().map(|tc| tc.name.as_str()).collect();
+        let names: Vec<&str> = content
+            .tool_calls
+            .iter()
+            .map(|tc| tc.name.as_str())
+            .collect();
         assert!(names.contains(&"read_file"));
         assert!(names.contains(&"list_files"));
     }
@@ -982,12 +993,8 @@ mod tests {
             id: "tc_b".into(),
             delta: r#"{"path":".","recursive":true}"#.into(),
         });
-        parser.feed_chunk(&ApiStreamChunk::ToolCallEnd {
-            id: "tc_a".into(),
-        });
-        parser.feed_chunk(&ApiStreamChunk::ToolCallEnd {
-            id: "tc_b".into(),
-        });
+        parser.feed_chunk(&ApiStreamChunk::ToolCallEnd { id: "tc_a".into() });
+        parser.feed_chunk(&ApiStreamChunk::ToolCallEnd { id: "tc_b".into() });
 
         let content = parser.finalize();
         assert_eq!(content.tool_calls.len(), 2);
@@ -1021,9 +1028,7 @@ mod tests {
             id: "tc_1".into(),
             delta: r#"{"path":"x.rs"}"#.into(),
         });
-        parser.feed_chunk(&ApiStreamChunk::ToolCallEnd {
-            id: "tc_1".into(),
-        });
+        parser.feed_chunk(&ApiStreamChunk::ToolCallEnd { id: "tc_1".into() });
 
         let content = parser.finalize();
         assert_eq!(content.tool_calls.len(), 1);
@@ -1095,7 +1100,10 @@ mod tests {
 
         let content = parser.finalize();
         assert_eq!(content.thinking_blocks.len(), 1);
-        assert_eq!(content.thinking_blocks[0].text, "Let me think about this...");
+        assert_eq!(
+            content.thinking_blocks[0].text,
+            "Let me think about this..."
+        );
         assert_eq!(
             content.thinking_blocks[0].signature,
             Some("sig_123".to_string())
@@ -1138,13 +1146,11 @@ mod tests {
     fn test_parser_grounding() {
         let mut parser = StreamParser::new();
         parser.feed_chunk(&ApiStreamChunk::Grounding {
-            sources: vec![
-                GroundingSource {
-                    title: Some("Doc".into()),
-                    url: Some("https://example.com".into()),
-                    snippet: None,
-                },
-            ],
+            sources: vec![GroundingSource {
+                title: Some("Doc".into()),
+                url: Some("https://example.com".into()),
+                snippet: None,
+            }],
         });
 
         let content = parser.finalize();
@@ -1178,7 +1184,10 @@ mod tests {
         assert_eq!(blocks.len(), 3);
 
         match &blocks[0] {
-            ContentBlock::Thinking { thinking, signature } => {
+            ContentBlock::Thinking {
+                thinking,
+                signature,
+            } => {
                 assert_eq!(thinking, "hmm");
                 assert_eq!(signature, "sig");
             }
@@ -1330,7 +1339,12 @@ mod tests {
     #[test]
     fn test_finalize_raw_chunks() {
         let mut parser = StreamParser::new();
-        parser.process_raw_chunk(0, Some("call_1"), Some("read_file"), Some(r#"{"path":"x.rs"}"#));
+        parser.process_raw_chunk(
+            0,
+            Some("call_1"),
+            Some("read_file"),
+            Some(r#"{"path":"x.rs"}"#),
+        );
 
         let events = parser.finalize_raw_chunks();
         assert_eq!(events.len(), 1);
@@ -1503,7 +1517,11 @@ mod tests {
     #[test]
     fn test_parse_dynamic_mcp_tool() {
         let parser = StreamParser::new();
-        let result = parser.parse_dynamic_mcp_tool("call_1", "mcp--serverName--toolName", r#"{"arg":"val"}"#);
+        let result = parser.parse_dynamic_mcp_tool(
+            "call_1",
+            "mcp--serverName--toolName",
+            r#"{"arg":"val"}"#,
+        );
         assert!(result.is_some());
 
         match result.unwrap() {

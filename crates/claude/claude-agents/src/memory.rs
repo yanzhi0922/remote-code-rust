@@ -700,7 +700,10 @@ mod tests {
             .map(PathBuf::from)
             .or_else(|| std::env::var_os("CLAUDE_CONFIG_DIR").map(PathBuf::from))
             .unwrap_or_else(|| config.clone());
-        let user_mem = user_config.join("agent-memory").join("test").join("MEMORY.md");
+        let user_mem = user_config
+            .join("agent-memory")
+            .join("test")
+            .join("MEMORY.md");
         assert!(is_agent_memory_path(&user_mem, &base, &config));
 
         let random = PathBuf::from("/tmp/other.md");

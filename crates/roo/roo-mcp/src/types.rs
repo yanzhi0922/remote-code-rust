@@ -85,11 +85,7 @@ impl McpServerState {
     /// Corresponds to TS: `McpHub.appendErrorMessage(connection, error, level)`.
     /// Adds "...(error message truncated)" suffix when truncated.
     /// Supports error levels: "error", "warn", "info" (matching TS).
-    pub fn append_error(
-        &mut self,
-        error_msg: &str,
-        level: crate::hub::ErrorLevel,
-    ) {
+    pub fn append_error(&mut self, error_msg: &str, level: crate::hub::ErrorLevel) {
         let truncated = if error_msg.len() > Self::MAX_ERROR_LENGTH {
             format!(
                 "{}...(error message truncated)",

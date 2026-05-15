@@ -446,10 +446,20 @@ pub type QueryStreamingEventSink = Arc<dyn Fn(QueryStreamingEvent) + Send + Sync
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum QueryStreamingEvent {
-    AssistantMessageDelta { delta: String },
-    ThinkingDelta { delta: String },
-    ToolCallStarted { tool_call_id: String, tool_name: String },
-    ToolCallDelta { tool_call_id: String, delta: String },
+    AssistantMessageDelta {
+        delta: String,
+    },
+    ThinkingDelta {
+        delta: String,
+    },
+    ToolCallStarted {
+        tool_call_id: String,
+        tool_name: String,
+    },
+    ToolCallDelta {
+        tool_call_id: String,
+        delta: String,
+    },
 }
 
 /// Default no-op observer.

@@ -109,8 +109,8 @@ impl Default for TaskManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::TaskConfig;
     use crate::engine::TaskEngine;
+    use crate::types::TaskConfig;
 
     fn make_lifecycle(task_id: &str) -> TaskLifecycle {
         let config = TaskConfig::new(task_id, "/tmp/test").with_start_task(false);

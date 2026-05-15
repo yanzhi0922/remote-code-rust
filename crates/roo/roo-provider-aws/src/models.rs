@@ -1,7 +1,7 @@
 //! AWS Bedrock model definitions.
 
-use std::collections::HashMap;
 use roo_types::model::ModelInfo;
+use std::collections::HashMap;
 
 /// Default Bedrock model ID.
 pub const DEFAULT_MODEL_ID: &str = "anthropic.claude-sonnet-4-5-20250929-v1:0";
@@ -280,9 +280,7 @@ pub fn models() -> HashMap<String, ModelInfo> {
             output_price: Some(4.0),
             cache_writes_price: Some(1.0),
             cache_reads_price: Some(0.25),
-            description: Some(
-                "Amazon Nova Pro with latency optimized inference".to_string(),
-            ),
+            description: Some("Amazon Nova Pro with latency optimized inference".to_string()),
             ..Default::default()
         },
     );
@@ -314,9 +312,7 @@ pub fn models() -> HashMap<String, ModelInfo> {
             output_price: Some(2.75),
             cache_writes_price: Some(0.0),
             cache_reads_price: Some(0.0825),
-            description: Some(
-                "Amazon Nova 2 Lite - Comparable to Claude Haiku 4.5".to_string(),
-            ),
+            description: Some("Amazon Nova 2 Lite - Comparable to Claude Haiku 4.5".to_string()),
             ..Default::default()
         },
     );
@@ -349,9 +345,7 @@ pub fn models() -> HashMap<String, ModelInfo> {
             output_price: Some(3.2),
             cache_writes_price: Some(0.8),
             cache_reads_price: Some(0.2),
-            description: Some(
-                "Amazon Nova Pro (US Cross-Region Inference)".to_string(),
-            ),
+            description: Some("Amazon Nova Pro (US Cross-Region Inference)".to_string()),
             ..Default::default()
         },
     );
@@ -367,9 +361,7 @@ pub fn models() -> HashMap<String, ModelInfo> {
             output_price: Some(0.24),
             cache_writes_price: Some(0.06),
             cache_reads_price: Some(0.015),
-            description: Some(
-                "Amazon Nova Lite (US Cross-Region Inference)".to_string(),
-            ),
+            description: Some("Amazon Nova Lite (US Cross-Region Inference)".to_string()),
             ..Default::default()
         },
     );
@@ -656,9 +648,7 @@ pub fn models() -> HashMap<String, ModelInfo> {
             supports_prompt_cache: false,
             input_price: Some(0.15),
             output_price: Some(1.2),
-            description: Some(
-                "Qwen3 Next 80B (MoE model with 3B active parameters)".to_string(),
-            ),
+            description: Some("Qwen3 Next 80B (MoE model with 3B active parameters)".to_string()),
             ..Default::default()
         },
     );
@@ -763,11 +753,8 @@ pub const GLOBAL_INFERENCE_MODEL_IDS: &[&str] = &[
 ];
 
 /// Bedrock service tier pricing multipliers.
-pub const SERVICE_TIER_PRICING: &[(&str, f64)] = &[
-    ("STANDARD", 1.0),
-    ("FLEX", 0.5),
-    ("PRIORITY", 1.75),
-];
+pub const SERVICE_TIER_PRICING: &[(&str, f64)] =
+    &[("STANDARD", 1.0), ("FLEX", 0.5), ("PRIORITY", 1.75)];
 
 /// Bedrock models that support service tiers.
 pub const SERVICE_TIER_MODEL_IDS: &[&str] = &[

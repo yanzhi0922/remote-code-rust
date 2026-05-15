@@ -438,7 +438,10 @@ mod tests {
 
         // First entry should be active
         let metadata = tracker.get_task_metadata("test-task").unwrap();
-        assert_eq!(metadata.files_in_context[0].record_state, RecordState::Active);
+        assert_eq!(
+            metadata.files_in_context[0].record_state,
+            RecordState::Active
+        );
 
         // Track the same file again - previous entry should become stale
         tracker
@@ -447,8 +450,14 @@ mod tests {
 
         let metadata = tracker.get_task_metadata("test-task").unwrap();
         assert_eq!(metadata.files_in_context.len(), 2);
-        assert_eq!(metadata.files_in_context[0].record_state, RecordState::Stale);
-        assert_eq!(metadata.files_in_context[1].record_state, RecordState::Active);
+        assert_eq!(
+            metadata.files_in_context[0].record_state,
+            RecordState::Stale
+        );
+        assert_eq!(
+            metadata.files_in_context[1].record_state,
+            RecordState::Active
+        );
     }
 
     #[test]
@@ -469,13 +478,22 @@ mod tests {
         let metadata = tracker.get_task_metadata("test-task").unwrap();
         // a.rs first entry -> stale
         assert_eq!(metadata.files_in_context[0].path, "a.rs");
-        assert_eq!(metadata.files_in_context[0].record_state, RecordState::Stale);
+        assert_eq!(
+            metadata.files_in_context[0].record_state,
+            RecordState::Stale
+        );
         // b.rs -> still active
         assert_eq!(metadata.files_in_context[1].path, "b.rs");
-        assert_eq!(metadata.files_in_context[1].record_state, RecordState::Active);
+        assert_eq!(
+            metadata.files_in_context[1].record_state,
+            RecordState::Active
+        );
         // a.rs second entry -> active
         assert_eq!(metadata.files_in_context[2].path, "a.rs");
-        assert_eq!(metadata.files_in_context[2].record_state, RecordState::Active);
+        assert_eq!(
+            metadata.files_in_context[2].record_state,
+            RecordState::Active
+        );
     }
 
     // --- Latest date preservation tests ---
@@ -857,9 +875,18 @@ mod tests {
         assert_eq!(metadata.files_in_context.len(), 3);
 
         // First two should be stale, last should be active
-        assert_eq!(metadata.files_in_context[0].record_state, RecordState::Stale);
-        assert_eq!(metadata.files_in_context[1].record_state, RecordState::Stale);
-        assert_eq!(metadata.files_in_context[2].record_state, RecordState::Active);
+        assert_eq!(
+            metadata.files_in_context[0].record_state,
+            RecordState::Stale
+        );
+        assert_eq!(
+            metadata.files_in_context[1].record_state,
+            RecordState::Stale
+        );
+        assert_eq!(
+            metadata.files_in_context[2].record_state,
+            RecordState::Active
+        );
 
         // Last entry should have preserved dates from prior entries
         let last = &metadata.files_in_context[2];
@@ -1090,7 +1117,12 @@ mod tests {
 
         let metadata = tracker.get_task_metadata("test-task").unwrap();
         // The last entry should be the read
-        let read_entry = metadata.files_in_context.iter().rev().find(|e| e.record_state == RecordState::Active).unwrap();
+        let read_entry = metadata
+            .files_in_context
+            .iter()
+            .rev()
+            .find(|e| e.record_state == RecordState::Active)
+            .unwrap();
         assert_eq!(read_entry.record_source, RecordSource::ReadTool);
         assert_eq!(read_entry.roo_read_date, Some(2000));
         // roo_edit_date should be preserved from the edit

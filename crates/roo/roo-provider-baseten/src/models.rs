@@ -1,7 +1,7 @@
 //! Baseten model definitions.
 
-use std::collections::HashMap;
 use roo_types::model::ModelInfo;
+use std::collections::HashMap;
 
 /// Default Baseten model ID.
 pub const DEFAULT_MODEL_ID: &str = "zai-org/GLM-4.6";
@@ -60,9 +60,7 @@ pub fn models() -> HashMap<String, ModelInfo> {
             output_price: Some(5.95),
             cache_writes_price: Some(0.0),
             cache_reads_price: Some(0.0),
-            description: Some(
-                "DeepSeek's first-generation reasoning model".to_string(),
-            ),
+            description: Some("DeepSeek's first-generation reasoning model".to_string()),
             ..Default::default()
         },
     );

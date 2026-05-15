@@ -18,7 +18,7 @@
 
 use std::sync::Arc;
 
-use tokio::sync::{watch, Mutex};
+use tokio::sync::{Mutex, watch};
 use tracing::{debug, warn};
 
 use roo_types::message::{
@@ -247,7 +247,9 @@ pub struct AskSayHandler {
     /// waiting.
     ///
     /// Source: TS lines 1456–1467 — pWaitFor loop checks `messageQueueService`
-    queued_message_checker: Option<Arc<dyn Fn() -> Option<(AskResponse, Option<String>, Option<Vec<String>>)> + Send + Sync>>,
+    queued_message_checker: Option<
+        Arc<dyn Fn() -> Option<(AskResponse, Option<String>, Option<Vec<String>>)> + Send + Sync>,
+    >,
 }
 
 impl AskSayHandler {
@@ -302,7 +304,9 @@ impl AskSayHandler {
     /// Source: TS lines 1456–1467 — pWaitFor loop checks `messageQueueService`
     pub fn set_queued_message_checker(
         &mut self,
-        checker: Arc<dyn Fn() -> Option<(AskResponse, Option<String>, Option<Vec<String>>)> + Send + Sync>,
+        checker: Arc<
+            dyn Fn() -> Option<(AskResponse, Option<String>, Option<Vec<String>>)> + Send + Sync,
+        >,
     ) {
         self.queued_message_checker = Some(checker);
     }
@@ -497,12 +501,12 @@ impl AskSayHandler {
             say_type,
             text,
             images,
-            None,  // partial
-            None,  // checkpoint
-            None,  // progress_status
+            None, // partial
+            None, // checkpoint
+            None, // progress_status
             SayOptions::default(),
-            None,  // context_condense
-            None,  // context_truncation
+            None, // context_condense
+            None, // context_truncation
         )
         .await
     }
@@ -575,7 +579,13 @@ impl AskSayHandler {
         }
 
         // Source: TS lines 1285–1359 — handle partial messages
-        let ask_ts = self.handle_ask_partial(ask_type, text.clone(), partial, progress_status.clone(), is_protected)?;
+        let ask_ts = self.handle_ask_partial(
+            ask_type,
+            text.clone(),
+            partial,
+            progress_status.clone(),
+            is_protected,
+        )?;
 
         // ── Auto-approval check ─────────────────────────────────────────
         // Source: TS lines 1361–1380
@@ -1151,8 +1161,7 @@ impl AskSayHandler {
             "Roo tried to use {}{} without value for required parameter '{}'. Retrying...",
             tool_name, path_info, param_name
         );
-        self.say_simple(ClineSay::Error, Some(text), None)
-            .await?;
+        self.say_simple(ClineSay::Error, Some(text), None).await?;
 
         // Source: TS line 1876 — `formatResponse.toolError(formatResponse.missingToolParameterError(paramName))`
         // Returns a tool error string that matches the TS formatResponse.missingToolParameterError
@@ -1373,10 +1382,11 @@ impl AskSayHandler {
     ///
     /// Source: TS lines 1517–1532
     fn mark_last_followup_answered(&mut self) {
-        let idx = self
-            .cline_messages
-            .iter()
-            .rposition(|m| m.r#type == MessageType::Ask && m.ask == Some(ClineAsk::Followup) && m.is_answered != Some(true));
+        let idx = self.cline_messages.iter().rposition(|m| {
+            m.r#type == MessageType::Ask
+                && m.ask == Some(ClineAsk::Followup)
+                && m.is_answered != Some(true)
+        });
 
         if let Some(i) = idx {
             self.cline_messages[i].is_answered = Some(true);
@@ -1388,10 +1398,11 @@ impl AskSayHandler {
     ///
     /// Source: TS lines 1534–1547
     fn mark_last_tool_ask_answered(&mut self) {
-        let idx = self
-            .cline_messages
-            .iter()
-            .rposition(|m| m.r#type == MessageType::Ask && m.ask == Some(ClineAsk::Tool) && m.is_answered != Some(true));
+        let idx = self.cline_messages.iter().rposition(|m| {
+            m.r#type == MessageType::Ask
+                && m.ask == Some(ClineAsk::Tool)
+                && m.is_answered != Some(true)
+        });
 
         if let Some(i) = idx {
             self.cline_messages[i].is_answered = Some(true);
@@ -1470,7 +1481,9 @@ mod tests {
                 None,
                 None,
                 None,
-                SayOptions { is_non_interactive: true },
+                SayOptions {
+                    is_non_interactive: true,
+                },
                 Some(condense),
                 None,
             )
@@ -1530,7 +1543,9 @@ mod tests {
                 None,
                 None,
                 None,
-                SayOptions { is_non_interactive: true },
+                SayOptions {
+                    is_non_interactive: true,
+                },
                 None,
                 None,
             )
@@ -1545,7 +1560,13 @@ mod tests {
     async fn test_ask_partial_returns_error() {
         let mut handler = AskSayHandler::new();
         let result = handler
-            .ask(ClineAsk::Followup, Some("Question?".to_string()), Some(true), None, None)
+            .ask(
+                ClineAsk::Followup,
+                Some("Question?".to_string()),
+                Some(true),
+                None,
+                None,
+            )
             .await;
         assert!(result.is_err());
         let err = result.unwrap_err();
@@ -1571,7 +1592,13 @@ mod tests {
         });
 
         let result = handler
-            .ask(ClineAsk::Tool, Some("Approve?".to_string()), None, None, None)
+            .ask(
+                ClineAsk::Tool,
+                Some("Approve?".to_string()),
+                None,
+                None,
+                None,
+            )
             .await;
         assert!(result.is_ok());
         let ask_result = result.unwrap();
@@ -1662,11 +1689,7 @@ mod tests {
 
         // Handle response with yesButtonClicked
         let checkpoint = handler
-            .handle_response_full(
-                AskResponse::YesButtonClicked,
-                None,
-                None,
-            )
+            .handle_response_full(AskResponse::YesButtonClicked, None, None)
             .await;
 
         assert!(!checkpoint); // no checkpoint for yesButtonClicked
@@ -1677,9 +1700,7 @@ mod tests {
     async fn test_approve_deny_ask() {
         let handler = AskSayHandler::new();
 
-        handler
-            .approve_ask(Some("ok".to_string()), None)
-            .await;
+        handler.approve_ask(Some("ok".to_string()), None).await;
         {
             let guard = handler.ask_response.lock().await;
             assert_eq!(

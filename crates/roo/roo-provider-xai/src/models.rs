@@ -1,7 +1,7 @@
 //! xAI/Grok model definitions.
 
-use std::collections::HashMap;
 use roo_types::model::ModelInfo;
+use std::collections::HashMap;
 
 /// Default xAI model ID.
 pub const DEFAULT_MODEL_ID: &str = "grok-4.20";
@@ -41,9 +41,7 @@ pub fn models() -> HashMap<String, ModelInfo> {
             output_price: Some(1.5),
             cache_writes_price: Some(0.02),
             cache_reads_price: Some(0.02),
-            description: Some(
-                "xAI's Grok Code Fast model with 256K context window.".to_string(),
-            ),
+            description: Some("xAI's Grok Code Fast model with 256K context window.".to_string()),
             ..Default::default()
         },
     );
@@ -139,9 +137,7 @@ pub fn models() -> HashMap<String, ModelInfo> {
             output_price: Some(15.0),
             cache_writes_price: Some(0.75),
             cache_reads_price: Some(0.75),
-            description: Some(
-                "xAI's Grok-4 model with 256K context window.".to_string(),
-            ),
+            description: Some("xAI's Grok-4 model with 256K context window.".to_string()),
             ..Default::default()
         },
     );
@@ -158,9 +154,7 @@ pub fn models() -> HashMap<String, ModelInfo> {
             output_price: Some(0.5),
             cache_writes_price: Some(0.07),
             cache_reads_price: Some(0.07),
-            description: Some(
-                "xAI's Grok-3 mini model with 128K context window.".to_string(),
-            ),
+            description: Some("xAI's Grok-3 mini model with 128K context window.".to_string()),
             ..Default::default()
         },
     );
@@ -176,9 +170,7 @@ pub fn models() -> HashMap<String, ModelInfo> {
             output_price: Some(15.0),
             cache_writes_price: Some(0.75),
             cache_reads_price: Some(0.75),
-            description: Some(
-                "xAI's Grok-3 model with 128K context window.".to_string(),
-            ),
+            description: Some("xAI's Grok-3 model with 128K context window.".to_string()),
             ..Default::default()
         },
     );

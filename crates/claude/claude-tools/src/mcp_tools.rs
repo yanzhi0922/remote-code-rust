@@ -9,9 +9,9 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use claude_core::ToolResult;
 use claude_mcp::{
-    AuthorizationServerMetadata, McpAuthCache, McpOAuthFlow, McpPromptMessage,
-    McpResourceContent, McpToolCallContent, McpToolCallResponse, McpToolCallResult,
-    OAuthTokenStore, OAuthTokens, mcp_oauth_server_key, normalization::normalize_name_for_mcp,
+    AuthorizationServerMetadata, McpAuthCache, McpOAuthFlow, McpPromptMessage, McpResourceContent,
+    McpToolCallContent, McpToolCallResponse, McpToolCallResult, OAuthTokenStore, OAuthTokens,
+    mcp_oauth_server_key, normalization::normalize_name_for_mcp,
 };
 use serde_json::{Map, Value, json};
 use tokio::sync::oneshot;

@@ -1,7 +1,7 @@
 //! Qwen / 通义千问 model definitions.
 
-use std::collections::HashMap;
 use roo_types::model::ModelInfo;
+use std::collections::HashMap;
 
 /// Default Qwen model ID.
 pub const DEFAULT_MODEL_ID: &str = "qwen3-coder-plus";

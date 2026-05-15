@@ -110,7 +110,10 @@ pub fn image_generation_models() -> Vec<ImageGenerationModel> {
 
 /// Returns the image generation model IDs.
 pub fn image_generation_model_ids() -> Vec<String> {
-    image_generation_models().iter().map(|m| m.value.clone()).collect()
+    image_generation_models()
+        .iter()
+        .map(|m| m.value.clone())
+        .collect()
 }
 
 /// Gets the image generation provider with backwards compatibility.

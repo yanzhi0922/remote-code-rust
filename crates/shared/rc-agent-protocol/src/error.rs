@@ -197,9 +197,6 @@ mod tests {
     #[test]
     fn adapter_error_converts_to_anyhow() {
         let err: anyhow::Error = AdapterError::NotStarted.into();
-        assert_eq!(
-            err.to_string(),
-            "adapter not started — call start() first"
-        );
+        assert_eq!(err.to_string(), "adapter not started — call start() first");
     }
 }

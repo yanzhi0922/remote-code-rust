@@ -25,12 +25,7 @@ pub fn format_current_time() -> String {
     let offset_hours = local_offset / 3600;
     let offset_minutes = (local_offset.abs() % 3600) / 60;
     let sign = if offset_hours >= 0 { "+" } else { "-" };
-    let offset_str = format!(
-        "{}{}:{:02}",
-        sign,
-        offset_hours.abs(),
-        offset_minutes
-    );
+    let offset_str = format!("{}{}:{:02}", sign, offset_hours.abs(), offset_minutes);
 
     // Best-effort timezone name (IANA name if detectable, else "Local").
     let tz_display = get_timezone_name();
@@ -73,12 +68,7 @@ pub fn format_current_time_with_tz(timezone_name: &str) -> String {
     let offset_hours = offset_secs / 3600;
     let offset_minutes = (offset_secs.abs() % 3600) / 60;
     let sign = if offset_hours >= 0 { "+" } else { "-" };
-    let offset_str = format!(
-        "{}{}:{:02}",
-        sign,
-        offset_hours.abs(),
-        offset_minutes
-    );
+    let offset_str = format!("{}{}:{:02}", sign, offset_hours.abs(), offset_minutes);
 
     format!(
         "\n\n# Current Time\nCurrent time in ISO 8601 UTC format: {}\nUser time zone: {}, UTC{}",

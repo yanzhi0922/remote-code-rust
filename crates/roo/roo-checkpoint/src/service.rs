@@ -46,7 +46,9 @@ fn sanitize_git_env() {
             removed.push(*var);
             // SAFETY: Removing env vars is safe in single-threaded context
             // during initialization. This mirrors the TS behavior of `delete process.env[key]`.
-            unsafe { std::env::remove_var(var); }
+            unsafe {
+                std::env::remove_var(var);
+            }
         }
     }
     if !removed.is_empty() {
@@ -379,10 +381,7 @@ impl ShadowCheckpointService {
         message: &str,
         options: SaveCheckpointOptions,
     ) -> Result<Option<CheckpointResult>, CheckpointError> {
-        let repo = self
-            .repo
-            .as_ref()
-            .ok_or(CheckpointError::NotInitialized)?;
+        let repo = self.repo.as_ref().ok_or(CheckpointError::NotInitialized)?;
 
         self.log(&format!(
             "[ShadowCheckpointService#saveCheckpoint] starting checkpoint save (allowEmpty: {})",
@@ -419,9 +418,11 @@ impl ShadowCheckpointService {
         // Check if there are changes.
         let diff = repo
             .diff_tree_to_tree(
-                Some(&head_commit.tree().map_err(|e| {
-                    CheckpointError::GitError(e.message().to_string())
-                })?),
+                Some(
+                    &head_commit
+                        .tree()
+                        .map_err(|e| CheckpointError::GitError(e.message().to_string()))?,
+                ),
                 Some(&tree),
                 None,
             )
@@ -443,14 +444,7 @@ impl ShadowCheckpointService {
             .map_err(|e| CheckpointError::GitError(e.message().to_string()))?;
 
         let commit_id = repo
-            .commit(
-                Some("HEAD"),
-                &sig,
-                &sig,
-                message,
-                &tree,
-                &[&head_commit],
-            )
+            .commit(Some("HEAD"), &sig, &sig, message, &tree, &[&head_commit])
             .map_err(|e| CheckpointError::GitError(e.message().to_string()))?;
 
         let to_hash = commit_id.to_string();
@@ -497,14 +491,8 @@ impl ShadowCheckpointService {
     }
 
     /// Restores the workspace to a specific checkpoint.
-    pub async fn restore_checkpoint(
-        &mut self,
-        commit_hash: &str,
-    ) -> Result<(), CheckpointError> {
-        let repo = self
-            .repo
-            .as_ref()
-            .ok_or(CheckpointError::NotInitialized)?;
+    pub async fn restore_checkpoint(&mut self, commit_hash: &str) -> Result<(), CheckpointError> {
+        let repo = self.repo.as_ref().ok_or(CheckpointError::NotInitialized)?;
 
         self.log("[ShadowCheckpointService#restoreCheckpoint] starting checkpoint restore");
 
@@ -545,10 +533,7 @@ impl ShadowCheckpointService {
         &self,
         params: GetDiffParams,
     ) -> Result<Vec<CheckpointDiff>, CheckpointError> {
-        let repo = self
-            .repo
-            .as_ref()
-            .ok_or(CheckpointError::NotInitialized)?;
+        let repo = self.repo.as_ref().ok_or(CheckpointError::NotInitialized)?;
 
         // Resolve "from" hash.
         let from_hash = match params.from {
@@ -578,7 +563,9 @@ impl ShadowCheckpointService {
 
                 let mut root_oid = head_oid;
                 for oid in revwalk {
-                    root_oid = oid.map_err(|e: git2::Error| CheckpointError::GitError(e.message().to_string()))?;
+                    root_oid = oid.map_err(|e: git2::Error| {
+                        CheckpointError::GitError(e.message().to_string())
+                    })?;
                 }
                 root_oid.to_string()
             }
@@ -771,10 +758,7 @@ impl ShadowCheckpointService {
         let head = repo
             .head()
             .map_err(|e| CheckpointError::GitError(e.message().to_string()))?;
-        let current_branch = head
-            .shorthand()
-            .unwrap_or("")
-            .to_string();
+        let current_branch = head.shorthand().unwrap_or("").to_string();
 
         if current_branch == branch_name {
             // Currently on the branch to delete — need to switch first.
@@ -890,10 +874,7 @@ mod tests {
     #[test]
     fn test_task_repo_dir() {
         let path = ShadowCheckpointService::task_repo_dir("/storage", "task-123");
-        assert_eq!(
-            path,
-            PathBuf::from("/storage/tasks/task-123/checkpoints")
-        );
+        assert_eq!(path, PathBuf::from("/storage/tasks/task-123/checkpoints"));
     }
 
     #[test]
@@ -964,24 +945,16 @@ mod tests {
 
     #[test]
     fn test_valid_workspace_path() {
-        let result = ShadowCheckpointService::new(
-            "task-1",
-            "/tmp/checkpoints",
-            "/tmp/my-project",
-            None,
-        );
+        let result =
+            ShadowCheckpointService::new("task-1", "/tmp/checkpoints", "/tmp/my-project", None);
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_initial_state() {
-        let service = ShadowCheckpointService::new(
-            "task-1",
-            "/tmp/checkpoints",
-            "/tmp/my-project",
-            None,
-        )
-        .unwrap();
+        let service =
+            ShadowCheckpointService::new("task-1", "/tmp/checkpoints", "/tmp/my-project", None)
+                .unwrap();
 
         assert_eq!(service.task_id, "task-1");
         assert!(!service.is_initialized());

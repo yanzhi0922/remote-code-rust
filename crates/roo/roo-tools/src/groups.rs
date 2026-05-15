@@ -144,7 +144,10 @@ pub static TOOL_DISPLAY_NAMES: LazyLock<HashMap<ToolName, &'static str>> = LazyL
     m.insert(ToolName::WriteToFile, "write files");
     m.insert(ToolName::ApplyDiff, "apply changes");
     m.insert(ToolName::Edit, "edit files");
-    m.insert(ToolName::SearchAndReplace, "apply changes using search and replace");
+    m.insert(
+        ToolName::SearchAndReplace,
+        "apply changes using search and replace",
+    );
     m.insert(ToolName::SearchReplace, "apply single search and replace");
     m.insert(ToolName::EditFile, "edit files using search and replace");
     m.insert(ToolName::ApplyPatch, "apply patches using codex format");
@@ -255,7 +258,11 @@ mod tests {
         let edit_group = TOOL_GROUPS.get(&ToolGroup::Edit).unwrap();
         assert_eq!(
             edit_group.tools,
-            vec![ToolName::ApplyDiff, ToolName::WriteToFile, ToolName::GenerateImage,]
+            vec![
+                ToolName::ApplyDiff,
+                ToolName::WriteToFile,
+                ToolName::GenerateImage,
+            ]
         );
         assert_eq!(
             edit_group.custom_tools,
@@ -301,10 +308,22 @@ mod tests {
 
     #[test]
     fn test_tool_display_names() {
-        assert_eq!(TOOL_DISPLAY_NAMES.get(&ToolName::ExecuteCommand), Some(&"run commands"));
-        assert_eq!(TOOL_DISPLAY_NAMES.get(&ToolName::ReadFile), Some(&"read files"));
-        assert_eq!(TOOL_DISPLAY_NAMES.get(&ToolName::WriteToFile), Some(&"write files"));
-        assert_eq!(TOOL_DISPLAY_NAMES.get(&ToolName::CustomTool), Some(&"use custom tools"));
+        assert_eq!(
+            TOOL_DISPLAY_NAMES.get(&ToolName::ExecuteCommand),
+            Some(&"run commands")
+        );
+        assert_eq!(
+            TOOL_DISPLAY_NAMES.get(&ToolName::ReadFile),
+            Some(&"read files")
+        );
+        assert_eq!(
+            TOOL_DISPLAY_NAMES.get(&ToolName::WriteToFile),
+            Some(&"write files")
+        );
+        assert_eq!(
+            TOOL_DISPLAY_NAMES.get(&ToolName::CustomTool),
+            Some(&"use custom tools")
+        );
     }
 
     #[test]

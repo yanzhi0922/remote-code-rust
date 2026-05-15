@@ -90,10 +90,7 @@ impl AutoDreamConfig {
     }
 
     /// Gate 3: Scan throttle — enough time since last scan?
-    pub fn scan_throttle_passed(
-        &self,
-        minutes_since_last_scan: Option<f64>,
-    ) -> bool {
+    pub fn scan_throttle_passed(&self, minutes_since_last_scan: Option<f64>) -> bool {
         match minutes_since_last_scan {
             Some(mins) => mins >= self.scan_throttle_minutes as f64,
             None => true, // never scanned before

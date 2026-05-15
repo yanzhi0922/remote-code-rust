@@ -4,10 +4,10 @@
 
 use std::path::Path;
 
+use crate::TaskPersistenceError;
 use crate::metadata;
 use crate::storage::{self, TaskFileSystem};
 use crate::types::{HistoryItem, PersistenceTaskStatus, TaskMetadataOptions};
-use crate::TaskPersistenceError;
 
 // ---------------------------------------------------------------------------
 // list_history
@@ -143,12 +143,7 @@ mod tests {
     use roo_types::message::{ClineMessage, MessageType};
 
     /// Helper to create a task with messages on disk.
-    fn create_test_task(
-        fs: &OsFileSystem,
-        base: &Path,
-        task_id: &str,
-        description: &str,
-    ) {
+    fn create_test_task(fs: &OsFileSystem, base: &Path, task_id: &str, description: &str) {
         let task_dir = storage::task_dir(base, task_id);
         fs.create_dir_all(&task_dir).unwrap();
 
@@ -221,7 +216,12 @@ mod tests {
             api_protocol: None,
             is_answered: None,
         };
-        messages::save_task_messages(&fs, &storage::messages_path(dir.path(), "older-task"), &[msg1]).unwrap();
+        messages::save_task_messages(
+            &fs,
+            &storage::messages_path(dir.path(), "older-task"),
+            &[msg1],
+        )
+        .unwrap();
 
         let task_dir2 = storage::task_dir(dir.path(), "newer-task");
         fs.create_dir_all(&task_dir2).unwrap();
@@ -243,7 +243,12 @@ mod tests {
             api_protocol: None,
             is_answered: None,
         };
-        messages::save_task_messages(&fs, &storage::messages_path(dir.path(), "newer-task"), &[msg2]).unwrap();
+        messages::save_task_messages(
+            &fs,
+            &storage::messages_path(dir.path(), "newer-task"),
+            &[msg2],
+        )
+        .unwrap();
 
         let result = list_history(&fs, dir.path()).unwrap();
         assert_eq!(result.len(), 2);

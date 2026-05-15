@@ -5,7 +5,7 @@
 //! Source: `src/core/task/Task.ts` — message building logic in
 //! `recursivelyMakeClineRequests` and `presentAssistantMessage`.
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tracing::debug;
 
 use roo_types::api::{ApiMessage, ContentBlock, ImageSource, MessageRole, ToolResultContent};
@@ -148,9 +148,7 @@ impl MessageBuilder {
         // Apply mode-based filtering
         let filter_settings = roo_tools::filter::FilterSettings {
             todo_list_enabled: true,
-            disabled_tools: disabled_tools
-                .map(|d| d.to_vec())
-                .unwrap_or_default(),
+            disabled_tools: disabled_tools.map(|d| d.to_vec()).unwrap_or_default(),
             model_info: None,
             codebase_search_enabled: true,
             mcp_resources_available: true,
@@ -208,9 +206,7 @@ impl MessageBuilder {
 
         let filter_settings = roo_tools::filter::FilterSettings {
             todo_list_enabled: true,
-            disabled_tools: disabled_tools
-                .map(|d| d.to_vec())
-                .unwrap_or_default(),
+            disabled_tools: disabled_tools.map(|d| d.to_vec()).unwrap_or_default(),
             model_info: None,
             codebase_search_enabled: true,
             mcp_resources_available: true,
@@ -388,20 +384,26 @@ impl MessageBuilder {
                         if text.starts_with("{\"type\":\"reasoning\"") {
                             // Try to parse as encrypted reasoning
                             if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(text) {
-                                if parsed.get("type").and_then(|v| v.as_str()) == Some("reasoning") {
-                                    if let Some(enc) = parsed.get("encrypted_content").and_then(|v| v.as_str()) {
+                                if parsed.get("type").and_then(|v| v.as_str()) == Some("reasoning")
+                                {
+                                    if let Some(enc) =
+                                        parsed.get("encrypted_content").and_then(|v| v.as_str())
+                                    {
                                         // Send as separate reasoning item
                                         clean.push(CleanConversationItem::Reasoning {
                                             item_type: "reasoning".to_string(),
                                             encrypted_content: enc.to_string(),
-                                            id: parsed.get("id").and_then(|v| v.as_str()).map(String::from),
+                                            id: parsed
+                                                .get("id")
+                                                .and_then(|v| v.as_str())
+                                                .map(String::from),
                                             summary: parsed.get("summary").cloned(),
                                         });
 
                                         // Send assistant message without reasoning
-                                        let rest: Vec<&ContentBlock> = raw_content.iter().skip(1).collect();
-                                        let assistant_content =
-                                            content_refs_to_api_value(&rest);
+                                        let rest: Vec<&ContentBlock> =
+                                            raw_content.iter().skip(1).collect();
+                                        let assistant_content = content_refs_to_api_value(&rest);
                                         clean.push(CleanConversationItem::Message {
                                             role: "assistant".to_string(),
                                             content: assistant_content,
@@ -569,11 +571,7 @@ impl MessageBuilder {
             }
         }
 
-        let is_error = if result.is_error {
-            Some(true)
-        } else {
-            None
-        };
+        let is_error = if result.is_error { Some(true) } else { None };
 
         ApiMessage {
             role: MessageRole::User, // Tool results are sent as "user" role
@@ -729,9 +727,7 @@ impl Default for MessageBuilder {
 /// Returns the validated history with corrected messages.
 ///
 /// Source: `src/core/task/validateToolResultIds.ts` — `validateAndFixToolResultIds()`
-pub fn validate_and_fix_tool_result_ids(
-    history: &[ApiMessage],
-) -> Vec<ApiMessage> {
+pub fn validate_and_fix_tool_result_ids(history: &[ApiMessage]) -> Vec<ApiMessage> {
     // Need at least 2 messages (assistant + user) to validate
     if history.len() < 2 {
         return history.to_vec();
@@ -740,7 +736,10 @@ pub fn validate_and_fix_tool_result_ids(
     // Find the last assistant message that has tool_use blocks
     let last_assistant_idx = history.iter().rposition(|msg| {
         msg.role == MessageRole::Assistant
-            && msg.content.iter().any(|b| matches!(b, ContentBlock::ToolUse { .. }))
+            && msg
+                .content
+                .iter()
+                .any(|b| matches!(b, ContentBlock::ToolUse { .. }))
     });
 
     let last_assistant_idx = match last_assistant_idx {
@@ -810,7 +809,10 @@ pub fn validate_and_fix_tool_result_ids(
         let mut had_duplicates = false;
 
         for block in msg.content.drain(..) {
-            if let ContentBlock::ToolResult { ref tool_use_id, .. } = block {
+            if let ContentBlock::ToolResult {
+                ref tool_use_id, ..
+            } = block
+            {
                 if seen_ids.contains(tool_use_id.as_str()) {
                     debug!(
                         tool_use_id = %tool_use_id,
@@ -875,7 +877,10 @@ pub fn validate_and_fix_tool_result_ids(
 
             // First pass: mark IDs that are already valid
             for &pos in &tool_result_positions {
-                if let ContentBlock::ToolResult { ref tool_use_id, .. } = msg.content[pos] {
+                if let ContentBlock::ToolResult {
+                    ref tool_use_id, ..
+                } = msg.content[pos]
+                {
                     if valid_tool_use_ids.contains(tool_use_id.as_str()) {
                         used_ids.insert(tool_use_id.clone());
                     }
@@ -884,7 +889,10 @@ pub fn validate_and_fix_tool_result_ids(
 
             // Second pass: fix invalid IDs by positional matching
             for (result_idx, &pos) in tool_result_positions.iter().enumerate() {
-                if let ContentBlock::ToolResult { ref tool_use_id, .. } = msg.content[pos] {
+                if let ContentBlock::ToolResult {
+                    ref tool_use_id, ..
+                } = msg.content[pos]
+                {
                     // If already valid and not duplicate, keep it
                     if valid_tool_use_ids.contains(tool_use_id.as_str())
                         && !used_ids.contains(tool_use_id.as_str())
@@ -1068,9 +1076,18 @@ mod tests {
             .iter()
             .map(|t| t["function"]["name"].as_str().unwrap())
             .collect();
-        assert!(names.contains(&"read_file"), "Code mode should have read_file");
-        assert!(names.contains(&"write_to_file"), "Code mode should have write_to_file");
-        assert!(names.contains(&"apply_diff"), "Code mode should have apply_diff");
+        assert!(
+            names.contains(&"read_file"),
+            "Code mode should have read_file"
+        );
+        assert!(
+            names.contains(&"write_to_file"),
+            "Code mode should have write_to_file"
+        );
+        assert!(
+            names.contains(&"apply_diff"),
+            "Code mode should have apply_diff"
+        );
     }
 
     #[test]

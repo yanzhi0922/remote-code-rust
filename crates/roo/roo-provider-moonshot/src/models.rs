@@ -1,7 +1,7 @@
 //! Moonshot / Kimi AI model definitions.
 
-use std::collections::HashMap;
 use roo_types::model::ModelInfo;
+use std::collections::HashMap;
 
 /// Default Moonshot model ID.
 pub const DEFAULT_MODEL_ID: &str = "kimi-k2-0905-preview";

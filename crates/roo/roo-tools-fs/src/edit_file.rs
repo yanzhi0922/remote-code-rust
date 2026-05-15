@@ -18,7 +18,9 @@ use roo_types::tool::EditFileParams;
 /// Validate edit_file parameters.
 pub fn validate_edit_file_params(params: &EditFileParams) -> Result<(), FsToolError> {
     if params.file_path.trim().is_empty() {
-        return Err(FsToolError::Validation("file_path must not be empty".to_string()));
+        return Err(FsToolError::Validation(
+            "file_path must not be empty".to_string(),
+        ));
     }
 
     if params.file_path.contains("..") {
@@ -86,7 +88,12 @@ fn restore_line_ending(content_lf: &str, eol: &str) -> String {
 /// Try exact literal match and replacement.
 ///
 /// Returns `Some((modified_content, actual_count))` on success, `None` on failure.
-fn try_exact_replace(content: &str, old: &str, new: &str, expected: usize) -> Option<(String, usize)> {
+fn try_exact_replace(
+    content: &str,
+    old: &str,
+    new: &str,
+    expected: usize,
+) -> Option<(String, usize)> {
     let actual_count = count_occurrences(content, old);
     if actual_count == 0 || actual_count != expected {
         return None;
@@ -269,13 +276,21 @@ fn build_detailed_error(
 ) -> FsToolError {
     // Provide context about what was found vs what was expected
     let old_preview = if old_string.len() > 200 {
-        format!("{}... (truncated, {} chars total)", &old_string[..200], old_string.len())
+        format!(
+            "{}... (truncated, {} chars total)",
+            &old_string[..200],
+            old_string.len()
+        )
     } else {
         old_string.to_string()
     };
 
     let new_preview = if new_string.len() > 200 {
-        format!("{}... (truncated, {} chars total)", &new_string[..200], new_string.len())
+        format!(
+            "{}... (truncated, {} chars total)",
+            &new_string[..200],
+            new_string.len()
+        )
     } else {
         new_string.to_string()
     };
@@ -785,7 +800,12 @@ mod tests {
         };
         let result = process_edit_file(&params, std::path::Path::new("."), None).unwrap();
         assert!(result.success);
-        assert!(result.message.unwrap().contains("whitespace-tolerant match"));
+        assert!(
+            result
+                .message
+                .unwrap()
+                .contains("whitespace-tolerant match")
+        );
 
         let content = std::fs::read_to_string(&file_path).unwrap();
         assert_eq!(content, "HELLO WORLD\n");

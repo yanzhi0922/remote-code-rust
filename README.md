@@ -7,10 +7,10 @@
 | 指标 | 数值 |
 |------|------|
 | 应用程序 | 5 个（CLI、GUI、Control Plane、Runner、Migrate） |
-| Workspace Crates | 154 个（Claude 41 + Codex 105 + Adapters 3 + Apps 5）+ Roo 67（独立） |
+| Workspace Crates | 多个 Rust workspace 成员（Claude / Codex / Adapters / Apps 等；Roo 为独立来源，数量随同步变化） |
 | 内置工具 | 62 |
-| 单元测试 | 14,000+（Workspace 范围） |
-| Clippy 警告 | 0 |
+| 测试 | 按 crate 和功能维护单元 / 集成测试 |
+| Clippy 状态 | 以 CI 和本地检查结果为准 |
 | `unsafe` 代码 | 警告（`warn`） |
 | Rust 版本 | 1.93 (Edition 2024) |
 | 许可证 | Proprietary |
@@ -61,7 +61,7 @@ remote-code-rust/
 │   ├── remote-code-control-plane/ # 控制平面
 │   ├── remote-code-runner/        # 远程 Runner
 │   └── remote-code-migrate/       # 数据迁移
-├── crates/                        # 库 Crates（Shared 2 + Claude 39 + Codex 105 + Adapters 3）
+├── crates/                        # 库 crates（shared / claude / codex / adapters / roo）
 │   ├── shared/                    # 三 Agent 共享 crate
 │   │   ├── rc-agent-protocol/     # 多 Agent 协议抽象层（trait + events + types）
 │   │   └── rc-engine-events/      # 共享运行时事件类型（RuntimeEventDetail 15 variants）
@@ -75,7 +75,7 @@ remote-code-rust/
 │   │   ├── claude-provider/           # Provider 标准化与流式
 │   │   └── ...                    # 其他 Claude 核心 crate
 │   ├── codex/                     # Codex 核心 crate（core, exec, protocol 等）
-│   └── roo/                       # Roo 核心 crate（67 个，provider, task, tools 等）
+│   └── roo/                       # Roo 核心 crate（provider, task, tools 等）
 ├── plans/                         # 设计文档
 │   ├── multi-agent-architecture.md  # 多 Agent 架构设计
 │   ├── PROJECT_STATUS.md            # 项目状态
@@ -282,10 +282,10 @@ npm run tauri dev
 # 编译检查
 cargo check --workspace
 
-# 运行全部测试（14,000+）
+# 运行全部测试（耗时较长，依赖当前 workspace 状态）
 cargo test --workspace
 
-# Clippy 静态分析（0 警告）
+# Clippy 静态分析
 cargo clippy --workspace
 
 # 格式检查

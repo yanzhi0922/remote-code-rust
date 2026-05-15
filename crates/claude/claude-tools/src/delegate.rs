@@ -418,7 +418,7 @@ impl DelegationEngine {
             let semaphore = semaphore.clone();
             let progress_cb = progress_cb.clone();
             let mut tool_context = tool_context.clone();
-            tool_context.task_stack = Arc::new(std::sync::Mutex::new(
+            tool_context.task_stack = Arc::new(parking_lot::Mutex::new(
                 claude_core::task_stack::TaskStack::default(),
             ));
             let broker = broker.clone();
@@ -554,11 +554,7 @@ impl DelegationEngine {
             });
         }
 
-        let mut stack = context
-            .tool_context
-            .task_stack
-            .lock()
-            .expect("task_stack lock poisoned");
+        let mut stack = context.tool_context.task_stack.lock();
         if stack.current().is_none() {
             let task_id = stack.push_root(context.parent_conversation.clone());
             let frame = stack.current().cloned().expect("root frame should exist");
@@ -589,11 +585,7 @@ impl DelegationEngine {
         task: &ActiveDelegationTask,
         success: bool,
     ) {
-        let mut stack = context
-            .tool_context
-            .task_stack
-            .lock()
-            .expect("task_stack lock poisoned");
+        let mut stack = context.tool_context.task_stack.lock();
         match task.cleanup_mode {
             StackCleanupMode::Root => {
                 if success {
@@ -663,8 +655,8 @@ mod tests {
     use crate::ToolExecutionContext;
     use claude_core::{ProviderResponse, ToolCall};
     use claude_permissions::StaticPermissionBroker;
+    use parking_lot::Mutex;
     use serde_json::json;
-    use std::sync::Mutex;
 
     // -- Mock completer -------------------------------------------------------
 
@@ -715,7 +707,7 @@ mod tests {
             &self,
             _conversation: &[ConversationEntry],
         ) -> anyhow::Result<ProviderResponse> {
-            let mut count = self.call_count.lock().unwrap();
+            let mut count = self.call_count.lock();
             let idx = *count;
             *count += 1;
             if idx < self.responses.len() {
@@ -758,12 +750,9 @@ mod tests {
             &self,
             conversation: &[ConversationEntry],
         ) -> anyhow::Result<ProviderResponse> {
-            self.seen_conversations
-                .lock()
-                .unwrap()
-                .push(conversation.to_vec());
+            self.seen_conversations.lock().push(conversation.to_vec());
 
-            let mut count = self.call_count.lock().unwrap();
+            let mut count = self.call_count.lock();
             let idx = *count;
             *count += 1;
             if idx < self.responses.len() {
@@ -793,7 +782,7 @@ mod tests {
             timeout_ms: 30_000,
             sub_agent: None,
             progress_cb: None,
-            task_stack: std::sync::Arc::new(std::sync::Mutex::new(
+            task_stack: std::sync::Arc::new(parking_lot::Mutex::new(
                 claude_core::task_stack::TaskStack::default(),
             )),
             read_file_state: crate::FileStateCache::new(),
@@ -963,7 +952,7 @@ mod tests {
                 }
                 _ => "other".to_owned(),
             };
-            events_clone.lock().unwrap().push(label);
+            events_clone.lock().push(label);
         }) as Arc<ProgressCallback>;
 
         let ctx = DelegationContext {
@@ -982,7 +971,7 @@ mod tests {
             .await
             .unwrap();
 
-        let captured = events.lock().unwrap();
+        let captured = events.lock();
         assert!(captured.len() >= 2);
         assert!(captured[0].starts_with("started:"));
         assert!(captured[1].starts_with("completed:"));
@@ -1046,7 +1035,7 @@ mod tests {
         assert!(result.success);
         assert_eq!(result.output, "done");
 
-        let seen = completer.seen_conversations.lock().unwrap();
+        let seen = completer.seen_conversations.lock();
         assert_eq!(seen.len(), 2);
 
         let second_turn = &seen[1];

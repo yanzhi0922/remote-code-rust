@@ -5,7 +5,7 @@
 //! Parses the AWS event stream binary format for streaming responses.
 
 use async_trait::async_trait;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use sha2::Digest;
 
 use roo_provider::error::{ProviderError, Result};
@@ -14,9 +14,7 @@ use roo_provider::transform::anthropic_filter::filter_non_anthropic_blocks;
 use roo_provider::transform::cache_strategy::{
     BedrockCacheModelInfo, MultiPointStrategy, MultiPointStrategyConfig,
 };
-use roo_types::api::{
-    ApiMessage, ApiStreamChunk, ContentBlock, ProviderName,
-};
+use roo_types::api::{ApiMessage, ApiStreamChunk, ContentBlock, ProviderName};
 use roo_types::model::ModelInfo;
 
 use crate::bedrock_events::{
@@ -214,19 +212,18 @@ pub fn parse_arn(arn: &str, configured_region: Option<&str>) -> ArnInfo {
         model_id.as_deref().map_or(false, |base| base != id)
     });
 
-    let error_message =
-        if let (Some(arn_region), Some(cfg)) = (&region, configured_region) {
-            if arn_region != cfg {
-                Some(format!(
-                    "Region mismatch: ARN region ({}) differs from configured region ({})",
-                    arn_region, cfg
-                ))
-            } else {
-                None
-            }
+    let error_message = if let (Some(arn_region), Some(cfg)) = (&region, configured_region) {
+        if arn_region != cfg {
+            Some(format!(
+                "Region mismatch: ARN region ({}) differs from configured region ({})",
+                arn_region, cfg
+            ))
         } else {
             None
-        };
+        }
+    } else {
+        None
+    };
 
     ArnInfo {
         is_valid: true,
@@ -241,16 +238,7 @@ pub fn parse_arn(arn: &str, configured_region: Option<&str>) -> ArnInfo {
 /// Strip cross-region inference prefix from a model ID.
 fn parse_base_model_id(model_id: &str) -> String {
     let prefixes = [
-        "us.",
-        "eu.",
-        "apac.",
-        "ap.",
-        "au.",
-        "jp.",
-        "ca.",
-        "sa.",
-        "ug.",
-        "global.",
+        "us.", "eu.", "apac.", "ap.", "au.", "jp.", "ca.", "sa.", "ug.", "global.",
     ];
     for prefix in prefixes {
         if model_id.starts_with(prefix) {
@@ -275,13 +263,16 @@ pub struct AwsBedrockHandler {
     /// Whether to use Bedrock prompt caching (cachePoint markers).
     use_prompt_cache: bool,
     /// Previous cache point placements (for maintaining consistency across calls).
-    previous_cache_point_placements: Option<Vec<roo_provider::transform::cache_strategy::CachePointPlacement>>,
+    previous_cache_point_placements:
+        Option<Vec<roo_provider::transform::cache_strategy::CachePointPlacement>>,
 }
 
 impl AwsBedrockHandler {
     /// Create a new AWS Bedrock handler from configuration.
     pub fn new(config: AwsBedrockConfig) -> Result<Self> {
-        let model_id = config.model_id.unwrap_or_else(|| models::default_model_id());
+        let model_id = config
+            .model_id
+            .unwrap_or_else(|| models::default_model_id());
         let model_info = models::models()
             .get(&model_id)
             .cloned()
@@ -309,8 +300,7 @@ impl AwsBedrockHandler {
 
         let mut client_builder = reqwest::Client::builder();
         if let Some(timeout) = config.request_timeout {
-            client_builder =
-                client_builder.timeout(std::time::Duration::from_millis(timeout));
+            client_builder = client_builder.timeout(std::time::Duration::from_millis(timeout));
         }
         let http_client = client_builder.build().map_err(ProviderError::Reqwest)?;
 
@@ -322,7 +312,9 @@ impl AwsBedrockHandler {
             model_info,
             use_cross_region_inference: config.use_cross_region_inference,
             use_global_inference: config.use_global_inference,
-            temperature: config.temperature.unwrap_or(crate::types::BEDROCK_DEFAULT_TEMPERATURE),
+            temperature: config
+                .temperature
+                .unwrap_or(crate::types::BEDROCK_DEFAULT_TEMPERATURE),
             service_tier: config.service_tier,
             enable_1m_context: config.enable_1m_context,
             use_prompt_cache: config.use_prompt_cache,
@@ -460,7 +452,11 @@ impl AwsBedrockHandler {
                             _ => {
                                 // Check for specific function choice: { type: "function", function: { name: "..." } }
                                 if choice.get("type").and_then(|t| t.as_str()) == Some("function") {
-                                    if let Some(name) = choice.get("function").and_then(|f| f.get("name")).and_then(|n| n.as_str()) {
+                                    if let Some(name) = choice
+                                        .get("function")
+                                        .and_then(|f| f.get("name"))
+                                        .and_then(|n| n.as_str())
+                                    {
                                         json!({ "tool": { "name": name } })
                                     } else {
                                         json!({ "auto": {} })
@@ -536,7 +532,12 @@ impl Provider for AwsBedrockHandler {
         tools: Option<Vec<Value>>,
         _metadata: CreateMessageMetadata,
     ) -> Result<ApiStream> {
-        let body = self.build_converse_request(system_prompt, &messages, tools.as_ref(), _metadata.tool_choice.as_ref());
+        let body = self.build_converse_request(
+            system_prompt,
+            &messages,
+            tools.as_ref(),
+            _metadata.tool_choice.as_ref(),
+        );
         let body_bytes = serde_json::to_vec(&body).map_err(ProviderError::Json)?;
         let model_id = self.effective_model_id();
 
@@ -573,16 +574,16 @@ impl Provider for AwsBedrockHandler {
 
         if !response.status().is_success() {
             let status = response.status().as_u16();
-            let text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+            let text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
             return Err(ProviderError::api_error_response("bedrock", status, text));
         }
 
         // Read the full response body and parse the Bedrock event stream
         let model_info = self.model_info.clone();
-        let bytes = response
-            .bytes()
-            .await
-            .map_err(ProviderError::Reqwest)?;
+        let bytes = response.bytes().await.map_err(ProviderError::Reqwest)?;
 
         let events = parse_bedrock_event_stream(&bytes);
 
@@ -598,10 +599,7 @@ impl Provider for AwsBedrockHandler {
                             chunks.push(Ok(ApiStreamChunk::Text { text }));
                         }
                     }
-                    ContentBlockDeltaData::ToolUseDelta {
-                        tool_use_id,
-                        input,
-                    } => {
+                    ContentBlockDeltaData::ToolUseDelta { tool_use_id, input } => {
                         chunks.push(Ok(ApiStreamChunk::ToolCall {
                             id: tool_use_id.clone(),
                             name: String::new(), // name comes from ContentBlockStart
@@ -621,20 +619,15 @@ impl Provider for AwsBedrockHandler {
                         let _ = signature;
                     }
                 },
-                BedrockEvent::ContentBlockStart { content_block, .. } => {
-                    match content_block {
-                        ContentBlockStartData::ToolUse {
-                            tool_use_id,
+                BedrockEvent::ContentBlockStart { content_block, .. } => match content_block {
+                    ContentBlockStartData::ToolUse { tool_use_id, name } => {
+                        chunks.push(Ok(ApiStreamChunk::ToolCallStart {
+                            id: tool_use_id,
                             name,
-                        } => {
-                            chunks.push(Ok(ApiStreamChunk::ToolCallStart {
-                                id: tool_use_id,
-                                name,
-                            }));
-                        }
-                        _ => {}
+                        }));
                     }
-                }
+                    _ => {}
+                },
                 BedrockEvent::ContentBlockStop { .. } => {
                     // No action needed for stop events
                 }
@@ -704,7 +697,10 @@ impl Provider for AwsBedrockHandler {
                     // Log but don't fail on unknown events
                     let _ = event_type;
                 }
-                BedrockEvent::PromptRouter { invoked_model_id, usage } => {
+                BedrockEvent::PromptRouter {
+                    invoked_model_id,
+                    usage,
+                } => {
                     // Source: TS bedrock.ts — prompt router updates model info for pricing
                     if let Some(_model_id) = invoked_model_id {
                         tracing::debug!(model_id = %_model_id, "Bedrock prompt router invoked model");
@@ -739,21 +735,27 @@ impl Provider for AwsBedrockHandler {
         (self.model_id.clone(), self.model_info.clone())
     }
 
-
     async fn complete_prompt(&self, prompt: &str) -> Result<String> {
-        let body = self.build_converse_request("", &[ApiMessage {
-            role: roo_types::api::MessageRole::User,
-            content: vec![ContentBlock::Text { text: prompt.to_string() }],
-            reasoning: None,
-            ts: None,
-            truncation_parent: None,
-            is_truncation_marker: None,
-            truncation_id: None,
-            condense_parent: None,
-            is_summary: None,
-            condense_id: None,
-            reasoning_details: None,
-        }], None, None);
+        let body = self.build_converse_request(
+            "",
+            &[ApiMessage {
+                role: roo_types::api::MessageRole::User,
+                content: vec![ContentBlock::Text {
+                    text: prompt.to_string(),
+                }],
+                reasoning: None,
+                ts: None,
+                truncation_parent: None,
+                is_truncation_marker: None,
+                truncation_id: None,
+                condense_parent: None,
+                is_summary: None,
+                condense_id: None,
+                reasoning_details: None,
+            }],
+            None,
+            None,
+        );
 
         let body_bytes = serde_json::to_vec(&body).map_err(ProviderError::Json)?;
         let model_id = self.effective_model_id();
@@ -790,14 +792,21 @@ impl Provider for AwsBedrockHandler {
 
         if !response.status().is_success() {
             let status = response.status().as_u16();
-            let text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+            let text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
             return Err(ProviderError::api_error_response("bedrock", status, text));
         }
 
         let resp: Value = response.json().await.map_err(ProviderError::Reqwest)?;
 
         // Extract text from output message
-        if let Some(content) = resp.get("output").and_then(|o| o.get("message")).and_then(|m| m.get("content")) {
+        if let Some(content) = resp
+            .get("output")
+            .and_then(|o| o.get("message"))
+            .and_then(|m| m.get("content"))
+        {
             if let Some(arr) = content.as_array() {
                 let text: String = arr
                     .iter()
@@ -858,9 +867,21 @@ mod tests {
     #[test]
     fn test_all_models_have_required_fields() {
         for (id, info) in models::models() {
-            assert!(info.max_tokens.is_some(), "Model '{}' missing max_tokens", id);
-            assert!(info.input_price.is_some(), "Model '{}' missing input_price", id);
-            assert!(info.output_price.is_some(), "Model '{}' missing output_price", id);
+            assert!(
+                info.max_tokens.is_some(),
+                "Model '{}' missing max_tokens",
+                id
+            );
+            assert!(
+                info.input_price.is_some(),
+                "Model '{}' missing input_price",
+                id
+            );
+            assert!(
+                info.output_price.is_some(),
+                "Model '{}' missing output_price",
+                id
+            );
         }
     }
 
@@ -934,7 +955,10 @@ mod tests {
     #[test]
     fn test_models_count() {
         let all_models = models::models();
-        assert!(all_models.len() >= 5, "Should have at least 5 Bedrock models");
+        assert!(
+            all_models.len() >= 5,
+            "Should have at least 5 Bedrock models"
+        );
     }
 
     #[test]

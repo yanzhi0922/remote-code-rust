@@ -3176,7 +3176,8 @@ mod tests {
         )
         .expect("config should load");
         let registration = config.registration_request();
-        let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (event_tx, mut event_rx) =
+            tokio::sync::mpsc::channel(claude_runner::RUNNER_EVENT_CHANNEL_CAPACITY);
         let runner_api =
             RunnerApi::new(config, "remote-code-runner", "0.1.0").with_event_channel(event_tx);
         let runner_server = {

@@ -7,11 +7,11 @@ use std::io::Write;
 
 use anyhow::Result;
 use claude_core::SessionState;
+use claude_permissions::PermissionUpdate;
+use claude_ui_bridge::{UiRuntimeStatusSnapshot, UiTaskNode};
 pub use rc_engine_events::{
     DaemonPresenceState, MessageRole, RuntimeEventCreateRequest, RuntimeEventDetail,
 };
-use claude_permissions::PermissionUpdate;
-use claude_ui_bridge::{UiRuntimeStatusSnapshot, UiTaskNode};
 use serde::Serialize;
 use serde_json::{Value, json};
 use uuid::Uuid;
@@ -707,41 +707,72 @@ impl<'a> From<&'a RuntimeEventDetail> for ProtocolRuntimeEventRef<'a> {
             RuntimeEventDetail::DaemonPresenceChanged { state } => {
                 Self::DaemonPresenceChanged { state }
             }
-            RuntimeEventDetail::SubtaskStarted { task_id, parent_task_id, description, depth } => Self::SubtaskStarted {
+            RuntimeEventDetail::SubtaskStarted {
+                task_id,
+                parent_task_id,
+                description,
+                depth,
+            } => Self::SubtaskStarted {
                 task_id: task_id.as_ref(),
                 parent_task_id: parent_task_id.as_deref(),
                 description,
                 depth: *depth,
             },
-            RuntimeEventDetail::SubtaskProgress { task_id, status, summary } => Self::SubtaskProgress {
+            RuntimeEventDetail::SubtaskProgress {
+                task_id,
+                status,
+                summary,
+            } => Self::SubtaskProgress {
                 task_id: task_id.as_ref(),
                 status,
                 summary,
             },
-            RuntimeEventDetail::SubtaskCompleted { task_id, status, summary, turns_used } => Self::SubtaskCompleted {
+            RuntimeEventDetail::SubtaskCompleted {
+                task_id,
+                status,
+                summary,
+                turns_used,
+            } => Self::SubtaskCompleted {
                 task_id: task_id.as_ref(),
                 status,
                 summary,
                 turns_used: *turns_used,
             },
-            RuntimeEventDetail::BatchProgress { total, completed, running } => Self::BatchProgress {
+            RuntimeEventDetail::BatchProgress {
+                total,
+                completed,
+                running,
+            } => Self::BatchProgress {
                 total: *total,
                 completed: *completed,
                 running: *running,
             },
-            RuntimeEventDetail::ContextUsage { estimated_tokens, max_input_tokens, threshold_tokens, ratio } => Self::ContextUsage {
+            RuntimeEventDetail::ContextUsage {
+                estimated_tokens,
+                max_input_tokens,
+                threshold_tokens,
+                ratio,
+            } => Self::ContextUsage {
                 estimated_tokens: *estimated_tokens,
                 max_input_tokens: *max_input_tokens,
                 threshold_tokens: *threshold_tokens,
                 ratio: *ratio,
             },
-            RuntimeEventDetail::ContextOverflow { estimated_tokens, max_input_tokens, threshold_tokens, ratio } => Self::ContextOverflow {
+            RuntimeEventDetail::ContextOverflow {
+                estimated_tokens,
+                max_input_tokens,
+                threshold_tokens,
+                ratio,
+            } => Self::ContextOverflow {
                 estimated_tokens: *estimated_tokens,
                 max_input_tokens: *max_input_tokens,
                 threshold_tokens: *threshold_tokens,
                 ratio: *ratio,
             },
-            RuntimeEventDetail::ContextCompacted { entries_removed, usage_ratio } => Self::ContextCompacted {
+            RuntimeEventDetail::ContextCompacted {
+                entries_removed,
+                usage_ratio,
+            } => Self::ContextCompacted {
                 entries_removed: *entries_removed,
                 usage_ratio: *usage_ratio,
             },

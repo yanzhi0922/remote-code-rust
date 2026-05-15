@@ -64,10 +64,7 @@ struct TenantFilter {
 impl TenantFilter {
     /// Build a tenant filter snapshot.  Returns `None` for admin/legacy principals
     /// (no filtering needed).
-    fn from_registry(
-        registry: &crate::registry::Registry,
-        user_id: Option<&str>,
-    ) -> Option<Self> {
+    fn from_registry(registry: &crate::registry::Registry, user_id: Option<&str>) -> Option<Self> {
         let uid = user_id?;
         Some(Self {
             runner_ids: registry
@@ -97,7 +94,10 @@ impl TenantFilter {
 }
 
 /// Filter a backlog of events by tenant visibility.
-fn filter_events_by_tenant(events: Vec<TimelineEvent>, filter: &Option<TenantFilter>) -> Vec<TimelineEvent> {
+fn filter_events_by_tenant(
+    events: Vec<TimelineEvent>,
+    filter: &Option<TenantFilter>,
+) -> Vec<TimelineEvent> {
     match filter {
         None => events,
         Some(f) => events.into_iter().filter(|e| f.event_visible(e)).collect(),
@@ -113,7 +113,12 @@ fn build_session_view(
     registry: &crate::registry::Registry,
     session: SessionRecord,
 ) -> SessionView {
-    let (owner_runner_available, owner_runner_state, owner_runner_last_seen_at, owner_runner_public_base_url) = session
+    let (
+        owner_runner_available,
+        owner_runner_state,
+        owner_runner_last_seen_at,
+        owner_runner_public_base_url,
+    ) = session
         .owner_runner_id
         .as_deref()
         .and_then(|runner_id| registry.runners.get(runner_id))
@@ -193,8 +198,7 @@ pub(crate) async fn claim_bootstrap_device(
 ) -> Result<(StatusCode, Json<BootstrapClaimResponse>), ApiError> {
     let response = {
         let mut registry = service.registry.write().await;
-        let result =
-            registry.bootstrap_claim(service.bootstrap_secret_hash.as_deref(), request)?;
+        let result = registry.bootstrap_claim(service.bootstrap_secret_hash.as_deref(), request)?;
         BootstrapClaimResponse {
             device: result.device,
             access_token: result.access_token,
@@ -277,8 +281,7 @@ pub(crate) async fn refresh_token(
 ) -> Result<Json<TokenRefreshResponse>, ApiError> {
     let response = {
         let mut registry = service.registry.write().await;
-        let (_device, access_token) =
-            registry.refresh_access_token(&request.refresh_token)?;
+        let (_device, access_token) = registry.refresh_access_token(&request.refresh_token)?;
         TokenRefreshResponse { access_token }
     };
     persist_state_logged(&service).await;
@@ -714,7 +717,9 @@ pub(crate) async fn get_runner(
     let user_id = user_id_from_principal(&principal);
     let registry = service.registry.read().await;
     if !registry.runner_visible_to(&runner_id, user_id) {
-        return Err(ApiError::not_found(format!("runner `{runner_id}` was not found")));
+        return Err(ApiError::not_found(format!(
+            "runner `{runner_id}` was not found"
+        )));
     }
     let snapshot = registry
         .runners
@@ -771,7 +776,9 @@ pub(crate) async fn update_runner_heartbeat(
     {
         let registry = service.registry.read().await;
         if !registry.runner_visible_to(&runner_id, user_id) {
-            return Err(ApiError::not_found(format!("runner `{runner_id}` was not found")));
+            return Err(ApiError::not_found(format!(
+                "runner `{runner_id}` was not found"
+            )));
         }
     }
     let snapshot = {
@@ -858,7 +865,11 @@ pub(crate) async fn list_sessions(
     let registry = service.registry.read().await;
     let user_id = user_id_from_principal(&principal);
     Json(ListResponse {
-        items: build_session_views(&service, &registry, registry.list_sessions_filtered(&query, user_id)),
+        items: build_session_views(
+            &service,
+            &registry,
+            registry.list_sessions_filtered(&query, user_id),
+        ),
         latest_sequence: None,
     })
 }
@@ -892,7 +903,11 @@ pub(crate) async fn list_runner_sessions(
     }
     query.runner_id = Some(runner_id);
     Ok(Json(ListResponse {
-        items: build_session_views(&service, &registry, registry.list_sessions_filtered(&query, user_id)),
+        items: build_session_views(
+            &service,
+            &registry,
+            registry.list_sessions_filtered(&query, user_id),
+        ),
         latest_sequence: None,
     }))
 }
@@ -1772,7 +1787,9 @@ pub(crate) async fn register_push_token(
         let _is_new = registry.register_user_push_token(user_id.to_owned(), body);
     } else {
         drop(registry);
-        return Err(ApiError::unauthorized("no device or user identity".to_owned()));
+        return Err(ApiError::unauthorized(
+            "no device or user identity".to_owned(),
+        ));
     }
     drop(registry);
 

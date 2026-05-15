@@ -64,7 +64,10 @@ pub fn load_from_directory(dir: &Path) -> Result<LoadResult, CustomToolError> {
             continue;
         }
 
-        let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("unknown");
+        let file_name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("unknown");
 
         match load_single_file(&path) {
             Ok(definition) => match validate_definition(&definition) {
@@ -141,7 +144,12 @@ mod tests {
         def.description = "".to_string();
         let result = validate_definition(&def);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("non-empty description"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("non-empty description")
+        );
     }
 
     #[test]

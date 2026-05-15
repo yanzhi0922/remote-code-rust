@@ -38,12 +38,13 @@ pub(crate) fn todo_write(input: &Value, context: &ToolExecutionContext) -> Resul
         }
         let priority = todo.get("priority").and_then(Value::as_str);
         if let Some(p) = &priority
-            && !["high", "medium", "low"].contains(p) {
-                return Err(anyhow!(
-                    "invalid todo priority '{}': must be high, medium, or low",
-                    p
-                ));
-            }
+            && !["high", "medium", "low"].contains(p)
+        {
+            return Err(anyhow!(
+                "invalid todo priority '{}': must be high, medium, or low",
+                p
+            ));
+        }
         let mut item = json!({
             "content": content,
             "status": status,

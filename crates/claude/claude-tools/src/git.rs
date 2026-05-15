@@ -582,7 +582,7 @@ mod tests {
             timeout_ms: 30_000,
             sub_agent: None,
             progress_cb: None,
-            task_stack: Arc::new(std::sync::Mutex::new(TaskStack::default())),
+            task_stack: Arc::new(parking_lot::Mutex::new(TaskStack::default())),
             read_file_state: crate::FileStateCache::new(),
             sub_agent_output_tokens: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         }

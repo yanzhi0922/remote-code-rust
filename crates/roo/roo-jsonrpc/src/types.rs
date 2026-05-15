@@ -30,11 +30,7 @@ impl Message {
             jsonrpc: JSONRPC_VERSION.to_string(),
             id: Some(Value::Number(id.into())),
             method: Some(method.to_string()),
-            params: if params.is_null() {
-                None
-            } else {
-                Some(params)
-            },
+            params: if params.is_null() { None } else { Some(params) },
             result: None,
             error: None,
         }
@@ -46,11 +42,7 @@ impl Message {
             jsonrpc: JSONRPC_VERSION.to_string(),
             id: None,
             method: Some(method.to_string()),
-            params: if params.is_null() {
-                None
-            } else {
-                Some(params)
-            },
+            params: if params.is_null() { None } else { Some(params) },
             result: None,
             error: None,
         }
@@ -82,10 +74,7 @@ impl Message {
 
     /// Returns true if this message is a request (has id, method, no result, no error)
     pub fn is_request(&self) -> bool {
-        self.id.is_some()
-            && self.method.is_some()
-            && self.result.is_none()
-            && self.error.is_none()
+        self.id.is_some() && self.method.is_some() && self.result.is_none() && self.error.is_none()
     }
 
     /// Returns true if this message is a notification (no id, has method)

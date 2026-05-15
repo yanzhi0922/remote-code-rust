@@ -236,10 +236,16 @@ impl MultiSearchReplaceDiffStrategy {
         replacements.sort_by_key(|r| r.start_line);
 
         for replacement in replacements {
-            let (mut search_content, mut replace_content) =
-                (replacement.search_content.clone(), replacement.replace_content.clone());
-            let mut start_line =
-                replacement.start_line as i64 + if replacement.start_line == 0 { 0 } else { delta };
+            let (mut search_content, mut replace_content) = (
+                replacement.search_content.clone(),
+                replacement.replace_content.clone(),
+            );
+            let mut start_line = replacement.start_line as i64
+                + if replacement.start_line == 0 {
+                    0
+                } else {
+                    delta
+                };
 
             // First unescape any escaped markers in the content
             search_content = Self::unescape_markers(&search_content);
@@ -248,7 +254,8 @@ impl MultiSearchReplaceDiffStrategy {
             // Strip line numbers from search and replace content if every line starts with a line number
             let has_all_line_numbers = (every_line_has_line_numbers(&search_content)
                 && every_line_has_line_numbers(&replace_content))
-                || (every_line_has_line_numbers(&search_content) && replace_content.trim().is_empty());
+                || (every_line_has_line_numbers(&search_content)
+                    && replace_content.trim().is_empty());
 
             if has_all_line_numbers && start_line == 0 {
                 if let Some(first_line) = search_content.split('\n').next() {
@@ -366,8 +373,7 @@ impl MultiSearchReplaceDiffStrategy {
                 let aggressive_search_content = strip_line_numbers(&search_content, true);
                 let aggressive_replace_content = strip_line_numbers(&replace_content, true);
 
-                let aggressive_search_lines: Vec<String> = if aggressive_search_content.is_empty()
-                {
+                let aggressive_search_lines: Vec<String> = if aggressive_search_content.is_empty() {
                     Vec::new()
                 } else {
                     aggressive_search_content
@@ -407,9 +413,10 @@ impl MultiSearchReplaceDiffStrategy {
                 } else {
                     // No match found with either method
                     let original_content_section = if start_line > 0 && end_line > 0 {
-                        let slice_start = ((start_line as usize).saturating_sub(self.buffer_lines + 1))
-                            .max(0)
-                            .min(result_lines.len());
+                        let slice_start = ((start_line as usize)
+                            .saturating_sub(self.buffer_lines + 1))
+                        .max(0)
+                        .min(result_lines.len());
                         let slice_end = ((end_line as usize + self.buffer_lines)
                             .min(result_lines.len()))
                         .max(slice_start);
@@ -487,8 +494,7 @@ impl MultiSearchReplaceDiffStrategy {
                 .iter()
                 .map(|line| {
                     // Get the matched line's exact indentation
-                    let matched_indent =
-                        original_indents.first().map(|s| s.as_str()).unwrap_or("");
+                    let matched_indent = original_indents.first().map(|s| s.as_str()).unwrap_or("");
 
                     // Get the current line's indentation relative to the search content
                     let current_indent: &str = {
@@ -506,8 +512,7 @@ impl MultiSearchReplaceDiffStrategy {
                     // If relative level is negative, remove indentation from matched indent
                     // If positive, add to matched indent
                     let final_indent = if relative_level < 0 {
-                        let keep =
-                            (matched_indent.len() as isize + relative_level).max(0) as usize;
+                        let keep = (matched_indent.len() as isize + relative_level).max(0) as usize;
                         matched_indent[..keep].to_string()
                     } else {
                         format!("{}{}", matched_indent, &current_indent[search_base_level..])
@@ -613,7 +618,11 @@ function hello() {
 }
 >>>>>>> REPLACE";
         let result = strategy.apply_diff(original, diff);
-        assert!(result.success, "Expected success, got error: {:?}", result.error);
+        assert!(
+            result.success,
+            "Expected success, got error: {:?}",
+            result.error
+        );
         assert_eq!(
             result.content.unwrap(),
             "function hello() {\n    console.log(\"goodbye\")\n}\n"
@@ -637,7 +646,11 @@ function goodbye() {
     console.log(\"goodbye\")
 >>>>>>> REPLACE";
         let result = strategy.apply_diff(original, diff);
-        assert!(result.success, "Expected success, got error: {:?}", result.error);
+        assert!(
+            result.success,
+            "Expected success, got error: {:?}",
+            result.error
+        );
         assert_eq!(
             result.content.unwrap(),
             "function goodbye() {\n    console.log(\"goodbye\")\n}\n"
@@ -659,7 +672,11 @@ function hello() {
 }
 >>>>>>> REPLACE";
         let result = strategy.apply_diff(original, diff);
-        assert!(result.success, "Expected success, got error: {:?}", result.error);
+        assert!(
+            result.success,
+            "Expected success, got error: {:?}",
+            result.error
+        );
         assert_eq!(
             result.content.unwrap(),
             "function hello() {\n    console.log(\"goodbye\")\n}\n"
@@ -682,7 +699,11 @@ function hello() {
 }
 >>>>>>> REPLACE";
         let result = strategy.apply_diff(original, diff);
-        assert!(result.success, "Expected success, got error: {:?}", result.error);
+        assert!(
+            result.success,
+            "Expected success, got error: {:?}",
+            result.error
+        );
     }
 
     #[test]
@@ -700,7 +721,11 @@ function test() {
 }
 >>>>>>> REPLACE";
         let result = strategy.apply_diff(original, diff);
-        assert!(result.success, "Expected success, got error: {:?}", result.error);
+        assert!(
+            result.success,
+            "Expected success, got error: {:?}",
+            result.error
+        );
         assert_eq!(
             result.content.unwrap(),
             "    function test() {\n        return false;\n    }\n"
@@ -722,7 +747,11 @@ function test() {
 }
 >>>>>>> REPLACE";
         let result = strategy.apply_diff(original, diff);
-        assert!(result.success, "Expected success, got error: {:?}", result.error);
+        assert!(
+            result.success,
+            "Expected success, got error: {:?}",
+            result.error
+        );
         assert_eq!(
             result.content.unwrap(),
             "function test() {\n\treturn false;\n}\n"
@@ -744,7 +773,11 @@ function test() {
 }
 >>>>>>> REPLACE";
         let result = strategy.apply_diff(original, diff);
-        assert!(result.success, "Expected success, got error: {:?}", result.error);
+        assert!(
+            result.success,
+            "Expected success, got error: {:?}",
+            result.error
+        );
         assert_eq!(
             result.content.unwrap(),
             "function test() {\r\n    return false;\r\n}\r\n"
@@ -791,7 +824,9 @@ line 2
         let result = strategy.apply_diff(original, diff);
         assert!(!result.success);
         // Error is in fail_parts since no blocks were applied
-        let error_msg = result.error.as_deref()
+        let error_msg = result
+            .error
+            .as_deref()
             .or_else(|| result.fail_parts.first().and_then(|p| p.error.as_deref()))
             .unwrap();
         assert!(error_msg.contains("identical"));
@@ -809,7 +844,11 @@ line 2
     return false;
 >>>>>>> REPLACE";
         let result = strategy.apply_diff(original, diff);
-        assert!(result.success, "Expected success, got error: {:?}", result.error);
+        assert!(
+            result.success,
+            "Expected success, got error: {:?}",
+            result.error
+        );
         assert_eq!(
             result.content.unwrap(),
             "function test() {\n    return false;\n}\n"
@@ -819,8 +858,7 @@ line 2
     #[test]
     fn test_apply_diff_fuzzy_matching() {
         let strategy = make_fuzzy_strategy();
-        let original =
-            "function processData(data) {\n    return data.map(item => item.name);\n}\n";
+        let original = "function processData(data) {\n    return data.map(item => item.name);\n}\n";
         let diff = "\
 <<<<<<< SEARCH
 function processData(data) {
@@ -832,12 +870,17 @@ function processData(data) {
 }
 >>>>>>> REPLACE";
         let result = strategy.apply_diff(original, diff);
-        assert!(result.success, "Expected success, got error: {:?}", result.error);
+        assert!(
+            result.success,
+            "Expected success, got error: {:?}",
+            result.error
+        );
     }
 
     #[test]
     fn test_unescape_markers() {
-        let content = "\\<<<<<<< SEARCH\n\\=======\n\\>>>>>>>\n\\-------\n\\:start_line:\n\\:end_line:";
+        let content =
+            "\\<<<<<<< SEARCH\n\\=======\n\\>>>>>>>\n\\-------\n\\:start_line:\n\\:end_line:";
         let result = MultiSearchReplaceDiffStrategy::unescape_markers(content);
         assert!(result.contains("<<<<<<< SEARCH"));
         assert!(result.contains("======="));
@@ -895,8 +938,10 @@ function processData(data) {
             },
             partial: false,
         };
-        let result =
-            DiffResult::ok("new content".to_string(), vec![DiffResult::fail("error".to_string())]);
+        let result = DiffResult::ok(
+            "new content".to_string(),
+            vec![DiffResult::fail("error".to_string())],
+        );
         let status = strategy.get_progress_status(&tool_use, Some(&result));
         assert_eq!(status.icon, Some("diff-multiple".to_string()));
         assert_eq!(status.text, Some("1/2".to_string()));
@@ -925,7 +970,11 @@ some content
 updated content
 >>>>>>> REPLACE";
         let result = strategy.apply_diff(original, diff);
-        assert!(result.success, "Expected success, got error: {:?}", result.error);
+        assert!(
+            result.success,
+            "Expected success, got error: {:?}",
+            result.error
+        );
         assert_eq!(result.content.unwrap(), "updated content\nnew content\n");
     }
 
@@ -944,7 +993,11 @@ function example() {
 }
 >>>>>>> REPLACE";
         let result = strategy.apply_diff(original, diff);
-        assert!(result.success, "Expected success, got error: {:?}", result.error);
+        assert!(
+            result.success,
+            "Expected success, got error: {:?}",
+            result.error
+        );
         assert_eq!(
             result.content.unwrap(),
             "\nfunction example() {\n    return 43;\n}\n\n"
@@ -968,7 +1021,11 @@ function example() {
 \t}
 >>>>>>> REPLACE";
         let result = strategy.apply_diff(original, diff);
-        assert!(result.success, "Expected success, got error: {:?}", result.error);
+        assert!(
+            result.success,
+            "Expected success, got error: {:?}",
+            result.error
+        );
         assert_eq!(
             result.content.unwrap(),
             "\tfunction test() {\n\t\t// First comment\n\t\t// Second comment\n\t\treturn true;\n\t}"
@@ -978,8 +1035,7 @@ function example() {
     #[test]
     fn test_apply_diff_negative_indentation() {
         let strategy = make_strategy();
-        let original =
-            "class Example {\n        if (true) {\n            this.init();\n            this.setup();\n        }\n}";
+        let original = "class Example {\n        if (true) {\n            this.init();\n            this.setup();\n        }\n}";
         let diff = "\
 <<<<<<< SEARCH
             this.init();
@@ -989,7 +1045,11 @@ function example() {
         this.setup();
 >>>>>>> REPLACE";
         let result = strategy.apply_diff(original, diff);
-        assert!(result.success, "Expected success, got error: {:?}", result.error);
+        assert!(
+            result.success,
+            "Expected success, got error: {:?}",
+            result.error
+        );
         assert_eq!(
             result.content.unwrap(),
             "class Example {\n        if (true) {\n        this.init();\n        this.setup();\n        }\n}"

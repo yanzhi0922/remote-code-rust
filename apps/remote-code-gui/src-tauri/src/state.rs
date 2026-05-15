@@ -18,7 +18,8 @@ pub(crate) const APP_EVENT_PERMISSION_RESOLVED: &str = "gui://permission-resolve
 pub(crate) const APP_EVENT_TOOL_START: &str = "gui://tool-start";
 pub(crate) const APP_EVENT_TOOL_RESULT: &str = "gui://tool-result";
 pub(crate) const APP_EVENT_TOOL_PROGRESS: &str = "gui://tool-progress";
-pub(crate) const APP_EVENT_CODEX_APP_SERVER_NOTIFICATION: &str = "gui://codex-app-server-notification";
+pub(crate) const APP_EVENT_CODEX_APP_SERVER_NOTIFICATION: &str =
+    "gui://codex-app-server-notification";
 pub(crate) const APP_EVENT_STREAMING_DELTA: &str = "gui://streaming-delta";
 pub(crate) const APP_EVENT_PROMPT_DONE: &str = "gui://prompt-done";
 pub(crate) const APP_EVENT_SUBTASK_STARTED: &str = "gui://subtask-started";
@@ -67,7 +68,8 @@ pub(crate) struct RuntimeState {
 
 pub(crate) struct AppState {
     pub(crate) runtime: Mutex<RuntimeState>,
-    pub(crate) pending_permissions: Arc<Mutex<HashMap<String, oneshot::Sender<PermissionDecision>>>>,
+    pub(crate) pending_permissions:
+        Arc<Mutex<HashMap<String, oneshot::Sender<PermissionDecision>>>>,
     pub(crate) pending_codex_permissions: Arc<Mutex<HashMap<String, CodexPendingPermission>>>,
     pub(crate) pending_roo_permissions: Arc<Mutex<HashMap<String, RooPendingPermission>>>,
     pub(crate) pending_claude_permissions: Arc<Mutex<HashMap<String, ClaudePendingPermission>>>,

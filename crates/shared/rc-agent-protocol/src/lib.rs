@@ -22,6 +22,7 @@ pub mod jsonrpc;
 pub mod permission;
 pub mod restart;
 pub mod router;
+pub mod shared_str;
 pub mod types;
 pub mod util;
 
@@ -33,4 +34,5 @@ pub use error::{AdapterError, AgentProtocolError};
 pub use events::{AgentResult, ToolCallInfo, UnifiedAgentEvent, UsageInfo};
 pub use permission::{PermissionDecision, PermissionRequest};
 pub use router::AgentRouter;
+pub use shared_str::SharedStr;
 pub use types::{AgentCapability, AgentConfig, AgentInfo, AgentStatus, AgentType};

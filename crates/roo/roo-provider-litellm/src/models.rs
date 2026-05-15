@@ -1,10 +1,10 @@
-﻿//! LiteLLM model definitions.
+//! LiteLLM model definitions.
 //!
 //! These are static fallback models. In production, models are fetched
 //! dynamically from the LiteLLM server's `/v1/model/info` endpoint.
 
-use std::collections::HashMap;
 use roo_types::model::ModelInfo;
+use std::collections::HashMap;
 
 /// Default LiteLLM model ID.
 pub const DEFAULT_MODEL_ID: &str = "claude-3-7-sonnet-20250219";

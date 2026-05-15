@@ -185,7 +185,11 @@ impl TerminalProcess {
 
     /// Build a [`CommandResult`] from the current process state.
     pub fn to_command_result(&self) -> CommandResult {
-        CommandResult::new(self.exit_code, self.output.clone(), self.stderr_output.clone())
+        CommandResult::new(
+            self.exit_code,
+            self.output.clone(),
+            self.stderr_output.clone(),
+        )
     }
 
     /// Build [`ShellExecutionDetails`] from the current process state.

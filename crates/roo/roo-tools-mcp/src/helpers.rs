@@ -131,10 +131,7 @@ mod tests {
 
     #[test]
     fn test_text_content() {
-        assert_eq!(
-            format_resource_content("hello", "text/plain"),
-            "hello"
-        );
+        assert_eq!(format_resource_content("hello", "text/plain"), "hello");
     }
 
     #[test]

@@ -345,7 +345,14 @@ pub fn should_auto_compact(
     tracking: &AutoCompactTrackingState,
     query_source: Option<&str>,
 ) -> bool {
-    should_auto_compact_with_snip(messages, context_window_size, max_output_tokens, 0, tracking, query_source)
+    should_auto_compact_with_snip(
+        messages,
+        context_window_size,
+        max_output_tokens,
+        0,
+        tracking,
+        query_source,
+    )
 }
 
 /// Like [`should_auto_compact`] but accounts for tokens already freed by snip.
@@ -357,7 +364,8 @@ pub fn should_auto_compact_with_snip(
     tracking: &AutoCompactTrackingState,
     query_source: Option<&str>,
 ) -> bool {
-    let strategy = AutoCompactStrategy::with_max_output_tokens(context_window_size, max_output_tokens);
+    let strategy =
+        AutoCompactStrategy::with_max_output_tokens(context_window_size, max_output_tokens);
     let token_usage = estimate_message_tokens(messages);
     strategy.should_auto_compact_with_snip(token_usage, snip_tokens_freed, tracking, query_source)
 }
@@ -386,11 +394,17 @@ pub async fn auto_compact(
         return Ok(None);
     }
 
-    let strategy = AutoCompactStrategy::with_max_output_tokens(context_window_size, max_output_tokens)
-        .with_auto_compact_enabled(auto_compact_user_config);
+    let strategy =
+        AutoCompactStrategy::with_max_output_tokens(context_window_size, max_output_tokens)
+            .with_auto_compact_enabled(auto_compact_user_config);
     let token_usage = estimate_message_tokens(messages);
 
-    if !strategy.should_auto_compact_with_snip(token_usage, snip_tokens_freed, tracking, query_source) {
+    if !strategy.should_auto_compact_with_snip(
+        token_usage,
+        snip_tokens_freed,
+        tracking,
+        query_source,
+    ) {
         return Ok(None);
     }
 
@@ -448,7 +462,10 @@ pub async fn auto_compact(
         recompaction_info: Some(recompaction_info),
         ..options.clone()
     };
-    match strategy.compact(messages, &full_options, provider, None).await {
+    match strategy
+        .compact(messages, &full_options, provider, None)
+        .await
+    {
         Ok(result) => {
             tracking.compacted = true;
             tracking.consecutive_failures = 0;
@@ -489,9 +506,14 @@ pub async fn try_session_memory_auto_compact(
     };
 
     match session_memory_strategy
-        .compact(messages, &options, &crate::strategy::FnSummaryProvider::new(
-            |_, _, _| Box::pin(async { Ok(String::new()) }),
-        ), None)
+        .compact(
+            messages,
+            &options,
+            &crate::strategy::FnSummaryProvider::new(|_, _, _| {
+                Box::pin(async { Ok(String::new()) })
+            }),
+            None,
+        )
         .await
     {
         Ok(result) => {

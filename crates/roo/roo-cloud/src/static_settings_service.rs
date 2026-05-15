@@ -1,6 +1,5 @@
 /// Static settings service for non-cloud environments.
 /// Mirrors packages/cloud/src/StaticSettingsService.ts
-
 use crate::types::{OrganizationSettingsData, UserSettingsData};
 
 /// Static settings service that returns fixed/default settings.

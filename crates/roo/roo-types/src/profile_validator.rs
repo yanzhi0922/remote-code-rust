@@ -351,8 +351,16 @@ mod tests {
             allow_all: false,
             providers,
         };
-        assert!(is_model_allowed(ProviderName::Anthropic, "claude-3-5-sonnet", &allow_list));
-        assert!(!is_model_allowed(ProviderName::Anthropic, "claude-3-opus", &allow_list));
+        assert!(is_model_allowed(
+            ProviderName::Anthropic,
+            "claude-3-5-sonnet",
+            &allow_list
+        ));
+        assert!(!is_model_allowed(
+            ProviderName::Anthropic,
+            "claude-3-opus",
+            &allow_list
+        ));
     }
 
     #[test]
@@ -362,7 +370,10 @@ mod tests {
             api_model_id: Some("claude-3-5-sonnet".to_string()),
             ..Default::default()
         };
-        assert_eq!(get_model_id_from_profile(&profile), Some("claude-3-5-sonnet".to_string()));
+        assert_eq!(
+            get_model_id_from_profile(&profile),
+            Some("claude-3-5-sonnet".to_string())
+        );
     }
 
     #[test]
@@ -372,7 +383,10 @@ mod tests {
             open_router_model_id: Some("anthropic/claude-3".to_string()),
             ..Default::default()
         };
-        assert_eq!(get_model_id_from_profile(&profile), Some("anthropic/claude-3".to_string()));
+        assert_eq!(
+            get_model_id_from_profile(&profile),
+            Some("anthropic/claude-3".to_string())
+        );
     }
 
     #[test]
@@ -382,7 +396,10 @@ mod tests {
             ollama_model_id: Some("llama3".to_string()),
             ..Default::default()
         };
-        assert_eq!(get_model_id_from_profile(&profile), Some("llama3".to_string()));
+        assert_eq!(
+            get_model_id_from_profile(&profile),
+            Some("llama3".to_string())
+        );
     }
 
     #[test]

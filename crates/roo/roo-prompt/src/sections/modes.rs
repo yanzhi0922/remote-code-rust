@@ -17,13 +17,24 @@ pub fn get_modes_section(modes: &[ModeConfig]) -> String {
                     wtu.replace('\n', "\n    ")
                 } else {
                     // Fallback to the first sentence of roleDefinition
-                    mode.role_definition.split('.').next().unwrap_or("").to_string()
+                    mode.role_definition
+                        .split('.')
+                        .next()
+                        .unwrap_or("")
+                        .to_string()
                 }
             } else {
                 // Fallback to the first sentence of roleDefinition
-                mode.role_definition.split('.').next().unwrap_or("").to_string()
+                mode.role_definition
+                    .split('.')
+                    .next()
+                    .unwrap_or("")
+                    .to_string()
             };
-            format!("  * \"{}\" mode ({}) - {}", mode.name, mode.slug, description)
+            format!(
+                "  * \"{}\" mode ({}) - {}",
+                mode.name, mode.slug, description
+            )
         })
         .collect::<Vec<_>>()
         .join("\n");
@@ -42,7 +53,12 @@ MODES
 mod tests {
     use super::*;
 
-    fn make_mode(name: &str, slug: &str, role_definition: &str, when_to_use: Option<&str>) -> ModeConfig {
+    fn make_mode(
+        name: &str,
+        slug: &str,
+        role_definition: &str,
+        when_to_use: Option<&str>,
+    ) -> ModeConfig {
         ModeConfig {
             name: name.to_string(),
             slug: slug.to_string(),
@@ -58,8 +74,18 @@ mod tests {
     #[test]
     fn test_get_modes_section_basic() {
         let modes = vec![
-            make_mode("Code", "code", "You are a coding assistant.", Some("Use for coding tasks")),
-            make_mode("Architect", "architect", "You are an architect.", Some("Use for planning")),
+            make_mode(
+                "Code",
+                "code",
+                "You are a coding assistant.",
+                Some("Use for coding tasks"),
+            ),
+            make_mode(
+                "Architect",
+                "architect",
+                "You are an architect.",
+                Some("Use for planning"),
+            ),
         ];
         let result = get_modes_section(&modes);
         assert!(result.starts_with("====\n\nMODES"));
@@ -70,18 +96,24 @@ mod tests {
 
     #[test]
     fn test_get_modes_section_uses_when_to_use() {
-        let modes = vec![
-            make_mode("Code", "code", "You are a coding assistant.", Some("Use for writing code")),
-        ];
+        let modes = vec![make_mode(
+            "Code",
+            "code",
+            "You are a coding assistant.",
+            Some("Use for writing code"),
+        )];
         let result = get_modes_section(&modes);
         assert!(result.contains("Use for writing code"));
     }
 
     #[test]
     fn test_get_modes_section_falls_back_to_role_definition() {
-        let modes = vec![
-            make_mode("Code", "code", "You are a coding assistant. You write code.", None),
-        ];
+        let modes = vec![make_mode(
+            "Code",
+            "code",
+            "You are a coding assistant. You write code.",
+            None,
+        )];
         let result = get_modes_section(&modes);
         // Should use first sentence of roleDefinition
         assert!(result.contains("You are a coding assistant"));
@@ -91,9 +123,12 @@ mod tests {
 
     #[test]
     fn test_get_modes_section_empty_when_to_use() {
-        let modes = vec![
-            make_mode("Code", "code", "You are a coding assistant.", Some("")),
-        ];
+        let modes = vec![make_mode(
+            "Code",
+            "code",
+            "You are a coding assistant.",
+            Some(""),
+        )];
         let result = get_modes_section(&modes);
         // Empty whenToUse should fall back to roleDefinition
         assert!(result.contains("You are a coding assistant"));
@@ -101,9 +136,12 @@ mod tests {
 
     #[test]
     fn test_get_modes_section_multiline_when_to_use() {
-        let modes = vec![
-            make_mode("Code", "code", "A coder.", Some("Line one\nLine two")),
-        ];
+        let modes = vec![make_mode(
+            "Code",
+            "code",
+            "A coder.",
+            Some("Line one\nLine two"),
+        )];
         let result = get_modes_section(&modes);
         // Multiline whenToUse should be indented
         assert!(result.contains("Line one\n    Line two"));

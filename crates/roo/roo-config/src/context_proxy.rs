@@ -145,9 +145,7 @@ pub const SECRET_STATE_KEYS: &[&str] = &[
 ];
 
 /// Global secret keys (additional).
-pub const GLOBAL_SECRET_KEYS: &[&str] = &[
-    "openRouterImageApiKey",
-];
+pub const GLOBAL_SECRET_KEYS: &[&str] = &["openRouterImageApiKey"];
 
 // ---------------------------------------------------------------------------
 // StateStore trait
@@ -164,7 +162,8 @@ pub trait StateStore: Send + Sync {
     async fn get_global_state(&self, key: &str) -> Result<Option<Value>, ConfigError>;
 
     /// Update a value in global state.
-    async fn update_global_state(&self, key: &str, value: Option<Value>) -> Result<(), ConfigError>;
+    async fn update_global_state(&self, key: &str, value: Option<Value>)
+    -> Result<(), ConfigError>;
 
     /// Get a secret value.
     async fn get_secret(&self, key: &str) -> Result<Option<String>, ConfigError>;
@@ -190,7 +189,11 @@ impl StateStore for InMemoryStateStore {
         Ok(self.global_state.get(key).cloned())
     }
 
-    async fn update_global_state(&self, _key: &str, _value: Option<Value>) -> Result<(), ConfigError> {
+    async fn update_global_state(
+        &self,
+        _key: &str,
+        _value: Option<Value>,
+    ) -> Result<(), ConfigError> {
         // Note: In real use this would need interior mutability (RwLock)
         // For the trait definition this is fine
         Ok(())
@@ -390,16 +393,14 @@ impl ContextProxy {
 
         for key in all_secret_keys {
             match self.store.get_secret(key).await {
-                Ok(value) => {
-                    match value {
-                        Some(v) => {
-                            self.secret_cache.insert(key.to_string(), v);
-                        }
-                        None => {
-                            self.secret_cache.remove(key);
-                        }
+                Ok(value) => match value {
+                    Some(v) => {
+                        self.secret_cache.insert(key.to_string(), v);
                     }
-                }
+                    None => {
+                        self.secret_cache.remove(key);
+                    }
+                },
                 Err(e) => {
                     tracing::error!("Error refreshing secret {}: {}", key, e);
                 }
@@ -583,11 +584,7 @@ mod tests {
             Ok(self.secrets.lock().unwrap().get(key).cloned())
         }
 
-        async fn store_secret(
-            &self,
-            key: &str,
-            value: Option<String>,
-        ) -> Result<(), ConfigError> {
+        async fn store_secret(&self, key: &str, value: Option<String>) -> Result<(), ConfigError> {
             let mut secrets = self.secrets.lock().unwrap();
             match value {
                 Some(v) => {
@@ -721,7 +718,10 @@ mod tests {
 
         let values = proxy.get_values();
         assert_eq!(values.get("mode"), Some(&Value::String("code".to_string())));
-        assert_eq!(values.get("apiKey"), Some(&Value::String("key-123".to_string())));
+        assert_eq!(
+            values.get("apiKey"),
+            Some(&Value::String("key-123".to_string()))
+        );
     }
 
     // ---- Test 9: resetAllState clears everything ----
@@ -766,7 +766,10 @@ mod tests {
         // taskHistory should be excluded
         assert!(exported.get("taskHistory").is_none());
         // mode should be included
-        assert_eq!(exported.get("mode"), Some(&Value::String("code".to_string())));
+        assert_eq!(
+            exported.get("mode"),
+            Some(&Value::String("code".to_string()))
+        );
     }
 
     // ---- Test 12: is_secret_key detection ----

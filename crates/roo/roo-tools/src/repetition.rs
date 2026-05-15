@@ -61,10 +61,7 @@ impl ToolRepetitionDetector {
             self.consecutive_identical_count = 0;
             self.previous_tool_call_json = None;
 
-            tracing::warn!(
-                "Tool repetition limit reached for tool: {}",
-                tool_name
-            );
+            tracing::warn!("Tool repetition limit reached for tool: {}", tool_name);
 
             return false;
         }

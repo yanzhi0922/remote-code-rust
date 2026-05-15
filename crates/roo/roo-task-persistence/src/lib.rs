@@ -39,16 +39,16 @@ pub enum TaskPersistenceError {
 // Module declarations
 // ---------------------------------------------------------------------------
 
-pub mod types;
-pub mod messages;
 pub mod api_messages;
-pub mod metadata;
-pub mod storage;
-pub mod history;
-pub mod task_history_store;
 pub mod consolidate_commands;
 pub mod consolidate_token_usage;
+pub mod history;
+pub mod messages;
+pub mod metadata;
 pub mod safe_json_parse;
+pub mod storage;
+pub mod task_history_store;
+pub mod types;
 
 // ---------------------------------------------------------------------------
 // Re-exports
@@ -65,19 +65,20 @@ pub use api_messages::{read_api_messages, save_api_messages};
 
 pub use metadata::{compute_history_item, compute_task_metadata};
 
-pub use storage::{OsFileSystem, TaskFileSystem, api_messages_path, ensure_task_dir, messages_path, metadata_path, task_dir};
+pub use storage::{
+    OsFileSystem, TaskFileSystem, api_messages_path, ensure_task_dir, messages_path, metadata_path,
+    task_dir,
+};
 
 pub use history::{delete_task, get_history_item, list_history, search_history};
 
 pub use task_history_store::{TaskHistoryStore, TaskHistoryStoreOptions};
 
 pub use consolidate_token_usage::{
-    consolidate_token_usage, has_token_usage_changed, TokenUsage, ClineMessageRef,
-    ParsedApiReqStartedText,
+    ClineMessageRef, ParsedApiReqStartedText, TokenUsage, consolidate_token_usage,
+    has_token_usage_changed,
 };
 
-pub use consolidate_commands::{
-    combine_messages, consolidate_api_requests, consolidate_commands,
-};
+pub use consolidate_commands::{combine_messages, consolidate_api_requests, consolidate_commands};
 
 pub use safe_json_parse::{safe_json_parse, safe_json_parse_or};

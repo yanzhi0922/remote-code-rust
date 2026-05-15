@@ -4,7 +4,7 @@
 //! Handles conversion of Anthropic-style content blocks to OpenAI's
 //! message format, including tool calls, images, and reasoning details.
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use roo_types::api::{ApiMessage, ContentBlock, ImageSource, MessageRole, ToolResultContent};
 
@@ -43,7 +43,9 @@ pub struct ReasoningDetail {
 /// - For encrypted blocks: keeps only the last one per index
 ///
 /// Source: `src/api/transform/openai-format.ts` — `consolidateReasoningDetails`
-pub fn consolidate_reasoning_details(reasoning_details: &[ReasoningDetail]) -> Vec<ReasoningDetail> {
+pub fn consolidate_reasoning_details(
+    reasoning_details: &[ReasoningDetail],
+) -> Vec<ReasoningDetail> {
     if reasoning_details.is_empty() {
         return vec![];
     }
@@ -59,10 +61,7 @@ pub fn consolidate_reasoning_details(reasoning_details: &[ReasoningDetail]) -> V
         }
 
         let index = detail.index.unwrap_or(0);
-        grouped_by_index
-            .entry(index)
-            .or_default()
-            .push(detail);
+        grouped_by_index.entry(index).or_default().push(detail);
     }
 
     let mut consolidated: Vec<ReasoningDetail> = Vec::new();
@@ -132,8 +131,16 @@ pub fn consolidate_reasoning_details(reasoning_details: &[ReasoningDetail]) -> V
                 last_data_entry = Some(ReasoningDetail {
                     detail_type: detail.detail_type.clone(),
                     data: detail.data.clone(),
-                    signature: if detail.signature.is_some() { detail.signature.clone() } else { None },
-                    id: if detail.id.is_some() { detail.id.clone() } else { None },
+                    signature: if detail.signature.is_some() {
+                        detail.signature.clone()
+                    } else {
+                        None
+                    },
+                    id: if detail.id.is_some() {
+                        detail.id.clone()
+                    } else {
+                        None
+                    },
                     format: Some(format.clone()),
                     index: Some(index),
                     text: None,
@@ -209,36 +216,29 @@ pub fn sanitize_gemini_messages(messages: &[Value], model_id: &str) -> Vec<Value
 
                         if !matching_details.is_empty() {
                             valid_tool_calls.push(tc.clone());
-                            valid_reasoning_details
-                                .extend(matching_details.into_iter().cloned());
+                            valid_reasoning_details.extend(matching_details.into_iter().cloned());
                         } else if !tc_id.is_empty() {
                             dropped_tool_call_ids.insert(tc_id.to_string());
                         }
                     }
 
                     // Also include reasoning_details that don't have an id (legacy format)
-                    let details_without_id: Vec<&Value> = rd_array
-                        .iter()
-                        .filter(|d| d.get("id").is_none())
-                        .collect();
+                    let details_without_id: Vec<&Value> =
+                        rd_array.iter().filter(|d| d.get("id").is_none()).collect();
                     valid_reasoning_details.extend(details_without_id.into_iter().cloned());
 
                     // Build the sanitized message
-                    let content_str = msg
-                        .get("content")
-                        .and_then(|c| c.as_str())
-                        .unwrap_or("");
+                    let content_str = msg.get("content").and_then(|c| c.as_str()).unwrap_or("");
                     let mut sanitized_msg = json!({
                         "role": "assistant",
                         "content": content_str
                     });
 
                     if !valid_reasoning_details.is_empty() {
-                        sanitized_msg["reasoning_details"] =
-                            serde_json::to_value(consolidate_reasoning_details_from_values(
-                                &valid_reasoning_details,
-                            ))
-                            .unwrap_or(json!([]));
+                        sanitized_msg["reasoning_details"] = serde_json::to_value(
+                            consolidate_reasoning_details_from_values(&valid_reasoning_details),
+                        )
+                        .unwrap_or(json!([]));
                     }
 
                     if !valid_tool_calls.is_empty() {
@@ -318,9 +318,7 @@ pub fn convert_to_openai_messages(
         }
     };
 
-    let merge_tool_result_text = options
-        .map(|o| o.merge_tool_result_text)
-        .unwrap_or(false);
+    let merge_tool_result_text = options.map(|o| o.merge_tool_result_text).unwrap_or(false);
 
     for anthropic_message in anthropic_messages {
         match anthropic_message.role {
@@ -409,8 +407,9 @@ pub fn convert_to_openai_messages(
                                     .get("content")
                                     .and_then(|c| c.as_str())
                                     .unwrap_or("");
-                                last_msg["content"] =
-                                    Value::String(format!("{existing_content}\n\n{additional_text}"));
+                                last_msg["content"] = Value::String(format!(
+                                    "{existing_content}\n\n{additional_text}"
+                                ));
                             }
                         }
                     } else {
@@ -736,7 +735,12 @@ mod tests {
         let content = result[0]["content"].as_array().unwrap();
         assert_eq!(content.len(), 2);
         assert_eq!(content[1]["type"], "image_url");
-        assert!(content[1]["image_url"]["url"].as_str().unwrap().starts_with("data:image/png;base64,"));
+        assert!(
+            content[1]["image_url"]["url"]
+                .as_str()
+                .unwrap()
+                .starts_with("data:image/png;base64,")
+        );
     }
 
     #[test]

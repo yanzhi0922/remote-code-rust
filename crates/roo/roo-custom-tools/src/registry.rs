@@ -129,7 +129,10 @@ mod tests {
         updated.description = "Updated description".to_string();
         registry.register(updated, None);
         assert_eq!(registry.len(), 1);
-        assert_eq!(registry.get("tool1").unwrap().description, "Updated description");
+        assert_eq!(
+            registry.get("tool1").unwrap().description,
+            "Updated description"
+        );
     }
 
     #[test]

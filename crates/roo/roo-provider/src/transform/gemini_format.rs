@@ -1,4 +1,4 @@
-﻿//! Converts Anthropic content blocks to Gemini Part format.
+//! Converts Anthropic content blocks to Gemini Part format.
 //!
 //! Derived from `src/api/transform/gemini-format.ts`.
 
@@ -244,10 +244,7 @@ pub fn convert_anthropic_content_to_gemini(
 
                 // Create content text with a note about images if present
                 let content_text = if !image_parts.is_empty() {
-                    format!(
-                        "{}\n\n(See next part for image)",
-                        text_parts.join("\n\n")
-                    )
+                    format!("{}\n\n(See next part for image)", text_parts.join("\n\n"))
                 } else {
                     text_parts.join("\n\n")
                 };
@@ -328,7 +325,9 @@ pub fn convert_anthropic_message_to_gemini(
 
 /// Builds a tool ID to name mapping from a conversation history.
 /// Scans all messages for `tool_use` blocks and maps their IDs to names.
-pub fn build_tool_id_to_name_map(messages: &[ApiMessage]) -> std::collections::HashMap<String, String> {
+pub fn build_tool_id_to_name_map(
+    messages: &[ApiMessage],
+) -> std::collections::HashMap<String, String> {
     let mut map = std::collections::HashMap::new();
     for message in messages {
         for block in &message.content {
@@ -419,7 +418,11 @@ mod tests {
 
     #[test]
     fn test_tool_use_conversion() {
-        let content = vec![tool_use_block("call_1", "read_file", r#"{"path":"test.rs"}"#)];
+        let content = vec![tool_use_block(
+            "call_1",
+            "read_file",
+            r#"{"path":"test.rs"}"#,
+        )];
         let options = GeminiConversionOptions::default();
         let parts = convert_anthropic_content_to_gemini(&content, &options);
         assert_eq!(parts.len(), 1);
@@ -443,7 +446,10 @@ mod tests {
         let parts = convert_anthropic_content_to_gemini(&content, &options);
         // Should have function_call + function_response
         assert!(parts.len() >= 2);
-        let fr = parts.iter().find(|p| p.function_response.is_some()).unwrap();
+        let fr = parts
+            .iter()
+            .find(|p| p.function_response.is_some())
+            .unwrap();
         let resp = fr.function_response.as_ref().unwrap();
         assert_eq!(resp.name, "read_file");
         assert!(resp.response.content.contains("file contents"));

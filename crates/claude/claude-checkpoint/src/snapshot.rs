@@ -187,7 +187,10 @@ impl SnapshotScanner {
 #[derive(Debug, Clone)]
 pub enum FileChangeEntry {
     Created(FileSnapshot),
-    Modified { before: FileSnapshot, after: FileSnapshot },
+    Modified {
+        before: FileSnapshot,
+        after: FileSnapshot,
+    },
     Deleted(FileSnapshot),
 }
 
@@ -240,7 +243,10 @@ mod tests {
         };
         let changes = scanner.diff_snapshots(&before, &after);
         assert_eq!(changes.len(), 1);
-        assert!(matches!(changes.get("new_file.rs"), Some(FileChangeEntry::Created(_))));
+        assert!(matches!(
+            changes.get("new_file.rs"),
+            Some(FileChangeEntry::Created(_))
+        ));
     }
 
     #[test]
@@ -266,7 +272,10 @@ mod tests {
         };
         let changes = scanner.diff_snapshots(&before, &after);
         assert_eq!(changes.len(), 1);
-        assert!(matches!(changes.get("file.rs"), Some(FileChangeEntry::Modified { .. })));
+        assert!(matches!(
+            changes.get("file.rs"),
+            Some(FileChangeEntry::Modified { .. })
+        ));
     }
 
     #[test]
@@ -288,7 +297,10 @@ mod tests {
         };
         let changes = scanner.diff_snapshots(&before, &after);
         assert_eq!(changes.len(), 1);
-        assert!(matches!(changes.get("old_file.rs"), Some(FileChangeEntry::Deleted(_))));
+        assert!(matches!(
+            changes.get("old_file.rs"),
+            Some(FileChangeEntry::Deleted(_))
+        ));
     }
 
     #[test]

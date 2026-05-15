@@ -20,14 +20,14 @@ use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
+use axum::Router;
 use axum::extract::State;
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::IntoResponse;
 use axum::response::sse::{Event, Sse};
 use axum::routing::post;
-use axum::Router;
-use futures::stream::Stream;
 use futures::StreamExt;
+use futures::stream::Stream;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use tokio::net::TcpListener;
@@ -72,10 +72,9 @@ impl AnthropicProxy {
             .with_state(state);
 
         tokio::spawn(async move {
-            let server = axum::serve(listener, app)
-                .with_graceful_shutdown(async {
-                    let _ = shutdown_rx.await;
-                });
+            let server = axum::serve(listener, app).with_graceful_shutdown(async {
+                let _ = shutdown_rx.await;
+            });
             if let Err(e) = server.await {
                 tracing::error!("anthropic proxy server error: {e}");
             }
@@ -275,14 +274,12 @@ async fn handle_responses(
     let upstream_url = format!("{}/v1/messages", state.config.upstream_url_trimmed());
 
     let mut upstream_headers = HeaderMap::new();
-    upstream_headers.insert(
-        "content-type",
-        HeaderValue::from_static("application/json"),
-    );
+    upstream_headers.insert("content-type", HeaderValue::from_static("application/json"));
     upstream_headers.insert("anthropic-version", HeaderValue::from_static("2023-06-01"));
     upstream_headers.insert(
         "x-api-key",
-        HeaderValue::from_str(&state.config.api_key).unwrap_or_else(|_| HeaderValue::from_static("")),
+        HeaderValue::from_str(&state.config.api_key)
+            .unwrap_or_else(|_| HeaderValue::from_static("")),
     );
 
     // Forward select headers from the original request
@@ -337,7 +334,10 @@ async fn fallback_handler(uri: axum::http::Uri) -> impl IntoResponse {
 
 // ── Request translation ─────────────────────────────────────────────────────
 
-fn translate_request(req: &ResponsesApiRequest, config: &AnthropicProxyConfig) -> AnthropicMessagesRequest {
+fn translate_request(
+    req: &ResponsesApiRequest,
+    config: &AnthropicProxyConfig,
+) -> AnthropicMessagesRequest {
     let model = config.model.clone().unwrap_or_else(|| req.model.clone());
     let system = if req.instructions.is_empty() {
         None
@@ -390,10 +390,7 @@ fn translate_input_to_messages(input: &[serde_json::Value]) -> Vec<AnthropicMess
 
         match item_type {
             "message" => {
-                let role = item
-                    .get("role")
-                    .and_then(|r| r.as_str())
-                    .unwrap_or("user");
+                let role = item.get("role").and_then(|r| r.as_str()).unwrap_or("user");
                 let content = extract_message_content(item);
                 if let Some(content) = content {
                     messages.push(AnthropicMessage {
@@ -525,10 +522,7 @@ fn translate_tool_item(item: &serde_json::Value, item_type: &str) -> serde_json:
                 .get("call_id")
                 .and_then(|c| c.as_str())
                 .unwrap_or("unknown");
-            let output = item
-                .get("output")
-                .and_then(|o| o.as_str())
-                .unwrap_or("");
+            let output = item.get("output").and_then(|o| o.as_str()).unwrap_or("");
 
             serde_json::json!([{
                 "type": "tool_result",
@@ -756,7 +750,10 @@ fn translate_anthropic_event(
     let event = match parsed {
         Ok(e) => e,
         Err(e) => {
-            tracing::warn!("failed to parse anthropic SSE event: {e} (data: {})", &data[..data.len().min(200)]);
+            tracing::warn!(
+                "failed to parse anthropic SSE event: {e} (data: {})",
+                &data[..data.len().min(200)]
+            );
             return Vec::new();
         }
     };
@@ -952,9 +949,7 @@ fn translate_anthropic_event(
 }
 
 fn make_event(event_type: &str, data: &serde_json::Value) -> Event {
-    Event::default()
-        .event(event_type)
-        .data(data.to_string())
+    Event::default().event(event_type).data(data.to_string())
 }
 
 // ── Helper ──────────────────────────────────────────────────────────────────
@@ -1010,14 +1005,12 @@ mod tests {
 
     #[test]
     fn test_translate_tools() {
-        let tools = vec![
-            serde_json::json!({
-                "type": "function",
-                "name": "read_file",
-                "description": "Read a file",
-                "parameters": {"type": "object", "properties": {"path": {"type": "string"}}}
-            }),
-        ];
+        let tools = vec![serde_json::json!({
+            "type": "function",
+            "name": "read_file",
+            "description": "Read a file",
+            "parameters": {"type": "object", "properties": {"path": {"type": "string"}}}
+        })];
 
         let result = translate_tools(&tools);
         assert_eq!(result.len(), 1);
@@ -1028,10 +1021,22 @@ mod tests {
     #[test]
     fn test_ensure_alternating_roles() {
         let mut messages = vec![
-            AnthropicMessage { role: "user".into(), content: serde_json::json!("a") },
-            AnthropicMessage { role: "user".into(), content: serde_json::json!("b") },
-            AnthropicMessage { role: "assistant".into(), content: serde_json::json!("c") },
-            AnthropicMessage { role: "assistant".into(), content: serde_json::json!("d") },
+            AnthropicMessage {
+                role: "user".into(),
+                content: serde_json::json!("a"),
+            },
+            AnthropicMessage {
+                role: "user".into(),
+                content: serde_json::json!("b"),
+            },
+            AnthropicMessage {
+                role: "assistant".into(),
+                content: serde_json::json!("c"),
+            },
+            AnthropicMessage {
+                role: "assistant".into(),
+                content: serde_json::json!("d"),
+            },
         ];
         ensure_alternating_roles(&mut messages);
         assert_eq!(messages.len(), 2);

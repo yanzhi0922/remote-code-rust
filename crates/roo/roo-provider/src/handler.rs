@@ -183,9 +183,9 @@ pub fn build_api_handler(
         .ok_or_else(|| ProviderError::Other("No API provider specified".to_string()))?;
 
     let registry = PROVIDER_REGISTRY.read().unwrap_or_else(|e| e.into_inner());
-    let map = registry
-        .as_ref()
-        .ok_or_else(|| ProviderError::Other("No providers registered — call register_provider() first".to_string()))?;
+    let map = registry.as_ref().ok_or_else(|| {
+        ProviderError::Other("No providers registered — call register_provider() first".to_string())
+    })?;
 
     let factory = map.get(&provider_name).ok_or_else(|| {
         ProviderError::Other(format!(

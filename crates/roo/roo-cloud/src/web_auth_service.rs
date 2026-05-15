@@ -1,7 +1,6 @@
 /// Web-based authentication service using Clerk.
 /// Mirrors packages/cloud/src/WebAuthService.ts
-
-use crate::config::{get_clerk_base_url, PRODUCTION_CLERK_BASE_URL};
+use crate::config::{PRODUCTION_CLERK_BASE_URL, get_clerk_base_url};
 use crate::types::{AuthCredentials, AuthState, CloudError, CloudUserInfo};
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -101,7 +100,10 @@ impl WebAuthService {
             Err(e) => {
                 let mut state = self.state.write().await;
                 *state = AuthState::LoggedOut;
-                return Err(CloudError::NetworkError(format!("Failed to sign in: {}", e)));
+                return Err(CloudError::NetworkError(format!(
+                    "Failed to sign in: {}",
+                    e
+                )));
             }
         };
 

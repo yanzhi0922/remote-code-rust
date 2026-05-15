@@ -111,8 +111,9 @@ pub struct TaskLifecycle {
     /// FileContextTracker for tracking file reads/edits.
     ///
     /// Source: TS `this.fileContextTracker = new FileContextTracker(provider, this.taskId)` (line 480)
-    file_context_tracker:
-        Option<roo_context_tracking::FileContextTracker<roo_context_tracking::InMemoryMetadataStore>>,
+    file_context_tracker: Option<
+        roo_context_tracking::FileContextTracker<roo_context_tracking::InMemoryMetadataStore>,
+    >,
     /// DiffViewProvider for managing diff editor state.
     ///
     /// Source: TS `this.diffViewProvider = new DiffViewProvider(this.cwd, this)` (line 493)
@@ -191,8 +192,9 @@ impl TaskLifecycle {
 
         // Source: TS line 480 — `this.fileContextTracker = new FileContextTracker(provider, this.taskId)`
         let store = roo_context_tracking::InMemoryMetadataStore::new();
-        let file_context_tracker =
-            Some(roo_context_tracking::FileContextTracker::new(&task_id, store));
+        let file_context_tracker = Some(roo_context_tracking::FileContextTracker::new(
+            &task_id, store,
+        ));
 
         // Source: TS line 493 — `this.diffViewProvider = new DiffViewProvider(this.cwd, this)`
         let diff_view_provider = Some(roo_editor::DiffViewProvider::new(
@@ -345,16 +347,18 @@ impl TaskLifecycle {
     /// Source: TS `this.fileContextTracker` (line 480)
     pub fn file_context_tracker(
         &self,
-    ) -> Option<&roo_context_tracking::FileContextTracker<roo_context_tracking::InMemoryMetadataStore>>
-    {
+    ) -> Option<
+        &roo_context_tracking::FileContextTracker<roo_context_tracking::InMemoryMetadataStore>,
+    > {
         self.file_context_tracker.as_ref()
     }
 
     /// Get a mutable reference to the FileContextTracker.
     pub fn file_context_tracker_mut(
         &mut self,
-    ) -> Option<&mut roo_context_tracking::FileContextTracker<roo_context_tracking::InMemoryMetadataStore>>
-    {
+    ) -> Option<
+        &mut roo_context_tracking::FileContextTracker<roo_context_tracking::InMemoryMetadataStore>,
+    > {
         self.file_context_tracker.as_mut()
     }
 
@@ -698,9 +702,9 @@ impl TaskLifecycle {
 
         // Step 2: Remove any resume messages that may have been added before
         // Source: TS lines 2006–2013
-        let last_relevant_idx = modified_cline_messages
-            .iter()
-            .rposition(|m| m.ask != Some(ClineAsk::ResumeTask) && m.ask != Some(ClineAsk::ResumeCompletedTask));
+        let last_relevant_idx = modified_cline_messages.iter().rposition(|m| {
+            m.ask != Some(ClineAsk::ResumeTask) && m.ask != Some(ClineAsk::ResumeCompletedTask)
+        });
 
         if let Some(idx) = last_relevant_idx {
             modified_cline_messages.truncate(idx + 1);
@@ -735,7 +739,8 @@ impl TaskLifecycle {
 
         // Step 5: Overwrite cline messages
         // Source: TS line 2043
-        self.ask_say.overwrite_cline_messages(modified_cline_messages);
+        self.ask_say
+            .overwrite_cline_messages(modified_cline_messages);
 
         // Step 6: Reload cline messages from saved (to get the cleaned version)
         // Source: TS line 2044
@@ -1144,11 +1149,9 @@ impl TaskLifecycle {
         }
 
         // Source: TS line 1617 — emit TaskUserMessage event
-        self.engine
-            .emitter()
-            .emit(&TaskEvent::UserMessage {
-                task_id: self.task_id().to_string(),
-            });
+        self.engine.emitter().emit(&TaskEvent::UserMessage {
+            task_id: self.task_id().to_string(),
+        });
 
         // Source: TS line 1622 — handle the message via handleWebviewAskResponse
         // `this.handleWebviewAskResponse("messageResponse", text, images)`
@@ -1157,7 +1160,11 @@ impl TaskLifecycle {
             .handle_response_full(
                 AskResponse::MessageResponse,
                 Some(trimmed_text.clone()),
-                if images.is_empty() { None } else { Some(images) },
+                if images.is_empty() {
+                    None
+                } else {
+                    Some(images)
+                },
             )
             .await;
 
@@ -1257,7 +1264,10 @@ impl TaskLifecycle {
                  Previous context tokens: {}\n\n\
                  Provide a concise summary that captures the essential context.",
                 history_len,
-                files_read_by_roo.as_ref().map(|f| f.join(", ")).unwrap_or_default(),
+                files_read_by_roo
+                    .as_ref()
+                    .map(|f| f.join(", "))
+                    .unwrap_or_default(),
                 prev_context_tokens,
             );
 
@@ -1282,13 +1292,17 @@ impl TaskLifecycle {
                     };
 
                     self.engine.api_conversation_history_mut().clear();
-                    self.engine.api_conversation_history_mut().push(condensed_message);
+                    self.engine
+                        .api_conversation_history_mut()
+                        .push(condensed_message);
 
                     // Emit condensation completed event
-                    self.engine.emitter().emit(&TaskEvent::ContextCondensationCompleted {
-                        task_id: self.task_id().to_string(),
-                        messages_removed: history_len.saturating_sub(1),
-                    });
+                    self.engine
+                        .emitter()
+                        .emit(&TaskEvent::ContextCondensationCompleted {
+                            task_id: self.task_id().to_string(),
+                            messages_removed: history_len.saturating_sub(1),
+                        });
 
                     info!(task_id = %self.task_id(), "Context condensed successfully");
                 }
@@ -1333,12 +1347,15 @@ impl TaskLifecycle {
         let history = self.engine.api_conversation_history();
         if let Some(last_msg) = history.last() {
             if last_msg.role == roo_types::api::MessageRole::Assistant {
-                let has_tool_use = last_msg.content.iter().any(|b| {
-                    matches!(b, roo_types::api::ContentBlock::ToolUse { .. })
-                });
+                let has_tool_use = last_msg
+                    .content
+                    .iter()
+                    .any(|b| matches!(b, roo_types::api::ContentBlock::ToolUse { .. }));
                 if has_tool_use {
                     // Check if the history already has a matching tool_result message
-                    let tool_use_ids: Vec<String> = last_msg.content.iter()
+                    let tool_use_ids: Vec<String> = last_msg
+                        .content
+                        .iter()
                         .filter_map(|b| {
                             if let roo_types::api::ContentBlock::ToolUse { id, .. } = b {
                                 Some(id.clone())
@@ -1352,14 +1369,19 @@ impl TaskLifecycle {
                     for msg in history.iter().rev().take(2) {
                         if msg.role == roo_types::api::MessageRole::User {
                             for b in &msg.content {
-                                if let roo_types::api::ContentBlock::ToolResult { tool_use_id, .. } = b {
+                                if let roo_types::api::ContentBlock::ToolResult {
+                                    tool_use_id,
+                                    ..
+                                } = b
+                                {
                                     covered.insert(tool_use_id.clone());
                                 }
                             }
                         }
                     }
 
-                    let missing: Vec<_> = tool_use_ids.iter()
+                    let missing: Vec<_> = tool_use_ids
+                        .iter()
                         .filter(|id| !covered.contains(*id))
                         .collect();
 
@@ -1440,10 +1462,7 @@ impl TaskLifecycle {
     ///     this.terminalProcess?.abort()
     /// }
     /// ```
-    pub async fn handle_terminal_operation(
-        &mut self,
-        operation: &str,
-    ) -> Result<(), TaskError> {
+    pub async fn handle_terminal_operation(&mut self, operation: &str) -> Result<(), TaskError> {
         match operation {
             // Source: TS line 1633 — `this.terminalProcess?.continue()`
             "continue" => {
@@ -1452,11 +1471,9 @@ impl TaskLifecycle {
                 // The actual terminal continue is handled via TerminalProcess
                 // which is managed by the agent loop.
                 // Here we emit an event that the agent loop can listen to.
-                self.engine
-                    .emitter()
-                    .emit(&TaskEvent::TaskUnpaused {
-                        task_id: self.task_id().to_string(),
-                    });
+                self.engine.emitter().emit(&TaskEvent::TaskUnpaused {
+                    task_id: self.task_id().to_string(),
+                });
                 debug!("Continuing terminal operation");
             }
             // Source: TS line 1635 — `this.terminalProcess?.abort()`
@@ -1496,15 +1513,17 @@ impl TaskLifecycle {
     ) -> Result<Option<String>, TaskError> {
         // Source: TS lines 4454–4565
         let task_id = self.task_id().to_string();
-        let message = format!("Task: {}, Time: {}", task_id, chrono::Utc::now().timestamp());
+        let message = format!(
+            "Task: {}, Time: {}",
+            task_id,
+            chrono::Utc::now().timestamp()
+        );
 
         if let Some(ref mut service) = self.checkpoint_service {
             // Initialize shadow git if not already done
             if let Err(e) = service.init_shadow_git().await {
                 warn!(error = %e, "Failed to init shadow git for checkpoint");
-                self.engine
-                    .emitter()
-                    .emit_checkpoint_saved(&task_id, None);
+                self.engine.emitter().emit_checkpoint_saved(&task_id, None);
                 return Ok(None);
             }
 
@@ -1526,24 +1545,18 @@ impl TaskLifecycle {
                 }
                 Ok(None) => {
                     debug!(task_id = %task_id, "No changes to checkpoint");
-                    self.engine
-                        .emitter()
-                        .emit_checkpoint_saved(&task_id, None);
+                    self.engine.emitter().emit_checkpoint_saved(&task_id, None);
                     Ok(None)
                 }
                 Err(e) => {
                     warn!(error = %e, "Checkpoint save failed, disabling checkpoints");
-                    self.engine
-                        .emitter()
-                        .emit_checkpoint_saved(&task_id, None);
+                    self.engine.emitter().emit_checkpoint_saved(&task_id, None);
                     Ok(None)
                 }
             }
         } else {
             // No checkpoint service available — emit event and return None
-            self.engine
-                .emitter()
-                .emit_checkpoint_saved(&task_id, None);
+            self.engine.emitter().emit_checkpoint_saved(&task_id, None);
             debug!(task_id = %task_id, "Checkpoint save requested (no service)");
             Ok(None)
         }
@@ -1573,7 +1586,9 @@ impl TaskLifecycle {
         }
 
         // 3. Emit restore completed event
-        self.engine.emitter().emit_checkpoint_restored(self.task_id());
+        self.engine
+            .emitter()
+            .emit_checkpoint_restored(self.task_id());
         debug!(
             task_id = %self.task_id(),
             commit_hash = %commit_hash,
@@ -1658,7 +1673,9 @@ impl TaskLifecycle {
     /// Called before task completion or abort to ensure final stats are captured.
     pub fn emit_final_token_usage_update(&self) {
         let usage = self.engine.result().token_usage.clone();
-        self.engine.emitter().emit_token_usage_updated(usage.clone());
+        self.engine
+            .emitter()
+            .emit_token_usage_updated(usage.clone());
 
         // Telemetry: LLM completion with token counts
         self.emit_telemetry_llm_completion(&usage);
@@ -1798,10 +1815,7 @@ impl TaskLifecycle {
     /// Overwrite the API conversation history.
     ///
     /// Source: `src/core/task/Task.ts` — `overwriteApiConversationHistory()`
-    pub fn overwrite_api_conversation_history(
-        &mut self,
-        history: Vec<roo_types::api::ApiMessage>,
-    ) {
+    pub fn overwrite_api_conversation_history(&mut self, history: Vec<roo_types::api::ApiMessage>) {
         self.engine.set_api_conversation_history(history);
     }
 
@@ -1986,7 +2000,9 @@ mod tests {
 
         // submit_user_message sets the ask response and emits events;
         // it does NOT directly add to cline_messages (that happens in the agent loop).
-        lc.submit_user_message("Hello", None, None, None).await.unwrap();
+        lc.submit_user_message("Hello", None, None, None)
+            .await
+            .unwrap();
         // Verify no error occurred — the response is set internally via handle_response_full.
     }
 
@@ -2155,10 +2171,7 @@ mod tests {
         // Restore with timestamp 1500 — should remove messages after that
         lc.checkpoint_restore("abc123", Some(1500.0)).await.unwrap();
         assert_eq!(lc.engine.cline_messages().len(), 1);
-        assert_eq!(
-            lc.engine.cline_messages()[0].text.as_deref(),
-            Some("first")
-        );
+        assert_eq!(lc.engine.cline_messages()[0].text.as_deref(), Some("first"));
     }
 
     #[tokio::test]

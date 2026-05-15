@@ -80,10 +80,7 @@ impl CloudService {
         // Parse user info from response
         let user_info = CloudUserInfo {
             id: user_data["id"].as_str().unwrap_or_default().to_string(),
-            email: user_data["email"]
-                .as_str()
-                .unwrap_or_default()
-                .to_string(),
+            email: user_data["email"].as_str().unwrap_or_default().to_string(),
             name: user_data["name"].as_str().unwrap_or_default().to_string(),
             avatar_url: user_data["avatarUrl"].as_str().map(|s| s.to_string()),
         };
@@ -355,7 +352,9 @@ mod tests {
     async fn test_login_network_error() {
         let mut svc = CloudService::new();
         // Using an unreachable endpoint to verify error handling
-        let result = svc.login(Some("http://127.0.0.1:1/nonexistent"), None).await;
+        let result = svc
+            .login(Some("http://127.0.0.1:1/nonexistent"), None)
+            .await;
         assert!(result.is_err());
         assert!(!svc.is_authenticated());
     }

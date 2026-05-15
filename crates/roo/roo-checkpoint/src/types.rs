@@ -70,9 +70,7 @@ pub enum CheckpointEvent {
         duration_ms: u64,
     },
     /// Emitted when an error occurs.
-    Error {
-        error: String,
-    },
+    Error { error: String },
 }
 
 /// Options for the `save_checkpoint` method.

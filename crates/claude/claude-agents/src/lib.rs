@@ -60,8 +60,10 @@ pub use runner::{
     AgentExecutionRequest, AgentExecutor, AgentRunConfig, AgentRunResult, AgentRunner,
     ConversationEntry, UsageSummary, compose_agent_system_prompt,
 };
+pub use transcript::{
+    SubagentTranscript, TranscriptMessage, persist_transcript, persist_transcript_from_result,
+};
 pub use worker::{WorkerAgent, WorkerConfig, WorkerResult, WorkerStatus};
-pub use transcript::{SubagentTranscript, TranscriptMessage, persist_transcript, persist_transcript_from_result};
 
 /// Current state of an agent.
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -646,9 +648,7 @@ impl AgentScheduler {
 
         while let Some(parent_id) = queue.pop_front() {
             for task in self.tasks.values() {
-                if task.parent_task_id == Some(parent_id)
-                    && !to_cancel.contains(&task.id)
-                {
+                if task.parent_task_id == Some(parent_id) && !to_cancel.contains(&task.id) {
                     to_cancel.push(task.id);
                     queue.push_back(task.id);
                 }
@@ -726,11 +726,11 @@ impl AgentScheduler {
             "child_task_spawned",
             "scheduler",
             Some(child_id),
-            self.tasks.get(&parent_task_id).map(|p| p.owner).unwrap_or_default(),
-            format!(
-                "spawned child of task {}",
-                parent_title
-            ),
+            self.tasks
+                .get(&parent_task_id)
+                .map(|p| p.owner)
+                .unwrap_or_default(),
+            format!("spawned child of task {}", parent_title),
         );
         Some(child_id)
     }
@@ -1364,7 +1364,9 @@ mod tests {
 
         let mut parent = AgentTask::new("Parent task");
         parent.ownership_paths = vec!["src/".to_owned()];
-        parent.required_labels.insert("lang".to_owned(), "rust".to_owned());
+        parent
+            .required_labels
+            .insert("lang".to_owned(), "rust".to_owned());
         let parent_id = scheduler.add_task(parent);
         scheduler.assign_task(parent_id, agent_id);
 

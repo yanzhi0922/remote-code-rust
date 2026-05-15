@@ -113,7 +113,10 @@ impl App {
         if rooignore_path.exists() {
             if let Ok(content) = std::fs::read_to_string(&rooignore_path) {
                 roo_ignore.load_patterns(&content);
-                tracing::info!("Loaded .rooignore patterns from {}", rooignore_path.display());
+                tracing::info!(
+                    "Loaded .rooignore patterns from {}",
+                    rooignore_path.display()
+                );
             }
         }
         self.roo_ignore = Some(Arc::new(roo_ignore));
@@ -127,7 +130,11 @@ impl App {
         let settings_path = self.config.global_storage_path.clone();
         let hub = roo_mcp::McpHub::new_with_paths(
             Some(workspace_path.clone()),
-            if settings_path.is_empty() { None } else { Some(settings_path) },
+            if settings_path.is_empty() {
+                None
+            } else {
+                Some(settings_path)
+            },
         );
 
         // Load project-level MCP config (.roo/mcp.json)
@@ -138,23 +145,37 @@ impl App {
             if let Ok(content) = std::fs::read_to_string(&project_mcp_path) {
                 match serde_json::from_str::<serde_json::Value>(&content) {
                     Ok(config) => {
-                        if let Some(servers) = config.get("mcpServers").and_then(|v| v.as_object()) {
+                        if let Some(servers) = config.get("mcpServers").and_then(|v| v.as_object())
+                        {
                             let server_map: std::collections::HashMap<String, serde_json::Value> =
-                                servers.into_iter().map(|(k, v)| (k.clone(), v.clone())).collect();
-                            if let Err(e) = hub.update_server_connections(
-                                &server_map,
-                                roo_mcp::McpSource::Project,
-                                true,
-                            ).await {
+                                servers
+                                    .into_iter()
+                                    .map(|(k, v)| (k.clone(), v.clone()))
+                                    .collect();
+                            if let Err(e) = hub
+                                .update_server_connections(
+                                    &server_map,
+                                    roo_mcp::McpSource::Project,
+                                    true,
+                                )
+                                .await
+                            {
                                 tracing::warn!("Failed to load project MCP servers: {}", e);
                             } else {
-                                tracing::info!("Loaded {} project MCP servers from {}",
-                                    server_map.len(), project_mcp_path.display());
+                                tracing::info!(
+                                    "Loaded {} project MCP servers from {}",
+                                    server_map.len(),
+                                    project_mcp_path.display()
+                                );
                             }
                         }
                     }
                     Err(e) => {
-                        tracing::warn!("Failed to parse project MCP config {}: {}", project_mcp_path.display(), e);
+                        tracing::warn!(
+                            "Failed to parse project MCP config {}: {}",
+                            project_mcp_path.display(),
+                            e
+                        );
                     }
                 }
             }
@@ -169,23 +190,40 @@ impl App {
                 if let Ok(content) = std::fs::read_to_string(&global_mcp_path) {
                     match serde_json::from_str::<serde_json::Value>(&content) {
                         Ok(config) => {
-                            if let Some(servers) = config.get("mcpServers").and_then(|v| v.as_object()) {
-                                let server_map: std::collections::HashMap<String, serde_json::Value> =
-                                    servers.into_iter().map(|(k, v)| (k.clone(), v.clone())).collect();
-                                if let Err(e) = hub.update_server_connections(
-                                    &server_map,
-                                    roo_mcp::McpSource::Global,
-                                    true,
-                                ).await {
+                            if let Some(servers) =
+                                config.get("mcpServers").and_then(|v| v.as_object())
+                            {
+                                let server_map: std::collections::HashMap<
+                                    String,
+                                    serde_json::Value,
+                                > = servers
+                                    .into_iter()
+                                    .map(|(k, v)| (k.clone(), v.clone()))
+                                    .collect();
+                                if let Err(e) = hub
+                                    .update_server_connections(
+                                        &server_map,
+                                        roo_mcp::McpSource::Global,
+                                        true,
+                                    )
+                                    .await
+                                {
                                     tracing::warn!("Failed to load global MCP servers: {}", e);
                                 } else {
-                                    tracing::info!("Loaded {} global MCP servers from {}",
-                                        server_map.len(), global_mcp_path.display());
+                                    tracing::info!(
+                                        "Loaded {} global MCP servers from {}",
+                                        server_map.len(),
+                                        global_mcp_path.display()
+                                    );
                                 }
                             }
                         }
                         Err(e) => {
-                            tracing::warn!("Failed to parse global MCP config {}: {}", global_mcp_path.display(), e);
+                            tracing::warn!(
+                                "Failed to parse global MCP config {}: {}",
+                                global_mcp_path.display(),
+                                e
+                            );
                         }
                     }
                 }
@@ -208,7 +246,8 @@ impl App {
 
         // ── Initialize Skills Manager ───────────────────────────────────
         let mut skills = roo_skills::SkillsManager::new();
-        let mut skills_dirs: Vec<(std::path::PathBuf, roo_skills::SkillSource, Option<String>)> = Vec::new();
+        let mut skills_dirs: Vec<(std::path::PathBuf, roo_skills::SkillSource, Option<String>)> =
+            Vec::new();
 
         // Global skills directory: ~/.roo/skills/
         if let Some(home) = dirs_home() {
@@ -224,7 +263,9 @@ impl App {
         }
 
         // Project skills directory: <cwd>/.roo/skills/
-        let project_skills_dir = std::path::Path::new(&self.config.cwd).join(".roo").join("skills");
+        let project_skills_dir = std::path::Path::new(&self.config.cwd)
+            .join(".roo")
+            .join("skills");
         if project_skills_dir.exists() {
             skills_dirs.push((project_skills_dir, roo_skills::SkillSource::Project, None));
         }
@@ -234,7 +275,11 @@ impl App {
             .join(".roo")
             .join(format!("skills-{}", self.config.mode));
         if mode_skills_dir.exists() {
-            skills_dirs.push((mode_skills_dir, roo_skills::SkillSource::Project, Some(self.config.mode.clone())));
+            skills_dirs.push((
+                mode_skills_dir,
+                roo_skills::SkillSource::Project,
+                Some(self.config.mode.clone()),
+            ));
         }
 
         if let Err(e) = skills.discover_skills(&skills_dirs).await {
@@ -254,8 +299,8 @@ impl App {
         } else {
             std::path::PathBuf::from(&self.config.global_storage_path)
         };
-        let project_roomodes = std::path::Path::new(&self.config.cwd)
-            .join(roo_modes::ROOMODES_FILENAME);
+        let project_roomodes =
+            std::path::Path::new(&self.config.cwd).join(roo_modes::ROOMODES_FILENAME);
         let project_roomodes = if project_roomodes.exists() {
             Some(project_roomodes)
         } else {
@@ -350,7 +395,9 @@ impl App {
     }
 
     /// Get a reference to the custom modes manager, if initialized.
-    pub fn custom_modes_manager(&self) -> Option<&Arc<std::sync::RwLock<roo_modes::CustomModesManager>>> {
+    pub fn custom_modes_manager(
+        &self,
+    ) -> Option<&Arc<std::sync::RwLock<roo_modes::CustomModesManager>>> {
         self.custom_modes_manager.as_ref()
     }
 
@@ -422,16 +469,16 @@ impl App {
         roo_prompt::build_system_prompt(
             &self.config.cwd,
             &self.config.mode,
-            None,                      // custom_modes
-            None,                      // custom_mode_prompts
-            self.mcp_hub.is_some(),    // has_mcp
-            None,                      // global_custom_instructions
+            None,                   // custom_modes
+            None,                   // custom_mode_prompts
+            self.mcp_hub.is_some(), // has_mcp
+            None,                   // global_custom_instructions
             self.config.language.as_deref(),
-            None,                      // roo_ignore_instructions
+            None, // roo_ignore_instructions
             Some(&settings),
-            &[],                       // skills
+            &[], // skills
             &format!("{} {}", std::env::consts::OS, env!("CARGO_PKG_VERSION")),
-            "bash",                    // shell
+            "bash", // shell
             &std::env::var("HOME")
                 .or_else(|_| std::env::var("USERPROFILE"))
                 .unwrap_or_else(|_| "~".to_string()),
@@ -443,7 +490,11 @@ impl App {
     /// Source: TS `webviewMessageHandler.ts` — `customInstructions`
     pub async fn set_custom_instructions(&self, text: &str) {
         let mut state = self.state.write().await;
-        state.custom_instructions = if text.is_empty() { None } else { Some(text.to_string()) };
+        state.custom_instructions = if text.is_empty() {
+            None
+        } else {
+            Some(text.to_string())
+        };
     }
 
     /// Reset all application state.
@@ -485,7 +536,10 @@ mod tests {
     fn test_app_creation() {
         let config = AppConfig::default();
         let app = App::new(config);
-        assert_eq!(app.cwd(), std::env::current_dir().unwrap().to_str().unwrap());
+        assert_eq!(
+            app.cwd(),
+            std::env::current_dir().unwrap().to_str().unwrap()
+        );
     }
 
     #[tokio::test]

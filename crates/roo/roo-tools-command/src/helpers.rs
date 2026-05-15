@@ -134,7 +134,10 @@ pub fn format_persisted_output(
     vec![
         format!("Command executed in '{}'. {}", working_dir, exit_status),
         String::new(),
-        format!("Output ({}) persisted. Artifact ID: {}", size_str, artifact_id),
+        format!(
+            "Output ({}) persisted. Artifact ID: {}",
+            size_str, artifact_id
+        ),
         String::new(),
         "Preview:".to_string(),
         preview.to_string(),
@@ -272,7 +275,10 @@ mod tests {
 
     #[test]
     fn test_resolve_timeout_none() {
-        assert_eq!(resolve_timeout(None).unwrap(), crate::types::DEFAULT_TIMEOUT_SECS);
+        assert_eq!(
+            resolve_timeout(None).unwrap(),
+            crate::types::DEFAULT_TIMEOUT_SECS
+        );
     }
 
     #[test]

@@ -38,7 +38,7 @@ impl GitOperations {
         let head = repo.head()?;
         match head.kind {
             gix::head::Kind::Symbolic(reference) => {
-              let name = reference.name.to_string();
+                let name = reference.name.to_string();
                 // Strip "refs/heads/" prefix
                 let branch = name
                     .strip_prefix("refs/heads/")
@@ -152,7 +152,7 @@ impl GitOperations {
     /// Stage files for commit.
     pub fn stage(&self, paths: &[&str]) -> Result<()> {
         let mut cmd = std::process::Command::new("git");
-        cmd.arg("add").current_dir(&self.repo_path);
+        cmd.arg("add").arg("--").current_dir(&self.repo_path);
         for path in paths {
             cmd.arg(path);
         }
@@ -200,21 +200,23 @@ impl GitOperations {
             ));
         }
 
-        // Parse commit hash from output
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let hash = stdout
-            .lines()
-            .find_map(|line| {
-                line.strip_prefix("[main ")
-                    .or_else(|| line.strip_prefix("["))
-                    .and_then(|s| s.split(']').next())
-                    .and_then(|s| s.split_whitespace().next())
-                    .map(|s| s.to_string())
-            })
-            .unwrap_or_default();
+        let hash_output = std::process::Command::new("git")
+            .args(["rev-parse", "HEAD"])
+            .current_dir(&self.repo_path)
+            .output()?;
+        if !hash_output.status.success() {
+            return Err(anyhow::anyhow!(
+                "git rev-parse failed after commit: {}",
+                String::from_utf8_lossy(&hash_output.stderr)
+            ));
+        }
+        let hash = String::from_utf8_lossy(&hash_output.stdout)
+            .trim()
+            .to_string();
+        let short_hash = hash.chars().take(12).collect::<String>();
 
         Ok(CommitResult {
-            short_hash: hash.clone(),
+            short_hash,
             hash,
             files_changed: 0,
             insertions: 0,
@@ -269,6 +271,10 @@ impl GitOperations {
 
     /// Switch to a different branch.
     pub fn switch_branch(&self, name: &str) -> Result<()> {
+        if name.trim().is_empty() || name.starts_with('-') {
+            return Err(anyhow::anyhow!("invalid branch name"));
+        }
+
         let output = std::process::Command::new("git")
             .args(["checkout", name])
             .current_dir(&self.repo_path)

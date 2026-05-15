@@ -13,9 +13,9 @@ use std::sync::Arc;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 
+use crate::TaskPersistenceError;
 use crate::storage::TaskFileSystem;
 use crate::types::HistoryItem;
-use crate::TaskPersistenceError;
 
 // ---------------------------------------------------------------------------
 // HistoryIndex — index file format
@@ -544,9 +544,15 @@ mod tests {
         let store = TaskHistoryStore::new(dir.path().to_path_buf(), None);
         store.initialize(&fs).unwrap();
 
-        store.upsert(&fs, make_item("task-1", "Older", 1000)).unwrap();
-        store.upsert(&fs, make_item("task-2", "Newer", 2000)).unwrap();
-        store.upsert(&fs, make_item("task-3", "Middle", 1500)).unwrap();
+        store
+            .upsert(&fs, make_item("task-1", "Older", 1000))
+            .unwrap();
+        store
+            .upsert(&fs, make_item("task-2", "Newer", 2000))
+            .unwrap();
+        store
+            .upsert(&fs, make_item("task-3", "Middle", 1500))
+            .unwrap();
 
         let all = store.get_all();
         assert_eq!(all.len(), 3);
@@ -582,7 +588,9 @@ mod tests {
         let store = TaskHistoryStore::new(dir.path().to_path_buf(), None);
         store.initialize(&fs).unwrap();
 
-        store.upsert(&fs, make_item("task-1", "Delete me", 1000)).unwrap();
+        store
+            .upsert(&fs, make_item("task-1", "Delete me", 1000))
+            .unwrap();
         assert!(store.get("task-1").is_some());
 
         store.delete(&fs, "task-1").unwrap();
@@ -598,7 +606,9 @@ mod tests {
 
         store.upsert(&fs, make_item("task-1", "One", 1000)).unwrap();
         store.upsert(&fs, make_item("task-2", "Two", 2000)).unwrap();
-        store.upsert(&fs, make_item("task-3", "Three", 3000)).unwrap();
+        store
+            .upsert(&fs, make_item("task-3", "Three", 3000))
+            .unwrap();
 
         store
             .delete_many(&fs, &["task-1".to_string(), "task-3".to_string()])
@@ -621,8 +631,11 @@ mod tests {
         fs.create_dir_all(&tasks_dir.join("manual-task")).unwrap();
         let item = make_item("manual-task", "Manual entry", 1000);
         let content = serde_json::to_string_pretty(&item).unwrap();
-        fs.write_file(&tasks_dir.join("manual-task").join("history_item.json"), &content)
-            .unwrap();
+        fs.write_file(
+            &tasks_dir.join("manual-task").join("history_item.json"),
+            &content,
+        )
+        .unwrap();
 
         // Reconcile should pick it up
         store.reconcile(&fs).unwrap();
@@ -659,7 +672,9 @@ mod tests {
         let store = TaskHistoryStore::new(dir.path().to_path_buf(), None);
         store.initialize(&fs).unwrap();
 
-        store.upsert(&fs, make_item("task-1", "Original", 1000)).unwrap();
+        store
+            .upsert(&fs, make_item("task-1", "Original", 1000))
+            .unwrap();
 
         // Manually update the file on disk
         let file_path = dir
@@ -705,15 +720,15 @@ mod tests {
             dir.path().to_path_buf(),
             Some(TaskHistoryStoreOptions {
                 on_write: Some(Arc::new(move |items: &[HistoryItem]| {
-                    written_clone
-                        .lock()
-                        .push(items.to_vec());
+                    written_clone.lock().push(items.to_vec());
                 })),
             }),
         );
         store.initialize(&fs).unwrap();
 
-        store.upsert(&fs, make_item("task-1", "Test", 1000)).unwrap();
+        store
+            .upsert(&fs, make_item("task-1", "Test", 1000))
+            .unwrap();
 
         let calls = written_items.lock();
         assert_eq!(calls.len(), 1);

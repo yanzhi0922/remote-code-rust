@@ -1,11 +1,11 @@
-﻿//! Vercel AI SDK format conversion utilities.
+//! Vercel AI SDK format conversion utilities.
 //!
 //! Derived from `src/api/transform/ai-sdk.ts`.
 //! Transforms between Anthropic/OpenAI formats and Vercel AI SDK `ModelMessage`
 //! format.  These utilities are designed to be reused across different AI SDK
 //! providers.
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use roo_types::api::{ApiMessage, ContentBlock, ImageSource, MessageRole, ToolResultContent};
 
@@ -23,27 +23,15 @@ use crate::error::{ProviderError, Result};
 #[derive(Debug, Clone, PartialEq)]
 pub enum AiSdkStreamPart {
     /// Text content delta.
-    Text {
-        text: String,
-    },
+    Text { text: String },
     /// Reasoning/thinking content delta.
-    Reasoning {
-        text: String,
-    },
+    Reasoning { text: String },
     /// Start of a tool call.
-    ToolCallStart {
-        id: String,
-        name: String,
-    },
+    ToolCallStart { id: String, name: String },
     /// Delta content for a tool call.
-    ToolCallDelta {
-        id: String,
-        delta: String,
-    },
+    ToolCallDelta { id: String, delta: String },
     /// End of a tool call.
-    ToolCallEnd {
-        id: String,
-    },
+    ToolCallEnd { id: String },
     /// Complete tool call with all arguments.
     ToolCall {
         id: String,
@@ -51,14 +39,9 @@ pub enum AiSdkStreamPart {
         arguments: String,
     },
     /// Grounding source (e.g. from Gemini).
-    Grounding {
-        title: String,
-        url: String,
-    },
+    Grounding { title: String, url: String },
     /// Error during streaming.
-    Error {
-        message: String,
-    },
+    Error { message: String },
 }
 
 // ---------------------------------------------------------------------------
@@ -157,19 +140,23 @@ pub fn process_ai_sdk_stream_part(data: &str) -> Result<Option<AiSdkStreamPart>>
         .ok_or_else(|| ProviderError::ParseError("Missing 'type' field in stream part".into()))?;
 
     let part = match event_type {
-        "text" | "text-delta" => value
-            .get("text")
-            .and_then(|v| v.as_str())
-            .map(|text| AiSdkStreamPart::Text {
-                text: text.to_string(),
-            }),
+        "text" | "text-delta" => {
+            value
+                .get("text")
+                .and_then(|v| v.as_str())
+                .map(|text| AiSdkStreamPart::Text {
+                    text: text.to_string(),
+                })
+        }
 
-        "reasoning" | "reasoning-delta" => value
-            .get("text")
-            .and_then(|v| v.as_str())
-            .map(|text| AiSdkStreamPart::Reasoning {
-                text: text.to_string(),
-            }),
+        "reasoning" | "reasoning-delta" => {
+            value
+                .get("text")
+                .and_then(|v| v.as_str())
+                .map(|text| AiSdkStreamPart::Reasoning {
+                    text: text.to_string(),
+                })
+        }
 
         "tool-input-start" => {
             let id = value.get("id").and_then(|v| v.as_str()).unwrap_or("");
@@ -191,9 +178,7 @@ pub fn process_ai_sdk_stream_part(data: &str) -> Result<Option<AiSdkStreamPart>>
 
         "tool-input-end" => {
             let id = value.get("id").and_then(|v| v.as_str()).unwrap_or("");
-            Some(AiSdkStreamPart::ToolCallEnd {
-                id: id.to_string(),
-            })
+            Some(AiSdkStreamPart::ToolCallEnd { id: id.to_string() })
         }
 
         "tool-call" => {
@@ -201,10 +186,7 @@ pub fn process_ai_sdk_stream_part(data: &str) -> Result<Option<AiSdkStreamPart>>
                 .get("toolCallId")
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
-            let name = value
-                .get("toolName")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
+            let name = value.get("toolName").and_then(|v| v.as_str()).unwrap_or("");
             let input = value.get("input");
             let arguments = match input {
                 Some(v) if v.is_string() => v.as_str().unwrap_or_default().to_string(),
@@ -236,15 +218,13 @@ pub fn process_ai_sdk_stream_part(data: &str) -> Result<Option<AiSdkStreamPart>>
                 Some(v) => v.to_string(),
                 None => "Unknown error".to_string(),
             };
-            Some(AiSdkStreamPart::Error {
-                message: error_msg,
-            })
+            Some(AiSdkStreamPart::Error { message: error_msg })
         }
 
         // Lifecycle events — skip
-        "text-start" | "text-end" | "reasoning-start" | "reasoning-end"
-        | "start-step" | "finish-step" | "start" | "finish" | "abort"
-        | "file" | "tool-result" | "tool-error" | "raw" => None,
+        "text-start" | "text-end" | "reasoning-start" | "reasoning-end" | "start-step"
+        | "finish-step" | "start" | "finish" | "abort" | "file" | "tool-result" | "tool-error"
+        | "raw" => None,
 
         _ => None,
     };
@@ -270,23 +250,21 @@ fn process_user_message_ai_sdk(
             ContentBlock::Text { text } => {
                 parts.push(json!({ "type": "text", "text": text }));
             }
-            ContentBlock::Image { source } => {
-                match source {
-                    ImageSource::Base64 { media_type, data } => {
-                        parts.push(json!({
-                            "type": "image",
-                            "image": format!("data:{media_type};base64,{data}"),
-                            "mimeType": media_type,
-                        }));
-                    }
-                    ImageSource::Url { url } => {
-                        parts.push(json!({
-                            "type": "image",
-                            "image": url,
-                        }));
-                    }
+            ContentBlock::Image { source } => match source {
+                ImageSource::Base64 { media_type, data } => {
+                    parts.push(json!({
+                        "type": "image",
+                        "image": format!("data:{media_type};base64,{data}"),
+                        "mimeType": media_type,
+                    }));
                 }
-            }
+                ImageSource::Url { url } => {
+                    parts.push(json!({
+                        "type": "image",
+                        "image": url,
+                    }));
+                }
+            },
             ContentBlock::ToolResult {
                 tool_use_id,
                 content,
@@ -500,7 +478,12 @@ mod tests {
         let content = result[0]["content"].as_array().unwrap();
         assert_eq!(content.len(), 2);
         assert_eq!(content[1]["type"], "image");
-        assert!(content[1]["image"].as_str().unwrap().starts_with("data:image/png;base64,"));
+        assert!(
+            content[1]["image"]
+                .as_str()
+                .unwrap()
+                .starts_with("data:image/png;base64,")
+        );
     }
 
     #[test]
@@ -526,8 +509,7 @@ mod tests {
 
     #[test]
     fn test_process_stream_text_delta() {
-        let part = process_ai_sdk_stream_part(r#"{"type":"text-delta","text":"hello"}"#)
-            .unwrap();
+        let part = process_ai_sdk_stream_part(r#"{"type":"text-delta","text":"hello"}"#).unwrap();
         assert_eq!(
             part,
             Some(AiSdkStreamPart::Text {
@@ -554,16 +536,15 @@ mod tests {
 
     #[test]
     fn test_process_stream_lifecycle_event_skipped() {
-        let part = process_ai_sdk_stream_part(r#"{"type":"finish","usage":{"promptTokens":10}}"#)
-            .unwrap();
+        let part =
+            process_ai_sdk_stream_part(r#"{"type":"finish","usage":{"promptTokens":10}}"#).unwrap();
         assert!(part.is_none());
     }
 
     #[test]
     fn test_process_stream_error() {
-        let part =
-            process_ai_sdk_stream_part(r#"{"type":"error","error":"Rate limit exceeded"}"#)
-                .unwrap();
+        let part = process_ai_sdk_stream_part(r#"{"type":"error","error":"Rate limit exceeded"}"#)
+            .unwrap();
         assert_eq!(
             part,
             Some(AiSdkStreamPart::Error {

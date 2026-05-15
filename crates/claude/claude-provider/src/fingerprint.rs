@@ -26,10 +26,7 @@ const FINGERPRINT_INDICES: [usize; 3] = [4, 7, 20];
 /// 2. Pick characters at indices `[4, 7, 20]` (fallback to `"0"` if out of bounds)
 /// 3. Concatenate: `SALT + char[4] + char[7] + char[20] + VERSION`
 /// 4. SHA-256 hash, return first 3 hex characters
-pub fn compute_attribution_fingerprint(
-    messages: &[Value],
-    version: &str,
-) -> String {
+pub fn compute_attribution_fingerprint(messages: &[Value], version: &str) -> String {
     let first_user_text = messages
         .iter()
         .find(|msg| msg.get("role").and_then(Value::as_str) == Some("user"))

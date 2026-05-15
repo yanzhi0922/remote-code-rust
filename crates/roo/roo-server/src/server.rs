@@ -160,7 +160,10 @@ impl Server {
                 }
             }
             if !notifications.is_empty() {
-                debug!(count = notifications.len(), "Forwarded notifications to client");
+                debug!(
+                    count = notifications.len(),
+                    "Forwarded notifications to client"
+                );
             }
         }
     }

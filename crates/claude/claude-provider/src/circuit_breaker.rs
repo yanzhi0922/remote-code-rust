@@ -17,7 +17,7 @@
 //!                                    OPEN
 //! ```
 
-use std::sync::Mutex;
+use parking_lot::Mutex;
 use std::time::{Duration, Instant};
 
 /// Configuration for a circuit breaker instance.
@@ -92,7 +92,7 @@ impl CircuitBreaker {
     /// Returns an error if the circuit is OPEN and the recovery timeout has
     /// not yet elapsed.
     pub fn allow_request(&self) -> Result<(), CircuitState> {
-        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let mut state = self.state.lock();
         match &mut *state {
             InternalState::Closed { .. } => Ok(()),
             InternalState::Open { opened_at } => {
@@ -119,7 +119,7 @@ impl CircuitBreaker {
     ///
     /// Transitions HALF_OPEN → CLOSED on success.
     pub fn record_success(&self) {
-        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let mut state = self.state.lock();
         *state = InternalState::Closed { failure_count: 0 };
     }
 
@@ -129,7 +129,7 @@ impl CircuitBreaker {
     /// to OPEN when the threshold is reached. In HALF_OPEN, immediately
     /// transitions back to OPEN.
     pub fn record_failure(&self) {
-        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let mut state = self.state.lock();
         match &mut *state {
             InternalState::Closed { failure_count } => {
                 *failure_count += 1;
@@ -156,7 +156,7 @@ impl CircuitBreaker {
 
     /// Get the current circuit state.
     pub fn state(&self) -> CircuitState {
-        let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let state = self.state.lock();
         match &*state {
             InternalState::Closed { .. } => CircuitState::Closed,
             InternalState::Open { opened_at } => {
@@ -172,7 +172,7 @@ impl CircuitBreaker {
 
     /// Reset the circuit breaker to CLOSED state.
     pub fn reset(&self) {
-        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let mut state = self.state.lock();
         *state = InternalState::Closed { failure_count: 0 };
     }
 }

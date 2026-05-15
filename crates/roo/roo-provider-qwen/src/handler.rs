@@ -23,7 +23,9 @@ pub struct QwenHandler {
 impl QwenHandler {
     /// Create a new Qwen handler from configuration.
     pub fn new(config: QwenConfig) -> Result<Self, roo_provider::ProviderError> {
-        let model_id = config.model_id.unwrap_or_else(|| models::default_model_id());
+        let model_id = config
+            .model_id
+            .unwrap_or_else(|| models::default_model_id());
         let model_info = models::models()
             .get(&model_id)
             .cloned()
@@ -46,7 +48,7 @@ impl QwenHandler {
             model_info,
             provider_name_enum: ProviderName::QwenCode,
             request_timeout: config.request_timeout,
-        reasoning_effort: None,
+            reasoning_effort: None,
             streaming_enabled: None,
             include_max_tokens: None,
             extra_body_fields: None,
@@ -61,8 +63,8 @@ impl QwenHandler {
     pub fn from_settings(
         settings: &roo_types::provider_settings::ProviderSettings,
     ) -> Result<Self, roo_provider::ProviderError> {
-        let config =
-            QwenConfig::from_settings(settings).ok_or(roo_provider::ProviderError::ApiKeyRequired)?;
+        let config = QwenConfig::from_settings(settings)
+            .ok_or(roo_provider::ProviderError::ApiKeyRequired)?;
         Self::new(config)
     }
 }
@@ -85,10 +87,7 @@ impl Provider for QwenHandler {
         self.inner.get_model()
     }
 
-    async fn complete_prompt(
-        &self,
-        prompt: &str,
-    ) -> Result<String, roo_provider::ProviderError> {
+    async fn complete_prompt(&self, prompt: &str) -> Result<String, roo_provider::ProviderError> {
         self.inner.complete_prompt(prompt).await
     }
 
@@ -280,6 +279,10 @@ mod tests {
     #[test]
     fn test_model_count() {
         let all_models = models::models();
-        assert!(all_models.len() >= 2, "Expected at least 2 models, got {}", all_models.len());
+        assert!(
+            all_models.len() >= 2,
+            "Expected at least 2 models, got {}",
+            all_models.len()
+        );
     }
 }

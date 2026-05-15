@@ -121,23 +121,21 @@ pub async fn migrate_custom_modes_to_yaml(
     }
 
     match tokio::fs::read_to_string(&old_json_path).await {
-        Ok(json_content) => {
-            match serde_yaml::from_str::<serde_yaml::Value>(&json_content) {
-                Ok(custom_modes_data) => {
-                    let yaml_content = serde_yaml::to_string(&custom_modes_data)?;
-                    tokio::fs::write(&new_yaml_path, &yaml_content).await?;
-                    log.push(
+        Ok(json_content) => match serde_yaml::from_str::<serde_yaml::Value>(&json_content) {
+            Ok(custom_modes_data) => {
+                let yaml_content = serde_yaml::to_string(&custom_modes_data)?;
+                tokio::fs::write(&new_yaml_path, &yaml_content).await?;
+                log.push(
                         "Successfully migrated custom_modes.json to YAML format (original JSON file preserved for rollback purposes)".to_string()
                     );
-                }
-                Err(e) => {
-                    log.push(format!(
+            }
+            Err(e) => {
+                log.push(format!(
                         "Error parsing custom_modes.json: {}. File might be corrupted. Skipping migration.",
                         e
                     ));
-                }
             }
-        }
+        },
         Err(e) => {
             log.push(format!(
                 "Error reading custom_modes.json: {}. Skipping migration.",

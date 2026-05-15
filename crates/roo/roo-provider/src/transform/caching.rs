@@ -10,7 +10,7 @@
 //! strategic positions in the message array so the provider can reuse
 //! previously-computed KV-cache entries.
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 // ---------------------------------------------------------------------------
 // Anthropic caching
@@ -59,17 +59,12 @@ pub fn apply_anthropic_caching(system_prompt: &str, messages: &mut Vec<Value>) {
         let msg = &mut messages[idx];
         if let Some(content) = msg["content"].as_array_mut() {
             // Find the last text part
-            let last_text_idx = content
-                .iter()
-                .rposition(|part| part["type"] == "text");
+            let last_text_idx = content.iter().rposition(|part| part["type"] == "text");
 
             if let Some(text_idx) = last_text_idx {
                 let text_part = &mut content[text_idx];
                 if let Some(obj) = text_part.as_object_mut() {
-                    obj.insert(
-                        "cache_control".to_string(),
-                        json!({ "type": "ephemeral" }),
-                    );
+                    obj.insert("cache_control".to_string(), json!({ "type": "ephemeral" }));
                 }
             } else {
                 // No text part — add a placeholder
@@ -128,10 +123,7 @@ pub fn apply_gemini_caching(system_prompt: &str, messages: &mut Vec<Value>, freq
 
                 if let Some(text_idx) = last_text_idx {
                     if let Some(obj) = content[text_idx].as_object_mut() {
-                        obj.insert(
-                            "cache_control".to_string(),
-                            json!({ "type": "ephemeral" }),
-                        );
+                        obj.insert("cache_control".to_string(), json!({ "type": "ephemeral" }));
                     }
                 } else {
                     content.push(json!({
@@ -203,10 +195,7 @@ pub fn apply_vercel_caching(system_prompt: &str, messages: &mut Vec<Value>) {
 
             if let Some(text_idx) = last_text_idx {
                 if let Some(obj) = content[text_idx].as_object_mut() {
-                    obj.insert(
-                        "cache_control".to_string(),
-                        json!({ "type": "ephemeral" }),
-                    );
+                    obj.insert("cache_control".to_string(), json!({ "type": "ephemeral" }));
                 }
             }
         }
@@ -264,16 +253,11 @@ pub fn apply_vertex_caching(messages: &mut Vec<Value>) {
 
             // Handle array content — find last text block
             if let Some(content) = msg["content"].as_array_mut() {
-                let last_text_idx = content
-                    .iter()
-                    .rposition(|part| part["type"] == "text");
+                let last_text_idx = content.iter().rposition(|part| part["type"] == "text");
 
                 if let Some(text_idx) = last_text_idx {
                     if let Some(obj) = content[text_idx].as_object_mut() {
-                        obj.insert(
-                            "cache_control".to_string(),
-                            json!({ "type": "ephemeral" }),
-                        );
+                        obj.insert("cache_control".to_string(), json!({ "type": "ephemeral" }));
                     }
                 }
             }

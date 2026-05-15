@@ -16,6 +16,14 @@
 //! └────────────┘           └────────────┘           └────────────┘
 //! ```
 //!
+//! # Payload model
+//!
+//! [`BusEvent::payload`] is `Arc<str>`, so multiple subscribers receive
+//! shared references to the same heap string instead of forcing each
+//! subscription to clone an owned `String`. Producers may pass either an
+//! owned `String` or an existing `Arc<str>` via [`EventBus::publish`] /
+//! [`EventBus::publish_arc`].
+//!
 //! # Example
 //!
 //! ```rust,ignore
@@ -24,18 +32,20 @@
 //! let bus = EventBus::new(1024);
 //!
 //! // Subscribe to a topic
-//! let mut rx = bus.subscribe(EventTopic::ToolResult);
+//! let mut rx = bus.subscribe(EventTopic::ToolExecution);
 //!
 //! // Publish an event
-//! bus.publish(EventTopic::ToolResult, "tool completed".to_owned());
+//! bus.publish(EventTopic::ToolExecution, "tool completed".to_owned());
 //!
 //! // Receive the event
 //! let event = rx.recv().await.unwrap();
 //! ```
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
+use parking_lot::RwLock;
 use tokio::sync::broadcast;
 use tokio::sync::broadcast::{Receiver, Sender};
 
@@ -104,14 +114,29 @@ impl EventTopic {
 // ---------------------------------------------------------------------------
 
 /// A wrapped event with metadata.
+///
+/// `payload` is wrapped in `Arc<str>` so the bus can broadcast to many
+/// subscribers without cloning the string body. `Clone` on `BusEvent` only
+/// bumps the refcount.
 #[derive(Debug, Clone)]
 pub struct BusEvent {
     /// The topic this event was published to.
     pub topic: EventTopic,
-    /// The event payload as a JSON string.
-    pub payload: String,
+    /// The event payload as a shared string slice.
+    ///
+    /// The payload is logically opaque to the bus. Producers and consumers
+    /// agree on the format — typically a JSON string for cross-module events.
+    pub payload: Arc<str>,
     /// Monotonic sequence number.
     pub sequence: u64,
+}
+
+impl BusEvent {
+    /// Borrow the payload as `&str`.
+    #[must_use]
+    pub fn payload_str(&self) -> &str {
+        &self.payload
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -126,7 +151,7 @@ pub struct BusEvent {
 pub struct EventBus {
     channels: RwLock<HashMap<u64, Sender<BusEvent>>>,
     buffer_size: usize,
-    sequence: Mutex<u64>,
+    sequence: AtomicU64,
 }
 
 impl EventBus {
@@ -136,17 +161,24 @@ impl EventBus {
         Arc::new(Self {
             channels: RwLock::new(HashMap::new()),
             buffer_size,
-            sequence: Mutex::new(0),
+            sequence: AtomicU64::new(0),
         })
     }
 
-    /// Publish an event to a topic.
-    pub fn publish(&self, topic: EventTopic, payload: String) {
-        let seq = {
-            let mut seq = self.sequence.lock().unwrap_or_else(|e| e.into_inner());
-            *seq += 1;
-            *seq
-        };
+    /// Publish an event to a topic, taking ownership of an owned payload.
+    ///
+    /// The payload is moved into an `Arc<str>` once and then cheaply
+    /// reference-counted across subscribers.
+    pub fn publish(&self, topic: EventTopic, payload: impl Into<Arc<str>>) {
+        self.publish_arc(topic, payload.into());
+    }
+
+    /// Publish an event using an already-shared `Arc<str>` payload.
+    ///
+    /// Useful when the same payload needs to flow into multiple destinations
+    /// without making a fresh allocation each time.
+    pub fn publish_arc(&self, topic: EventTopic, payload: Arc<str>) {
+        let seq = self.sequence.fetch_add(1, Ordering::Relaxed) + 1;
 
         let event = BusEvent {
             topic,
@@ -155,7 +187,7 @@ impl EventBus {
         };
 
         let key = topic_key(topic);
-        let channels = self.channels.read().unwrap_or_else(|e| e.into_inner());
+        let channels = self.channels.read();
         if let Some(sender) = channels.get(&key) {
             // Send returns Err if no receivers, which is fine.
             let _ = sender.send(event);
@@ -165,7 +197,7 @@ impl EventBus {
     /// Subscribe to a topic. Returns a receiver for async event consumption.
     pub fn subscribe(&self, topic: EventTopic) -> Receiver<BusEvent> {
         let key = topic_key(topic);
-        let mut channels = self.channels.write().unwrap_or_else(|e| e.into_inner());
+        let mut channels = self.channels.write();
         channels
             .entry(key)
             .or_insert_with(|| broadcast::channel(self.buffer_size).0)
@@ -195,14 +227,14 @@ impl EventBus {
     /// Get the number of active subscribers for a topic.
     pub fn subscriber_count(&self, topic: EventTopic) -> usize {
         let key = topic_key(topic);
-        let channels = self.channels.read().unwrap_or_else(|e| e.into_inner());
+        let channels = self.channels.read();
         channels.get(&key).map_or(0, |s| s.receiver_count())
     }
 
     /// Get the total number of events published.
     #[must_use]
     pub fn total_published(&self) -> u64 {
-        *self.sequence.lock().unwrap_or_else(|e| e.into_inner())
+        self.sequence.load(Ordering::Relaxed)
     }
 }
 
@@ -253,7 +285,7 @@ mod tests {
             .await
             .expect("timeout")
             .expect("recv failed");
-        assert_eq!(event.payload, "hello");
+        assert_eq!(event.payload_str(), "hello");
         assert_eq!(event.topic, EventTopic::Conversation);
         assert_eq!(event.sequence, 1);
     }
@@ -275,8 +307,10 @@ mod tests {
             .expect("timeout")
             .expect("recv failed");
 
-        assert_eq!(e1.payload, "api_call");
-        assert_eq!(e2.payload, "api_call");
+        assert_eq!(e1.payload_str(), "api_call");
+        assert_eq!(e2.payload_str(), "api_call");
+        // Subscribers should share the same Arc, not duplicate the body.
+        assert!(Arc::ptr_eq(&e1.payload, &e2.payload));
     }
 
     #[tokio::test]
@@ -292,13 +326,13 @@ mod tests {
             .await
             .expect("timeout")
             .expect("recv failed");
-        assert_eq!(conv_event.payload, "user msg");
+        assert_eq!(conv_event.payload_str(), "user msg");
 
         let tool_event = timeout(Duration::from_millis(100), rx_tool.recv())
             .await
             .expect("timeout")
             .expect("recv failed");
-        assert_eq!(tool_event.payload, "tool ran");
+        assert_eq!(tool_event.payload_str(), "tool ran");
     }
 
     #[tokio::test]
@@ -381,5 +415,20 @@ mod tests {
         let bus = EventBus::new(16);
         bus.publish(EventTopic::Custom(99), "orphan event".to_owned());
         assert_eq!(bus.total_published(), 1);
+    }
+
+    #[tokio::test]
+    async fn publish_arc_avoids_extra_allocation() {
+        let bus = EventBus::new(16);
+        let mut rx = bus.subscribe(EventTopic::Telemetry);
+
+        let payload: Arc<str> = Arc::from("shared");
+        bus.publish_arc(EventTopic::Telemetry, payload.clone());
+
+        let event = timeout(Duration::from_millis(100), rx.recv())
+            .await
+            .expect("timeout")
+            .expect("recv failed");
+        assert!(Arc::ptr_eq(&event.payload, &payload));
     }
 }

@@ -191,14 +191,9 @@ pub enum McpToolResultContent {
     #[serde(rename = "text")]
     Text { text: String },
     #[serde(rename = "image")]
-    Image {
-        data: String,
-        mime_type: String,
-    },
+    Image { data: String, mime_type: String },
     #[serde(rename = "resource")]
-    Resource {
-        resource: McpResourceContent,
-    },
+    Resource { resource: McpResourceContent },
 }
 
 // ---------------------------------------------------------------------------

@@ -371,12 +371,19 @@ pub enum RunnerApiEvent {
     },
 }
 
+/// Capacity for runner event channels.
+///
+/// Bounded to keep memory predictable when consumers stall. The runner emits
+/// events from synchronous code paths (HTTP handlers), so on overflow we drop
+/// the event and log — better than growing the queue without limit.
+pub const RUNNER_EVENT_CHANNEL_CAPACITY: usize = 1024;
+
 #[derive(Debug, Clone)]
 pub struct RunnerApi {
     meta: RunnerMeta,
     sessions: Arc<RwLock<BTreeMap<Uuid, RunnerSessionRecord>>>,
     approvals: Arc<RwLock<BTreeMap<Uuid, ApprovalRequestRecord>>>,
-    event_tx: Option<mpsc::UnboundedSender<RunnerApiEvent>>,
+    event_tx: Option<mpsc::Sender<RunnerApiEvent>>,
     stream_tx: broadcast::Sender<(Uuid, String)>,
 }
 
@@ -403,7 +410,7 @@ impl RunnerApi {
     }
 
     #[must_use]
-    pub fn with_event_channel(mut self, event_tx: mpsc::UnboundedSender<RunnerApiEvent>) -> Self {
+    pub fn with_event_channel(mut self, event_tx: mpsc::Sender<RunnerApiEvent>) -> Self {
         self.event_tx = Some(event_tx);
         self
     }
@@ -659,7 +666,20 @@ impl RunnerApi {
 impl RunnerApi {
     fn emit_event(&self, event: RunnerApiEvent) {
         if let Some(event_tx) = &self.event_tx {
-            let _ = event_tx.send(event);
+            // Synchronous emission path; use try_send and log on saturation
+            // rather than blocking inside the HTTP handler.
+            match event_tx.try_send(event) {
+                Ok(()) => {}
+                Err(mpsc::error::TrySendError::Full(_)) => {
+                    tracing::warn!(
+                        capacity = RUNNER_EVENT_CHANNEL_CAPACITY,
+                        "runner event channel saturated; dropping event"
+                    );
+                }
+                Err(mpsc::error::TrySendError::Closed(_)) => {
+                    tracing::debug!("runner event channel closed; dropping event");
+                }
+            }
         }
     }
 
@@ -968,10 +988,13 @@ pub async fn register_with_control_plane(
         capabilities: &registration.capabilities,
         platform: &registration.platform,
     };
-    let response = authorize_control_plane_request(client.post(control_plane_endpoint(
-        control_plane_url,
-        "/v1/runners/register",
-    )?), explicit_token)
+    let response = authorize_control_plane_request(
+        client.post(control_plane_endpoint(
+            control_plane_url,
+            "/v1/runners/register",
+        )?),
+        explicit_token,
+    )
     .json(&payload)
     .send()
     .await
@@ -1018,7 +1041,10 @@ fn control_plane_endpoint(base_url: &str, path: &str) -> Result<String> {
     Ok(format!("{base_url}{path}"))
 }
 
-fn authorize_control_plane_request(builder: reqwest::RequestBuilder, explicit_token: Option<&str>) -> reqwest::RequestBuilder {
+fn authorize_control_plane_request(
+    builder: reqwest::RequestBuilder,
+    explicit_token: Option<&str>,
+) -> reqwest::RequestBuilder {
     let token = explicit_token
         .map(|s| s.trim().to_owned())
         .filter(|s| !s.is_empty())
@@ -1126,10 +1152,10 @@ async fn require_runner_auth(
     // For WebSocket upgrade endpoints, also accept ?access_token= or ?token=
     // query parameters — browsers cannot set custom headers on WS upgrade.
     let is_stream_path = request.uri().path().ends_with("/stream");
-    let is_ws_upgrade = request
-        .headers()
-        .get("upgrade")
-        .is_some_and(|v| v.to_str().is_ok_and(|v| v.eq_ignore_ascii_case("websocket")));
+    let is_ws_upgrade = request.headers().get("upgrade").is_some_and(|v| {
+        v.to_str()
+            .is_ok_and(|v| v.eq_ignore_ascii_case("websocket"))
+    });
     let is_get = request.method() == axum::http::Method::GET;
 
     if is_stream_path && (is_ws_upgrade || is_get) {
@@ -1483,15 +1509,9 @@ async fn serve_runner_session_stream(
         let mut rx = api.subscribe_stream_events();
         // The broadcast receiver starts at the tail of the channel buffer.
         // Try to receive and filter — events with sequence <= after are skipped.
-        let replay_deadline =
-            tokio::time::Instant::now() + tokio::time::Duration::from_millis(500);
+        let replay_deadline = tokio::time::Instant::now() + tokio::time::Duration::from_millis(500);
         loop {
-            match tokio::time::timeout(
-                tokio::time::Duration::from_millis(50),
-                rx.recv(),
-            )
-            .await
-            {
+            match tokio::time::timeout(tokio::time::Duration::from_millis(50), rx.recv()).await {
                 Ok(Ok((sid, line))) if sid == session_id => {
                     if let Some(seq) = extract_sequence_from_json(&line) {
                         if seq <= after {
@@ -1847,7 +1867,7 @@ mod tests {
             },
         )
         .expect("config should load");
-        let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (event_tx, mut event_rx) = tokio::sync::mpsc::channel(RUNNER_EVENT_CHANNEL_CAPACITY);
         let app = RunnerApi::new(config, "remote-code-runner", "0.1.0")
             .with_event_channel(event_tx)
             .router();
@@ -2199,9 +2219,14 @@ mod tests {
             queued_sessions: 1,
             timestamp: Utc::now(),
         };
-        let snapshot = send_heartbeat(&Client::new(), &format!("http://{address}"), &heartbeat, None)
-            .await
-            .expect("heartbeat request should succeed");
+        let snapshot = send_heartbeat(
+            &Client::new(),
+            &format!("http://{address}"),
+            &heartbeat,
+            None,
+        )
+        .await
+        .expect("heartbeat request should succeed");
         assert_eq!(snapshot.registration.runner_id, "runner/a b?c");
         assert_eq!(
             state.runner_id.lock().await.as_deref(),

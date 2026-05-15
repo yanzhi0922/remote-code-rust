@@ -1,6 +1,5 @@
 /// Output interceptor for terminal processes.
 /// Mirrors src/integrations/terminal/OutputInterceptor.ts
-
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -67,7 +66,11 @@ impl OutputInterceptor {
         // Trim buffer if it exceeds max size
         if buffer.len() > self.max_buffer_size {
             let excess = buffer.len() - self.max_buffer_size;
-            let drain_to = buffer.char_indices().nth(excess).map(|(i, _)| i).unwrap_or(0);
+            let drain_to = buffer
+                .char_indices()
+                .nth(excess)
+                .map(|(i, _)| i)
+                .unwrap_or(0);
             buffer.drain(..drain_to);
         }
     }
@@ -114,7 +117,9 @@ mod tests {
     #[tokio::test]
     async fn test_intercept_carriage_return() {
         let interceptor = OutputInterceptor::new(1024);
-        interceptor.intercept("loading 10%\rloading 50%\rloading 100%\n").await;
+        interceptor
+            .intercept("loading 10%\rloading 50%\rloading 100%\n")
+            .await;
         let output = interceptor.get_output().await;
         assert!(output.contains("loading 100%"));
         assert!(!output.contains("loading 10%"));
@@ -131,17 +136,19 @@ mod tests {
     #[tokio::test]
     async fn test_max_buffer_size() {
         let interceptor = OutputInterceptor::new(20);
-        interceptor.intercept("this is a very long line that exceeds the buffer size\n").await;
+        interceptor
+            .intercept("this is a very long line that exceeds the buffer size\n")
+            .await;
         let output = interceptor.get_output().await;
         assert!(output.len() <= 20);
     }
 
     #[tokio::test]
     async fn test_with_filter() {
-        let interceptor = OutputInterceptor::with_filter(1024, |line| {
-            !line.contains("debug:")
-        });
-        interceptor.intercept("debug: something\nimportant line\n").await;
+        let interceptor = OutputInterceptor::with_filter(1024, |line| !line.contains("debug:"));
+        interceptor
+            .intercept("debug: something\nimportant line\n")
+            .await;
         let output = interceptor.get_output().await;
         assert!(!output.contains("debug:"));
         assert!(output.contains("important"));

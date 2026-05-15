@@ -9,9 +9,7 @@ use tokio::fs;
 use tracing::{debug, warn};
 
 use crate::error::SkillsError;
-use crate::frontmatter::{
-    generate_new_skill_md, get_skill_dir_path, parse_skill_md, FrontMatter,
-};
+use crate::frontmatter::{FrontMatter, generate_new_skill_md, get_skill_dir_path, parse_skill_md};
 use crate::types::{SkillContent, SkillMetadata, SkillSource};
 use crate::validate::{get_skill_name_error_message, validate_skill_name};
 
@@ -77,10 +75,7 @@ impl SkillsManager {
                 .scan_skills_directory(dir_path, *source, mode.as_deref())
                 .await
             {
-                debug!(
-                    "Failed to scan skills directory {:?}: {}",
-                    dir_path, e
-                );
+                debug!("Failed to scan skills directory {:?}: {}", dir_path, e);
             }
         }
 
@@ -120,9 +115,7 @@ impl SkillsManager {
                         let resolved = if target.is_absolute() {
                             target
                         } else {
-                            path.parent()
-                                .unwrap_or(Path::new("."))
-                                .join(target)
+                            path.parent().unwrap_or(Path::new(".")).join(target)
                         };
                         if !resolved.exists() {
                             debug!(
@@ -186,16 +179,15 @@ impl SkillsManager {
             });
         }
 
-        let content = fs::read_to_string(&skill_md_path).await.map_err(|e| {
-            SkillsError::IoError(format!("Failed to read '{}': {}", path_str, e))
-        })?;
+        let content = fs::read_to_string(&skill_md_path)
+            .await
+            .map_err(|e| SkillsError::IoError(format!("Failed to read '{}': {}", path_str, e)))?;
 
-        let (frontmatter, _body) = parse_skill_md(&content).ok_or_else(|| {
-            SkillsError::ParseError {
+        let (frontmatter, _body) =
+            parse_skill_md(&content).ok_or_else(|| SkillsError::ParseError {
                 path: path_str.clone(),
                 reason: "No valid frontmatter found".to_string(),
-            }
-        })?;
+            })?;
 
         // Determine the skill name: frontmatter > fallback (directory name)
         let name = frontmatter
@@ -236,12 +228,12 @@ impl SkillsManager {
         }
 
         // Validate description is present (required field in TS)
-        let description = frontmatter.description.ok_or_else(|| {
-            SkillsError::ParseError {
+        let description = frontmatter
+            .description
+            .ok_or_else(|| SkillsError::ParseError {
                 path: path_str.clone(),
                 reason: "Skill is missing required 'description' field".to_string(),
-            }
-        })?;
+            })?;
 
         // Validate description length (1-1024 chars, matching TS)
         let trimmed_desc = description.trim();
@@ -257,9 +249,9 @@ impl SkillsManager {
         }
 
         // Merge deprecated `mode` field into `mode_slugs`
-        let mode_slugs = frontmatter.mode_slugs.or_else(|| {
-            frontmatter.mode.map(|m| vec![m])
-        });
+        let mode_slugs = frontmatter
+            .mode_slugs
+            .or_else(|| frontmatter.mode.map(|m| vec![m]));
 
         let metadata = SkillMetadata {
             name: name.clone(),
@@ -560,8 +552,8 @@ impl SkillsManager {
         let content = fs::read_to_string(&skill_md_path).await?;
 
         // Parse to get instructions
-        let (_frontmatter, instructions) = parse_skill_md(&content)
-            .unwrap_or((FrontMatter::default(), String::new()));
+        let (_frontmatter, instructions) =
+            parse_skill_md(&content).unwrap_or((FrontMatter::default(), String::new()));
 
         // Regenerate with new mode_slugs
         let new_content = crate::frontmatter::generate_skill_md(
@@ -695,7 +687,10 @@ mod tests {
             mode_slugs: None,
         };
         assert!(SkillsManager::is_skill_available_in_mode(&skill, "code"));
-        assert!(SkillsManager::is_skill_available_in_mode(&skill, "architect"));
+        assert!(SkillsManager::is_skill_available_in_mode(
+            &skill,
+            "architect"
+        ));
     }
 
     #[test]
@@ -722,7 +717,10 @@ mod tests {
             mode_slugs: Some(vec!["code".to_string(), "architect".to_string()]),
         };
         assert!(SkillsManager::is_skill_available_in_mode(&skill, "code"));
-        assert!(SkillsManager::is_skill_available_in_mode(&skill, "architect"));
+        assert!(SkillsManager::is_skill_available_in_mode(
+            &skill,
+            "architect"
+        ));
         assert!(!SkillsManager::is_skill_available_in_mode(&skill, "debug"));
     }
 

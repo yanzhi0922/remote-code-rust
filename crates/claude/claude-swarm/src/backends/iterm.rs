@@ -6,6 +6,7 @@
 use async_trait::async_trait;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::sync::Mutex;
 
 use crate::backends::PaneBackend;
@@ -98,7 +99,7 @@ pub fn build_list_sessions_command() -> ItermCommand {
 #[derive(Debug)]
 pub struct ItermBackend {
     panes: Arc<Mutex<HashMap<PaneId, bool>>>,
-    counter: Arc<Mutex<usize>>,
+    counter: AtomicUsize,
 }
 
 impl ItermBackend {
@@ -107,7 +108,7 @@ impl ItermBackend {
     pub fn new() -> Self {
         Self {
             panes: Arc::new(Mutex::new(HashMap::new())),
-            counter: Arc::new(Mutex::new(0)),
+            counter: AtomicUsize::new(0),
         }
     }
 }
@@ -128,11 +129,8 @@ impl PaneBackend for ItermBackend {
         let cmd = build_create_split_command(&config.name, &config.cwd, config.command.as_deref());
         tracing::debug!("iterm2 create pane command: {}", cmd.to_command_string());
 
-        let pane_id = {
-            let mut counter = self.counter.lock().await;
-            *counter += 1;
-            format!("iterm-pane-{}", counter)
-        };
+        let n = self.counter.fetch_add(1, Ordering::Relaxed) + 1;
+        let pane_id = format!("iterm-pane-{n}");
         let is_first = {
             let panes = self.panes.lock().await;
             panes.is_empty()

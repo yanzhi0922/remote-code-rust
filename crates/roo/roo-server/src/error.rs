@@ -13,10 +13,7 @@ pub enum ServerError {
 
     /// Invalid parameters for the requested method.
     #[error("Invalid params for {method}: {detail}")]
-    InvalidParams {
-        method: String,
-        detail: String,
-    },
+    InvalidParams { method: String, detail: String },
 
     /// The server has not been initialized.
     #[error("Server not initialized")]

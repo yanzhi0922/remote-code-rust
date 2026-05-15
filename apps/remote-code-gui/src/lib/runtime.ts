@@ -41,11 +41,6 @@ export function resolveRemoteAccessToken(): string | null {
     return queryValue;
   }
 
-  const envValue = import.meta.env.VITE_REMOTE_CONTROL_PLANE_TOKEN?.trim();
-  if (envValue) {
-    return envValue;
-  }
-
   try {
     const storedValue = window.localStorage.getItem(REMOTE_ACCESS_TOKEN_STORAGE_KEY)?.trim();
     if (storedValue) {

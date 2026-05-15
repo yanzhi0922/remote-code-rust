@@ -40,7 +40,9 @@ pub enum ProviderError {
     RateLimitExceeded,
 
     /// A retired/no-longer-supported provider was requested.
-    #[error("Sorry, this provider is no longer supported. We saw very few Roo users actually using it and we need to reduce the surface area of our codebase so we can keep shipping fast and serving our community well in this space. It was a really hard decision but it lets us focus on what matters most to you. It sucks, we know.\n\nPlease select a different provider in your API profile settings.")]
+    #[error(
+        "Sorry, this provider is no longer supported. We saw very few Roo users actually using it and we need to reduce the surface area of our codebase so we can keep shipping fast and serving our community well in this space. It was a really hard decision but it lets us focus on what matters most to you. It sucks, we know.\n\nPlease select a different provider in your API profile settings."
+    )]
     RetiredProvider,
 
     /// Generic error.
@@ -63,7 +65,11 @@ impl ProviderError {
     }
 
     /// Create a provider-specific API error response with status code.
-    pub fn api_error_response(provider: &str, status_code: u16, message: impl fmt::Display) -> Self {
+    pub fn api_error_response(
+        provider: &str,
+        status_code: u16,
+        message: impl fmt::Display,
+    ) -> Self {
         Self::ApiErrorResponse(provider.to_string(), status_code, message.to_string())
     }
 }

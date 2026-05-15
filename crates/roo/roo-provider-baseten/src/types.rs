@@ -28,7 +28,10 @@ impl BasetenConfig {
             .baseten_base_url
             .clone()
             .unwrap_or_else(|| Self::DEFAULT_BASE_URL.to_string());
-        let model_id = settings.baseten_model_id.clone().or(settings.api_model_id.clone());
+        let model_id = settings
+            .baseten_model_id
+            .clone()
+            .or(settings.api_model_id.clone());
 
         Some(Self {
             api_key,

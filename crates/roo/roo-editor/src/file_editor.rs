@@ -297,7 +297,9 @@ mod tests {
     async fn test_write_and_read_file() {
         let dir = tempfile::tempdir().unwrap();
         let file_path = dir.path().join("test.txt");
-        FileEditor::write_file(&file_path, "hello world").await.unwrap();
+        FileEditor::write_file(&file_path, "hello world")
+            .await
+            .unwrap();
         let content = FileEditor::read_file(&file_path).await.unwrap();
         assert_eq!(content, "hello world");
     }
@@ -316,7 +318,9 @@ mod tests {
     async fn test_create_new_file() {
         let dir = tempfile::tempdir().unwrap();
         let file_path = dir.path().join("new_file.txt");
-        FileEditor::create_file(&file_path, "new content").await.unwrap();
+        FileEditor::create_file(&file_path, "new content")
+            .await
+            .unwrap();
         let content = FileEditor::read_file(&file_path).await.unwrap();
         assert_eq!(content, "new content");
     }
@@ -325,7 +329,9 @@ mod tests {
     async fn test_create_existing_file_fails() {
         let dir = tempfile::tempdir().unwrap();
         let file_path = dir.path().join("existing.txt");
-        FileEditor::write_file(&file_path, "existing").await.unwrap();
+        FileEditor::write_file(&file_path, "existing")
+            .await
+            .unwrap();
         let result = FileEditor::create_file(&file_path, "new").await;
         assert!(result.is_err());
     }
@@ -343,14 +349,18 @@ mod tests {
     async fn test_backup_and_restore() {
         let dir = tempfile::tempdir().unwrap();
         let file_path = dir.path().join("backup_test.txt");
-        FileEditor::write_file(&file_path, "original content").await.unwrap();
+        FileEditor::write_file(&file_path, "original content")
+            .await
+            .unwrap();
 
         // Backup
         let backup_path = FileEditor::backup_file(&file_path).await.unwrap();
         assert!(backup_path.exists());
 
         // Modify the file
-        FileEditor::write_file(&file_path, "modified content").await.unwrap();
+        FileEditor::write_file(&file_path, "modified content")
+            .await
+            .unwrap();
         let modified = FileEditor::read_file(&file_path).await.unwrap();
         assert_eq!(modified, "modified content");
 
@@ -367,7 +377,9 @@ mod tests {
     async fn test_write_creates_parent_dirs() {
         let dir = tempfile::tempdir().unwrap();
         let file_path = dir.path().join("nested/deep/dir/file.txt");
-        FileEditor::write_file(&file_path, "deep content").await.unwrap();
+        FileEditor::write_file(&file_path, "deep content")
+            .await
+            .unwrap();
         let content = FileEditor::read_file(&file_path).await.unwrap();
         assert_eq!(content, "deep content");
     }

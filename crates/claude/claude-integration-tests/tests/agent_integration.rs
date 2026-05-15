@@ -30,7 +30,10 @@ fn agent_definition_round_trips_via_json() {
         serde_json::from_str(&json).expect("deserialize definition");
     assert_eq!(decoded.agent_type, "test-agent");
     assert_eq!(decoded.when_to_use, "Use for testing");
-    assert_eq!(decoded.source, claude_agents::definition::AgentSource::BuiltIn);
+    assert_eq!(
+        decoded.source,
+        claude_agents::definition::AgentSource::BuiltIn
+    );
 }
 
 #[test]
@@ -460,7 +463,10 @@ fn checkpoint_save_and_load_round_trip() {
     cp.add_message("user", "hello");
     cp.add_message("assistant", "hi there");
 
-    ok(claude_agents::resume::save_agent_checkpoint(temp.path(), &cp));
+    ok(claude_agents::resume::save_agent_checkpoint(
+        temp.path(),
+        &cp,
+    ));
 
     let loaded = ok(claude_agents::resume::load_agent_checkpoint(
         temp.path(),
@@ -1146,8 +1152,8 @@ fn restart_tracker_zero_max_never_allows() {
 
 #[tokio::test]
 async fn remote_roo_adapter_lifecycle_and_routing() {
-    let adapter = rc_agent_protocol::adapters::RemoteRooAdapter::new_roo().with_send_message(
-        |_sid, msg| {
+    let adapter =
+        rc_agent_protocol::adapters::RemoteRooAdapter::new_roo().with_send_message(|_sid, msg| {
             Ok(vec![
                 UnifiedAgentEvent::MessageDelta {
                     session_id: "roo-s1".into(),
@@ -1163,8 +1169,7 @@ async fn remote_roo_adapter_lifecycle_and_routing() {
                     },
                 },
             ])
-        },
-    );
+        });
 
     let mut boxed: Box<dyn AgentAdapter> = Box::new(adapter);
     let config = AgentConfig {
@@ -1183,9 +1188,14 @@ async fn remote_roo_adapter_lifecycle_and_routing() {
     assert!(boxed.is_alive());
     assert_eq!(boxed.info().name, "Remote Roo");
 
-    let mut rx = boxed.send_message("roo-s1", "hello from roo").await.unwrap();
+    let mut rx = boxed
+        .send_message("roo-s1", "hello from roo")
+        .await
+        .unwrap();
     let ev1 = rx.recv().await.unwrap();
-    assert!(matches!(ev1, UnifiedAgentEvent::MessageDelta { ref delta, .. } if delta == "roo: hello from roo"));
+    assert!(
+        matches!(ev1, UnifiedAgentEvent::MessageDelta { ref delta, .. } if delta == "roo: hello from roo")
+    );
     let ev2 = rx.recv().await.unwrap();
     assert!(matches!(ev2, UnifiedAgentEvent::Completed { .. }));
 }
@@ -1229,9 +1239,14 @@ async fn remote_codex_adapter_lifecycle_and_routing() {
     assert!(boxed.is_alive());
     assert_eq!(boxed.info().name, "Remote Codex");
 
-    let mut rx = boxed.send_message("codex-s1", "hello from codex").await.unwrap();
+    let mut rx = boxed
+        .send_message("codex-s1", "hello from codex")
+        .await
+        .unwrap();
     let ev1 = rx.recv().await.unwrap();
-    assert!(matches!(ev1, UnifiedAgentEvent::MessageDelta { ref delta, .. } if delta == "codex: hello from codex"));
+    assert!(
+        matches!(ev1, UnifiedAgentEvent::MessageDelta { ref delta, .. } if delta == "codex: hello from codex")
+    );
 }
 
 #[tokio::test]
@@ -1248,46 +1263,53 @@ async fn three_agents_route_through_same_router() {
     boxed_c.start(&protocol_test_config()).await.unwrap();
     router.register("s-claude".into(), boxed_c).await;
 
-    let roo = rc_agent_protocol::adapters::RemoteRooAdapter::new_roo()
-        .with_send_message(|_sid, msg| {
+    let roo =
+        rc_agent_protocol::adapters::RemoteRooAdapter::new_roo().with_send_message(|_sid, msg| {
             Ok(vec![UnifiedAgentEvent::MessageDelta {
                 session_id: "s-roo".into(),
                 delta: format!("roo:{msg}"),
             }])
         });
     let mut boxed_r: Box<dyn AgentAdapter> = Box::new(roo);
-    boxed_r.start(&AgentConfig {
-        agent_type: AgentType::RemoteRoo,
-        binary_path: None,
-        args: vec![],
-        env: vec![],
-        working_dir: None,
-        model: None,
-        provider: None,
-        api_key: None,
-        base_url: None,
-    }).await.unwrap();
+    boxed_r
+        .start(&AgentConfig {
+            agent_type: AgentType::RemoteRoo,
+            binary_path: None,
+            args: vec![],
+            env: vec![],
+            working_dir: None,
+            model: None,
+            provider: None,
+            api_key: None,
+            base_url: None,
+        })
+        .await
+        .unwrap();
     router.register("s-roo".into(), boxed_r).await;
 
-    let codex = rc_agent_protocol::adapters::RemoteCodexAdapter::new_codex()
-        .with_send_message(|_sid, msg| {
+    let codex = rc_agent_protocol::adapters::RemoteCodexAdapter::new_codex().with_send_message(
+        |_sid, msg| {
             Ok(vec![UnifiedAgentEvent::MessageDelta {
                 session_id: "s-codex".into(),
                 delta: format!("codex:{msg}"),
             }])
-        });
+        },
+    );
     let mut boxed_x: Box<dyn AgentAdapter> = Box::new(codex);
-    boxed_x.start(&AgentConfig {
-        agent_type: AgentType::RemoteCodex,
-        binary_path: None,
-        args: vec![],
-        env: vec![],
-        working_dir: None,
-        model: None,
-        provider: None,
-        api_key: None,
-        base_url: None,
-    }).await.unwrap();
+    boxed_x
+        .start(&AgentConfig {
+            agent_type: AgentType::RemoteCodex,
+            binary_path: None,
+            args: vec![],
+            env: vec![],
+            working_dir: None,
+            model: None,
+            provider: None,
+            api_key: None,
+            base_url: None,
+        })
+        .await
+        .unwrap();
     router.register("s-codex".into(), boxed_x).await;
 
     assert_eq!(router.session_count(), 3);

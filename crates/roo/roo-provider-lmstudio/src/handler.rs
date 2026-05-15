@@ -489,10 +489,7 @@ mod tests {
 
     #[test]
     fn test_config_default_url() {
-        assert_eq!(
-            LmStudioConfig::DEFAULT_BASE_URL,
-            "http://localhost:1234/v1"
-        );
+        assert_eq!(LmStudioConfig::DEFAULT_BASE_URL, "http://localhost:1234/v1");
     }
 
     #[test]

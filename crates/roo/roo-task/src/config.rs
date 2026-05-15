@@ -5,8 +5,7 @@
 //! Source: `src/core/task/Task.ts` — constructor validation, `DEFAULT_CONSECUTIVE_MISTAKE_LIMIT`
 
 use crate::types::{
-    TaskConfig, TaskError, MAX_CHECKPOINT_TIMEOUT_SECONDS,
-    MIN_CHECKPOINT_TIMEOUT_SECONDS,
+    MAX_CHECKPOINT_TIMEOUT_SECONDS, MIN_CHECKPOINT_TIMEOUT_SECONDS, TaskConfig, TaskError,
 };
 
 /// Default maximum consecutive mistakes.
@@ -41,7 +40,9 @@ pub fn validate_config(config: &TaskConfig) -> Result<(), TaskError> {
 
     if let Some(max) = config.max_iterations {
         if max == 0 {
-            return Err(TaskError::General("max_iterations must be greater than 0".to_string()));
+            return Err(TaskError::General(
+                "max_iterations must be greater than 0".to_string(),
+            ));
         }
     }
 
@@ -148,7 +149,12 @@ mod tests {
             .with_task_text("hello");
         let result = validate_config(&config);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("checkpoint_timeout"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("checkpoint_timeout")
+        );
     }
 
     #[test]
@@ -158,7 +164,12 @@ mod tests {
             .with_task_text("hello");
         let result = validate_config(&config);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("checkpoint_timeout"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("checkpoint_timeout")
+        );
     }
 
     #[test]

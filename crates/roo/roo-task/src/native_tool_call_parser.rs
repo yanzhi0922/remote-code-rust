@@ -17,13 +17,13 @@
 
 use std::collections::HashMap;
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tracing::warn;
 
 use crate::types::{
-    AssistantMessageContent, McpToolUse, RawChunkTrackerEntry, StreamingToolCallState, ToolUse,
-    ToolCallStreamEvent, normalize_mcp_tool_name, parse_mcp_tool_name,
-    is_valid_tool_param, MCP_TOOL_PREFIX, MCP_TOOL_SEPARATOR,
+    AssistantMessageContent, MCP_TOOL_PREFIX, MCP_TOOL_SEPARATOR, McpToolUse, RawChunkTrackerEntry,
+    StreamingToolCallState, ToolCallStreamEvent, ToolUse, is_valid_tool_param,
+    normalize_mcp_tool_name, parse_mcp_tool_name,
 };
 
 // ---------------------------------------------------------------------------
@@ -306,7 +306,10 @@ impl NativeToolCallParser {
     /// Emits end events when `finish_reason` is `"tool_calls"`.
     ///
     /// Source: TS `NativeToolCallParser.processFinishReason()`
-    pub fn process_finish_reason(&mut self, finish_reason: Option<&str>) -> Vec<ToolCallStreamEvent> {
+    pub fn process_finish_reason(
+        &mut self,
+        finish_reason: Option<&str>,
+    ) -> Vec<ToolCallStreamEvent> {
         let mut events = Vec::new();
 
         if finish_reason == Some("tool_calls") && !self.raw_chunk_tracker.is_empty() {
@@ -448,7 +451,11 @@ impl NativeToolCallParser {
         let tool_call = self.streaming_tool_calls.remove(id)?;
 
         // Parse the complete accumulated JSON via parseToolCall
-        let result = self.parse_tool_call(&tool_call.id, &tool_call.name, &tool_call.arguments_accumulator);
+        let result = self.parse_tool_call(
+            &tool_call.id,
+            &tool_call.name,
+            &tool_call.arguments_accumulator,
+        );
 
         result
     }
@@ -1436,7 +1443,9 @@ impl NativeToolCallParser {
             // use_mcp_tool
             // -----------------------------------------------------------------
             "use_mcp_tool" => {
-                if partial_args.contains_key("server_name") || partial_args.contains_key("tool_name") {
+                if partial_args.contains_key("server_name")
+                    || partial_args.contains_key("tool_name")
+                {
                     return Some(json!({
                         "server_name": partial_args.get("server_name"),
                         "tool_name": partial_args.get("tool_name"),
@@ -1765,11 +1774,8 @@ mod tests {
     #[test]
     fn test_parse_tool_call_execute_command() {
         let parser = new_parser();
-        let result = parser.parse_tool_call(
-            "call_1",
-            "execute_command",
-            r#"{"command": "cargo build"}"#,
-        );
+        let result =
+            parser.parse_tool_call("call_1", "execute_command", r#"{"command": "cargo build"}"#);
         assert!(result.is_some());
         match result.unwrap() {
             AssistantMessageContent::ToolUse(tu) => {
@@ -1803,11 +1809,7 @@ mod tests {
     #[test]
     fn test_parse_tool_call_invalid_name() {
         let parser = new_parser();
-        let result = parser.parse_tool_call(
-            "call_1",
-            "nonexistent_tool",
-            r#"{"arg": "value"}"#,
-        );
+        let result = parser.parse_tool_call("call_1", "nonexistent_tool", r#"{"arg": "value"}"#);
         assert!(result.is_none());
     }
 
@@ -1846,17 +1848,26 @@ mod tests {
 
     #[test]
     fn test_resolve_tool_alias_write_file() {
-        assert_eq!(NativeToolCallParser::resolve_tool_alias("write_file"), "write_to_file");
+        assert_eq!(
+            NativeToolCallParser::resolve_tool_alias("write_file"),
+            "write_to_file"
+        );
     }
 
     #[test]
     fn test_resolve_tool_alias_search_and_replace() {
-        assert_eq!(NativeToolCallParser::resolve_tool_alias("search_and_replace"), "edit");
+        assert_eq!(
+            NativeToolCallParser::resolve_tool_alias("search_and_replace"),
+            "edit"
+        );
     }
 
     #[test]
     fn test_resolve_tool_alias_no_alias() {
-        assert_eq!(NativeToolCallParser::resolve_tool_alias("read_file"), "read_file");
+        assert_eq!(
+            NativeToolCallParser::resolve_tool_alias("read_file"),
+            "read_file"
+        );
     }
 
     // ===================================================================
@@ -1905,11 +1916,8 @@ mod tests {
     #[test]
     fn test_parse_tool_call_mcp_tool() {
         let parser = new_parser();
-        let result = parser.parse_tool_call(
-            "call_1",
-            "mcp--myServer--myTool",
-            r#"{"arg1": "value1"}"#,
-        );
+        let result =
+            parser.parse_tool_call("call_1", "mcp--myServer--myTool", r#"{"arg1": "value1"}"#);
         assert!(result.is_some());
         match result.unwrap() {
             AssistantMessageContent::McpToolUse(mtu) => {
@@ -1926,20 +1934,50 @@ mod tests {
 
     #[test]
     fn test_coerce_optional_boolean() {
-        assert_eq!(NativeToolCallParser::coerce_optional_boolean(&json!(true)), Some(true));
-        assert_eq!(NativeToolCallParser::coerce_optional_boolean(&json!(false)), Some(false));
-        assert_eq!(NativeToolCallParser::coerce_optional_boolean(&json!("true")), Some(true));
-        assert_eq!(NativeToolCallParser::coerce_optional_boolean(&json!("false")), Some(false));
-        assert_eq!(NativeToolCallParser::coerce_optional_boolean(&json!("yes")), None);
-        assert_eq!(NativeToolCallParser::coerce_optional_boolean(&json!(42)), None);
+        assert_eq!(
+            NativeToolCallParser::coerce_optional_boolean(&json!(true)),
+            Some(true)
+        );
+        assert_eq!(
+            NativeToolCallParser::coerce_optional_boolean(&json!(false)),
+            Some(false)
+        );
+        assert_eq!(
+            NativeToolCallParser::coerce_optional_boolean(&json!("true")),
+            Some(true)
+        );
+        assert_eq!(
+            NativeToolCallParser::coerce_optional_boolean(&json!("false")),
+            Some(false)
+        );
+        assert_eq!(
+            NativeToolCallParser::coerce_optional_boolean(&json!("yes")),
+            None
+        );
+        assert_eq!(
+            NativeToolCallParser::coerce_optional_boolean(&json!(42)),
+            None
+        );
     }
 
     #[test]
     fn test_coerce_optional_number() {
-        assert_eq!(NativeToolCallParser::coerce_optional_number(&json!(42)), Some(42.0));
-        assert_eq!(NativeToolCallParser::coerce_optional_number(&json!("42")), Some(42.0));
-        assert_eq!(NativeToolCallParser::coerce_optional_number(&json!("abc")), None);
-        assert_eq!(NativeToolCallParser::coerce_optional_number(&json!(true)), None);
+        assert_eq!(
+            NativeToolCallParser::coerce_optional_number(&json!(42)),
+            Some(42.0)
+        );
+        assert_eq!(
+            NativeToolCallParser::coerce_optional_number(&json!("42")),
+            Some(42.0)
+        );
+        assert_eq!(
+            NativeToolCallParser::coerce_optional_number(&json!("abc")),
+            None
+        );
+        assert_eq!(
+            NativeToolCallParser::coerce_optional_number(&json!(true)),
+            None
+        );
     }
 
     #[test]
@@ -2055,7 +2093,9 @@ mod tests {
 
     #[test]
     fn test_try_parse_partial_json_incomplete_nested() {
-        let result = NativeToolCallParser::try_parse_partial_json(r#"{"path": "test.rs", "indentation": {"anchor_line": 42"#);
+        let result = NativeToolCallParser::try_parse_partial_json(
+            r#"{"path": "test.rs", "indentation": {"anchor_line": 42"#,
+        );
         assert!(result.is_some());
         let v = result.unwrap();
         assert_eq!(v["path"], "test.rs");
@@ -2107,17 +2147,49 @@ mod tests {
             ("execute_command", r#"{"command": "ls"}"#, true),
             ("read_file", r#"{"path": "test.rs"}"#, true),
             ("read_command_output", r#"{"artifact_id": "abc"}"#, true),
-            ("write_to_file", r#"{"path": "test.rs", "content": "hi"}"#, true),
-            ("apply_diff", r#"{"path": "test.rs", "diff": "--- a\n+++ b"}"#, true),
-            ("edit", r#"{"file_path":"a","old_string":"b","new_string":"c"}"#, true),
-            ("search_and_replace", r#"{"file_path":"a","old_string":"b","new_string":"c"}"#, true),
-            ("edit_file", r#"{"file_path":"a","old_string":"b","new_string":"c"}"#, true),
+            (
+                "write_to_file",
+                r#"{"path": "test.rs", "content": "hi"}"#,
+                true,
+            ),
+            (
+                "apply_diff",
+                r#"{"path": "test.rs", "diff": "--- a\n+++ b"}"#,
+                true,
+            ),
+            (
+                "edit",
+                r#"{"file_path":"a","old_string":"b","new_string":"c"}"#,
+                true,
+            ),
+            (
+                "search_and_replace",
+                r#"{"file_path":"a","old_string":"b","new_string":"c"}"#,
+                true,
+            ),
+            (
+                "edit_file",
+                r#"{"file_path":"a","old_string":"b","new_string":"c"}"#,
+                true,
+            ),
             ("apply_patch", r#"{"patch": "--- a\n+++ b"}"#, true),
             ("search_files", r#"{"path": ".", "regex": "TODO"}"#, true),
             ("list_files", r#"{"path": "."}"#, true),
-            ("use_mcp_tool", r#"{"server_name":"s","tool_name":"t"}"#, true),
-            ("access_mcp_resource", r#"{"server_name":"s","uri":"u"}"#, true),
-            ("ask_followup_question", r#"{"question":"q","follow_up":[]}"#, true),
+            (
+                "use_mcp_tool",
+                r#"{"server_name":"s","tool_name":"t"}"#,
+                true,
+            ),
+            (
+                "access_mcp_resource",
+                r#"{"server_name":"s","uri":"u"}"#,
+                true,
+            ),
+            (
+                "ask_followup_question",
+                r#"{"question":"q","follow_up":[]}"#,
+                true,
+            ),
             ("attempt_completion", r#"{"result": "done"}"#, true),
             ("switch_mode", r#"{"mode_slug":"code","reason":"r"}"#, true),
             ("new_task", r#"{"mode":"code","message":"m"}"#, true),
@@ -2135,7 +2207,11 @@ mod tests {
                 should_succeed,
                 "Tool '{}' should have {}",
                 name,
-                if should_succeed { "succeeded" } else { "failed" }
+                if should_succeed {
+                    "succeeded"
+                } else {
+                    "failed"
+                }
             );
         }
     }

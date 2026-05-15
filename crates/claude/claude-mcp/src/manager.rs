@@ -237,9 +237,7 @@ impl McpConnectionManager {
                     // Check auth cache — skip if recently needed auth.
                     if self.auth_cache.is_cached(name) {
                         // Handle auth-needed immediately (no spawn needed).
-                        self.emit_event(McpLifecycleEvent::NeedsAuth {
-                            name: name.clone(),
-                        });
+                        self.emit_event(McpLifecycleEvent::NeedsAuth { name: name.clone() });
                         self.connections.insert(
                             name.clone(),
                             McpServerConnection::NeedsAuth(NeedsAuthServer {
@@ -267,9 +265,7 @@ impl McpConnectionManager {
                 let ci = client_info.clone();
                 join_set.spawn(async move {
                     let result = crate::discovery::McpDiscovery::discover_for_server_standalone(
-                        &name,
-                        &config,
-                        &ci,
+                        &name, &config, &ci,
                     )
                     .await;
                     (name, config, result)
@@ -990,7 +986,9 @@ mod tests {
             test_scoped_config_with_policy("srv-guarded", policy),
         );
 
-        let result = mgr.call_tool("srv-guarded", "delete", serde_json::json!({})).await;
+        let result = mgr
+            .call_tool("srv-guarded", "delete", serde_json::json!({}))
+            .await;
         assert!(result.is_err());
         let err = result.unwrap_err();
         let msg = err.to_string();

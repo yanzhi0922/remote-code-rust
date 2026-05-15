@@ -64,17 +64,11 @@ pub enum ApiStreamChunk {
 
     /// Start of a tool call.
     #[serde(rename = "tool_call_start")]
-    ToolCallStart {
-        id: String,
-        name: String,
-    },
+    ToolCallStart { id: String, name: String },
 
     /// Delta content for a tool call.
     #[serde(rename = "tool_call_delta")]
-    ToolCallDelta {
-        id: String,
-        delta: String,
-    },
+    ToolCallDelta { id: String, delta: String },
 
     /// End of a tool call.
     #[serde(rename = "tool_call_end")]
@@ -100,10 +94,7 @@ pub enum ApiStreamChunk {
 
     /// Error during streaming.
     #[serde(rename = "error")]
-    Error {
-        error: String,
-        message: String,
-    },
+    Error { error: String, message: String },
 }
 
 // ---------------------------------------------------------------------------
@@ -150,9 +141,7 @@ pub enum ContentBlock {
     Text { text: String },
 
     #[serde(rename = "image")]
-    Image {
-        source: ImageSource,
-    },
+    Image { source: ImageSource },
 
     #[serde(rename = "tool_use")]
     ToolUse {
@@ -170,15 +159,10 @@ pub enum ContentBlock {
     },
 
     #[serde(rename = "thinking")]
-    Thinking {
-        thinking: String,
-        signature: String,
-    },
+    Thinking { thinking: String, signature: String },
 
     #[serde(rename = "redacted_thinking")]
-    RedactedThinking {
-        data: String,
-    },
+    RedactedThinking { data: String },
 }
 
 /// Image source data.
@@ -186,14 +170,9 @@ pub enum ContentBlock {
 #[serde(tag = "type")]
 pub enum ImageSource {
     #[serde(rename = "base64")]
-    Base64 {
-        media_type: String,
-        data: String,
-    },
+    Base64 { media_type: String, data: String },
     #[serde(rename = "url")]
-    Url {
-        url: String,
-    },
+    Url { url: String },
 }
 
 /// Content within a tool result.
@@ -224,7 +203,6 @@ pub struct ApiMessage {
     pub ts: Option<f64>,
 
     // --- Truncation fields (sliding window) ---
-
     /// If set, this message was truncated by the sliding window with this truncation ID.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub truncation_parent: Option<String>,
@@ -236,7 +214,6 @@ pub struct ApiMessage {
     pub truncation_id: Option<String>,
 
     // --- Condensation fields ---
-
     /// If set, this message was condensed with this condense ID.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub condense_parent: Option<String>,
@@ -248,7 +225,6 @@ pub struct ApiMessage {
     pub condense_id: Option<String>,
 
     // --- Reasoning details (OpenRouter/Gemini format) ---
-
     /// Reasoning details array for models that report structured reasoning
     /// (e.g., OpenRouter format for Gemini 3).
     /// Source: `src/core/task/Task.ts` — `reasoning_details` on ApiMessage

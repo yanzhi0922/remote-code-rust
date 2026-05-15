@@ -499,7 +499,11 @@ mod tests {
         let long_content = "x".repeat(1_000);
         let mut messages = vec![make_tool_summary("id1", &long_content, false)];
 
-        let truncated = PreprocessingPipeline::apply_tool_result_budget(&mut messages, 500, &Default::default());
+        let truncated = PreprocessingPipeline::apply_tool_result_budget(
+            &mut messages,
+            500,
+            &Default::default(),
+        );
         assert_eq!(truncated, 1);
 
         if let Message::ToolUseSummary(ts) = &messages[0] {
@@ -517,7 +521,11 @@ mod tests {
         let short_content = "small result";
         let mut messages = vec![make_tool_summary("id1", short_content, false)];
 
-        let truncated = PreprocessingPipeline::apply_tool_result_budget(&mut messages, 200_000, &Default::default());
+        let truncated = PreprocessingPipeline::apply_tool_result_budget(
+            &mut messages,
+            200_000,
+            &Default::default(),
+        );
         assert_eq!(truncated, 0);
 
         if let Message::ToolUseSummary(ts) = &messages[0] {

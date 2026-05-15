@@ -151,8 +151,8 @@ impl VertexTokenProvider {
     /// Returns `Err(VertexAuthError::InvalidCredentials)` if the JSON cannot be
     /// parsed or required fields (`client_email`, `private_key`) are missing/empty.
     pub fn new(credentials_json: &str) -> Result<Self, VertexAuthError> {
-        let credentials: ServiceAccountCredentials =
-            serde_json::from_str(credentials_json).map_err(|e| {
+        let credentials: ServiceAccountCredentials = serde_json::from_str(credentials_json)
+            .map_err(|e| {
                 VertexAuthError::InvalidCredentials(format!("Failed to parse JSON: {e}"))
             })?;
 
@@ -182,7 +182,8 @@ impl VertexTokenProvider {
         {
             let cached = self.cached_token.lock().await;
             if let Some(token) = cached.as_ref() {
-                if token.expires_at > Instant::now() + Duration::from_secs(Self::REFRESH_MARGIN_SECS)
+                if token.expires_at
+                    > Instant::now() + Duration::from_secs(Self::REFRESH_MARGIN_SECS)
                 {
                     return Ok(token.access_token.clone());
                 }
@@ -230,12 +231,9 @@ impl VertexTokenProvider {
             )));
         }
 
-        let token_response: TokenResponse = response
-            .json()
-            .await
-            .map_err(|e| VertexAuthError::TokenResponseError(format!(
-                "Failed to parse token response: {e}"
-            )))?;
+        let token_response: TokenResponse = response.json().await.map_err(|e| {
+            VertexAuthError::TokenResponseError(format!("Failed to parse token response: {e}"))
+        })?;
 
         let expires_in = token_response.expires_in.unwrap_or(Self::JWT_DURATION_SECS);
 
@@ -267,10 +265,9 @@ impl VertexTokenProvider {
         };
 
         let header = jsonwebtoken::Header::new(jsonwebtoken::Algorithm::RS256);
-        let encoding_key = jsonwebtoken::EncodingKey::from_rsa_pem(
-            self.credentials.private_key.as_bytes(),
-        )
-        .map_err(|e| VertexAuthError::JwtError(format!("Invalid private key: {e}")))?;
+        let encoding_key =
+            jsonwebtoken::EncodingKey::from_rsa_pem(self.credentials.private_key.as_bytes())
+                .map_err(|e| VertexAuthError::JwtError(format!("Invalid private key: {e}")))?;
 
         jsonwebtoken::encode(&header, &claims, &encoding_key)
             .map_err(|e| VertexAuthError::JwtError(format!("JWT encoding failed: {e}")))

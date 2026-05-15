@@ -16,7 +16,10 @@ pub struct SecurityCheckResult {
 
 impl SecurityCheckResult {
     pub fn safe() -> Self {
-        Self { safe: true, reasons: Vec::new() }
+        Self {
+            safe: true,
+            reasons: Vec::new(),
+        }
     }
 }
 
@@ -45,12 +48,16 @@ pub fn check_bash_security(command: &str) -> SecurityCheckResult {
 fn check_command_substitution(command: &str, result: &mut SecurityCheckResult) {
     if command.contains('`') && count_unescaped_single_quotes(command) % 2 == 0 {
         result.safe = false;
-        result.reasons.push("Command substitution via backticks detected".into());
+        result
+            .reasons
+            .push("Command substitution via backticks detected".into());
     }
     if let Some(pos) = command.find("$(") {
         if !is_inside_single_quotes(command, pos) {
             result.safe = false;
-            result.reasons.push("Command substitution via $() detected".into());
+            result
+                .reasons
+                .push("Command substitution via $() detected".into());
         }
     }
     for m in command.match_indices("${") {
@@ -60,7 +67,10 @@ fn check_command_substitution(command: &str, result: &mut SecurityCheckResult) {
                 let var_name = &after[..end];
                 if var_name.contains('!') || var_name.contains('#') || var_name.contains('@') {
                     result.safe = false;
-                    result.reasons.push(format!("Dangerous parameter expansion ${{{{{}}}}}", var_name));
+                    result.reasons.push(format!(
+                        "Dangerous parameter expansion ${{{{{}}}}}",
+                        var_name
+                    ));
                 }
             }
         }
@@ -79,12 +89,22 @@ fn check_process_substitution(command: &str, result: &mut SecurityCheckResult) {
 }
 
 fn check_dangerous_variables(command: &str, result: &mut SecurityCheckResult) {
-    for var in ["IFS", "LD_PRELOAD", "LD_LIBRARY_PATH", "PYTHONPATH", "NODE_OPTIONS", "BASH_ENV", "ENV"] {
+    for var in [
+        "IFS",
+        "LD_PRELOAD",
+        "LD_LIBRARY_PATH",
+        "PYTHONPATH",
+        "NODE_OPTIONS",
+        "BASH_ENV",
+        "ENV",
+    ] {
         for pat in [format!("${}", var), format!("${{{}}}", var)] {
             for (i, _) in command.match_indices(pat.as_str()) {
                 if !is_inside_single_quotes(command, i) {
                     result.safe = false;
-                    result.reasons.push(format!("Dangerous variable {} referenced", var));
+                    result
+                        .reasons
+                        .push(format!("Dangerous variable {} referenced", var));
                 }
             }
         }
@@ -95,18 +115,24 @@ fn check_obfuscated_flags(command: &str, result: &mut SecurityCheckResult) {
     for (i, _) in command.match_indices("$'") {
         if !is_inside_single_quotes(command, i) {
             result.safe = false;
-            result.reasons.push("ANSI-C quoting ($'...') — potential flag obfuscation".into());
+            result
+                .reasons
+                .push("ANSI-C quoting ($'...') — potential flag obfuscation".into());
         }
     }
     for (i, _) in command.match_indices("$\"") {
         if !is_inside_single_quotes(command, i) {
             result.safe = false;
-            result.reasons.push("Locale quoting ($\"...\") — potential flag obfuscation".into());
+            result
+                .reasons
+                .push("Locale quoting ($\"...\") — potential flag obfuscation".into());
         }
     }
     if command.contains("\"\"-") || command.contains("''-") {
         result.safe = false;
-        result.reasons.push("Empty quote concatenation — potential flag obfuscation".into());
+        result
+            .reasons
+            .push("Empty quote concatenation — potential flag obfuscation".into());
     }
 }
 
@@ -121,7 +147,9 @@ fn check_brace_expansion(command: &str, result: &mut SecurityCheckResult) {
                 if (inner.contains(',') && !inner.contains(' ')) || inner.contains("..") {
                     if !inner.starts_with('$') && !is_inside_single_quotes(command, i) {
                         result.safe = false;
-                        result.reasons.push(format!("Brace expansion {{{}}} detected", inner));
+                        result
+                            .reasons
+                            .push(format!("Brace expansion {{{}}} detected", inner));
                     }
                 }
             }
@@ -134,7 +162,10 @@ fn check_control_characters(command: &str, result: &mut SecurityCheckResult) {
     for (i, c) in command.char_indices() {
         if c.is_control() && c != '\n' && c != '\t' && c != '\r' {
             result.safe = false;
-            result.reasons.push(format!("Control character (U+{:04X}) at position {}", c as u32, i));
+            result.reasons.push(format!(
+                "Control character (U+{:04X}) at position {}",
+                c as u32, i
+            ));
         }
     }
     if command.contains("\x1b[") {
@@ -144,10 +175,16 @@ fn check_control_characters(command: &str, result: &mut SecurityCheckResult) {
 }
 
 fn check_unicode_whitespace(command: &str, result: &mut SecurityCheckResult) {
-    for ws in ['\u{00A0}', '\u{2000}', '\u{2001}', '\u{2002}', '\u{2003}', '\u{2009}', '\u{202F}', '\u{3000}'] {
+    for ws in [
+        '\u{00A0}', '\u{2000}', '\u{2001}', '\u{2002}', '\u{2003}', '\u{2009}', '\u{202F}',
+        '\u{3000}',
+    ] {
         if command.contains(ws) {
             result.safe = false;
-            result.reasons.push(format!("Unicode whitespace (U+{:04X}) — potential parser differential", ws as u32));
+            result.reasons.push(format!(
+                "Unicode whitespace (U+{:04X}) — potential parser differential",
+                ws as u32
+            ));
         }
     }
 }
@@ -157,27 +194,37 @@ fn check_heredoc_patterns(command: &str, result: &mut SecurityCheckResult) {
         let has_subst = command.contains("$(") || command.contains('`');
         if has_subst {
             result.safe = false;
-            result.reasons.push("Heredoc with command substitution detected".into());
+            result
+                .reasons
+                .push("Heredoc with command substitution detected".into());
         }
     }
 }
 
 fn check_jq_dangerous_flags(command: &str, result: &mut SecurityCheckResult) {
-    if !command.to_ascii_lowercase().contains("jq") { return; }
+    if !command.to_ascii_lowercase().contains("jq") {
+        return;
+    }
     if command.contains("system(") || command.contains("exec(") {
         result.safe = false;
-        result.reasons.push("jq system/exec function call detected".into());
+        result
+            .reasons
+            .push("jq system/exec function call detected".into());
     }
 }
 
 fn check_zsh_dangerous_commands(command: &str, result: &mut SecurityCheckResult) {
-    let zsh_cmds = ["zmodload", "emulate", "sysopen", "sysread", "syswrite", "zpty", "ztcp", "zsocket", "sched"];
+    let zsh_cmds = [
+        "zmodload", "emulate", "sysopen", "sysread", "syswrite", "zpty", "ztcp", "zsocket", "sched",
+    ];
     let lower = command.to_ascii_lowercase();
     let words: HashSet<&str> = lower.split_whitespace().collect();
     for cmd in &zsh_cmds {
         if words.contains(cmd) {
             result.safe = false;
-            result.reasons.push(format!("Zsh dangerous command '{}' detected", cmd));
+            result
+                .reasons
+                .push(format!("Zsh dangerous command '{}' detected", cmd));
         }
     }
 }
@@ -187,7 +234,10 @@ fn check_backslash_escaped_operators(command: &str, result: &mut SecurityCheckRe
     for op in ["\\;", "\\|", "\\&", "\\<", "\\>"] {
         if command.contains(op) && !lower.contains("find ") && !lower.contains("xargs ") {
             result.safe = false;
-            result.reasons.push(format!("Backslash-escaped operator '{}' — potential parser differential", op));
+            result.reasons.push(format!(
+                "Backslash-escaped operator '{}' — potential parser differential",
+                op
+            ));
         }
     }
 }
@@ -199,7 +249,9 @@ fn check_git_commit_injection(command: &str, result: &mut SecurityCheckResult) {
             let after_m = &command[m_pos + 3..];
             if after_m.contains("$(") || after_m.contains('`') {
                 result.safe = false;
-                result.reasons.push("Command substitution in git commit message detected".into());
+                result
+                    .reasons
+                    .push("Command substitution in git commit message detected".into());
             }
         }
     }
@@ -215,7 +267,9 @@ fn check_ifs_injection(command: &str, result: &mut SecurityCheckResult) {
 fn check_proc_environ_access(command: &str, result: &mut SecurityCheckResult) {
     if command.contains("/proc/") && command.contains("environ") {
         result.safe = false;
-        result.reasons.push("/proc/*/environ access — potential credential leak".into());
+        result
+            .reasons
+            .push("/proc/*/environ access — potential credential leak".into());
     }
 }
 
@@ -224,7 +278,9 @@ fn check_redirection_injection(command: &str, result: &mut SecurityCheckResult) 
         for (i, _) in command.match_indices(pat) {
             if !is_inside_single_quotes(command, i) {
                 result.safe = false;
-                result.reasons.push(format!("Variable in redirect target: {}", pat));
+                result
+                    .reasons
+                    .push(format!("Variable in redirect target: {}", pat));
             }
         }
     }
@@ -235,9 +291,17 @@ fn count_unescaped_single_quotes(s: &str) -> usize {
     let mut count = 0;
     let mut escaped = false;
     for c in s.chars() {
-        if escaped { escaped = false; continue; }
-        if c == '\\' { escaped = true; continue; }
-        if c == '\'' { count += 1; }
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        if c == '\\' {
+            escaped = true;
+            continue;
+        }
+        if c == '\'' {
+            count += 1;
+        }
     }
     count
 }
@@ -246,10 +310,20 @@ fn is_inside_single_quotes(s: &str, pos: usize) -> bool {
     let mut in_single = false;
     let mut escaped = false;
     for (i, c) in s.char_indices() {
-        if i >= pos { return in_single; }
-        if escaped { escaped = false; continue; }
-        if c == '\\' { escaped = true; continue; }
-        if c == '\'' { in_single = !in_single; }
+        if i >= pos {
+            return in_single;
+        }
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        if c == '\\' {
+            escaped = true;
+            continue;
+        }
+        if c == '\'' {
+            in_single = !in_single;
+        }
     }
     in_single
 }
@@ -259,7 +333,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn safe_command_passes() { assert!(check_bash_security("ls -la /tmp").safe); }
+    fn safe_command_passes() {
+        assert!(check_bash_security("ls -la /tmp").safe);
+    }
 
     #[test]
     fn detects_command_substitution() {
@@ -268,17 +344,27 @@ mod tests {
     }
 
     #[test]
-    fn detects_process_substitution() { assert!(!check_bash_security("diff <(ls a) <(ls b)").safe); }
+    fn detects_process_substitution() {
+        assert!(!check_bash_security("diff <(ls a) <(ls b)").safe);
+    }
 
     #[test]
-    fn detects_ifs_injection() { assert!(!check_bash_security("echo $IFS").safe); }
+    fn detects_ifs_injection() {
+        assert!(!check_bash_security("echo $IFS").safe);
+    }
 
     #[test]
-    fn detects_proc_environ() { assert!(!check_bash_security("cat /proc/1/environ").safe); }
+    fn detects_proc_environ() {
+        assert!(!check_bash_security("cat /proc/1/environ").safe);
+    }
 
     #[test]
-    fn detects_zsh_commands() { assert!(!check_bash_security("zmodload zsh/net/tcp").safe); }
+    fn detects_zsh_commands() {
+        assert!(!check_bash_security("zmodload zsh/net/tcp").safe);
+    }
 
     #[test]
-    fn single_quoted_substitution_is_safe() { assert!(check_bash_security("echo '$(whoami)'").safe); }
+    fn single_quoted_substitution_is_safe() {
+        assert!(check_bash_security("echo '$(whoami)'").safe);
+    }
 }

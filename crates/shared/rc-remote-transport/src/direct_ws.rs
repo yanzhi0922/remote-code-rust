@@ -2,14 +2,12 @@
 
 use async_trait::async_trait;
 use tokio::sync::mpsc;
-use tokio_tungstenite::{connect_async_tls_with_config, tungstenite};
 use tokio_tungstenite::Connector;
+use tokio_tungstenite::{connect_async_tls_with_config, tungstenite};
 
-use crate::transport::{CommandAck, HealthStatus, RemoteTransport, TransportCommand};
 use crate::reconnect::ReconnectPolicy;
-use crate::{
-    ConnectionState, TransportConfig, TransportEvent, TransportMetrics,
-};
+use crate::transport::{CommandAck, HealthStatus, RemoteTransport, TransportCommand};
+use crate::{ConnectionState, TransportConfig, TransportEvent, TransportMetrics};
 
 /// Direct WebSocket transport to a runner machine.
 pub struct DirectWsTransport {
@@ -58,13 +56,12 @@ impl RemoteTransport for DirectWsTransport {
         let tls_config = crate::tls::build_client_tls_config(&config.tls)?;
         let connector = Some(Connector::Rustls(tls_config));
 
-        let (stream, _response) =
-            connect_async_tls_with_config(&ws_url, None, false, connector)
-                .await
-                .map_err(|e| {
-                    self.state = ConnectionState::Error(e.to_string());
-                    anyhow::anyhow!("WebSocket connect failed: {e}")
-                })?;
+        let (stream, _response) = connect_async_tls_with_config(&ws_url, None, false, connector)
+            .await
+            .map_err(|e| {
+                self.state = ConnectionState::Error(e.to_string());
+                anyhow::anyhow!("WebSocket connect failed: {e}")
+            })?;
 
         // Spawn a task to read events from the WebSocket.
         let (tx, rx) = mpsc::channel(256);
@@ -120,7 +117,12 @@ impl RemoteTransport for DirectWsTransport {
         if let Some(config) = config {
             let runner_url = match &config.strategy {
                 crate::TransportStrategy::DirectWebSocket { runner_url } => runner_url,
-                _ => return HealthStatus { endpoints: vec![], recommended_strategy: None },
+                _ => {
+                    return HealthStatus {
+                        endpoints: vec![],
+                        recommended_strategy: None,
+                    };
+                }
             };
             let health_url = format!("{runner_url}/healthz");
             let health = crate::health::probe_endpoint(
@@ -160,18 +162,11 @@ impl RemoteTransport for DirectWsTransport {
     }
 }
 
-fn build_runner_ws_url(
-    runner_url: &str,
-    session_id: &str,
-    after: u64,
-    token: &str,
-) -> String {
+fn build_runner_ws_url(runner_url: &str, session_id: &str, after: u64, token: &str) -> String {
     let ws_base = runner_url
         .replace("https://", "wss://")
         .replace("http://", "ws://");
-    format!(
-        "{ws_base}/v1/sessions/{session_id}/events/stream?after={after}&access_token={token}"
-    )
+    format!("{ws_base}/v1/sessions/{session_id}/events/stream?after={after}&access_token={token}")
 }
 
 pub(crate) async fn read_ws_events(

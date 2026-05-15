@@ -11,12 +11,12 @@ use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 use eventsource_stream::Eventsource;
 use futures::{Stream, StreamExt};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use roo_provider::error::{ProviderError, Result};
 use roo_provider::handler::{ApiStream, CreateMessageMetadata, Provider};
 use roo_provider::transform::gemini_format::{
-    build_tool_id_to_name_map, convert_anthropic_message_to_gemini, GeminiConversionOptions,
+    GeminiConversionOptions, build_tool_id_to_name_map, convert_anthropic_message_to_gemini,
 };
 use roo_types::api::{ApiMessage, ApiStreamChunk, GroundingSource, ProviderName};
 use roo_types::model::ModelInfo;
@@ -42,7 +42,9 @@ pub struct GoogleHandler {
 impl GoogleHandler {
     /// Create a new Google Gemini handler from configuration.
     pub fn new(config: GoogleConfig) -> Result<Self> {
-        let raw_model_id = config.model_id.unwrap_or_else(|| models::default_model_id());
+        let raw_model_id = config
+            .model_id
+            .unwrap_or_else(|| models::default_model_id());
 
         // Strip :thinking suffix — it indicates a hybrid reasoning model
         // but the actual Gemini API model ID does not include this suffix.
@@ -52,19 +54,20 @@ impl GoogleHandler {
             raw_model_id
         };
 
-        let mut model_info = models::models()
-            .get(&model_id)
-            .cloned()
-            .unwrap_or_else(|| ModelInfo {
-                max_tokens: Some(65536),
-                context_window: 1048576,
-                supports_images: Some(true),
-                supports_prompt_cache: true,
-                input_price: Some(1.25),
-                output_price: Some(10.0),
-                description: Some("Google Gemini model (unknown variant)".to_string()),
-                ..Default::default()
-            });
+        let mut model_info =
+            models::models()
+                .get(&model_id)
+                .cloned()
+                .unwrap_or_else(|| ModelInfo {
+                    max_tokens: Some(65536),
+                    context_window: 1048576,
+                    supports_images: Some(true),
+                    supports_prompt_cache: true,
+                    input_price: Some(1.25),
+                    output_price: Some(10.0),
+                    description: Some("Google Gemini model (unknown variant)".to_string()),
+                    ..Default::default()
+                });
 
         // Gemini models perform better with the edit tool instead of apply_diff.
         // This matches the TS behavior in getModel().
@@ -85,15 +88,17 @@ impl GoogleHandler {
         // Otherwise, allow the user setting to override, falling back to model default,
         // then to 1 for Gemini provider default.
         let temperature = if model_info.supports_temperature != Some(false) {
-            config.temperature.or(model_info.default_temperature).unwrap_or(1.0)
+            config
+                .temperature
+                .or(model_info.default_temperature)
+                .unwrap_or(1.0)
         } else {
             model_info.default_temperature.unwrap_or(1.0)
         };
 
         let mut client_builder = reqwest::Client::builder();
         if let Some(timeout) = config.request_timeout {
-            client_builder =
-                client_builder.timeout(std::time::Duration::from_millis(timeout));
+            client_builder = client_builder.timeout(std::time::Duration::from_millis(timeout));
         }
         let http_client = client_builder.build().map_err(ProviderError::Reqwest)?;
 
@@ -112,8 +117,7 @@ impl GoogleHandler {
     pub fn from_settings(
         settings: &roo_types::provider_settings::ProviderSettings,
     ) -> Result<Self> {
-        let config =
-            GoogleConfig::from_settings(settings).ok_or(ProviderError::ApiKeyRequired)?;
+        let config = GoogleConfig::from_settings(settings).ok_or(ProviderError::ApiKeyRequired)?;
         Self::new(config)
     }
 
@@ -121,7 +125,10 @@ impl GoogleHandler {
     ///
     /// Source: `.research/Roo-Code/src/api/providers/gemini.ts` — `getThoughtSignature()`
     pub fn get_thought_signature(&self) -> Option<String> {
-        self.last_thought_signature.lock().ok().and_then(|g| g.clone())
+        self.last_thought_signature
+            .lock()
+            .ok()
+            .and_then(|g| g.clone())
     }
 
     /// Build the request body for the Gemini generateContent API.
@@ -142,8 +149,7 @@ impl GoogleHandler {
         let mut gemini_contents: Vec<Value> = Vec::new();
 
         for msg in messages {
-            let gemini_messages =
-                convert_anthropic_message_to_gemini(msg, &conversion_opts);
+            let gemini_messages = convert_anthropic_message_to_gemini(msg, &conversion_opts);
             for gemini_msg in gemini_messages {
                 gemini_contents.push(serde_json::to_value(gemini_msg).unwrap_or_default());
             }
@@ -226,8 +232,11 @@ impl GoogleHandler {
                 v if v.as_str() == Some("auto") => ("AUTO", None),
                 v if v.as_str() == Some("none") => ("NONE", None),
                 v if v.as_str() == Some("required") => ("ANY", None),
-                v if v.is_object() && v.get("type").and_then(|t| t.as_str()) == Some("function") => {
-                    let name = v.get("function")
+                v if v.is_object()
+                    && v.get("type").and_then(|t| t.as_str()) == Some("function") =>
+                {
+                    let name = v
+                        .get("function")
                         .and_then(|f| f.get("name"))
                         .and_then(|n| n.as_str())
                         .map(|s| vec![s.to_string()]);
@@ -288,7 +297,9 @@ impl GoogleHandler {
                                             }
                                         }
 
-                                        let is_thought = part.thought.as_ref()
+                                        let is_thought = part
+                                            .thought
+                                            .as_ref()
                                             .map(|t| t.is_thinking())
                                             .unwrap_or(false);
 
@@ -307,9 +318,10 @@ impl GoogleHandler {
                                             // Gemini sends complete function calls in a single chunk.
                                             // Emit as partial chunks for consistent handling with
                                             // NativeToolCallParser, matching TS behavior.
-                                            let call_id = format!("{}-{}", fc.name, tool_call_counter);
-                                            let args = serde_json::to_string(&fc.args)
-                                                .unwrap_or_default();
+                                            let call_id =
+                                                format!("{}-{}", fc.name, tool_call_counter);
+                                            let args =
+                                                serde_json::to_string(&fc.args).unwrap_or_default();
 
                                             // Emit name first
                                             results.push(Ok(ApiStreamChunk::ToolCallPartial {
@@ -349,7 +361,10 @@ impl GoogleHandler {
                                         .iter()
                                         .filter_map(|chunk| {
                                             chunk.web.as_ref().map(|web| GroundingSource {
-                                                title: web.title.clone().or_else(|| web.uri.clone()),
+                                                title: web
+                                                    .title
+                                                    .clone()
+                                                    .or_else(|| web.uri.clone()),
                                                 url: web.uri.clone(),
                                                 snippet: None,
                                             })
@@ -375,14 +390,20 @@ impl GoogleHandler {
                             // Resolve pricing, considering tiered pricing if available.
                             let (input_price, output_price, cache_reads_price) =
                                 if let Some(ref tiers) = model_info.tiers {
-                                    let tier = tiers.iter().find(|t| {
-                                        input_tokens <= t.context_window as u64
-                                    });
+                                    let tier = tiers
+                                        .iter()
+                                        .find(|t| input_tokens <= t.context_window as u64);
                                     if let Some(tier) = tier {
                                         (
-                                            tier.input_price.or(model_info.input_price).unwrap_or(0.0),
-                                            tier.output_price.or(model_info.output_price).unwrap_or(0.0),
-                                            tier.cache_reads_price.or(model_info.cache_reads_price).unwrap_or(0.0),
+                                            tier.input_price
+                                                .or(model_info.input_price)
+                                                .unwrap_or(0.0),
+                                            tier.output_price
+                                                .or(model_info.output_price)
+                                                .unwrap_or(0.0),
+                                            tier.cache_reads_price
+                                                .or(model_info.cache_reads_price)
+                                                .unwrap_or(0.0),
                                         )
                                     } else {
                                         (
@@ -400,13 +421,16 @@ impl GoogleHandler {
                                 };
 
                             // Subtract cached tokens from total input for uncached cost.
-                            let uncached_input_tokens = input_tokens.saturating_sub(cache_read_tokens);
+                            let uncached_input_tokens =
+                                input_tokens.saturating_sub(cache_read_tokens);
                             // Bill both completion and reasoning tokens as output.
-                            let billed_output_tokens = output_tokens
-                                + reasoning_tokens.unwrap_or(0);
+                            let billed_output_tokens =
+                                output_tokens + reasoning_tokens.unwrap_or(0);
 
-                            let input_cost = input_price * uncached_input_tokens as f64 / 1_000_000.0;
-                            let output_cost = output_price * billed_output_tokens as f64 / 1_000_000.0;
+                            let input_cost =
+                                input_price * uncached_input_tokens as f64 / 1_000_000.0;
+                            let output_cost =
+                                output_price * billed_output_tokens as f64 / 1_000_000.0;
                             let cache_read_cost = if cache_read_tokens > 0 {
                                 cache_reads_price * cache_read_tokens as f64 / 1_000_000.0
                             } else {
@@ -442,7 +466,6 @@ impl GoogleHandler {
     }
 }
 
-
 #[async_trait]
 impl Provider for GoogleHandler {
     async fn create_message(
@@ -477,7 +500,10 @@ impl Provider for GoogleHandler {
 
         if !response.status().is_success() {
             let status = response.status().as_u16();
-            let text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+            let text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
             return Err(ProviderError::api_error_response("gemini", status, text));
         }
 
@@ -489,30 +515,29 @@ impl Provider for GoogleHandler {
         let sse_stream = response
             .bytes_stream()
             .eventsource()
-            .map(move |event| {
-                match event {
-                    Ok(event) => {
-                        match serde_json::from_str::<GeminiStreamResponse>(&event.data) {
-                            Ok(chunk) => Ok(chunk),
-                            Err(e) => Err(ProviderError::ParseError(format!(
-                                "Failed to parse Gemini SSE event: {e}"
-                            ))),
-                        }
-                    }
-                    Err(e) => Err(ProviderError::StreamError(format!("SSE error: {e}"))),
-                }
+            .map(move |event| match event {
+                Ok(event) => match serde_json::from_str::<GeminiStreamResponse>(&event.data) {
+                    Ok(chunk) => Ok(chunk),
+                    Err(e) => Err(ProviderError::ParseError(format!(
+                        "Failed to parse Gemini SSE event: {e}"
+                    ))),
+                },
+                Err(e) => Err(ProviderError::StreamError(format!("SSE error: {e}"))),
             });
 
         let stream: Pin<Box<dyn Stream<Item = Result<GeminiStreamResponse>> + Send>> =
             Box::pin(sse_stream);
 
-        Ok(Self::parse_sse_stream(stream, model_info, thought_signature_out))
+        Ok(Self::parse_sse_stream(
+            stream,
+            model_info,
+            thought_signature_out,
+        ))
     }
 
     fn get_model(&self) -> (String, ModelInfo) {
         (self.model_id.clone(), self.model_info.clone())
     }
-
 
     async fn complete_prompt(&self, prompt: &str) -> Result<String> {
         let url = format!(
@@ -543,7 +568,10 @@ impl Provider for GoogleHandler {
 
         if !response.status().is_success() {
             let status = response.status().as_u16();
-            let text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+            let text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
             return Err(ProviderError::api_error_response("gemini", status, text));
         }
 
@@ -636,8 +664,7 @@ impl VertexHandler {
 
         let mut client_builder = reqwest::Client::builder();
         if let Some(timeout) = config.request_timeout {
-            client_builder =
-                client_builder.timeout(std::time::Duration::from_millis(timeout));
+            client_builder = client_builder.timeout(std::time::Duration::from_millis(timeout));
         }
         let http_client = client_builder.build().map_err(ProviderError::Reqwest)?;
 
@@ -678,8 +705,7 @@ impl VertexHandler {
     pub fn from_settings(
         settings: &roo_types::provider_settings::ProviderSettings,
     ) -> Result<Self> {
-        let config =
-            VertexConfig::from_settings(settings).ok_or(ProviderError::ApiKeyRequired)?;
+        let config = VertexConfig::from_settings(settings).ok_or(ProviderError::ApiKeyRequired)?;
         Self::new(config)
     }
 
@@ -706,11 +732,7 @@ impl VertexHandler {
 
         format!(
             "https://{}-aiplatform.googleapis.com/v1/projects/{}/locations/{}/publishers/{}/models/{}:streamGenerateContent?alt=sse",
-            self.region,
-            self.project_id,
-            self.region,
-            publisher,
-            clean_id,
+            self.region, self.project_id, self.region, publisher, clean_id,
         )
     }
 
@@ -725,11 +747,7 @@ impl VertexHandler {
 
         format!(
             "https://{}-aiplatform.googleapis.com/v1/projects/{}/locations/{}/publishers/{}/models/{}:generateContent",
-            self.region,
-            self.project_id,
-            self.region,
-            publisher,
-            clean_id,
+            self.region, self.project_id, self.region, publisher, clean_id,
         )
     }
 
@@ -749,8 +767,7 @@ impl VertexHandler {
 
         let mut gemini_contents: Vec<Value> = Vec::new();
         for msg in messages {
-            let gemini_messages =
-                convert_anthropic_message_to_gemini(msg, &conversion_opts);
+            let gemini_messages = convert_anthropic_message_to_gemini(msg, &conversion_opts);
             for gemini_msg in gemini_messages {
                 gemini_contents.push(serde_json::to_value(gemini_msg).unwrap_or_default());
             }
@@ -810,8 +827,11 @@ impl VertexHandler {
                 v if v.as_str() == Some("auto") => ("AUTO", None),
                 v if v.as_str() == Some("none") => ("NONE", None),
                 v if v.as_str() == Some("required") => ("ANY", None),
-                v if v.is_object() && v.get("type").and_then(|t| t.as_str()) == Some("function") => {
-                    let name = v.get("function")
+                v if v.is_object()
+                    && v.get("type").and_then(|t| t.as_str()) == Some("function") =>
+                {
+                    let name = v
+                        .get("function")
                         .and_then(|f| f.get("name"))
                         .and_then(|n| n.as_str())
                         .map(|s| vec![s.to_string()]);
@@ -860,7 +880,10 @@ impl Provider for VertexHandler {
 
         if !response.status().is_success() {
             let status = response.status().as_u16();
-            let text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+            let text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
             return Err(ProviderError::api_error_response("vertex", status, text));
         }
 
@@ -871,21 +894,23 @@ impl Provider for VertexHandler {
             .bytes_stream()
             .eventsource()
             .map(move |event| match event {
-                Ok(event) => {
-                    match serde_json::from_str::<GeminiStreamResponse>(&event.data) {
-                        Ok(chunk) => Ok(chunk),
-                        Err(e) => Err(ProviderError::ParseError(format!(
-                            "Failed to parse Vertex SSE event: {e}"
-                        ))),
-                    }
-                }
+                Ok(event) => match serde_json::from_str::<GeminiStreamResponse>(&event.data) {
+                    Ok(chunk) => Ok(chunk),
+                    Err(e) => Err(ProviderError::ParseError(format!(
+                        "Failed to parse Vertex SSE event: {e}"
+                    ))),
+                },
                 Err(e) => Err(ProviderError::StreamError(format!("SSE error: {e}"))),
             });
 
         let stream: Pin<Box<dyn Stream<Item = Result<GeminiStreamResponse>> + Send>> =
             Box::pin(sse_stream);
 
-        Ok(GoogleHandler::parse_sse_stream(stream, model_info, thought_signature_out))
+        Ok(GoogleHandler::parse_sse_stream(
+            stream,
+            model_info,
+            thought_signature_out,
+        ))
     }
 
     fn get_model(&self) -> (String, ModelInfo) {
@@ -925,7 +950,10 @@ impl Provider for VertexHandler {
 
         if !response.status().is_success() {
             let status = response.status().as_u16();
-            let text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+            let text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
             return Err(ProviderError::api_error_response("vertex", status, text));
         }
 
@@ -969,9 +997,21 @@ mod tests {
     #[test]
     fn test_all_models_have_required_fields() {
         for (id, info) in models::models() {
-            assert!(info.max_tokens.is_some(), "Model '{}' missing max_tokens", id);
-            assert!(info.input_price.is_some(), "Model '{}' missing input_price", id);
-            assert!(info.output_price.is_some(), "Model '{}' missing output_price", id);
+            assert!(
+                info.max_tokens.is_some(),
+                "Model '{}' missing max_tokens",
+                id
+            );
+            assert!(
+                info.input_price.is_some(),
+                "Model '{}' missing input_price",
+                id
+            );
+            assert!(
+                info.output_price.is_some(),
+                "Model '{}' missing output_price",
+                id
+            );
         }
     }
 
@@ -1073,20 +1113,29 @@ mod tests {
     #[test]
     fn test_models_count() {
         let all_models = models::models();
-        assert!(all_models.len() >= 5, "Should have at least 5 Gemini models");
+        assert!(
+            all_models.len() >= 5,
+            "Should have at least 5 Gemini models"
+        );
     }
 
     #[test]
     fn test_all_models_support_images() {
         for (id, info) in models::models() {
-            assert!(info.supports_images.unwrap_or(false), "Model '{}' should support images", id);
+            assert!(
+                info.supports_images.unwrap_or(false),
+                "Model '{}' should support images",
+                id
+            );
         }
     }
 
     #[test]
     fn test_pro_model_has_thinking() {
         let all_models = models::models();
-        let pro = all_models.get("gemini-2.5-pro").expect("gemini-2.5-pro should exist");
+        let pro = all_models
+            .get("gemini-2.5-pro")
+            .expect("gemini-2.5-pro should exist");
         assert_eq!(pro.supports_reasoning_budget, Some(true));
     }
 
@@ -1115,7 +1164,6 @@ mod tests {
         assert_eq!(model_id, "gemini-future");
         assert!(info.max_tokens.is_some());
     }
-
 
     #[test]
     fn test_handler_with_timeout() {
@@ -1251,9 +1299,15 @@ mod tests {
 
     #[test]
     fn test_vertex_publisher_detection() {
-        assert_eq!(VertexHandler::get_publisher("claude-sonnet-4@20250514"), "anthropic");
+        assert_eq!(
+            VertexHandler::get_publisher("claude-sonnet-4@20250514"),
+            "anthropic"
+        );
         assert_eq!(VertexHandler::get_publisher("gemini-2.5-pro"), "google");
-        assert_eq!(VertexHandler::get_publisher("claude-3-opus@20240229"), "anthropic");
+        assert_eq!(
+            VertexHandler::get_publisher("claude-3-opus@20240229"),
+            "anthropic"
+        );
     }
 
     #[test]
@@ -1292,13 +1346,20 @@ mod tests {
             enable_1m_context: false,
             max_thinking_tokens: None,
         };
-        assert_eq!(config.base_url(), "https://us-central1-aiplatform.googleapis.com/v1");
+        assert_eq!(
+            config.base_url(),
+            "https://us-central1-aiplatform.googleapis.com/v1"
+        );
     }
 
     #[test]
     fn test_vertex_models_count() {
         let all_models = models::vertex_models();
-        assert!(all_models.len() >= 20, "Should have at least 20 Vertex models, got {}", all_models.len());
+        assert!(
+            all_models.len() >= 20,
+            "Should have at least 20 Vertex models, got {}",
+            all_models.len()
+        );
     }
 
     #[test]

@@ -42,8 +42,8 @@ pub use circuit_breaker::{CircuitBreaker, CircuitBreakerConfig, CircuitState};
 pub use context::{TokenEstimator, dual_ratio_estimate};
 pub use conversation_backend::{ConversationBackend, DiscoveredToolScope, ProviderCompatBackend};
 pub use retry::{
-    ApiErrorKind, FastModeState, OAuthRefreshCallback, ResponseHints, RetryConfig,
-    RetryContext, RetryOptions, SubscriberTier, classify_api_error, get_subscriber_tier,
+    ApiErrorKind, FastModeState, OAuthRefreshCallback, ResponseHints, RetryConfig, RetryContext,
+    RetryOptions, SubscriberTier, classify_api_error, get_subscriber_tier,
     is_enterprise_subscriber, is_fast_mode_enabled, is_persistent_retry_enabled, is_subscriber,
     should_retry_529, with_retry_ext,
 };
@@ -63,6 +63,7 @@ use claude_tools::{
     ToolSpec, runtime_provider_tool_specs,
     runtime_visible_provider_tool_specs_with_discovered_tools,
 };
+use parking_lot::Mutex;
 use reqwest::Client;
 use reqwest::header::{
     ACCEPT, AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue, USER_AGENT,
@@ -71,7 +72,6 @@ use serde_json::{Value, json};
 use std::borrow::Cow;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::env;
-use std::sync::Mutex;
 use std::time::Duration;
 use uuid::Uuid;
 
@@ -159,7 +159,7 @@ impl ProviderClient {
     /// Returns `Ok(())` if requests are allowed, or an error describing
     /// why the request was rejected.
     fn check_circuit(&self, provider_name: &str) -> Result<()> {
-        let breakers = self.breakers.lock().unwrap_or_else(|e| e.into_inner());
+        let breakers = self.breakers.lock();
         if let Some(breaker) = breakers.get(provider_name) {
             breaker.allow_request().map_err(|state| {
                 anyhow!("provider {provider_name} circuit breaker is {state:?} — skipping request")
@@ -170,7 +170,7 @@ impl ProviderClient {
 
     /// Record a successful provider call in the circuit breaker.
     fn record_success(&self, provider_name: &str) {
-        let mut breakers = self.breakers.lock().unwrap_or_else(|e| e.into_inner());
+        let mut breakers = self.breakers.lock();
         if let Some(breaker) = breakers.get_mut(provider_name) {
             breaker.record_success();
         }
@@ -180,7 +180,7 @@ impl ProviderClient {
     ///
     /// Lazily creates a breaker for the provider if one does not yet exist.
     fn record_failure(&self, provider_name: &str) {
-        let mut breakers = self.breakers.lock().unwrap_or_else(|e| e.into_inner());
+        let mut breakers = self.breakers.lock();
         use std::collections::hash_map::Entry;
         match breakers.entry(provider_name.to_owned()) {
             Entry::Occupied(e) => e.into_mut().record_failure(),
@@ -739,8 +739,12 @@ impl ProviderClient {
                         } else {
                             retry_after
                         };
-                        tokio::time::sleep(compute_retry_delay(provider, attempt, effective_retry_after))
-                            .await;
+                        tokio::time::sleep(compute_retry_delay(
+                            provider,
+                            attempt,
+                            effective_retry_after,
+                        ))
+                        .await;
                         attempt += 1;
                         continue;
                     }
@@ -1974,8 +1978,7 @@ async fn prepare_anthropic_request_surface(
     // Normalize messages for API: role alternation, tool pairing, thinking cleanup
     let mut messages = messages;
     let tool_search = tool_search_enabled_from_tool_schemas(&tools);
-    let available_tool_names_hashset: HashSet<String> =
-        available_tool_names.into_iter().collect();
+    let available_tool_names_hashset: HashSet<String> = available_tool_names.into_iter().collect();
     let config = normalize::NormalizeConfig {
         tool_search_enabled: tool_search,
         available_tool_names: Some(&available_tool_names_hashset),
@@ -1998,12 +2001,18 @@ async fn build_anthropic_request_body(
     // the official Claude Code CLI.  The fingerprint is derived from the first
     // user message text using the same SHA-256 + salt algorithm.
     if matches!(provider.protocol, ProviderProtocol::Anthropic) {
-        let fp = fingerprint::compute_attribution_fingerprint(&messages, claude_config::runtime_version());
+        let fp = fingerprint::compute_attribution_fingerprint(
+            &messages,
+            claude_config::runtime_version(),
+        );
         let attr_text = attribution::build_billing_attribution_text(&fp);
-        system.insert(0, json!({
-            "type": "text",
-            "text": attr_text,
-        }));
+        system.insert(
+            0,
+            json!({
+                "type": "text",
+                "text": attr_text,
+            }),
+        );
     }
 
     let mut body = json!({
@@ -2077,10 +2086,7 @@ fn apply_anthropic_thinking_options(body: &mut Value, provider: &ProviderConfig)
         return;
     }
 
-    let max_tokens = body
-        .get("max_tokens")
-        .and_then(Value::as_u64)
-        .unwrap_or(0);
+    let max_tokens = body.get("max_tokens").and_then(Value::as_u64).unwrap_or(0);
     let budget = if max_tokens > 0 {
         std::cmp::min(u64::from(raw_budget), max_tokens.saturating_sub(1)) as u32
     } else {
@@ -2255,8 +2261,9 @@ fn parse_openai_response(status: u16, raw_text: String) -> Result<ProviderRespon
             .or_else(|| payload.get("message").and_then(Value::as_str))
             .unwrap_or("provider error");
         let pe = classify_provider_error(status, error_message, "openai");
-        return Err(anyhow::Error::from(pe)
-            .context(format!("provider request failed ({status}): {error_message}")));
+        return Err(anyhow::Error::from(pe).context(format!(
+            "provider request failed ({status}): {error_message}"
+        )));
     }
 
     let choice = payload
@@ -2350,8 +2357,9 @@ fn parse_anthropic_response(status: u16, raw_text: String) -> Result<ProviderRes
             .or_else(|| payload.get("message").and_then(Value::as_str))
             .unwrap_or("provider error");
         let pe = classify_provider_error(status, error_message, "anthropic");
-        return Err(anyhow::Error::from(pe)
-            .context(format!("provider request failed ({status}): {error_message}")));
+        return Err(anyhow::Error::from(pe).context(format!(
+            "provider request failed ({status}): {error_message}"
+        )));
     }
     let blocks = payload
         .get("content")
@@ -3918,7 +3926,11 @@ mod tests {
 
         let budget = body["thinking"]["budget_tokens"].as_u64().unwrap();
         assert_eq!(budget, 8_191, "budget should be clamped to max_tokens - 1");
-        assert_eq!(body["max_tokens"].as_u64().unwrap(), 8_192, "max_tokens should remain unchanged since budget < max_tokens");
+        assert_eq!(
+            body["max_tokens"].as_u64().unwrap(),
+            8_192,
+            "max_tokens should remain unchanged since budget < max_tokens"
+        );
     }
 
     #[test]
@@ -3935,7 +3947,10 @@ mod tests {
         super::apply_anthropic_thinking_options(&mut body, &provider);
 
         let budget = body["thinking"]["budget_tokens"].as_u64().unwrap();
-        assert_eq!(budget, 5_000, "budget should be unchanged when already below max_tokens");
+        assert_eq!(
+            budget, 5_000,
+            "budget should be unchanged when already below max_tokens"
+        );
     }
 
     #[test]
@@ -3952,7 +3967,10 @@ mod tests {
         super::apply_anthropic_thinking_options(&mut body, &provider);
 
         let budget = body["thinking"]["budget_tokens"].as_u64().unwrap();
-        assert_eq!(budget, 8_191, "budget equal to max_tokens must be clamped to max_tokens - 1");
+        assert_eq!(
+            budget, 8_191,
+            "budget equal to max_tokens must be clamped to max_tokens - 1"
+        );
     }
 
     #[test]
@@ -3969,7 +3987,10 @@ mod tests {
         super::apply_anthropic_thinking_options(&mut body, &provider);
 
         let budget = body["thinking"]["budget_tokens"].as_u64().unwrap();
-        assert_eq!(budget, 0, "budget should clamp to 0 when max_tokens is 1 (1 - 1 = 0)");
+        assert_eq!(
+            budget, 0,
+            "budget should clamp to 0 when max_tokens is 1 (1 - 1 = 0)"
+        );
         // The safety net should still kick in and raise max_tokens.
         assert!(body["max_tokens"].as_u64().unwrap() > budget);
     }

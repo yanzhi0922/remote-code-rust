@@ -31,7 +31,9 @@ pub struct OllamaHandler {
 impl OllamaHandler {
     /// Create a new Ollama handler from configuration.
     pub fn new(config: OllamaConfig) -> Result<Self, roo_provider::ProviderError> {
-        let model_id = config.model_id.unwrap_or_else(|| models::default_model_id());
+        let model_id = config
+            .model_id
+            .unwrap_or_else(|| models::default_model_id());
         let model_info = models::models()
             .get(&model_id)
             .cloned()
@@ -53,7 +55,7 @@ impl OllamaHandler {
             model_info,
             provider_name_enum: ProviderName::Ollama,
             request_timeout: config.request_timeout,
-        reasoning_effort: None,
+            reasoning_effort: None,
             streaming_enabled: None,
             include_max_tokens: None,
             extra_body_fields: config.num_ctx.map(|n| serde_json::json!({"num_ctx": n})),
@@ -129,7 +131,8 @@ impl OllamaHandler {
         // Ollama /api/tags returns { "models": [ { "name": "...", "model": "...", ... } ] }
         if let Some(models_arr) = parsed.get("models").and_then(|m| m.as_array()) {
             for entry in models_arr {
-                let name = entry["name"].as_str()
+                let name = entry["name"]
+                    .as_str()
                     .or_else(|| entry["model"].as_str())
                     .unwrap_or("")
                     .to_string();
@@ -140,7 +143,8 @@ impl OllamaHandler {
                 // Ollama may append :latest to model names
                 let clean_name = name.trim_end_matches(":latest").to_string();
 
-                let context_length = entry.get("parameters")
+                let context_length = entry
+                    .get("parameters")
                     .and_then(|p| p.get("num_ctx"))
                     .and_then(|v| v.as_u64())
                     .unwrap_or(131072);
@@ -200,10 +204,7 @@ impl Provider for OllamaHandler {
         self.resolve_model_info()
     }
 
-    async fn complete_prompt(
-        &self,
-        prompt: &str,
-    ) -> Result<String, roo_provider::ProviderError> {
+    async fn complete_prompt(&self, prompt: &str) -> Result<String, roo_provider::ProviderError> {
         self.inner.complete_prompt(prompt).await
     }
 
@@ -240,10 +241,7 @@ mod tests {
 
     #[test]
     fn test_config_default_url() {
-        assert_eq!(
-            OllamaConfig::DEFAULT_BASE_URL,
-            "http://localhost:11434/v1"
-        );
+        assert_eq!(OllamaConfig::DEFAULT_BASE_URL, "http://localhost:11434/v1");
     }
 
     #[test]

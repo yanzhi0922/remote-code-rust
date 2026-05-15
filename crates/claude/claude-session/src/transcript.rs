@@ -77,7 +77,8 @@ impl SessionTranscript {
                 continue;
             };
 
-            let Ok(boundary) = serde_json::from_value::<claude_transcript::CompactBoundary>(payload)
+            let Ok(boundary) =
+                serde_json::from_value::<claude_transcript::CompactBoundary>(payload)
             else {
                 continue;
             };
@@ -506,8 +507,9 @@ mod tests {
     #[test]
     fn transcript_reads_conversation_memory_saved_messages() {
         let session_id = Uuid::new_v4();
-        let mut entry =
-            claude_core::ConversationEntry::system(r#"{"writtenPaths":["C:/mem.md"],"teamCount":1}"#);
+        let mut entry = claude_core::ConversationEntry::system(
+            r#"{"writtenPaths":["C:/mem.md"],"teamCount":1}"#,
+        );
         entry.name = Some("memory_saved".to_owned());
         let transcript = SessionTranscript::new(
             session_id,

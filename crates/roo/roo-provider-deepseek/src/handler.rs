@@ -10,8 +10,8 @@
 
 use async_trait::async_trait;
 use roo_provider::{
-    transform::{convert_to_r1_zai_messages, R1ZaiOptions},
     ApiStream, CreateMessageMetadata, OpenAiCompatibleConfig, OpenAiCompatibleProvider, Provider,
+    transform::{R1ZaiOptions, convert_to_r1_zai_messages},
 };
 use roo_types::api::ProviderName;
 use roo_types::model::ModelInfo;
@@ -33,7 +33,9 @@ pub struct DeepSeekHandler {
 impl DeepSeekHandler {
     /// Create a new DeepSeek handler from configuration.
     pub fn new(config: DeepSeekConfig) -> Result<Self, roo_provider::ProviderError> {
-        let model_id = config.model_id.unwrap_or_else(|| models::default_model_id());
+        let model_id = config
+            .model_id
+            .unwrap_or_else(|| models::default_model_id());
         let model_info = models::models()
             .get(&model_id)
             .cloned()
@@ -72,9 +74,8 @@ impl DeepSeekHandler {
     pub fn from_settings(
         settings: &roo_types::provider_settings::ProviderSettings,
     ) -> Result<Self, roo_provider::ProviderError> {
-        let config = DeepSeekConfig::from_settings(settings).ok_or_else(|| {
-            roo_provider::ProviderError::ApiKeyRequired
-        })?;
+        let config = DeepSeekConfig::from_settings(settings)
+            .ok_or_else(|| roo_provider::ProviderError::ApiKeyRequired)?;
         Self::new(config)
     }
 
@@ -180,10 +181,7 @@ impl Provider for DeepSeekHandler {
         self.inner.get_model()
     }
 
-    async fn complete_prompt(
-        &self,
-        prompt: &str,
-    ) -> Result<String, roo_provider::ProviderError> {
+    async fn complete_prompt(&self, prompt: &str) -> Result<String, roo_provider::ProviderError> {
         self.inner.complete_prompt(prompt).await
     }
 
@@ -231,7 +229,9 @@ mod tests {
     #[test]
     fn test_reasoner_has_thinking_enabled() {
         let all_models = models::models();
-        let reasoner = all_models.get("deepseek-reasoner").expect("reasoner should exist");
+        let reasoner = all_models
+            .get("deepseek-reasoner")
+            .expect("reasoner should exist");
         assert_eq!(reasoner.supports_reasoning_budget, Some(true));
     }
 
@@ -245,10 +245,7 @@ mod tests {
 
     #[test]
     fn test_deepseek_config_default_url() {
-        assert_eq!(
-            DeepSeekConfig::DEFAULT_BASE_URL,
-            "https://api.deepseek.com"
-        );
+        assert_eq!(DeepSeekConfig::DEFAULT_BASE_URL, "https://api.deepseek.com");
     }
 
     #[test]
@@ -342,7 +339,10 @@ mod tests {
     #[test]
     fn test_models_count() {
         let all_models = models::models();
-        assert!(all_models.len() >= 4, "Should have at least 4 DeepSeek models");
+        assert!(
+            all_models.len() >= 4,
+            "Should have at least 4 DeepSeek models"
+        );
     }
 
     #[test]
@@ -431,7 +431,7 @@ mod tests {
                 condense_parent: None,
                 is_summary: None,
                 condense_id: None,
-            reasoning_details: None,
+                reasoning_details: None,
             },
             roo_types::api::ApiMessage {
                 role: roo_types::api::MessageRole::User,
@@ -446,7 +446,7 @@ mod tests {
                 condense_parent: None,
                 is_summary: None,
                 condense_id: None,
-            reasoning_details: None,
+                reasoning_details: None,
             },
         ];
 
@@ -460,6 +460,9 @@ mod tests {
         // The system prompt + 2 user messages should be merged into fewer messages
         let msgs = body["messages"].as_array().unwrap();
         // System prompt becomes first user message, then the two user messages should be merged
-        assert!(msgs.len() < 3, "R1 format should merge consecutive same-role messages");
+        assert!(
+            msgs.len() < 3,
+            "R1 format should merge consecutive same-role messages"
+        );
     }
 }

@@ -9,7 +9,9 @@ use std::sync::Mutex;
 use serde_json::Value;
 
 use crate::client::{BaseTelemetryClient, TelemetryClient};
-use crate::types::{TelemetryEvent, TelemetryEventName, SubscriptionType, TelemetryEventSubscription};
+use crate::types::{
+    SubscriptionType, TelemetryEvent, TelemetryEventName, TelemetryEventSubscription,
+};
 
 // ---------------------------------------------------------------------------
 // PostHog batch request types
@@ -119,7 +121,6 @@ impl PostHogTelemetryClient {
 
         !msg_contains_rate_limit && !msg_contains_billing
     }
-
 }
 
 impl TelemetryClient for PostHogTelemetryClient {
@@ -146,7 +147,10 @@ impl TelemetryClient for PostHogTelemetryClient {
             None => HashMap::new(),
         };
         // Inject distinct_id into every event
-        properties.insert("distinct_id".to_string(), Value::String(self.distinct_id.clone()));
+        properties.insert(
+            "distinct_id".to_string(),
+            Value::String(self.distinct_id.clone()),
+        );
 
         let event_name = format!("{:?}", event.event_name);
         let api_key = self.api_key.clone();
@@ -202,14 +206,14 @@ impl TelemetryClient for PostHogTelemetryClient {
         }
 
         if self.base.is_debug() {
-            eprintln!(
-                "[PostHogTelemetryClient#captureException] {}",
-                error
-            );
+            eprintln!("[PostHogTelemetryClient#captureException] {}", error);
         }
 
         let mut properties = additional_properties.unwrap_or_default();
-        properties.insert("distinct_id".to_string(), Value::String(self.distinct_id.clone()));
+        properties.insert(
+            "distinct_id".to_string(),
+            Value::String(self.distinct_id.clone()),
+        );
 
         let error_type = std::any::type_name_of_val(error).to_string();
         let error_message = error.to_string();
@@ -232,14 +236,8 @@ impl TelemetryClient for PostHogTelemetryClient {
                             "$exception_message".to_string(),
                             Value::String(error_message),
                         );
-                        p.insert(
-                            "$exception_type".to_string(),
-                            Value::String(error_type),
-                        );
-                        p.insert(
-                            "distinct_id".to_string(),
-                            Value::String(distinct_id),
-                        );
+                        p.insert("$exception_type".to_string(), Value::String(error_type));
+                        p.insert("distinct_id".to_string(), Value::String(distinct_id));
                         p
                     },
                     timestamp: None,
@@ -306,7 +304,10 @@ mod tests {
     fn test_filter_properties_removes_git() {
         let client = PostHogTelemetryClient::new("test-key".to_string(), "test-id".to_string());
         let mut props = HashMap::new();
-        props.insert("repositoryUrl".to_string(), Value::String("https://github.com/test".to_string()));
+        props.insert(
+            "repositoryUrl".to_string(),
+            Value::String("https://github.com/test".to_string()),
+        );
         props.insert("mode".to_string(), Value::String("code".to_string()));
 
         let filtered = client.filter_properties(&props);
@@ -317,25 +318,37 @@ mod tests {
     #[test]
     fn test_should_report_error_normal() {
         let client = PostHogTelemetryClient::new("test-key".to_string(), "test-id".to_string());
-        assert!(client.should_report_error(&std::io::Error::new(std::io::ErrorKind::Other, "something failed")));
+        assert!(client.should_report_error(&std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "something failed"
+        )));
     }
 
     #[test]
     fn test_should_report_error_rate_limit_429() {
         let client = PostHogTelemetryClient::new("test-key".to_string(), "test-id".to_string());
-        assert!(!client.should_report_error(&std::io::Error::new(std::io::ErrorKind::Other, "429 Too Many Requests")));
+        assert!(!client.should_report_error(&std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "429 Too Many Requests"
+        )));
     }
 
     #[test]
     fn test_should_report_error_rate_limit_text() {
         let client = PostHogTelemetryClient::new("test-key".to_string(), "test-id".to_string());
-        assert!(!client.should_report_error(&std::io::Error::new(std::io::ErrorKind::Other, "rate limit exceeded")));
+        assert!(!client.should_report_error(&std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "rate limit exceeded"
+        )));
     }
 
     #[test]
     fn test_should_report_error_billing_402() {
         let client = PostHogTelemetryClient::new("test-key".to_string(), "test-id".to_string());
-        assert!(!client.should_report_error(&std::io::Error::new(std::io::ErrorKind::Other, "402 Payment Required")));
+        assert!(!client.should_report_error(&std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "402 Payment Required"
+        )));
     }
 
     #[test]
@@ -352,10 +365,26 @@ mod tests {
     fn test_event_capturable_excludes() {
         let client = PostHogTelemetryClient::new("test-key".to_string(), "test-id".to_string());
         // These should be excluded
-        assert!(!client.base.is_event_capturable(&TelemetryEventName::TaskConversationMessage));
-        assert!(!client.base.is_event_capturable(&TelemetryEventName::TaskLlmCompletion));
+        assert!(
+            !client
+                .base
+                .is_event_capturable(&TelemetryEventName::TaskConversationMessage)
+        );
+        assert!(
+            !client
+                .base
+                .is_event_capturable(&TelemetryEventName::TaskLlmCompletion)
+        );
         // Others should be included
-        assert!(client.base.is_event_capturable(&TelemetryEventName::TaskCreated));
-        assert!(client.base.is_event_capturable(&TelemetryEventName::ToolUsed));
+        assert!(
+            client
+                .base
+                .is_event_capturable(&TelemetryEventName::TaskCreated)
+        );
+        assert!(
+            client
+                .base
+                .is_event_capturable(&TelemetryEventName::ToolUsed)
+        );
     }
 }

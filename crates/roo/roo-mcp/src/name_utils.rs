@@ -106,7 +106,11 @@ pub fn normalize_mcp_tool_name(tool_name: &str) -> String {
             let tool_name_part = parts[2..].join(MCP_TOOL_SEPARATOR);
             return format!(
                 "{}{}{}{}{}",
-                MCP_TOOL_PREFIX, MCP_TOOL_SEPARATOR, server_name, MCP_TOOL_SEPARATOR, tool_name_part
+                MCP_TOOL_PREFIX,
+                MCP_TOOL_SEPARATOR,
+                server_name,
+                MCP_TOOL_SEPARATOR,
+                tool_name_part
             );
         }
     }
@@ -137,11 +141,7 @@ pub fn build_mcp_tool_name(server_name: &str, tool_name: &str) -> String {
     // Build the full name: mcp--{server}--{tool}
     let full_name = format!(
         "{}{}{}{}{}",
-        MCP_TOOL_PREFIX,
-        MCP_TOOL_SEPARATOR,
-        sanitized_server,
-        MCP_TOOL_SEPARATOR,
-        sanitized_tool
+        MCP_TOOL_PREFIX, MCP_TOOL_SEPARATOR, sanitized_server, MCP_TOOL_SEPARATOR, sanitized_tool
     );
 
     // Truncate if necessary (max 64 chars for Gemini)
@@ -266,7 +266,10 @@ mod tests {
 
     #[test]
     fn test_sanitize_preserves_hyphens() {
-        assert_eq!(sanitize_mcp_name("atlassian-jira_search"), "atlassian-jira_search");
+        assert_eq!(
+            sanitize_mcp_name("atlassian-jira_search"),
+            "atlassian-jira_search"
+        );
         assert_eq!(
             sanitize_mcp_name("atlassian-confluence_search"),
             "atlassian-confluence_search"
@@ -284,7 +287,10 @@ mod tests {
     fn test_normalize_for_comparison() {
         assert_eq!(normalize_for_comparison("get-user"), "get_user");
         assert_eq!(normalize_for_comparison("get_user"), "get_user");
-        assert_eq!(normalize_for_comparison("mcp--server--tool"), "mcp__server__tool");
+        assert_eq!(
+            normalize_for_comparison("mcp--server--tool"),
+            "mcp__server__tool"
+        );
     }
 
     // ---- normalize_mcp_tool_name tests ----
@@ -501,10 +507,7 @@ mod tests {
     fn test_roundtrip_basic() {
         let tool_name = build_mcp_tool_name("server", "tool");
         let parsed = parse_mcp_tool_name(&tool_name);
-        assert_eq!(
-            parsed,
-            Some(("server".to_string(), "tool".to_string()))
-        );
+        assert_eq!(parsed, Some(("server".to_string(), "tool".to_string())));
     }
 
     #[test]
@@ -533,7 +536,10 @@ mod tests {
         let parsed = parse_mcp_tool_name(&tool_name);
         assert_eq!(
             parsed,
-            Some(("Weather_API".to_string(), "get_current_forecast".to_string()))
+            Some((
+                "Weather_API".to_string(),
+                "get_current_forecast".to_string()
+            ))
         );
     }
 
@@ -614,10 +620,7 @@ mod tests {
         assert_eq!(tool_name, "mcp--my-server--tool");
 
         let parsed = parse_mcp_tool_name(&tool_name);
-        assert_eq!(
-            parsed,
-            Some(("my-server".to_string(), "tool".to_string()))
-        );
+        assert_eq!(parsed, Some(("my-server".to_string(), "tool".to_string())));
     }
 
     #[test]

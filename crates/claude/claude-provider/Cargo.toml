@@ -13,6 +13,7 @@ workspace = true
 
 [dependencies]
 anyhow.workspace = true
+parking_lot.workspace = true
 async-trait.workspace = true
 base64.workspace = true
 chrono.workspace = true
@@ -29,6 +30,7 @@ tokio.workspace = true
 tracing.workspace = true
 uuid.workspace = true
 claude-config = { path = "../claude-config" }
+claude-context = { path = "../claude-context" }
 claude-core = { path = "../claude-core" }
 claude-tools = { path = "../claude-tools" }
 

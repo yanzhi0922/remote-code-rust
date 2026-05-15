@@ -1,8 +1,8 @@
 //! Anthropic-specific configuration and SSE response types.
 
-use serde::Deserialize;
-use roo_types::provider_settings::ProviderSettings;
 use roo_types::model::ModelInfo;
+use roo_types::provider_settings::ProviderSettings;
+use serde::Deserialize;
 
 /// Configuration for the Anthropic provider.
 #[derive(Debug, Clone)]
@@ -69,10 +69,7 @@ pub enum AnthropicSseEvent {
     },
 
     #[serde(rename = "content_block_delta")]
-    ContentBlockDelta {
-        index: u64,
-        delta: AnthropicDelta,
-    },
+    ContentBlockDelta { index: u64, delta: AnthropicDelta },
 
     #[serde(rename = "message_delta")]
     MessageDelta {
@@ -114,9 +111,7 @@ pub enum AnthropicContentBlock {
         input: serde_json::Value,
     },
     #[serde(rename = "thinking")]
-    Thinking {
-        thinking: String,
-    },
+    Thinking { thinking: String },
 }
 
 #[derive(Debug, Deserialize)]
@@ -127,13 +122,9 @@ pub enum AnthropicDelta {
     #[serde(rename = "thinking_delta")]
     ThinkingDelta { thinking: String },
     #[serde(rename = "input_json_delta")]
-    InputJsonDelta {
-        partial_json: String,
-    },
+    InputJsonDelta { partial_json: String },
     #[serde(rename = "signature_delta")]
-    SignatureDelta {
-        signature: String,
-    },
+    SignatureDelta { signature: String },
 }
 
 #[derive(Debug, Deserialize)]
