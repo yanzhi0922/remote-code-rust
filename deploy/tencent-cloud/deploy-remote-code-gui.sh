@@ -2,7 +2,7 @@
 set -euo pipefail
 
 SOURCE_DIR="${1:-}"
-TARGET_DIR="${2:-/var/www/remote-code/dist}"
+TARGET_DIR="${2:-/opt/remote-code/frontend}"
 
 if [[ -z "${SOURCE_DIR}" ]]; then
   echo "usage: $0 <built-dist-dir> [target-dir]" >&2

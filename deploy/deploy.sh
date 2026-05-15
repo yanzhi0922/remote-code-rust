@@ -30,7 +30,7 @@ $SSH "mkdir -p $REMOTE_DIR/bin && cp $REMOTE_DIR/src/target/release/remote-code-
 
 # 4. Install config
 echo ">>> Installing config..."
-$SSH "cp $REMOTE_DIR/src/deploy/control-plane.env $REMOTE_DIR/control-plane.env 2>/dev/null || true"
+$SSH "if [ ! -f $REMOTE_DIR/control-plane.env ]; then cp $REMOTE_DIR/src/deploy/remote-code-control-plane.env $REMOTE_DIR/control-plane.env; fi"
 $SSH "cp $REMOTE_DIR/src/deploy/Caddyfile /etc/caddy/Caddyfile"
 $SSH "cp $REMOTE_DIR/src/deploy/remote-code-control-plane.service /etc/systemd/system/"
 
