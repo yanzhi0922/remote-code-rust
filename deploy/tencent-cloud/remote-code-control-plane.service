@@ -15,7 +15,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full
 ProtectHome=true
-ReadWritePaths=/var/lib/remote-code
+ReadWritePaths=/var/lib/remote-code /opt/remote-code/downloads
 
 [Install]
 WantedBy=multi-user.target

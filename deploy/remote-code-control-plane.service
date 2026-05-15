@@ -4,13 +4,19 @@ After=network.target
 
 [Service]
 Type=simple
-User=root
+User=remote-code
+Group=remote-code
 WorkingDirectory=/opt/remote-code
-EnvironmentFile=/opt/remote-code/control-plane.env
+EnvironmentFile=/etc/remote-code/control-plane.env
 ExecStart=/opt/remote-code/bin/remote-code-control-plane serve
 Restart=always
-RestartSec=5
+RestartSec=3
 LimitNOFILE=65536
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=/var/lib/remote-code /opt/remote-code/downloads
 
 [Install]
 WantedBy=multi-user.target

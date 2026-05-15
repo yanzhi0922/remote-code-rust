@@ -26,6 +26,15 @@ The codex and roo-code directories are excluded from the main repo via `.gitigno
 - `apps/remote-code-migrate`: explicit migration and import tool
 - `apps/remote-code-gui`: desktop GUI (Tauri v2 + React 19) — also serves as the Tauri v2 mobile target (iOS / Android); `mobile.rs` provides 20 native Tauri commands for haptics, biometrics, secure storage, file download/share, push notifications, and deep linking; `RemoteApp.tsx` provides the responsive remote-control UI reused in both desktop and mobile WebView contexts
 
+### Deployment Boundary
+
+Production uses a local-execution, cloud-relay model:
+
+- The user's desktop runs the GUI, local runner, agent engines, provider credentials, workspace access, and tool execution.
+- The cloud host runs only `remote-code-control-plane`, static Web/PWA assets, authentication/pairing, event relay, and optional app-binary downloads.
+- The cloud host must not run `remote-code-runner`, `remote-code`, Codex/Roo/Claude agent loops, workspace tools, or provider-key backed coding sessions.
+- Mobile clients connect to the control plane and control a paired desktop runner; the server is an auxiliary communication surface, not an execution environment.
+
 ### Shared Crates (`crates/shared/`)
 
 Agent-agnostic crates shared across all three adapters (Claude, Roo, Codex):
@@ -116,6 +125,8 @@ The runner owns:
 - forwarding approvals, messages, and shutdown requests
 - periodic heartbeat with exponential backoff reconnect
 
+The runner is a local component. In the production topology it runs on the user's desktop or another trusted workstation that owns the workspace, never on the relay server.
+
 ### Control Plane
 
 The control plane owns:
@@ -126,6 +137,8 @@ The control plane owns:
 - approval workflows (create, list, show, respond)
 - artifact metadata, upload (base64), and download
 - timeline event fan-out over WebSocket
+
+The control plane does not execute coding tools, read workspaces, or hold provider credentials. It can keep runner/session metadata and relay runtime events for paired devices.
 
 ### Mobile (Tauri v2)
 
@@ -162,8 +175,8 @@ The full conversation loop operates as follows:
 ### Remote Session
 
 1. A client asks the control plane to create or resume a session.
-2. The control plane selects a runner that owns the requested workspace.
-3. The runner launches a `remote-code` backend session with the correct profile and workspace mapping.
+2. The control plane selects a paired desktop runner that owns the requested workspace.
+3. The desktop runner launches a local `remote-code` backend session with the correct profile and workspace mapping.
 4. Runtime events flow from the backend to the runner, then to the control plane, then to subscribed clients.
 5. Approval responses and follow-up prompts flow back through the same chain in reverse.
 
