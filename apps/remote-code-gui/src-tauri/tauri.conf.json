@@ -48,7 +48,8 @@
         "installMode": "currentUser",
         "languages": ["English", "SimpChinese"],
         "displayLanguageSelector": false,
-        "startMenuFolder": "Remote Code"
+        "startMenuFolder": "Remote Code",
+        "installerHooks": "windows/installer-hooks.nsh"
       }
     }
   }
