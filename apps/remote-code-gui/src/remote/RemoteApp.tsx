@@ -657,9 +657,9 @@ export default function RemoteApp() {
         await refreshSessionBundle(selectedSessionId);
         if (!cancelled) {
           const config: TransportConfig = {
-            strategy: 'hybrid',
+            strategy: 'server_relay',
             baseUrl,
-            runnerBaseUrl: activeSession?.owner_runner_public_base_url ?? null,
+            runnerBaseUrl: null,
             sessionId: selectedSessionId,
             authToken: accessToken,
           };

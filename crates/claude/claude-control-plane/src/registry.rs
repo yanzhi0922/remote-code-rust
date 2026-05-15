@@ -321,17 +321,15 @@ impl Registry {
 
         // Try access token first.
         for device in self.trusted_devices.values() {
-            if let Some(ref at_hash) = device.access_token_hash {
-                if constant_time_hash_eq(&hash, at_hash) {
-                    let expired = device
-                        .access_token_expires_at
-                        .map_or(true, |exp| now >= exp);
-                    if !expired {
-                        let device_id = device.device_id;
-                        let dev = self.trusted_devices.get_mut(&device_id)?;
-                        dev.last_seen_at = now;
-                        return Some((dev.public_record(), true));
-                    }
+            if let Some(ref at_hash) = device.access_token_hash
+                && constant_time_hash_eq(&hash, at_hash)
+            {
+                let expired = device.access_token_expires_at.is_none_or(|exp| now >= exp);
+                if !expired {
+                    let device_id = device.device_id;
+                    let dev = self.trusted_devices.get_mut(&device_id)?;
+                    dev.last_seen_at = now;
+                    return Some((dev.public_record(), true));
                 }
             }
         }

@@ -65,6 +65,14 @@ export function RemoteSettings() {
     void refresh();
   }, [refresh]);
 
+  useEffect(() => {
+    if (status !== 'running') return;
+    const timer = window.setInterval(() => {
+      void tauri.remoteGetConnectionInfo().then(setConnectionInfo).catch(() => undefined);
+    }, 5000);
+    return () => window.clearInterval(timer);
+  }, [status]);
+
   const handleSaveConnection = useCallback(async () => {
     if (!controlPlaneUrl.trim()) return;
     if (!hasExistingCredentials && (!username.trim() || password.length < 4)) return;
@@ -141,6 +149,7 @@ export function RemoteSettings() {
   }, [username, password]);
 
   const isRunning = status === 'running';
+  const isConnected = Boolean(connectionInfo?.connected);
   const isConfigured = status === 'enabled' || status === 'running' || connectionInfo?.configured;
   const canStartWithCredentials =
     hasExistingCredentials || (username.trim().length > 0 && password.length >= 4);
@@ -151,8 +160,10 @@ export function RemoteSettings() {
         <div className="flex items-center gap-3">
           {status === 'loading' ? (
             <Loader2 size={20} className="animate-spin text-slate-400" />
-          ) : isRunning ? (
+          ) : isRunning && isConnected ? (
             <Wifi size={20} className="text-green-600" />
+          ) : isRunning ? (
+            <Loader2 size={20} className="animate-spin text-blue-500" />
           ) : (
             <WifiOff size={20} className="text-slate-400" />
           )}
@@ -160,8 +171,10 @@ export function RemoteSettings() {
             <div className="text-sm font-medium text-slate-800">
               {status === 'loading'
                 ? '检测中...'
-                : isRunning
+                : isRunning && isConnected
                   ? '远程控制运行中'
+                  : isRunning
+                    ? '正在连接控制平面'
                   : isConfigured
                     ? '远程控制已配置'
                     : '远程控制未配置'}
@@ -174,14 +187,16 @@ export function RemoteSettings() {
           </div>
           <span
             className={`inline-flex shrink-0 items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${
-              isRunning
+              isRunning && isConnected
                 ? 'bg-green-100 text-green-700'
+                : isRunning
+                  ? 'bg-blue-100 text-blue-700'
                 : isConfigured
                   ? 'bg-blue-100 text-blue-700'
                   : 'bg-slate-100 text-slate-500'
             }`}
           >
-            {status === 'loading' ? '--' : isRunning ? 'RUNNING' : isConfigured ? 'READY' : 'OFF'}
+            {status === 'loading' ? '--' : isRunning && isConnected ? 'ONLINE' : isRunning ? 'CONNECTING' : isConfigured ? 'READY' : 'OFF'}
           </span>
         </div>
       </div>
@@ -260,6 +275,7 @@ export function RemoteSettings() {
           <div className="space-y-2 rounded-xl border border-slate-200 bg-white p-4">
             <InfoRow label="Runner ID" value={connectionInfo.runner_id} />
             <InfoRow label="控制平面" value={connectionInfo.control_plane_url} />
+            <InfoRow label="中继连接" value={connectionInfo.connected ? '已连接' : connectionInfo.running ? '连接中' : '未连接'} />
             <InfoRow label="自动启动" value={connectionInfo.auto_start ? '是' : '否'} />
           </div>
         )}

@@ -6,6 +6,8 @@
 .DESCRIPTION
     Builds Claude Code Agent, Codex Agent, and Roo-code Agent, then copies
     the resulting binaries into a unified output directory.
+    Local development / trusted runner machines only. Do not run this on the
+    relay-only cloud control-plane host.
 
 .EXAMPLE
     ./scripts/build-agents.ps1

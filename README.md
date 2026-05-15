@@ -55,6 +55,36 @@
 - 手机 App 或 PWA 连接控制平面后，通过已配对的本机 Runner 远程控制桌面软件。
 - 腾讯云部署材料位于 [`deploy/tencent-cloud`](deploy/tencent-cloud)，默认面向 `remote-code.yz520gzy.top`。
 
+### 本地发布验证
+
+Windows 本地发布前建议执行：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\verify-release.ps1 -IncludeAudit
+```
+
+需要同时重打桌面安装包时执行：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\verify-release.ps1 -IncludeDesktopBundle -IncludeAudit -UseProxy
+```
+
+清理本地构建缓存但保留已生成安装包：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\clean-build-caches.ps1 -Aggressive
+```
+
+部署到腾讯云中继服务器只上传本地构建产物，不上传源码、不在服务器编译：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File deploy\deploy.ps1
+```
+
+`deploy.ps1` 默认要求 `target\x86_64-unknown-linux-gnu\release\remote-code-control-plane`
+已经存在；不要把 Windows `.exe` 上传到 Linux 中继机。GitHub Release 会额外产出
+`remote-code-cloud-relay-x86_64-unknown-linux-gnu` 专用云端中继包。
+
 ## 项目结构
 
 ```
@@ -230,6 +260,9 @@ npm run desktop:build
 桌面安装包由 Tauri NSIS 生成。安装后打开 `Remote Code`，在 `设置 -> 远程控制` 填写控制平面 URL、保存配对账号密码，即可让手机 App 通过控制平面远程控制本机 GUI 内置 Agent。
 
 ### 构建 Agent 二进制
+
+以下脚本仅用于本地开发机或可信 Runner 机器。云服务器只部署控制平面和静态资源，
+不要在云服务器上运行这些 Agent 构建脚本。
 
 ```bash
 # PowerShell (Windows)

@@ -1158,13 +1158,13 @@ async fn require_runner_auth(
     });
     let is_get = request.method() == axum::http::Method::GET;
 
-    if is_stream_path && (is_ws_upgrade || is_get) {
-        if let Some(token) = extract_query_auth_token(request.uri().query()) {
-            if constant_time_token_eq(&token, expected) {
-                strip_auth_from_request_uri(&mut request);
-                return next.run(request).await;
-            }
-        }
+    if is_stream_path
+        && (is_ws_upgrade || is_get)
+        && let Some(token) = extract_query_auth_token(request.uri().query())
+        && constant_time_token_eq(&token, expected)
+    {
+        strip_auth_from_request_uri(&mut request);
+        return next.run(request).await;
     }
 
     ApiError::unauthorized("missing or invalid runner bearer token".to_owned()).into_response()
@@ -1513,10 +1513,10 @@ async fn serve_runner_session_stream(
         loop {
             match tokio::time::timeout(tokio::time::Duration::from_millis(50), rx.recv()).await {
                 Ok(Ok((sid, line))) if sid == session_id => {
-                    if let Some(seq) = extract_sequence_from_json(&line) {
-                        if seq <= after {
-                            continue;
-                        }
+                    if let Some(seq) = extract_sequence_from_json(&line)
+                        && seq <= after
+                    {
+                        continue;
                     }
                     if socket
                         .send(axum::extract::ws::Message::Text(line.into()))

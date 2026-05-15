@@ -1007,6 +1007,7 @@ export interface RemoteConnectionInfo {
   auto_start: boolean;
   configured: boolean;
   running: boolean;
+  connected: boolean;
 }
 
 export function remoteGetStatus(): Promise<RemoteControlStatus> {

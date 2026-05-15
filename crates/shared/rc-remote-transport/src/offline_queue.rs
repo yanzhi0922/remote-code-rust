@@ -78,6 +78,12 @@ impl OfflineQueue {
     }
 }
 
+impl Default for OfflineQueue {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

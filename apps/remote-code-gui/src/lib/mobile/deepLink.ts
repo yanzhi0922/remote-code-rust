@@ -34,9 +34,9 @@ export function parseDeepLink(url: string): { path: string; params: Record<strin
 export function parsePairingUrl(url: string): DeepLinkPairing | null {
   const parsed = parseDeepLink(url);
   if (!parsed) return null;
-  if (parsed.path === '/pair' || parsed.path === '/pair/') {
-    const offerId = parsed.params['offerId'];
-    const secret = parsed.params['secret'];
+  if (parsed.path === '/pair' || parsed.path === '/pair/' || parsed.params['pairing_offer']) {
+    const offerId = parsed.params['offerId'] ?? parsed.params['pairing_offer'];
+    const secret = parsed.params['secret'] ?? parsed.params['pairing_secret'];
     if (offerId && secret) return { offerId, secret };
   }
   return null;

@@ -6,11 +6,11 @@
 }
 
 remote-code.yz520gzy.top {
-    root * /opt/remote-code/remote-code-gui/dist
+    root * /opt/remote-code/frontend
     encode zstd gzip
 
     @api {
-        path /v1/* /healthz
+        path /v1/* /healthz /download /downloads/*
     }
     handle @api {
         reverse_proxy 127.0.0.1:8787

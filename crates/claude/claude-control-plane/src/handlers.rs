@@ -1,6 +1,7 @@
 //! HTTP handler functions for the control plane axum router.
 
 use std::collections::{BTreeSet, HashSet};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
 use axum::Json;
 use axum::extract::{Extension, Path as AxumPath, Query, State, WebSocketUpgrade};
@@ -51,6 +52,16 @@ async fn persist_state_logged(service: &ControlPlaneService) {
 /// Returns `None` for `SharedToken` (admin — sees all) and `Device` (legacy).
 fn user_id_from_principal(principal: &AuthPrincipal) -> Option<&str> {
     principal.user_id()
+}
+
+fn require_owner_or_shared(principal: &AuthPrincipal) -> Result<(), ApiError> {
+    match principal {
+        AuthPrincipal::SharedToken => Ok(()),
+        AuthPrincipal::Device(device) if device.owner => Ok(()),
+        _ => Err(ApiError::forbidden(
+            "owner or shared-token access is required".to_owned(),
+        )),
+    }
 }
 
 /// Snapshot of ownership data for tenant-filtered event streams.
@@ -211,18 +222,22 @@ pub(crate) async fn claim_bootstrap_device(
 
 pub(crate) async fn list_devices(
     State(service): State<ControlPlaneService>,
-) -> Json<ListResponse<TrustedDeviceRecord>> {
+    Extension(principal): Extension<AuthPrincipal>,
+) -> Result<Json<ListResponse<TrustedDeviceRecord>>, ApiError> {
+    require_owner_or_shared(&principal)?;
     let registry = service.registry.read().await;
-    Json(ListResponse {
+    Ok(Json(ListResponse {
         items: registry.list_trusted_devices(),
         latest_sequence: None,
-    })
+    }))
 }
 
 pub(crate) async fn revoke_device(
     State(service): State<ControlPlaneService>,
+    Extension(principal): Extension<AuthPrincipal>,
     AxumPath(device_id): AxumPath<Uuid>,
 ) -> Result<StatusCode, ApiError> {
+    require_owner_or_shared(&principal)?;
     {
         let mut registry = service.registry.write().await;
         registry.revoke_device(device_id)?;
@@ -236,6 +251,7 @@ pub(crate) async fn create_pairing_offer(
     Extension(principal): Extension<AuthPrincipal>,
     Json(request): Json<PairingOfferCreateRequest>,
 ) -> Result<(StatusCode, Json<PairingOfferCreateResponse>), ApiError> {
+    require_owner_or_shared(&principal)?;
     let (offer, pairing_secret) = {
         let mut registry = service.registry.write().await;
         registry.create_pairing_offer(principal.created_by_device_id(), request)?
@@ -733,7 +749,11 @@ pub(crate) async fn register_runner(
     State(service): State<ControlPlaneService>,
     Extension(principal): Extension<AuthPrincipal>,
     Json(request): Json<RunnerRegistrationRequest>,
-) -> Json<RunnerRegistrationResponse> {
+) -> Result<Json<RunnerRegistrationResponse>, ApiError> {
+    validate_runner_registration_public_base_url(
+        request.public_base_url.as_deref(),
+        service.meta.public_base_url.as_deref(),
+    )?;
     let user_id = user_id_from_principal(&principal);
     let mut response = {
         let mut registry = service.registry.write().await;
@@ -763,7 +783,116 @@ pub(crate) async fn register_runner(
     } {
         response.snapshot = snapshot;
     }
-    Json(response)
+    Ok(Json(response))
+}
+
+fn validate_runner_registration_public_base_url(
+    public_base_url: Option<&str>,
+    control_plane_public_base_url: Option<&str>,
+) -> Result<(), ApiError> {
+    let Some(raw) = public_base_url
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(());
+    };
+
+    let url = reqwest::Url::parse(raw)
+        .map_err(|_| ApiError::bad_request("runner public_base_url is invalid".to_owned()))?;
+    let scheme = url.scheme();
+    let host = url.host_str().ok_or_else(|| {
+        ApiError::bad_request("runner public_base_url must include a host".to_owned())
+    })?;
+
+    let loopback = is_loopback_host(host);
+    if !(scheme == "https" || (cfg!(debug_assertions) && scheme == "http" && loopback)) {
+        return Err(ApiError::bad_request(
+            "runner public_base_url must use https outside loopback development".to_owned(),
+        ));
+    }
+
+    if !cfg!(debug_assertions) && is_forbidden_runner_public_host(host) {
+        return Err(ApiError::bad_request(
+            "runner public_base_url must not target loopback, private, link-local, multicast, or unspecified hosts"
+                .to_owned(),
+        ));
+    }
+
+    if let Some(control_plane_url) = control_plane_public_base_url
+        && let Ok(control_plane) = reqwest::Url::parse(control_plane_url)
+        && let Some(control_plane_host) = control_plane.host_str()
+        && host.eq_ignore_ascii_case(control_plane_host)
+    {
+        return Err(ApiError::bad_request(
+            "runner public_base_url must not point at the control plane host".to_owned(),
+        ));
+    }
+
+    if let Some(allowed_hosts) = std::env::var("REMOTE_CODE_ALLOWED_RUNNER_PUBLIC_HOSTS")
+        .ok()
+        .map(|value| parse_allowed_runner_hosts(&value))
+        .filter(|hosts| !hosts.is_empty())
+        && !allowed_runner_host_matches(host, &allowed_hosts)
+    {
+        return Err(ApiError::bad_request(
+            "runner public_base_url host is not in REMOTE_CODE_ALLOWED_RUNNER_PUBLIC_HOSTS"
+                .to_owned(),
+        ));
+    }
+
+    Ok(())
+}
+
+fn parse_allowed_runner_hosts(raw: &str) -> Vec<String> {
+    raw.split(',')
+        .map(|host| host.trim().trim_start_matches('.').to_ascii_lowercase())
+        .filter(|host| !host.is_empty())
+        .collect()
+}
+
+fn allowed_runner_host_matches(host: &str, allowed_hosts: &[String]) -> bool {
+    let host = host.trim_end_matches('.').to_ascii_lowercase();
+    allowed_hosts
+        .iter()
+        .any(|allowed| host == *allowed || host.ends_with(&format!(".{allowed}")))
+}
+
+fn is_loopback_host(host: &str) -> bool {
+    host.eq_ignore_ascii_case("localhost")
+        || host.parse::<IpAddr>().is_ok_and(|ip| match ip {
+            IpAddr::V4(ip) => ip.is_loopback(),
+            IpAddr::V6(ip) => ip.is_loopback(),
+        })
+}
+
+fn is_forbidden_runner_public_host(host: &str) -> bool {
+    if host.eq_ignore_ascii_case("localhost") {
+        return true;
+    }
+    let Ok(ip) = host.parse::<IpAddr>() else {
+        return false;
+    };
+    match ip {
+        IpAddr::V4(ip) => is_forbidden_ipv4(ip),
+        IpAddr::V6(ip) => is_forbidden_ipv6(ip),
+    }
+}
+
+fn is_forbidden_ipv4(ip: Ipv4Addr) -> bool {
+    ip.is_loopback()
+        || ip.is_private()
+        || ip.is_link_local()
+        || ip.is_broadcast()
+        || ip.is_documentation()
+        || ip.is_unspecified()
+        || ip.is_multicast()
+}
+
+fn is_forbidden_ipv6(ip: Ipv6Addr) -> bool {
+    let first = ip.segments()[0];
+    let unique_local = (first & 0xfe00) == 0xfc00;
+    let link_local = (first & 0xffc0) == 0xfe80;
+    ip.is_loopback() || ip.is_unspecified() || ip.is_multicast() || unique_local || link_local
 }
 
 pub(crate) async fn update_runner_heartbeat(
@@ -843,14 +972,23 @@ pub(crate) async fn pull_runner_commands(
             )));
         }
     }
-    let commands = {
-        let mut registry = service.registry.write().await;
-        registry.pull_runner_commands(&runner_id, query.limit.unwrap_or(16).clamp(1, 64))?
-    };
-    if !commands.is_empty() {
-        persist_state_logged(&service).await;
+    let limit = query.limit.unwrap_or(16).clamp(1, 64);
+    let deadline = tokio::time::Instant::now()
+        + std::time::Duration::from_secs(query.timeout.unwrap_or(0).min(30));
+    loop {
+        let commands = {
+            let mut registry = service.registry.write().await;
+            registry.pull_runner_commands(&runner_id, limit)?
+        };
+        if !commands.is_empty() {
+            persist_state_logged(&service).await;
+            return Ok(Json(RunnerCommandPullResponse { commands }));
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Ok(Json(RunnerCommandPullResponse { commands }));
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
     }
-    Ok(Json(RunnerCommandPullResponse { commands }))
 }
 
 // ---------------------------------------------------------------------------

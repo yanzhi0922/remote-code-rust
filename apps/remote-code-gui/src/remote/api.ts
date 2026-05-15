@@ -99,11 +99,10 @@ export async function sendPrompt(
   baseUrl: string,
   sessionId: string,
   content: string,
-  runnerBaseUrl?: string | null,
+  _runnerBaseUrl?: string | null,
 ): Promise<RemoteCommandResponse> {
-  const target = runnerBaseUrl ?? baseUrl;
   return requestJson<RemoteCommandResponse>(
-    target,
+    baseUrl,
     `/v1/sessions/${encodeURIComponent(sessionId)}/commands`,
     {
       method: 'POST',
@@ -118,11 +117,10 @@ export async function sendPrompt(
 export async function interruptSession(
   baseUrl: string,
   sessionId: string,
-  runnerBaseUrl?: string | null,
+  _runnerBaseUrl?: string | null,
 ): Promise<RemoteCommandResponse> {
-  const target = runnerBaseUrl ?? baseUrl;
   return requestJson<RemoteCommandResponse>(
-    target,
+    baseUrl,
     `/v1/sessions/${encodeURIComponent(sessionId)}/commands`,
     {
       method: 'POST',
@@ -138,11 +136,10 @@ export async function respondToApproval(
   approvalId: string,
   decision: RemoteApprovalDecision,
   note?: string,
-  runnerBaseUrl?: string | null,
+  _runnerBaseUrl?: string | null,
 ): Promise<RemoteApprovalRecord> {
-  const target = runnerBaseUrl ?? baseUrl;
   return requestJson<RemoteApprovalRecord>(
-    target,
+    baseUrl,
     `/v1/approvals/${encodeURIComponent(approvalId)}/decision`,
     {
       method: 'POST',

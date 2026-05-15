@@ -120,7 +120,14 @@ pub(crate) async fn require_api_auth(
         let mut registry = service.registry.write().await;
         registry.authenticate_device_token(&provided)
     };
-    if let Some((device, _is_access_token)) = authenticated_device {
+    if let Some((device, is_access_token)) = authenticated_device {
+        if !is_access_token {
+            return ApiError::unauthorized(
+                "refresh tokens must be exchanged at /v1/auth/refresh before calling protected APIs"
+                    .to_owned(),
+            )
+            .into_response();
+        }
         request
             .extensions_mut()
             .insert(AuthPrincipal::Device(device));
@@ -131,10 +138,10 @@ pub(crate) async fn require_api_auth(
     // device token, treat it as a user-derived tenant identity.  The token is
     // `sha256(username:password)` computed client-side — the server never
     // stores the password, it just uses this value as a tenant-scoping key.
-    if let Some(token) = extract_request_auth_token(&mut request) {
+    if request_allows_tenant_user_auth(&request) {
         request
             .extensions_mut()
-            .insert(AuthPrincipal::User { user_id: token });
+            .insert(AuthPrincipal::User { user_id: provided });
         return next.run(request).await;
     }
 
@@ -181,6 +188,32 @@ fn request_allows_query_auth(request: &Request) -> bool {
     });
     let is_get = request.method() == Method::GET;
     is_ws_upgrade || is_get
+}
+
+fn request_allows_tenant_user_auth(request: &Request) -> bool {
+    let path = request.uri().path();
+    let method = request.method();
+
+    if path == "/v1/devices/push-token" && method == Method::POST {
+        return true;
+    }
+    if path.starts_with("/v1/runners") {
+        return true;
+    }
+    if path.starts_with("/v1/sessions") {
+        return true;
+    }
+    if path.starts_with("/v1/approvals") {
+        return true;
+    }
+    if path.starts_with("/v1/artifacts") {
+        return true;
+    }
+    if path == "/v1/events" || path == "/v1/events/stream" {
+        return true;
+    }
+
+    false
 }
 
 fn extract_auth_token_from_query(query: &str) -> Option<String> {
