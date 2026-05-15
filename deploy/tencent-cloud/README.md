@@ -5,7 +5,7 @@ serves the Web/PWA frontend, and stores downloadable app binaries. It must not
 run `remote-code-runner`, `remote-code`, Codex/Roo/Claude agent loops, workspace
 tools, or provider credentials.
 
-1. Build `remote-code-control-plane` and `apps/remote-code-gui/dist` on a trusted local build machine, then upload only the release binary and built static files.
+1. Build the Linux `remote-code-control-plane` release binary and `apps/remote-code-gui/dist` on a trusted build machine, then upload only the release binary and built static files. On Windows, use the root [deploy.ps1](../deploy.ps1) script with `-ControlPlaneBin target\x86_64-unknown-linux-gnu\release\remote-code-control-plane`; on Linux/macOS, use [deploy.sh](../deploy.sh). Do not upload a Windows `.exe` as the cloud control-plane binary.
    For the GUI, upload the built directory to a temporary path on the server and then run [deploy-remote-code-gui.sh](deploy-remote-code-gui.sh) so static files land with nginx-safe permissions:
    `sudo bash /opt/remote-code/deploy/tencent-cloud/deploy-remote-code-gui.sh /tmp/remote-code-gui-dist /opt/remote-code/frontend`
 2. Create user `remote-code`, then place the env file at `/etc/remote-code/control-plane.env`.

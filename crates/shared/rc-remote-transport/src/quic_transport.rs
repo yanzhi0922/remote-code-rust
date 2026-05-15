@@ -205,10 +205,10 @@ async fn quic_event_reader(
                             tracing::debug!("QUIC payload read error: {e}");
                             break;
                         }
-                        if let Ok(event) = serde_json::from_slice::<TransportEvent>(&buf) {
-                            if tx.send(event).await.is_err() {
-                                break;
-                            }
+                        if let Ok(event) = serde_json::from_slice::<TransportEvent>(&buf)
+                            && tx.send(event).await.is_err()
+                        {
+                            break;
                         }
                     }
                     Err(quinn::ConnectionError::ApplicationClosed(_)) => break,

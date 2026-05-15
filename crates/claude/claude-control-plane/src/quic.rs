@@ -98,11 +98,11 @@ async fn handle_quic_connection(
                     Ok(event) => {
                         let matches_session = event.session_id == target_session
                             || event.session_id.is_none();
-                        if matches_session {
-                            if let Err(e) = send_quic_event(&conn, &event).await {
-                                tracing::debug!("QUIC event send error: {e}");
-                                break;
-                            }
+                        if matches_session
+                            && let Err(e) = send_quic_event(&conn, &event).await
+                        {
+                            tracing::debug!("QUIC event send error: {e}");
+                            break;
                         }
                     }
                     Err(broadcast::error::RecvError::Lagged(n)) => {

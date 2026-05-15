@@ -70,6 +70,10 @@ install -d -m 755 "$REMOTE_DIR" "$REMOTE_DIR/bin" "$REMOTE_DIR/downloads" "$REMO
 install -d -m 750 -o remote-code -g remote-code "$(dirname "$STATE_DIR")" "$STATE_DIR"
 install -d -m 750 "$ENV_DIR"
 
+systemctl disable --now remote-code-runner.service remote-code.service >/dev/null 2>&1 || true
+pkill -f '/opt/remote-code/bin/remote-code-runner' >/dev/null 2>&1 || true
+pkill -f '/opt/remote-code/bin/remote-code($| )' >/dev/null 2>&1 || true
+
 install -m 755 /tmp/remote-code-deploy/remote-code-control-plane "$REMOTE_DIR/bin/remote-code-control-plane"
 install -m 755 /tmp/remote-code-deploy/deploy-remote-code-gui.sh "$REMOTE_DIR/deploy/tencent-cloud/deploy-remote-code-gui.sh"
 install -m 644 /tmp/remote-code-deploy/nginx-remote-code.conf.example "$REMOTE_DIR/deploy/tencent-cloud/nginx-remote-code.conf.example"
@@ -109,9 +113,7 @@ fi
 chown root:remote-code "$ENV_DIR/control-plane.env"
 chmod 640 "$ENV_DIR/control-plane.env"
 
-if [[ -d /root/.remote-code-rust && ! -e "$STATE_DIR/state.db" ]]; then
-  cp -a /root/.remote-code-rust/. "$STATE_DIR"/
-fi
+rm -rf /root/.remote-code-rust "$REMOTE_DIR/src"
 chown -R remote-code:remote-code "$(dirname "$STATE_DIR")" "$REMOTE_DIR/downloads"
 
 rm -rf /tmp/remote-code-gui-dist
@@ -132,6 +134,13 @@ if command -v nginx >/dev/null 2>&1; then
 fi
 
 rm -rf /tmp/remote-code-deploy /tmp/remote-code-gui-dist "$REMOTE_DIR/src"
+
+forbidden_processes="$(pgrep -af '/opt/remote-code/bin/remote-code-runner|/opt/remote-code/bin/remote-code($| )' || true)"
+if [[ -n "$forbidden_processes" ]]; then
+  echo "Forbidden local runner/agent process is still running on relay host:" >&2
+  echo "$forbidden_processes" >&2
+  exit 70
+fi
 
 systemctl is-active remote-code-control-plane
 curl -fsS http://127.0.0.1:8787/healthz >/dev/null

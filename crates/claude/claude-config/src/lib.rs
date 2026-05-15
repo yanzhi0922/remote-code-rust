@@ -420,7 +420,7 @@ pub fn load_runtime_config(
     let effort = runtime_overrides
         .effort
         .clone()
-        .or_else(|| crate::env_vars::effort_level())
+        .or_else(crate::env_vars::effort_level)
         .or_else(|| read_env_first(&["REMOTE_CODE_EFFORT"]))
         .or(settings.effort.clone());
     let fallback_model = runtime_overrides

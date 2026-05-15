@@ -1,0 +1,53 @@
+name: Cloud Relay Artifact
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/cloud-relay.yml"
+      - "apps/remote-code-control-plane/**"
+      - "crates/**"
+      - "deploy/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-cloud-relay:
+    name: Build relay-only Linux control plane
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.93.1
+          targets: x86_64-unknown-linux-gnu
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: cloud-relay-x86_64-unknown-linux-gnu
+
+      - name: Build relay-only control plane
+        run: cargo build --release -p remote-code-control-plane --target x86_64-unknown-linux-gnu
+
+      - name: Package relay artifact
+        run: |
+          artifact="remote-code-cloud-relay-x86_64-unknown-linux-gnu"
+          mkdir "$artifact"
+          cp target/x86_64-unknown-linux-gnu/release/remote-code-control-plane "$artifact/"
+          cp -r deploy "$artifact/"
+          tar czf "$artifact.tar.gz" -C "$artifact" .
+          sha256sum "$artifact.tar.gz" > "$artifact.sha256"
+
+      - name: Upload relay artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: remote-code-cloud-relay-x86_64-unknown-linux-gnu
+          path: |
+            remote-code-cloud-relay-x86_64-unknown-linux-gnu.tar.gz
+            remote-code-cloud-relay-x86_64-unknown-linux-gnu.sha256

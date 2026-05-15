@@ -1091,6 +1091,7 @@ pub(crate) struct EventStreamQuery {
 #[derive(Debug, Clone, Default, Deserialize)]
 pub(crate) struct RunnerCommandPullQuery {
     pub(crate) limit: Option<usize>,
+    pub(crate) timeout: Option<u64>,
 }
 
 // ---------------------------------------------------------------------------
@@ -1160,6 +1161,14 @@ impl ApiError {
         Self {
             status: StatusCode::UNAUTHORIZED,
             code: "unauthorized",
+            message,
+        }
+    }
+
+    pub(crate) fn forbidden(message: String) -> Self {
+        Self {
+            status: StatusCode::FORBIDDEN,
+            code: "forbidden",
             message,
         }
     }

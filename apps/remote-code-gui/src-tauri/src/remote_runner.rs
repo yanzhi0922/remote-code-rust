@@ -9,7 +9,7 @@
 //! passwords don't match.
 
 use std::collections::{HashMap, VecDeque};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -29,6 +29,9 @@ use tokio::sync::{Mutex, mpsc, watch};
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
+use crate::dto::ProjectListFile;
+use crate::state::{KEYRING_SERVICE, PROJECTS_FILE_NAME};
+
 use claude_control_plane::RunnerCommandPullResponse;
 use claude_runner::{
     RUNNER_EVENT_CHANNEL_CAPACITY, RunnerApi, RunnerApiEvent, RunnerConfig, RunnerConfigOverrides,
@@ -37,6 +40,13 @@ use claude_runner::{
 };
 
 static REMOTE_SERVICE_STARTED: AtomicBool = AtomicBool::new(false);
+static REMOTE_SERVICE_CONNECTED: AtomicBool = AtomicBool::new(false);
+
+const REMOTE_PASSWORD_HASH_FILE: &str = "remote_password_hash.txt";
+const REMOTE_USER_KEY_FILE: &str = "remote_user_key.txt";
+const REMOTE_USERNAME_FILE: &str = "remote_username.txt";
+const REMOTE_PASSWORD_HASH_KEY: &str = "remote-control-password-hash";
+const REMOTE_USER_KEY_KEY: &str = "remote-control-user-key";
 
 // ─── Public API ─────────────────────────────────────────────────────────────
 
@@ -142,6 +152,14 @@ fn remote_settings_path(app: &AppHandle) -> Result<PathBuf> {
     Ok(dir.join("remote_control.json"))
 }
 
+fn app_config_path(app: &AppHandle, file_name: &str) -> Result<PathBuf> {
+    let dir = app
+        .path()
+        .app_config_dir()
+        .context("failed to get app config dir")?;
+    Ok(dir.join(file_name))
+}
+
 fn load_remote_settings(app: &AppHandle) -> RemoteControlSettings {
     let Ok(path) = remote_settings_path(app) else {
         return RemoteControlSettings::default();
@@ -195,6 +213,7 @@ fn remote_connection_info(app: &AppHandle) -> serde_json::Value {
     let runner_id = configured_runner_id(app).unwrap_or_default();
     let configured = !control_plane_url.is_empty();
     let running = REMOTE_SERVICE_STARTED.load(Ordering::SeqCst);
+    let connected = REMOTE_SERVICE_CONNECTED.load(Ordering::SeqCst);
 
     serde_json::json!({
         "control_plane_url": control_plane_url,
@@ -202,6 +221,7 @@ fn remote_connection_info(app: &AppHandle) -> serde_json::Value {
         "auto_start": settings.auto_start,
         "configured": configured,
         "running": running,
+        "connected": connected,
     })
 }
 
@@ -217,12 +237,14 @@ fn start_configured_remote_service(app: AppHandle) -> std::result::Result<(), St
         info!("Remote control: background service is already running");
         return Ok(());
     }
+    REMOTE_SERVICE_CONNECTED.store(false, Ordering::SeqCst);
 
     info!("Remote control: starting background service for {control_plane_url}");
     tauri::async_runtime::spawn(async move {
         if let Err(error) = run_remote_service(app).await {
             error!("Remote control service error: {error:#}");
             REMOTE_SERVICE_STARTED.store(false, Ordering::SeqCst);
+            REMOTE_SERVICE_CONNECTED.store(false, Ordering::SeqCst);
         }
     });
 
@@ -231,18 +253,12 @@ fn start_configured_remote_service(app: AppHandle) -> std::result::Result<(), St
 
 /// Get the stored remote control password hash (if any).
 fn get_remote_password_hash(app: &AppHandle) -> Option<String> {
-    let dir: std::path::PathBuf = app.path().app_config_dir().ok()?;
-    let path = dir.join("remote_password_hash.txt");
-    std::fs::read_to_string(path)
-        .ok()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
+    read_secret_with_legacy_file_migration(app, REMOTE_PASSWORD_HASH_KEY, REMOTE_PASSWORD_HASH_FILE)
 }
 
 /// Get the stored remote control username (if any).
 fn get_remote_username(app: &AppHandle) -> Option<String> {
-    let dir: std::path::PathBuf = app.path().app_config_dir().ok()?;
-    let path = dir.join("remote_username.txt");
+    let path = app_config_path(app, REMOTE_USERNAME_FILE).ok()?;
     std::fs::read_to_string(path)
         .ok()
         .map(|s| s.trim().to_string())
@@ -264,24 +280,20 @@ fn derive_user_key(username: &str, password: &str) -> String {
 
 /// Save the remote control password (stored as SHA-256 hash).
 pub fn set_remote_password(app: &AppHandle, password: &str) -> Result<()> {
-    let dir: std::path::PathBuf = app
-        .path()
-        .app_config_dir()
-        .context("failed to get app config dir")?;
-    std::fs::create_dir_all(&dir)?;
-    let path = dir.join("remote_password_hash.txt");
-    std::fs::write(path, hash_password(password))?;
-    Ok(())
+    save_secret_with_file_fallback(
+        app,
+        REMOTE_PASSWORD_HASH_KEY,
+        REMOTE_PASSWORD_HASH_FILE,
+        &hash_password(password),
+    )
 }
 
 /// Save the remote control username.
 pub fn set_remote_username(app: &AppHandle, username: &str) -> Result<()> {
-    let dir: std::path::PathBuf = app
-        .path()
-        .app_config_dir()
-        .context("failed to get app config dir")?;
-    std::fs::create_dir_all(&dir)?;
-    let path = dir.join("remote_username.txt");
+    let path = app_config_path(app, REMOTE_USERNAME_FILE)?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
     std::fs::write(path, username.trim())?;
     Ok(())
 }
@@ -310,24 +322,97 @@ pub fn verify_remote_password(app: &AppHandle, provided: &str) -> bool {
 /// Get the derived user_key for tenant isolation.
 /// Returns sha256(username:password), or None if not yet derived.
 pub fn get_remote_user_key(app: &AppHandle) -> Option<String> {
-    let dir: std::path::PathBuf = app.path().app_config_dir().ok()?;
-    let path = dir.join("remote_user_key.txt");
-    std::fs::read_to_string(path)
-        .ok()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
+    read_secret_with_legacy_file_migration(app, REMOTE_USER_KEY_KEY, REMOTE_USER_KEY_FILE)
 }
 
 /// Save the derived user_key for use as auth token.
 fn save_remote_user_key(app: &AppHandle, user_key: &str) -> Result<()> {
-    let dir: std::path::PathBuf = app
-        .path()
-        .app_config_dir()
-        .context("failed to get app config dir")?;
-    std::fs::create_dir_all(&dir)?;
-    let path = dir.join("remote_user_key.txt");
-    std::fs::write(path, user_key)?;
+    save_secret_with_file_fallback(app, REMOTE_USER_KEY_KEY, REMOTE_USER_KEY_FILE, user_key)
+}
+
+fn keyring_get(key: &str) -> Option<String> {
+    keyring::Entry::new(KEYRING_SERVICE, key)
+        .ok()
+        .and_then(|entry| entry.get_password().ok())
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+}
+
+fn keyring_set(key: &str, value: &str) -> bool {
+    keyring::Entry::new(KEYRING_SERVICE, key)
+        .ok()
+        .and_then(|entry| entry.set_password(value).ok())
+        .is_some()
+}
+
+fn read_legacy_secret_file(app: &AppHandle, file_name: &str) -> Option<String> {
+    let path = app_config_path(app, file_name).ok()?;
+    std::fs::read_to_string(path)
+        .ok()
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+}
+
+fn read_secret_with_legacy_file_migration(
+    app: &AppHandle,
+    keyring_key: &str,
+    legacy_file_name: &str,
+) -> Option<String> {
+    if let Some(value) = keyring_get(keyring_key) {
+        return Some(value);
+    }
+
+    let value = read_legacy_secret_file(app, legacy_file_name)?;
+    if keyring_set(keyring_key, &value) {
+        if let Ok(path) = app_config_path(app, legacy_file_name) {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+    Some(value)
+}
+
+fn save_secret_with_file_fallback(
+    app: &AppHandle,
+    keyring_key: &str,
+    fallback_file_name: &str,
+    value: &str,
+) -> Result<()> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Err(anyhow!("secret value cannot be empty"));
+    }
+
+    if keyring_set(keyring_key, value) {
+        if let Ok(path) = app_config_path(app, fallback_file_name) {
+            let _ = std::fs::remove_file(path);
+        }
+        return Ok(());
+    }
+
+    let path = app_config_path(app, fallback_file_name)?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&path, value)?;
+    restrict_secret_file_permissions(&path);
     Ok(())
+}
+
+#[cfg(unix)]
+fn restrict_secret_file_permissions(path: &PathBuf) {
+    use std::os::unix::fs::PermissionsExt;
+
+    if let Ok(metadata) = std::fs::metadata(path) {
+        let mut permissions = metadata.permissions();
+        permissions.set_mode(0o600);
+        let _ = std::fs::set_permissions(path, permissions);
+    }
+}
+
+#[cfg(not(unix))]
+fn restrict_secret_file_permissions(_path: &PathBuf) {
+    // Windows ACLs on the per-user app config directory already scope this
+    // fallback to the current user. Prefer OS keyring when available.
 }
 
 /// Constant-time byte comparison to prevent timing side-channels.
@@ -455,19 +540,32 @@ async fn run_remote_service(app: AppHandle) -> Result<()> {
     let user_key = get_remote_user_key(&app);
     let auth_token = user_key
         .or_else(|| std::env::var("REMOTE_CODE_RUNNER_AUTH_TOKEN").ok())
-        .filter(|s| !s.is_empty());
+        .filter(|s| !s.is_empty())
+        .context("remote credentials are not configured; set username/password in the GUI first")?;
     let runner_id = ensure_runner_id(&app)?;
     let control_plane_url =
         configured_control_plane_url(&app).context("control plane URL is not configured")?;
+    let profile_override = remote_profile_override_from_env();
+    let workspaces = if read_nonempty_env("REMOTE_CODE_RUNNER_WORKSPACES").is_none() {
+        match load_gui_runner_workspaces(profile_override.clone()) {
+            Ok(workspaces) if !workspaces.is_empty() => Some(workspaces),
+            Ok(_) => Some(Vec::new()),
+            Err(error) => {
+                warn!("Remote control: failed to load GUI workspaces: {error:#}");
+                Some(Vec::new())
+            }
+        }
+    } else {
+        None
+    };
 
-    let config = load_runner_config(
-        std::env::var("REMOTE_CODE_PROFILE_DIR")
-            .ok()
-            .map(PathBuf::from),
+    let mut config = load_runner_config(
+        profile_override,
         RunnerConfigOverrides {
             runner_id: Some(runner_id),
             control_plane_url: Some(control_plane_url),
-            auth_token: auth_token.clone(),
+            auth_token: Some(auth_token),
+            workspaces,
             heartbeat_interval_secs: std::env::var("REMOTE_CODE_RUNNER_HEARTBEAT_SECS")
                 .ok()
                 .and_then(|s| s.parse().ok()),
@@ -477,10 +575,16 @@ async fn run_remote_service(app: AppHandle) -> Result<()> {
             ..RunnerConfigOverrides::default()
         },
     )?;
+    if !allow_direct_runner_public_url() {
+        config.public_base_url = None;
+    }
 
     let profile_dir = config.profile_dir.profile_dir.clone();
     let cp_url = config.control_plane_url.clone().unwrap_or_default();
-    let auth = config.auth_token.clone().unwrap_or_default();
+    let auth = config
+        .auth_token
+        .clone()
+        .context("remote credentials are not configured")?;
 
     let (event_tx, event_rx) = mpsc::channel(RUNNER_EVENT_CHANNEL_CAPACITY);
     let api = RunnerApi::new(config.clone(), "remote-code-gui", env!("CARGO_PKG_VERSION"))
@@ -526,6 +630,69 @@ async fn run_remote_service(app: AppHandle) -> Result<()> {
     let _ = wait_shutdown.changed().await;
 
     Ok(())
+}
+
+fn remote_profile_override_from_env() -> Option<PathBuf> {
+    read_nonempty_env("REMOTE_CODE_PROFILE_DIR").map(PathBuf::from)
+}
+
+fn allow_direct_runner_public_url() -> bool {
+    read_nonempty_env("REMOTE_CODE_GUI_ALLOW_DIRECT_RUNNER")
+        .map(|value| {
+            matches!(
+                value.to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(false)
+}
+
+fn load_gui_runner_workspaces(
+    profile_override: Option<PathBuf>,
+) -> Result<Vec<claude_runner::RunnerWorkspace>> {
+    let paths = claude_config::AppPaths::discover(profile_override)?;
+    let projects_path = paths.profile_dir.join(PROJECTS_FILE_NAME);
+    if !projects_path.exists() {
+        return Ok(Vec::new());
+    }
+
+    let contents = std::fs::read_to_string(&projects_path)
+        .with_context(|| format!("failed to read {}", projects_path.display()))?;
+    let file: ProjectListFile = serde_json::from_str(&contents)
+        .with_context(|| format!("failed to parse {}", projects_path.display()))?;
+
+    let mut workspaces = Vec::new();
+    for project in file.projects {
+        let root_dir = project.path;
+        if !root_dir.is_absolute() || !root_dir.is_dir() {
+            continue;
+        }
+        let workspace_id = gui_workspace_id(&root_dir);
+        if workspaces
+            .iter()
+            .any(|workspace: &claude_runner::RunnerWorkspace| {
+                workspace.workspace_id == workspace_id
+            })
+        {
+            continue;
+        }
+        workspaces.push(claude_runner::RunnerWorkspace {
+            workspace_id,
+            root_dir,
+            writable: true,
+        });
+    }
+
+    Ok(workspaces)
+}
+
+fn gui_workspace_id(path: &Path) -> String {
+    let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let normalized = canonical.to_string_lossy().replace('\\', "/");
+    let mut hasher = Sha256::new();
+    hasher.update(normalized.as_bytes());
+    let digest = format!("{:x}", hasher.finalize());
+    format!("gui-{}", &digest[..12])
 }
 
 // ─── Session manager (in-process) ───────────────────────────────────────────
@@ -777,7 +944,9 @@ impl InProcessSessionManager {
         let sid = session_id.to_string();
         let prompt = match &command {
             RunnerSessionCommandRequest::SendPrompt { content } => content.clone(),
-            RunnerSessionCommandRequest::Interrupt => return Ok(()),
+            RunnerSessionCommandRequest::Interrupt => {
+                return self.interrupt_session(session_id).await;
+            }
         };
 
         info!("Remote prompt for {}: {} chars", sid, prompt.len());
@@ -852,6 +1021,49 @@ impl InProcessSessionManager {
                 Err(e) => warn!("Remote adapter error for {}: {e}", sid),
             }
         });
+
+        Ok(())
+    }
+
+    async fn interrupt_session(&self, session_id: Uuid) -> Result<()> {
+        let sid = session_id.to_string();
+        let agent_type = {
+            let sessions = self.sessions.lock().await;
+            sessions
+                .get(&session_id)
+                .map(|session| session.agent_type)
+                .ok_or_else(|| anyhow!("session {session_id} not found"))?
+        };
+
+        match agent_type {
+            AgentType::RemoteClaude => {
+                let mut adapters = self.claude_adapters.lock().await;
+                adapters
+                    .get_mut(&sid)
+                    .ok_or_else(|| anyhow!("Claude adapter not started"))?
+                    .cancel(&sid)
+                    .await
+                    .map_err(|error| anyhow!("Claude cancel: {error}"))?;
+            }
+            AgentType::RemoteRoo => {
+                let mut adapters = self.roo_adapters.lock().await;
+                adapters
+                    .get_mut(&sid)
+                    .ok_or_else(|| anyhow!("Roo adapter not started"))?
+                    .cancel(&sid)
+                    .await
+                    .map_err(|error| anyhow!("Roo cancel: {error}"))?;
+            }
+            AgentType::RemoteCodex => {
+                let mut adapters = self.codex_adapters.lock().await;
+                adapters
+                    .get_mut(&sid)
+                    .ok_or_else(|| anyhow!("Codex adapter not started"))?
+                    .cancel(&sid)
+                    .await
+                    .map_err(|error| anyhow!("Codex cancel: {error}"))?;
+            }
+        }
 
         Ok(())
     }
@@ -982,7 +1194,7 @@ async fn run_outbound_poll_loop(
         }
 
         let url = format!(
-            "{cp_url}/v1/runners/{runner_id}/commands/pull?timeout={}",
+            "{cp_url}/v1/runners/{runner_id}/commands/pull?limit=16&timeout={}",
             poll_timeout.as_secs(),
         );
 
@@ -997,22 +1209,33 @@ async fn run_outbound_poll_loop(
             Ok(response) => {
                 if response.status().is_success() {
                     retry_delay = Duration::from_secs(1);
+                    REMOTE_SERVICE_CONNECTED.store(true, Ordering::SeqCst);
+                    let mut pulled_count = 0usize;
                     if let Ok(body) = response.text().await {
                         if !body.is_empty() {
                             if let Ok(cmd_response) =
                                 serde_json::from_str::<RunnerCommandPullResponse>(&body)
                             {
+                                pulled_count = cmd_response.commands.len();
                                 if let Err(e) = apply_pulled_commands(&api, cmd_response).await {
                                     warn!("command processing failed: {e:#}");
                                 }
                             }
                         }
                     }
+                    if pulled_count == 0 {
+                        tokio::select! {
+                            _ = tokio::time::sleep(Duration::from_millis(500)) => {}
+                            _ = shutdown.changed() => break,
+                        }
+                    }
                 } else {
+                    REMOTE_SERVICE_CONNECTED.store(false, Ordering::SeqCst);
                     warn!("poll HTTP {}", response.status());
                 }
             }
             Err(e) => {
+                REMOTE_SERVICE_CONNECTED.store(false, Ordering::SeqCst);
                 warn!("poll failed: {e}");
                 tokio::select! {
                     _ = tokio::time::sleep(retry_delay) => {}
@@ -1068,10 +1291,12 @@ async fn run_control_plane_sync(
     loop {
         match register_with_control_plane(&client, &cp_url, &registration).await {
             Ok(_) => {
+                REMOTE_SERVICE_CONNECTED.store(true, Ordering::SeqCst);
                 info!("Registered runner {} with control plane", config.runner_id);
                 break;
             }
             Err(e) => {
+                REMOTE_SERVICE_CONNECTED.store(false, Ordering::SeqCst);
                 warn!("Registration failed: {e}, retrying...");
                 tokio::select! {
                     _ = tokio::time::sleep(Duration::from_secs(5)) => {}
@@ -1086,8 +1311,14 @@ async fn run_control_plane_sync(
         tokio::select! {
             _ = tokio::time::sleep(heartbeat_interval) => {
                 let hb = api.heartbeat().await;
-                if let Err(e) = send_heartbeat(&client, &cp_url, &hb, auth_token).await {
-                    warn!("Heartbeat failed: {e}");
+                match send_heartbeat(&client, &cp_url, &hb, auth_token).await {
+                    Ok(_) => {
+                        REMOTE_SERVICE_CONNECTED.store(true, Ordering::SeqCst);
+                    }
+                    Err(e) => {
+                        REMOTE_SERVICE_CONNECTED.store(false, Ordering::SeqCst);
+                        warn!("Heartbeat failed: {e}");
+                    }
                 }
             }
             changed = shutdown.changed() => {

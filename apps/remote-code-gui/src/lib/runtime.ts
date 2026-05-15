@@ -38,6 +38,7 @@ export function resolveRemoteAccessToken(): string | null {
   const params = new URLSearchParams(window.location.search);
   const queryValue = params.get('access_token')?.trim() ?? params.get('token')?.trim();
   if (queryValue) {
+    queueMicrotask(stripRemoteSensitiveQueryParams);
     return queryValue;
   }
 
@@ -157,8 +158,8 @@ export function clearRemoteActiveSessionId(baseUrl: string | null): void {
 export function resolveRemotePairingContext(): { offerId: string | null; pairingSecret: string | null } {
   const params = new URLSearchParams(window.location.search);
   return {
-    offerId: params.get('pairing_offer')?.trim() ?? null,
-    pairingSecret: params.get('pairing_secret')?.trim() ?? null,
+    offerId: params.get('pairing_offer')?.trim() ?? params.get('offerId')?.trim() ?? null,
+    pairingSecret: params.get('pairing_secret')?.trim() ?? params.get('secret')?.trim() ?? null,
   };
 }
 
@@ -174,7 +175,7 @@ export function clearRemotePairingContext(): void {
 export function stripRemoteSensitiveQueryParams(): void {
   const url = new URL(window.location.href);
   let changed = false;
-  for (const key of ['access_token', 'token', 'pairing_offer', 'pairing_secret']) {
+  for (const key of ['access_token', 'token', 'pairing_offer', 'pairing_secret', 'offerId', 'secret']) {
     if (url.searchParams.has(key)) {
       url.searchParams.delete(key);
       changed = true;

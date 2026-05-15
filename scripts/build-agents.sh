@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 #
 # Build all three Agent binaries for the multi-agent architecture.
+# Local development / trusted runner machines only. Do not run this on the
+# relay-only cloud control-plane host.
 #
 # Usage:
 #   ./scripts/build-agents.sh          # Release build (default)
