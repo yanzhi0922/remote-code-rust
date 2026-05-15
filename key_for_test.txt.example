@@ -1,0 +1,7 @@
+# Local-only test credential placeholder.
+# Copy this file to key_for_test.txt when a manual test explicitly requires it.
+# Never commit real API keys, auth tokens, app secrets, or domain account details.
+
+API_KEY=replace-with-test-api-key
+AUTH_TOKEN=replace-with-test-auth-token
+APP_SECRET=replace-with-test-app-secret
