@@ -1,13 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { hasTauriRuntime } from '../runtime';
 
-export type Platform = 'ios' | 'android' | 'macos' | 'windows' | 'linux' | 'unknown';
-
-export async function getPlatform(): Promise<Platform> {
-  if (!hasTauriRuntime()) return 'web' as Platform;
-  return invoke<Platform>('mobile_platform');
-}
-
 export async function isMobile(): Promise<boolean> {
   if (!hasTauriRuntime()) return false;
   return invoke<boolean>('mobile_is_mobile');

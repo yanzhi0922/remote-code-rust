@@ -469,7 +469,7 @@ export class UnifiedTransport implements TransportHandle {
   }
 }
 
-export function mapConnectionState(state: string): ConnectionState {
+function mapConnectionState(state: string): ConnectionState {
   switch (state) {
     case 'open':
       return 'open';

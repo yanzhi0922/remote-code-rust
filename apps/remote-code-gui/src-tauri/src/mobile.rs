@@ -56,47 +56,8 @@ pub struct BiometricAvailability {
 }
 
 #[tauri::command]
-pub async fn mobile_platform() -> String {
-    if cfg!(target_os = "ios") {
-        "ios".to_string()
-    } else if cfg!(target_os = "android") {
-        "android".to_string()
-    } else if cfg!(target_os = "macos") {
-        "macos".to_string()
-    } else if cfg!(target_os = "windows") {
-        "windows".to_string()
-    } else if cfg!(target_os = "linux") {
-        "linux".to_string()
-    } else {
-        "unknown".to_string()
-    }
-}
-
-#[tauri::command]
 pub async fn mobile_is_mobile() -> bool {
     cfg!(target_os = "ios") || cfg!(target_os = "android")
-}
-
-#[tauri::command]
-pub async fn mobile_haptic_impact(
-    app: AppHandle<impl Runtime>,
-    style: String,
-) -> Result<(), String> {
-    #[cfg(any(target_os = "android", target_os = "ios"))]
-    {
-        use tauri_plugin_haptics::HapticsExt;
-        let impact_style = match style.as_str() {
-            "heavy" => tauri_plugin_haptics::ImpactFeedbackStyle::Heavy,
-            "medium" => tauri_plugin_haptics::ImpactFeedbackStyle::Medium,
-            _ => tauri_plugin_haptics::ImpactFeedbackStyle::Light,
-        };
-        app.haptics()
-            .impact_feedback(impact_style)
-            .map_err(|e| e.to_string())?;
-    }
-    let _ = style;
-    let _ = &app;
-    Ok(())
 }
 
 #[tauri::command]
@@ -118,19 +79,6 @@ pub async fn mobile_haptic_notification(
             .map_err(|e| e.to_string())?;
     }
     let _ = kind;
-    let _ = &app;
-    Ok(())
-}
-
-#[tauri::command]
-pub async fn mobile_haptic_selection(app: AppHandle<impl Runtime>) -> Result<(), String> {
-    #[cfg(any(target_os = "android", target_os = "ios"))]
-    {
-        use tauri_plugin_haptics::HapticsExt;
-        app.haptics()
-            .selection_feedback()
-            .map_err(|e| e.to_string())?;
-    }
     let _ = &app;
     Ok(())
 }
@@ -217,31 +165,6 @@ pub async fn mobile_secure_store_get(
             }
             Ok(None)
         }
-        Err(e) => Err(e.to_string()),
-    }
-}
-
-#[tauri::command]
-pub async fn mobile_secure_store_set(
-    _app: AppHandle<impl Runtime>,
-    key: String,
-    value: String,
-) -> Result<(), String> {
-    let entry = keyring::Entry::new("remote-code-secure-store", &key).map_err(|e| e.to_string())?;
-    entry.set_password(&value).map_err(|e| e.to_string())?;
-    let _ = &_app;
-    Ok(())
-}
-
-#[tauri::command]
-pub async fn mobile_secure_store_remove(
-    _app: AppHandle<impl Runtime>,
-    key: String,
-) -> Result<(), String> {
-    let entry = keyring::Entry::new("remote-code-secure-store", &key).map_err(|e| e.to_string())?;
-    match entry.delete_credential() {
-        Ok(()) => Ok(()),
-        Err(keyring::Error::NoEntry) => Ok(()),
         Err(e) => Err(e.to_string()),
     }
 }

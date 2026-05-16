@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { UnifiedTransport, probeEndpointHealth, mapConnectionState } from './unified-transport';
+import { UnifiedTransport, probeEndpointHealth } from './unified-transport';
 import type { TransportConfig, TransportCallbacks, TransportStrategyType } from './unified-transport';
 import type { RemoteTimelineEvent } from './types';
 
@@ -70,20 +70,6 @@ function makeCallbacks(): TransportCallbacks & {
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
-
-describe('mapConnectionState', () => {
-  it('maps known states correctly', () => {
-    expect(mapConnectionState('open')).toBe('open');
-    expect(mapConnectionState('connecting')).toBe('connecting');
-    expect(mapConnectionState('reconnecting')).toBe('reconnecting');
-    expect(mapConnectionState('error')).toBe('error');
-  });
-
-  it('maps unknown states to idle', () => {
-    expect(mapConnectionState('something_else')).toBe('idle');
-    expect(mapConnectionState('')).toBe('idle');
-  });
-});
 
 describe('probeEndpointHealth', () => {
   let fetchMock: ReturnType<typeof vi.fn>;

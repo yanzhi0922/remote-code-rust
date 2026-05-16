@@ -71,7 +71,6 @@ members = [
     "otel",
     "tui",
     "tools",
-    "v8-poc",
     "utils/absolute-path",
     "utils/cargo-bin",
     "git-utils",
@@ -100,7 +99,6 @@ members = [
     "state",
     "terminal-detection",
     "test-binary-support",
-    "thread-manager-sample",
     "thread-store",
     "uds",
     "codex-experimental-api-macros",
@@ -222,7 +220,6 @@ codex-utils-sleep-inhibitor = { path = "utils/sleep-inhibitor" }
 codex-utils-stream-parser = { path = "utils/stream-parser" }
 codex-utils-string = { path = "utils/string" }
 codex-utils-template = { path = "utils/template" }
-codex-v8-poc = { path = "v8-poc" }
 codex-windows-sandbox = { path = "windows-sandbox-rs" }
 core_test_support = { path = "core/tests/common" }
 mcp_test_support = { path = "mcp-server/tests/common" }
@@ -465,7 +462,6 @@ ignored = [
     "openssl-sys",
     "codex-utils-readiness",
     "codex-utils-template",
-    "codex-v8-poc",
 ]
 
 [profile.dev]

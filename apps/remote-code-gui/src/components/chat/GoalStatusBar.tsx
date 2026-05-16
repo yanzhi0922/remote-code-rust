@@ -74,5 +74,3 @@ export function GoalStatusBar() {
     </div>
   );
 }
-
-export default GoalStatusBar;

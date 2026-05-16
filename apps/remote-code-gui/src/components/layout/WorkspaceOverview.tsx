@@ -4,13 +4,15 @@ import {
   FolderPlus,
   Gauge,
   HardDrive,
+  Eye,
+  EyeOff,
   Layers3,
   Plus,
   RefreshCw,
   ShieldCheck,
   ShieldAlert,
 } from 'lucide-react';
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { truncateMiddle } from '../../lib/utils';
 import { useAgentStore } from '../../stores/useAgentStore';
 import { useAppStore } from '../../stores/useAppStore';
@@ -36,6 +38,8 @@ function permissionLabel(mode: string | null | undefined): string {
       return mode || '未配置';
   }
 }
+
+const PRIVACY_STORAGE_KEY = 'remote-code-gui-workspace-overview-privacy';
 
 function MetricTile({
   icon: Icon,
@@ -76,6 +80,14 @@ function MetricTile({
 }
 
 export function WorkspaceOverview() {
+  const [privacyMode, setPrivacyMode] = useState(() => {
+    try {
+      return window.localStorage.getItem(PRIVACY_STORAGE_KEY) === '1';
+    } catch {
+      return false;
+    }
+  });
+
   const provider = useAppStore((state) => state.provider);
   const runtimeStatus = useAppStore((state) => state.runtimeStatus);
   const sessions = useAppStore((state) => state.sessions);
@@ -103,12 +115,27 @@ export function WorkspaceOverview() {
   const runningCount = runningSessionIds.size;
   const contextRatio = contextUsage?.ratio ?? null;
   const activeProjectLabel = activeProjectPath
-    ? truncateMiddle(activeProjectPath, 72)
+    ? privacyMode
+      ? '项目路径已隐藏'
+      : truncateMiddle(activeProjectPath, 72)
     : '未选择项目';
   const sessionDetail = activeSession
-    ? truncateMiddle(activeSession.title, 48)
+    ? privacyMode
+      ? '当前会话已隐藏'
+      : truncateMiddle(activeSession.title, 48)
     : `${sessions.length} 个历史会话`;
   const permissionTone = permission === '全自动' ? 'warning' : 'success';
+  const activeSessionTitle = privacyMode
+    ? '当前会话已隐藏'
+    : activeSession?.title ?? '未选择会话';
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(PRIVACY_STORAGE_KEY, privacyMode ? '1' : '0');
+    } catch {
+      // Ignore storage failures in restricted webviews.
+    }
+  }, [privacyMode]);
 
   return (
     <section className="shrink-0 px-6 pb-4 pt-5">
@@ -127,6 +154,15 @@ export function WorkspaceOverview() {
           </div>
 
           <div className="flex items-center gap-2 rounded-lg border border-white/80 bg-white/80 p-1.5 shadow-sm backdrop-blur dark:border-rc-border-primary dark:bg-rc-bg-surface/90">
+            <button
+              type="button"
+              title={privacyMode ? '显示敏感信息' : '隐藏敏感信息'}
+              aria-pressed={privacyMode}
+              onClick={() => setPrivacyMode((current) => !current)}
+              className="flex h-9 w-9 items-center justify-center rounded-md text-rc-text-secondary transition-colors hover:bg-rc-bg-hover hover:text-rc-text-primary active:scale-[0.98]"
+            >
+              {privacyMode ? <EyeOff size={17} /> : <Eye size={17} />}
+            </button>
             <button
               type="button"
               title="添加项目"
@@ -195,7 +231,7 @@ export function WorkspaceOverview() {
           <div className="min-w-0 rounded-lg border border-white/80 bg-white/80 px-4 py-3 shadow-sm backdrop-blur dark:border-rc-border-primary dark:bg-rc-bg-surface/90">
             <div className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-2 text-sm">
               <span className="min-w-0 truncate font-medium text-rc-text-primary">
-                {activeSession?.title ?? '未选择会话'}
+                {activeSessionTitle}
               </span>
               <span className="truncate text-rc-text-secondary">{providerName}</span>
               <span className="truncate font-mono text-xs text-rc-text-tertiary">{modelName}</span>

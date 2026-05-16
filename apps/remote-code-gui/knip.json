@@ -1,0 +1,15 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "entry": [
+    "src/main.tsx",
+    "src/test/setup.ts",
+    "public/sw.js",
+    "plugins/plugin-network/src/index.ts"
+  ],
+  "ignoreFiles": [
+    "src/test/appStoreTestUtils.ts"
+  ],
+  "ignoreIssues": {
+    "src/lib/tauri.ts": ["exports", "types"]
+  }
+}

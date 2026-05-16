@@ -43,12 +43,6 @@ export async function initPushNotifications(options: PushNotificationOptions): P
   });
 }
 
-export async function requestPushPermission(): Promise<boolean> {
-  if (!hasTauriRuntime()) return false;
-  _permissionGranted = await invoke<boolean>('mobile_push_request_permission');
-  return _permissionGranted;
-}
-
 export async function registerPushTokenWithControlPlane(
   baseUrl: string,
   accessToken: string,
@@ -57,22 +51,7 @@ export async function registerPushTokenWithControlPlane(
   await invoke('mobile_push_register_token', { baseUrl, accessToken });
 }
 
-export async function getStoredPushToken(): Promise<string | null> {
-  if (_pushToken) return _pushToken;
-  if (!hasTauriRuntime()) return null;
-  _pushToken = await invoke<string | null>('mobile_push_get_token');
-  return _pushToken;
-}
-
-export async function clearPushToken(): Promise<void> {
-  _pushToken = null;
-}
-
 export async function showLocalNotification(title: string, body: string, data?: string): Promise<void> {
   if (!hasTauriRuntime()) return;
   await invoke('mobile_push_show', { title, body, data: data ?? null });
-}
-
-export function hasPushPermission(): boolean {
-  return _permissionGranted;
 }

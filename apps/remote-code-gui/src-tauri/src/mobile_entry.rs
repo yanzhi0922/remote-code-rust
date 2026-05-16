@@ -23,16 +23,11 @@ pub fn run() {
         })
         .manage(crate::quic_bridge::QuicBridgeState::new())
         .invoke_handler(tauri::generate_handler![
-            crate::mobile::mobile_platform,
             crate::mobile::mobile_is_mobile,
-            crate::mobile::mobile_haptic_impact,
             crate::mobile::mobile_haptic_notification,
-            crate::mobile::mobile_haptic_selection,
             crate::mobile::mobile_biometric_check_availability,
             crate::mobile::mobile_biometric_authenticate,
             crate::mobile::mobile_secure_store_get,
-            crate::mobile::mobile_secure_store_set,
-            crate::mobile::mobile_secure_store_remove,
             crate::mobile::mobile_download_artifact,
             crate::mobile::mobile_share_file,
             crate::mobile::mobile_push_request_permission,

@@ -456,7 +456,6 @@ codex-process-hardening = { path = "crates/codex/process-hardening" }
 codex-realtime-webrtc = { path = "crates/codex/realtime-webrtc" }
 codex-terminal-detection = { path = "crates/codex/terminal-detection" }
 codex-uds = { path = "crates/codex/uds" }
-codex-v8-poc = { path = "crates/codex/v8-poc" }
 codex-utils-absolute-path = { path = "crates/codex/utils/absolute-path" }
 codex-utils-cache = { path = "crates/codex/utils/cache" }
 codex-utils-cargo-bin = { path = "crates/codex/utils/cargo-bin" }

@@ -16,10 +16,3 @@ export async function initAppLifecycle(callbacks: LifecycleCallbacks): Promise<v
     }
   });
 }
-
-export function isAppActive(): boolean {
-  if (typeof document === 'undefined') return true;
-  return document.visibilityState === 'visible';
-}
-
-export { isOnline as isNetworkConnected } from './network';

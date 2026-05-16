@@ -47,14 +47,6 @@ export function initNetworkMonitoring(): void {
   }).catch(() => {});
 }
 
-export function destroyNetworkMonitoring(): void {
-  if (cleanup) {
-    cleanup();
-    cleanup = null;
-  }
-  listeners.clear();
-}
-
 export function getNetworkStatus(): NetworkStatus {
   return currentStatus;
 }

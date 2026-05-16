@@ -1,5 +1,4 @@
 @import './styles/tokens.css';
-@import '@xterm/xterm/css/xterm.css';
 @import 'katex/dist/katex.min.css';
 @import 'highlight.js/styles/github.css';
 @import './styles/components.css';

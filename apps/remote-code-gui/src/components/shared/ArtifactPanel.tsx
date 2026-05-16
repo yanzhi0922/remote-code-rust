@@ -17,7 +17,7 @@ import type { ReactNode } from 'react';
 import { formatBytes } from './formatBytes';
 import { PanelHint } from './ApprovalPanel';
 
-export interface ArtifactItem {
+interface ArtifactItem {
   artifact_id: string;
   name: string;
   file_name: string;
