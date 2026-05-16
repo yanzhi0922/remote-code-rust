@@ -780,6 +780,10 @@ pub fn rule_matches_pattern(pattern: &str, tool_name: &str) -> bool {
 /// `ToolSpec::permission_tool_name` and snake_case internal names (e.g.
 /// `"bash_command"`, `"read_file"`) used in `ToolSpec::name`.
 pub fn classify_tool(name: &str) -> PermissionClass {
+    if name.starts_with("mcp__") {
+        return PermissionClass::Mcp;
+    }
+
     match name {
         // PascalCase (permission_tool_name / rule patterns)
         "Read" | "Glob" | "LS" => PermissionClass::Read,
@@ -818,9 +822,7 @@ pub fn auto_allows(mode: claude_core::PermissionMode, class: PermissionClass) ->
         PermissionMode::Default | PermissionMode::Plan | PermissionMode::DontAsk => {
             matches!(class, PermissionClass::Read)
         }
-        PermissionMode::Auto => {
-            matches!(class, PermissionClass::Read | PermissionClass::Edit)
-        }
+        PermissionMode::Auto => matches!(class, PermissionClass::Read),
     }
 }
 
@@ -1044,8 +1046,23 @@ mod tests {
         assert_eq!(classify_tool("McpCall"), PermissionClass::Mcp);
         assert_eq!(classify_tool("Daemon"), PermissionClass::Bash);
         assert_eq!(classify_tool("mcp"), PermissionClass::Mcp);
+        assert_eq!(
+            classify_tool("mcp__github__create_issue"),
+            PermissionClass::Mcp
+        );
         assert_eq!(classify_tool("Agent"), PermissionClass::Agent);
         assert_eq!(classify_tool("Unknown"), PermissionClass::Read);
+    }
+
+    #[test]
+    fn auto_mode_only_auto_allows_read_class_tools() {
+        use claude_core::PermissionMode;
+
+        assert!(auto_allows(PermissionMode::Auto, PermissionClass::Read));
+        assert!(!auto_allows(PermissionMode::Auto, PermissionClass::Edit));
+        assert!(!auto_allows(PermissionMode::Auto, PermissionClass::Bash));
+        assert!(!auto_allows(PermissionMode::Auto, PermissionClass::Mcp));
+        assert!(!auto_allows(PermissionMode::Auto, PermissionClass::Agent));
     }
 
     #[test]

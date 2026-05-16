@@ -136,6 +136,18 @@ pub struct Cli {
     #[arg(long = "permission-prompt-tool", alias = "permissionPromptTool")]
     pub permission_prompt_tool: Option<String>,
 
+    #[arg(long = "sdk-url", alias = "sdkUrl", hide = true)]
+    pub sdk_url: Option<String>,
+
+    #[arg(long = "enable-auth-status", alias = "enableAuthStatus", hide = true)]
+    pub enable_auth_status: bool,
+
+    #[arg(long = "worktree", hide = true)]
+    pub worktree: Option<String>,
+
+    #[arg(long = "worktree-base-ref", alias = "worktreeBaseRef", hide = true)]
+    pub worktree_base_ref: Option<String>,
+
     #[arg(long = "include-hook-events", alias = "includeHookEvents")]
     pub include_hook_events: bool,
 

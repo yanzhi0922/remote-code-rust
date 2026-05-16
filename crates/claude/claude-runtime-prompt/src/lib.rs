@@ -4,6 +4,7 @@ use std::collections::HashSet;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use anyhow::Result;
 use auto_memory::{
@@ -35,6 +36,7 @@ use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
 const MEMORY_INSTRUCTION_PROMPT: &str = "Codebase and user instructions are shown below. Be sure to adhere to these instructions. IMPORTANT: These instructions OVERRIDE any default behavior and you MUST follow them exactly as written.";
 const SCRATCHPAD_FEATURE_KEY: &str = "tengu_scratch";
 const SCRATCHPAD_DIRNAME: &str = "scratchpad";
+static SESSION_START_DATE: OnceLock<String> = OnceLock::new();
 
 pub use auto_memory::{
     MemoryHeader as AutoMemoryHeader, MemoryPromptFeatures, MemoryScope as AutoMemoryScope,
@@ -200,7 +202,7 @@ pub fn runtime_env_defined_falsy(name: &str) -> bool {
     std::env::var(name).is_ok_and(|value| {
         matches!(
             value.trim().to_ascii_lowercase().as_str(),
-            "" | "0" | "false" | "no" | "off"
+            "0" | "false" | "no" | "off"
         )
     })
 }
@@ -368,8 +370,13 @@ pub fn conversation_with_runtime_user_context(
     conversation: &[ConversationEntry],
     overrides: &PromptRuntimeOverrides,
 ) -> Vec<ConversationEntry> {
-    let context_entries = base_runtime_user_context_entries(config, overrides);
-    augment_conversation_with_runtime_user_context(conversation, context_entries)
+    let user_context_entries = base_runtime_user_context_entries(config, overrides);
+    let system_context_entries = base_runtime_system_context_entries(config, overrides);
+    augment_conversation_with_runtime_context(
+        conversation,
+        system_context_entries,
+        user_context_entries,
+    )
 }
 
 pub async fn conversation_with_runtime_user_context_with_settings(
@@ -378,9 +385,79 @@ pub async fn conversation_with_runtime_user_context_with_settings(
     overrides: &PromptRuntimeOverrides,
     settings: &RuntimePromptSettings,
 ) -> Vec<ConversationEntry> {
-    let context_entries =
+    let user_context_entries =
         runtime_user_context_entries_with_settings(config, overrides, settings).await;
-    augment_conversation_with_runtime_user_context(conversation, context_entries)
+    let system_context_entries = runtime_system_context_entries(config, overrides);
+    augment_conversation_with_runtime_context(
+        conversation,
+        system_context_entries,
+        user_context_entries,
+    )
+}
+
+fn runtime_session_start_date() -> String {
+    SESSION_START_DATE
+        .get_or_init(|| {
+            env::var("CLAUDE_CODE_OVERRIDE_DATE")
+                .ok()
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or_else(|| Local::now().format("%Y-%m-%d").to_string())
+        })
+        .clone()
+}
+
+fn runtime_platform_name() -> &'static str {
+    if cfg!(windows) {
+        "win32"
+    } else {
+        std::env::consts::OS
+    }
+}
+
+fn augment_conversation_with_runtime_context(
+    conversation: &[ConversationEntry],
+    system_context_entries: Vec<(String, String)>,
+    user_context_entries: Vec<(String, String)>,
+) -> Vec<ConversationEntry> {
+    let with_user_context =
+        augment_conversation_with_runtime_user_context(conversation, user_context_entries);
+    augment_conversation_with_runtime_system_context(&with_user_context, system_context_entries)
+}
+
+fn augment_conversation_with_runtime_system_context(
+    conversation: &[ConversationEntry],
+    context_entries: Vec<(String, String)>,
+) -> Vec<ConversationEntry> {
+    if context_entries.is_empty()
+        || conversation.iter().any(|entry| {
+            entry.role == ConversationRole::System
+                && entry
+                    .text
+                    .contains("This is the git status at the start of the conversation.")
+        })
+    {
+        return conversation.to_vec();
+    }
+
+    let body = context_entries
+        .into_iter()
+        .map(|(key, value)| format!("# {key}\n{value}"))
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    let reminder = ConversationEntry::system(body);
+
+    let mut augmented = Vec::with_capacity(conversation.len() + 1);
+    if let Some((first, rest)) = conversation.split_first()
+        && first.role == ConversationRole::System
+    {
+        augmented.push(first.clone());
+        augmented.push(reminder);
+        augmented.extend(rest.iter().cloned());
+        return augmented;
+    }
+    augmented.push(reminder);
+    augmented.extend(conversation.iter().cloned());
+    augmented
 }
 
 fn augment_conversation_with_runtime_user_context(
@@ -444,7 +521,7 @@ pub async fn build_runtime_system_prompt(
     } else {
         None
     };
-    let session_start_date = Local::now().format("%Y-%m-%d").to_string();
+    let session_start_date = runtime_session_start_date();
     if runtime_env_truthy("CLAUDE_CODE_SIMPLE") {
         let default_prompt_blocks = if use_default_system_prompt {
             vec![format!(
@@ -511,7 +588,7 @@ pub async fn build_runtime_system_prompt(
             .unwrap_or_else(|| "unknown".to_owned()),
         cwd: config.cwd.clone(),
         is_git: detect_git_repository(&config.cwd),
-        platform: std::env::consts::OS.to_owned(),
+        platform: runtime_platform_name().to_owned(),
         shell: detect_shell_name(),
         os_version: detect_os_version(),
         enabled_tools,
@@ -722,6 +799,9 @@ fn run_git_command(cwd: &Path, args: &[&str]) -> Option<String> {
 /// ```
 fn get_git_status_context(cwd: &Path) -> Option<String> {
     if runtime_env_truthy("CLAUDE_CODE_REMOTE") {
+        return None;
+    }
+    if runtime_env_truthy("CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS") {
         return None;
     }
     if !detect_git_repository(cwd) {
@@ -1899,7 +1979,15 @@ fn collect_claude_md_context(
     config: &RuntimeConfig,
     settings: Option<&RuntimePromptSettings>,
 ) -> Option<String> {
+    if runtime_env_truthy("CLAUDE_CODE_DISABLE_CLAUDE_MDS")
+        || runtime_env_truthy("REMOTE_CODE_DISABLE_CLAUDE_MDS")
+    {
+        return None;
+    }
     let roots = ClaudeMemoryRoots::from_runtime_settings(settings);
+    if runtime_env_truthy("CLAUDE_CODE_SIMPLE") && roots.additional_dirs.is_empty() {
+        return None;
+    }
     collect_claude_md_context_with_roots(config, &roots)
 }
 
@@ -1913,15 +2001,30 @@ fn base_runtime_user_context_entries(
     {
         entries.push(("claudeMd".to_owned(), claude_md));
     }
+    entries.push((
+        "currentDate".to_owned(),
+        format!("Today's date is {}.", runtime_session_start_date()),
+    ));
+    entries
+}
+
+fn base_runtime_system_context_entries(
+    config: &RuntimeConfig,
+    overrides: &PromptRuntimeOverrides,
+) -> Vec<(String, String)> {
+    runtime_system_context_entries(config, overrides)
+}
+
+fn runtime_system_context_entries(
+    config: &RuntimeConfig,
+    overrides: &PromptRuntimeOverrides,
+) -> Vec<(String, String)> {
+    let mut entries = Vec::new();
     if !overrides.omit_git_status
         && let Some(git_status) = get_git_status_context(&config.cwd)
     {
         entries.push(("gitStatus".to_owned(), git_status));
     }
-    entries.push((
-        "currentDate".to_owned(),
-        format!("Today's date is {}.", Local::now().format("%Y-%m-%d")),
-    ));
     entries
 }
 
@@ -1936,14 +2039,9 @@ async fn runtime_user_context_entries_with_settings(
     {
         entries.push(("claudeMd".to_owned(), claude_md));
     }
-    if !overrides.omit_git_status
-        && let Some(git_status) = get_git_status_context(&config.cwd)
-    {
-        entries.push(("gitStatus".to_owned(), git_status));
-    }
     entries.push((
         "currentDate".to_owned(),
-        format!("Today's date is {}.", Local::now().format("%Y-%m-%d")),
+        format!("Today's date is {}.", runtime_session_start_date()),
     ));
     let mcp_catalog = claude_tools::mcp_catalog::runtime_mcp_catalog().await;
     let coordinator_mcp_clients = mcp_catalog
@@ -2139,16 +2237,18 @@ fn should_use_global_prompt_cache_scope(config: &RuntimeConfig) -> bool {
 mod tests {
     use super::{
         ClaudeMemoryRoots, MemoryPromptFeatures, PromptRuntimeOverrides, RuntimePromptSettings,
-        build_runtime_scratchpad_state_with, build_runtime_system_prompt,
-        clear_runtime_system_prompt_state, collect_claude_md_context_with_roots,
-        expand_requested_tool_names, runtime_claude_temp_dir_name,
-        runtime_user_context_entries_with_settings, sanitize_path_component,
+        augment_conversation_with_runtime_context, build_runtime_scratchpad_state_with,
+        build_runtime_system_prompt, clear_runtime_system_prompt_state,
+        collect_claude_md_context_with_roots, expand_requested_tool_names,
+        runtime_claude_temp_dir_name, runtime_user_context_entries_with_settings,
+        sanitize_path_component,
     };
     use claude_config::settings_layers::RuntimeOverrides;
     use claude_config::{ProviderOverrides, SettingSource, load_runtime_config};
     use claude_context::RuntimeIdentityContext;
     use claude_core::{
-        ConversationEntry, InputFormat, OutputFormat, PermissionMode, ProviderProtocol,
+        ConversationEntry, ConversationRole, InputFormat, OutputFormat, PermissionMode,
+        ProviderProtocol,
     };
     use claude_provider::DiscoveredToolScope;
     use claude_tools::ToolSpec;
@@ -2364,6 +2464,33 @@ mod tests {
         );
 
         claude_agents::coordinator::reset_coordinator_override();
+    }
+
+    #[test]
+    fn runtime_context_places_git_status_in_system_context() {
+        let conversation = vec![
+            ConversationEntry::system("base system"),
+            ConversationEntry::user("hello"),
+        ];
+
+        let augmented = augment_conversation_with_runtime_context(
+            &conversation,
+            vec![(
+                "gitStatus".to_owned(),
+                "This is the git status at the start of the conversation.".to_owned(),
+            )],
+            vec![(
+                "currentDate".to_owned(),
+                "Today's date is 2026-05-17.".to_owned(),
+            )],
+        );
+
+        assert_eq!(augmented[0].role, ConversationRole::System);
+        assert_eq!(augmented[1].role, ConversationRole::System);
+        assert!(augmented[1].text.contains("# gitStatus"));
+        assert_eq!(augmented[2].role, ConversationRole::User);
+        assert!(augmented[2].text.contains("# currentDate"));
+        assert!(!augmented[2].text.contains("# gitStatus"));
     }
 
     #[tokio::test]

@@ -119,6 +119,18 @@ impl RuntimePlanModeController {
         self.state.read().current_permission_mode
     }
 
+    pub fn set_permission_mode(&self, mode: PermissionMode) -> Result<()> {
+        let mut state = self.state.write();
+        if mode == PermissionMode::Plan && !state.is_plan_mode() {
+            state.pre_plan_permission_mode = Some(state.current_permission_mode);
+            self.ensure_plan_descriptor_locked(&mut state)?;
+        } else if mode != PermissionMode::Plan {
+            state.pre_plan_permission_mode = None;
+        }
+        state.current_permission_mode = mode;
+        self.persist_locked(&mut state)
+    }
+
     pub fn plan_file_matches_request(&self, request: &PermissionRequest) -> bool {
         let Some(raw_path) = request
             .tool_input

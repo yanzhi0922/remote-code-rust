@@ -278,6 +278,10 @@ struct HookSpecificOutput {
     #[serde(default)]
     updated_input: Option<Value>,
     #[serde(default)]
+    permission_decision: Option<PermissionHookBehavior>,
+    #[serde(default)]
+    permission_decision_reason: Option<String>,
+    #[serde(default)]
     decision: Option<PermissionHookDecision>,
 }
 
@@ -297,6 +301,7 @@ struct PermissionHookDecision {
 #[serde(rename_all = "camelCase")]
 enum PermissionHookBehavior {
     Allow,
+    Ask,
     Deny,
 }
 
@@ -663,9 +668,23 @@ pub async fn apply_pre_tool_use_hooks_with_options(
         &effects.additional_contexts,
         options.persist,
     )?;
+    let blocked_reason = effects.blocked_reason.or_else(|| {
+        effects
+            .permission_decision
+            .as_ref()
+            .and_then(|decision| match decision.behavior {
+                PermissionHookBehavior::Deny => Some(
+                    decision
+                        .message
+                        .clone()
+                        .unwrap_or_else(|| "Tool use denied by hook.".to_owned()),
+                ),
+                PermissionHookBehavior::Allow | PermissionHookBehavior::Ask => None,
+            })
+    });
     Ok(PreparedToolCall {
         call,
-        blocked_reason: effects.blocked_reason,
+        blocked_reason,
     })
 }
 
@@ -795,6 +814,7 @@ pub async fn apply_permission_request_hooks(
             permission_decision.permission_updates = decision.updated_permissions;
             Ok(Some(permission_decision))
         }
+        PermissionHookBehavior::Ask => Ok(None),
         PermissionHookBehavior::Deny => Ok(Some(PermissionDecision::deny(
             decision
                 .message
@@ -1436,10 +1456,18 @@ fn normalized_updated_input(response: &HookResponse) -> Option<Value> {
 }
 
 fn normalized_permission_hook_decision(response: &HookResponse) -> Option<PermissionHookDecision> {
-    response
-        .hook_specific_output
-        .as_ref()
-        .and_then(|value| value.decision.clone())
+    let hook_specific = response.hook_specific_output.as_ref()?;
+    if let Some(decision) = hook_specific.decision.clone() {
+        return Some(decision);
+    }
+    hook_specific
+        .permission_decision
+        .map(|behavior| PermissionHookDecision {
+            behavior,
+            updated_input: hook_specific.updated_input.clone(),
+            updated_permissions: Vec::new(),
+            message: hook_specific.permission_decision_reason.clone(),
+        })
 }
 
 fn normalized_additional_context(response: &HookResponse) -> Option<String> {
@@ -1832,6 +1860,22 @@ mod tests {
         assert!(!decision.allowed);
         assert_eq!(decision.message.as_deref(), Some("blocked by hook"));
         assert_eq!(calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn hook_parser_accepts_upstream_permission_decision_shape() {
+        let parsed = parse_hook_response(
+            r#"{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"blocked upstream","updatedInput":{"command":"git status"}}}"#,
+        )
+        .expect("parse hook response");
+
+        let decision = normalized_permission_hook_decision(&parsed).expect("permission decision");
+        assert_eq!(decision.behavior, PermissionHookBehavior::Deny);
+        assert_eq!(decision.message.as_deref(), Some("blocked upstream"));
+        assert_eq!(
+            decision.updated_input,
+            Some(json!({"command": "git status"}))
+        );
     }
 
     #[tokio::test]

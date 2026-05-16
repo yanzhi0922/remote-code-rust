@@ -437,6 +437,11 @@ pub(crate) async fn mcp_call_tool(
 
     let runtime_policy = current_tool_runtime_policy();
     let server = resolve_runtime_policy_mcp_server(&runtime_policy, server_name)?.server;
+    if !server.tool_policy.is_tool_allowed(tool_name) {
+        return Err(anyhow!(
+            "MCP tool `{tool_name}` on server `{server_name}` is not allowed by the server's tool policy"
+        ));
+    }
 
     let client_info = claude_mcp::McpClientInfo::new("remote-code-rust", env!("CARGO_PKG_VERSION"));
     let response = claude_mcp::call_tool(&server, &client_info, tool_name, arguments).await?;

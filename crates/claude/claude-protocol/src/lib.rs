@@ -51,14 +51,43 @@ pub enum ProtocolInput {
 }
 
 /// Control operations accepted from the external consumer.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ControlRequest {
     /// SDK/session initialization handshake.
-    Initialize,
+    Initialize {
+        /// Optional custom system prompt supplied by the SDK host.
+        system_prompt: Option<String>,
+        /// Optional prompt suffix supplied by the SDK host.
+        append_system_prompt: Option<String>,
+        /// Optional structured-output JSON schema supplied by the SDK host.
+        json_schema: Option<Value>,
+    },
     /// Gracefully end the stream-json session.
-    EndSession,
+    EndSession {
+        /// Optional caller-provided reason for shutdown.
+        reason: Option<String>,
+    },
     /// Interrupt the currently running turn.
     Interrupt,
+    /// Update the active permission mode for subsequent tool decisions.
+    SetPermissionMode {
+        /// Claude Code permission mode string.
+        mode: String,
+    },
+    /// Update the active model for subsequent turns.
+    SetModel {
+        /// New model identifier. `None` clears the explicit model override.
+        model: Option<String>,
+    },
+    /// Update the maximum thinking-token budget for subsequent turns.
+    SetMaxThinkingTokens {
+        /// Token budget, or `None` to clear it.
+        max_thinking_tokens: Option<u32>,
+    },
+    /// Request a context-usage snapshot.
+    GetContextUsage,
+    /// Request MCP connection status.
+    McpStatus,
     /// Unknown control subtype, retained so callers can ignore it deliberately.
     Unknown(String),
 }
@@ -114,6 +143,22 @@ impl<W: Write> ProtocolEmitter<W> {
             "subtype": "status",
             "status": status.as_ref(),
             "uuid": Uuid::new_v4(),
+            "session_id": self.session_id,
+        }))
+    }
+
+    /// Emit a replayed user message acknowledgement for SDK stream-json consumers.
+    pub fn emit_replayed_user_message(&mut self, content: impl AsRef<str>) -> Result<()> {
+        self.emit(json!({
+            "type": "user",
+            "message": {
+                "role": "user",
+                "content": content.as_ref(),
+            },
+            "parent_tool_use_id": Value::Null,
+            "isReplay": true,
+            "uuid": Uuid::new_v4(),
+            "timestamp": chrono::Utc::now().to_rfc3339(),
             "session_id": self.session_id,
         }))
     }
@@ -379,6 +424,18 @@ impl<W: Write> ProtocolEmitter<W> {
                 "subtype": "success",
                 "request_id": request_id,
                 "response": response,
+            },
+        }))
+    }
+
+    /// Emit an error control response for unsupported or invalid SDK control requests.
+    pub fn emit_control_error_response(&mut self, request_id: &str, error: &str) -> Result<()> {
+        self.emit(json!({
+            "type": "control_response",
+            "response": {
+                "subtype": "error",
+                "request_id": request_id,
+                "error": error,
             },
         }))
     }
@@ -881,13 +938,55 @@ fn trimmed_non_empty(text: &str) -> Option<&str> {
     }
 }
 
-fn parse_control_request(subtype: &str) -> ControlRequest {
+fn parse_control_request(request: &Value) -> Option<ControlRequest> {
+    let subtype = request.get("subtype").and_then(Value::as_str)?;
     match subtype {
-        "initialize" => ControlRequest::Initialize,
-        "end_session" => ControlRequest::EndSession,
-        "interrupt" => ControlRequest::Interrupt,
-        other => ControlRequest::Unknown(other.to_owned()),
+        "initialize" => Some(ControlRequest::Initialize {
+            system_prompt: request
+                .get("systemPrompt")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned),
+            append_system_prompt: request
+                .get("appendSystemPrompt")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned),
+            json_schema: request.get("jsonSchema").cloned(),
+        }),
+        "end_session" => Some(ControlRequest::EndSession {
+            reason: request
+                .get("reason")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned),
+        }),
+        "interrupt" => Some(ControlRequest::Interrupt),
+        "set_permission_mode" => Some(ControlRequest::SetPermissionMode {
+            mode: request.get("mode")?.as_str()?.to_owned(),
+        }),
+        "set_model" => Some(ControlRequest::SetModel {
+            model: request
+                .get("model")
+                .and_then(Value::as_str)
+                .and_then(trimmed_non_empty)
+                .map(ToOwned::to_owned),
+        }),
+        "set_max_thinking_tokens" => Some(ControlRequest::SetMaxThinkingTokens {
+            max_thinking_tokens: request
+                .get("max_thinking_tokens")
+                .and_then(Value::as_u64)
+                .and_then(|value| u32::try_from(value).ok()),
+        }),
+        "get_context_usage" => Some(ControlRequest::GetContextUsage),
+        "mcp_status" => Some(ControlRequest::McpStatus),
+        other => Some(ControlRequest::Unknown(other.to_owned())),
     }
+}
+
+fn string_field(value: &Value, snake_case: &str, camel_case: &str) -> Option<String> {
+    value
+        .get(snake_case)
+        .or_else(|| value.get(camel_case))
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned)
 }
 
 /// Parse a single line of JSON input from the external consumer.
@@ -907,7 +1006,22 @@ pub fn parse_input_line(line: &str) -> Option<ProtocolInput> {
         }
         "control_response" => {
             let response = value.get("response")?;
-            let request_id = response.get("request_id")?.as_str()?.to_owned();
+            let request_id = string_field(response, "request_id", "requestId")
+                .or_else(|| string_field(&value, "request_id", "requestId"))?;
+            if response.get("subtype").and_then(Value::as_str) == Some("error") {
+                return Some(ProtocolInput::ControlResponse {
+                    request_id,
+                    allow: false,
+                    message: response
+                        .get("error")
+                        .and_then(Value::as_str)
+                        .map(ToOwned::to_owned),
+                    updated_input: None,
+                    permission_updates: Vec::new(),
+                    feedback: None,
+                    content_blocks: Vec::new(),
+                });
+            }
             let response_body = response.get("response");
             let behavior = response_body
                 .and_then(|value| value.get("behavior"))
@@ -921,7 +1035,11 @@ pub fn parse_input_line(line: &str) -> Option<ProtocolInput> {
                 .and_then(|value| value.get("updatedInput"))
                 .cloned();
             let permission_updates = response_body
-                .and_then(|value| value.get("permissionUpdates"))
+                .and_then(|value| {
+                    value
+                        .get("updatedPermissions")
+                        .or_else(|| value.get("permissionUpdates"))
+                })
                 .and_then(|value| {
                     serde_json::from_value::<Vec<PermissionUpdate>>(value.clone()).ok()
                 })
@@ -950,16 +1068,10 @@ pub fn parse_input_line(line: &str) -> Option<ProtocolInput> {
             })
         }
         "control_request" => {
-            let subtype = value
-                .get("request")
-                .and_then(|request| request.get("subtype"))
-                .and_then(Value::as_str)?;
+            let request_value = value.get("request")?;
             Some(ProtocolInput::ControlRequest {
-                request_id: value
-                    .get("request_id")
-                    .and_then(Value::as_str)
-                    .map(ToOwned::to_owned),
-                request: parse_control_request(subtype),
+                request_id: string_field(&value, "request_id", "requestId"),
+                request: parse_control_request(request_value)?,
             })
         }
         _ => None,
@@ -1026,6 +1138,22 @@ mod tests {
         assert_eq!(events[0]["type"], "system");
         assert_eq!(events[0]["subtype"], "session_state_changed");
         assert_eq!(events[0]["state"], "running");
+    }
+
+    #[test]
+    fn emit_replayed_user_message_matches_sdk_shape() {
+        let mut buf = Cursor::new(Vec::new());
+        let mut emitter = ProtocolEmitter::new(&mut buf, test_session_id());
+        emitter
+            .emit_replayed_user_message("hello")
+            .expect("emit replayed user");
+        let events = collect_lines(&buf.into_inner());
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0]["type"], "user");
+        assert_eq!(events[0]["message"]["role"], "user");
+        assert_eq!(events[0]["message"]["content"], "hello");
+        assert_eq!(events[0]["isReplay"], true);
+        assert_eq!(events[0]["session_id"], test_session_id().to_string());
     }
 
     #[test]
@@ -1405,6 +1533,44 @@ mod tests {
     }
 
     #[test]
+    fn parse_input_line_control_response_accepts_reference_aliases() {
+        let input = r#"{"type":"control_response","response":{"requestId":"req-2","response":{"behavior":"allow","updatedInput":{},"updatedPermissions":[{"type":"setMode","destination":"session","mode":"acceptEdits"}]}}}"#;
+        let result = parse_input_line(input).expect("should parse alias response");
+        match result {
+            ProtocolInput::ControlResponse {
+                request_id,
+                allow,
+                permission_updates,
+                ..
+            } => {
+                assert_eq!(request_id, "req-2");
+                assert!(allow);
+                assert_eq!(permission_updates.len(), 1);
+            }
+            _ => panic!("expected ControlResponse variant"),
+        }
+    }
+
+    #[test]
+    fn parse_input_line_control_response_error_is_deny() {
+        let input = r#"{"type":"control_response","requestId":"req-err","response":{"subtype":"error","error":"bad request"}}"#;
+        let result = parse_input_line(input).expect("should parse error response");
+        match result {
+            ProtocolInput::ControlResponse {
+                request_id,
+                allow,
+                message,
+                ..
+            } => {
+                assert_eq!(request_id, "req-err");
+                assert!(!allow);
+                assert_eq!(message.as_deref(), Some("bad request"));
+            }
+            _ => panic!("expected ControlResponse variant"),
+        }
+    }
+
+    #[test]
     fn parse_input_line_interrupt() {
         let input = r#"{"type":"control_request","request":{"subtype":"interrupt"}}"#;
         let result = parse_input_line(input).expect("should parse interrupt");
@@ -1422,20 +1588,21 @@ mod tests {
         let initialize =
             r#"{"type":"control_request","request_id":"ctl-1","request":{"subtype":"initialize"}}"#;
         let end_session = r#"{"type":"control_request","request_id":"ctl-2","request":{"subtype":"end_session"}}"#;
-        let unknown = r#"{"type":"control_request","request_id":"ctl-3","request":{"subtype":"future_type"}}"#;
+        let unknown =
+            r#"{"type":"control_request","requestId":"ctl-3","request":{"subtype":"future_type"}}"#;
 
         assert!(matches!(
             parse_input_line(initialize),
             Some(ProtocolInput::ControlRequest {
                 request_id: Some(id),
-                request: ControlRequest::Initialize,
+                request: ControlRequest::Initialize { .. },
             }) if id == "ctl-1"
         ));
         assert!(matches!(
             parse_input_line(end_session),
             Some(ProtocolInput::ControlRequest {
                 request_id: Some(id),
-                request: ControlRequest::EndSession,
+                request: ControlRequest::EndSession { .. },
             }) if id == "ctl-2"
         ));
         assert!(matches!(
@@ -1444,6 +1611,49 @@ mod tests {
                 request_id: Some(id),
                 request: ControlRequest::Unknown(subtype),
             }) if id == "ctl-3" && subtype == "future_type"
+        ));
+    }
+
+    #[test]
+    fn parse_input_line_mutating_control_requests() {
+        let initialize = r#"{"type":"control_request","request_id":"ctl-init","request":{"subtype":"initialize","systemPrompt":"sys","appendSystemPrompt":"append","jsonSchema":{"type":"object"}}}"#;
+        let set_mode = r#"{"type":"control_request","request_id":"ctl-mode","request":{"subtype":"set_permission_mode","mode":"acceptEdits"}}"#;
+        let set_model = r#"{"type":"control_request","request_id":"ctl-model","request":{"subtype":"set_model","model":"claude-sonnet-4-6"}}"#;
+        let thinking = r#"{"type":"control_request","request_id":"ctl-thinking","request":{"subtype":"set_max_thinking_tokens","max_thinking_tokens":4096}}"#;
+
+        assert!(matches!(
+            parse_input_line(initialize),
+            Some(ProtocolInput::ControlRequest {
+                request_id: Some(id),
+                request: ControlRequest::Initialize {
+                    system_prompt: Some(system_prompt),
+                    append_system_prompt: Some(append_system_prompt),
+                    json_schema: Some(_),
+                },
+            }) if id == "ctl-init" && system_prompt == "sys" && append_system_prompt == "append"
+        ));
+        assert!(matches!(
+            parse_input_line(set_mode),
+            Some(ProtocolInput::ControlRequest {
+                request_id: Some(id),
+                request: ControlRequest::SetPermissionMode { mode },
+            }) if id == "ctl-mode" && mode == "acceptEdits"
+        ));
+        assert!(matches!(
+            parse_input_line(set_model),
+            Some(ProtocolInput::ControlRequest {
+                request_id: Some(id),
+                request: ControlRequest::SetModel { model: Some(model) },
+            }) if id == "ctl-model" && model == "claude-sonnet-4-6"
+        ));
+        assert!(matches!(
+            parse_input_line(thinking),
+            Some(ProtocolInput::ControlRequest {
+                request_id: Some(id),
+                request: ControlRequest::SetMaxThinkingTokens {
+                    max_thinking_tokens: Some(4096),
+                },
+            }) if id == "ctl-thinking"
         ));
     }
 

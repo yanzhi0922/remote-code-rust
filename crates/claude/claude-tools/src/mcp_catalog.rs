@@ -221,8 +221,8 @@ pub async fn runtime_mcp_catalog() -> RuntimeMcpCatalog {
                     supports_resources: inspection_supports_resources(entry, &inspection),
                 });
 
-                for tool in &inspection.tools {
-                    let descriptor = build_mcp_tool_spec(entry, tool);
+                for tool in entry.server.tool_policy.filter_tools(&inspection.tools) {
+                    let descriptor = build_mcp_tool_spec(entry, &tool);
                     if !tool_allowed_by_policy(descriptor.qualified_name(), &policy) {
                         continue;
                     }
@@ -371,6 +371,17 @@ pub async fn execute_runtime_mcp_tool(
     context: &crate::ToolExecutionContext,
 ) -> Result<claude_core::ToolResult> {
     let descriptor = resolve_runtime_mcp_tool(name).await?;
+    if !descriptor
+        .server_config
+        .tool_policy
+        .is_tool_allowed(&descriptor.tool_name)
+    {
+        return Err(anyhow!(
+            "MCP tool `{}` on server `{}` is not allowed by the server's tool policy",
+            descriptor.tool_name,
+            descriptor.server_name
+        ));
+    }
     let response = claude_mcp::call_tool(
         &descriptor.server_config,
         &McpClientInfo::default(),
@@ -412,7 +423,7 @@ mod tests {
 
     use claude_mcp::{
         McpCapabilityMatrix, McpListChangedSurface, McpPeerInfo, McpServerConfig,
-        McpServerInspection, McpToolDescriptor, McpTransportConfig,
+        McpServerInspection, McpToolDescriptor, McpToolPolicy, McpTransportConfig,
     };
     use once_cell::sync::Lazy;
     use serde_json::json;
@@ -422,7 +433,10 @@ mod tests {
         handle_runtime_mcp_list_changed, inspection_cache_key,
         invalidate_runtime_mcp_catalog_server,
     };
-    use crate::RuntimeMcpServerPolicyEntry;
+    use crate::{
+        RuntimeMcpServerPolicyEntry, ToolRuntimePolicy, configure_tool_runtime_policy,
+        current_tool_runtime_policy,
+    };
 
     static MCP_CATALOG_TEST_MUTEX: Lazy<StdMutex<()>> = Lazy::new(|| StdMutex::new(()));
 
@@ -451,25 +465,35 @@ mod tests {
     }
 
     fn cached_inspection(server_name: &str) -> CachedInspection {
+        cached_inspection_with_tools(&policy_entry(server_name, "ignored"), &["search"])
+    }
+
+    fn cached_inspection_with_tools(
+        entry: &RuntimeMcpServerPolicyEntry,
+        tool_names: &[&str],
+    ) -> CachedInspection {
         CachedInspection {
-            server_config: policy_entry(server_name, "ignored").server,
+            server_config: entry.server.clone(),
             inspection: McpServerInspection {
-                server_name: server_name.to_owned(),
+                server_name: entry.server.name.clone(),
                 protocol_version: "2025-03-26".to_owned(),
                 server_info: Some(McpPeerInfo {
-                    name: server_name.to_owned(),
+                    name: entry.server.name.clone(),
                     title: None,
                     version: None,
                 }),
                 capabilities: json!({"tools": {"listChanged": true}}),
                 instructions: Some("instructions".to_owned()),
-                tools: vec![McpToolDescriptor {
-                    name: "search".to_owned(),
-                    title: None,
-                    description: None,
-                    input_schema: json!({}),
-                    annotations: json!({}),
-                }],
+                tools: tool_names
+                    .iter()
+                    .map(|name| McpToolDescriptor {
+                        name: (*name).to_owned(),
+                        title: None,
+                        description: None,
+                        input_schema: json!({}),
+                        annotations: json!({}),
+                    })
+                    .collect(),
                 prompts: Vec::new(),
                 resources: Vec::new(),
             },
@@ -538,6 +562,35 @@ mod tests {
                 .await
                 .contains_key(&inspection_cache_key(&entry))
         );
+        clear_runtime_mcp_catalog_cache().await;
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn runtime_mcp_catalog_applies_server_tool_policy() {
+        let _guard = MCP_CATALOG_TEST_MUTEX.lock().expect("test mutex");
+        let original_policy = current_tool_runtime_policy();
+        let mut entry = policy_entry("test-policy-server", "test-policy-server.toml");
+        entry.server.tool_policy = McpToolPolicy::allow_only(["search"]);
+        {
+            let mut cache = RUNTIME_MCP_INSPECTION_CACHE.lock().await;
+            cache.clear();
+            cache.insert(
+                inspection_cache_key(&entry),
+                cached_inspection_with_tools(&entry, &["search", "delete"]),
+            );
+        }
+
+        configure_tool_runtime_policy(ToolRuntimePolicy {
+            mcp_servers: vec![entry],
+            ..ToolRuntimePolicy::default()
+        })
+        .expect("configure policy");
+        let catalog = super::runtime_mcp_catalog().await;
+
+        assert_eq!(catalog.tools.len(), 1);
+        assert_eq!(catalog.tools[0].tool_name, "search");
+        configure_tool_runtime_policy(original_policy).expect("restore policy");
         clear_runtime_mcp_catalog_cache().await;
     }
 }

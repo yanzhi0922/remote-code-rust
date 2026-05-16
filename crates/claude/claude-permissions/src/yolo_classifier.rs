@@ -1341,7 +1341,7 @@ mod tests {
         let input = "<thinking>part 1</thinking>middle<thinking>part 2</thinking>";
         let thinking = extract_thinking_text(input);
         assert!(thinking.is_some());
-        let t = thinking.unwrap();
+        let t = thinking.expect("thinking text should be extracted");
         assert!(t.contains("part 1"));
         assert!(t.contains("part 2"));
     }
@@ -1444,8 +1444,10 @@ mod tests {
 
     #[test]
     fn classifier_stage_serialization() {
-        let fast = serde_json::to_string(&ClassifierStage::Fast).unwrap();
-        let thinking = serde_json::to_string(&ClassifierStage::Thinking).unwrap();
+        let fast =
+            serde_json::to_string(&ClassifierStage::Fast).expect("serialize fast classifier stage");
+        let thinking = serde_json::to_string(&ClassifierStage::Thinking)
+            .expect("serialize thinking classifier stage");
         assert!(fast.contains("Fast") || fast.contains("fast"));
         assert!(thinking.contains("Thinking") || thinking.contains("thinking"));
     }

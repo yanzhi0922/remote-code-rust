@@ -41,6 +41,7 @@ pub(crate) async fn run_headless(
     config: &RuntimeConfig,
     inline_prompt: Option<String>,
 ) -> Result<()> {
+    let runtime_config = Arc::new(Mutex::new(config.clone()));
     let discovery = discover_runtime_extensions(config);
     let emitter = Arc::new(Mutex::new(ProtocolEmitter::new(
         io::stdout(),
@@ -58,7 +59,7 @@ pub(crate) async fn run_headless(
     let _plan_mode_runtime = install_plan_mode_runtime(plan_mode_controller.clone())?;
     let broker: Arc<dyn PermissionBroker> = Arc::new(HeadlessPermissionBroker::new(
         config,
-        plan_mode_controller,
+        plan_mode_controller.clone(),
         emitter.clone(),
         pending_permissions.clone(),
     ));
@@ -68,41 +69,50 @@ pub(crate) async fn run_headless(
         prompt_tx.send(prompt).await?;
     }
 
-    let mut processor_config = config.clone();
+    let processor_config = config.clone();
     let processor_store = SessionStore::open(config.paths.clone())?;
     let processor_broker = broker.clone();
     let processor_emitter = emitter.clone();
     let processor_interrupted = interrupted.clone();
+    let processor_runtime_config = runtime_config.clone();
     let processor = tokio::spawn(async move {
-        let backend = ProviderCompatBackend::new(
-            Arc::new(claude_provider::ProviderClient::new()?),
-            &processor_config.provider,
-        );
-        let discovered_tool_scope = backend.discovered_tool_scope();
+        let provider_client = Arc::new(claude_provider::ProviderClient::new()?);
         let discovery = discover_runtime_hooks(&processor_config, &[]);
-        let (mut conversation, mut hook_state) = prepare_prompt_runtime_state(
-            &processor_store,
-            &processor_config,
-            &discovered_tool_scope,
-            &discovery,
-            None,
-        )
-        .await?;
+        let mut runtime_state = None;
         while let Some(prompt) = prompt_rx.recv().await {
             if processor_interrupted.load(Ordering::Relaxed) {
                 processor_interrupted.store(false, Ordering::Relaxed);
                 continue;
             }
+            let mut prompt_config = processor_runtime_config.lock().await.clone();
+            let backend =
+                ProviderCompatBackend::new(provider_client.clone(), &prompt_config.provider);
+            let discovered_tool_scope = backend.discovered_tool_scope();
+            if runtime_state.is_none() {
+                runtime_state = Some(
+                    prepare_prompt_runtime_state(
+                        &processor_store,
+                        &prompt_config,
+                        &discovered_tool_scope,
+                        &discovery,
+                        None,
+                    )
+                    .await?,
+                );
+            }
+            let (conversation, hook_state) = runtime_state
+                .as_mut()
+                .expect("runtime state is initialized before prompt execution");
             run_headless_prompt_once(
                 Arc::clone(&processor_emitter),
-                &mut processor_config,
+                &mut prompt_config,
                 &processor_store,
-                Arc::new(backend.clone()),
+                Arc::new(backend),
                 discovered_tool_scope.clone(),
                 processor_broker.clone(),
                 &discovery,
-                &mut hook_state,
-                &mut conversation,
+                hook_state,
+                conversation,
                 &prompt,
             )
             .await?;
@@ -122,7 +132,7 @@ pub(crate) async fn run_headless(
             ProtocolInput::User { content } => {
                 if config.replay_user_messages {
                     let mut emitter = emitter.lock().await;
-                    emitter.emit_status(format!("Replayed user prompt: {content}"))?;
+                    emitter.emit_replayed_user_message(&content)?;
                 }
                 prompt_tx.send(content).await?;
             }
@@ -159,6 +169,8 @@ pub(crate) async fn run_headless(
                     &pending_permissions,
                     &emitter,
                     &interrupted,
+                    &runtime_config,
+                    &plan_mode_controller,
                     request_id,
                     request,
                 )
@@ -239,30 +251,47 @@ async fn handle_headless_control_request<W: Write + Send>(
     pending_permissions: &Arc<Mutex<HashMap<String, oneshot::Sender<PermissionDecision>>>>,
     emitter: &Arc<Mutex<ProtocolEmitter<W>>>,
     interrupted: &Arc<AtomicBool>,
+    runtime_config: &Arc<Mutex<RuntimeConfig>>,
+    plan_mode_controller: &Arc<RuntimePlanModeController>,
     request_id: Option<String>,
     request: ControlRequest,
 ) -> Result<bool> {
     match request {
-        ControlRequest::Initialize => {
+        ControlRequest::Initialize {
+            system_prompt,
+            append_system_prompt,
+            json_schema,
+        } => {
+            let response_config = {
+                let mut config = runtime_config.lock().await;
+                if let Some(system_prompt) = system_prompt {
+                    config.system_prompt = Some(system_prompt);
+                }
+                if let Some(append_system_prompt) = append_system_prompt {
+                    config.append_system_prompt = Some(append_system_prompt);
+                }
+                if let Some(json_schema) = json_schema {
+                    config.structured_output_schema = Some(json_schema);
+                }
+                config.clone()
+            };
+            let response = build_headless_initialize_response(&response_config).await;
             let mut emitter = emitter.lock().await;
             if let Some(request_id) = request_id.as_deref() {
-                emitter.emit_control_success_response(
-                    request_id,
-                    serde_json::json!({"status": "initialized"}),
-                )?;
+                emitter.emit_control_success_response(request_id, response)?;
             } else {
                 emitter.emit_status("Initialized")?;
             }
             Ok(true)
         }
-        ControlRequest::EndSession => {
+        ControlRequest::EndSession { reason } => {
             cancel_pending_permissions(pending_permissions, emitter, "Session ended by operator.")
                 .await?;
             let mut emitter = emitter.lock().await;
             if let Some(request_id) = request_id.as_deref() {
                 emitter.emit_control_success_response(
                     request_id,
-                    serde_json::json!({"status": "ending"}),
+                    serde_json::json!({"status": "ending", "reason": reason}),
                 )?;
             }
             emitter.emit_status("Ending session")?;
@@ -281,12 +310,89 @@ async fn handle_headless_control_request<W: Write + Send>(
             }
             Ok(true)
         }
-        ControlRequest::Unknown(subtype) => {
+        ControlRequest::SetPermissionMode { mode } => {
+            let parsed_mode = match mode.parse::<PermissionMode>() {
+                Ok(mode) => mode,
+                Err(error) => {
+                    let mut emitter = emitter.lock().await;
+                    if let Some(request_id) = request_id.as_deref() {
+                        emitter.emit_control_error_response(request_id, &error)?;
+                    } else {
+                        emitter.emit_status(error)?;
+                    }
+                    return Ok(true);
+                }
+            };
+            plan_mode_controller.set_permission_mode(parsed_mode)?;
+            let snapshot = {
+                let mut config = runtime_config.lock().await;
+                config.permission_mode = parsed_mode;
+                build_runtime_status_snapshot(&config)
+            };
             let mut emitter = emitter.lock().await;
             if let Some(request_id) = request_id.as_deref() {
                 emitter.emit_control_success_response(
                     request_id,
-                    serde_json::json!({"status": "ignored", "subtype": subtype}),
+                    serde_json::json!({"permissionMode": parsed_mode.as_legacy_str()}),
+                )?;
+            }
+            emitter.emit_status_snapshot(&snapshot)?;
+            Ok(true)
+        }
+        ControlRequest::SetModel { model } => {
+            let snapshot = {
+                let mut config = runtime_config.lock().await;
+                config.provider.model = model;
+                build_runtime_status_snapshot(&config)
+            };
+            let mut emitter = emitter.lock().await;
+            if let Some(request_id) = request_id.as_deref() {
+                emitter.emit_control_success_response(
+                    request_id,
+                    serde_json::json!({"model": snapshot.provider.model}),
+                )?;
+            }
+            emitter.emit_status_snapshot(&snapshot)?;
+            Ok(true)
+        }
+        ControlRequest::McpStatus => {
+            let snapshot = {
+                let config = runtime_config.lock().await;
+                build_runtime_status_snapshot(&config)
+            };
+            let mut emitter = emitter.lock().await;
+            if let Some(request_id) = request_id.as_deref() {
+                emitter.emit_control_success_response(
+                    request_id,
+                    serde_json::json!({"mcp": snapshot.mcp}),
+                )?;
+            }
+            Ok(true)
+        }
+        ControlRequest::GetContextUsage | ControlRequest::SetMaxThinkingTokens { .. } => {
+            let mut emitter = emitter.lock().await;
+            let message = match request {
+                ControlRequest::GetContextUsage => {
+                    "get_context_usage is not available until a turn has produced usage data"
+                }
+                ControlRequest::SetMaxThinkingTokens { .. } => {
+                    "set_max_thinking_tokens is not supported by the current Rust runtime config"
+                }
+                _ => unreachable!(),
+            };
+            if let Some(request_id) = request_id.as_deref() {
+                emitter.emit_control_error_response(request_id, message)?;
+            } else {
+                emitter.emit_status(message)?;
+            }
+            Ok(true)
+        }
+        ControlRequest::Unknown(subtype) => {
+            let mut emitter = emitter.lock().await;
+            if let Some(request_id) = request_id.as_deref() {
+                emitter.emit_control_error_response(
+                    request_id,
+                    &format!("unsupported control request subtype: {subtype}"),
                 )?;
             } else {
                 emitter.emit_status(format!("Ignored unsupported control request: {subtype}"))?;
@@ -294,6 +400,41 @@ async fn handle_headless_control_request<W: Write + Send>(
             Ok(true)
         }
     }
+}
+
+async fn build_headless_initialize_response(config: &RuntimeConfig) -> serde_json::Value {
+    let slash_commands = headless_slash_commands().await;
+    let current_model = config
+        .provider
+        .model
+        .clone()
+        .unwrap_or_else(|| "default".to_owned());
+    serde_json::json!({
+        "commands": slash_commands
+            .into_iter()
+            .map(|name| serde_json::json!({
+                "name": name.trim_start_matches('/'),
+                "description": "",
+                "argumentHint": "",
+            }))
+            .collect::<Vec<_>>(),
+        "agents": [],
+        "output_style": config.output_style.clone().unwrap_or_else(|| "default".to_owned()),
+        "available_output_styles": ["default"],
+        "models": [{
+            "value": current_model,
+            "displayName": config.provider.model.clone().unwrap_or_else(|| "Default".to_owned()),
+            "description": "Configured model for this Rust Claude runtime",
+        }],
+        "account": {
+            "apiKeySource": config.auth_source.clone(),
+            "tokenSource": config.auth_source.clone(),
+        },
+        "pid": std::process::id(),
+        "fast_mode_state": {
+            "enabled": false,
+        },
+    })
 }
 
 pub(crate) async fn run_headless_text_print(
@@ -1471,7 +1612,7 @@ mod tests {
 
     #[tokio::test]
     async fn headless_initialize_control_request_emits_ack() {
-        let (_tempdir, config, _store) = mock_config_and_store();
+        let (_tempdir, config, store) = mock_config_and_store();
         let output = NamedTempFile::new().expect("protocol output");
         let emitter = Arc::new(Mutex::new(ProtocolEmitter::new(
             output.reopen().expect("reopen output"),
@@ -1479,31 +1620,50 @@ mod tests {
         )));
         let pending_permissions = Arc::new(Mutex::new(HashMap::new()));
         let interrupted = Arc::new(AtomicBool::new(false));
+        let runtime_config = Arc::new(Mutex::new(config.clone()));
+        let plan_mode_controller =
+            RuntimePlanModeController::load(&config, &store).expect("plan mode controller");
 
         let should_continue = handle_headless_control_request(
             &pending_permissions,
             &emitter,
             &interrupted,
+            &runtime_config,
+            &plan_mode_controller,
             Some("ctl-init".to_owned()),
-            claude_protocol::ControlRequest::Initialize,
+            claude_protocol::ControlRequest::Initialize {
+                system_prompt: Some("custom system".to_owned()),
+                append_system_prompt: Some("appendix".to_owned()),
+                json_schema: Some(serde_json::json!({"type": "object"})),
+            },
         )
         .await
         .expect("handle initialize");
 
         assert!(should_continue);
         assert!(!interrupted.load(Ordering::SeqCst));
+        {
+            let config = runtime_config.lock().await;
+            assert_eq!(config.system_prompt.as_deref(), Some("custom system"));
+            assert_eq!(config.append_system_prompt.as_deref(), Some("appendix"));
+            assert_eq!(
+                config.structured_output_schema,
+                Some(serde_json::json!({"type": "object"}))
+            );
+        }
         drop(emitter);
         let events = read_protocol_events(output.path());
         assert_eq!(events.len(), 1);
         assert_eq!(events[0]["type"], "control_response");
         assert_eq!(events[0]["response"]["subtype"], "success");
         assert_eq!(events[0]["response"]["request_id"], "ctl-init");
-        assert_eq!(events[0]["response"]["response"]["status"], "initialized");
+        assert!(events[0]["response"]["response"]["commands"].is_array());
+        assert_eq!(events[0]["response"]["response"]["output_style"], "default");
     }
 
     #[tokio::test]
     async fn headless_end_session_control_request_cancels_pending_and_stops_loop() {
-        let (_tempdir, config, _store) = mock_config_and_store();
+        let (_tempdir, config, store) = mock_config_and_store();
         let output = NamedTempFile::new().expect("protocol output");
         let emitter = Arc::new(Mutex::new(ProtocolEmitter::new(
             output.reopen().expect("reopen output"),
@@ -1516,13 +1676,20 @@ mod tests {
             .await
             .insert("req-pending".to_owned(), tx);
         let interrupted = Arc::new(AtomicBool::new(false));
+        let runtime_config = Arc::new(Mutex::new(config.clone()));
+        let plan_mode_controller =
+            RuntimePlanModeController::load(&config, &store).expect("plan mode controller");
 
         let should_continue = handle_headless_control_request(
             &pending_permissions,
             &emitter,
             &interrupted,
+            &runtime_config,
+            &plan_mode_controller,
             Some("ctl-end".to_owned()),
-            claude_protocol::ControlRequest::EndSession,
+            claude_protocol::ControlRequest::EndSession {
+                reason: Some("operator".to_owned()),
+            },
         )
         .await
         .expect("handle end_session");
@@ -1543,13 +1710,14 @@ mod tests {
         assert_eq!(events[1]["type"], "control_response");
         assert_eq!(events[1]["response"]["request_id"], "ctl-end");
         assert_eq!(events[1]["response"]["response"]["status"], "ending");
+        assert_eq!(events[1]["response"]["response"]["reason"], "operator");
         assert_eq!(events[2]["type"], "system");
         assert_eq!(events[2]["subtype"], "status");
     }
 
     #[tokio::test]
     async fn headless_interrupt_control_request_cancels_pending_and_emits_ack() {
-        let (_tempdir, config, _store) = mock_config_and_store();
+        let (_tempdir, config, store) = mock_config_and_store();
         let output = NamedTempFile::new().expect("protocol output");
         let emitter = Arc::new(Mutex::new(ProtocolEmitter::new(
             output.reopen().expect("reopen output"),
@@ -1562,11 +1730,16 @@ mod tests {
             .await
             .insert("req-interrupt".to_owned(), tx);
         let interrupted = Arc::new(AtomicBool::new(false));
+        let runtime_config = Arc::new(Mutex::new(config.clone()));
+        let plan_mode_controller =
+            RuntimePlanModeController::load(&config, &store).expect("plan mode controller");
 
         let should_continue = handle_headless_control_request(
             &pending_permissions,
             &emitter,
             &interrupted,
+            &runtime_config,
+            &plan_mode_controller,
             Some("ctl-interrupt".to_owned()),
             claude_protocol::ControlRequest::Interrupt,
         )
@@ -1589,6 +1762,74 @@ mod tests {
         assert_eq!(events[1]["type"], "control_response");
         assert_eq!(events[1]["response"]["request_id"], "ctl-interrupt");
         assert_eq!(events[1]["response"]["response"]["status"], "interrupted");
+    }
+
+    #[tokio::test]
+    async fn headless_set_model_and_permission_mode_update_runtime_config() {
+        let (_tempdir, config, store) = mock_config_and_store();
+        let output = NamedTempFile::new().expect("protocol output");
+        let emitter = Arc::new(Mutex::new(ProtocolEmitter::new(
+            output.reopen().expect("reopen output"),
+            config.session_id,
+        )));
+        let pending_permissions = Arc::new(Mutex::new(HashMap::new()));
+        let interrupted = Arc::new(AtomicBool::new(false));
+        let runtime_config = Arc::new(Mutex::new(config.clone()));
+        let plan_mode_controller =
+            RuntimePlanModeController::load(&config, &store).expect("plan mode controller");
+
+        handle_headless_control_request(
+            &pending_permissions,
+            &emitter,
+            &interrupted,
+            &runtime_config,
+            &plan_mode_controller,
+            Some("ctl-model".to_owned()),
+            claude_protocol::ControlRequest::SetModel {
+                model: Some("claude-sonnet-4-6".to_owned()),
+            },
+        )
+        .await
+        .expect("set model");
+
+        handle_headless_control_request(
+            &pending_permissions,
+            &emitter,
+            &interrupted,
+            &runtime_config,
+            &plan_mode_controller,
+            Some("ctl-mode".to_owned()),
+            claude_protocol::ControlRequest::SetPermissionMode {
+                mode: "acceptEdits".to_owned(),
+            },
+        )
+        .await
+        .expect("set permission mode");
+
+        {
+            let config = runtime_config.lock().await;
+            assert_eq!(config.provider.model.as_deref(), Some("claude-sonnet-4-6"));
+            assert_eq!(config.permission_mode, PermissionMode::AcceptEdits);
+        }
+        assert_eq!(
+            plan_mode_controller.current_mode(),
+            PermissionMode::AcceptEdits
+        );
+
+        drop(emitter);
+        let events = read_protocol_events(output.path());
+        assert_eq!(events[0]["type"], "control_response");
+        assert_eq!(
+            events[0]["response"]["response"]["model"],
+            "claude-sonnet-4-6"
+        );
+        assert_eq!(events[1]["type"], "status_snapshot");
+        assert_eq!(events[2]["type"], "control_response");
+        assert_eq!(
+            events[2]["response"]["response"]["permissionMode"],
+            "acceptEdits"
+        );
+        assert_eq!(events[3]["type"], "status_snapshot");
     }
 
     /// Same stack-size workaround as

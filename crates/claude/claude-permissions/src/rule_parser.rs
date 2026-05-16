@@ -476,44 +476,45 @@ mod tests {
 
     #[test]
     fn parse_tool_name_only() {
-        let v = parse_permission_rule_value("Bash").unwrap();
+        let v = parse_permission_rule_value("Bash").expect("parse tool-only rule");
         assert_eq!(v.tool_name, "Bash");
         assert!(v.rule_content.is_none());
     }
 
     #[test]
     fn parse_tool_name_with_content() {
-        let v = parse_permission_rule_value("Bash(npm install)").unwrap();
+        let v = parse_permission_rule_value("Bash(npm install)").expect("parse rule content");
         assert_eq!(v.tool_name, "Bash");
         assert_eq!(v.rule_content.as_deref(), Some("npm install"));
     }
 
     #[test]
     fn parse_empty_content_treated_as_tool_only() {
-        let v = parse_permission_rule_value("Bash()").unwrap();
+        let v = parse_permission_rule_value("Bash()").expect("parse empty rule content");
         assert_eq!(v.tool_name, "Bash");
         assert!(v.rule_content.is_none());
     }
 
     #[test]
     fn parse_wildcard_content_treated_as_tool_only() {
-        let v = parse_permission_rule_value("Bash(*)").unwrap();
+        let v = parse_permission_rule_value("Bash(*)").expect("parse wildcard rule content");
         assert_eq!(v.tool_name, "Bash");
         assert!(v.rule_content.is_none());
     }
 
     #[test]
     fn parse_escaped_parens_in_content() {
-        let v = parse_permission_rule_value("Bash(python -c \"print\\(1\\)\")").unwrap();
+        let v = parse_permission_rule_value("Bash(python -c \"print\\(1\\)\")")
+            .expect("parse escaped parentheses");
         assert_eq!(v.tool_name, "Bash");
         assert_eq!(v.rule_content.as_deref(), Some("python -c \"print(1)\""));
     }
 
     #[test]
     fn parse_legacy_tool_name_is_normalized() {
-        let v = parse_permission_rule_value("Task").unwrap();
+        let v = parse_permission_rule_value("Task").expect("parse legacy task rule");
         assert_eq!(v.tool_name, "Agent");
-        let v2 = parse_permission_rule_value("KillShell(foo)").unwrap();
+        let v2 = parse_permission_rule_value("KillShell(foo)").expect("parse legacy shell rule");
         assert_eq!(v2.tool_name, "TaskStop");
         assert_eq!(v2.rule_content.as_deref(), Some("foo"));
     }
@@ -525,21 +526,21 @@ mod tests {
 
     #[test]
     fn parse_malformed_no_close_paren() {
-        let v = parse_permission_rule_value("Bash(nope").unwrap();
+        let v = parse_permission_rule_value("Bash(nope").expect("parse malformed open paren");
         assert_eq!(v.tool_name, "Bash(nope");
         assert!(v.rule_content.is_none());
     }
 
     #[test]
     fn parse_malformed_trailing_chars() {
-        let v = parse_permission_rule_value("Bash(foo)extra").unwrap();
+        let v = parse_permission_rule_value("Bash(foo)extra").expect("parse trailing chars");
         assert_eq!(v.tool_name, "Bash(foo)extra");
         assert!(v.rule_content.is_none());
     }
 
     #[test]
     fn parse_empty_tool_name_treated_as_tool_name() {
-        let v = parse_permission_rule_value("(foo)").unwrap();
+        let v = parse_permission_rule_value("(foo)").expect("parse empty tool name");
         assert_eq!(v.tool_name, "(foo)");
         assert!(v.rule_content.is_none());
     }
@@ -575,7 +576,7 @@ mod tests {
     fn parse_to_string_roundtrip() {
         let cases = ["Bash", "Bash(npm install)", "Read(src/**)", "Bash(git *)"];
         for case in cases {
-            let parsed = parse_permission_rule_value(case).unwrap();
+            let parsed = parse_permission_rule_value(case).expect("parse roundtrip case");
             let back = permission_rule_value_to_string(&parsed);
             assert_eq!(back, case);
         }
@@ -586,7 +587,7 @@ mod tests {
         let original = "python -c \"print(1)\"";
         let v = PermissionRuleValue::new("Bash", Some(original.to_string()));
         let s = permission_rule_value_to_string(&v);
-        let back = parse_permission_rule_value(&s).unwrap();
+        let back = parse_permission_rule_value(&s).expect("parse escaped roundtrip");
         assert_eq!(back.rule_content.as_deref(), Some(original));
     }
 }
