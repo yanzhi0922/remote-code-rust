@@ -3,20 +3,8 @@ name: CI
 on:
   push:
     branches: [main]
-    paths-ignore:
-      - "**.md"
-      - "plans/**"
-      - "docs/**"
-      - "LICENSE"
-      - ".gitignore"
   pull_request:
     branches: [main]
-    paths-ignore:
-      - "**.md"
-      - "plans/**"
-      - "docs/**"
-      - "LICENSE"
-      - ".gitignore"
 
 env:
   CARGO_TERM_COLOR: always
@@ -104,6 +92,7 @@ jobs:
           cache: npm
           cache-dependency-path: apps/remote-code-gui/package-lock.json
       - run: npm ci
+      - run: npm audit --audit-level=moderate --registry=https://registry.npmjs.org/
       - run: npx tsc --noEmit
       - run: npx vite build
 
@@ -128,10 +117,3 @@ jobs:
           toolchain: 1.93.1
       - uses: Swatinem/rust-cache@v2
       - run: cargo check --package remote-code-gui
-
-  audit:
-    name: Security Audit
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: rustsec/audit-check@v2

@@ -44,9 +44,11 @@ static REMOTE_SERVICE_CONNECTED: AtomicBool = AtomicBool::new(false);
 
 const REMOTE_PASSWORD_HASH_FILE: &str = "remote_password_hash.txt";
 const REMOTE_USER_KEY_FILE: &str = "remote_user_key.txt";
+const REMOTE_RUNNER_API_TOKEN_FILE: &str = "remote_runner_api_token.txt";
 const REMOTE_USERNAME_FILE: &str = "remote_username.txt";
 const REMOTE_PASSWORD_HASH_KEY: &str = "remote-control-password-hash";
 const REMOTE_USER_KEY_KEY: &str = "remote-control-user-key";
+const REMOTE_RUNNER_API_TOKEN_KEY: &str = "remote-runner-api-token";
 const MIN_REMOTE_PASSWORD_LEN: usize = 12;
 
 // ─── Public API ─────────────────────────────────────────────────────────────
@@ -145,6 +147,10 @@ fn generate_runner_id() -> String {
     format!("desktop-{}", Uuid::new_v4())
 }
 
+fn generate_secret_token() -> String {
+    format!("rc-{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple())
+}
+
 fn remote_settings_path(app: &AppHandle) -> Result<PathBuf> {
     let dir = app
         .path()
@@ -190,6 +196,10 @@ fn save_remote_settings(app: &AppHandle, settings: &RemoteControlSettings) -> Re
 fn configured_control_plane_url(app: &AppHandle) -> Option<String> {
     read_nonempty_env("REMOTE_CODE_CONTROL_PLANE_URL")
         .or_else(|| load_remote_settings(app).control_plane_url)
+}
+
+fn configured_control_plane_auth_token(app: &AppHandle) -> Option<String> {
+    read_nonempty_env("REMOTE_CODE_CONTROL_PLANE_AUTH_TOKEN").or_else(|| get_remote_user_key(app))
 }
 
 fn configured_runner_id(app: &AppHandle) -> Option<String> {
@@ -329,6 +339,29 @@ pub fn get_remote_user_key(app: &AppHandle) -> Option<String> {
 /// Save the derived user_key for use as an explicitly provisioned auth token.
 fn save_remote_user_key(app: &AppHandle, user_key: &str) -> Result<()> {
     save_secret_with_file_fallback(app, REMOTE_USER_KEY_KEY, REMOTE_USER_KEY_FILE, user_key)
+}
+
+fn get_or_create_runner_api_token(app: &AppHandle) -> Result<String> {
+    if let Some(token) = read_nonempty_env("REMOTE_CODE_RUNNER_AUTH_TOKEN") {
+        return Ok(token);
+    }
+
+    if let Some(token) = read_secret_with_legacy_file_migration(
+        app,
+        REMOTE_RUNNER_API_TOKEN_KEY,
+        REMOTE_RUNNER_API_TOKEN_FILE,
+    ) {
+        return Ok(token);
+    }
+
+    let token = generate_secret_token();
+    save_secret_with_file_fallback(
+        app,
+        REMOTE_RUNNER_API_TOKEN_KEY,
+        REMOTE_RUNNER_API_TOKEN_FILE,
+        &token,
+    )?;
+    Ok(token)
 }
 
 fn keyring_get(key: &str) -> Option<String> {
@@ -541,12 +574,9 @@ pub fn remote_has_password(app: AppHandle) -> bool {
 // ─── Internal service ───────────────────────────────────────────────────────
 
 async fn run_remote_service(app: AppHandle) -> Result<()> {
-    // Use the derived user_key as auth token if available, falling back to env var.
-    let user_key = get_remote_user_key(&app);
-    let auth_token = user_key
-        .or_else(|| std::env::var("REMOTE_CODE_RUNNER_AUTH_TOKEN").ok())
-        .filter(|s| !s.is_empty())
+    let control_plane_auth_token = configured_control_plane_auth_token(&app)
         .context("remote credentials are not configured; set username/password in the GUI first")?;
+    let runner_api_auth_token = get_or_create_runner_api_token(&app)?;
     let runner_id = ensure_runner_id(&app)?;
     let control_plane_url =
         configured_control_plane_url(&app).context("control plane URL is not configured")?;
@@ -569,7 +599,8 @@ async fn run_remote_service(app: AppHandle) -> Result<()> {
         RunnerConfigOverrides {
             runner_id: Some(runner_id),
             control_plane_url: Some(control_plane_url),
-            auth_token: Some(auth_token),
+            auth_token: Some(runner_api_auth_token),
+            control_plane_auth_token: Some(control_plane_auth_token.clone()),
             workspaces,
             heartbeat_interval_secs: std::env::var("REMOTE_CODE_RUNNER_HEARTBEAT_SECS")
                 .ok()
@@ -587,7 +618,7 @@ async fn run_remote_service(app: AppHandle) -> Result<()> {
     let profile_dir = config.profile_dir.profile_dir.clone();
     let cp_url = config.control_plane_url.clone().unwrap_or_default();
     let auth = config
-        .auth_token
+        .control_plane_auth_token
         .clone()
         .context("remote credentials are not configured")?;
 
@@ -1189,7 +1220,7 @@ async fn run_outbound_poll_loop(
     };
     let runner_id = &config.runner_id;
     let client = reqwest::Client::new();
-    let auth = config.auth_token.as_deref().unwrap_or("");
+    let auth = config.control_plane_auth_token.as_deref().unwrap_or("");
     let poll_timeout = Duration::from_secs(30);
     let mut retry_delay = Duration::from_secs(1);
 
@@ -1292,9 +1323,9 @@ async fn run_control_plane_sync(
 
     let registration = config.registration_request();
     let client = reqwest::Client::new();
-    let auth_token = config.auth_token.as_deref();
+    let auth_token = config.control_plane_auth_token.as_deref();
     loop {
-        match register_with_control_plane(&client, &cp_url, &registration).await {
+        match register_with_control_plane(&client, &cp_url, &registration, auth_token).await {
             Ok(_) => {
                 REMOTE_SERVICE_CONNECTED.store(true, Ordering::SeqCst);
                 info!("Registered runner {} with control plane", config.runner_id);

@@ -7,7 +7,8 @@ param(
     [string]$StateDir = "/var/lib/remote-code/control-plane",
     [string]$ControlPlaneBin = "target\x86_64-unknown-linux-gnu\release\remote-code-control-plane",
     [string]$GuiDist = "apps\remote-code-gui\dist",
-    [string]$Installer = "target\release\bundle\nsis\Remote Code_0.1.0_x64-setup.exe"
+    [string]$Installer = "target\release\bundle\nsis\Remote Code_0.1.0_x64-setup.exe",
+    [string]$SshStrictHostKeyChecking = $env:REMOTE_CODE_SSH_STRICT_HOST_KEY_CHECKING
 )
 
 $ErrorActionPreference = "Stop"
@@ -24,10 +25,19 @@ function Require-Directory([string]$Path) {
     }
 }
 
+function Quote-RemoteShell([string]$Value) {
+    return "'" + ($Value -replace "'", "'\''") + "'"
+}
+
 Require-File $ControlPlaneBin
 Require-Directory $GuiDist
 Require-File (Join-Path $GuiDist "index.html")
 Require-File $SshKey
+
+if ([string]::IsNullOrWhiteSpace($SshStrictHostKeyChecking)) {
+    $SshStrictHostKeyChecking = "yes"
+}
+$SshOptions = @("-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=$SshStrictHostKeyChecking", "-i", $SshKey)
 
 if ([System.IO.Path]::GetExtension($ControlPlaneBin) -ieq ".exe") {
     throw "ControlPlaneBin must be a Linux remote-code-control-plane binary, not a Windows .exe"
@@ -46,16 +56,16 @@ try {
     Write-Host "Control plane binary: $ControlPlaneBin"
     Write-Host "Frontend dist: $GuiDist"
 
-    & ssh -o BatchMode=yes -o StrictHostKeyChecking=no -i $SshKey $Server "mkdir -p /tmp/remote-code-deploy"
-    & scp -o BatchMode=yes -o StrictHostKeyChecking=no -i $SshKey $ControlPlaneBin "$Server`:/tmp/remote-code-deploy/remote-code-control-plane"
-    & scp -o BatchMode=yes -o StrictHostKeyChecking=no -i $SshKey $frontendArchive "$Server`:/tmp/remote-code-deploy/remote-code-gui-dist.tar.gz"
-    & scp -o BatchMode=yes -o StrictHostKeyChecking=no -i $SshKey "deploy\tencent-cloud\deploy-remote-code-gui.sh" "$Server`:/tmp/remote-code-deploy/deploy-remote-code-gui.sh"
-    & scp -o BatchMode=yes -o StrictHostKeyChecking=no -i $SshKey "deploy\tencent-cloud\remote-code-control-plane.service" "$Server`:/tmp/remote-code-deploy/remote-code-control-plane.service"
-    & scp -o BatchMode=yes -o StrictHostKeyChecking=no -i $SshKey "deploy\tencent-cloud\remote-code-control-plane.env.example" "$Server`:/tmp/remote-code-deploy/control-plane.env.example"
-    & scp -o BatchMode=yes -o StrictHostKeyChecking=no -i $SshKey "deploy\tencent-cloud\nginx-remote-code.conf.example" "$Server`:/tmp/remote-code-deploy/nginx-remote-code.conf.example"
+    & ssh @SshOptions $Server "mkdir -p /tmp/remote-code-deploy"
+    & scp @SshOptions $ControlPlaneBin "$Server`:/tmp/remote-code-deploy/remote-code-control-plane"
+    & scp @SshOptions $frontendArchive "$Server`:/tmp/remote-code-deploy/remote-code-gui-dist.tar.gz"
+    & scp @SshOptions "deploy\tencent-cloud\deploy-remote-code-gui.sh" "$Server`:/tmp/remote-code-deploy/deploy-remote-code-gui.sh"
+    & scp @SshOptions "deploy\tencent-cloud\remote-code-control-plane.service" "$Server`:/tmp/remote-code-deploy/remote-code-control-plane.service"
+    & scp @SshOptions "deploy\tencent-cloud\remote-code-control-plane.env.example" "$Server`:/tmp/remote-code-deploy/control-plane.env.example"
+    & scp @SshOptions "deploy\tencent-cloud\nginx-remote-code.conf.example" "$Server`:/tmp/remote-code-deploy/nginx-remote-code.conf.example"
 
     if (Test-Path -LiteralPath $Installer -PathType Leaf) {
-        & scp -o BatchMode=yes -o StrictHostKeyChecking=no -i $SshKey $Installer "$Server`:/tmp/remote-code-deploy/Remote-Code-0.1.0-x64-setup.exe"
+        & scp @SshOptions $Installer "$Server`:/tmp/remote-code-deploy/Remote-Code-0.1.0-x64-setup.exe"
     }
 
     $remoteScript = @'
@@ -146,8 +156,8 @@ systemctl is-active remote-code-control-plane
 curl -fsS http://127.0.0.1:8787/healthz >/dev/null
 '@
 
-    $remoteCommand = "DOMAIN='$Domain' REMOTE_DIR='$RemoteDir' ENV_DIR='$EnvDir' STATE_DIR='$StateDir' bash -s"
-    $remoteScript | & ssh -o BatchMode=yes -o StrictHostKeyChecking=no -i $SshKey $Server $remoteCommand
+    $remoteCommand = "DOMAIN=$(Quote-RemoteShell $Domain) REMOTE_DIR=$(Quote-RemoteShell $RemoteDir) ENV_DIR=$(Quote-RemoteShell $EnvDir) STATE_DIR=$(Quote-RemoteShell $StateDir) bash -s"
+    $remoteScript | & ssh @SshOptions $Server $remoteCommand
 
     Write-Host "=== Deploy complete ==="
     Write-Host "Control plane: https://$Domain"

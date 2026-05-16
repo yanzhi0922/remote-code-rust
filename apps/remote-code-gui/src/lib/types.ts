@@ -501,6 +501,12 @@ export interface CodexThreadShellCommandRequest extends CodexThreadNativeRequest
   cwd?: string | null;
 }
 
+export interface CodexThreadMetadataUpdateRequest extends CodexThreadNativeRequest {
+  sha?: string | null;
+  branch?: string | null;
+  originUrl?: string | null;
+}
+
 export interface CodexAccountLoginRequest {
   params?: CodexNativeParams | null;
 }

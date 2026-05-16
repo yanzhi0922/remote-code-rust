@@ -1,7 +1,7 @@
 @import './styles/tokens.css';
-@import 'katex/dist/katex.min.css';
-@import 'highlight.js/styles/github.css';
 @import './styles/components.css';
+
+@config "../tailwind.config.ts";
 
 @tailwind base;
 @tailwind components;

@@ -10,9 +10,14 @@ STATE_DIR="${STATE_DIR:-/var/lib/remote-code/control-plane}"
 CONTROL_PLANE_BIN="${CONTROL_PLANE_BIN:-target/release/remote-code-control-plane}"
 GUI_DIST="${GUI_DIST:-apps/remote-code-gui/dist}"
 INSTALLER="${INSTALLER:-target/release/bundle/nsis/Remote Code_0.1.0_x64-setup.exe}"
+SSH_STRICT_HOST_KEY_CHECKING="${REMOTE_CODE_SSH_STRICT_HOST_KEY_CHECKING:-yes}"
 
-SSH=(ssh -o StrictHostKeyChecking=no -i "$SSH_KEY" "$SERVER")
-SCP=(scp -o StrictHostKeyChecking=no -i "$SSH_KEY")
+SSH=(ssh -o BatchMode=yes -o StrictHostKeyChecking="$SSH_STRICT_HOST_KEY_CHECKING" -i "$SSH_KEY" "$SERVER")
+SCP=(scp -o BatchMode=yes -o StrictHostKeyChecking="$SSH_STRICT_HOST_KEY_CHECKING" -i "$SSH_KEY")
+
+shell_quote() {
+  printf '%q' "$1"
+}
 
 require_file() {
   if [[ ! -f "$1" ]]; then
@@ -59,7 +64,7 @@ if [[ -f "$INSTALLER" ]]; then
   "${SCP[@]}" "$INSTALLER" "$SERVER:/tmp/remote-code-deploy/Remote-Code-0.1.0-x64-setup.exe"
 fi
 
-"${SSH[@]}" "DOMAIN='$DOMAIN' REMOTE_DIR='$REMOTE_DIR' ENV_DIR='$ENV_DIR' STATE_DIR='$STATE_DIR' bash -s" <<'REMOTE_SCRIPT'
+"${SSH[@]}" "DOMAIN=$(shell_quote "$DOMAIN") REMOTE_DIR=$(shell_quote "$REMOTE_DIR") ENV_DIR=$(shell_quote "$ENV_DIR") STATE_DIR=$(shell_quote "$STATE_DIR") bash -s" <<'REMOTE_SCRIPT'
 set -euo pipefail
 
 if ! id remote-code >/dev/null 2>&1; then

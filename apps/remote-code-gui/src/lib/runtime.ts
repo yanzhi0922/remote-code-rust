@@ -1,3 +1,5 @@
+import { invoke } from '@tauri-apps/api/core';
+
 declare global {
   interface Window {
     __TAURI__?: unknown;
@@ -35,15 +37,11 @@ export function resolveRemoteBaseUrl(): string | null {
 }
 
 export function resolveRemoteAccessToken(): string | null {
-  const params = new URLSearchParams(window.location.search);
-  const queryValue = params.get('access_token')?.trim() ?? params.get('token')?.trim();
-  if (queryValue) {
-    queueMicrotask(stripRemoteSensitiveQueryParams);
-    return queryValue;
-  }
+  clearLegacyPersistentRemoteTokens();
+  stripRemoteSensitiveQueryParams();
 
   try {
-    const storedValue = window.localStorage.getItem(REMOTE_ACCESS_TOKEN_STORAGE_KEY)?.trim();
+    const storedValue = window.sessionStorage.getItem(REMOTE_ACCESS_TOKEN_STORAGE_KEY)?.trim();
     if (storedValue) {
       return storedValue;
     }
@@ -60,18 +58,21 @@ export function persistRemoteAccessToken(token: string): void {
     return;
   }
   try {
-    window.localStorage.setItem(REMOTE_ACCESS_TOKEN_STORAGE_KEY, normalized);
+    window.sessionStorage.setItem(REMOTE_ACCESS_TOKEN_STORAGE_KEY, normalized);
   } catch {
     // Ignore storage access failures.
   }
+  void secureStoreSet(REMOTE_ACCESS_TOKEN_STORAGE_KEY, normalized);
 }
 
 export function clearRemoteAccessToken(): void {
   try {
-    window.localStorage.removeItem(REMOTE_ACCESS_TOKEN_STORAGE_KEY);
+    window.sessionStorage.removeItem(REMOTE_ACCESS_TOKEN_STORAGE_KEY);
   } catch {
     // Ignore storage access failures.
   }
+  void secureStoreRemove(REMOTE_ACCESS_TOKEN_STORAGE_KEY);
+  clearLegacyPersistentRemoteTokens();
 }
 
 /**
@@ -92,8 +93,9 @@ export async function deriveUserKey(username: string, password: string): Promise
 }
 
 export function resolveRemoteRefreshToken(): string | null {
+  clearLegacyPersistentRemoteTokens();
   try {
-    return window.localStorage.getItem(REMOTE_REFRESH_TOKEN_STORAGE_KEY)?.trim() ?? null;
+    return window.sessionStorage.getItem(REMOTE_REFRESH_TOKEN_STORAGE_KEY)?.trim() ?? null;
   } catch {
     return null;
   }
@@ -103,18 +105,46 @@ export function persistRemoteRefreshToken(token: string): void {
   const normalized = token.trim();
   if (!normalized) return;
   try {
-    window.localStorage.setItem(REMOTE_REFRESH_TOKEN_STORAGE_KEY, normalized);
+    window.sessionStorage.setItem(REMOTE_REFRESH_TOKEN_STORAGE_KEY, normalized);
   } catch {
     // Ignore storage access failures.
   }
+  void secureStoreSet(REMOTE_REFRESH_TOKEN_STORAGE_KEY, normalized);
 }
 
 export function clearRemoteRefreshToken(): void {
   try {
-    window.localStorage.removeItem(REMOTE_REFRESH_TOKEN_STORAGE_KEY);
+    window.sessionStorage.removeItem(REMOTE_REFRESH_TOKEN_STORAGE_KEY);
   } catch {
     // Ignore storage access failures.
   }
+  void secureStoreRemove(REMOTE_REFRESH_TOKEN_STORAGE_KEY);
+  clearLegacyPersistentRemoteTokens();
+}
+
+export async function hydrateRemoteAuthTokensFromSecureStore(): Promise<string | null> {
+  clearLegacyPersistentRemoteTokens();
+  if (!hasTauriRuntime()) {
+    return resolveRemoteAccessToken();
+  }
+
+  const [accessToken, refreshToken] = await Promise.all([
+    secureStoreGet(REMOTE_ACCESS_TOKEN_STORAGE_KEY),
+    secureStoreGet(REMOTE_REFRESH_TOKEN_STORAGE_KEY),
+  ]);
+
+  try {
+    if (accessToken) {
+      window.sessionStorage.setItem(REMOTE_ACCESS_TOKEN_STORAGE_KEY, accessToken);
+    }
+    if (refreshToken) {
+      window.sessionStorage.setItem(REMOTE_REFRESH_TOKEN_STORAGE_KEY, refreshToken);
+    }
+  } catch {
+    // Ignore storage access failures.
+  }
+
+  return accessToken ?? resolveRemoteAccessToken();
 }
 
 export function resolveRemoteActiveSessionId(baseUrl: string | null): string | null {
@@ -183,6 +213,48 @@ export function stripRemoteSensitiveQueryParams(): void {
   }
   if (changed) {
     window.history.replaceState({}, document.title, url.toString());
+  }
+}
+
+function clearLegacyPersistentRemoteTokens(): void {
+  try {
+    window.localStorage.removeItem(REMOTE_ACCESS_TOKEN_STORAGE_KEY);
+    window.localStorage.removeItem(REMOTE_REFRESH_TOKEN_STORAGE_KEY);
+  } catch {
+    // Ignore storage access failures.
+  }
+}
+
+async function secureStoreGet(key: string): Promise<string | null> {
+  if (!hasTauriRuntime()) {
+    return null;
+  }
+  try {
+    return await invoke<string | null>('mobile_secure_store_get', { key });
+  } catch {
+    return null;
+  }
+}
+
+async function secureStoreSet(key: string, value: string): Promise<void> {
+  if (!hasTauriRuntime()) {
+    return;
+  }
+  try {
+    await invoke('mobile_secure_store_set', { key, value });
+  } catch {
+    // Ignore native secure-store failures; session storage remains the web fallback.
+  }
+}
+
+async function secureStoreRemove(key: string): Promise<void> {
+  if (!hasTauriRuntime()) {
+    return;
+  }
+  try {
+    await invoke('mobile_secure_store_remove', { key });
+  } catch {
+    // Ignore native secure-store failures.
   }
 }
 

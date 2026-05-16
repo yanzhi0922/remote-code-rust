@@ -6,13 +6,12 @@ class ResizeObserverMock {
   unobserve() {}
   disconnect() {}
 }
-global.ResizeObserver = ResizeObserverMock;
+globalThis.ResizeObserver = ResizeObserverMock;
 
 // Mock scrollIntoView for jsdom
 Element.prototype.scrollIntoView = function scrollIntoView() {};
 
-// Mock localStorage
-const localStorageMock = (() => {
+function createStorageMock() {
   let store: Record<string, string> = {};
   return {
     getItem: (key: string) => store[key] ?? null,
@@ -22,5 +21,7 @@ const localStorageMock = (() => {
     get length() { return Object.keys(store).length; },
     key: (index: number) => Object.keys(store)[index] ?? null,
   };
-})();
-Object.defineProperty(global, 'localStorage', { value: localStorageMock });
+}
+
+Object.defineProperty(globalThis, 'localStorage', { value: createStorageMock() });
+Object.defineProperty(globalThis, 'sessionStorage', { value: createStorageMock() });

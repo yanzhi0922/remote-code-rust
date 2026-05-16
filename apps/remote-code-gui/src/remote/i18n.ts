@@ -207,7 +207,7 @@ const ENGLISH_COPY: RemoteCopy = {
   acceptPairingAction: 'Accept Pairing Offer',
   existingTokenTitle: 'Use an existing token',
   existingTokenDescription:
-    'If you already minted a device token from the CLI, paste it here and store it in this browser.',
+    'If you already minted a device token from the CLI, paste it here for this browser session.',
   saveToken: 'Save Token',
   clearSavedToken: 'Clear Saved Token',
   controlPlaneEyebrow: 'Control Plane',
@@ -217,7 +217,7 @@ const ENGLISH_COPY: RemoteCopy = {
   activeSessionsLabel: 'Active sessions',
   bootstrapConfiguredLabel: 'Bootstrap configured',
   browserTokenNotice:
-    'The browser only stores the device access token locally. Session content still stays on your local machine; the control plane only brokers access to the runner.',
+    'The browser keeps device tokens in session storage only. Session content still stays on your local machine; the control plane only brokers access to the runner.',
   messageHeaders: {
     assistant: 'Assistant',
     user: 'User',
@@ -272,8 +272,8 @@ const ENGLISH_COPY: RemoteCopy = {
   responderLabel: 'Responder',
   statusBootstrapClaimSucceeded: 'Bootstrap claim succeeded.',
   statusPairingSucceeded: 'Pairing succeeded.',
-  statusSavedAccessToken: 'Saved access token locally.',
-  statusClearedAccessToken: 'Cleared the saved access token.',
+  statusSavedAccessToken: 'Saved access token for this browser session.',
+  statusClearedAccessToken: 'Cleared the session access token.',
   statusPromptForwarded: 'Prompt forwarded to the local runner.',
   statusInterruptForwarded: 'Interrupt signal forwarded.',
   statusArtifactDownloaded: (fileName) => `Downloading artifact ${fileName}.`,
@@ -395,7 +395,7 @@ const CHINESE_COPY: RemoteCopy = {
   pairingSecretPlaceholder: '配对密钥',
   acceptPairingAction: '接受配对邀请',
   existingTokenTitle: '使用已有令牌',
-  existingTokenDescription: '如果你已经从 CLI 生成了设备令牌，可以直接粘贴并保存在当前浏览器中。',
+  existingTokenDescription: '如果你已经从 CLI 生成了设备令牌，可以粘贴给当前浏览器会话使用。',
   saveToken: '保存令牌',
   clearSavedToken: '清除已保存令牌',
   controlPlaneEyebrow: '控制面',
@@ -405,7 +405,7 @@ const CHINESE_COPY: RemoteCopy = {
   activeSessionsLabel: '活跃会话数',
   bootstrapConfiguredLabel: 'Bootstrap 已配置',
   browserTokenNotice:
-    '浏览器只会在本地保存设备访问令牌。会话内容仍留在你的本地机器上，控制面只负责把访问路由到 runner。',
+    '浏览器只在当前会话中保存设备令牌。会话内容仍留在你的本地机器上，控制面只负责把访问路由到 runner。',
   messageHeaders: {
     assistant: '助手',
     user: '用户',
@@ -460,8 +460,8 @@ const CHINESE_COPY: RemoteCopy = {
   responderLabel: '处理人',
   statusBootstrapClaimSucceeded: 'Bootstrap 认领成功。',
   statusPairingSucceeded: '配对成功。',
-  statusSavedAccessToken: '已在本地保存访问令牌。',
-  statusClearedAccessToken: '已清除本地保存的访问令牌。',
+  statusSavedAccessToken: '已为当前浏览器会话保存访问令牌。',
+  statusClearedAccessToken: '已清除会话访问令牌。',
   statusPromptForwarded: '提示词已转发给本地 runner。',
   statusInterruptForwarded: '中断信号已转发。',
   statusArtifactDownloaded: (fileName) => `正在下载产物 ${fileName}。`,

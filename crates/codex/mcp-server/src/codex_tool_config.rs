@@ -10,7 +10,8 @@ use codex_utils_json_to_toml::json_to_toml;
 use rmcp::model::JsonObject;
 use rmcp::model::Tool;
 use schemars::JsonSchema;
-use schemars::r#gen::SchemaSettings;
+use schemars::Schema;
+use schemars::generate::SchemaSettings;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashMap;
@@ -111,7 +112,6 @@ pub(crate) fn create_tool_for_codex_tool_call_param() -> Tool {
     let schema = SchemaSettings::draft2019_09()
         .with(|s| {
             s.inline_subschemas = true;
-            s.option_add_null_type = false;
         })
         .into_generator()
         .into_root_schema_for::<CodexToolCallParam>();
@@ -229,7 +229,6 @@ pub(crate) fn create_tool_for_codex_tool_call_reply_param() -> Tool {
     let schema = SchemaSettings::draft2019_09()
         .with(|s| {
             s.inline_subschemas = true;
-            s.option_add_null_type = false;
         })
         .into_generator()
         .into_root_schema_for::<CodexToolCallReplyParam>();
@@ -245,10 +244,7 @@ pub(crate) fn create_tool_for_codex_tool_call_reply_param() -> Tool {
     .with_raw_output_schema(codex_tool_output_schema())
 }
 
-fn create_tool_input_schema(
-    schema: schemars::schema::RootSchema,
-    panic_message: &str,
-) -> Arc<JsonObject> {
+fn create_tool_input_schema(schema: Schema, panic_message: &str) -> Arc<JsonObject> {
     #[expect(clippy::expect_used)]
     let schema_value = serde_json::to_value(&schema).expect(panic_message);
     let mut schema_object = match schema_value {

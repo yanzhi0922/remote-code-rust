@@ -1,5 +1,6 @@
 import { Cable, PlugZap, RefreshCw, RotateCcw, Trash2 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { formatSensitivePath } from '../../lib/utils';
 import type {
   ConfigScope,
   McpServerDraft,
@@ -93,6 +94,7 @@ function serverSummary(
 }
 
 export function McpTab() {
+  const privacyMode = useAppStore((state) => state.workspacePrivacyMode);
   const activeProjectPath = useAppStore((state) => state.activeProjectPath);
 
   const [scope, setScope] = useState<ConfigScope>('profile');
@@ -257,10 +259,18 @@ export function McpTab() {
         <div className="rounded-[24px] border border-[#ddd6c8] bg-white px-4 py-4 text-sm text-slate-600">
           <div className="font-semibold text-slate-700">{displayedScopeLabel}</div>
           <div className="mt-2 break-all text-xs text-slate-500">
-            {configPath || (scope === 'project' ? activeProjectPath ?? '请先选择项目' : '加载中…')}
+            {configPath
+              ? formatSensitivePath(configPath, privacyMode)
+              : scope === 'project'
+                ? activeProjectPath
+                  ? formatSensitivePath(activeProjectPath, privacyMode)
+                  : '请先选择项目'
+                : '加载中…'}
           </div>
           {scope === 'project' && activeProjectPath && (
-            <div className="mt-2 text-xs text-slate-500">project: {activeProjectPath}</div>
+            <div className="mt-2 text-xs text-slate-500">
+              project: {formatSensitivePath(activeProjectPath, privacyMode)}
+            </div>
           )}
         </div>
 
@@ -469,7 +479,10 @@ export function McpTab() {
         <div className="rounded-[24px] border border-[#ddd6c8] bg-white px-4 py-4 text-sm text-slate-600">
           <div className="font-semibold text-slate-700">Runtime inventory</div>
           <div className="mt-2 break-all text-xs text-slate-500">
-            cwd {runtimeEffectiveCwd || activeProjectPath || '加载中…'}
+            cwd{' '}
+            {runtimeEffectiveCwd || activeProjectPath
+              ? formatSensitivePath(runtimeEffectiveCwd || activeProjectPath, privacyMode)
+              : '加载中…'}
           </div>
           <div className="mt-2 text-xs text-slate-500">
             enabled {runtimeServers.filter((server) => server.enabled).length} · disabled{' '}
@@ -518,7 +531,9 @@ export function McpTab() {
                     <div className="mt-2 break-all text-xs text-slate-500">
                       origin {server.origin_kind}:{server.origin_name}
                     </div>
-                    <div className="mt-1 break-all text-xs text-slate-500">{server.config_path}</div>
+                    <div className="mt-1 break-all text-xs text-slate-500">
+                      {formatSensitivePath(server.config_path, privacyMode)}
+                    </div>
                     {server.live && (
                       <div className="mt-2 text-xs text-slate-500">
                         live {server.live.status}

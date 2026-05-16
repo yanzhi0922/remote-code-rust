@@ -17,7 +17,7 @@
 
 import { LoaderCircle } from 'lucide-react';
 import type { ReactNode } from 'react';
-import { truncateMiddle } from '../../lib/utils';
+import { formatSensitivePath } from '../../lib/utils';
 
 interface ApprovalItem {
   approval_id: string;
@@ -46,6 +46,8 @@ export interface ApprovalPanelProps {
   onDecision: (approvalId: string, decision: string) => void;
   /** 为 true 时隐藏面板自带标题（用于外部已有标题的场景，如移动端 bottom sheet） */
   hideTitle?: boolean;
+  /** 为 true 时隐藏审批 metadata 中的本机路径。 */
+  privacyMode?: boolean;
 }
 
 export function ApprovalPanel({
@@ -58,6 +60,7 @@ export function ApprovalPanel({
   loadingText,
   onDecision,
   hideTitle,
+  privacyMode = false,
 }: ApprovalPanelProps) {
   return (
     <section className="rounded-[24px] border border-[#e0d6c6] bg-white px-4 py-4 shadow-[0_12px_30px_rgba(34,32,28,0.06)]">
@@ -82,7 +85,7 @@ export function ApprovalPanel({
               </div>
               {approval.metadata.blocked_path && (
                 <div className="mt-2 rounded-xl bg-white px-3 py-2 font-mono text-xs text-slate-500">
-                  {truncateMiddle(approval.metadata.blocked_path, 56)}
+                  {formatSensitivePath(approval.metadata.blocked_path, privacyMode, 56)}
                 </div>
               )}
               <div className="mt-3 flex flex-wrap gap-2">

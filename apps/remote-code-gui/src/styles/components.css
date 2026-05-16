@@ -1,4 +1,5 @@
 /* ── Reusable Component Styles ───────────────────────────── */
+@reference "tailwindcss";
 
 @layer components {
   /* ---- Input Fields ---- */

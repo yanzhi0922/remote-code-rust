@@ -6578,6 +6578,8 @@ pub fn run() {
             crate::mobile::mobile_biometric_check_availability,
             crate::mobile::mobile_biometric_authenticate,
             crate::mobile::mobile_secure_store_get,
+            crate::mobile::mobile_secure_store_set,
+            crate::mobile::mobile_secure_store_remove,
             crate::mobile::mobile_download_artifact,
             crate::mobile::mobile_share_file,
             crate::mobile::mobile_push_request_permission,
@@ -7158,6 +7160,10 @@ mod tests {
         project_mcp
             .save(project_dir.join(DEFAULT_MCP_CONFIG_FILE))
             .expect("project MCP config should save");
+        let projects = vec![ProjectEntry {
+            path: project_dir.clone(),
+            name: "project".to_owned(),
+        }];
 
         let mut user_only = test_runtime_config(&project_dir, &profile_dir);
         user_only.allowed_setting_sources = vec![SettingSource::User];
@@ -7165,7 +7171,7 @@ mod tests {
             &user_only,
             ConfigScopeDto::Project,
             Some(project_dir.to_str().expect("utf8 project path")),
-            &[],
+            &projects,
             false,
             false,
         )
@@ -7405,11 +7411,13 @@ mod tests {
     #[tokio::test]
     async fn recv_with_liveness_returns_item_immediately() {
         let (tx, mut rx) = tokio::sync::mpsc::channel::<String>(10);
-        tx.send("hello".to_string()).await.unwrap();
+        tx.send("hello".to_string())
+            .await
+            .expect("test channel should accept the initial message");
         drop(tx);
 
         let result = recv_with_liveness_check(&mut rx, || true).await;
-        assert_eq!(result.unwrap(), "hello");
+        assert_eq!(result.expect("message should be received"), "hello");
     }
 
     #[tokio::test]
@@ -7419,7 +7427,11 @@ mod tests {
 
         let result = recv_with_liveness_check(&mut rx, || true).await;
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("channel closed"));
+        assert!(
+            result
+                .expect_err("closed channel should return an error")
+                .contains("channel closed")
+        );
     }
 
     #[tokio::test(start_paused = true)]
@@ -7435,7 +7447,11 @@ mod tests {
 
         let result = handle.await.expect("task should complete");
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("crashed"));
+        assert!(
+            result
+                .expect_err("dead worker should return an error")
+                .contains("crashed")
+        );
         drop(tx);
     }
 
@@ -7451,7 +7467,10 @@ mod tests {
         });
 
         let result = recv_with_liveness_check(&mut rx, || true).await;
-        assert_eq!(result.unwrap(), "delayed");
+        assert_eq!(
+            result.expect("delayed message should be received"),
+            "delayed"
+        );
         drop(tx);
     }
 

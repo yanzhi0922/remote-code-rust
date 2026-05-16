@@ -28,6 +28,8 @@ pub fn run() {
             crate::mobile::mobile_biometric_check_availability,
             crate::mobile::mobile_biometric_authenticate,
             crate::mobile::mobile_secure_store_get,
+            crate::mobile::mobile_secure_store_set,
+            crate::mobile::mobile_secure_store_remove,
             crate::mobile::mobile_download_artifact,
             crate::mobile::mobile_share_file,
             crate::mobile::mobile_push_request_permission,

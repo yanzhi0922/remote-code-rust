@@ -1,5 +1,6 @@
 import { Download, RefreshCw, ShieldCheck, Stethoscope } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
+import { formatSensitivePath } from '../../lib/utils';
 import type { DoctorReportInfo, SessionExportFormat, SessionSummary } from '../../lib/types';
 import * as tauri from '../../lib/tauri';
 import { useAppStore } from '../../stores/useAppStore';
@@ -43,6 +44,7 @@ function describeSession(session: SessionSummary): string {
 }
 
 export function OperationsTab() {
+  const privacyMode = useAppStore((state) => state.workspacePrivacyMode);
   const sessions = useAppStore((state) => state.sessions);
   const archivedSessions = useAppStore((state) => state.archivedSessions);
   const activeSessionId = useAppStore((state) => state.activeSessionId);
@@ -259,10 +261,12 @@ export function OperationsTab() {
               <div className="mt-4 grid gap-4 lg:grid-cols-2">
                 <div className="space-y-2 text-sm text-slate-600">
                   <div>
-                    <span className="font-medium text-slate-700">CWD:</span> {doctor.runtime.cwd}
+                    <span className="font-medium text-slate-700">CWD:</span>{' '}
+                    {formatSensitivePath(doctor.runtime.cwd, privacyMode)}
                   </div>
                   <div>
-                    <span className="font-medium text-slate-700">Profile:</span> {doctor.runtime.profile_dir}
+                    <span className="font-medium text-slate-700">Profile:</span>{' '}
+                    {formatSensitivePath(doctor.runtime.profile_dir, privacyMode)}
                   </div>
                   <div>
                     <span className="font-medium text-slate-700">Setting sources:</span>{' '}
@@ -279,7 +283,9 @@ export function OperationsTab() {
                   <div>
                     <span className="font-medium text-slate-700">Settings files:</span>{' '}
                     {doctor.runtime.settings_files.length > 0
-                      ? doctor.runtime.settings_files.join(', ')
+                      ? doctor.runtime.settings_files
+                          .map((path) => formatSensitivePath(path, privacyMode))
+                          .join(', ')
                       : '(auto discovery only)'}
                   </div>
                   <div>

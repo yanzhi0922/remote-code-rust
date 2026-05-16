@@ -53,6 +53,7 @@ import type {
   CodexThreadGoalSetRequest,
   CodexThreadListRequest,
   CodexThreadListResponse,
+  CodexThreadMetadataUpdateRequest,
   CodexThreadNativeRequest,
   CodexThreadReadResponse,
   CodexThreadRefRequest,
@@ -520,10 +521,16 @@ export function codexThreadElicitationDecrement(
 }
 
 export function codexThreadMetadataUpdate(
-  request: CodexThreadNativeRequest,
+  request: CodexThreadMetadataUpdateRequest,
 ): Promise<CodexJsonValue> {
   return invoke<CodexJsonValue>('codex_thread_metadata_update', {
-    request: { sessionId: request.sessionId ?? null, threadId: request.threadId ?? '', ...(request.params ?? {}) },
+    request: {
+      sessionId: request.sessionId ?? null,
+      threadId: request.threadId ?? '',
+      sha: request.sha ?? null,
+      branch: request.branch ?? null,
+      originUrl: request.originUrl ?? null,
+    },
   });
 }
 

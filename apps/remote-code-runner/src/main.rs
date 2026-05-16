@@ -43,6 +43,9 @@ struct Cli {
     #[arg(long, env = "REMOTE_CODE_RUNNER_AUTH_TOKEN")]
     auth_token: Option<String>,
 
+    #[arg(long, env = "REMOTE_CODE_CONTROL_PLANE_AUTH_TOKEN")]
+    control_plane_auth_token: Option<String>,
+
     #[arg(long, env = "REMOTE_CODE_RUNNER_HEARTBEAT_SECS")]
     heartbeat_interval_secs: Option<u64>,
 
@@ -55,9 +58,9 @@ struct Cli {
     #[arg(long, env = "REMOTE_CODE_RUNNER_REMOTE_CODE_BIN")]
     remote_code_bin: Option<PathBuf>,
 
-    /// Runner connection mode: "inbound" (default, listens for connections) or
-    /// "outbound" (long-polls control plane for commands — no inbound port needed).
-    #[arg(long, env = "REMOTE_CODE_RUNNER_MODE", default_value = "inbound")]
+    /// Runner connection mode: "outbound" (default, long-polls control plane
+    /// for commands — no inbound port needed) or "inbound" (explicit direct API).
+    #[arg(long, env = "REMOTE_CODE_RUNNER_MODE", default_value = "outbound")]
     mode: String,
 
     #[command(subcommand)]
@@ -129,6 +132,7 @@ impl HostedSessionManager {
         control_plane_url: String,
         remote_code_bin: PathBuf,
         profile_dir: PathBuf,
+        auth_token: Option<String>,
     ) -> Self {
         Self {
             api,
@@ -136,7 +140,7 @@ impl HostedSessionManager {
             remote_code_bin,
             profile_dir,
             client: reqwest::Client::new(),
-            auth_token: control_plane_auth_token(),
+            auth_token,
             sessions: Arc::new(Mutex::new(HashMap::new())),
             event_buffer: Arc::new(Mutex::new(HashMap::new())),
         }
@@ -605,12 +609,7 @@ impl HostedSessionManager {
         session_id: Uuid,
         exit: std::io::Result<std::process::ExitStatus>,
     ) -> Result<()> {
-        if let Some(handle) = self.sessions.lock().await.remove(&session_id) {
-            let handles = handle.task_handles.lock().await;
-            for task in handles.iter() {
-                task.abort();
-            }
-        }
+        self.sessions.lock().await.remove(&session_id);
         self.post_runtime_event(
             session_id,
             RuntimeEventDetail::DaemonPresenceChanged {
@@ -1017,13 +1016,6 @@ fn default_remote_code_bin() -> Result<PathBuf> {
     Ok(PathBuf::from("remote-code"))
 }
 
-fn control_plane_auth_token() -> Option<String> {
-    std::env::var("REMOTE_CODE_CONTROL_PLANE_AUTH_TOKEN")
-        .ok()
-        .map(|value| value.trim().to_owned())
-        .filter(|value| !value.is_empty())
-}
-
 fn authorize_control_plane_request(
     builder: reqwest::RequestBuilder,
     auth_token: Option<&str>,
@@ -1052,6 +1044,7 @@ async fn pull_runner_commands_from_control_plane(
     client: &reqwest::Client,
     control_plane_url: &str,
     runner_id: &str,
+    auth_token: Option<&str>,
 ) -> Result<RunnerCommandPullResponse> {
     let response = authorize_control_plane_request(
         client.post(format!(
@@ -1059,7 +1052,7 @@ async fn pull_runner_commands_from_control_plane(
             control_plane_url.trim_end_matches('/'),
             encode_path_segment(runner_id)
         )),
-        control_plane_auth_token().as_deref(),
+        auth_token,
     )
     .send()
     .await
@@ -1124,7 +1117,7 @@ async fn run_control_plane_sync(
     };
     let registration = config.registration_request();
     let configured_interval_secs = config.heartbeat_interval_secs;
-    let auth_token = config.auth_token.clone();
+    let control_plane_auth_token = config.control_plane_auth_token.clone();
     let mut retry_delay = Duration::from_secs(1);
     let client = reqwest::Client::new();
     const IDLE_POLL_SECS: u64 = 5;
@@ -1138,7 +1131,14 @@ async fn run_control_plane_sync(
             return;
         }
 
-        match register_with_control_plane(&client, &control_plane_url, &registration).await {
+        match register_with_control_plane(
+            &client,
+            &control_plane_url,
+            &registration,
+            control_plane_auth_token.as_deref(),
+        )
+        .await
+        {
             Ok(lease) => {
                 retry_delay = Duration::from_secs(1);
                 let mut heartbeat_interval = tokio::time::interval(effective_heartbeat_interval(
@@ -1156,7 +1156,7 @@ async fn run_control_plane_sync(
                         }
                         _ = heartbeat_interval.tick() => {
                             let heartbeat = api.heartbeat().await;
-                            if let Err(error) = send_heartbeat(&client, &control_plane_url, &heartbeat, auth_token.as_deref()).await {
+                            if let Err(error) = send_heartbeat(&client, &control_plane_url, &heartbeat, control_plane_auth_token.as_deref()).await {
                                 warn!("failed to send heartbeat to control plane: {error}");
                                 break;
                             }
@@ -1166,6 +1166,7 @@ async fn run_control_plane_sync(
                                 &client,
                                 &control_plane_url,
                                 &registration.runner_id,
+                                control_plane_auth_token.as_deref(),
                             ).await {
                                 Ok(response) => {
                                     let command_count = response.commands.len();
@@ -1218,7 +1219,7 @@ async fn run_outbound_poll_loop(
     };
     let runner_id = &config.runner_id;
     let client = reqwest::Client::new();
-    let auth = config.auth_token.as_deref().unwrap_or("");
+    let auth = config.control_plane_auth_token.as_deref().unwrap_or("");
     let poll_timeout = Duration::from_secs(30);
 
     let mut retry_delay = Duration::from_secs(1);
@@ -1288,6 +1289,7 @@ async fn main() -> Result<()> {
             bind: cli.bind,
             public_base_url: cli.public_base_url,
             auth_token: cli.auth_token,
+            control_plane_auth_token: cli.control_plane_auth_token,
             heartbeat_interval_secs: cli.heartbeat_interval_secs,
             max_parallel_sessions: cli.max_parallel_sessions,
             ..RunnerConfigOverrides::default()
@@ -1344,6 +1346,7 @@ async fn main() -> Result<()> {
                         .ok_or_else(|| anyhow!("missing control plane URL"))?,
                     remote_code_bin,
                     config.profile_dir.profile_dir.clone(),
+                    config.control_plane_auth_token.clone(),
                 );
                 let manager_task =
                     tokio::spawn(hosted_manager.run(event_rx, shutdown_tx.subscribe()));
@@ -1729,6 +1732,7 @@ mod tests {
             control_plane_url.clone(),
             remote_code_bin,
             profile_dir,
+            None,
         );
         let manager_task = tokio::spawn(manager.run(event_rx, manager_shutdown_rx));
 

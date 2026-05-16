@@ -1,13 +1,11 @@
 use codex_utils_absolute_path::AbsolutePathBuf;
 use schemars::JsonSchema;
-use schemars::r#gen::SchemaGenerator;
-use schemars::schema::InstanceType;
-use schemars::schema::Metadata;
-use schemars::schema::Schema;
-use schemars::schema::SchemaObject;
+use schemars::Schema;
+use schemars::SchemaGenerator;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::num::NonZeroU64;
 use std::time::Duration;
@@ -95,8 +93,8 @@ pub enum ApprovalsReviewer {
 }
 
 impl JsonSchema for ApprovalsReviewer {
-    fn schema_name() -> String {
-        "ApprovalsReviewer".to_string()
+    fn schema_name() -> Cow<'static, str> {
+        Cow::Borrowed("ApprovalsReviewer")
     }
 
     fn json_schema(_generator: &mut SchemaGenerator) -> Schema {
@@ -167,21 +165,22 @@ impl Default for ShellEnvironmentPolicy {
 }
 
 fn string_enum_schema_with_description(values: &[&str], description: &str) -> Schema {
-    let mut schema = SchemaObject {
-        instance_type: Some(InstanceType::String.into()),
-        metadata: Some(Box::new(Metadata {
-            description: Some(description.to_string()),
-            ..Default::default()
-        })),
-        ..Default::default()
-    };
-    schema.enum_values = Some(
-        values
-            .iter()
-            .map(|value| Value::String((*value).to_string()))
-            .collect(),
+    let mut schema = serde_json::Map::new();
+    schema.insert("type".to_string(), Value::String("string".to_string()));
+    schema.insert(
+        "description".to_string(),
+        Value::String(description.to_string()),
     );
-    Schema::Object(schema)
+    schema.insert(
+        "enum".to_string(),
+        Value::Array(
+            values
+                .iter()
+                .map(|value| Value::String((*value).to_string()))
+                .collect(),
+        ),
+    );
+    schema.into()
 }
 
 #[derive(

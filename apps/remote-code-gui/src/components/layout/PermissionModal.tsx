@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { ShieldAlert } from 'lucide-react';
+import { formatSensitivePath, redactSensitivePathsForDisplay } from '../../lib/utils';
 import { useAppStore } from '../../stores/useAppStore';
 
 const PROMPT_PREFIX = 'prompt:';
@@ -131,6 +132,7 @@ function parseJsonOrText(value: string): unknown {
 export function PermissionModal() {
   const pendingPermission = useAppStore((state) => state.pendingPermission);
   const resolvePermission = useAppStore((state) => state.resolvePermission);
+  const privacyMode = useAppStore((state) => state.workspacePrivacyMode);
   const [feedback, setFeedback] = useState('');
   const [codexJsonResponse, setCodexJsonResponse] = useState('');
   const [codexTextResponse, setCodexTextResponse] = useState('');
@@ -149,6 +151,10 @@ export function PermissionModal() {
   );
   const planText = stringField(inputRecord, 'plan');
   const planFilePath = stringField(inputRecord, 'plan_file_path', 'planFilePath');
+  const displayedInput = useMemo(
+    () => redactSensitivePathsForDisplay(pendingPermission?.input, privacyMode),
+    [pendingPermission?.input, privacyMode],
+  );
 
   useEffect(() => {
     setFeedback('');
@@ -203,7 +209,9 @@ export function PermissionModal() {
                 {planText}
               </pre>
               {planFilePath && (
-                <div className="mt-2 break-all text-xs text-slate-500">{planFilePath}</div>
+                <div className="mt-2 break-all text-xs text-slate-500">
+                  {formatSensitivePath(planFilePath, privacyMode)}
+                </div>
               )}
             </div>
           )}
@@ -281,7 +289,7 @@ export function PermissionModal() {
             <div>
               <div className="text-sm font-medium text-slate-700">目标路径</div>
               <div className="mt-1 break-all rounded-2xl bg-[#f7f5ef] px-3 py-2 text-sm text-slate-600">
-                {pendingPermission.blocked_path}
+                {formatSensitivePath(pendingPermission.blocked_path, privacyMode)}
               </div>
             </div>
           )}
@@ -294,7 +302,7 @@ export function PermissionModal() {
                     key={index}
                     className="max-h-40 overflow-auto rounded-2xl bg-[#f7f5ef] p-4 text-xs leading-6 text-slate-700"
                   >
-                    {formatInput(suggestion)}
+                    {formatInput(redactSensitivePathsForDisplay(suggestion, privacyMode))}
                   </pre>
                 ))}
               </div>
@@ -303,7 +311,7 @@ export function PermissionModal() {
           <div>
             <div className="text-sm font-medium text-slate-700">输入参数</div>
             <pre className="mt-1 max-h-64 overflow-auto rounded-2xl bg-[#f7f5ef] p-4 text-xs leading-6 text-slate-700">
-              {formatInput(pendingPermission.input)}
+              {formatInput(displayedInput)}
             </pre>
           </div>
           {isExitPlanMode && (

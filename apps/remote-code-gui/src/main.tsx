@@ -1,5 +1,7 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
+import "katex/dist/katex.min.css";
+import "highlight.js/styles/github.css";
 import "./index.css";
 import App from "./App";
 import { AppErrorBoundary } from "./components/layout/AppErrorBoundary";

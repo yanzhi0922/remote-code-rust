@@ -46,6 +46,7 @@ import {
   clearRemoteAccessToken,
   clearRemotePairingContext,
   deriveUserKey,
+  hydrateRemoteAuthTokensFromSecureStore,
   persistRemoteAccessToken,
   persistRemoteActiveSessionId,
   persistRemoteRefreshToken,
@@ -216,6 +217,15 @@ export default function MobileRemoteApp() {
 
   // ── Active session persistence ────────────────────────────────────────
   useEffect(() => {
+    if (accessToken || !baseUrl) return;
+    let cancelled = false;
+    void hydrateRemoteAuthTokensFromSecureStore().then((token) => {
+      if (!cancelled && token) setAccessToken(token);
+    });
+    return () => { cancelled = true; };
+  }, [accessToken, baseUrl]);
+
+  useEffect(() => {
     if (selectedSessionId) { persistRemoteActiveSessionId(baseUrl, selectedSessionId); return; }
     clearRemoteActiveSessionId(baseUrl);
   }, [baseUrl, selectedSessionId]);
@@ -289,9 +299,7 @@ export default function MobileRemoteApp() {
     setAuthLoading(true);
     try {
       const userKey = await deriveUserKey(signInUsername.trim(), signInPassword.trim());
-      persistRemoteAccessToken(userKey);
-      setAccessToken(userKey); setAuthErrorMessage(null); setSignInPassword('');
-      showStatusMessage(copy.statusSignInSucceeded);
+      completeAuthentication(userKey, copy.statusSignInSucceeded);
       setHealth(await getControlPlaneHealth(baseUrl));
     } catch (e) { reportAsyncError(e); }
     finally { setAuthLoading(false); }

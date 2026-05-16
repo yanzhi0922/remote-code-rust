@@ -55,6 +55,8 @@ pub struct RunnerConfigOverrides {
     pub labels: Option<BTreeMap<String, String>>,
     /// Bearer token for protecting the runner API.
     pub auth_token: Option<String>,
+    /// Bearer token used when this runner calls the control plane.
+    pub control_plane_auth_token: Option<String>,
 }
 
 /// Full runner configuration.
@@ -82,6 +84,9 @@ pub struct RunnerConfig {
     /// Bearer token for protecting the runner API.
     #[serde(default, skip_serializing)]
     pub auth_token: Option<String>,
+    /// Bearer token used for outbound control-plane requests.
+    #[serde(default, skip_serializing)]
+    pub control_plane_auth_token: Option<String>,
     /// Runner capability flags.
     pub capabilities: RunnerCapabilities,
 }
@@ -793,6 +798,9 @@ pub fn load_runner_config(
     let auth_token = overrides
         .auth_token
         .or_else(|| read_env("REMOTE_CODE_RUNNER_AUTH_TOKEN"));
+    let control_plane_auth_token = overrides
+        .control_plane_auth_token
+        .or_else(read_control_plane_auth_token_env);
     let heartbeat_interval_secs = overrides
         .heartbeat_interval_secs
         .or_else(|| parse_env_number("REMOTE_CODE_RUNNER_HEARTBEAT_SECS"))
@@ -834,6 +842,7 @@ pub fn load_runner_config(
         max_parallel_sessions,
         labels,
         auth_token,
+        control_plane_auth_token,
         capabilities: RunnerCapabilities {
             interactive_approvals: true,
             background_sessions: true,
@@ -872,8 +881,13 @@ pub fn describe_status(config: &RunnerConfig) -> Result<RunnerStatus> {
 pub fn validate_runner_config(config: &RunnerConfig) -> Vec<String> {
     let mut issues = Vec::new();
     let auth_configured = config.auth_token.is_some();
+    let control_plane_auth_configured = config.control_plane_auth_token.is_some();
     let public_url = config.public_base_url.as_deref();
     let remote_public_url = public_url.filter(|url| !is_local_runner_url(url));
+    let remote_control_plane_url = config
+        .control_plane_url
+        .as_deref()
+        .filter(|url| !is_local_runner_url(url));
 
     if !config.bind.ip().is_loopback() && !auth_configured {
         issues.push("non-loopback runner binds require REMOTE_CODE_RUNNER_AUTH_TOKEN".to_owned());
@@ -889,6 +903,13 @@ pub fn validate_runner_config(config: &RunnerConfig) -> Vec<String> {
         && !url.starts_with("https://")
     {
         issues.push("remote runner public_base_url must use https".to_owned());
+    }
+
+    if remote_control_plane_url.is_some() && !control_plane_auth_configured {
+        issues.push(
+            "remote control-plane URL requires REMOTE_CODE_CONTROL_PLANE_AUTH_TOKEN or desktop credentials"
+                .to_owned(),
+        );
     }
 
     issues
@@ -976,8 +997,8 @@ pub async fn register_with_control_plane(
     client: &Client,
     control_plane_url: &str,
     registration: &RunnerRegistrationRequest,
+    control_plane_auth_token: Option<&str>,
 ) -> Result<RunnerRegistrationLease> {
-    let explicit_token = registration.auth_token.as_deref();
     let payload = RunnerRegistrationWire {
         runner_id: &registration.runner_id,
         control_plane_url: &registration.control_plane_url,
@@ -993,7 +1014,7 @@ pub async fn register_with_control_plane(
             control_plane_url,
             "/v1/runners/register",
         )?),
-        explicit_token,
+        control_plane_auth_token,
     )
     .json(&payload)
     .send()
@@ -1048,7 +1069,7 @@ fn authorize_control_plane_request(
     let token = explicit_token
         .map(|s| s.trim().to_owned())
         .filter(|s| !s.is_empty())
-        .or_else(control_plane_auth_token);
+        .or_else(read_control_plane_auth_token_env);
     if let Some(token) = token {
         builder.bearer_auth(token)
     } else {
@@ -1056,7 +1077,7 @@ fn authorize_control_plane_request(
     }
 }
 
-fn control_plane_auth_token() -> Option<String> {
+fn read_control_plane_auth_token_env() -> Option<String> {
     env::var("REMOTE_CODE_CONTROL_PLANE_AUTH_TOKEN")
         .ok()
         .map(|value| value.trim().to_owned())
@@ -1721,6 +1742,7 @@ mod tests {
                     String::from("lab"),
                 )])),
                 auth_token: Some("runner-secret".to_owned()),
+                control_plane_auth_token: Some("control-plane-secret".to_owned()),
             },
         )
         .expect("config should load");
@@ -1730,6 +1752,10 @@ mod tests {
         assert_eq!(config.max_parallel_sessions, 8);
         assert_eq!(config.labels.get("region").map(String::as_str), Some("lab"));
         assert_eq!(config.auth_token.as_deref(), Some("runner-secret"));
+        assert_eq!(
+            config.control_plane_auth_token.as_deref(),
+            Some("control-plane-secret")
+        );
     }
 
     #[test]

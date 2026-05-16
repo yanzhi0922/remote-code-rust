@@ -87,27 +87,36 @@ async fn main() -> Result<()> {
             let bind = config.bind;
             let service = ControlPlaneService::new(config.clone(), env!("CARGO_PKG_VERSION"));
 
-            // Optionally start the QUIC listener alongside HTTP.
+            // QUIC is still experimental and currently not the production relay
+            // transport. Keep it behind an explicit flag until the client/server
+            // stream protocol is covered by integration tests.
             if let (Some(quic_bind), Some(cert_path), Some(key_path)) = (
                 &config.quic_bind,
                 &config.quic_cert_pem,
                 &config.quic_key_pem,
             ) {
-                let cert_pem = std::fs::read(cert_path)
-                    .with_context(|| format!("reading QUIC cert from {}", cert_path.display()))?;
-                let key_pem = std::fs::read(key_path)
-                    .with_context(|| format!("reading QUIC key from {}", key_path.display()))?;
-                let quic_config = QuicServerConfig {
-                    listen_addr: *quic_bind,
-                    cert_pem,
-                    key_pem,
-                };
-                let quic_service = std::sync::Arc::new(service.clone());
-                tokio::spawn(async move {
-                    if let Err(e) = start_quic_listener(quic_service, quic_config).await {
-                        eprintln!("QUIC listener failed: {e:#}");
-                    }
-                });
+                if quic_experimental_enabled() {
+                    let cert_pem = std::fs::read(cert_path).with_context(|| {
+                        format!("reading QUIC cert from {}", cert_path.display())
+                    })?;
+                    let key_pem = std::fs::read(key_path)
+                        .with_context(|| format!("reading QUIC key from {}", key_path.display()))?;
+                    let quic_config = QuicServerConfig {
+                        listen_addr: *quic_bind,
+                        cert_pem,
+                        key_pem,
+                    };
+                    let quic_service = std::sync::Arc::new(service.clone());
+                    tokio::spawn(async move {
+                        if let Err(e) = start_quic_listener(quic_service, quic_config).await {
+                            eprintln!("QUIC listener failed: {e:#}");
+                        }
+                    });
+                } else {
+                    eprintln!(
+                        "QUIC config is present but disabled; set REMOTE_CODE_CONTROL_PLANE_QUIC_EXPERIMENTAL=1 to enable"
+                    );
+                }
             }
 
             let app = service.router();
@@ -116,4 +125,14 @@ async fn main() -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn quic_experimental_enabled() -> bool {
+    matches!(
+        std::env::var("REMOTE_CODE_CONTROL_PLANE_QUIC_EXPERIMENTAL")
+            .unwrap_or_default()
+            .to_ascii_lowercase()
+            .as_str(),
+        "1" | "true" | "yes"
+    )
 }

@@ -1,6 +1,8 @@
 param(
     [switch]$Aggressive,
-    [switch]$RemoveReleaseArtifacts
+    [switch]$RemoveReleaseArtifacts,
+    [switch]$RemoveCargoDepInfo,
+    [switch]$RemoveGeneratedTauriArtifacts
 )
 
 $ErrorActionPreference = "Stop"
@@ -8,10 +10,13 @@ $RepoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 Set-Location $RepoRoot
 
 $paths = @(
-    "apps\remote-code-gui\src-tauri\gen",
     "apps\remote-code-gui\dist",
     "target\deploy"
 )
+
+if ($RemoveGeneratedTauriArtifacts) {
+    $paths += "apps\remote-code-gui\src-tauri\gen"
+}
 
 if ($Aggressive) {
     $paths += @(
@@ -43,7 +48,12 @@ foreach ($path in $paths) {
     }
 }
 
-Get-ChildItem -Path (Join-Path $RepoRoot "target") -Recurse -Include "*.pdb", "*.d" -File -ErrorAction SilentlyContinue |
+$staleFilePatterns = @("*.pdb")
+if ($RemoveCargoDepInfo) {
+    $staleFilePatterns += "*.d"
+}
+
+Get-ChildItem -Path (Join-Path $RepoRoot "target") -Recurse -Include $staleFilePatterns -File -ErrorAction SilentlyContinue |
     Where-Object {
         -not $_.FullName.Contains("\target\release\bundle\")
     } |

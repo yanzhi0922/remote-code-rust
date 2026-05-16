@@ -9,9 +9,9 @@
 | 应用程序 | 5 个（CLI、GUI、Control Plane、Runner、Migrate） |
 | Workspace Packages | 当前 `cargo metadata --no-deps` 实测 231 个 Rust packages（Claude / Codex / Roo / Adapters / Apps） |
 | 内置工具 | 62 |
-| 测试 | 按 crate 和功能维护单元 / 集成测试 |
-| Clippy 状态 | 以 CI 和本地检查结果为准 |
-| `unsafe` 代码 | 平台 FFI 允许，CI 通过 clippy / audit / secret scan 约束风险 |
+| 测试 | 按 crate 和功能维护单元 / 集成测试；完整 workspace 测试耗时较长 |
+| Clippy 状态 | `cargo clippy --workspace -- -D warnings` 是发布门禁 |
+| `unsafe` 代码 | 平台 FFI 允许，CI 通过 clippy / audit / secret scan 约束风险；新增 unsafe 必须 code review |
 | Rust 版本 | 1.93 (Edition 2024) |
 | 许可证 | Proprietary |
 
@@ -41,7 +41,7 @@
 - 📡 **SSH 模式** — 远程主机安全执行
 - ⌨️ **Vim 模式** — Normal / Insert / Visual / Buffer 四种模式
 - 🖥️ **桌面 GUI** — Tauri v2 + React 19，内置 Provider/Model/Runtime 管理
-- 📱 **移动端远程控制** — 桌面 GUI 内置远程 Runner 服务，手机 App 可经控制平面控制本机 Agent
+- 📱 **移动端 / PWA 远程控制** — 桌面 GUI 内置远程 Runner 服务，手机端经控制平面控制本机 Agent；服务器只做安全中继
 - 🔐 **OAuth2 认证** — PKCE 流程 + 自动 Token 刷新
 - 📈 **遥测与分析** — Datadog / 自有端点 / 文件导出三种方式
 - 🎤 **语音输入** — Web Speech API + 音频级别实时反馈
@@ -53,10 +53,32 @@
 - 用户电脑运行独立桌面应用和本地 Runner，Agent、Provider Key、工作区文件、工具执行都留在用户电脑。
 - 云服务器只运行 `remote-code-control-plane`、Web/PWA 静态资源、认证/配对/事件中继和安装包下载，不运行 coding agent，不运行 `remote-code-runner`，不保存本地工作区。
 - 手机 App 或 PWA 连接控制平面后，通过已配对的本机 Runner 远程控制桌面软件。
+- 独立 `remote-code-runner` 默认使用 `outbound` 长轮询模式，不暴露入站端口；需要直连 API 时必须显式使用 `--mode inbound` 并配置 runner API token。
 - 远程客户端默认使用 `relay_only` 中继模式；直连/混合模式必须显式设置 `VITE_REMOTE_CODE_TRANSPORT_MODE=hybrid` 或 `direct_only`。
 - WebSocket 事件流使用短期一次性 `stream_ticket`，URL 中的长期 `access_token` 查询参数默认禁用；控制平面旧兼容开关为 `REMOTE_CODE_ALLOW_QUERY_ACCESS_TOKEN=true`，本地 Runner 旧兼容开关为 `REMOTE_CODE_RUNNER_ALLOW_QUERY_ACCESS_TOKEN=true`，两者都只应临时使用。
 - 用户名/密码派生的 user-key 认证只接受服务端 `REMOTE_CODE_CONTROL_PLANE_USER_KEY_HASHES` 中预配置的 SHA-256 哈希；生产环境优先使用 bootstrap/pairing 设备信任链。
+- Runner API token 与控制平面 token 分离：`REMOTE_CODE_RUNNER_AUTH_TOKEN` 只保护可选直连 runner API，`REMOTE_CODE_CONTROL_PLANE_AUTH_TOKEN` / pairing token 用于控制平面注册、心跳和命令轮询，不要复用。
+- QUIC 通道当前是实验能力，默认不启动；只有设置 `REMOTE_CODE_CONTROL_PLANE_QUIC_EXPERIMENTAL=1` 且提供 QUIC 证书/私钥时才会开启。
 - 腾讯云部署材料位于 [`deploy/tencent-cloud`](deploy/tencent-cloud)，默认面向 `remote-code.yz520gzy.top`。
+
+### 当前发布状态
+
+当前目标是 Windows 桌面 exe + 云端 relay + 手机端远控的产品闭环。发布前必须至少完成这些本地门禁：
+
+```powershell
+cargo fmt --all -- --check
+git diff --check
+cargo check --workspace --all-targets
+cargo clippy --workspace -- -D warnings
+cargo audit --quiet
+cd apps\remote-code-gui
+npm ci
+npm audit --audit-level=moderate --registry=https://registry.npmjs.org/
+npm test
+npm run build
+```
+
+`cargo audit` 中存在已接受且有到期复核日期的上游未修复风险，记录在 [`.cargo/audit.toml`](.cargo/audit.toml)。移动端原生推送、Android/iOS 真机打包和应用商店级加固需要单独验收，不应仅凭 Web 构建通过就标记为正式移动端发布。
 
 ### 本地发布验证
 
@@ -77,6 +99,8 @@ powershell -ExecutionPolicy Bypass -File scripts\verify-release.ps1 -IncludeDesk
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\clean-build-caches.ps1 -Aggressive
 ```
+
+默认清理不会删除 `src-tauri/gen` 生成 schema；只有明确传入 `-RemoveGeneratedTauriArtifacts` 才会移除 Tauri 生成目录。
 
 部署到腾讯云中继服务器只上传本地构建产物，不上传源码、不在服务器编译：
 
@@ -435,6 +459,9 @@ graph TB
 | Roo Token 估算粗糙 | 使用 `text.len() / 4` 近似而非 tiktoken |
 | Roo MCP 未接入 | 声明了 McpSupport 能力但未在 send_message 中集成 McpServerConnection |
 | `rama-*` 依赖为预发布 | 锁定 `0.3.0-alpha.4`，待迁移至稳定版 |
+| 原生移动推送未完成 | 当前可注册/展示本地通知，但 APNs/FCM/WebPush token 获取和服务端发送链路仍需真机实现与验收 |
+| Android/iOS 发布需真机验证 | Web/PWA 构建通过不等价于移动端正式发布，需补齐 SDK、签名、R8/ProGuard 和商店目标 SDK 验证 |
+| QUIC 仍为实验通道 | 默认关闭，只能通过 `REMOTE_CODE_CONTROL_PLANE_QUIC_EXPERIMENTAL=1` 显式启用 |
 
 ## 项目文档
 
