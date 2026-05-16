@@ -584,7 +584,7 @@ mcp_test_support = { path = "crates/codex/mcp-server/tests/common" }
 	jsonschema = "0.26"
 	pin-project-lite = "0.2"
 	strsim = "0.11"
-	tiktoken-rs = "0.7"
+	tiktoken-rs = "0.11"
 	unic-langid = "0.9"
 
 [patch.crates-io]
