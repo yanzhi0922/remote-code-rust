@@ -207,7 +207,7 @@ export function ChatInput() {
               </button>
               {voiceToast && (
                 <div className="absolute bottom-full right-0 mb-2 whitespace-nowrap rounded-lg bg-rc-bg-user-bubble px-3 py-1.5 text-xs text-white shadow-lg">
-                  🎤 语音输入功能即将推出
+                  语音输入即将推出
                 </div>
               )}
             </div>

@@ -48,7 +48,7 @@ function EmptyState({
   return (
     <div className="flex h-full min-h-[400px] items-center justify-center px-6">
       <div className="max-w-md text-center space-y-4">
-        <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-rc-accent-primary to-purple-500 shadow-lg">
+        <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-lg bg-[linear-gradient(135deg,#2563eb_0%,#0891b2_100%)] shadow-lg">
           <span className="text-2xl font-bold text-white">RC</span>
         </div>
         <div>
@@ -156,7 +156,7 @@ function AssistantMessage({ entry }: { entry: ConversationEntry }) {
   return (
     <div className="rounded-2xl border border-rc-border-primary bg-rc-bg-assistant p-6 shadow-sm">
       <div className="mb-4 flex items-center gap-2">
-        <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-gradient-to-br from-rc-accent-primary to-purple-500">
+        <div className="flex h-7 w-7 items-center justify-center rounded-md bg-[linear-gradient(135deg,#2563eb_0%,#0891b2_100%)]">
           <span className="text-white text-xs font-bold">A</span>
         </div>
         <span className="text-xs font-semibold uppercase tracking-wider text-rc-text-tertiary">

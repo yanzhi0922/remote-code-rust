@@ -1,5 +1,6 @@
 import {
   Archive,
+  Bot,
   ChevronRight,
   Folder,
   FolderOpen,
@@ -192,7 +193,7 @@ function StatusDot({ status }: { status: SessionTaskStatus }) {
 function SessionTaskRow({ task }: { task: SessionTaskItem }) {
   return (
     <div
-      className="mt-1.5 flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm transition-colors hover:bg-rc-bg-hover"
+      className="mt-1.5 flex items-center gap-2.5 rounded-md px-3 py-2 text-sm transition-colors hover:bg-rc-bg-hover"
       style={{ paddingLeft: `${20 + task.depth * 16}px` }}
     >
       <StatusDot status={task.status} />
@@ -229,9 +230,9 @@ function SessionRow({
     <div className="space-y-1">
       <div
         className={cn(
-          'group flex items-start gap-2 rounded-xl px-3 py-2.5 transition-all duration-200',
+          'group flex items-start gap-2 rounded-lg px-3 py-2.5 transition-all duration-200',
           active
-            ? 'bg-rc-bg-selected border border-rc-accent-primary/20'
+            ? 'border border-[#9cc4ff] bg-[#eef6ff] shadow-sm dark:border-rc-border-focus dark:bg-rc-bg-selected'
             : 'border border-transparent hover:bg-rc-bg-hover',
         )}
       >
@@ -241,7 +242,7 @@ function SessionRow({
           disabled={!hasTasks}
           title={hasTasks ? '展开/收起子任务' : undefined}
           className={cn(
-            'mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-lg transition-colors',
+            'mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-md transition-colors',
             hasTasks
               ? 'text-rc-text-tertiary hover:bg-rc-bg-active hover:text-rc-text-primary'
               : 'cursor-default opacity-30',
@@ -269,7 +270,7 @@ function SessionRow({
         <button
           type="button"
           onClick={onArchive}
-          className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-lg text-rc-text-tertiary opacity-0 transition-all duration-200 group-hover:opacity-100 hover:bg-rc-bg-active hover:text-rc-accent-error"
+          className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-rc-text-tertiary opacity-0 transition-all duration-200 group-hover:opacity-100 hover:bg-rc-bg-active hover:text-rc-accent-error"
           title="归档此会话"
         >
           <Archive size={14} />
@@ -361,16 +362,16 @@ export function Sidebar() {
 
   return (
     <>
-      <aside className="flex h-full w-sidebar shrink-0 flex-col border-r border-rc-border-primary bg-rc-bg-sidebar">
+      <aside className="my-5 flex h-[calc(100%-40px)] w-[336px] shrink-0 flex-col overflow-hidden rounded-lg border border-white/80 bg-white/80 shadow-[0_20px_60px_rgba(15,23,42,0.12)] backdrop-blur-xl dark:border-rc-border-primary dark:bg-rc-bg-surface/90">
         {/* Header */}
-        <div className="border-b border-rc-border-primary px-5 py-4">
+        <div className="border-b border-rc-border-primary/80 px-5 py-4">
           <div className="flex items-center gap-2.5">
-            <div className="h-7 w-7 rounded-lg bg-gradient-to-br from-rc-accent-primary to-purple-500 flex items-center justify-center">
-              <span className="text-white text-[11px] font-bold">RC</span>
+            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-[linear-gradient(135deg,#2563eb_0%,#0891b2_100%)] text-white shadow-sm">
+              <Bot size={17} />
             </div>
             <div>
               <div className="text-sm font-semibold text-rc-text-primary">Remote Code</div>
-              <div className="text-xs text-rc-text-tertiary">工作区</div>
+              <div className="text-xs text-rc-text-tertiary">工作台</div>
             </div>
           </div>
 
@@ -383,7 +384,7 @@ export function Sidebar() {
               }}
               disabled={!canCreateSession}
               title={canCreateSession ? '在当前选中的项目下新建会话' : '请先选择或添加项目文件夹'}
-              className="inline-flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-rc-accent-primary to-rc-accent-primary-hover px-3 py-2.5 text-sm font-medium text-white shadow-sm transition-all duration-200 hover:shadow-md disabled:cursor-not-allowed disabled:opacity-50"
+              className="inline-flex items-center justify-center gap-2 rounded-lg bg-[linear-gradient(135deg,#2563eb_0%,#0891b2_100%)] px-3 py-2.5 text-sm font-medium text-white shadow-sm transition-all duration-200 hover:shadow-md active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50"
             >
               <Plus size={15} />
               新会话
@@ -392,7 +393,7 @@ export function Sidebar() {
               onClick={() => {
                 void pickFolderAndAddProject();
               }}
-              className="inline-flex items-center justify-center gap-2 rounded-xl border border-rc-border-primary bg-rc-bg-surface px-3 py-2.5 text-sm font-medium text-rc-text-primary transition-all duration-200 hover:border-rc-border-hover hover:bg-rc-bg-hover"
+              className="inline-flex items-center justify-center gap-2 rounded-lg border border-rc-border-primary bg-white/80 px-3 py-2.5 text-sm font-medium text-rc-text-primary transition-all duration-200 hover:border-rc-border-hover hover:bg-rc-bg-hover active:scale-[0.98] dark:bg-rc-bg-elevated"
             >
               <FolderPlus size={15} />
               添加项目
@@ -426,7 +427,7 @@ export function Sidebar() {
                 </div>
 
                 {projects.length === 0 ? (
-                  <div className="rounded-xl border border-dashed border-rc-border-primary px-4 py-6 text-center text-sm leading-6 text-rc-text-secondary">
+                  <div className="rounded-lg border border-dashed border-rc-border-primary px-4 py-6 text-center text-sm leading-6 text-rc-text-secondary">
                     还没有项目目录
                     <br />
                     <span className="text-xs text-rc-text-tertiary">添加项目后，会话将按项目管理</span>
@@ -443,9 +444,9 @@ export function Sidebar() {
                         <section
                           key={project.path}
                           className={cn(
-                            'rounded-xl px-3 py-3 transition-colors duration-200',
+                            'rounded-lg px-3 py-3 transition-colors duration-200',
                             active
-                              ? 'bg-rc-bg-surface border border-rc-border-primary shadow-sm'
+                              ? 'bg-white/90 border border-rc-border-primary shadow-sm dark:bg-rc-bg-elevated'
                               : 'bg-transparent border border-transparent hover:bg-rc-bg-hover',
                           )}
                         >
@@ -454,7 +455,7 @@ export function Sidebar() {
                               type="button"
                               onClick={() => toggleProject(project.path)}
                               title="展开/收起项目"
-                              className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-rc-text-tertiary transition-colors hover:bg-rc-bg-hover hover:text-rc-text-primary"
+                              className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-rc-text-tertiary transition-colors hover:bg-rc-bg-hover hover:text-rc-text-primary"
                             >
                               <ChevronRight
                                 size={15}
@@ -492,7 +493,7 @@ export function Sidebar() {
                                 setExpandedProjects((state) => ({ ...state, [projectKey]: true }));
                                 void createSession(undefined, project.path);
                               }}
-                              className="rounded-lg p-1.5 text-rc-text-tertiary transition-colors hover:bg-rc-accent-primary-light hover:text-rc-accent-primary"
+                              className="rounded-md p-1.5 text-rc-text-tertiary transition-colors hover:bg-rc-accent-primary-light hover:text-rc-accent-primary"
                               title="在此项目下新建会话"
                             >
                               <Plus size={14} />
@@ -506,7 +507,7 @@ export function Sidebar() {
                                 }
                               }}
                               disabled={projectSessions.length > 0}
-                              className="rounded-lg p-1.5 text-rc-text-tertiary transition-colors hover:bg-rc-accent-error-bg hover:text-rc-accent-error disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:bg-transparent"
+                              className="rounded-md p-1.5 text-rc-text-tertiary transition-colors hover:bg-rc-accent-error-bg hover:text-rc-accent-error disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:bg-transparent"
                               title={
                                 projectSessions.length > 0
                                   ? '该项目下仍有会话，无法移除'
