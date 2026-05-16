@@ -14,8 +14,8 @@ use claude_permissions::{
     PermissionRequest, load_layered_rules,
 };
 use claude_protocol::{
-    InitPayload, PermissionRequestPayload, ProtocolEmitter, ProtocolInput, ResultPayload,
-    UsagePayload, parse_input_line, result_event_value,
+    ControlRequest, InitPayload, PermissionRequestPayload, ProtocolEmitter, ProtocolInput,
+    ResultPayload, UsagePayload, parse_input_line, result_event_value,
 };
 use claude_provider::ProviderCompatBackend;
 use claude_session::SessionStore;
@@ -151,13 +151,20 @@ pub(crate) async fn run_headless(
                 )
                 .await?;
             }
-            ProtocolInput::Interrupt => {
-                interrupted.store(true, Ordering::Relaxed);
-                let mut pending = pending_permissions.lock().await;
-                for (request_id, sender) in pending.drain() {
-                    let _ = sender.send(PermissionDecision::deny("Interrupted by operator."));
-                    let mut emitter = emitter.lock().await;
-                    let _ = emitter.emit_permission_cancelled(&request_id);
+            ProtocolInput::ControlRequest {
+                request_id,
+                request,
+            } => {
+                if !handle_headless_control_request(
+                    &pending_permissions,
+                    &emitter,
+                    &interrupted,
+                    request_id,
+                    request,
+                )
+                .await?
+                {
+                    break;
                 }
             }
         }
@@ -212,6 +219,81 @@ async fn emit_headless_init<W: Write + Send + 'static>(
     emitter_guard.emit_state(SessionState::Idle)?;
     emitter_guard.emit_status_snapshot(&build_runtime_status_snapshot(config))?;
     Ok(())
+}
+
+async fn cancel_pending_permissions<W: Write + Send>(
+    pending_permissions: &Arc<Mutex<HashMap<String, oneshot::Sender<PermissionDecision>>>>,
+    emitter: &Arc<Mutex<ProtocolEmitter<W>>>,
+    decision_message: &'static str,
+) -> Result<()> {
+    let mut pending = pending_permissions.lock().await;
+    for (request_id, sender) in pending.drain() {
+        let _ = sender.send(PermissionDecision::deny(decision_message));
+        let mut emitter = emitter.lock().await;
+        let _ = emitter.emit_permission_cancelled(&request_id);
+    }
+    Ok(())
+}
+
+async fn handle_headless_control_request<W: Write + Send>(
+    pending_permissions: &Arc<Mutex<HashMap<String, oneshot::Sender<PermissionDecision>>>>,
+    emitter: &Arc<Mutex<ProtocolEmitter<W>>>,
+    interrupted: &Arc<AtomicBool>,
+    request_id: Option<String>,
+    request: ControlRequest,
+) -> Result<bool> {
+    match request {
+        ControlRequest::Initialize => {
+            let mut emitter = emitter.lock().await;
+            if let Some(request_id) = request_id.as_deref() {
+                emitter.emit_control_success_response(
+                    request_id,
+                    serde_json::json!({"status": "initialized"}),
+                )?;
+            } else {
+                emitter.emit_status("Initialized")?;
+            }
+            Ok(true)
+        }
+        ControlRequest::EndSession => {
+            cancel_pending_permissions(pending_permissions, emitter, "Session ended by operator.")
+                .await?;
+            let mut emitter = emitter.lock().await;
+            if let Some(request_id) = request_id.as_deref() {
+                emitter.emit_control_success_response(
+                    request_id,
+                    serde_json::json!({"status": "ending"}),
+                )?;
+            }
+            emitter.emit_status("Ending session")?;
+            Ok(false)
+        }
+        ControlRequest::Interrupt => {
+            interrupted.store(true, Ordering::Relaxed);
+            cancel_pending_permissions(pending_permissions, emitter, "Interrupted by operator.")
+                .await?;
+            if let Some(request_id) = request_id.as_deref() {
+                let mut emitter = emitter.lock().await;
+                emitter.emit_control_success_response(
+                    request_id,
+                    serde_json::json!({"status": "interrupted"}),
+                )?;
+            }
+            Ok(true)
+        }
+        ControlRequest::Unknown(subtype) => {
+            let mut emitter = emitter.lock().await;
+            if let Some(request_id) = request_id.as_deref() {
+                emitter.emit_control_success_response(
+                    request_id,
+                    serde_json::json!({"status": "ignored", "subtype": subtype}),
+                )?;
+            } else {
+                emitter.emit_status(format!("Ignored unsupported control request: {subtype}"))?;
+            }
+            Ok(true)
+        }
+    }
 }
 
 pub(crate) async fn run_headless_text_print(
@@ -806,7 +888,7 @@ mod tests {
     use std::collections::HashMap;
     use std::fs;
     use std::io::{BufRead, BufReader};
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex as StdMutex};
 
     use anyhow::{Result, anyhow};
@@ -828,8 +910,9 @@ mod tests {
     use tokio::sync::{Mutex, oneshot};
 
     use super::{
-        HeadlessPermissionBroker, headless_slash_commands, prompt_success_result_payload,
-        resolve_pending_permission, run_headless_prompt_once, should_run_headless,
+        HeadlessPermissionBroker, handle_headless_control_request, headless_slash_commands,
+        prompt_success_result_payload, resolve_pending_permission, run_headless_prompt_once,
+        should_run_headless,
     };
     use crate::conversation::{
         PromptRunOutcome, initialize_conversation, prepare_prompt_runtime_state, run_prompt,
@@ -1384,6 +1467,128 @@ mod tests {
         assert_eq!(events[0]["type"], "system");
         assert_eq!(events[0]["subtype"], "session_state_changed");
         assert_eq!(events[0]["state"], "running");
+    }
+
+    #[tokio::test]
+    async fn headless_initialize_control_request_emits_ack() {
+        let (_tempdir, config, _store) = mock_config_and_store();
+        let output = NamedTempFile::new().expect("protocol output");
+        let emitter = Arc::new(Mutex::new(ProtocolEmitter::new(
+            output.reopen().expect("reopen output"),
+            config.session_id,
+        )));
+        let pending_permissions = Arc::new(Mutex::new(HashMap::new()));
+        let interrupted = Arc::new(AtomicBool::new(false));
+
+        let should_continue = handle_headless_control_request(
+            &pending_permissions,
+            &emitter,
+            &interrupted,
+            Some("ctl-init".to_owned()),
+            claude_protocol::ControlRequest::Initialize,
+        )
+        .await
+        .expect("handle initialize");
+
+        assert!(should_continue);
+        assert!(!interrupted.load(Ordering::SeqCst));
+        drop(emitter);
+        let events = read_protocol_events(output.path());
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0]["type"], "control_response");
+        assert_eq!(events[0]["response"]["subtype"], "success");
+        assert_eq!(events[0]["response"]["request_id"], "ctl-init");
+        assert_eq!(events[0]["response"]["response"]["status"], "initialized");
+    }
+
+    #[tokio::test]
+    async fn headless_end_session_control_request_cancels_pending_and_stops_loop() {
+        let (_tempdir, config, _store) = mock_config_and_store();
+        let output = NamedTempFile::new().expect("protocol output");
+        let emitter = Arc::new(Mutex::new(ProtocolEmitter::new(
+            output.reopen().expect("reopen output"),
+            config.session_id,
+        )));
+        let pending_permissions = Arc::new(Mutex::new(HashMap::new()));
+        let (tx, rx) = oneshot::channel();
+        pending_permissions
+            .lock()
+            .await
+            .insert("req-pending".to_owned(), tx);
+        let interrupted = Arc::new(AtomicBool::new(false));
+
+        let should_continue = handle_headless_control_request(
+            &pending_permissions,
+            &emitter,
+            &interrupted,
+            Some("ctl-end".to_owned()),
+            claude_protocol::ControlRequest::EndSession,
+        )
+        .await
+        .expect("handle end_session");
+
+        assert!(!should_continue);
+        assert!(!interrupted.load(Ordering::SeqCst));
+        assert!(pending_permissions.lock().await.is_empty());
+        let decision = rx.await.expect("pending decision");
+        assert!(!decision.allowed);
+        assert_eq!(
+            decision.message.as_deref(),
+            Some("Session ended by operator.")
+        );
+        drop(emitter);
+        let events = read_protocol_events(output.path());
+        assert_eq!(events[0]["type"], "control_cancel_request");
+        assert_eq!(events[0]["request_id"], "req-pending");
+        assert_eq!(events[1]["type"], "control_response");
+        assert_eq!(events[1]["response"]["request_id"], "ctl-end");
+        assert_eq!(events[1]["response"]["response"]["status"], "ending");
+        assert_eq!(events[2]["type"], "system");
+        assert_eq!(events[2]["subtype"], "status");
+    }
+
+    #[tokio::test]
+    async fn headless_interrupt_control_request_cancels_pending_and_emits_ack() {
+        let (_tempdir, config, _store) = mock_config_and_store();
+        let output = NamedTempFile::new().expect("protocol output");
+        let emitter = Arc::new(Mutex::new(ProtocolEmitter::new(
+            output.reopen().expect("reopen output"),
+            config.session_id,
+        )));
+        let pending_permissions = Arc::new(Mutex::new(HashMap::new()));
+        let (tx, rx) = oneshot::channel();
+        pending_permissions
+            .lock()
+            .await
+            .insert("req-interrupt".to_owned(), tx);
+        let interrupted = Arc::new(AtomicBool::new(false));
+
+        let should_continue = handle_headless_control_request(
+            &pending_permissions,
+            &emitter,
+            &interrupted,
+            Some("ctl-interrupt".to_owned()),
+            claude_protocol::ControlRequest::Interrupt,
+        )
+        .await
+        .expect("handle interrupt");
+
+        assert!(should_continue);
+        assert!(interrupted.load(Ordering::SeqCst));
+        assert!(pending_permissions.lock().await.is_empty());
+        let decision = rx.await.expect("pending decision");
+        assert!(!decision.allowed);
+        assert_eq!(
+            decision.message.as_deref(),
+            Some("Interrupted by operator.")
+        );
+        drop(emitter);
+        let events = read_protocol_events(output.path());
+        assert_eq!(events[0]["type"], "control_cancel_request");
+        assert_eq!(events[0]["request_id"], "req-interrupt");
+        assert_eq!(events[1]["type"], "control_response");
+        assert_eq!(events[1]["response"]["request_id"], "ctl-interrupt");
+        assert_eq!(events[1]["response"]["response"]["status"], "interrupted");
     }
 
     /// Same stack-size workaround as

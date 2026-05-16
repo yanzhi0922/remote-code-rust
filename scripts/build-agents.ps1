@@ -92,7 +92,7 @@ Build-Agent -Name "Codex Agent" `
 
 # ── 3. Roo-code Agent ──
 Build-Agent -Name "Roo-code Agent" `
-    -BuildCmd { cargo build --package roo-cli $ProfileFlag } `
+    -BuildCmd { cargo build -p roo-cli --bin roo $ProfileFlag } `
     -BinaryName "roo.exe" `
     -SourcePath (Join-Path $PSScriptRoot ".." "target" $Profile "roo.exe")
 

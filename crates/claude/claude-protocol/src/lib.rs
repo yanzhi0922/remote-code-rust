@@ -41,8 +41,26 @@ pub enum ProtocolInput {
         /// Optional provider-facing content blocks attached to the decision.
         content_blocks: Vec<Value>,
     },
-    /// Interrupt signal.
+    /// Control request from the external consumer.
+    ControlRequest {
+        /// Optional ID of the control request, when the caller expects a response.
+        request_id: Option<String>,
+        /// Requested control operation.
+        request: ControlRequest,
+    },
+}
+
+/// Control operations accepted from the external consumer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ControlRequest {
+    /// SDK/session initialization handshake.
+    Initialize,
+    /// Gracefully end the stream-json session.
+    EndSession,
+    /// Interrupt the currently running turn.
     Interrupt,
+    /// Unknown control subtype, retained so callers can ignore it deliberately.
+    Unknown(String),
 }
 
 /// Writes line-delimited JSON protocol events to an underlying writer.
@@ -346,6 +364,22 @@ impl<W: Write> ProtocolEmitter<W> {
         self.emit(json!({
             "type": "control_cancel_request",
             "request_id": request_id,
+        }))
+    }
+
+    /// Emit a successful control response for SDK control requests.
+    pub fn emit_control_success_response(
+        &mut self,
+        request_id: &str,
+        response: Value,
+    ) -> Result<()> {
+        self.emit(json!({
+            "type": "control_response",
+            "response": {
+                "subtype": "success",
+                "request_id": request_id,
+                "response": response,
+            },
         }))
     }
 
@@ -790,6 +824,72 @@ fn parse_message_role(role: &str) -> MessageRole {
     }
 }
 
+fn parse_message_content(content: &Value) -> Option<String> {
+    match content {
+        Value::String(text) => trimmed_non_empty(text).map(ToOwned::to_owned),
+        Value::Array(blocks) => {
+            let text = blocks
+                .iter()
+                .filter_map(content_block_to_text)
+                .collect::<Vec<_>>()
+                .join("\n");
+            trimmed_non_empty(&text).map(ToOwned::to_owned)
+        }
+        _ => None,
+    }
+}
+
+fn content_block_to_text(block: &Value) -> Option<String> {
+    let block_type = block.get("type").and_then(Value::as_str);
+    match block_type {
+        Some("text") => block
+            .get("text")
+            .and_then(Value::as_str)
+            .and_then(trimmed_non_empty)
+            .map(ToOwned::to_owned),
+        Some("image") => Some("[image]".to_owned()),
+        Some("tool_result") => block
+            .get("content")
+            .and_then(parse_tool_result_content)
+            .or_else(|| Some("[tool_result]".to_owned())),
+        Some(other) => Some(format!("[{other}]")),
+        None => serde_json::to_string(block).ok(),
+    }
+}
+
+fn parse_tool_result_content(content: &Value) -> Option<String> {
+    match content {
+        Value::String(text) => trimmed_non_empty(text).map(ToOwned::to_owned),
+        Value::Array(blocks) => {
+            let text = blocks
+                .iter()
+                .filter_map(content_block_to_text)
+                .collect::<Vec<_>>()
+                .join("\n");
+            trimmed_non_empty(&text).map(ToOwned::to_owned)
+        }
+        other => serde_json::to_string(other).ok(),
+    }
+}
+
+fn trimmed_non_empty(text: &str) -> Option<&str> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed)
+    }
+}
+
+fn parse_control_request(subtype: &str) -> ControlRequest {
+    match subtype {
+        "initialize" => ControlRequest::Initialize,
+        "end_session" => ControlRequest::EndSession,
+        "interrupt" => ControlRequest::Interrupt,
+        other => ControlRequest::Unknown(other.to_owned()),
+    }
+}
+
 /// Parse a single line of JSON input from the external consumer.
 ///
 /// Returns `None` if the line cannot be parsed or is not a recognised event type.
@@ -798,15 +898,12 @@ pub fn parse_input_line(line: &str) -> Option<ProtocolInput> {
     let kind = value.get("type")?.as_str()?;
     match kind {
         "user" => {
-            let content = value
-                .get("message")
-                .and_then(|message| message.get("content"))
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .filter(|content| !content.is_empty())?;
-            Some(ProtocolInput::User {
-                content: content.to_owned(),
-            })
+            let content = parse_message_content(
+                value
+                    .get("message")
+                    .and_then(|message| message.get("content"))?,
+            )?;
+            Some(ProtocolInput::User { content })
         }
         "control_response" => {
             let response = value.get("response")?;
@@ -857,11 +954,13 @@ pub fn parse_input_line(line: &str) -> Option<ProtocolInput> {
                 .get("request")
                 .and_then(|request| request.get("subtype"))
                 .and_then(Value::as_str)?;
-            if subtype == "interrupt" {
-                Some(ProtocolInput::Interrupt)
-            } else {
-                None
-            }
+            Some(ProtocolInput::ControlRequest {
+                request_id: value
+                    .get("request_id")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned),
+                request: parse_control_request(subtype),
+            })
         }
         _ => None,
     }
@@ -1262,6 +1361,18 @@ mod tests {
     }
 
     #[test]
+    fn parse_input_line_user_message_content_blocks() {
+        let input = r#"{"type":"user","message":{"role":"user","content":[{"type":"text","text":"hello"},{"type":"image","source":{"type":"base64","media_type":"image/png","data":"abc"}},{"type":"tool_result","content":[{"type":"text","text":"tool output"}]},{"type":"custom_block","payload":1}]}}"#;
+        let result = parse_input_line(input).expect("should parse user content blocks");
+        match result {
+            ProtocolInput::User { content } => {
+                assert_eq!(content, "hello\n[image]\ntool output\n[custom_block]");
+            }
+            _ => panic!("expected User variant"),
+        }
+    }
+
+    #[test]
     fn parse_input_line_rejects_flat_user_content() {
         let input = r#"{"type":"user","content":"hello"}"#;
         assert!(parse_input_line(input).is_none());
@@ -1298,9 +1409,42 @@ mod tests {
         let input = r#"{"type":"control_request","request":{"subtype":"interrupt"}}"#;
         let result = parse_input_line(input).expect("should parse interrupt");
         match result {
-            ProtocolInput::Interrupt => {}
-            _ => panic!("expected Interrupt variant"),
+            ProtocolInput::ControlRequest {
+                request_id: None,
+                request: ControlRequest::Interrupt,
+            } => {}
+            _ => panic!("expected interrupt control request"),
         }
+    }
+
+    #[test]
+    fn parse_input_line_control_request_variants() {
+        let initialize =
+            r#"{"type":"control_request","request_id":"ctl-1","request":{"subtype":"initialize"}}"#;
+        let end_session = r#"{"type":"control_request","request_id":"ctl-2","request":{"subtype":"end_session"}}"#;
+        let unknown = r#"{"type":"control_request","request_id":"ctl-3","request":{"subtype":"future_type"}}"#;
+
+        assert!(matches!(
+            parse_input_line(initialize),
+            Some(ProtocolInput::ControlRequest {
+                request_id: Some(id),
+                request: ControlRequest::Initialize,
+            }) if id == "ctl-1"
+        ));
+        assert!(matches!(
+            parse_input_line(end_session),
+            Some(ProtocolInput::ControlRequest {
+                request_id: Some(id),
+                request: ControlRequest::EndSession,
+            }) if id == "ctl-2"
+        ));
+        assert!(matches!(
+            parse_input_line(unknown),
+            Some(ProtocolInput::ControlRequest {
+                request_id: Some(id),
+                request: ControlRequest::Unknown(subtype),
+            }) if id == "ctl-3" && subtype == "future_type"
+        ));
     }
 
     #[test]
