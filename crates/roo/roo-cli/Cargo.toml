@@ -28,6 +28,7 @@ roo-provider-lmstudio = { path = "../roo-provider-lmstudio" }
 roo-provider-litellm = { path = "../roo-provider-litellm" }
 roo-provider-qwen = { path = "../roo-provider-qwen" }
 roo-provider-minimax = { path = "../roo-provider-minimax" }
+roo-provider-fake-ai = { path = "../roo-provider-fake-ai" }
 roo-provider-poe = { path = "../roo-provider-poe" }
 roo-provider-requesty = { path = "../roo-provider-requesty" }
 roo-provider-unbound = { path = "../roo-provider-unbound" }
@@ -56,3 +57,8 @@ futures = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 async-trait = { workspace = true }
+
+[dev-dependencies]
+assert_cmd = { workspace = true }
+predicates = { workspace = true }
+tempfile = { workspace = true }

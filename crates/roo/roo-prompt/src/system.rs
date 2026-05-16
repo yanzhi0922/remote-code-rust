@@ -26,35 +26,85 @@ pub fn get_prompt_component(
         })
 }
 
+fn find_custom_mode(mode_slug: &str, custom_modes: Option<&[ModeConfig]>) -> Option<ModeConfig> {
+    custom_modes.and_then(|modes| modes.iter().find(|mode| mode.slug == mode_slug).cloned())
+}
+
+fn find_default_mode(mode_slug: &str) -> Option<ModeConfig> {
+    roo_types::mode::default_modes()
+        .into_iter()
+        .find(|mode| mode.slug == mode_slug)
+}
+
+fn first_default_mode() -> ModeConfig {
+    roo_types::mode::default_modes()
+        .into_iter()
+        .next()
+        .expect("at least one default mode must exist")
+}
+
+fn apply_prompt_overrides_to_modes(
+    mut modes: Vec<ModeConfig>,
+    custom_mode_prompts: Option<&CustomModePrompts>,
+) -> Vec<ModeConfig> {
+    let Some(prompts) = custom_mode_prompts else {
+        return modes;
+    };
+
+    for mode in &mut modes {
+        if let Some(Some(prompt)) = prompts.get(&mode.slug) {
+            if let Some(role_definition) = &prompt.role_definition {
+                mode.role_definition = role_definition.clone();
+            }
+            if let Some(when_to_use) = &prompt.when_to_use {
+                mode.when_to_use = Some(when_to_use.clone());
+            }
+            if let Some(custom_instructions) = &prompt.custom_instructions {
+                mode.custom_instructions = Some(custom_instructions.clone());
+            }
+        }
+    }
+
+    modes
+}
+
 /// Gets the role definition for a mode, with optional prompt component override.
 ///
-/// Source: `src/shared/modes.ts` — `getRoleDefinition`
+/// Source: `src/shared/modes.ts` — `getModeSelection`
 fn get_role_definition(
     mode_slug: &str,
     custom_modes: Option<&[ModeConfig]>,
     prompt_component: Option<&PromptComponent>,
 ) -> String {
-    let mode = get_mode_by_slug(mode_slug, custom_modes);
-    let base = mode
-        .as_ref()
-        .map(|m| m.role_definition.as_str())
-        .unwrap_or("");
+    if let Some(custom_mode) = find_custom_mode(mode_slug, custom_modes) {
+        return custom_mode.role_definition;
+    }
+
+    let base_mode = find_default_mode(mode_slug).unwrap_or_else(first_default_mode);
+
     prompt_component
-        .and_then(|pc| pc.role_definition.as_deref())
-        .unwrap_or(base)
-        .to_string()
+        .and_then(|pc| pc.role_definition.clone())
+        .unwrap_or(base_mode.role_definition)
 }
 
 /// Gets the base instructions for a mode.
 ///
 /// Source: `src/shared/modes.ts` — `getModeSelection`
 fn get_base_instructions(
-    _mode_slug: &str,
+    mode_slug: &str,
+    custom_modes: Option<&[ModeConfig]>,
     prompt_component: Option<&PromptComponent>,
 ) -> Option<String> {
+    if let Some(custom_mode) = find_custom_mode(mode_slug, custom_modes) {
+        return custom_mode.custom_instructions.filter(|s| !s.is_empty());
+    }
+
+    let base_mode = find_default_mode(mode_slug).unwrap_or_else(first_default_mode);
+
     prompt_component
-        .and_then(|pc| pc.custom_instructions.as_deref())
-        .map(|s| s.to_string())
+        .and_then(|pc| pc.custom_instructions.clone())
+        .or(base_mode.custom_instructions)
+        .filter(|s| !s.is_empty())
 }
 
 /// Generate the system prompt.
@@ -150,15 +200,18 @@ pub fn build_system_prompt(
         .unwrap_or_else(|| {
             roo_types::mode::default_modes()
                 .into_iter()
-                .find(|m| m.slug == "code")
-                .expect("code mode must exist")
+                .next()
+                .expect("at least one default mode must exist")
         });
 
     let role_definition = get_role_definition(mode, custom_modes, prompt_component.as_ref());
-    let base_instructions = get_base_instructions(mode, prompt_component.as_ref());
+    let base_instructions = get_base_instructions(mode, custom_modes, prompt_component.as_ref());
 
     // Get all modes for the modes section
-    let all_modes = roo_types::mode::get_all_modes(custom_modes);
+    let all_modes = apply_prompt_overrides_to_modes(
+        roo_types::mode::get_all_modes(custom_modes),
+        custom_mode_prompts,
+    );
 
     let params = SystemPromptParams {
         cwd: cwd.to_string(),
@@ -232,5 +285,154 @@ mod tests {
         assert!(result.contains("OBJECTIVE"));
         assert!(result.contains("SYSTEM INFORMATION"));
         assert!(result.contains("/home/user/project"));
+    }
+
+    #[test]
+    fn test_builtin_mode_includes_default_custom_instructions() {
+        let result = build_system_prompt(
+            "/home/user/project",
+            "ask",
+            None,
+            None,
+            false,
+            None,
+            None,
+            None,
+            None,
+            &[],
+            "Linux",
+            "/bin/bash",
+            "/home/user",
+        );
+
+        assert!(result.contains("Mode-specific Instructions:"));
+        assert!(result.contains("do not switch to implementing code unless explicitly requested"));
+    }
+
+    #[test]
+    fn test_builtin_prompt_component_overrides_default_custom_instructions() {
+        let mut prompts = std::collections::HashMap::new();
+        prompts.insert(
+            "debug".to_string(),
+            Some(PromptComponent {
+                custom_instructions: Some("Use the project incident playbook.".to_string()),
+                ..PromptComponent::default()
+            }),
+        );
+
+        let result = build_system_prompt(
+            "/home/user/project",
+            "debug",
+            None,
+            Some(&prompts),
+            false,
+            None,
+            None,
+            None,
+            None,
+            &[],
+            "Linux",
+            "/bin/bash",
+            "/home/user",
+        );
+
+        assert!(result.contains("Use the project incident playbook."));
+        assert!(!result.contains("Reflect on 5-7 different possible sources"));
+    }
+
+    #[test]
+    fn test_custom_mode_ignores_prompt_component_overrides() {
+        let custom_modes = vec![ModeConfig {
+            slug: "research".to_string(),
+            name: "Research".to_string(),
+            role_definition: "Custom mode role".to_string(),
+            when_to_use: None,
+            description: None,
+            custom_instructions: Some("Custom mode instructions".to_string()),
+            groups: vec![],
+            source: None,
+        }];
+
+        let mut prompts = std::collections::HashMap::new();
+        prompts.insert(
+            "research".to_string(),
+            Some(PromptComponent {
+                role_definition: Some("Prompt role override".to_string()),
+                custom_instructions: Some("Prompt instruction override".to_string()),
+                ..PromptComponent::default()
+            }),
+        );
+
+        let result = build_system_prompt(
+            "/home/user/project",
+            "research",
+            Some(&custom_modes),
+            Some(&prompts),
+            false,
+            None,
+            None,
+            None,
+            None,
+            &[],
+            "Linux",
+            "/bin/bash",
+            "/home/user",
+        );
+
+        assert!(result.starts_with("Custom mode role"));
+        assert!(result.contains("Custom mode instructions"));
+        assert!(!result.starts_with("Prompt role override"));
+        assert!(!result.contains("Prompt instruction override"));
+    }
+
+    #[test]
+    fn test_modes_section_applies_prompt_overrides() {
+        let mut prompts = std::collections::HashMap::new();
+        prompts.insert(
+            "ask".to_string(),
+            Some(PromptComponent {
+                when_to_use: Some("Use for product support answers".to_string()),
+                ..PromptComponent::default()
+            }),
+        );
+
+        let result = build_system_prompt(
+            "/home/user/project",
+            "code",
+            None,
+            Some(&prompts),
+            false,
+            None,
+            None,
+            None,
+            None,
+            &[],
+            "Linux",
+            "/bin/bash",
+            "/home/user",
+        );
+
+        assert!(result.contains(r#""❓ Ask" mode (ask) - Use for product support answers"#));
+    }
+
+    #[test]
+    fn test_unknown_mode_falls_back_to_first_default_mode() {
+        let result = build_system_prompt(
+            "/home/user/project",
+            "unknown-mode",
+            None,
+            None,
+            false,
+            None,
+            None,
+            None,
+            None,
+            &[],
+            "Linux",
+            "/bin/bash",
+            "/home/user",
+        );
+
+        assert!(result.starts_with("You are Roo, an experienced technical leader"));
     }
 }

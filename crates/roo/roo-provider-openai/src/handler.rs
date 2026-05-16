@@ -273,8 +273,8 @@ mod tests {
     #[test]
     fn test_config_from_settings() {
         let mut settings = roo_types::provider_settings::ProviderSettings::default();
-        settings.api_key = Some("sk-test".to_string());
-        settings.api_model_id = Some("gpt-4o-mini".to_string());
+        settings.open_ai_api_key = Some("sk-test".to_string());
+        settings.open_ai_model_id = Some("gpt-4o-mini".to_string());
 
         let config = OpenAiConfig::from_settings(&settings).unwrap();
         assert_eq!(config.api_key, "sk-test");
@@ -282,9 +282,22 @@ mod tests {
     }
 
     #[test]
+    fn test_config_from_settings_prefers_openai_specific_fields() {
+        let mut settings = roo_types::provider_settings::ProviderSettings::default();
+        settings.api_key = Some("anthropic-key".to_string());
+        settings.api_model_id = Some("claude-model".to_string());
+        settings.open_ai_api_key = Some("openai-key".to_string());
+        settings.open_ai_model_id = Some("gpt-4.1".to_string());
+
+        let config = OpenAiConfig::from_settings(&settings).unwrap();
+        assert_eq!(config.api_key, "openai-key");
+        assert_eq!(config.model_id, Some("gpt-4.1".to_string()));
+    }
+
+    #[test]
     fn test_config_from_settings_with_org() {
         let mut settings = roo_types::provider_settings::ProviderSettings::default();
-        settings.api_key = Some("sk-test".to_string());
+        settings.open_ai_api_key = Some("sk-test".to_string());
         settings.open_ai_org_id = Some("org-123".to_string());
 
         let config = OpenAiConfig::from_settings(&settings).unwrap();

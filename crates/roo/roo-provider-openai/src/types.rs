@@ -41,7 +41,10 @@ impl OpenAiConfig {
 
     /// Create configuration from provider settings.
     pub fn from_settings(settings: &ProviderSettings) -> Option<Self> {
-        let api_key = settings.api_key.clone()?;
+        let api_key = settings
+            .open_ai_api_key
+            .clone()
+            .or_else(|| settings.api_key.clone())?;
         let base_url = settings
             .open_ai_base_url
             .clone()
@@ -51,7 +54,10 @@ impl OpenAiConfig {
             api_key,
             base_url,
             org_id: settings.open_ai_org_id.clone(),
-            model_id: settings.api_model_id.clone(),
+            model_id: settings
+                .open_ai_model_id
+                .clone()
+                .or_else(|| settings.api_model_id.clone()),
             temperature: settings.model_temperature.flatten(),
             reasoning_effort: settings.model_reasoning_effort.clone().or_else(|| {
                 settings.reasoning_effort.map(|v| {

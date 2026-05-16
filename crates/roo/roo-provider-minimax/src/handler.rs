@@ -180,7 +180,7 @@ mod tests {
     fn test_minimax_config_default_url() {
         assert_eq!(
             MiniMaxConfig::DEFAULT_BASE_URL,
-            "https://api.minimaxi.com/anthropic"
+            "https://api.minimax.io/anthropic"
         );
     }
 

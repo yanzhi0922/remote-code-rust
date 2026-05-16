@@ -220,8 +220,8 @@ impl MessageBuilder {
             &filter_settings,
         );
 
-        // Get MCP tools
         let mcp_tools = get_mcp_server_tools(mcp_servers);
+        let mcp_tool_names = get_mcp_server_tool_names(mcp_servers);
 
         if include_all_tools_with_restrictions {
             // Combine filtered native + MCP for allowed names
@@ -229,14 +229,7 @@ impl MessageBuilder {
                 .iter()
                 .map(|t| roo_tools::groups::resolve_tool_alias(&t.name).to_string())
                 .collect();
-            // Add MCP tool names to allowed list
-            allowed_function_names.extend(
-                mcp_servers
-                    .iter()
-                    .flat_map(|s| s.tools.iter())
-                    .filter(|t| t.enabled_for_prompt)
-                    .map(|t| t.name.clone()),
-            );
+            allowed_function_names.extend(mcp_tool_names);
 
             let all_native_json: Vec<Value> = native_tools
                 .into_iter()
@@ -595,6 +588,7 @@ impl MessageBuilder {
 /// Source: `src/core/task/build-tools.ts` — `getMcpServerTools()`
 pub fn get_mcp_server_tools(mcp_servers: &[McpServerConnection]) -> Vec<Value> {
     let mut tools = Vec::new();
+    let mut seen_tool_names = std::collections::HashSet::new();
 
     for server in mcp_servers {
         for tool in &server.tools {
@@ -603,22 +597,82 @@ pub fn get_mcp_server_tools(mcp_servers: &[McpServerConnection]) -> Vec<Value> {
                 continue;
             }
 
+            let tool_name = roo_mcp::build_mcp_tool_name(&server.name, &tool.name);
+            if !seen_tool_names.insert(tool_name.clone()) {
+                continue;
+            }
+
+            let parameters = tool
+                .input_schema
+                .clone()
+                .map(normalize_mcp_tool_schema)
+                .unwrap_or_else(|| {
+                    json!({
+                        "type": "object",
+                        "additionalProperties": false
+                    })
+                });
+
             tools.push(json!({
                 "type": "function",
                 "function": {
-                    "name": tool.name,
+                    "name": tool_name,
                     "description": tool.description.clone().unwrap_or_default(),
-                    "parameters": tool.input_schema.clone().unwrap_or(json!({
-                        "type": "object",
-                        "properties": {},
-                        "required": []
-                    })),
+                    "parameters": parameters,
                 }
             }));
         }
     }
 
     tools
+}
+
+fn get_mcp_server_tool_names(mcp_servers: &[McpServerConnection]) -> Vec<String> {
+    let mut names = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+
+    for server in mcp_servers {
+        for tool in &server.tools {
+            if !tool.enabled_for_prompt {
+                continue;
+            }
+
+            let name = roo_mcp::build_mcp_tool_name(&server.name, &tool.name);
+            if seen.insert(name.clone()) {
+                names.push(name);
+            }
+        }
+    }
+
+    names
+}
+
+fn normalize_mcp_tool_schema(mut schema: Value) -> Value {
+    normalize_mcp_tool_schema_in_place(&mut schema);
+    schema
+}
+
+fn normalize_mcp_tool_schema_in_place(value: &mut Value) {
+    match value {
+        Value::Object(map) => {
+            let is_object_schema = matches!(map.get("type"), Some(Value::String(t)) if t == "object")
+                || map.contains_key("properties");
+            if is_object_schema {
+                map.entry("additionalProperties".to_string())
+                    .or_insert(Value::Bool(false));
+            }
+
+            for child in map.values_mut() {
+                normalize_mcp_tool_schema_in_place(child);
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                normalize_mcp_tool_schema_in_place(item);
+            }
+        }
+        _ => {}
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1342,6 +1396,89 @@ mod tests {
     fn test_get_mcp_server_tools_empty() {
         let tools = get_mcp_server_tools(&[]);
         assert!(tools.is_empty());
+    }
+
+    #[test]
+    fn test_get_mcp_server_tools_uses_prefixed_sanitized_names_and_dedupes() {
+        let servers = vec![
+            roo_types::mcp::McpServerConnection {
+                name: "context7".to_string(),
+                status: roo_types::mcp::McpConnectionStatus::Connected,
+                tools: vec![roo_types::mcp::McpTool {
+                    name: "resolve-library-id".to_string(),
+                    description: Some("Resolve library".to_string()),
+                    input_schema: Some(json!({
+                        "type": "object",
+                        "properties": {
+                            "libraryName": { "type": "string" }
+                        }
+                    })),
+                    always_allow: false,
+                    enabled_for_prompt: true,
+                }],
+                resources: vec![],
+                resource_templates: vec![],
+                disabled_tools: vec![],
+                errors: vec![],
+            },
+            roo_types::mcp::McpServerConnection {
+                name: "context7".to_string(),
+                status: roo_types::mcp::McpConnectionStatus::Connected,
+                tools: vec![roo_types::mcp::McpTool {
+                    name: "resolve-library-id".to_string(),
+                    description: Some("Duplicate".to_string()),
+                    input_schema: None,
+                    always_allow: false,
+                    enabled_for_prompt: true,
+                }],
+                resources: vec![],
+                resource_templates: vec![],
+                disabled_tools: vec![],
+                errors: vec![],
+            },
+        ];
+
+        let tools = get_mcp_server_tools(&servers);
+
+        assert_eq!(tools.len(), 1);
+        assert_eq!(
+            tools[0]["function"]["name"],
+            json!("mcp--context7--resolve-library-id")
+        );
+        assert_eq!(
+            tools[0]["function"]["parameters"]["additionalProperties"],
+            json!(false)
+        );
+    }
+
+    #[test]
+    fn test_restricted_tool_names_include_prefixed_mcp_names() {
+        let builder = MessageBuilder::new("test");
+        let servers = vec![roo_types::mcp::McpServerConnection {
+            name: "MiniMax".to_string(),
+            status: roo_types::mcp::McpConnectionStatus::Connected,
+            tools: vec![roo_types::mcp::McpTool {
+                name: "coding-plan".to_string(),
+                description: None,
+                input_schema: None,
+                always_allow: false,
+                enabled_for_prompt: true,
+            }],
+            resources: vec![],
+            resource_templates: vec![],
+            disabled_tools: vec![],
+            errors: vec![],
+        }];
+
+        let result =
+            builder.build_tool_definitions_with_restrictions(None, &[], None, None, true, &servers);
+
+        assert!(
+            result
+                .allowed_function_names
+                .unwrap()
+                .contains(&"mcp--MiniMax--coding-plan".to_string())
+        );
     }
 
     #[test]

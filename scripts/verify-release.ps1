@@ -30,6 +30,11 @@ if (-not $SkipRust) {
     Run-Step "Control plane check" { cargo check -p remote-code-control-plane --all-targets }
     Run-Step "Runner check" { cargo check -p remote-code-runner --all-targets }
     Run-Step "GUI Rust check" { cargo check -p remote-code-gui --all-targets }
+    Run-Step "Roo Rust check" { cargo check -p roo-cli -p roo-task -p roo-server -p rc-roo-adapter --all-targets }
+    Run-Step "Roo focused tests" {
+        cargo test -p roo-cli -p roo-prompt -p roo-provider-minimax -p roo-provider-openai --all-targets
+        cargo test -p roo-task --lib message_builder
+    }
 }
 
 if (-not $SkipFrontend) {

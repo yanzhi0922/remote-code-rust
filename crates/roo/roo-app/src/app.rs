@@ -128,14 +128,15 @@ impl App {
         // ── Initialize MCP Hub ──────────────────────────────────────────
         let workspace_path = self.config.cwd.clone();
         let settings_path = self.config.global_storage_path.clone();
-        let hub = roo_mcp::McpHub::new_with_paths(
+        let hub = Arc::new(roo_mcp::McpHub::new_with_paths(
             Some(workspace_path.clone()),
             if settings_path.is_empty() {
                 None
             } else {
                 Some(settings_path)
             },
-        );
+        ));
+        hub.initialize_weak_self();
 
         // Load project-level MCP config (.roo/mcp.json)
         let project_mcp_path = std::path::Path::new(&self.config.cwd)
@@ -226,7 +227,7 @@ impl App {
             }
         }
 
-        self.mcp_hub = Some(Arc::new(hub));
+        self.mcp_hub = Some(hub);
         tracing::debug!("MCP hub initialized");
 
         // ── Initialize Message Queue ────────────────────────────────────
@@ -421,8 +422,12 @@ impl App {
     /// `TaskLifecycle`, and attaches all available service references.
     pub fn create_task_lifecycle(
         &self,
-        config: roo_task::TaskConfig,
+        mut config: roo_task::TaskConfig,
     ) -> Result<roo_task::TaskLifecycle, roo_task::TaskError> {
+        if config.storage_path.is_none() && !self.config.global_storage_path.is_empty() {
+            config.storage_path = Some(self.config.global_storage_path.clone());
+        }
+
         let engine = roo_task::TaskEngine::new(config)?;
         let services = self.service_refs();
         Ok(roo_task::TaskLifecycle::new(engine).with_services(services))
@@ -582,6 +587,7 @@ mod tests {
     async fn test_app_create_task_lifecycle() {
         let config = AppConfig {
             cwd: "/tmp/test".to_string(),
+            global_storage_path: "/tmp/roo-global-storage".to_string(),
             mode: "code".to_string(),
             ..Default::default()
         };
@@ -593,6 +599,10 @@ mod tests {
             .with_start_task(false);
         let lifecycle = app.create_task_lifecycle(task_config).unwrap();
         assert_eq!(lifecycle.task_id(), "test-task-1");
+        assert_eq!(
+            lifecycle.engine().global_storage_path(),
+            "/tmp/roo-global-storage"
+        );
         // Services should be wired in
         assert!(lifecycle.services().mcp_hub.is_some());
         assert!(lifecycle.services().terminal_registry.is_some());

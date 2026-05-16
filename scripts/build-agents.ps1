@@ -92,9 +92,9 @@ Build-Agent -Name "Codex Agent" `
 
 # ── 3. Roo-code Agent ──
 Build-Agent -Name "Roo-code Agent" `
-    -BuildCmd { Push-Location (Join-Path $PSScriptRoot ".." "agents" "roo-code"); cargo build --package roo-cli $ProfileFlag; Pop-Location } `
+    -BuildCmd { cargo build --package roo-cli $ProfileFlag } `
     -BinaryName "roo.exe" `
-    -SourcePath (Join-Path $PSScriptRoot ".." "agents" "roo-code" "target" $Profile "roo.exe")
+    -SourcePath (Join-Path $PSScriptRoot ".." "target" $Profile "roo.exe")
 
 # ── Summary ──
 Write-Host "`n========================================" -ForegroundColor White

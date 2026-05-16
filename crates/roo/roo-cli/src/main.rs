@@ -24,6 +24,7 @@ use roo_provider_anthropic::{
 use roo_provider_aws::{AwsBedrockConfig, AwsBedrockHandler};
 use roo_provider_baseten::{BasetenConfig, BasetenHandler};
 use roo_provider_deepseek::{DeepSeekConfig, DeepSeekHandler};
+use roo_provider_fake_ai::{FakeAiConfig, FakeAiHandler, ResponsePattern};
 use roo_provider_fireworks::{FireworksConfig, FireworksHandler};
 use roo_provider_google::{GoogleConfig, GoogleHandler};
 use roo_provider_litellm::{LiteLlmConfig, LiteLlmHandler};
@@ -170,6 +171,7 @@ struct ConfigFile {
     max_thinking_tokens: Option<u64>,
     timeout: Option<u64>,
     system_prompt: Option<String>,
+    fake_response: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -359,6 +361,7 @@ fn load_config(cli: &Cli) -> Result<ConfigFile> {
             max_thinking_tokens: None,
             timeout: None,
             system_prompt: None,
+            fake_response: None,
         }
     };
 
@@ -953,11 +956,29 @@ fn build_handler(provider_name: &str, config: &ConfigFile) -> Result<Box<dyn Pro
             ))
         }
 
+        // ── FakeAI ────────────────────────────────────────────────────
+        "fake-ai" | "fake" => {
+            let response_pattern = config
+                .fake_response
+                .as_ref()
+                .map(|text| ResponsePattern::Text { text: text.clone() })
+                .unwrap_or_default();
+            let cfg = FakeAiConfig {
+                model_id: config
+                    .model
+                    .clone()
+                    .unwrap_or_else(|| "fake-ai-model".to_string()),
+                response_pattern,
+                ..FakeAiConfig::default()
+            };
+            Ok(Box::new(FakeAiHandler::new(cfg)))
+        }
+
         other => anyhow::bail!(
             "Unsupported provider: '{other}'. Supported providers: anthropic, vertex, aws/bedrock, \
              openai, openai-native, openrouter, deepseek, google, xai, mistral, fireworks, \
              ollama, lmstudio, litellm, qwen, minimax, poe, requesty, unbound, vercel, \
-             roo, sambanova, baseten, moonshot, zai"
+             roo, sambanova, baseten, moonshot, zai, fake-ai"
         ),
     }
 }

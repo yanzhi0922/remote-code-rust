@@ -5,7 +5,7 @@
 /// Settings passed to system prompt generation functions.
 ///
 /// Source: `src/core/prompts/types.ts` — `SystemPromptSettings`
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct SystemPromptSettings {
     /// Whether the todo list feature is enabled.
     pub todo_list_enabled: bool,
@@ -17,6 +17,18 @@ pub struct SystemPromptSettings {
     pub new_task_require_todos: bool,
     /// When true, model should hide vendor/company identity in responses.
     pub is_stealth_model: bool,
+}
+
+impl Default for SystemPromptSettings {
+    fn default() -> Self {
+        Self {
+            todo_list_enabled: true,
+            use_agent_rules: true,
+            enable_subfolder_rules: false,
+            new_task_require_todos: false,
+            is_stealth_model: false,
+        }
+    }
 }
 
 /// Skill information for the skills section.
@@ -73,4 +85,20 @@ pub struct SystemPromptParams {
     pub home_dir: String,
     /// Custom instructions loaded from rule files.
     pub custom_rules_content: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SystemPromptSettings;
+
+    #[test]
+    fn default_settings_match_roo_code_runtime_defaults() {
+        let settings = SystemPromptSettings::default();
+
+        assert!(settings.todo_list_enabled);
+        assert!(settings.use_agent_rules);
+        assert!(!settings.enable_subfolder_rules);
+        assert!(!settings.new_task_require_todos);
+        assert!(!settings.is_stealth_model);
+    }
 }

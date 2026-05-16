@@ -95,8 +95,8 @@ build_agent "Codex Agent" \
 # ── 3. Roo-code Agent ──
 build_agent "Roo-code Agent" \
     "roo" \
-    "$ROOT_DIR/agents/roo-code/target/$PROFILE/roo" \
-    cargo build --package roo-cli --manifest-path "$ROOT_DIR/agents/roo-code/Cargo.toml" $PROFILE_FLAG
+    "$ROOT_DIR/target/$PROFILE/roo" \
+    cargo build --package roo-cli --manifest-path "$ROOT_DIR/Cargo.toml" $PROFILE_FLAG
 
 # ── Summary ──
 echo -e "\n========================================"

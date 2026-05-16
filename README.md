@@ -120,8 +120,7 @@ remote-code-rust/
 │   ├── claudecode/                # Claude Code Agent（Rust 重写，原 remote-code CLI）
 │   │   ├── src/                   # CLI / TUI / Headless / 交互式模式
 │   │   └── Cargo.toml
-│   ├── codex/                     # OpenAI Codex 源码（codex-rs，独立 Git 仓库）
-│   └── roo-code/                  # Roo Code 源码（独立 Git 仓库）
+│   └── codex/                     # OpenAI Codex 源码（codex-rs，独立 Git 仓库）
 ├── apps/                          # 应用程序
 │   ├── remote-code-gui/           # 桌面 GUI（Tauri v2 + React 19）
 │   ├── remote-code-control-plane/ # 控制平面
@@ -141,7 +140,7 @@ remote-code-rust/
 │   │   ├── claude-provider/           # Provider 标准化与流式
 │   │   └── ...                    # 其他 Claude 核心 crate
 │   ├── codex/                     # Codex 核心 crate（core, exec, protocol 等）
-│   └── roo/                       # Roo 核心 crate（provider, task, tools 等）
+│   └── roo/                       # Roo Rust 重写的唯一有效源码（provider, task, tools, cli 等）
 ├── plans/                         # 设计文档
 │   ├── multi-agent-architecture.md  # 多 Agent 架构设计
 │   ├── PROJECT_STATUS.md            # 项目状态
@@ -296,21 +295,20 @@ npm run desktop:build
 
 ```bash
 # PowerShell (Windows)
-powershell -ExecutionPolicy Bypass -File scripts/build-agents.ps1 all
+powershell -ExecutionPolicy Bypass -File scripts/build-agents.ps1
 
 # Bash (Linux/macOS)
-./scripts/build-agents.sh all
+./scripts/build-agents.sh
 
-# 单独构建
-powershell -ExecutionPolicy Bypass -File scripts/build-agents.ps1 roo-code
-powershell -ExecutionPolicy Bypass -File scripts/build-agents.ps1 codex
+# 单独构建 Roo CLI（有效源码位于 crates/roo/*）
+cargo build --package roo-cli --release
 ```
 
-> Agent 源码位于 `agents/` 目录，为独立 Git 仓库，需单独克隆：
+> Codex 源码位于 `agents/codex` 独立树；Roo Rust 重写已合并为根 workspace 的
+> `crates/roo/*`，不要再维护 `agents/roo-code` 的第二份副本。
 > ```bash
 > cd agents
 > gh repo clone openai/codex       # Codex 源码
-> # roo-code 已包含在仓库中
 > ```
 
 ### 配置

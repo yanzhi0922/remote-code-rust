@@ -13670,9 +13670,11 @@ name = "roo-cli"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "assert_cmd",
  "async-trait",
  "clap",
  "futures",
+ "predicates",
  "roo-app",
  "roo-context-tracking",
  "roo-ignore",
@@ -13685,6 +13687,7 @@ dependencies = [
  "roo-provider-aws",
  "roo-provider-baseten",
  "roo-provider-deepseek",
+ "roo-provider-fake-ai",
  "roo-provider-fireworks",
  "roo-provider-google",
  "roo-provider-litellm",
@@ -13711,6 +13714,7 @@ dependencies = [
  "roo-types",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
  "tracing",
  "tracing-subscriber",
