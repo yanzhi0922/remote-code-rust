@@ -26,6 +26,7 @@
 //!   before continuing with the rest of the stream.
 
 use std::collections::{HashMap, HashSet};
+use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -35,7 +36,11 @@ use tokio::sync::{Notify, mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
-use roo_auto_approval::types::AutoApprovalState;
+use roo_auto_approval::{
+    AskType, AutoApprovalState, CheckAutoApprovalParams, CheckAutoApprovalResult,
+    McpServer as AutoApprovalMcpServer, McpServerUse as AutoApprovalMcpServerUse,
+    McpTool as AutoApprovalMcpTool, ToolAction, check_auto_approval,
+};
 use roo_checkpoint::service::ShadowCheckpointService;
 use roo_checkpoint::types::SaveCheckpointOptions;
 use roo_context_tracking::FileContextTracker;
@@ -45,7 +50,7 @@ use roo_protect::RooProtectedController;
 use roo_provider::ProviderError;
 use roo_provider::handler::{CreateMessageMetadata, Provider};
 use roo_tools::repetition::ToolRepetitionDetector;
-use roo_types::mcp::McpServerConnection;
+use roo_types::mcp::{McpConnectionStatus, McpServerConnection};
 use roo_types::tool::{ToolName, ToolUsageEntry};
 
 use crate::engine::TaskEngine;
@@ -230,11 +235,298 @@ pub enum ApprovalDecision {
     Denied { reason: String },
 }
 
-/// Tool names that are considered read-only (do not modify files).
-const READ_ONLY_TOOLS: &[&str] = &["read_file", "list_files", "search_files", "codebase_search"];
+/// Runtime data needed to evaluate Roo's reference auto-approval rules.
+#[derive(Debug, Clone, Copy)]
+pub struct ToolApprovalContext<'a> {
+    pub cwd: &'a str,
+    pub roo_protected_controller: Option<&'a RooProtectedController>,
+    pub mcp_servers: &'a [McpServerConnection],
+}
 
-/// Tool names that are considered write operations (modify files).
-const WRITE_TOOLS: &[&str] = &["write_to_file", "apply_diff", "edit_file"];
+impl<'a> ToolApprovalContext<'a> {
+    pub fn new(cwd: &'a str) -> Self {
+        Self {
+            cwd,
+            roo_protected_controller: None,
+            mcp_servers: &[],
+        }
+    }
+
+    pub fn with_roo_protected_controller(
+        mut self,
+        controller: Option<&'a RooProtectedController>,
+    ) -> Self {
+        self.roo_protected_controller = controller;
+        self
+    }
+
+    pub fn with_mcp_servers(mut self, servers: &'a [McpServerConnection]) -> Self {
+        self.mcp_servers = servers;
+        self
+    }
+}
+
+fn normalize_lexically(path: PathBuf) -> PathBuf {
+    let mut normalized = PathBuf::new();
+
+    for component in path.components() {
+        match component {
+            Component::Prefix(prefix) => normalized.push(prefix.as_os_str()),
+            Component::RootDir => normalized.push(component.as_os_str()),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !normalized.pop() {
+                    normalized.push("..");
+                }
+            }
+            Component::Normal(part) => normalized.push(part),
+        }
+    }
+
+    normalized
+}
+
+fn resolve_path(cwd: &str, path: &str) -> PathBuf {
+    let path = PathBuf::from(path);
+    if path.is_absolute() {
+        normalize_lexically(path)
+    } else {
+        normalize_lexically(PathBuf::from(cwd).join(path))
+    }
+}
+
+fn is_outside_workspace(cwd: &str, path: &str) -> bool {
+    if cwd.is_empty() {
+        return false;
+    }
+
+    let cwd = normalize_lexically(PathBuf::from(cwd));
+    let path = resolve_path(cwd.to_string_lossy().as_ref(), path);
+    !path.starts_with(cwd)
+}
+
+fn path_exists(cwd: &str, path: &str) -> bool {
+    resolve_path(cwd, path).exists()
+}
+
+fn string_param<'a>(params: &'a serde_json::Value, keys: &[&str]) -> Option<&'a str> {
+    keys.iter()
+        .find_map(|key| params.get(*key).and_then(|v| v.as_str()))
+}
+
+fn tool_primary_path<'a>(tool_name: &str, params: &'a serde_json::Value) -> Option<&'a str> {
+    match tool_name {
+        "read_file" | "list_files" | "search_files" | "write_to_file" | "apply_diff" => {
+            string_param(params, &["path"])
+        }
+        "edit_file" | "edit" | "search_replace" | "search_and_replace" => {
+            string_param(params, &["filePath", "file_path", "path"])
+        }
+        _ => None,
+    }
+}
+
+fn apply_patch_paths(params: &serde_json::Value) -> Vec<String> {
+    let Some(patch) = params.get("patch").and_then(|v| v.as_str()) else {
+        return Vec::new();
+    };
+
+    let Ok(parsed) = roo_tools_fs::apply_patch::parse_patch(patch) else {
+        return Vec::new();
+    };
+
+    let mut paths = Vec::new();
+    for hunk in parsed.hunks {
+        match hunk {
+            roo_tools_fs::apply_patch::Hunk::AddFile { path, .. }
+            | roo_tools_fs::apply_patch::Hunk::DeleteFile { path } => paths.push(path),
+            roo_tools_fs::apply_patch::Hunk::UpdateFile {
+                path, move_path, ..
+            } => {
+                paths.push(path);
+                if let Some(move_path) = move_path {
+                    paths.push(move_path);
+                }
+            }
+        }
+    }
+
+    paths
+}
+
+fn is_tool_call_outside_workspace(
+    tool_name: &str,
+    params: &serde_json::Value,
+    context: ToolApprovalContext<'_>,
+) -> bool {
+    if tool_name == "apply_patch" {
+        return apply_patch_paths(params)
+            .iter()
+            .any(|path| is_outside_workspace(context.cwd, path));
+    }
+
+    tool_primary_path(tool_name, params)
+        .map(|path| is_outside_workspace(context.cwd, path))
+        .unwrap_or(false)
+}
+
+fn is_tool_call_protected(
+    tool_name: &str,
+    params: &serde_json::Value,
+    context: ToolApprovalContext<'_>,
+) -> bool {
+    let Some(controller) = context.roo_protected_controller else {
+        return false;
+    };
+
+    if tool_name == "apply_patch" {
+        return apply_patch_paths(params)
+            .iter()
+            .any(|path| controller.is_write_protected(path));
+    }
+
+    tool_primary_path(tool_name, params)
+        .map(|path| controller.is_write_protected(path))
+        .unwrap_or(false)
+}
+
+fn tool_action_for_approval(
+    tool_name: &str,
+    params: &serde_json::Value,
+    context: ToolApprovalContext<'_>,
+) -> Option<ToolAction> {
+    let outside = is_tool_call_outside_workspace(tool_name, params, context);
+
+    match tool_name {
+        "read_file" => Some(ToolAction::ReadFile {
+            is_outside_workspace: outside,
+        }),
+        "list_files" => {
+            let recursive = params
+                .get("recursive")
+                .and_then(|value| value.as_bool())
+                .unwrap_or(false);
+            Some(if recursive {
+                ToolAction::ListFilesRecursive {
+                    is_outside_workspace: outside,
+                }
+            } else if tool_primary_path(tool_name, params)
+                .map(|path| Path::new(path) == Path::new(".") || path.is_empty())
+                .unwrap_or(false)
+            {
+                ToolAction::ListFilesTopLevel {
+                    is_outside_workspace: outside,
+                }
+            } else {
+                ToolAction::ListFiles {
+                    is_outside_workspace: outside,
+                }
+            })
+        }
+        "search_files" => Some(ToolAction::SearchFiles {
+            is_outside_workspace: outside,
+        }),
+        "codebase_search" => Some(ToolAction::CodebaseSearch {
+            is_outside_workspace: outside,
+        }),
+        "run_slash_command" => Some(ToolAction::RunSlashCommand {
+            is_outside_workspace: outside,
+        }),
+        "write_to_file" => {
+            let path = tool_primary_path(tool_name, params).unwrap_or_default();
+            if path_exists(context.cwd, path) {
+                Some(ToolAction::EditedExistingFile {
+                    is_outside_workspace: outside,
+                })
+            } else {
+                Some(ToolAction::NewFileCreated {
+                    is_outside_workspace: outside,
+                })
+            }
+        }
+        "apply_diff" | "apply_patch" => Some(ToolAction::AppliedDiff {
+            is_outside_workspace: outside,
+        }),
+        "edit_file" | "edit" | "search_replace" | "search_and_replace" => {
+            Some(ToolAction::EditedExistingFile {
+                is_outside_workspace: outside,
+            })
+        }
+        "generate_image" => Some(ToolAction::GenerateImage {
+            is_outside_workspace: outside,
+        }),
+        "update_todo_list" => Some(ToolAction::UpdateTodoList),
+        "skill" => Some(ToolAction::Skill),
+        "switch_mode" => Some(ToolAction::SwitchMode),
+        "new_task" => Some(ToolAction::NewTask),
+        _ => None,
+    }
+}
+
+fn auto_approval_mcp_servers(servers: &[McpServerConnection]) -> Vec<AutoApprovalMcpServer> {
+    servers
+        .iter()
+        .filter(|server| server.status == McpConnectionStatus::Connected)
+        .map(|server| AutoApprovalMcpServer {
+            name: server.name.clone(),
+            tools: server
+                .tools
+                .iter()
+                .filter(|tool| {
+                    tool.enabled_for_prompt && !server.disabled_tools.contains(&tool.name)
+                })
+                .map(|tool| AutoApprovalMcpTool {
+                    name: tool.name.clone(),
+                    always_allow: tool.always_allow,
+                })
+                .collect(),
+        })
+        .collect()
+}
+
+fn mcp_use_for_approval(
+    tool_name: &str,
+    params: &serde_json::Value,
+) -> Option<AutoApprovalMcpServerUse> {
+    if tool_name == "use_mcp_tool" {
+        return Some(AutoApprovalMcpServerUse::UseMcpTool {
+            server_name: string_param(params, &["server_name", "serverName"])?.to_string(),
+            tool_name: string_param(params, &["tool_name", "toolName"])?.to_string(),
+        });
+    }
+
+    if tool_name == "access_mcp_resource" {
+        return Some(AutoApprovalMcpServerUse::AccessMcpResource {
+            server_name: string_param(params, &["server_name", "serverName"])?.to_string(),
+            uri: string_param(params, &["uri"])?.to_string(),
+        });
+    }
+
+    let normalized = crate::types::normalize_mcp_tool_name(tool_name);
+    let (server_name, tool_name) = crate::types::parse_mcp_tool_name(&normalized)?;
+    Some(AutoApprovalMcpServerUse::UseMcpTool {
+        server_name,
+        tool_name,
+    })
+}
+
+fn approval_decision_from_result(
+    tool_name: &str,
+    result: CheckAutoApprovalResult,
+) -> ApprovalDecision {
+    match result {
+        CheckAutoApprovalResult::Approve => ApprovalDecision::AutoApproved,
+        CheckAutoApprovalResult::Deny => ApprovalDecision::Denied {
+            reason: format!("tool '{}' is denied by auto-approval policy", tool_name),
+        },
+        CheckAutoApprovalResult::Ask => ApprovalDecision::NeedsApproval {
+            reason: format!("tool '{}' requires approval", tool_name),
+        },
+        CheckAutoApprovalResult::Timeout { .. } => ApprovalDecision::NeedsApproval {
+            reason: format!("tool '{}' requires timed user approval", tool_name),
+        },
+    }
+}
 
 /// Check whether a tool call should be auto-approved.
 ///
@@ -243,70 +535,72 @@ const WRITE_TOOLS: &[&str] = &["write_to_file", "apply_diff", "edit_file"];
 /// while write tools and commands require explicit permission.
 pub fn check_tool_approval(
     tool_name: &str,
-    _params: &serde_json::Value,
+    params: &serde_json::Value,
     auto_approval: &AutoApprovalState,
 ) -> ApprovalDecision {
-    if !auto_approval.auto_approval_enabled {
-        return ApprovalDecision::NeedsApproval {
-            reason: "auto-approval is disabled".to_string(),
-        };
-    }
-
-    if READ_ONLY_TOOLS.contains(&tool_name) {
-        if auto_approval.always_allow_read_only {
-            return ApprovalDecision::AutoApproved;
-        }
-        return ApprovalDecision::NeedsApproval {
-            reason: format!("read-only tool '{}' not auto-approved", tool_name),
-        };
-    }
-
-    if WRITE_TOOLS.contains(&tool_name) {
-        if auto_approval.always_allow_write {
-            return ApprovalDecision::AutoApproved;
-        }
-        return ApprovalDecision::NeedsApproval {
-            reason: format!("write tool '{}' not auto-approved", tool_name),
-        };
-    }
-
-    if tool_name == "execute_command" {
-        if auto_approval.always_allow_execute {
-            return ApprovalDecision::AutoApproved;
-        }
-        return ApprovalDecision::NeedsApproval {
-            reason: "command execution not auto-approved".to_string(),
-        };
-    }
-
-    if tool_name == "use_mcp_tool" || tool_name == "access_mcp_resource" {
-        if auto_approval.always_allow_mcp {
-            return ApprovalDecision::AutoApproved;
-        }
-        return ApprovalDecision::NeedsApproval {
-            reason: "MCP tool not auto-approved".to_string(),
-        };
-    }
-
-    if tool_name == "switch_mode" {
-        if auto_approval.always_allow_mode_switch {
-            return ApprovalDecision::AutoApproved;
-        }
-        return ApprovalDecision::NeedsApproval {
-            reason: "mode switch not auto-approved".to_string(),
-        };
-    }
-
-    if matches!(
+    check_tool_approval_with_context(
         tool_name,
-        "update_todo_list" | "skill" | "attempt_completion" | "new_task"
-    ) {
+        params,
+        auto_approval,
+        ToolApprovalContext::new(""),
+    )
+}
+
+/// Check whether a tool call should be auto-approved with workspace context.
+///
+/// This feeds the same structured ask payloads Roo-Code passes to
+/// `checkAutoApproval`, including outside-workspace and protected-file flags.
+pub fn check_tool_approval_with_context(
+    tool_name: &str,
+    params: &serde_json::Value,
+    auto_approval: &AutoApprovalState,
+    context: ToolApprovalContext<'_>,
+) -> ApprovalDecision {
+    if tool_name == "attempt_completion" || tool_name == "ask_followup_question" {
         return ApprovalDecision::AutoApproved;
     }
 
-    ApprovalDecision::NeedsApproval {
-        reason: format!("tool '{}' requires approval", tool_name),
+    let auto_mcp_servers = auto_approval_mcp_servers(context.mcp_servers);
+
+    if tool_name == "execute_command" {
+        let command = string_param(params, &["command"]);
+        let result = check_auto_approval(CheckAutoApprovalParams {
+            state: auto_approval,
+            ask: &AskType::Command,
+            text: command,
+            is_protected: false,
+            mcp_servers: &auto_mcp_servers,
+        });
+        return approval_decision_from_result(tool_name, result);
     }
+
+    if let Some(mcp_use) = mcp_use_for_approval(tool_name, params) {
+        let text = serde_json::to_string(&mcp_use).ok();
+        let result = check_auto_approval(CheckAutoApprovalParams {
+            state: auto_approval,
+            ask: &AskType::UseMcpServer,
+            text: text.as_deref(),
+            is_protected: false,
+            mcp_servers: &auto_mcp_servers,
+        });
+        return approval_decision_from_result(tool_name, result);
+    }
+
+    let Some(tool_action) = tool_action_for_approval(tool_name, params, context) else {
+        return ApprovalDecision::NeedsApproval {
+            reason: format!("tool '{}' requires approval", tool_name),
+        };
+    };
+
+    let text = serde_json::to_string(&tool_action).ok();
+    let result = check_auto_approval(CheckAutoApprovalParams {
+        state: auto_approval,
+        ask: &AskType::Tool,
+        text: text.as_deref(),
+        is_protected: is_tool_call_protected(tool_name, params, context),
+        mcp_servers: &auto_mcp_servers,
+    });
+    approval_decision_from_result(tool_name, result)
 }
 
 // ===========================================================================
@@ -4070,8 +4364,14 @@ impl AgentLoop {
             }
 
             // Check auto-approval
-            let approval =
-                check_tool_approval(&tool_call.name, &params, &self.config.auto_approval);
+            let approval = check_tool_approval_with_context(
+                &tool_call.name,
+                &params,
+                &self.config.auto_approval,
+                ToolApprovalContext::new(&self.engine.config().cwd)
+                    .with_roo_protected_controller(self.roo_protected_controller.as_ref())
+                    .with_mcp_servers(&self.mcp_servers),
+            );
 
             let result = match approval {
                 ApprovalDecision::AutoApproved => {
@@ -4454,6 +4754,7 @@ impl AgentLoop {
         if let Some(ref controller) = self.roo_protected_controller {
             context = context.with_roo_protected_controller(controller.clone());
         }
+        context = context.with_allow_protected_write(true);
 
         let params = tool_call.parse_arguments();
 
@@ -5735,7 +6036,7 @@ mod tests {
             always_allow_execute: true,
             always_allow_followup_questions: true,
             followup_auto_approve_timeout_ms: None,
-            allowed_commands: vec![],
+            allowed_commands: vec!["*".to_string()],
             denied_commands: vec![],
             ..Default::default()
         }
@@ -5767,9 +6068,7 @@ mod tests {
     fn test_read_only_tool_not_approved_when_disabled() {
         let state = no_approval_state();
         let decision = check_tool_approval("read_file", &serde_json::json!({}), &state);
-        assert!(
-            matches!(decision, ApprovalDecision::NeedsApproval { reason } if reason.contains("read-only"))
-        );
+        assert!(matches!(decision, ApprovalDecision::NeedsApproval { .. }));
     }
 
     #[test]
@@ -5785,15 +6084,17 @@ mod tests {
     fn test_write_tool_not_approved_when_disabled() {
         let state = no_approval_state();
         let decision = check_tool_approval("write_to_file", &serde_json::json!({}), &state);
-        assert!(
-            matches!(decision, ApprovalDecision::NeedsApproval { reason } if reason.contains("write"))
-        );
+        assert!(matches!(decision, ApprovalDecision::NeedsApproval { .. }));
     }
 
     #[test]
     fn test_execute_command_auto_approved() {
         let state = full_approval_state();
-        let decision = check_tool_approval("execute_command", &serde_json::json!({}), &state);
+        let decision = check_tool_approval(
+            "execute_command",
+            &serde_json::json!({"command":"echo ok"}),
+            &state,
+        );
         assert_eq!(decision, ApprovalDecision::AutoApproved);
     }
 
@@ -5801,20 +6102,44 @@ mod tests {
     fn test_execute_command_not_approved_when_disabled() {
         let state = no_approval_state();
         let decision = check_tool_approval("execute_command", &serde_json::json!({}), &state);
-        assert!(
-            matches!(decision, ApprovalDecision::NeedsApproval { reason } if reason.contains("command"))
-        );
+        assert!(matches!(decision, ApprovalDecision::NeedsApproval { .. }));
     }
 
     #[test]
     fn test_mcp_tool_auto_approved() {
-        let state = full_approval_state();
+        let mut state = full_approval_state();
+        state.allowed_commands.clear();
+        let mcp_servers = vec![McpServerConnection {
+            name: "server".to_string(),
+            status: McpConnectionStatus::Connected,
+            tools: vec![roo_types::mcp::McpTool {
+                name: "tool".to_string(),
+                description: None,
+                input_schema: None,
+                always_allow: true,
+                enabled_for_prompt: true,
+            }],
+            resources: vec![],
+            resource_templates: vec![],
+            disabled_tools: vec![],
+            errors: vec![],
+        }];
         assert_eq!(
-            check_tool_approval("use_mcp_tool", &serde_json::json!({}), &state),
+            check_tool_approval_with_context(
+                "use_mcp_tool",
+                &serde_json::json!({"server_name":"server","tool_name":"tool"}),
+                &state,
+                ToolApprovalContext::new("").with_mcp_servers(&mcp_servers),
+            ),
             ApprovalDecision::AutoApproved
         );
         assert_eq!(
-            check_tool_approval("access_mcp_resource", &serde_json::json!({}), &state),
+            check_tool_approval_with_context(
+                "access_mcp_resource",
+                &serde_json::json!({"server_name":"server","uri":"file://data"}),
+                &state,
+                ToolApprovalContext::new("").with_mcp_servers(&mcp_servers),
+            ),
             ApprovalDecision::AutoApproved
         );
     }
@@ -5822,15 +6147,54 @@ mod tests {
     #[test]
     fn test_always_approved_tools() {
         let state = no_approval_state();
-        for tool in &[
-            "update_todo_list",
-            "skill",
-            "attempt_completion",
-            "new_task",
-        ] {
+        for tool in &["update_todo_list", "skill", "attempt_completion"] {
             let decision = check_tool_approval(tool, &serde_json::json!({}), &state);
             assert_eq!(decision, ApprovalDecision::AutoApproved, "tool={}", tool);
         }
+
+        let decision = check_tool_approval("new_task", &serde_json::json!({}), &state);
+        assert!(matches!(decision, ApprovalDecision::NeedsApproval { .. }));
+    }
+
+    #[test]
+    fn test_protected_write_requires_protected_allowance() {
+        let mut state = full_approval_state();
+        state.always_allow_write_protected = false;
+        let controller = RooProtectedController::new("C:/repo");
+
+        let decision = check_tool_approval_with_context(
+            "write_to_file",
+            &serde_json::json!({"path": ".rooignore", "content": "target/"}),
+            &state,
+            ToolApprovalContext::new("C:/repo").with_roo_protected_controller(Some(&controller)),
+        );
+
+        assert!(matches!(decision, ApprovalDecision::NeedsApproval { .. }));
+
+        state.always_allow_write_protected = true;
+        let decision = check_tool_approval_with_context(
+            "write_to_file",
+            &serde_json::json!({"path": ".rooignore", "content": "target/"}),
+            &state,
+            ToolApprovalContext::new("C:/repo").with_roo_protected_controller(Some(&controller)),
+        );
+
+        assert_eq!(decision, ApprovalDecision::AutoApproved);
+    }
+
+    #[test]
+    fn test_outside_workspace_read_requires_explicit_allowance() {
+        let mut state = full_approval_state();
+        state.always_allow_read_only_outside_workspace = false;
+
+        let decision = check_tool_approval_with_context(
+            "read_file",
+            &serde_json::json!({"path": "../secrets.txt"}),
+            &state,
+            ToolApprovalContext::new("C:/repo"),
+        );
+
+        assert!(matches!(decision, ApprovalDecision::NeedsApproval { .. }));
     }
 
     #[test]

@@ -15,6 +15,44 @@ use roo_types::model::ModelInfo;
 use crate::stream_parser::ParsedStreamContent;
 use crate::tool_dispatcher::ToolExecutionResult;
 
+fn native_tool_is_strict(name: &str) -> bool {
+    matches!(
+        name,
+        "access_mcp_resource"
+            | "ask_followup_question"
+            | "attempt_completion"
+            | "codebase_search"
+            | "execute_command"
+            | "generate_image"
+            | "list_files"
+            | "new_task"
+            | "read_file"
+            | "run_slash_command"
+            | "search_files"
+            | "skill"
+            | "switch_mode"
+            | "update_todo_list"
+            | "write_to_file"
+    )
+}
+
+fn native_tool_to_json(tool: roo_tools::definition::ToolDefinition) -> Value {
+    let mut function = serde_json::Map::new();
+    let strict = native_tool_is_strict(&tool.name);
+
+    function.insert("name".to_string(), json!(tool.name));
+    function.insert("description".to_string(), json!(tool.description));
+    if strict {
+        function.insert("strict".to_string(), json!(true));
+    }
+    function.insert("parameters".to_string(), tool.parameters);
+
+    json!({
+        "type": "function",
+        "function": function,
+    })
+}
+
 // ---------------------------------------------------------------------------
 // BuildToolsResult
 // ---------------------------------------------------------------------------
@@ -165,16 +203,7 @@ impl MessageBuilder {
         // Convert native tools to JSON
         let mut tools_json: Vec<Value> = filtered_tools
             .into_iter()
-            .map(|tool| {
-                json!({
-                    "type": "function",
-                    "function": {
-                        "name": tool.name,
-                        "description": tool.description,
-                        "parameters": tool.parameters,
-                    }
-                })
-            })
+            .map(native_tool_to_json)
             .collect();
 
         // Merge MCP tools
@@ -231,19 +260,8 @@ impl MessageBuilder {
                 .collect();
             allowed_function_names.extend(mcp_tool_names);
 
-            let all_native_json: Vec<Value> = native_tools
-                .into_iter()
-                .map(|tool| {
-                    json!({
-                        "type": "function",
-                        "function": {
-                            "name": tool.name,
-                            "description": tool.description,
-                            "parameters": tool.parameters,
-                        }
-                    })
-                })
-                .collect();
+            let all_native_json: Vec<Value> =
+                native_tools.into_iter().map(native_tool_to_json).collect();
 
             // Combine ALL tools (unfiltered native + all MCP)
             let mut all_tools: Vec<Value> = all_native_json;
@@ -257,16 +275,7 @@ impl MessageBuilder {
             // Default: return only filtered tools + MCP tools
             let mut tools_json: Vec<Value> = filtered_tools
                 .into_iter()
-                .map(|tool| {
-                    json!({
-                        "type": "function",
-                        "function": {
-                            "name": tool.name,
-                            "description": tool.description,
-                            "parameters": tool.parameters,
-                        }
-                    })
-                })
+                .map(native_tool_to_json)
                 .collect();
             tools_json.extend(mcp_tools);
 
@@ -1134,6 +1143,16 @@ mod tests {
             names.contains(&"apply_diff"),
             "Code mode should have apply_diff"
         );
+
+        let find_tool = |name: &str| {
+            tools
+                .iter()
+                .find(|tool| tool["function"]["name"] == name)
+                .expect("tool should exist")
+        };
+        assert_eq!(find_tool("read_file")["function"]["strict"], true);
+        assert_eq!(find_tool("write_to_file")["function"]["strict"], true);
+        assert!(find_tool("apply_diff")["function"].get("strict").is_none());
     }
 
     #[test]

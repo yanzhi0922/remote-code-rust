@@ -375,6 +375,44 @@ impl ShadowCheckpointService {
         Ok(())
     }
 
+    /// Removes untracked files and directories from the configured worktree.
+    ///
+    /// Mirrors the reference `git clean -d -f` before checkpoint restore so
+    /// files created after the target checkpoint do not survive the reset.
+    fn clean_untracked(&self, repo: &Repository) -> Result<(), CheckpointError> {
+        let mut options = git2::StatusOptions::new();
+        options
+            .include_untracked(true)
+            .recurse_untracked_dirs(true)
+            .include_ignored(false);
+
+        let statuses = repo
+            .statuses(Some(&mut options))
+            .map_err(|e| CheckpointError::GitError(e.message().to_string()))?;
+
+        let mut paths: Vec<PathBuf> = statuses
+            .iter()
+            .filter(|entry| entry.status().contains(git2::Status::WT_NEW))
+            .filter_map(|entry| entry.path().map(|path| self.workspace_dir.join(path)))
+            .collect();
+
+        paths.sort_by_key(|path| std::cmp::Reverse(path.components().count()));
+
+        for path in paths {
+            if !path.starts_with(&self.workspace_dir) || !path.exists() {
+                continue;
+            }
+
+            if path.is_dir() {
+                std::fs::remove_dir_all(&path)?;
+            } else {
+                std::fs::remove_file(&path)?;
+            }
+        }
+
+        Ok(())
+    }
+
     /// Saves a checkpoint (creates a new commit in the shadow repo).
     pub async fn save_checkpoint(
         &mut self,
@@ -498,6 +536,10 @@ impl ShadowCheckpointService {
 
         let start = Instant::now();
 
+        // Match `git clean -d -f` before reset. A hard reset alone does not
+        // remove files that were created after the checkpoint.
+        self.clean_untracked(repo)?;
+
         // Reset to the target commit.
         let oid = git2::Oid::from_str(commit_hash)
             .map_err(|e| CheckpointError::GitError(e.message().to_string()))?;
@@ -534,6 +576,10 @@ impl ShadowCheckpointService {
         params: GetDiffParams,
     ) -> Result<Vec<CheckpointDiff>, CheckpointError> {
         let repo = self.repo.as_ref().ok_or(CheckpointError::NotInitialized)?;
+
+        // Reference Roo-Code stages the worktree before diffing so untracked
+        // files are included in review output.
+        self.stage_all(repo)?;
 
         // Resolve "from" hash.
         let from_hash = match params.from {
@@ -601,7 +647,7 @@ impl ShadowCheckpointService {
                 .diff_tree_to_tree(Some(&from_tree), Some(tt), None)
                 .map_err(|e| CheckpointError::GitError(e.message().to_string()))?,
             None => repo
-                .diff_tree_to_workdir(Some(&from_tree), None)
+                .diff_tree_to_workdir_with_index(Some(&from_tree), None)
                 .map_err(|e| CheckpointError::GitError(e.message().to_string()))?,
         };
 

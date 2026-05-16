@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use crate::helpers::*;
 use crate::types::*;
-use roo_types::mcp::McpToolResultContent;
+use roo_types::mcp::{McpTool, McpToolResultContent};
 use roo_types::tool::UseMcpToolParams;
 
 // ---------------------------------------------------------------------------
@@ -69,6 +69,68 @@ pub fn prepare_mcp_tool_call(
         result: params.arguments.clone(),
         is_error: false,
     })
+}
+
+fn mcp_tool_matches(server_name: &str, tool: &McpTool, requested_tool_name: &str) -> bool {
+    let sanitized_tool_name = roo_mcp::sanitize_mcp_name(&tool.name);
+    let dynamic_tool_name = roo_mcp::build_mcp_tool_name(server_name, &tool.name);
+
+    roo_mcp::tool_names_match(&tool.name, requested_tool_name)
+        || roo_mcp::tool_names_match(&sanitized_tool_name, requested_tool_name)
+        || roo_mcp::tool_names_match(&dynamic_tool_name, requested_tool_name)
+}
+
+fn requested_tool_name_for_server(server_name: &str, requested_tool_name: &str) -> String {
+    if let Some((parsed_server, parsed_tool)) = roo_mcp::parse_mcp_tool_name(requested_tool_name) {
+        let sanitized_server = roo_mcp::sanitize_mcp_name(server_name);
+        if roo_mcp::tool_names_match(&parsed_server, &sanitized_server)
+            || roo_mcp::tool_names_match(&parsed_server, server_name)
+        {
+            return parsed_tool;
+        }
+    }
+
+    requested_tool_name.to_string()
+}
+
+fn resolve_enabled_tool_name(
+    server_name: &str,
+    tools: &[McpTool],
+    requested_tool_name: &str,
+) -> Result<String, String> {
+    let requested_tool_name = requested_tool_name_for_server(server_name, requested_tool_name);
+    let mut disabled_match: Option<String> = None;
+
+    for tool in tools {
+        if !mcp_tool_matches(server_name, tool, &requested_tool_name) {
+            continue;
+        }
+
+        if tool.enabled_for_prompt {
+            return Ok(tool.name.clone());
+        }
+
+        disabled_match = Some(tool.name.clone());
+    }
+
+    if let Some(disabled_name) = disabled_match {
+        return Err(format!(
+            "Tool '{}' on server '{}' is disabled for prompts and cannot be called.",
+            disabled_name, server_name
+        ));
+    }
+
+    let available: Vec<&str> = tools
+        .iter()
+        .filter(|t| t.enabled_for_prompt)
+        .map(|t| t.name.as_str())
+        .collect();
+    Err(format!(
+        "Tool '{}' not found on server '{}'. Available tools: [{}]",
+        requested_tool_name,
+        server_name,
+        available.join(", ")
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -140,25 +202,16 @@ pub async fn execute_mcp_tool(
         ));
     }
 
-    // Check tool exists (normalize comparison)
-    let tool_exists = server
-        .tools
-        .iter()
-        .any(|t| tool_names_match(&t.name, &params.tool_name));
-    if !tool_exists {
-        let available: Vec<&str> = server.tools.iter().map(|t| t.name.as_str()).collect();
-        return McpToolExecutionResult::error(format!(
-            "Tool '{}' not found on server '{}'. Available tools: [{}]",
-            params.tool_name,
-            server_name,
-            available.join(", ")
-        ));
-    }
+    let resolved_tool_name =
+        match resolve_enabled_tool_name(&server_name, &server.tools, &params.tool_name) {
+            Ok(name) => name,
+            Err(message) => return McpToolExecutionResult::error(message),
+        };
 
     // 4. Call the tool via hub
     tracing::info!(
         "Calling MCP tool '{}' on server '{}'",
-        params.tool_name,
+        resolved_tool_name,
         server_name
     );
 
@@ -169,14 +222,14 @@ pub async fn execute_mcp_tool(
     };
 
     match hub
-        .call_tool(&server_name, &params.tool_name, arguments)
+        .call_tool(&server_name, &resolved_tool_name, arguments)
         .await
     {
-        Ok(response) => format_tool_call_response(&server_name, &params.tool_name, response),
+        Ok(response) => format_tool_call_response(&server_name, &resolved_tool_name, response),
         Err(e) => {
             tracing::error!(
                 "MCP tool call '{}' on '{}' failed: {}",
-                params.tool_name,
+                resolved_tool_name,
                 server_name,
                 e
             );
@@ -187,7 +240,7 @@ pub async fn execute_mcp_tool(
                  - Check that the tool arguments are correct. \
                  - Verify the MCP server is running and responsive. \
                  - Review the server logs for detailed error information.",
-                params.tool_name, server_name, e
+                resolved_tool_name, server_name, e
             ))
         }
     }
@@ -363,6 +416,50 @@ mod tests {
         // Empty tools list means skip tool existence check
         let result = prepare_mcp_tool_call(&params, &[]).unwrap();
         assert!(!result.is_error);
+    }
+
+    fn test_mcp_tool(name: &str, enabled_for_prompt: bool) -> McpTool {
+        McpTool {
+            name: name.to_string(),
+            description: None,
+            input_schema: None,
+            always_allow: false,
+            enabled_for_prompt,
+        }
+    }
+
+    #[test]
+    fn test_resolve_enabled_tool_raw_name() {
+        let tools = vec![test_mcp_tool("resolve-library-id", true)];
+        let resolved = resolve_enabled_tool_name("context7", &tools, "resolve-library-id").unwrap();
+        assert_eq!(resolved, "resolve-library-id");
+    }
+
+    #[test]
+    fn test_resolve_enabled_tool_from_dynamic_name() {
+        let tools = vec![test_mcp_tool("resolve-library-id", true)];
+        let resolved =
+            resolve_enabled_tool_name("context7", &tools, "mcp--context7--resolve-library-id")
+                .unwrap();
+        assert_eq!(resolved, "resolve-library-id");
+    }
+
+    #[test]
+    fn test_resolve_enabled_tool_from_model_underscore_name() {
+        let tools = vec![test_mcp_tool("resolve-library-id", true)];
+        let resolved = resolve_enabled_tool_name("context7", &tools, "resolve_library_id").unwrap();
+        assert_eq!(resolved, "resolve-library-id");
+    }
+
+    #[test]
+    fn test_resolve_enabled_tool_rejects_disabled_tool() {
+        let tools = vec![
+            test_mcp_tool("enabled-tool", true),
+            test_mcp_tool("disabled-tool", false),
+        ];
+        let err = resolve_enabled_tool_name("context7", &tools, "disabled-tool").unwrap_err();
+        assert!(err.contains("disabled for prompts"));
+        assert!(!err.contains("enabled-tool"));
     }
 
     // ---- Execution tests ----

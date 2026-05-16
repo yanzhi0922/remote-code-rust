@@ -413,6 +413,7 @@ impl App {
             terminal_registry: self.terminal_registry.clone(),
             message_queue: self.message_queue.clone(),
             telemetry: self.telemetry.clone(),
+            roo_ignore_controller: self.roo_ignore.clone(),
         }
     }
 

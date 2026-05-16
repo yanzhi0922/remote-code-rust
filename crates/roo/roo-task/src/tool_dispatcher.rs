@@ -143,6 +143,12 @@ pub struct ToolContext {
     ///
     /// Source: `src/core/task/Task.ts` — `this.rooProtectedController`
     pub roo_protected_controller: Option<roo_protect::RooProtectedController>,
+    /// Whether protected-file writes have already passed the approval gate.
+    ///
+    /// Direct tool-dispatcher callers leave this as `false`, so protected Roo
+    /// config files remain blocked unless the agent loop explicitly marks the
+    /// request as approved after user/auto approval.
+    pub allow_protected_write: bool,
     /// Optional diff-view provider for streaming file edits.
     ///
     /// Source: `src/core/task/Task.ts` — `this.diffViewProvider`
@@ -186,6 +192,7 @@ impl std::fmt::Debug for ToolContext {
                 "roo_protected_controller",
                 &self.roo_protected_controller.is_some(),
             )
+            .field("allow_protected_write", &self.allow_protected_write)
             .field("diff_view_provider", &self.diff_view_provider.is_some())
             .field("file_context_tracker", &self.file_context_tracker.is_some())
             .field("terminal_process", &self.terminal_process.is_some())
@@ -205,6 +212,7 @@ impl ToolContext {
             model_id: None,
             roo_ignore_controller: None,
             roo_protected_controller: None,
+            allow_protected_write: false,
             diff_view_provider: None,
             file_context_tracker: None,
             terminal_process: None,
@@ -239,6 +247,12 @@ impl ToolContext {
         controller: roo_protect::RooProtectedController,
     ) -> Self {
         self.roo_protected_controller = Some(controller);
+        self
+    }
+
+    /// Mark protected writes as already approved by the agent loop.
+    pub fn with_allow_protected_write(mut self, allow: bool) -> Self {
+        self.allow_protected_write = allow;
         self
     }
 
@@ -595,10 +609,15 @@ impl ToolHandler for WriteToFileHandler {
             return ToolExecutionResult::error(format!("read_file error: {}", e));
         }
 
-        // Check write protection before any file I/O
-        if let Err(e) =
-            roo_tools_fs::check_roo_protect(&path, context.roo_protected_controller.as_ref())
-        {
+        let protected_controller = if context.allow_protected_write {
+            None
+        } else {
+            context.roo_protected_controller.as_ref()
+        };
+
+        // Check write protection before any file I/O unless this call already
+        // passed the approval gate.
+        if let Err(e) = roo_tools_fs::check_roo_protect(&path, protected_controller) {
             return ToolExecutionResult::error(format!("write_to_file error: {}", e));
         }
 
@@ -608,7 +627,7 @@ impl ToolHandler for WriteToFileHandler {
             &write_params,
             &context.cwd,
             context.roo_ignore_controller.as_ref(),
-            context.roo_protected_controller.as_ref(),
+            protected_controller,
             context.model_id.as_deref(),
         ) {
             Ok(result) => {
@@ -674,9 +693,11 @@ impl ToolHandler for ApplyDiffHandler {
             return ToolExecutionResult::error(format!("apply_diff error: {}", e));
         }
 
-        // Check write protection before any file I/O
-        if let Err(e) =
-            roo_tools_fs::check_roo_protect(&path, context.roo_protected_controller.as_ref())
+        // Check write protection before any file I/O unless this call already
+        // passed the approval gate.
+        if !context.allow_protected_write
+            && let Err(e) =
+                roo_tools_fs::check_roo_protect(&path, context.roo_protected_controller.as_ref())
         {
             return ToolExecutionResult::error(format!("apply_diff error: {}", e));
         }
@@ -787,9 +808,13 @@ impl ToolHandler for EditFileHandler {
             return ToolExecutionResult::error(format!("edit_file error: {}", e));
         }
 
-        // Check write protection before any file I/O
-        if let Err(e) =
-            roo_tools_fs::check_roo_protect(&file_path, context.roo_protected_controller.as_ref())
+        // Check write protection before any file I/O unless this call already
+        // passed the approval gate.
+        if !context.allow_protected_write
+            && let Err(e) = roo_tools_fs::check_roo_protect(
+                &file_path,
+                context.roo_protected_controller.as_ref(),
+            )
         {
             return ToolExecutionResult::error(format!("edit_file error: {}", e));
         }
@@ -878,9 +903,13 @@ impl ToolHandler for SearchReplaceHandler {
             return ToolExecutionResult::error(format!("search_replace error: {}", e));
         }
 
-        // Check write protection before any file I/O
-        if let Err(e) =
-            roo_tools_fs::check_roo_protect(&file_path, context.roo_protected_controller.as_ref())
+        // Check write protection before any file I/O unless this call already
+        // passed the approval gate.
+        if !context.allow_protected_write
+            && let Err(e) = roo_tools_fs::check_roo_protect(
+                &file_path,
+                context.roo_protected_controller.as_ref(),
+            )
         {
             return ToolExecutionResult::error(format!("search_replace error: {}", e));
         }
@@ -979,9 +1008,13 @@ impl ToolHandler for EditHandler {
             return ToolExecutionResult::error(format!("edit error: {}", e));
         }
 
-        // Check write protection before any file I/O
-        if let Err(e) =
-            roo_tools_fs::check_roo_protect(&file_path, context.roo_protected_controller.as_ref())
+        // Check write protection before any file I/O unless this call already
+        // passed the approval gate.
+        if !context.allow_protected_write
+            && let Err(e) = roo_tools_fs::check_roo_protect(
+                &file_path,
+                context.roo_protected_controller.as_ref(),
+            )
         {
             return ToolExecutionResult::error(format!("edit error: {}", e));
         }
@@ -1059,11 +1092,14 @@ impl ToolHandler for ApplyPatchHandler {
             {
                 return ToolExecutionResult::error(format!("apply_patch error: {}", e));
             }
-            // Check write protection for each file path
-            if let Err(e) = roo_tools_fs::check_roo_protect(
-                &change.path,
-                context.roo_protected_controller.as_ref(),
-            ) {
+            // Check write protection for each file path unless this call
+            // already passed the approval gate.
+            if !context.allow_protected_write
+                && let Err(e) = roo_tools_fs::check_roo_protect(
+                    &change.path,
+                    context.roo_protected_controller.as_ref(),
+                )
+            {
                 return ToolExecutionResult::error(format!("apply_patch error: {}", e));
             }
 

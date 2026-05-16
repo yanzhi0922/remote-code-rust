@@ -26,6 +26,7 @@
 //! | `TaskLifecycle::record_tool_usage()`   | `Task.recordToolUsage()`             | 4617–4623   |
 //! | `TaskLifecycle::record_tool_error()`   | `Task.recordToolError()`             | 4625–4632   |
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use tokio_util::sync::CancellationToken;
@@ -72,6 +73,36 @@ pub struct ServiceRefs {
     ///
     /// Source: TS `this.telemetryService`
     pub telemetry: Option<Arc<std::sync::RwLock<roo_telemetry::TelemetryService>>>,
+    /// Shared RooIgnore controller loaded by the application.
+    ///
+    /// Source: TS `this.rooIgnoreController`
+    pub roo_ignore_controller: Option<Arc<roo_ignore::RooIgnoreController>>,
+}
+
+fn load_roo_ignore_controller(cwd: &str) -> roo_ignore::RooIgnoreController {
+    let mut controller = roo_ignore::RooIgnoreController::new(cwd);
+    let rooignore_path = std::path::Path::new(cwd).join(".rooignore");
+
+    if let Ok(content) = std::fs::read_to_string(&rooignore_path) {
+        controller.load_patterns(&content);
+    }
+
+    controller
+}
+
+fn command_output_dir(config: &TaskConfig) -> PathBuf {
+    if let Some(storage_path) = &config.storage_path {
+        return PathBuf::from(storage_path)
+            .join("tasks")
+            .join(&config.task_id)
+            .join("command-output");
+    }
+
+    PathBuf::from(&config.cwd)
+        .join(".roo")
+        .join("tasks")
+        .join(&config.task_id)
+        .join("command-output")
 }
 
 // ---------------------------------------------------------------------------
@@ -185,7 +216,7 @@ impl TaskLifecycle {
         let task_id = engine.config().task_id.clone();
 
         // Source: TS line 478 — `this.rooIgnoreController = new RooIgnoreController(this.cwd)`
-        let roo_ignore_controller = Some(roo_ignore::RooIgnoreController::new(&cwd));
+        let roo_ignore_controller = Some(load_roo_ignore_controller(&cwd));
 
         // Source: TS line 479 — `this.rooProtectedController = new RooProtectedController(this.cwd)`
         let roo_protected_controller = Some(roo_protect::RooProtectedController::new(&cwd));
@@ -232,6 +263,9 @@ impl TaskLifecycle {
     /// Source: `src/core/task/Task.ts` — constructor injection of
     /// `mcpHub`, `terminal`, `messageQueueService`, `telemetryService`.
     pub fn with_services(mut self, services: ServiceRefs) -> Self {
+        if let Some(controller) = &services.roo_ignore_controller {
+            self.roo_ignore_controller = Some((**controller).clone());
+        }
         self.services = services;
         self
     }
@@ -550,8 +584,27 @@ impl TaskLifecycle {
         // safe here.
         let message_builder = crate::MessageBuilder::new("");
 
-        // Build a default ToolDispatcher.
-        let dispatcher = crate::tool_dispatcher::default_dispatcher();
+        // Build the richest dispatcher supported by the available runtime
+        // services. This is the production path for command execution, MCP,
+        // slash commands, skills, and the core file/search tools.
+        let output_dir = command_output_dir(loop_engine.config());
+        let dispatcher = match (
+            self.services.terminal_registry.clone(),
+            self.services.mcp_hub.clone(),
+        ) {
+            (Some(registry), Some(mcp_hub)) => crate::tool_dispatcher::default_dispatcher_full(
+                registry,
+                output_dir,
+                &loop_engine.config().mode,
+                mcp_hub,
+            ),
+            (Some(registry), None) => crate::tool_dispatcher::default_dispatcher_with_terminal(
+                registry,
+                output_dir,
+                &loop_engine.config().mode,
+            ),
+            (None, _) => crate::tool_dispatcher::default_dispatcher(),
+        };
 
         // Take the controllers that belong to the lifecycle so we can move
         // them into the AgentLoop on its thread.
@@ -560,6 +613,17 @@ impl TaskLifecycle {
         let file_context_tracker = self.file_context_tracker.take();
         let diff_view = self.diff_view_provider.take();
         let terminal_registry = self.services.terminal_registry.clone();
+        let mcp_servers = self
+            .services
+            .mcp_hub
+            .as_ref()
+            .map(|hub| hub.get_servers())
+            .unwrap_or_default();
+        let checkpoint_service = self.checkpoint_service.take();
+        let agent_loop_config = crate::agent_loop::AgentLoopConfig {
+            enable_checkpoints: loop_engine.config().enable_checkpoints,
+            ..crate::agent_loop::AgentLoopConfig::default()
+        };
 
         info!(task_id = %task_id, "Spawning AgentLoop on background thread");
 
@@ -572,7 +636,9 @@ impl TaskLifecycle {
                     provider,
                     message_builder,
                     dispatcher,
-                );
+                )
+                .with_config(agent_loop_config)
+                .with_mcp_servers(mcp_servers);
 
                 // Wire in controllers from the lifecycle
                 if let Some(ig) = roo_ignore {
@@ -589,6 +655,9 @@ impl TaskLifecycle {
                 }
                 if let Some(reg) = terminal_registry {
                     agent_loop = agent_loop.with_terminal_registry(reg);
+                }
+                if let Some(service) = checkpoint_service {
+                    agent_loop = agent_loop.with_checkpoint_service(service);
                 }
 
                 // Create a minimal tokio runtime on this thread
