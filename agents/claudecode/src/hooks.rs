@@ -4,19 +4,25 @@ use std::{
     hash::{Hash, Hasher},
     path::{Path, PathBuf},
     process::Stdio,
+    sync::Arc,
     time::Instant,
 };
 
 use anyhow::{Context, Result, anyhow};
+use async_trait::async_trait;
 use clap::{Args, Subcommand, ValueEnum};
 use claude_config::{RuntimeConfig, SettingSource};
 use claude_core::{ConversationEntry, ToolCall, ToolResult};
+use claude_permissions::{
+    PermissionBroker, PermissionDecision, PermissionRequest, PermissionUpdate,
+};
 use claude_session::SessionStore;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::{
     io::AsyncWriteExt,
     process::Command,
+    sync::Mutex,
     time::{Duration, timeout},
 };
 use uuid::Uuid;
@@ -56,6 +62,7 @@ pub enum HookEventName {
     PreToolUse,
     PostToolUse,
     PostToolUseFailure,
+    PermissionRequest,
     PermissionDenied,
 }
 
@@ -68,6 +75,7 @@ impl HookEventName {
             Self::PreToolUse => "pre_tool_use",
             Self::PostToolUse => "post_tool_use",
             Self::PostToolUseFailure => "post_tool_use_failure",
+            Self::PermissionRequest => "permission_request",
             Self::PermissionDenied => "permission_denied",
         }
     }
@@ -80,6 +88,7 @@ impl HookEventName {
             Self::PreToolUse => "PreToolUse",
             Self::PostToolUse => "PostToolUse",
             Self::PostToolUseFailure => "PostToolUseFailure",
+            Self::PermissionRequest => "PermissionRequest",
             Self::PermissionDenied => "PermissionDenied",
         }
     }
@@ -96,6 +105,7 @@ impl HookEventName {
             "pretooluse" => Some(Self::PreToolUse),
             "posttooluse" => Some(Self::PostToolUse),
             "posttoolusefailure" => Some(Self::PostToolUseFailure),
+            "permissionrequest" => Some(Self::PermissionRequest),
             "permissiondenied" => Some(Self::PermissionDenied),
             _ => None,
         }
@@ -267,6 +277,27 @@ struct HookSpecificOutput {
     additional_context: Option<String>,
     #[serde(default)]
     updated_input: Option<Value>,
+    #[serde(default)]
+    decision: Option<PermissionHookDecision>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PermissionHookDecision {
+    behavior: PermissionHookBehavior,
+    #[serde(default)]
+    updated_input: Option<Value>,
+    #[serde(default)]
+    updated_permissions: Vec<PermissionUpdate>,
+    #[serde(default)]
+    message: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+enum PermissionHookBehavior {
+    Allow,
+    Deny,
 }
 
 #[derive(Debug)]
@@ -274,6 +305,7 @@ struct ExecutedHookOutcome {
     status: &'static str,
     blocked_reason: Option<String>,
     updated_input: Option<Value>,
+    permission_decision: Option<PermissionHookDecision>,
     additional_context: Option<String>,
     exit_code: Option<i32>,
     duration_ms: u64,
@@ -285,6 +317,7 @@ struct ExecutedHookOutcome {
 struct HookEffects {
     blocked_reason: Option<String>,
     updated_input: Option<Value>,
+    permission_decision: Option<PermissionHookDecision>,
     additional_contexts: Vec<String>,
 }
 
@@ -712,6 +745,185 @@ pub async fn apply_post_tool_hooks_with_options(
     Ok(())
 }
 
+pub async fn apply_permission_request_hooks(
+    discovery: &RuntimeHookDiscovery,
+    config: &RuntimeConfig,
+    store: &SessionStore,
+    state: &mut HookRunState,
+    request: &PermissionRequest,
+    options: HookExecutionOptions,
+) -> Result<Option<PermissionDecision>> {
+    let input = json!({
+        "event": HookEventName::PermissionRequest.as_str(),
+        "hookEventName": HookEventName::PermissionRequest.display_name(),
+        "session_id": config.session_id,
+        "cwd": config.cwd,
+        "tool_name": request.tool_name,
+        "tool_use_id": request.tool_use_id,
+        "tool_input": request.tool_input,
+        "permission_request": {
+            "class": request.resolved_permission_class(),
+            "title": request.title,
+            "description": request.description,
+            "blocked_path": request.blocked_path,
+            "permission_suggestions": request.permission_suggestions,
+        },
+    });
+    let effects = run_event_hooks(
+        discovery,
+        HookEventName::PermissionRequest,
+        config,
+        store,
+        state,
+        request.tool_name.clone(),
+        &input,
+        true,
+        options,
+    )
+    .await?;
+
+    if let Some(reason) = effects.blocked_reason {
+        return Ok(Some(PermissionDecision::deny(reason)));
+    }
+    let Some(decision) = effects.permission_decision else {
+        return Ok(None);
+    };
+    match decision.behavior {
+        PermissionHookBehavior::Allow => {
+            let mut permission_decision = PermissionDecision::allow();
+            permission_decision.updated_input = decision.updated_input;
+            permission_decision.permission_updates = decision.updated_permissions;
+            Ok(Some(permission_decision))
+        }
+        PermissionHookBehavior::Deny => Ok(Some(PermissionDecision::deny(
+            decision
+                .message
+                .unwrap_or_else(|| "Permission denied by hook.".to_owned()),
+        ))),
+    }
+}
+
+pub fn wrap_permission_broker_with_hooks(
+    broker: Arc<dyn PermissionBroker>,
+    discovery: &RuntimeHookDiscovery,
+    config: &RuntimeConfig,
+) -> Arc<dyn PermissionBroker> {
+    if !discovery
+        .hooks
+        .iter()
+        .any(|hook| hook.supported && hook.event == HookEventName::PermissionRequest)
+    {
+        return broker;
+    }
+    let store = match SessionStore::open(config.paths.clone()) {
+        Ok(store) => store,
+        Err(error) => {
+            tracing::warn!("failed to open hook-aware permission store: {error}");
+            return broker;
+        }
+    };
+    let state = HookRunState::load(&store, config.session_id).unwrap_or_default();
+    Arc::new(HookAwarePermissionBroker {
+        inner: broker,
+        discovery: discovery.clone(),
+        config: config.clone(),
+        store,
+        state: Mutex::new(state),
+        options: HookExecutionOptions::persistent(),
+    })
+}
+
+struct HookAwarePermissionBroker {
+    inner: Arc<dyn PermissionBroker>,
+    discovery: RuntimeHookDiscovery,
+    config: RuntimeConfig,
+    store: SessionStore,
+    state: Mutex<HookRunState>,
+    options: HookExecutionOptions,
+}
+
+#[async_trait]
+impl PermissionBroker for HookAwarePermissionBroker {
+    async fn decide(&self, request: PermissionRequest) -> PermissionDecision {
+        let hook_result = {
+            let mut state = self.state.lock().await;
+            apply_permission_request_hooks(
+                &self.discovery,
+                &self.config,
+                &self.store,
+                &mut state,
+                &request,
+                self.options,
+            )
+            .await
+        };
+        match hook_result {
+            Ok(Some(decision)) => decision,
+            Ok(None) => self.inner.decide(request).await,
+            Err(error) => PermissionDecision::deny(format!("Permission hook failed: {error}")),
+        }
+    }
+
+    async fn decide_forced_prompt(&self, request: PermissionRequest) -> PermissionDecision {
+        let hook_result = {
+            let mut state = self.state.lock().await;
+            apply_permission_request_hooks(
+                &self.discovery,
+                &self.config,
+                &self.store,
+                &mut state,
+                &request,
+                self.options,
+            )
+            .await
+        };
+        match hook_result {
+            Ok(Some(decision)) => decision,
+            Ok(None) => self.inner.decide_forced_prompt(request).await,
+            Err(error) => PermissionDecision::deny(format!("Permission hook failed: {error}")),
+        }
+    }
+
+    fn add_session_rule(
+        &self,
+        action: claude_permissions::RuleAction,
+        tool_pattern: String,
+    ) -> Result<()> {
+        self.inner.add_session_rule(action, tool_pattern)
+    }
+
+    fn clear_session_rules(&self) -> Result<usize> {
+        self.inner.clear_session_rules()
+    }
+
+    fn apply_permission_updates(&self, updates: &[PermissionUpdate]) -> Result<usize> {
+        self.inner.apply_permission_updates(updates)
+    }
+
+    fn mode(&self) -> Option<claude_core::PermissionMode> {
+        self.inner.mode()
+    }
+
+    fn additional_working_directories(&self) -> Vec<PathBuf> {
+        self.inner.additional_working_directories()
+    }
+
+    fn audit_records(&self) -> Vec<claude_permissions::PermissionAuditRecord> {
+        self.inner.audit_records()
+    }
+
+    fn layered_rules(&self) -> Vec<claude_permissions::SourceAwarePermissionRule> {
+        self.inner.layered_rules()
+    }
+
+    fn matching_rule(
+        &self,
+        request: &PermissionRequest,
+    ) -> Option<claude_permissions::SourceAwarePermissionRule> {
+        self.inner.matching_rule(request)
+    }
+}
+
 async fn run_hooks_list(config: &RuntimeConfig, args: HooksListArgs) -> Result<()> {
     let output = build_hooks_list_output(config, &args)?;
     if args.json {
@@ -1032,6 +1244,9 @@ async fn run_event_hooks(
         if let Some(updated_input) = outcome.updated_input {
             effects.updated_input = Some(updated_input);
         }
+        if let Some(permission_decision) = outcome.permission_decision {
+            effects.permission_decision = Some(permission_decision);
+        }
         if let Some(additional_context) = outcome.additional_context {
             effects.additional_contexts.push(additional_context);
         }
@@ -1055,6 +1270,7 @@ async fn execute_command_hook(
             blocked_reason: blocking
                 .then(|| "Hook configuration used an unsupported shell.".to_owned()),
             updated_input: None,
+            permission_decision: None,
             additional_context: None,
             exit_code: None,
             duration_ms: 0,
@@ -1089,6 +1305,7 @@ async fn execute_command_hook(
                 blocked_reason: blocking
                     .then(|| format!("Failed to spawn hook `{}`: {error}", hook.display)),
                 updated_input: None,
+                permission_decision: None,
                 additional_context: None,
                 exit_code: None,
                 duration_ms: started.elapsed().as_millis() as u64,
@@ -1118,6 +1335,7 @@ async fn execute_command_hook(
                 blocked_reason: blocking
                     .then(|| format!("Hook `{}` failed to complete: {error}", hook.display)),
                 updated_input: None,
+                permission_decision: None,
                 additional_context: None,
                 exit_code: None,
                 duration_ms: started.elapsed().as_millis() as u64,
@@ -1135,6 +1353,7 @@ async fn execute_command_hook(
                     )
                 }),
                 updated_input: None,
+                permission_decision: None,
                 additional_context: None,
                 exit_code: None,
                 duration_ms: started.elapsed().as_millis() as u64,
@@ -1148,6 +1367,9 @@ async fn execute_command_hook(
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
     let parsed = parse_hook_response(&stdout);
     let updated_input = parsed.as_ref().and_then(normalized_updated_input);
+    let permission_decision = parsed
+        .as_ref()
+        .and_then(normalized_permission_hook_decision);
     let additional_context = parsed.as_ref().and_then(normalized_additional_context);
     let blocked_reason = if parsed.as_ref().is_some_and(hook_response_blocks) {
         Some(
@@ -1182,6 +1404,7 @@ async fn execute_command_hook(
         },
         blocked_reason,
         updated_input,
+        permission_decision,
         additional_context,
         exit_code: output.status.code(),
         duration_ms: started.elapsed().as_millis() as u64,
@@ -1210,6 +1433,13 @@ fn normalized_updated_input(response: &HookResponse) -> Option<Value> {
             .as_ref()
             .and_then(|value| value.updated_input.clone())
     })
+}
+
+fn normalized_permission_hook_decision(response: &HookResponse) -> Option<PermissionHookDecision> {
+    response
+        .hook_specific_output
+        .as_ref()
+        .and_then(|value| value.decision.clone())
 }
 
 fn normalized_additional_context(response: &HookResponse) -> Option<String> {
@@ -1289,8 +1519,26 @@ fn format_source(hook: &HookRecord) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{
+        Arc as StdArc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    use async_trait::async_trait;
     use claude_config::{ProviderOverrides, RuntimeOverrides, SettingSource, load_runtime_config};
     use tempfile::tempdir;
+
+    struct CountingAllowBroker {
+        calls: StdArc<AtomicUsize>,
+    }
+
+    #[async_trait]
+    impl PermissionBroker for CountingAllowBroker {
+        async fn decide(&self, _request: PermissionRequest) -> PermissionDecision {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            PermissionDecision::allow()
+        }
+    }
 
     fn json_emitting_hook(json_body: &str) -> (String, String) {
         if cfg!(windows) {
@@ -1530,6 +1778,60 @@ mod tests {
             prepared.call.input.get("path").and_then(Value::as_str),
             Some("second.txt")
         );
+    }
+
+    #[tokio::test]
+    async fn permission_request_hook_can_deny_before_delegate_broker() {
+        let (_tempdir, config, store) = config_and_store();
+        let (shell, command) = json_emitting_hook(
+            r#"{"hookSpecificOutput":{"decision":{"behavior":"deny","message":"blocked by hook"}}}"#,
+        );
+        fs::write(
+            config.paths.profile_dir.join("hooks.json"),
+            format!(
+                r#"{{"PermissionRequest":[{{"matcher":"write_file","hooks":[{{"type":"command","command":"{}","shell":"{}"}}]}}]}}"#,
+                command.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n"),
+                shell
+            ),
+        )
+        .unwrap_or_else(|error| panic!("hooks write failed: {error}"));
+
+        store
+            .ensure_session(
+                config.session_id,
+                &config.cwd,
+                "mock",
+                Some("test"),
+                Some("hooks"),
+            )
+            .unwrap_or_else(|error| panic!("ensure session failed: {error}"));
+
+        let discovery = discover_runtime_hooks(&config, &[]);
+        let calls = StdArc::new(AtomicUsize::new(0));
+        let broker = wrap_permission_broker_with_hooks(
+            StdArc::new(CountingAllowBroker {
+                calls: calls.clone(),
+            }),
+            &discovery,
+            &config,
+        );
+        let decision = broker
+            .decide(PermissionRequest {
+                tool_name: "write_file".to_owned(),
+                permission_class: None,
+                tool_input: json!({"path":"secret.txt","content":"value"}),
+                working_directory: Some(config.cwd.display().to_string()),
+                tool_use_id: Some("tool-1".to_owned()),
+                title: Some("Write file".to_owned()),
+                description: None,
+                blocked_path: None,
+                permission_suggestions: Vec::new(),
+            })
+            .await;
+
+        assert!(!decision.allowed);
+        assert_eq!(decision.message.as_deref(), Some("blocked by hook"));
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
     }
 
     #[tokio::test]

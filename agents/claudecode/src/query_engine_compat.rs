@@ -4400,55 +4400,67 @@ while True:
         );
     }
 
-    #[tokio::test]
-    async fn compat_run_clears_resume_state_after_mock_list_files_prompt() {
-        let (_tempdir, config, store) = mock_config_and_store();
-        let discovery = RuntimeHookDiscovery::default();
-        let mut conversation =
-            initialize_conversation(&store, &config, Some("list files")).expect("conversation");
-        let mut hook_state = HookRunState::load(&store, config.session_id).expect("hook state");
+    #[test]
+    fn compat_run_clears_resume_state_after_mock_list_files_prompt() {
+        std::thread::Builder::new()
+            .stack_size(8 * 1024 * 1024)
+            .spawn(|| {
+                let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
+                rt.block_on(async {
+                    let (_tempdir, config, store) = mock_config_and_store();
+                    let discovery = RuntimeHookDiscovery::default();
+                    let mut conversation =
+                        initialize_conversation(&store, &config, Some("list files"))
+                            .expect("conversation");
+                    let mut hook_state =
+                        HookRunState::load(&store, config.session_id).expect("hook state");
 
-        let outcome = run_prompt_with_query_engine_compat(
-            &config,
-            &store,
-            mock_provider_backend(&config),
-            DiscoveredToolScope::default(),
-            mock_broker(&config),
-            None,
-            &discovery,
-            &mut hook_state,
-            &mut conversation,
-            "list files",
-        )
-        .await
-        .expect("compat run should succeed");
+                    let outcome = run_prompt_with_query_engine_compat(
+                        &config,
+                        &store,
+                        mock_provider_backend(&config),
+                        DiscoveredToolScope::default(),
+                        mock_broker(&config),
+                        None,
+                        &discovery,
+                        &mut hook_state,
+                        &mut conversation,
+                        "list files",
+                    )
+                    .await
+                    .expect("compat run should succeed");
 
-        assert!(!outcome.text.trim().is_empty());
-        assert!(
-            conversation
-                .iter()
-                .any(|entry| entry.role == ConversationRole::Assistant)
-        );
-        let resume_state = store
-            .load_resume_state(config.session_id)
-            .expect("resume state")
-            .expect("resume state row");
-        assert!(resume_state.pending_tool_calls.is_empty());
-        let transcript = store
-            .load_transcript(config.session_id)
-            .expect("load transcript");
-        assert!(
-            transcript
-                .conversation_entries()
-                .iter()
-                .any(|entry| entry.role == ConversationRole::Assistant),
-            "event types: {:?}",
-            transcript
-                .events()
-                .iter()
-                .map(|event| event.event_type.clone())
-                .collect::<Vec<_>>()
-        );
+                    assert!(!outcome.text.trim().is_empty());
+                    assert!(
+                        conversation
+                            .iter()
+                            .any(|entry| entry.role == ConversationRole::Assistant)
+                    );
+                    let resume_state = store
+                        .load_resume_state(config.session_id)
+                        .expect("resume state")
+                        .expect("resume state row");
+                    assert!(resume_state.pending_tool_calls.is_empty());
+                    let transcript = store
+                        .load_transcript(config.session_id)
+                        .expect("load transcript");
+                    assert!(
+                        transcript
+                            .conversation_entries()
+                            .iter()
+                            .any(|entry| entry.role == ConversationRole::Assistant),
+                        "event types: {:?}",
+                        transcript
+                            .events()
+                            .iter()
+                            .map(|event| event.event_type.clone())
+                            .collect::<Vec<_>>()
+                    );
+                });
+            })
+            .expect("thread spawn")
+            .join()
+            .expect("thread join");
     }
 
     #[tokio::test]

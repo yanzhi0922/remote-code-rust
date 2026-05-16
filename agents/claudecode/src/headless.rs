@@ -42,39 +42,11 @@ pub(crate) async fn run_headless(
     inline_prompt: Option<String>,
 ) -> Result<()> {
     let discovery = discover_runtime_extensions(config);
-    let slash_commands = headless_slash_commands().await;
     let emitter = Arc::new(Mutex::new(ProtocolEmitter::new(
         io::stdout(),
         config.session_id,
     )));
-    {
-        let mut emitter_guard = emitter.lock().await;
-        emitter_guard.emit_init(InitPayload {
-            api_key_source: config.auth_source.clone().unwrap_or_else(|| {
-                if config.provider.api_key.is_some() {
-                    "user".to_owned()
-                } else {
-                    "missing".to_owned()
-                }
-            }),
-            version: runtime_version().to_owned(),
-            cwd: config.cwd.display().to_string(),
-            tools: runtime_provider_tool_specs()
-                .await
-                .into_iter()
-                .map(|tool| tool.protocol_name)
-                .collect(),
-            mcp_servers: discovery.mcp_servers,
-            model: config.provider.model.clone(),
-            permission_mode: config.permission_mode.as_legacy_str().to_owned(),
-            slash_commands,
-            output_style: "default".to_owned(),
-            skills: discovery.skills,
-            plugins: discovery.plugins,
-        })?;
-        emitter_guard.emit_state(SessionState::Idle)?;
-        emitter_guard.emit_status_snapshot(&build_runtime_status_snapshot(config))?;
-    }
+    emit_headless_init(&emitter, config, discovery).await?;
 
     let pending_permissions = Arc::new(Mutex::new(HashMap::<
         String,
@@ -203,6 +175,45 @@ pub(crate) async fn headless_slash_commands() -> Vec<String> {
     commands
 }
 
+async fn emit_headless_init<W: Write + Send + 'static>(
+    emitter: &Arc<Mutex<ProtocolEmitter<W>>>,
+    config: &RuntimeConfig,
+    discovery: crate::conversation::RuntimeExtensionDiscovery,
+) -> Result<()> {
+    let slash_commands = headless_slash_commands().await;
+    let tools = runtime_provider_tool_specs()
+        .await
+        .into_iter()
+        .map(|tool| tool.protocol_name)
+        .collect();
+    let mut emitter_guard = emitter.lock().await;
+    emitter_guard.emit_init(InitPayload {
+        api_key_source: config.auth_source.clone().unwrap_or_else(|| {
+            if config.provider.api_key.is_some() {
+                "user".to_owned()
+            } else {
+                "missing".to_owned()
+            }
+        }),
+        version: runtime_version().to_owned(),
+        cwd: config.cwd.display().to_string(),
+        tools,
+        mcp_servers: discovery.mcp_servers,
+        model: config.provider.model.clone(),
+        permission_mode: config.permission_mode.as_legacy_str().to_owned(),
+        slash_commands,
+        output_style: config
+            .output_style
+            .clone()
+            .unwrap_or_else(|| "default".to_owned()),
+        skills: discovery.skills,
+        plugins: discovery.plugins,
+    })?;
+    emitter_guard.emit_state(SessionState::Idle)?;
+    emitter_guard.emit_status_snapshot(&build_runtime_status_snapshot(config))?;
+    Ok(())
+}
+
 pub(crate) async fn run_headless_text_print(
     config: &mut RuntimeConfig,
     store: &SessionStore,
@@ -234,6 +245,7 @@ pub(crate) async fn run_headless_stream_json_print(
     store: &SessionStore,
     prompt: String,
 ) -> Result<()> {
+    let runtime_discovery = discover_runtime_extensions(config);
     let backend = ProviderCompatBackend::new(
         Arc::new(claude_provider::ProviderClient::new()?),
         &config.provider,
@@ -255,6 +267,7 @@ pub(crate) async fn run_headless_stream_json_print(
         io::stdout(),
         config.session_id,
     )));
+    emit_headless_init(&emitter, config, runtime_discovery).await?;
 
     run_headless_prompt_once(
         emitter,
@@ -1210,46 +1223,58 @@ mod tests {
             .expect("thread join");
     }
 
-    #[tokio::test]
-    async fn headless_text_prompt_once_uses_streaming_backend_for_print_mode() {
-        let (_tempdir, mut config, store) = mock_config_and_store();
-        config.print_mode = true;
-        let backend = Arc::new(RecordingStreamingBackend::default());
-        let discovered_tool_scope = claude_provider::DiscoveredToolScope::default();
-        let discovery = RuntimeHookDiscovery::default();
-        let (plan_mode_controller, broker) =
-            claude_tools::runtime_plan_mode::build_runtime_plan_mode(&config, &store)
-                .expect("plan mode");
-        let _plan_mode_runtime =
-            install_plan_mode_runtime(plan_mode_controller).expect("install plan mode");
-        let (mut conversation, mut hook_state) = prepare_prompt_runtime_state(
-            &store,
-            &config,
-            &discovered_tool_scope,
-            &discovery,
-            Some("print"),
-        )
-        .await
-        .expect("prepare prompt runtime");
+    /// Same stack-size workaround as
+    /// `headless_default_compat_path_emits_stream_json_message_events_and_result`.
+    #[test]
+    fn headless_text_prompt_once_uses_streaming_backend_for_print_mode() {
+        std::thread::Builder::new()
+            .stack_size(8 * 1024 * 1024)
+            .spawn(|| {
+                let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
+                rt.block_on(async {
+                    let (_tempdir, mut config, store) = mock_config_and_store();
+                    config.print_mode = true;
+                    let backend = Arc::new(RecordingStreamingBackend::default());
+                    let discovered_tool_scope = claude_provider::DiscoveredToolScope::default();
+                    let discovery = RuntimeHookDiscovery::default();
+                    let (plan_mode_controller, broker) =
+                        claude_tools::runtime_plan_mode::build_runtime_plan_mode(&config, &store)
+                            .expect("plan mode");
+                    let _plan_mode_runtime =
+                        install_plan_mode_runtime(plan_mode_controller).expect("install plan mode");
+                    let (mut conversation, mut hook_state) = prepare_prompt_runtime_state(
+                        &store,
+                        &config,
+                        &discovered_tool_scope,
+                        &discovery,
+                        Some("print"),
+                    )
+                    .await
+                    .expect("prepare prompt runtime");
 
-        let outcome = run_prompt(
-            &mut config,
-            &store,
-            backend.clone(),
-            discovered_tool_scope,
-            broker,
-            None,
-            &discovery,
-            &mut hook_state,
-            &mut conversation,
-            "print",
-        )
-        .await
-        .expect("text print prompt should succeed");
+                    let outcome = run_prompt(
+                        &mut config,
+                        &store,
+                        backend.clone(),
+                        discovered_tool_scope,
+                        broker,
+                        None,
+                        &discovery,
+                        &mut hook_state,
+                        &mut conversation,
+                        "print",
+                    )
+                    .await
+                    .expect("text print prompt should succeed");
 
-        assert_eq!(outcome.text, "streaming-backend");
-        assert_eq!(backend.complete_calls.load(Ordering::SeqCst), 0);
-        assert_eq!(backend.complete_streaming_calls.load(Ordering::SeqCst), 1);
+                    assert_eq!(outcome.text, "streaming-backend");
+                    assert_eq!(backend.complete_calls.load(Ordering::SeqCst), 0);
+                    assert_eq!(backend.complete_streaming_calls.load(Ordering::SeqCst), 1);
+                });
+            })
+            .expect("thread spawn")
+            .join()
+            .expect("thread join");
     }
 
     /// Same stack-size workaround as
@@ -1332,7 +1357,7 @@ mod tests {
             "req-1".to_owned(),
             PermissionDecision {
                 allowed: true,
-                message: Some("approved".to_owned().into()),
+                message: Some("approved".to_owned()),
                 permission_suggestions: Vec::new(),
                 updated_input: Some(serde_json::json!({"plan":"edited"})),
                 permission_updates: Vec::new(),
@@ -1442,7 +1467,7 @@ mod tests {
             tokio::spawn(async move {
                 broker
                     .decide_forced_prompt(PermissionRequest {
-                        tool_name: "exit_plan_mode".to_owned().into(),
+                        tool_name: "exit_plan_mode".to_owned(),
                         permission_class: Some(PermissionClass::Read),
                         tool_input: serde_json::json!({}),
                         working_directory: Some(cwd),
@@ -1475,7 +1500,7 @@ mod tests {
             request_id,
             PermissionDecision {
                 allowed: true,
-                message: Some("approved".to_owned().into()),
+                message: Some("approved".to_owned()),
                 permission_suggestions: Vec::new(),
                 updated_input: None,
                 permission_updates: Vec::new(),

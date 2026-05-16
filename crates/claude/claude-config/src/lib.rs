@@ -26,7 +26,9 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::settings_layers::{
-    ResolvedRuntimeSettings, load_runtime_settings, resolve_runtime_settings_files,
+    ResolvedRuntimeSettings, discover_runtime_settings_sources, load_runtime_settings,
+    load_runtime_settings_with_source_hints, resolve_runtime_settings_files,
+    setting_source_for_kind,
 };
 use crate::tool_filters::merge_tool_filters;
 
@@ -414,7 +416,20 @@ pub fn load_runtime_config(
         &runtime_overrides.settings_files,
         &allowed_setting_sources,
     );
-    let settings = load_runtime_settings(&resolved_settings_files)?;
+    let settings = if runtime_overrides.settings_files.is_empty() {
+        let source_hints = discover_runtime_settings_sources(
+            &cwd,
+            &paths.profile_dir,
+            &paths.profiles_dir,
+            &allowed_setting_sources,
+        )
+        .into_iter()
+        .map(|source| (source.path, setting_source_for_kind(source.kind)))
+        .collect::<Vec<_>>();
+        load_runtime_settings_with_source_hints(&source_hints)?
+    } else {
+        load_runtime_settings(&resolved_settings_files)?
+    };
     let provider_overrides = overrides.clone();
     let mut provider = load_provider_config(overrides, session_id_override, &settings)?;
     let effort = runtime_overrides
@@ -550,7 +565,8 @@ pub fn load_provider_config(
                 "ANTHROPIC_BASE_URL",
             ])
         })
-        .or_else(|| settings.base_url.clone());
+        .or_else(|| settings.base_url.clone())
+        .or_else(|| default_base_url_for_provider(&provider_name));
     let explicit_protocol = overrides
         .protocol
         .or_else(|| {
@@ -595,14 +611,16 @@ pub fn load_provider_config(
         });
     let request_header_overrides = build_request_header_overrides(session_id);
     let request_metadata = build_request_metadata(session_id);
+    let model = overrides
+        .model
+        .or_else(|| provider_model_from_env(protocol))
+        .or_else(|| default_model_for_provider(provider_name.as_str(), protocol))
+        .or_else(|| settings.model.clone());
     let mut provider = ProviderConfig {
         name: provider_name,
         base_url: normalized_base_url,
         api_key: None,
-        model: overrides
-            .model
-            .or_else(|| read_env_first(&["REMOTE_CODE_MODEL", "OPENAI_MODEL"]))
-            .or_else(|| settings.model.clone()),
+        model,
         protocol,
         timeout_ms,
         max_output_tokens,
@@ -692,6 +710,37 @@ fn provider_matches_discovered_endpoint(
     provider.protocol == candidate.protocol
         && provider.base_url.is_some()
         && provider.base_url == candidate.base_url
+}
+
+fn default_base_url_for_provider(provider_name: &str) -> Option<String> {
+    if provider_name.eq_ignore_ascii_case("anthropic") {
+        Some("https://api.anthropic.com".to_owned())
+    } else {
+        None
+    }
+}
+
+fn provider_model_from_env(protocol: ProviderProtocol) -> Option<String> {
+    read_env_first(&["REMOTE_CODE_MODEL"]).or_else(|| match protocol {
+        ProviderProtocol::Anthropic => read_env_first(&[
+            "ANTHROPIC_MODEL",
+            "ANTHROPIC_DEFAULT_MODEL",
+            "ANTHROPIC_DEFAULT_SONNET_MODEL",
+        ]),
+        ProviderProtocol::OpenAi => read_env_first(&["OPENAI_MODEL"]),
+        _ => None,
+    })
+}
+
+fn default_model_for_provider(provider_name: &str, protocol: ProviderProtocol) -> Option<String> {
+    if provider_name.eq_ignore_ascii_case("anthropic")
+        || matches!(protocol, ProviderProtocol::Anthropic)
+            && provider_name.eq_ignore_ascii_case("custom")
+    {
+        Some("claude-sonnet-4-6".to_owned())
+    } else {
+        None
+    }
 }
 
 #[must_use]
@@ -1003,6 +1052,16 @@ fn env_setting_sources() -> Vec<String> {
         ("ANTHROPIC_API_KEY", "env:ANTHROPIC_API_KEY"),
         ("OPENAI_API_KEY", "env:OPENAI_API_KEY"),
         ("REMOTE_CODE_MODEL", "env:REMOTE_CODE_MODEL"),
+        (
+            "REMOTE_CODE_ANTHROPIC_MODEL",
+            "env:REMOTE_CODE_ANTHROPIC_MODEL",
+        ),
+        ("ANTHROPIC_MODEL", "env:ANTHROPIC_MODEL"),
+        ("ANTHROPIC_DEFAULT_MODEL", "env:ANTHROPIC_DEFAULT_MODEL"),
+        (
+            "ANTHROPIC_DEFAULT_SONNET_MODEL",
+            "env:ANTHROPIC_DEFAULT_SONNET_MODEL",
+        ),
         ("OPENAI_MODEL", "env:OPENAI_MODEL"),
         ("REMOTE_CODE_PROTOCOL", "env:REMOTE_CODE_PROTOCOL"),
         (
@@ -1024,15 +1083,26 @@ fn env_setting_sources() -> Vec<String> {
             "MINIMAX_TOKEN_PLAN_API_KEY",
             "env:MINIMAX_TOKEN_PLAN_API_KEY",
         ),
+        ("MINIMAX_API_KEY", "env:MINIMAX_API_KEY"),
         (
             "MINIMAX_TOKEN_PLAN_BASE_URL",
             "env:MINIMAX_TOKEN_PLAN_BASE_URL",
         ),
+        (
+            "MINIMAX_ANTHROPIC_BASE_URL",
+            "env:MINIMAX_ANTHROPIC_BASE_URL",
+        ),
+        ("MINIMAX_API_HOST", "env:MINIMAX_API_HOST"),
         ("MINIMAX_TOKEN_PLAN_MODEL", "env:MINIMAX_TOKEN_PLAN_MODEL"),
         (
             "MINIMAX_CODING_PLAN_API_KEY",
             "env:MINIMAX_CODING_PLAN_API_KEY",
         ),
+        (
+            "MINIMAX_CODING_PLAN_BASE_URL",
+            "env:MINIMAX_CODING_PLAN_BASE_URL",
+        ),
+        ("MINIMAX_CODING_PLAN_MODEL", "env:MINIMAX_CODING_PLAN_MODEL"),
         (
             "ALIYUN_CODING_PLAN_API_KEY",
             "env:ALIYUN_CODING_PLAN_API_KEY",
@@ -1157,10 +1227,13 @@ fn provider_specific_auth_candidates(
         "openai" => &[(&["OPENAI_API_KEY"], "env:OPENAI_API_KEY")],
         "glm" => &[(&["GLM_API_KEY"], "env:GLM_API_KEY")],
         "glm-coding" => &[(&["GLM_CODING_PLAN_API_KEY"], "env:GLM_CODING_PLAN_API_KEY")],
-        "minimax-token-plan" => &[(
-            &["MINIMAX_TOKEN_PLAN_API_KEY"],
-            "env:MINIMAX_TOKEN_PLAN_API_KEY",
-        )],
+        "minimax-token-plan" => &[
+            (
+                &["MINIMAX_TOKEN_PLAN_API_KEY"],
+                "env:MINIMAX_TOKEN_PLAN_API_KEY",
+            ),
+            (&["MINIMAX_API_KEY"], "env:MINIMAX_API_KEY"),
+        ],
         "minimax-coding" => &[(
             &["MINIMAX_CODING_PLAN_API_KEY"],
             "env:MINIMAX_CODING_PLAN_API_KEY",
@@ -1285,7 +1358,7 @@ fn effort_to_thinking_budget(effort: &str) -> Option<u32> {
 /// | `ALIYUN_CODING_PLAN_API_KEY`     | `aliyun-coding`      | `anthropic` | `https://coding.dashscope.aliyuncs.com/apps/anthropic`                | `qwen3.6-plus`     |
 /// | `TENCENT_CODING_PLAN_API_KEY`    | `tencent-coding`     | `anthropic` | `https://api.lkeap.cloud.tencent.com/coding/anthropic`                | `tc-code-latest`   |
 /// | `QIANFAN_CODING_PLAN_API_KEY`    | `qianfan-coding`     | `anthropic` | `https://qianfan.baidubce.com/anthropic/coding`                       | `qianfan-code-latest` |
-/// | `MINIMAX_TOKEN_PLAN_API_KEY`     | `minimax-token-plan` | `anthropic` | `https://api.minimaxi.com/anthropic`                                  | `minimax-m2.7`     |
+/// | `MINIMAX_TOKEN_PLAN_API_KEY` / `MINIMAX_API_KEY` | `minimax-token-plan` | `anthropic` | `https://api.minimaxi.com/anthropic`                                  | `minimax-m2.7`     |
 /// | `MINIMAX_CODING_PLAN_API_KEY`    | `minimax-coding`     | `openai`    | `https://api.minimax.chat/v1`                                         | `MiniMax-M2.7`     |
 /// | `KIMI_CODING_PLAN_API_KEY`       | `kimi-coding`        | `openai`    | `https://api.moonshot.cn/kimi-component/ai_coding`                    | `kimi-k2.5`        |
 /// | `VOLCENGINE_CODING_PLAN_API_KEY` | `volcengine-coding`  | `openai`    | `https://ark.cn-beijing.volces.com/api/v3`                            | `doubao-seed-1-5`  |
@@ -1338,31 +1411,12 @@ pub fn discover_env_providers() -> Vec<ProviderConfig> {
         });
     }
 
-    // Anthropic
-    if let Some(api_key) = read_env_first(&["REMOTE_CODE_API_KEY"]) {
-        let base_url = normalize_base_url(
-            read_env_first(&["REMOTE_CODE_ANTHROPIC_BASE_URL"]),
-            ProviderProtocol::Anthropic,
-        );
-        providers.push(ProviderConfig {
-            name: "anthropic".to_owned(),
-            base_url,
-            api_key: Some(api_key),
-            model: read_env_first(&["REMOTE_CODE_ANTHROPIC_MODEL"]),
-            protocol: ProviderProtocol::Anthropic,
-            timeout_ms: 600_000,
-            max_output_tokens: 4_096,
-            max_retries: default_provider_max_retries(),
-            retry_initial_backoff_ms: default_provider_retry_initial_backoff_ms(),
-            retry_max_backoff_ms: default_provider_retry_max_backoff_ms(),
-            respect_retry_after: default_provider_respect_retry_after(),
-            request_header_overrides: BTreeMap::new(),
-            request_metadata: BTreeMap::new(),
-            thinking_budget: None,
-            temperature: None,
-            top_p: None,
-            top_k: None,
-        });
+    // Anthropic / first-party Claude API.
+    {
+        let mut lookup = |keys: &[&str]| read_env_first(keys);
+        if let Some(provider) = discover_anthropic_provider(&mut lookup) {
+            providers.push(provider);
+        }
     }
 
     // OpenAI
@@ -1498,14 +1552,16 @@ pub fn discover_env_providers() -> Vec<ProviderConfig> {
     // Source: https://platform.minimaxi.com/docs/token-plan/intro
     if let Some(api_key) = read_env_first(&["MINIMAX_CODING_PLAN_API_KEY"]) {
         let base_url = normalize_base_url(
-            Some("https://api.minimax.chat/v1".to_owned()),
+            read_env_first(&["MINIMAX_CODING_PLAN_BASE_URL"])
+                .or_else(|| Some("https://api.minimax.chat/v1".to_owned())),
             ProviderProtocol::OpenAi,
         );
         providers.push(ProviderConfig {
             name: "minimax-coding".to_owned(),
             base_url,
             api_key: Some(api_key),
-            model: Some("MiniMax-M2.7".to_owned()),
+            model: read_env_first(&["MINIMAX_CODING_PLAN_MODEL"])
+                .or(Some("MiniMax-M2.7".to_owned())),
             protocol: ProviderProtocol::OpenAi,
             timeout_ms: 600_000,
             max_output_tokens: 8_192,
@@ -1673,12 +1729,20 @@ fn discover_minimax_token_plan_provider<F>(lookup: &mut F) -> Option<ProviderCon
 where
     F: FnMut(&[&str]) -> Option<String>,
 {
-    let api_key = lookup(&["MINIMAX_TOKEN_PLAN_API_KEY"])?;
-    let base_url = normalize_base_url(
-        lookup(&["MINIMAX_TOKEN_PLAN_BASE_URL"])
-            .or_else(|| Some("https://api.minimaxi.com/anthropic".to_owned())),
-        ProviderProtocol::Anthropic,
-    );
+    let api_key = lookup(&["MINIMAX_TOKEN_PLAN_API_KEY", "MINIMAX_API_KEY"])?;
+    let base_url = lookup(&["MINIMAX_TOKEN_PLAN_BASE_URL", "MINIMAX_ANTHROPIC_BASE_URL"])
+        .or_else(|| {
+            lookup(&["MINIMAX_API_HOST"]).map(|host| {
+                let trimmed = host.trim().trim_end_matches('/');
+                if trimmed.to_ascii_lowercase().contains("/anthropic") {
+                    trimmed.to_owned()
+                } else {
+                    format!("{trimmed}/anthropic")
+                }
+            })
+        })
+        .or_else(|| Some("https://api.minimaxi.com/anthropic".to_owned()));
+    let base_url = normalize_base_url(base_url, ProviderProtocol::Anthropic);
     Some(ProviderConfig {
         name: "minimax-token-plan".to_owned(),
         base_url,
@@ -1687,6 +1751,43 @@ where
         protocol: ProviderProtocol::Anthropic,
         timeout_ms: 600_000,
         max_output_tokens: 8_192,
+        max_retries: default_provider_max_retries(),
+        retry_initial_backoff_ms: default_provider_retry_initial_backoff_ms(),
+        retry_max_backoff_ms: default_provider_retry_max_backoff_ms(),
+        respect_retry_after: default_provider_respect_retry_after(),
+        request_header_overrides: BTreeMap::new(),
+        request_metadata: BTreeMap::new(),
+        thinking_budget: None,
+        temperature: None,
+        top_p: None,
+        top_k: None,
+    })
+}
+
+fn discover_anthropic_provider<F>(lookup: &mut F) -> Option<ProviderConfig>
+where
+    F: FnMut(&[&str]) -> Option<String>,
+{
+    let api_key = lookup(&["REMOTE_CODE_API_KEY", "ANTHROPIC_API_KEY"])?;
+    let base_url = normalize_base_url(
+        lookup(&["REMOTE_CODE_ANTHROPIC_BASE_URL", "ANTHROPIC_BASE_URL"])
+            .or_else(|| Some("https://api.anthropic.com".to_owned())),
+        ProviderProtocol::Anthropic,
+    );
+    Some(ProviderConfig {
+        name: "anthropic".to_owned(),
+        base_url,
+        api_key: Some(api_key),
+        model: lookup(&[
+            "REMOTE_CODE_ANTHROPIC_MODEL",
+            "ANTHROPIC_MODEL",
+            "ANTHROPIC_DEFAULT_MODEL",
+            "ANTHROPIC_DEFAULT_SONNET_MODEL",
+        ])
+        .or(Some("claude-sonnet-4-6".to_owned())),
+        protocol: ProviderProtocol::Anthropic,
+        timeout_ms: 600_000,
+        max_output_tokens: 4_096,
         max_retries: default_provider_max_retries(),
         retry_initial_backoff_ms: default_provider_retry_initial_backoff_ms(),
         retry_max_backoff_ms: default_provider_retry_max_backoff_ms(),
@@ -1836,8 +1937,9 @@ mod tests {
     use super::{
         ProviderConfig, default_provider_max_retries, default_provider_respect_retry_after,
         default_provider_retry_initial_backoff_ms, default_provider_retry_max_backoff_ms,
-        discover_minimax_token_plan_provider, hydrate_provider_from_discovered, load_hooks_file,
-        load_runtime_config, load_settings_hooks, normalize_base_url, normalize_protocol,
+        discover_anthropic_provider, discover_minimax_token_plan_provider,
+        hydrate_provider_from_discovered, load_hooks_file, load_runtime_config,
+        load_settings_hooks, normalize_base_url, normalize_protocol,
         resolve_auth_source_with_lookup, validate_provider_config,
     };
     use crate::ProviderOverrides;
@@ -2085,11 +2187,23 @@ mod tests {
         // Isolate from host environment variables that would add extra setting_sources.
         let prev_base = std::env::var("ANTHROPIC_BASE_URL").ok();
         let prev_key = std::env::var("ANTHROPIC_API_KEY").ok();
+        let prev_model = std::env::var("ANTHROPIC_MODEL").ok();
+        let prev_default_model = std::env::var("ANTHROPIC_DEFAULT_MODEL").ok();
+        let prev_default_sonnet = std::env::var("ANTHROPIC_DEFAULT_SONNET_MODEL").ok();
         unsafe {
             std::env::remove_var("ANTHROPIC_BASE_URL");
         }
         unsafe {
             std::env::remove_var("ANTHROPIC_API_KEY");
+        }
+        unsafe {
+            std::env::remove_var("ANTHROPIC_MODEL");
+        }
+        unsafe {
+            std::env::remove_var("ANTHROPIC_DEFAULT_MODEL");
+        }
+        unsafe {
+            std::env::remove_var("ANTHROPIC_DEFAULT_SONNET_MODEL");
         }
 
         let config = load_runtime_config(
@@ -2125,6 +2239,21 @@ mod tests {
         if let Some(v) = prev_key {
             unsafe {
                 std::env::set_var("ANTHROPIC_API_KEY", v);
+            }
+        }
+        if let Some(v) = prev_model {
+            unsafe {
+                std::env::set_var("ANTHROPIC_MODEL", v);
+            }
+        }
+        if let Some(v) = prev_default_model {
+            unsafe {
+                std::env::set_var("ANTHROPIC_DEFAULT_MODEL", v);
+            }
+        }
+        if let Some(v) = prev_default_sonnet {
+            unsafe {
+                std::env::set_var("ANTHROPIC_DEFAULT_SONNET_MODEL", v);
             }
         }
     }
@@ -2382,13 +2511,30 @@ mod tests {
     }
 
     #[test]
+    fn anthropic_env_provider_uses_reference_env_aliases_and_defaults() {
+        let values = HashMap::from([
+            ("ANTHROPIC_API_KEY", "env-secret".to_owned()),
+            ("ANTHROPIC_DEFAULT_MODEL", "claude-sonnet-4-6".to_owned()),
+        ]);
+        let provider = discover_anthropic_provider(&mut |keys| {
+            keys.iter().find_map(|key| values.get(*key).cloned())
+        })
+        .expect("anthropic provider should be discovered");
+
+        assert_eq!(provider.name, "anthropic");
+        assert_eq!(provider.protocol, ProviderProtocol::Anthropic);
+        assert_eq!(
+            provider.base_url.as_deref(),
+            Some("https://api.anthropic.com/v1/messages")
+        );
+        assert_eq!(provider.model.as_deref(), Some("claude-sonnet-4-6"));
+    }
+
+    #[test]
     fn minimax_token_plan_env_provider_is_discovered_as_anthropic() {
         let values = HashMap::from([
-            ("MINIMAX_TOKEN_PLAN_API_KEY", "secret".to_owned()),
-            (
-                "MINIMAX_TOKEN_PLAN_BASE_URL",
-                "https://api.minimaxi.com/anthropic".to_owned(),
-            ),
+            ("MINIMAX_API_KEY", "secret".to_owned()),
+            ("MINIMAX_API_HOST", "https://api.minimaxi.com".to_owned()),
             ("MINIMAX_TOKEN_PLAN_MODEL", "minimax-m2.7".to_owned()),
         ]);
         let provider = discover_minimax_token_plan_provider(&mut |keys| {
@@ -2401,6 +2547,26 @@ mod tests {
             Some("https://api.minimaxi.com/anthropic/v1/messages")
         );
         assert_eq!(provider.model.as_deref(), Some("minimax-m2.7"));
+    }
+
+    #[test]
+    fn minimax_token_plan_explicit_anthropic_base_url_is_preserved() {
+        let values = HashMap::from([
+            ("MINIMAX_TOKEN_PLAN_API_KEY", "secret".to_owned()),
+            (
+                "MINIMAX_ANTHROPIC_BASE_URL",
+                "https://api.minimaxi.com/anthropic".to_owned(),
+            ),
+        ]);
+        let provider = discover_minimax_token_plan_provider(&mut |keys| {
+            keys.iter().find_map(|key| values.get(*key).cloned())
+        })
+        .expect("minimax token plan provider should be discovered");
+
+        assert_eq!(
+            provider.base_url.as_deref(),
+            Some("https://api.minimaxi.com/anthropic/v1/messages")
+        );
     }
 
     #[test]

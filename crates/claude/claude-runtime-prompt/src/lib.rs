@@ -330,7 +330,15 @@ pub fn expand_requested_tool_names(
 
     let requested = requested_tools
         .iter()
-        .map(|tool| tool.as_str())
+        .flat_map(|tool| {
+            let trimmed = tool.trim();
+            let base = requested_tool_filter_base(trimmed);
+            if base == trimmed {
+                vec![trimmed.to_owned()]
+            } else {
+                vec![trimmed.to_owned(), base.to_owned()]
+            }
+        })
         .collect::<HashSet<_>>();
     let mut expanded = requested_tools.iter().cloned().collect::<HashSet<_>>();
 
@@ -348,6 +356,10 @@ pub fn expand_requested_tool_names(
     }
 
     expanded
+}
+
+fn requested_tool_filter_base(tool: &str) -> &str {
+    tool.split_once('(').map_or(tool, |(name, _)| name.trim())
 }
 
 #[must_use]
@@ -2129,8 +2141,8 @@ mod tests {
         ClaudeMemoryRoots, MemoryPromptFeatures, PromptRuntimeOverrides, RuntimePromptSettings,
         build_runtime_scratchpad_state_with, build_runtime_system_prompt,
         clear_runtime_system_prompt_state, collect_claude_md_context_with_roots,
-        runtime_claude_temp_dir_name, runtime_user_context_entries_with_settings,
-        sanitize_path_component,
+        expand_requested_tool_names, runtime_claude_temp_dir_name,
+        runtime_user_context_entries_with_settings, sanitize_path_component,
     };
     use claude_config::settings_layers::RuntimeOverrides;
     use claude_config::{ProviderOverrides, SettingSource, load_runtime_config};
@@ -2139,6 +2151,7 @@ mod tests {
         ConversationEntry, InputFormat, OutputFormat, PermissionMode, ProviderProtocol,
     };
     use claude_provider::DiscoveredToolScope;
+    use claude_tools::ToolSpec;
     use std::fs;
     use std::path::PathBuf;
     use std::sync::OnceLock;
@@ -2206,6 +2219,8 @@ mod tests {
 
     #[tokio::test]
     async fn default_prompt_populates_memory_section() {
+        let _guard = coordinator_override_lock().await;
+        claude_agents::coordinator::reset_coordinator_override();
         let config = test_config(None);
         let settings = test_settings(&config);
 
@@ -2223,8 +2238,28 @@ mod tests {
         assert!(prompt.text.contains("## How to save memories"));
     }
 
+    #[test]
+    fn requested_tool_expansion_accepts_reference_matcher_shape() {
+        let specs = vec![ToolSpec {
+            name: "bash_command".to_owned(),
+            protocol_name: "Bash".to_owned(),
+            permission_tool_name: "Bash".to_owned(),
+            description: String::new(),
+            requires_permission: true,
+            input_schema: serde_json::json!({"type":"object"}),
+        }];
+
+        let expanded = expand_requested_tool_names(&["Bash(git:*)".to_owned()], &specs);
+
+        assert!(expanded.contains("Bash(git:*)"));
+        assert!(expanded.contains("Bash"));
+        assert!(expanded.contains("bash_command"));
+    }
+
     #[tokio::test]
     async fn custom_prompt_still_skips_default_memory_section() {
+        let _guard = coordinator_override_lock().await;
+        claude_agents::coordinator::reset_coordinator_override();
         let config = test_config(None);
         let settings = test_settings(&config);
 
@@ -2247,6 +2282,8 @@ mod tests {
 
     #[tokio::test]
     async fn runtime_prompt_includes_additional_working_directories() {
+        let _guard = coordinator_override_lock().await;
+        claude_agents::coordinator::reset_coordinator_override();
         let config = test_config(None);
         let mut settings = test_settings(&config);
         settings.additional_working_directories = vec![
@@ -2331,6 +2368,8 @@ mod tests {
 
     #[tokio::test]
     async fn default_prompt_populates_scratchpad_section_when_enabled() {
+        let _guard = coordinator_override_lock().await;
+        claude_agents::coordinator::reset_coordinator_override();
         let config = test_config(None);
         let mut settings = test_settings(&config);
         settings.scratchpad_enabled = true;
@@ -2352,6 +2391,8 @@ mod tests {
 
     #[tokio::test]
     async fn default_prompt_reuses_session_cached_sections_until_cleared() {
+        let _guard = coordinator_override_lock().await;
+        claude_agents::coordinator::reset_coordinator_override();
         let config = test_config(None);
         let mut settings = test_settings(&config);
         settings.language = Some("English".to_owned());

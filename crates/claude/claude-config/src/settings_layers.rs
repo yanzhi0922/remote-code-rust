@@ -212,22 +212,35 @@ pub fn discover_runtime_settings_sources(
     profiles_dir: &Path,
     allowed_sources: &[SettingSource],
 ) -> Vec<RuntimeSettingsSource> {
+    let claude_user_settings = profile_dir
+        .parent()
+        .map(|home| home.join(".claude").join("settings.json"))
+        .unwrap_or_else(|| profile_dir.join("settings.json"));
+    let mut seen = BTreeSet::new();
     [
         (
             "legacy-import",
             profiles_dir.join("legacy-import").join("settings.json"),
         ),
         ("profile", profile_dir.join("settings.json")),
+        ("claude-user", claude_user_settings),
         ("project", cwd.join(".remote-code").join("settings.json")),
+        ("claude-project", cwd.join(".claude").join("settings.json")),
         (
             "local",
             cwd.join(".remote-code").join("settings.local.json"),
         ),
+        (
+            "claude-local",
+            cwd.join(".claude").join("settings.local.json"),
+        ),
     ]
     .into_iter()
     .filter_map(|(kind, path)| {
-        (path.exists() && is_runtime_settings_source_enabled(kind, allowed_sources))
-            .then_some(RuntimeSettingsSource { kind, path })
+        (path.exists()
+            && seen.insert(path.clone())
+            && is_runtime_settings_source_enabled(kind, allowed_sources))
+        .then_some(RuntimeSettingsSource { kind, path })
     })
     .collect()
 }
@@ -271,13 +284,20 @@ pub fn is_setting_source_enabled(
 }
 
 fn is_runtime_settings_source_enabled(kind: &str, allowed_sources: &[SettingSource]) -> bool {
-    let source = match kind {
-        "legacy-import" | "profile" => SettingSource::User,
-        "project" => SettingSource::Project,
-        "local" => SettingSource::Local,
-        _ => return false,
+    let Some(source) = setting_source_for_kind(kind) else {
+        return false;
     };
     is_setting_source_enabled(allowed_sources, source)
+}
+
+#[must_use]
+pub fn setting_source_for_kind(kind: &str) -> Option<SettingSource> {
+    Some(match kind {
+        "legacy-import" | "profile" | "claude-user" => SettingSource::User,
+        "project" | "claude-project" => SettingSource::Project,
+        "local" | "claude-local" => SettingSource::Local,
+        _ => return None,
+    })
 }
 
 /// Load and merge runtime settings files from lowest priority to highest priority.
@@ -287,8 +307,25 @@ fn is_runtime_settings_source_enabled(kind: &str, allowed_sources: &[SettingSour
 /// # Errors
 /// Returns an error if any requested settings file cannot be read or parsed.
 pub fn load_runtime_settings(paths: &[PathBuf]) -> Result<ResolvedRuntimeSettings> {
+    let source_hints = paths
+        .iter()
+        .map(|path| (path.clone(), Some(SettingSource::User)))
+        .collect::<Vec<_>>();
+    load_runtime_settings_with_source_hints(&source_hints)
+}
+
+/// Load and merge runtime settings files with explicit source metadata.
+///
+/// Source metadata is needed because upstream-compatible project/user files can
+/// share the same `.claude/settings.json` filename.
+///
+/// # Errors
+/// Returns an error if any requested settings file cannot be read or parsed.
+pub fn load_runtime_settings_with_source_hints(
+    paths: &[(PathBuf, Option<SettingSource>)],
+) -> Result<ResolvedRuntimeSettings> {
     let mut resolved = ResolvedRuntimeSettings::default();
-    for path in paths {
+    for (path, source_hint) in paths {
         let document = load_settings_document(path)?;
         resolved
             .setting_sources
@@ -328,7 +365,7 @@ pub fn load_runtime_settings(paths: &[PathBuf]) -> Result<ResolvedRuntimeSetting
             resolved.api_key_helper_source = resolved
                 .api_key_helper
                 .as_ref()
-                .and_then(|_| setting_source_for_path(path));
+                .and_then(|_| (*source_hint).or_else(|| setting_source_for_path(path)));
         }
         if let Some(fast_mode) = document.fast_mode {
             resolved.fast_mode = Some(fast_mode);
@@ -402,9 +439,13 @@ pub fn load_runtime_settings(paths: &[PathBuf]) -> Result<ResolvedRuntimeSetting
 
 fn setting_source_for_path(path: &Path) -> Option<SettingSource> {
     let normalized = path.to_string_lossy().replace('\\', "/");
-    if normalized.ends_with(".remote-code/settings.local.json") {
+    if normalized.ends_with(".remote-code/settings.local.json")
+        || normalized.ends_with(".claude/settings.local.json")
+    {
         Some(SettingSource::Local)
-    } else if normalized.ends_with(".remote-code/settings.json") {
+    } else if normalized.ends_with(".remote-code/settings.json")
+        || normalized.ends_with(".claude/settings.json")
+    {
         Some(SettingSource::Project)
     } else {
         Some(SettingSource::User)
@@ -455,7 +496,7 @@ fn normalize_optional_string(value: Option<String>) -> Option<String> {
 mod tests {
     use super::{
         RuntimeOverrides, SettingSource, discover_runtime_settings_sources, load_runtime_settings,
-        resolve_runtime_settings_files,
+        load_runtime_settings_with_source_hints, resolve_runtime_settings_files,
     };
     use std::fs;
     use tempfile::tempdir;
@@ -548,6 +589,29 @@ base_url = "https://example.com/v1"
     }
 
     #[test]
+    fn load_runtime_settings_uses_source_hints_for_claude_project_files() {
+        let tempdir = tempdir().expect("tempdir");
+        let settings = tempdir
+            .path()
+            .join("workspace")
+            .join(".claude")
+            .join("settings.json");
+        fs::create_dir_all(settings.parent().expect("settings parent")).expect("settings dir");
+        fs::write(&settings, r#"{ "apiKeyHelper": " echo project-helper " }"#)
+            .expect("write settings");
+
+        let resolved =
+            load_runtime_settings_with_source_hints(&[(settings, Some(SettingSource::Project))])
+                .expect("load settings");
+
+        assert_eq!(
+            resolved.api_key_helper.as_deref(),
+            Some("echo project-helper")
+        );
+        assert_eq!(resolved.api_key_helper_source, Some(SettingSource::Project));
+    }
+
+    #[test]
     fn load_runtime_settings_supports_auto_memory_enabled_alias() {
         let tempdir = tempdir().expect("tempdir");
         let settings = tempdir.path().join("settings.json");
@@ -603,17 +667,25 @@ base_url = "https://example.com/v1"
         let profile = tempdir.path().join("profile");
         let profiles = profile.join("profiles");
         fs::create_dir_all(cwd.join(".remote-code")).expect("workspace dir");
+        fs::create_dir_all(cwd.join(".claude")).expect("claude workspace dir");
         fs::create_dir_all(profiles.join("legacy-import")).expect("legacy dir");
         fs::create_dir_all(&profile).expect("profile dir");
+        fs::create_dir_all(tempdir.path().join(".claude")).expect("claude user dir");
 
         let legacy = profiles.join("legacy-import").join("settings.json");
         let user = profile.join("settings.json");
+        let claude_user = tempdir.path().join(".claude").join("settings.json");
         let project = cwd.join(".remote-code").join("settings.json");
+        let claude_project = cwd.join(".claude").join("settings.json");
         let local = cwd.join(".remote-code").join("settings.local.json");
+        let claude_local = cwd.join(".claude").join("settings.local.json");
         fs::write(&legacy, "{}").expect("legacy");
         fs::write(&user, "{}").expect("user");
+        fs::write(&claude_user, "{}").expect("claude user");
         fs::write(&project, "{}").expect("project");
+        fs::write(&claude_project, "{}").expect("claude project");
         fs::write(&local, "{}").expect("local");
+        fs::write(&claude_local, "{}").expect("claude local");
 
         let discovered =
             discover_runtime_settings_sources(&cwd, &profile, &profiles, &SettingSource::all());
@@ -622,14 +694,30 @@ base_url = "https://example.com/v1"
                 .iter()
                 .map(|source| source.kind)
                 .collect::<Vec<_>>(),
-            vec!["legacy-import", "profile", "project", "local"]
+            vec![
+                "legacy-import",
+                "profile",
+                "claude-user",
+                "project",
+                "claude-project",
+                "local",
+                "claude-local"
+            ]
         );
         assert_eq!(
             discovered
                 .into_iter()
                 .map(|source| source.path)
                 .collect::<Vec<_>>(),
-            vec![legacy, user, project, local]
+            vec![
+                legacy,
+                user,
+                claude_user,
+                project,
+                claude_project,
+                local,
+                claude_local
+            ]
         );
     }
 
@@ -640,9 +728,10 @@ base_url = "https://example.com/v1"
         let profile = tempdir.path().join("profile");
         let profiles = profile.join("profiles");
         fs::create_dir_all(cwd.join(".remote-code")).expect("workspace dir");
+        fs::create_dir_all(cwd.join(".claude")).expect("claude workspace dir");
         fs::create_dir_all(profiles.join("legacy-import")).expect("legacy dir");
         fs::create_dir_all(&profile).expect("profile dir");
-        let project = cwd.join(".remote-code").join("settings.json");
+        let project = cwd.join(".claude").join("settings.json");
         fs::write(&project, "{}").expect("project");
 
         let resolved =
@@ -657,6 +746,7 @@ base_url = "https://example.com/v1"
         let profile = tempdir.path().join("profile");
         let profiles = profile.join("profiles");
         fs::create_dir_all(cwd.join(".remote-code")).expect("workspace dir");
+        fs::create_dir_all(cwd.join(".claude")).expect("claude workspace dir");
         fs::create_dir_all(profiles.join("legacy-import")).expect("legacy dir");
         fs::create_dir_all(&profile).expect("profile dir");
 
@@ -664,14 +754,16 @@ base_url = "https://example.com/v1"
         let user = profile.join("settings.json");
         let project = cwd.join(".remote-code").join("settings.json");
         let local = cwd.join(".remote-code").join("settings.local.json");
+        let claude_local = cwd.join(".claude").join("settings.local.json");
         fs::write(&legacy, "{}").expect("legacy");
         fs::write(&user, "{}").expect("user");
         fs::write(&project, "{}").expect("project");
         fs::write(&local, "{}").expect("local");
+        fs::write(&claude_local, "{}").expect("claude local");
 
         let resolved =
             resolve_runtime_settings_files(&cwd, &profile, &profiles, &[], &[SettingSource::Local]);
 
-        assert_eq!(resolved, vec![local]);
+        assert_eq!(resolved, vec![local, claude_local]);
     }
 }

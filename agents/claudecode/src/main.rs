@@ -33,7 +33,7 @@ use std::{
     pin::Pin,
 };
 
-use anyhow::{Result, anyhow};
+use anyhow::{Context, Result, anyhow};
 use claude_config::{ProviderOverrides, RuntimeOverrides, SettingSource, load_runtime_config};
 use claude_core::{InputFormat, OutputFormat, PermissionMode};
 use claude_session::SessionStore;
@@ -101,7 +101,8 @@ async fn run_app() -> Result<()> {
     validate_cli_mode(&cli)?;
     let prompt_overrides = resolve_cli_prompt_overrides(&cli)?;
     let structured_output_schema = parse_json_schema_arg(cli.json_schema.as_deref())?;
-    let mcp_config_paths = resolve_mcp_config_args(&cli.mcp_config)?;
+    let mcp_config_args = resolve_mcp_config_args(&cli.mcp_config)?;
+    let mcp_config_paths = mcp_config_args.paths.clone();
     let effective_permission_mode = effective_permission_mode_from_cli(&cli);
 
     let resume_session = resolve_resume_session(&cli, &prompt_overrides)?;
@@ -153,9 +154,7 @@ async fn run_app() -> Result<()> {
 
     // Launch the first-run wizard if no API key or settings are detected.
     // Only runs for interactive sessions (no subcommand or Resume without prompt).
-    if !cli.print_mode && cli.command.is_none()
-        || matches!(&cli.command, Some(Commands::Resume(_)) if cli.prompt.is_empty())
-    {
+    if should_run_first_run_wizard(&cli) {
         run_first_run_wizard(&mut config)?;
     }
 
@@ -163,6 +162,7 @@ async fn run_app() -> Result<()> {
     let command = cli.command;
     let result = dispatch_command(command, prompt_parts, &mut config, &store).await;
     drain_pending_extractions(std::time::Duration::from_secs(60)).await;
+    cleanup_temporary_mcp_config_paths(&mcp_config_args.temporary_paths);
     result
 }
 
@@ -385,6 +385,12 @@ fn effective_permission_mode_from_cli(cli: &Cli) -> PermissionMode {
     }
 }
 
+fn should_run_first_run_wizard(cli: &Cli) -> bool {
+    !cli.print_mode
+        && (cli.command.is_none()
+            || matches!(&cli.command, Some(Commands::Resume(_)) if cli.prompt.is_empty()))
+}
+
 fn bool_override(enabled: bool, disabled: bool) -> Option<bool> {
     if enabled {
         Some(true)
@@ -406,13 +412,23 @@ fn resolve_resume_session(
     cli: &Cli,
     prompt_overrides: &ResolvedPromptOverrides,
 ) -> Result<Option<Uuid>> {
+    if cli.session_id.is_some() && cli.resume.is_some() {
+        return Err(anyhow!("--session-id and --resume cannot be used together"));
+    }
+    if cli.r#continue && cli.resume.is_some() {
+        return Err(anyhow!("--continue and --resume cannot be used together"));
+    }
+
     match &cli.command {
         Some(Commands::Resume(args)) => Ok(Some(args.session_id)),
         _ => {
             if let Some(session_id) = cli.session_id {
                 return Ok(Some(session_id));
             }
-            if !cli.r#continue {
+            if let Some(raw_resume) = cli.resume.as_ref().and_then(|value| value.as_ref()) {
+                return parse_resume_session_id(raw_resume).map(Some);
+            }
+            if !cli.r#continue && cli.resume.is_none() {
                 return Ok(None);
             }
             let config = load_runtime_config(
@@ -432,7 +448,7 @@ fn resolve_resume_session(
                     cli,
                     prompt_overrides,
                     parse_json_schema_arg(cli.json_schema.as_deref())?,
-                    resolve_mcp_config_args(&cli.mcp_config)?,
+                    Vec::new(),
                 ),
             )?;
             let store = SessionStore::open(config.paths.clone())?;
@@ -441,6 +457,19 @@ fn resolve_resume_session(
                 .map(|summary| summary.session_id))
         }
     }
+}
+
+fn parse_resume_session_id(raw: &str) -> Result<Uuid> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err(anyhow!("--resume session id cannot be empty"));
+    }
+    if trimmed.to_ascii_lowercase().ends_with(".jsonl") {
+        return Err(anyhow!(
+            "--resume JSONL transcript paths are not supported yet; use a session UUID"
+        ));
+    }
+    Uuid::parse_str(trimmed).with_context(|| format!("invalid --resume session id `{trimmed}`"))
 }
 
 fn setting_sources_from_cli(values: &[SettingSourceArgValue]) -> Option<Vec<SettingSource>> {
@@ -464,10 +493,16 @@ fn parse_json_schema_arg(raw: Option<&str>) -> Result<Option<serde_json::Value>>
     .transpose()
 }
 
-fn resolve_mcp_config_args(values: &[String]) -> Result<Vec<PathBuf>> {
-    values
-        .iter()
-        .map(|value| {
+#[derive(Debug, Clone, Default)]
+struct ResolvedMcpConfigArgs {
+    paths: Vec<PathBuf>,
+    temporary_paths: Vec<PathBuf>,
+}
+
+fn resolve_mcp_config_args(values: &[String]) -> Result<ResolvedMcpConfigArgs> {
+    let mut resolved = ResolvedMcpConfigArgs::default();
+    for value in values {
+        let path = {
             let trimmed = value.trim();
             if trimmed.is_empty() {
                 return Err(anyhow!("--mcp-config cannot be empty"));
@@ -478,26 +513,59 @@ fn resolve_mcp_config_args(values: &[String]) -> Result<Vec<PathBuf>> {
                 let mut path = std::env::temp_dir();
                 path.push(format!("remote-code-mcp-{}.json", Uuid::new_v4()));
                 fs::write(&path, trimmed)?;
+                resolved.temporary_paths.push(path.clone());
                 Ok(path)
             } else {
                 resolve_cli_file_path(Path::new(trimmed))
             }
-        })
-        .collect()
+        }?;
+        resolved.paths.push(path);
+    }
+    Ok(resolved)
+}
+
+fn cleanup_temporary_mcp_config_paths(paths: &[PathBuf]) {
+    for path in paths {
+        if let Err(error) = fs::remove_file(path) {
+            tracing::debug!(
+                "failed to remove temporary MCP config {}: {error}",
+                path.display()
+            );
+        }
+    }
 }
 
 fn normalize_cli_tool_values(values: &[String]) -> Vec<String> {
-    values
-        .iter()
-        .flat_map(|value| {
-            value
-                .split([',', ' '])
-                .map(str::trim)
-                .filter(|part| !part.is_empty())
-                .map(ToOwned::to_owned)
-                .collect::<Vec<_>>()
-        })
-        .collect()
+    let mut parsed = Vec::new();
+    for value in values {
+        let mut current = String::new();
+        let mut paren_depth = 0usize;
+        for ch in value.chars() {
+            match ch {
+                '(' => {
+                    paren_depth += 1;
+                    current.push(ch);
+                }
+                ')' => {
+                    paren_depth = paren_depth.saturating_sub(1);
+                    current.push(ch);
+                }
+                ',' | ' ' if paren_depth == 0 => {
+                    let trimmed = current.trim();
+                    if !trimmed.is_empty() {
+                        parsed.push(trimmed.to_owned());
+                    }
+                    current.clear();
+                }
+                _ => current.push(ch),
+            }
+        }
+        let trimmed = current.trim();
+        if !trimmed.is_empty() {
+            parsed.push(trimmed.to_owned());
+        }
+    }
+    parsed
 }
 
 fn configure_runtime_policy(config: &claude_config::RuntimeConfig) -> Result<()> {
@@ -818,9 +886,11 @@ mod tests {
         remote_session_commands_path, remote_session_state_path, remote_sessions_path,
     };
     use crate::{
-        Cli, ResolvedPromptOverrides, effective_permission_mode_from_cli, hydrate_api_key_helper,
-        normalize_cli_tool_values, parse_json_schema_arg, resolve_cli_prompt_overrides,
-        resolve_mcp_config_args, runtime_overrides_from_cli, validate_cli_mode,
+        Cli, ResolvedPromptOverrides, cleanup_temporary_mcp_config_paths,
+        effective_permission_mode_from_cli, hydrate_api_key_helper, normalize_cli_tool_values,
+        parse_json_schema_arg, resolve_cli_prompt_overrides, resolve_mcp_config_args,
+        resolve_resume_session, runtime_overrides_from_cli, should_run_first_run_wizard,
+        validate_cli_mode,
     };
 
     use axum::{
@@ -1269,21 +1339,54 @@ mod tests {
         ])
         .expect("mcp configs should resolve");
 
-        assert_eq!(resolved.len(), 2);
-        assert_eq!(resolved[0], file);
-        assert!(resolved[1].exists());
+        assert_eq!(resolved.paths.len(), 2);
+        assert_eq!(resolved.paths[0], file);
+        assert!(resolved.paths[1].exists());
+        assert_eq!(resolved.temporary_paths, vec![resolved.paths[1].clone()]);
+        cleanup_temporary_mcp_config_paths(&resolved.temporary_paths);
+        assert!(!resolved.paths[1].exists());
     }
 
     #[test]
     fn cli_tool_values_accept_space_and_comma_separated_reference_form() {
         assert_eq!(
-            normalize_cli_tool_values(&["Bash(git:*)".to_owned(), "Edit,Read".to_owned()]),
+            normalize_cli_tool_values(&[
+                "Bash(git commit:*)".to_owned(),
+                "Edit,Read".to_owned(),
+                "Bash(python -c \"print(1, 2)\")".to_owned(),
+            ]),
             vec![
-                "Bash(git:*)".to_owned(),
+                "Bash(git commit:*)".to_owned(),
                 "Edit".to_owned(),
-                "Read".to_owned()
+                "Read".to_owned(),
+                "Bash(python -c \"print(1, 2)\")".to_owned(),
             ]
         );
+    }
+
+    #[test]
+    fn cli_resume_flag_accepts_upstream_uuid_shape() {
+        let session_id = Uuid::nil();
+        let session_id_arg = session_id.to_string();
+        let cli = Cli::parse_from([
+            "remote-code",
+            "--resume",
+            session_id_arg.as_str(),
+            "continue the task",
+        ]);
+
+        let resolved = resolve_resume_session(&cli, &ResolvedPromptOverrides::default())
+            .expect("resume id should parse");
+
+        assert_eq!(resolved, Some(session_id));
+    }
+
+    #[test]
+    fn first_run_wizard_never_runs_for_print_resume() {
+        let session_id_arg = Uuid::nil().to_string();
+        let cli = Cli::parse_from(["remote-code", "-p", "resume", session_id_arg.as_str()]);
+
+        assert!(!should_run_first_run_wizard(&cli));
     }
 
     #[test]

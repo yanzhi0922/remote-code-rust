@@ -1867,8 +1867,7 @@ fn normalize_tool_runtime_policy(mut policy: ToolRuntimePolicy) -> ToolRuntimePo
     policy.allowed_tools = policy
         .allowed_tools
         .into_iter()
-        .map(|tool| tool.trim().to_ascii_lowercase())
-        .filter(|tool| !tool.is_empty())
+        .filter_map(|tool| normalize_runtime_tool_filter(&tool, ToolFilterBehavior::Allow))
         .collect::<Vec<_>>();
     policy.allowed_tools.sort();
     policy.allowed_tools.dedup();
@@ -1876,8 +1875,7 @@ fn normalize_tool_runtime_policy(mut policy: ToolRuntimePolicy) -> ToolRuntimePo
     policy.disallowed_tools = policy
         .disallowed_tools
         .into_iter()
-        .map(|tool| tool.trim().to_ascii_lowercase())
-        .filter(|tool| !tool.is_empty())
+        .filter_map(|tool| normalize_runtime_tool_filter(&tool, ToolFilterBehavior::Deny))
         .collect::<Vec<_>>();
     policy.disallowed_tools.sort();
     policy.disallowed_tools.dedup();
@@ -1894,6 +1892,50 @@ fn normalize_tool_runtime_policy(mut policy: ToolRuntimePolicy) -> ToolRuntimePo
         left.config_path == right.config_path && left.server == right.server
     });
     policy
+}
+
+#[derive(Debug, Clone, Copy)]
+enum ToolFilterBehavior {
+    Allow,
+    Deny,
+}
+
+fn normalize_runtime_tool_filter(raw: &str, behavior: ToolFilterBehavior) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let has_matcher = trimmed.contains('(');
+    let tool_name = trimmed
+        .split_once('(')
+        .map_or(trimmed, |(name, _)| name.trim());
+
+    if has_matcher && matches!(behavior, ToolFilterBehavior::Deny) {
+        return Some(trimmed.to_ascii_lowercase());
+    }
+
+    canonical_runtime_tool_name(tool_name).or_else(|| Some(tool_name.to_ascii_lowercase()))
+}
+
+fn canonical_runtime_tool_name(name: &str) -> Option<String> {
+    let key = normalize_tool_alias_key(name);
+    if key.is_empty() {
+        return None;
+    }
+    for spec in builtin_tool_specs() {
+        if normalize_tool_alias_key(&spec.name) == key
+            || normalize_tool_alias_key(&spec.protocol_name) == key
+            || canonical_builtin_tool_name(&spec.name)
+                .is_some_and(|canonical| normalize_tool_alias_key(canonical) == key)
+            || builtin_tool_aliases(&spec.name)
+                .iter()
+                .any(|alias| normalize_tool_alias_key(alias) == key)
+        {
+            return Some(spec.name);
+        }
+    }
+    None
 }
 
 fn tool_allowed_by_runtime(tool_name: &str) -> bool {
@@ -6650,6 +6692,28 @@ while True:
             .map(|spec| spec.name)
             .collect::<std::collections::BTreeSet<_>>();
         assert!(after.contains("write_file"));
+    }
+
+    #[test]
+    fn runtime_policy_accepts_reference_style_tool_filter_names() {
+        let policy = super::normalize_tool_runtime_policy(ToolRuntimePolicy {
+            allowed_tools: vec!["Bash(git:*)".to_owned(), "Read".to_owned()],
+            disallowed_tools: vec!["WebFetch".to_owned(), "Bash(rm:*)".to_owned()],
+            task_output_dir: None,
+            tasks_dir: None,
+            tool_results_dir: None,
+            mcp_servers: Vec::new(),
+            shell_policy: Default::default(),
+        });
+
+        assert!(policy.allowed_tools.contains(&"bash_command".to_owned()));
+        assert!(policy.allowed_tools.contains(&"read_file".to_owned()));
+        assert!(policy.disallowed_tools.contains(&"web_fetch".to_owned()));
+        assert!(policy.disallowed_tools.contains(&"bash(rm:*)".to_owned()));
+        assert!(super::tool_allowed_by_policy("bash_command", &policy));
+        assert!(super::tool_allowed_by_policy("read_file", &policy));
+        assert!(!super::tool_allowed_by_policy("write_file", &policy));
+        assert!(!super::tool_allowed_by_policy("web_fetch", &policy));
     }
 
     #[tokio::test]

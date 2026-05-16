@@ -40,6 +40,9 @@ pub struct Cli {
     #[arg(long = "continue")]
     pub r#continue: bool,
 
+    #[arg(short = 'r', long = "resume", num_args = 0..=1, value_name = "SESSION_ID")]
+    pub resume: Option<Option<String>>,
+
     #[arg(long)]
     pub name: Option<String>,
 

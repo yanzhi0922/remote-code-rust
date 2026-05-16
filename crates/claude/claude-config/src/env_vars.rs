@@ -259,7 +259,7 @@ mod tests {
 
     #[test]
     fn temperature_parses_valid_value() {
-        let _lock = ENV_LOCK.lock().unwrap();
+        let _lock = ENV_LOCK.lock().expect("env test lock poisoned");
         let guard = EnvGuard::new(vec!["CLAUDE_CODE_TEMPERATURE", "REMOTE_CODE_TEMPERATURE"]);
         guard.set("CLAUDE_CODE_TEMPERATURE", "0.5");
         assert_eq!(temperature(), Some(0.5));
@@ -268,7 +268,7 @@ mod tests {
 
     #[test]
     fn temperature_rejects_out_of_range() {
-        let _lock = ENV_LOCK.lock().unwrap();
+        let _lock = ENV_LOCK.lock().expect("env test lock poisoned");
         let guard = EnvGuard::new(vec!["CLAUDE_CODE_TEMPERATURE", "REMOTE_CODE_TEMPERATURE"]);
         guard.set("CLAUDE_CODE_TEMPERATURE", "3.0");
         assert_eq!(temperature(), None);
@@ -277,14 +277,14 @@ mod tests {
 
     #[test]
     fn temperature_returns_none_when_unset() {
-        let _lock = ENV_LOCK.lock().unwrap();
+        let _lock = ENV_LOCK.lock().expect("env test lock poisoned");
         let _guard = EnvGuard::new(vec!["CLAUDE_CODE_TEMPERATURE", "REMOTE_CODE_TEMPERATURE"]);
         assert_eq!(temperature(), None);
     }
 
     #[test]
     fn top_p_parses_valid_value() {
-        let _lock = ENV_LOCK.lock().unwrap();
+        let _lock = ENV_LOCK.lock().expect("env test lock poisoned");
         let guard = EnvGuard::new(vec!["CLAUDE_CODE_TOP_P", "REMOTE_CODE_TOP_P"]);
         guard.set("CLAUDE_CODE_TOP_P", "0.9");
         assert_eq!(top_p(), Some(0.9));
@@ -293,7 +293,7 @@ mod tests {
 
     #[test]
     fn top_k_parses_valid_value() {
-        let _lock = ENV_LOCK.lock().unwrap();
+        let _lock = ENV_LOCK.lock().expect("env test lock poisoned");
         let guard = EnvGuard::new(vec!["CLAUDE_CODE_TOP_K", "REMOTE_CODE_TOP_K"]);
         guard.set("CLAUDE_CODE_TOP_K", "50");
         assert_eq!(top_k(), Some(50));
@@ -302,7 +302,7 @@ mod tests {
 
     #[test]
     fn top_k_rejects_zero() {
-        let _lock = ENV_LOCK.lock().unwrap();
+        let _lock = ENV_LOCK.lock().expect("env test lock poisoned");
         let guard = EnvGuard::new(vec!["CLAUDE_CODE_TOP_K", "REMOTE_CODE_TOP_K"]);
         guard.set("CLAUDE_CODE_TOP_K", "0");
         assert_eq!(top_k(), None);
@@ -311,7 +311,7 @@ mod tests {
 
     #[test]
     fn effort_level_reads_env() {
-        let _lock = ENV_LOCK.lock().unwrap();
+        let _lock = ENV_LOCK.lock().expect("env test lock poisoned");
         let guard = EnvGuard::new(vec!["CLAUDE_CODE_EFFORT_LEVEL", "REMOTE_CODE_EFFORT"]);
         guard.set("CLAUDE_CODE_EFFORT_LEVEL", "high");
         assert_eq!(effort_level(), Some("high".to_owned()));
@@ -320,7 +320,7 @@ mod tests {
 
     #[test]
     fn max_output_tokens_parses_valid_value() {
-        let _lock = ENV_LOCK.lock().unwrap();
+        let _lock = ENV_LOCK.lock().expect("env test lock poisoned");
         let guard = EnvGuard::new(vec![
             "CLAUDE_CODE_MAX_OUTPUT_TOKENS",
             "REMOTE_CODE_MAX_OUTPUT_TOKENS",
@@ -332,7 +332,7 @@ mod tests {
 
     #[test]
     fn max_output_tokens_rejects_below_minimum() {
-        let _lock = ENV_LOCK.lock().unwrap();
+        let _lock = ENV_LOCK.lock().expect("env test lock poisoned");
         let guard = EnvGuard::new(vec![
             "CLAUDE_CODE_MAX_OUTPUT_TOKENS",
             "REMOTE_CODE_MAX_OUTPUT_TOKENS",
@@ -344,7 +344,7 @@ mod tests {
 
     #[test]
     fn disable_thinking_reads_truthy() {
-        let _lock = ENV_LOCK.lock().unwrap();
+        let _lock = ENV_LOCK.lock().expect("env test lock poisoned");
         let guard = EnvGuard::new(vec![
             "CLAUDE_CODE_DISABLE_THINKING",
             "REMOTE_CODE_DISABLE_THINKING",
@@ -356,7 +356,7 @@ mod tests {
 
     #[test]
     fn disable_thinking_returns_false_when_unset() {
-        let _lock = ENV_LOCK.lock().unwrap();
+        let _lock = ENV_LOCK.lock().expect("env test lock poisoned");
         let _guard = EnvGuard::new(vec![
             "CLAUDE_CODE_DISABLE_THINKING",
             "REMOTE_CODE_DISABLE_THINKING",
@@ -366,7 +366,7 @@ mod tests {
 
     #[test]
     fn disable_interleaved_thinking_reads_truthy() {
-        let _lock = ENV_LOCK.lock().unwrap();
+        let _lock = ENV_LOCK.lock().expect("env test lock poisoned");
         let guard = EnvGuard::new(vec!["DISABLE_INTERLEAVED_THINKING"]);
         guard.set("DISABLE_INTERLEAVED_THINKING", "true");
         assert!(disable_interleaved_thinking());
@@ -375,7 +375,7 @@ mod tests {
 
     #[test]
     fn user_type_reads_ant() {
-        let _lock = ENV_LOCK.lock().unwrap();
+        let _lock = ENV_LOCK.lock().expect("env test lock poisoned");
         let guard = EnvGuard::new(vec!["USER_TYPE"]);
         guard.set("USER_TYPE", "ant");
         assert!(is_ant_user());
@@ -385,7 +385,7 @@ mod tests {
 
     #[test]
     fn user_type_external_is_not_ant() {
-        let _lock = ENV_LOCK.lock().unwrap();
+        let _lock = ENV_LOCK.lock().expect("env test lock poisoned");
         let guard = EnvGuard::new(vec!["USER_TYPE"]);
         guard.set("USER_TYPE", "external");
         assert!(!is_ant_user());
@@ -394,7 +394,7 @@ mod tests {
 
     #[test]
     fn disable_cost_warnings_reads_truthy() {
-        let _lock = ENV_LOCK.lock().unwrap();
+        let _lock = ENV_LOCK.lock().expect("env test lock poisoned");
         let guard = EnvGuard::new(vec![
             "DISABLE_COST_WARNINGS",
             "REMOTE_CODE_DISABLE_COST_WARNINGS",
@@ -406,7 +406,7 @@ mod tests {
 
     #[test]
     fn disable_background_tasks_reads_truthy() {
-        let _lock = ENV_LOCK.lock().unwrap();
+        let _lock = ENV_LOCK.lock().expect("env test lock poisoned");
         let guard = EnvGuard::new(vec![
             "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS",
             "REMOTE_CODE_DISABLE_BACKGROUND_TASKS",
@@ -418,7 +418,7 @@ mod tests {
 
     #[test]
     fn is_remote_reads_truthy() {
-        let _lock = ENV_LOCK.lock().unwrap();
+        let _lock = ENV_LOCK.lock().expect("env test lock poisoned");
         let guard = EnvGuard::new(vec!["CLAUDE_CODE_REMOTE", "REMOTE_CODE_REMOTE"]);
         guard.set("CLAUDE_CODE_REMOTE", "1");
         assert!(is_remote());
@@ -427,14 +427,14 @@ mod tests {
 
     #[test]
     fn is_remote_returns_false_when_unset() {
-        let _lock = ENV_LOCK.lock().unwrap();
+        let _lock = ENV_LOCK.lock().expect("env test lock poisoned");
         let _guard = EnvGuard::new(vec!["CLAUDE_CODE_REMOTE", "REMOTE_CODE_REMOTE"]);
         assert!(!is_remote());
     }
 
     #[test]
     fn remote_code_prefix_fallback_works() {
-        let _lock = ENV_LOCK.lock().unwrap();
+        let _lock = ENV_LOCK.lock().expect("env test lock poisoned");
         let guard = EnvGuard::new(vec!["CLAUDE_CODE_TEMPERATURE", "REMOTE_CODE_TEMPERATURE"]);
         guard.remove("CLAUDE_CODE_TEMPERATURE");
         guard.set("REMOTE_CODE_TEMPERATURE", "0.7");

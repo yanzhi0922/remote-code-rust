@@ -1392,30 +1392,29 @@ mod tests {
             "bash_command should not expose legacy background"
         );
 
-        for tool_name in ["powershell"] {
-            let spec = specs
-                .iter()
-                .find(|spec| spec.name == tool_name)
-                .unwrap_or_else(|| panic!("missing tool spec for {tool_name}"));
-            let properties = spec
-                .input_schema
-                .get("properties")
-                .and_then(|value| value.as_object())
-                .unwrap_or_else(|| panic!("missing properties object for {tool_name}"));
+        let tool_name = "powershell";
+        let spec = specs
+            .iter()
+            .find(|spec| spec.name == tool_name)
+            .unwrap_or_else(|| panic!("missing tool spec for {tool_name}"));
+        let properties = spec
+            .input_schema
+            .get("properties")
+            .and_then(|value| value.as_object())
+            .unwrap_or_else(|| panic!("missing properties object for {tool_name}"));
 
-            assert!(
-                properties.contains_key("cwd"),
-                "{tool_name} should expose cwd"
-            );
-            assert!(
-                properties.contains_key("description"),
-                "{tool_name} should expose description"
-            );
-            assert!(
-                properties.contains_key("background"),
-                "{tool_name} should expose background"
-            );
-        }
+        assert!(
+            properties.contains_key("cwd"),
+            "{tool_name} should expose cwd"
+        );
+        assert!(
+            properties.contains_key("description"),
+            "{tool_name} should expose description"
+        );
+        assert!(
+            properties.contains_key("background"),
+            "{tool_name} should expose background"
+        );
     }
 
     #[test]

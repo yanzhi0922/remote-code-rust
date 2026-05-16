@@ -48,7 +48,7 @@ use crate::cli::Cli;
 use crate::conversation_backend::ConversationBackend;
 use crate::hooks::{
     HookRunState, RuntimeHookDiscovery, apply_post_tool_hooks, apply_pre_tool_use_hooks,
-    discover_runtime_hooks, ensure_session_start_hooks,
+    discover_runtime_hooks, ensure_session_start_hooks, wrap_permission_broker_with_hooks,
 };
 use crate::query_engine_compat::run_prompt_with_query_engine_compat;
 
@@ -817,6 +817,7 @@ pub(crate) async fn run_prompt(
         replacement_state,
         skip_tool_names,
     );
+    let broker = wrap_permission_broker_with_hooks(broker, discovery, config);
     let outcome = if env::var_os("REMOTE_CODE_FORCE_LEGACY_PROMPT_LOOP").is_some() {
         run_prompt_legacy(
             config,
@@ -1753,14 +1754,14 @@ mod tests {
     #[test]
     fn prompt_stream_event_maps_message_delta_to_shared_runtime_event() {
         let event = PromptStreamEvent::MessageDelta {
-            delta: "hello".to_owned().into(),
+            delta: "hello".to_owned(),
         };
 
         assert_eq!(
             event.runtime_event_detail(),
             Some(RuntimeEventDetail::MessageDelta {
                 role: MessageRole::Assistant,
-                delta: "hello".to_owned().into(),
+                delta: "hello".to_owned(),
                 message_id: None,
             })
         );

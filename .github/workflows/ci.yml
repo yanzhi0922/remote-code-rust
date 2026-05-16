@@ -8,6 +8,13 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  # Full workspace test binaries are large on Windows. Disabling test-profile
+  # debuginfo avoids MSVC PDB LIMIT linker failures without changing behavior.
+  CARGO_PROFILE_TEST_DEBUG: 0
+  # Several Claude runtime tests build large async state machines. Windows
+  # runners default to a 1 MiB test-thread stack, which is too small for those
+  # futures even though the same tests pass with a normal application stack.
+  RUST_MIN_STACK: 8388608
 
 jobs:
   check:
