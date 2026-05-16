@@ -68,6 +68,7 @@ pub async fn discover_subfolder_roo_directories(cwd: &Path) -> std::io::Result<V
 }
 
 /// Recursively walk directories to find `.roo` directories.
+#[allow(clippy::only_used_in_recursion)]
 fn discover_roo_dirs_recursive(
     base: &Path,
     current: &Path,

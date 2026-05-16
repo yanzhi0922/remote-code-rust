@@ -187,10 +187,10 @@ pub fn get_mode_config(slug: &str, custom_modes: Option<&[ModeConfig]>) -> ModeC
 /// Source: `src/shared/modes.ts` — `getModeBySlug`
 pub fn get_mode_by_slug(slug: &str, custom_modes: Option<&[ModeConfig]>) -> Option<ModeConfig> {
     // Custom modes take priority
-    if let Some(customs) = custom_modes {
-        if let Some(m) = customs.iter().find(|m| m.slug == slug) {
-            return Some(m.clone());
-        }
+    if let Some(customs) = custom_modes
+        && let Some(m) = customs.iter().find(|m| m.slug == slug)
+    {
+        return Some(m.clone());
     }
     // Then check defaults
     default_modes().into_iter().find(|m| m.slug == slug)

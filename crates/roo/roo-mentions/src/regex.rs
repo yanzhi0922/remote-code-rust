@@ -47,7 +47,7 @@ pub fn unescape_spaces(path: &str) -> String {
 /// Check if a string looks like a git commit hash (7-40 hex characters).
 pub fn is_git_hash(s: &str) -> bool {
     let len = s.len();
-    if len < 7 || len > 40 {
+    if !(7..=40).contains(&len) {
         return false;
     }
     s.chars()

@@ -1140,16 +1140,27 @@ mod tests {
         }
     }
 
+    fn echo_command(message: &str) -> Vec<String> {
+        if cfg!(windows) {
+            vec!["cmd".to_owned(), "/C".to_owned(), format!("echo {message}")]
+        } else {
+            vec!["echo".to_owned(), message.to_owned()]
+        }
+    }
+
+    fn test_echo_hook(event: &str, message: &str) -> HookDefinition {
+        HookDefinition {
+            event: event.to_owned(),
+            command: echo_command(message),
+            timeout_ms: Some(5_000),
+        }
+    }
+
     // ----- Hook process execution tests -----
 
     #[tokio::test]
     async fn execute_hook_process_echo_succeeds() {
-        // On Windows, use `cmd /C echo` as a simple hook.
-        let hook = HookDefinition {
-            event: "Stop".to_owned(),
-            command: vec!["echo".to_owned(), "hello world".to_owned()],
-            timeout_ms: Some(5_000),
-        };
+        let hook = test_echo_hook("Stop", "hello world");
 
         let result = execute_hook_process(&hook, "{}", 5_000).await;
         // echo should succeed (exit code 0).
@@ -1308,11 +1319,7 @@ mod tests {
 
     #[tokio::test]
     async fn user_configured_hooks_match_event_type() {
-        let hooks = vec![HookDefinition {
-            event: "Stop".to_owned(),
-            command: vec!["echo".to_owned(), "ok".to_owned()],
-            timeout_ms: Some(5_000),
-        }];
+        let hooks = vec![test_echo_hook("Stop", "ok")];
         let handler = UserConfiguredStopHooksHandler::new(hooks);
 
         // Main agent → event is "Stop", should match.
@@ -1327,11 +1334,7 @@ mod tests {
 
     #[tokio::test]
     async fn user_configured_hooks_subagent_uses_subagentstop() {
-        let hooks = vec![HookDefinition {
-            event: "Stop".to_owned(),
-            command: vec!["echo".to_owned(), "ok".to_owned()],
-            timeout_ms: Some(5_000),
-        }];
+        let hooks = vec![test_echo_hook("Stop", "ok")];
         let handler = UserConfiguredStopHooksHandler::new(hooks);
 
         // Sub-agent → event is "SubagentStop", should NOT match "Stop" hook.
@@ -1345,16 +1348,8 @@ mod tests {
     #[tokio::test]
     async fn teammate_hooks_only_run_for_teammates() {
         let hooks = vec![
-            HookDefinition {
-                event: "TaskCompleted".to_owned(),
-                command: vec!["echo".to_owned(), "task-done".to_owned()],
-                timeout_ms: Some(5_000),
-            },
-            HookDefinition {
-                event: "TeammateIdle".to_owned(),
-                command: vec!["echo".to_owned(), "idle".to_owned()],
-                timeout_ms: Some(5_000),
-            },
+            test_echo_hook("TaskCompleted", "task-done"),
+            test_echo_hook("TeammateIdle", "idle"),
         ];
         let handler = TeammateHooksHandler::new(hooks);
 
@@ -1440,11 +1435,7 @@ mod tests {
 
     #[tokio::test]
     async fn default_pipeline_with_handlers_executes_phases() {
-        let stop_hooks = vec![HookDefinition {
-            event: "Stop".to_owned(),
-            command: vec!["echo".to_owned(), "ok".to_owned()],
-            timeout_ms: Some(5_000),
-        }];
+        let stop_hooks = vec![test_echo_hook("Stop", "ok")];
         let teammate_hooks = vec![];
 
         let pipeline = StopHookPipeline::default_with_handlers(stop_hooks, teammate_hooks, None);
@@ -1476,22 +1467,10 @@ mod tests {
 
     #[tokio::test]
     async fn default_pipeline_teammate_runs_teammate_hooks() {
-        let stop_hooks = vec![HookDefinition {
-            event: "SubagentStop".to_owned(),
-            command: vec!["echo".to_owned(), "sub-stop".to_owned()],
-            timeout_ms: Some(5_000),
-        }];
+        let stop_hooks = vec![test_echo_hook("SubagentStop", "sub-stop")];
         let teammate_hooks = vec![
-            HookDefinition {
-                event: "TaskCompleted".to_owned(),
-                command: vec!["echo".to_owned(), "task-done".to_owned()],
-                timeout_ms: Some(5_000),
-            },
-            HookDefinition {
-                event: "TeammateIdle".to_owned(),
-                command: vec!["echo".to_owned(), "idle".to_owned()],
-                timeout_ms: Some(5_000),
-            },
+            test_echo_hook("TaskCompleted", "task-done"),
+            test_echo_hook("TeammateIdle", "idle"),
         ];
 
         let pipeline = StopHookPipeline::default_with_handlers(stop_hooks, teammate_hooks, None);

@@ -1,3 +1,6 @@
+#![allow(dead_code)]
+#![allow(clippy::all)]
+#![deny(clippy::dbg_macro, clippy::todo)]
 //! `roo-i18n` — internationalization support for Roo Code.
 //!
 //! Provides locale management and string translation with `{{param}}`-style

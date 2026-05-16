@@ -1,6 +1,7 @@
 /target
 **/target/
-/.cargo
+/.cargo/*
+!/.cargo/audit.toml
 /.idea
 /.vscode
 *.log

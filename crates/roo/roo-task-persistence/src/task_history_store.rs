@@ -261,11 +261,11 @@ impl TaskHistoryStore {
 
         // Tasks on disk but not in cache: read their history_item.json
         for task_id in &on_disk_ids {
-            if !cache_ids.contains(task_id) {
-                if let Ok(Some(item)) = self.read_task_file(fs, task_id) {
-                    self.cache.lock().insert(task_id.clone(), item);
-                    changed = true;
-                }
+            if !cache_ids.contains(task_id)
+                && let Ok(Some(item)) = self.read_task_file(fs, task_id)
+            {
+                self.cache.lock().insert(task_id.clone(), item);
+                changed = true;
             }
         }
 

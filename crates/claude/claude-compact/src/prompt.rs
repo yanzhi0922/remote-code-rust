@@ -384,11 +384,11 @@ pub fn format_compact_summary(summary: &str) -> String {
     // Strip the analysis section — it's a drafting scratchpad.
     // The TS reference uses a non-global regex `.replace(/<analysis>[\s\S]*?<\/analysis>/, '')`
     // which removes only the first occurrence.
-    if let Some(start) = formatted.find("<analysis>") {
-        if let Some(end) = formatted.find("</analysis>") {
-            let analysis_end = end + "</analysis>".len();
-            formatted = format!("{}{}", &formatted[..start], &formatted[analysis_end..]);
-        }
+    if let Some(start) = formatted.find("<analysis>")
+        && let Some(end) = formatted.find("</analysis>")
+    {
+        let analysis_end = end + "</analysis>".len();
+        formatted = format!("{}{}", &formatted[..start], &formatted[analysis_end..]);
     }
 
     // Extract and format summary section

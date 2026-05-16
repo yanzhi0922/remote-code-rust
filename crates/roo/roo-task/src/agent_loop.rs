@@ -500,12 +500,11 @@ fn detect_shell() -> String {
 /// - On Windows: returns "en" (locale auto-detection is complex and rarely needed).
 /// - Falls back to "en".
 fn detect_language() -> String {
-    if !cfg!(target_os = "windows") {
-        if let Ok(lang) = std::env::var("LANG") {
-            if let Some(lang_code) = lang.split('_').next() {
-                return lang_code.to_string();
-            }
-        }
+    if !cfg!(target_os = "windows")
+        && let Ok(lang) = std::env::var("LANG")
+        && let Some(lang_code) = lang.split('_').next()
+    {
+        return lang_code.to_string();
     }
     "en".to_string()
 }
@@ -1640,14 +1639,14 @@ impl AgentLoop {
                             info!("User chose to continue after mistake limit");
                             // Reset mistake count and optionally inject feedback
                             self.engine.loop_control_mut().reset_mistake_count();
-                            if let Some(ref text) = feedback {
-                                if !text.is_empty() {
-                                    let user_msg = MessageBuilder::create_user_message(
-                                        &format!("[USER FEEDBACK after mistake limit] {}", text),
-                                        &[],
-                                    );
-                                    self.engine.add_api_message(user_msg);
-                                }
+                            if let Some(ref text) = feedback
+                                && !text.is_empty()
+                            {
+                                let user_msg = MessageBuilder::create_user_message(
+                                    &format!("[USER FEEDBACK after mistake limit] {}", text),
+                                    &[],
+                                );
+                                self.engine.add_api_message(user_msg);
                             }
                         }
                         Ok(MistakeLimitAction::Cancel) => {
@@ -1759,7 +1758,7 @@ impl AgentLoop {
             let is_empty_user_content = current_item
                 .user_content
                 .as_ref()
-                .map_or(true, |c| c.is_empty());
+                .is_none_or(|c| c.is_empty());
             let should_add_user_message = (current_item.retry_attempt == 0
                 && !is_empty_user_content)
                 || current_item.user_message_was_removed;
@@ -1831,7 +1830,7 @@ impl AgentLoop {
             // dialog. The caller can then approve (reset limits) or abort.
             // ---------------------------------------------------------------
             if self.config.auto_approval_enabled {
-                let api_req_count = self.engine.loop_control().current_iteration as usize;
+                let api_req_count = self.engine.loop_control().current_iteration;
                 let total_cost = self.engine.result().token_usage.total_cost;
                 let limit_result = self
                     .config
@@ -2548,11 +2547,11 @@ impl AgentLoop {
                 // having two consecutive user messages (which would cause tool_result
                 // validation errors).
                 let history = self.engine.api_conversation_history_mut();
-                if let Some(last_msg) = history.last() {
-                    if last_msg.role == roo_types::api::MessageRole::User {
-                        history.pop();
-                        debug!("Removed last user message before empty response retry");
-                    }
+                if let Some(last_msg) = history.last()
+                    && last_msg.role == roo_types::api::MessageRole::User
+                {
+                    history.pop();
+                    debug!("Removed last user message before empty response retry");
                 }
 
                 // TS L3659-3686: Auto-retry with backoff when auto-approval is enabled
@@ -3371,13 +3370,12 @@ impl AgentLoop {
         //     if (match) { exponentialDelay = Number(match[1]) + 1 }
         // }
         if let Some(error_str) = error {
-            if error_str.contains("429")
+            if (error_str.contains("429")
                 || error_str.contains("rate_limit")
-                || error_str.contains("rate limit")
+                || error_str.contains("rate limit"))
+                && let Some(retry_secs) = parse_retry_info_from_error(error_str)
             {
-                if let Some(retry_secs) = parse_retry_info_from_error(error_str) {
-                    exponential_delay_secs = retry_secs + 1;
-                }
+                exponential_delay_secs = retry_secs + 1;
             }
         }
 
@@ -3740,26 +3738,26 @@ impl AgentLoop {
             // (stored for history only, not sent back to API).
             if msg.reasoning.is_some() && msg.content.is_empty() {
                 // Check if reasoning_details contains encrypted content
-                if let Some(ref details) = msg.reasoning_details {
-                    if !details.is_empty() {
-                        let has_encrypted =
-                            details.iter().any(|d| d.get("encrypted_content").is_some());
-                        if has_encrypted {
-                            // TS L4476-4481: Preserve encrypted standalone reasoning
-                            clean.push(roo_types::api::ApiMessage {
-                                role: msg.role.clone(),
-                                content: msg.content.clone(),
-                                reasoning: msg.reasoning.clone(),
-                                ts: msg.ts,
-                                truncation_parent: msg.truncation_parent.clone(),
-                                is_truncation_marker: msg.is_truncation_marker,
-                                truncation_id: msg.truncation_id.clone(),
-                                condense_parent: msg.condense_parent.clone(),
-                                is_summary: msg.is_summary,
-                                condense_id: msg.condense_id.clone(),
-                                reasoning_details: Some(details.clone()),
-                            });
-                        }
+                if let Some(ref details) = msg.reasoning_details
+                    && !details.is_empty()
+                {
+                    let has_encrypted =
+                        details.iter().any(|d| d.get("encrypted_content").is_some());
+                    if has_encrypted {
+                        // TS L4476-4481: Preserve encrypted standalone reasoning
+                        clean.push(roo_types::api::ApiMessage {
+                            role: msg.role,
+                            content: msg.content.clone(),
+                            reasoning: msg.reasoning.clone(),
+                            ts: msg.ts,
+                            truncation_parent: msg.truncation_parent.clone(),
+                            is_truncation_marker: msg.is_truncation_marker,
+                            truncation_id: msg.truncation_id.clone(),
+                            condense_parent: msg.condense_parent.clone(),
+                            is_summary: msg.is_summary,
+                            condense_id: msg.condense_id.clone(),
+                            reasoning_details: Some(details.clone()),
+                        });
                     }
                 }
                 // Skip plain text standalone reasoning (stored for history, not sent to API)
@@ -3772,36 +3770,36 @@ impl AgentLoop {
                 // TS L4500-4522: Check for reasoning_details (OpenRouter format for Gemini 3, etc.)
                 // If the message has reasoning_details, preserve them and skip further
                 // reasoning block processing.
-                if let Some(ref details) = msg.reasoning_details {
-                    if !details.is_empty() {
-                        // Check if there's a summary type without encrypted content
-                        let has_summary = details.iter().any(|d| {
-                            d.get("type")
-                                .and_then(|t| t.as_str())
-                                .map(|t| t == "summary")
-                                .unwrap_or(false)
-                        });
-                        let has_encrypted =
-                            details.iter().any(|d| d.get("encrypted_content").is_some());
+                if let Some(ref details) = msg.reasoning_details
+                    && !details.is_empty()
+                {
+                    // Check if there's a summary type without encrypted content
+                    let has_summary = details.iter().any(|d| {
+                        d.get("type")
+                            .and_then(|t| t.as_str())
+                            .map(|t| t == "summary")
+                            .unwrap_or(false)
+                    });
+                    let has_encrypted =
+                        details.iter().any(|d| d.get("encrypted_content").is_some());
 
-                        // If model supports preserveReasoning, or has summary without encrypted,
-                        // preserve the reasoning_details on the assistant message
-                        if preserve_reasoning || (has_summary && !has_encrypted) {
-                            clean.push(roo_types::api::ApiMessage {
-                                role: msg.role.clone(),
-                                content: msg.content.clone(),
-                                reasoning: None,
-                                ts: msg.ts,
-                                truncation_parent: msg.truncation_parent.clone(),
-                                is_truncation_marker: msg.is_truncation_marker,
-                                truncation_id: msg.truncation_id.clone(),
-                                condense_parent: msg.condense_parent.clone(),
-                                is_summary: msg.is_summary,
-                                condense_id: msg.condense_id.clone(),
-                                reasoning_details: Some(details.clone()),
-                            });
-                            continue;
-                        }
+                    // If model supports preserveReasoning, or has summary without encrypted,
+                    // preserve the reasoning_details on the assistant message
+                    if preserve_reasoning || (has_summary && !has_encrypted) {
+                        clean.push(roo_types::api::ApiMessage {
+                            role: msg.role,
+                            content: msg.content.clone(),
+                            reasoning: None,
+                            ts: msg.ts,
+                            truncation_parent: msg.truncation_parent.clone(),
+                            is_truncation_marker: msg.is_truncation_marker,
+                            truncation_id: msg.truncation_id.clone(),
+                            condense_parent: msg.condense_parent.clone(),
+                            is_summary: msg.is_summary,
+                            condense_id: msg.condense_id.clone(),
+                            reasoning_details: Some(details.clone()),
+                        });
+                        continue;
                     }
                 }
 
@@ -3852,7 +3850,7 @@ impl AgentLoop {
                     };
 
                     clean.push(roo_types::api::ApiMessage {
-                        role: msg.role.clone(),
+                        role: msg.role,
                         content: final_content,
                         reasoning: None,
                         reasoning_details: final_reasoning_details,
@@ -3891,7 +3889,7 @@ impl AgentLoop {
                     };
 
                     clean.push(roo_types::api::ApiMessage {
-                        role: msg.role.clone(),
+                        role: msg.role,
                         content: final_content,
                         reasoning: final_reasoning,
                         reasoning_details: final_reasoning_details,
@@ -3910,7 +3908,7 @@ impl AgentLoop {
                 let clean_content = Self::build_assistant_content(raw_content, supports_images);
                 if !clean_content.is_empty() {
                     clean.push(roo_types::api::ApiMessage {
-                        role: msg.role.clone(),
+                        role: msg.role,
                         content: clean_content,
                         reasoning: msg.reasoning.clone(),
                         reasoning_details: msg.reasoning_details.clone(),
@@ -3931,7 +3929,7 @@ impl AgentLoop {
             let clean_content = Self::filter_content_blocks(&msg.content, supports_images);
             if !clean_content.is_empty() {
                 clean.push(roo_types::api::ApiMessage {
-                    role: msg.role.clone(),
+                    role: msg.role,
                     content: clean_content,
                     reasoning: msg.reasoning.clone(),
                     reasoning_details: msg.reasoning_details.clone(),
@@ -4183,23 +4181,19 @@ impl AgentLoop {
 
                 // DiffView integration: update diff view for file-modifying tools.
                 // Source: `src/core/task/Task.ts` — diffViewProvider usage
-                if let Some(ref mut dvp) = self.diff_view_provider {
-                    if matches!(
+                if let Some(ref mut dvp) = self.diff_view_provider
+                    && matches!(
                         tool_call.name.as_str(),
                         "write_to_file" | "apply_diff" | "edit_file" | "search_and_replace"
-                    ) {
-                        if let Some(path) = params
-                            .get("path")
-                            .or_else(|| params.get("file_path"))
-                            .and_then(|v| v.as_str())
-                        {
-                            if dvp.is_active() {
-                                if dvp.update(&result.text, true).is_ok() {
-                                    debug!(path = %path, "DiffView updated with tool result");
-                                }
-                            }
-                        }
-                    }
+                    )
+                    && let Some(path) = params
+                        .get("path")
+                        .or_else(|| params.get("file_path"))
+                        .and_then(|v| v.as_str())
+                    && dvp.is_active()
+                    && dvp.update(&result.text, true).is_ok()
+                {
+                    debug!(path = %path, "DiffView updated with tool result");
                 }
             }
 
@@ -4540,7 +4534,7 @@ impl AgentLoop {
             }
             Err(e) => {
                 warn!(error = %e, "Image generation failed via provider");
-                ToolExecutionResult::error(&format!(
+                ToolExecutionResult::error(format!(
                     "Image generation failed: {}. \
                      The current provider may not support image generation. \
                      Please try a provider that supports image generation (e.g., OpenAI with DALL-E).",
@@ -4649,7 +4643,7 @@ impl AgentLoop {
                 _ => 0,
             })
             .sum();
-        let estimated_tokens = (total_chars as usize) / 4;
+        let estimated_tokens = total_chars / 4;
 
         // Estimate tokens for the last message (for will_manage_context)
         let last_message_tokens = history
@@ -4955,7 +4949,7 @@ impl AgentLoop {
                 .abort_with_reason("max_consecutive_mistakes_exceeded")?;
         } else if lc
             .max_iterations
-            .map_or(false, |max| lc.current_iteration >= max)
+            .is_some_and(|max| lc.current_iteration >= max)
         {
             self.engine.abort_with_reason("max_iterations_exceeded")?;
         }

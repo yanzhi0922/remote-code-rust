@@ -54,23 +54,23 @@ pub async fn get_git_repository_info(workspace_root: &Path) -> GitRepositoryInfo
     if let Ok(config_content) = tokio::fs::read_to_string(&config_path).await {
         // Find any URL line
         let url_re = Regex::new(r"url\s*=\s*(.+?)(?:\r?\n|$)").unwrap();
-        if let Some(caps) = url_re.captures(&config_content) {
-            if let Some(m) = caps.get(1) {
-                let url = m.as_str().trim();
-                info.repository_url = Some(convert_git_url_to_https(&sanitize_git_url(url)));
-                let repo_name = extract_repository_name(url);
-                if !repo_name.is_empty() {
-                    info.repository_name = Some(repo_name);
-                }
+        if let Some(caps) = url_re.captures(&config_content)
+            && let Some(m) = caps.get(1)
+        {
+            let url = m.as_str().trim();
+            info.repository_url = Some(convert_git_url_to_https(&sanitize_git_url(url)));
+            let repo_name = extract_repository_name(url);
+            if !repo_name.is_empty() {
+                info.repository_name = Some(repo_name);
             }
         }
 
         // Extract default branch
         let branch_re = Regex::new(r#"\[branch "([^"]+)"\]"#).unwrap();
-        if let Some(caps) = branch_re.captures(&config_content) {
-            if let Some(m) = caps.get(1) {
-                info.default_branch = Some(m.as_str().to_string());
-            }
+        if let Some(caps) = branch_re.captures(&config_content)
+            && let Some(m) = caps.get(1)
+        {
+            info.default_branch = Some(m.as_str().to_string());
         }
     }
 
@@ -79,10 +79,10 @@ pub async fn get_git_repository_info(workspace_root: &Path) -> GitRepositoryInfo
         let head_path = git_dir.join("HEAD");
         if let Ok(head_content) = tokio::fs::read_to_string(&head_path).await {
             let head_re = Regex::new(r"ref: refs/heads/(.+)").unwrap();
-            if let Some(caps) = head_re.captures(&head_content) {
-                if let Some(m) = caps.get(1) {
-                    info.default_branch = Some(m.as_str().trim().to_string());
-                }
+            if let Some(caps) = head_re.captures(&head_content)
+                && let Some(m) = caps.get(1)
+            {
+                info.default_branch = Some(m.as_str().trim().to_string());
             }
         }
     }
@@ -106,24 +106,24 @@ pub fn convert_git_url_to_https(url: &str) -> String {
     // SSH format: git@github.com:user/repo.git -> https://github.com/user/repo.git
     if url.starts_with("git@") {
         let re = Regex::new(r"git@([^:]+):(.+)").unwrap();
-        if let Some(caps) = re.captures(url) {
-            if caps.len() == 3 {
-                let host = caps.get(1).unwrap().as_str();
-                let path = caps.get(2).unwrap().as_str();
-                return format!("https://{host}/{path}");
-            }
+        if let Some(caps) = re.captures(url)
+            && caps.len() == 3
+        {
+            let host = caps.get(1).unwrap().as_str();
+            let path = caps.get(2).unwrap().as_str();
+            return format!("https://{host}/{path}");
         }
     }
 
     // SSH with protocol: ssh://git@github.com/user/repo.git
     if url.starts_with("ssh://") {
         let re = Regex::new(r"ssh://(?:git@)?([^/]+)/(.+)").unwrap();
-        if let Some(caps) = re.captures(url) {
-            if caps.len() == 3 {
-                let host = caps.get(1).unwrap().as_str();
-                let path = caps.get(2).unwrap().as_str();
-                return format!("https://{host}/{path}");
-            }
+        if let Some(caps) = re.captures(url)
+            && caps.len() == 3
+        {
+            let host = caps.get(1).unwrap().as_str();
+            let path = caps.get(2).unwrap().as_str();
+            return format!("https://{host}/{path}");
         }
     }
 
@@ -135,13 +135,13 @@ pub fn convert_git_url_to_https(url: &str) -> String {
 /// Source: `src/utils/git.ts` — `sanitizeGitUrl`
 pub fn sanitize_git_url(url: &str) -> String {
     // Remove credentials from HTTPS URLs
-    if url.starts_with("https://") {
-        if let Ok(mut url_obj) = url::Url::parse(url) {
-            // Remove username and password
-            url_obj.set_username("").unwrap_or(());
-            url_obj.set_password(None).unwrap_or(());
-            return url_obj.to_string();
-        }
+    if url.starts_with("https://")
+        && let Ok(mut url_obj) = url::Url::parse(url)
+    {
+        // Remove username and password
+        url_obj.set_username("").unwrap_or(());
+        url_obj.set_password(None).unwrap_or(());
+        return url_obj.to_string();
     }
 
     // For SSH URLs, return as-is
@@ -168,10 +168,10 @@ pub fn extract_repository_name(url: &str) -> String {
     ];
 
     for pattern in &patterns {
-        if let Some(caps) = pattern.captures(url) {
-            if let Some(m) = caps.get(1) {
-                return m.as_str().replace(".git", "");
-            }
+        if let Some(caps) = pattern.captures(url)
+            && let Some(m) = caps.get(1)
+        {
+            return m.as_str().replace(".git", "");
         }
     }
 
@@ -240,8 +240,9 @@ pub async fn search_commits(query: &str, cwd: &Path) -> Vec<GitCommit> {
 
     // If no results and query looks like a hash, try searching by hash
     let hash_re = Regex::new(r"^[a-f0-9]+$").unwrap();
-    if output_text.trim().is_empty() && hash_re.is_match(query) {
-        if let Ok(o) = Command::new("git")
+    if output_text.trim().is_empty()
+        && hash_re.is_match(query)
+        && let Ok(o) = Command::new("git")
             .args([
                 "log",
                 "-n",
@@ -253,11 +254,9 @@ pub async fn search_commits(query: &str, cwd: &Path) -> Vec<GitCommit> {
             ])
             .current_dir(cwd)
             .output()
-        {
-            if o.status.success() {
-                output_text = String::from_utf8_lossy(&o.stdout).to_string();
-            }
-        }
+        && o.status.success()
+    {
+        output_text = String::from_utf8_lossy(&o.stdout).to_string();
     }
 
     if output_text.trim().is_empty() {
@@ -302,7 +301,7 @@ pub async fn get_commit_info(hash: &str, cwd: &Path) -> String {
     let info_output = Command::new("git")
         .args([
             "show",
-            &format!("--format=%H%n%h%n%s%n%an%n%ad%n%b"),
+            "--format=%H%n%h%n%s%n%an%n%ad%n%b",
             "--no-patch",
             hash,
         ])

@@ -35,7 +35,7 @@ impl PoeHandler {
         let model_id = config
             .model_id
             .clone()
-            .unwrap_or_else(|| models::default_model_id());
+            .unwrap_or_else(models::default_model_id);
         let model_info = models::models()
             .get(&model_id)
             .cloned()

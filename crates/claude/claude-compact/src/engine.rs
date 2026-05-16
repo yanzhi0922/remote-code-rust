@@ -194,7 +194,7 @@ pub async fn compact_conversation(
     if std::env::var("DISABLE_COMPACT")
         .ok()
         .as_deref()
-        .map_or(false, is_env_truthy)
+        .is_some_and(is_env_truthy)
     {
         return Err(anyhow::anyhow!(
             "Compaction is disabled by DISABLE_COMPACT environment variable"
@@ -206,7 +206,7 @@ pub async fn compact_conversation(
         && std::env::var("DISABLE_AUTO_COMPACT")
             .ok()
             .as_deref()
-            .map_or(false, is_env_truthy)
+            .is_some_and(is_env_truthy)
     {
         return Err(anyhow::anyhow!(
             "Auto-compaction is disabled by DISABLE_AUTO_COMPACT environment variable"
@@ -287,7 +287,7 @@ pub async fn compact_conversation(
                         let truncated = truncate_head_for_ptl_retry(&messages_to_summarize);
                         if let Some(trunc) = truncated {
                             emit_telemetry(
-                                &options,
+                                options,
                                 "tengu_compact_ptl_retry",
                                 serde_json::json!({
                                     "attempt": ptl_attempts,
@@ -300,7 +300,7 @@ pub async fn compact_conversation(
                         }
                     }
                     emit_telemetry(
-                        &options,
+                        options,
                         "tengu_compact_failed",
                         serde_json::json!({
                             "reason": "prompt_too_long",
@@ -312,7 +312,7 @@ pub async fn compact_conversation(
                 }
                 if text.is_empty() {
                     emit_telemetry(
-                        &options,
+                        options,
                         "tengu_compact_failed",
                         serde_json::json!({
                             "reason": "no_summary",
@@ -328,7 +328,7 @@ pub async fn compact_conversation(
             }
             Err(e) => {
                 emit_telemetry(
-                    &options,
+                    options,
                     "tengu_compact_failed",
                     serde_json::json!({
                         "reason": "api_error",
@@ -491,7 +491,7 @@ pub async fn compact_conversation(
     let auto_compact_threshold = ri.map(|r| r.auto_compact_threshold).unwrap_or(0);
     let true_post_compact = result.post_compact_token_count.unwrap_or(0);
     emit_telemetry(
-        &options,
+        options,
         "tengu_compact",
         serde_json::json!({
             "preCompactTokenCount": result.pre_compact_token_count,
@@ -636,7 +636,7 @@ pub async fn partial_compact_conversation(
                         let truncated = truncate_head_for_ptl_retry(&messages_to_summarize);
                         if let Some(trunc) = truncated {
                             emit_telemetry(
-                                &options,
+                                options,
                                 "tengu_compact_ptl_retry",
                                 serde_json::json!({
                                     "attempt": ptl_attempts,
@@ -650,7 +650,7 @@ pub async fn partial_compact_conversation(
                         }
                     }
                     emit_telemetry(
-                        &options,
+                        options,
                         "tengu_partial_compact_failed",
                         serde_json::json!({
                             "reason": "prompt_too_long",
@@ -661,7 +661,7 @@ pub async fn partial_compact_conversation(
                 }
                 if text.is_empty() {
                     emit_telemetry(
-                        &options,
+                        options,
                         "tengu_partial_compact_failed",
                         serde_json::json!({
                             "reason": "no_summary",
@@ -676,7 +676,7 @@ pub async fn partial_compact_conversation(
             }
             Err(e) => {
                 emit_telemetry(
-                    &options,
+                    options,
                     "tengu_partial_compact_failed",
                     serde_json::json!({
                         "reason": "api_error",
@@ -856,7 +856,7 @@ pub async fn partial_compact_conversation(
 
     // Telemetry: successful partial compaction
     emit_telemetry(
-        &options,
+        options,
         "tengu_partial_compact",
         serde_json::json!({
             "preCompactTokenCount": result.pre_compact_token_count,
@@ -1053,15 +1053,15 @@ pub fn create_compact_boundary_message(
     if let Some(uuid) = last_message_uuid {
         metadata["lastPreCompactMessageUuid"] = serde_json::Value::String(uuid.to_string());
     }
-    if let Some(tools) = discovered_tools {
-        if !tools.is_empty() {
-            metadata["preCompactDiscoveredTools"] = serde_json::Value::Array(
-                tools
-                    .iter()
-                    .map(|t| serde_json::Value::String(t.clone()))
-                    .collect(),
-            );
-        }
+    if let Some(tools) = discovered_tools
+        && !tools.is_empty()
+    {
+        metadata["preCompactDiscoveredTools"] = serde_json::Value::Array(
+            tools
+                .iter()
+                .map(|t| serde_json::Value::String(t.clone()))
+                .collect(),
+        );
     }
 
     let mut base = MessageBase::with_origin(MessageOrigin::Compact);
@@ -1202,14 +1202,12 @@ pub fn strip_media_from_messages_ex(
         .iter()
         .filter(|message| {
             // Filter out skill attachment messages when requested.
-            if strip_skill_attachments {
-                if let Message::Attachment(att) = message {
-                    if att.label.as_deref() == Some("skill_discovery")
-                        || att.label.as_deref() == Some("skill_listing")
-                    {
-                        return false;
-                    }
-                }
+            if strip_skill_attachments
+                && let Message::Attachment(att) = message
+                && (att.label.as_deref() == Some("skill_discovery")
+                    || att.label.as_deref() == Some("skill_listing"))
+            {
+                return false;
             }
             true
         })
@@ -1318,9 +1316,7 @@ fn is_auto_compact_runtime_enabled() -> bool {
     std::env::var("CLAUDE_CODE_AUTO_COMPACT")
         .ok()
         .as_deref()
-        .map_or(true, |v| {
-            !matches!(v.to_lowercase().as_str(), "0" | "false" | "no")
-        })
+        .is_none_or(|v| !matches!(v.to_lowercase().as_str(), "0" | "false" | "no"))
 }
 
 #[cfg(test)]

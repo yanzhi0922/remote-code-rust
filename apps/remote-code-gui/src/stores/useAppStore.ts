@@ -50,6 +50,26 @@ function defaultProjectPath(projects: ProjectInfo[], activeProjectPath: string |
   return projects[0]?.path ?? null;
 }
 
+const WORKSPACE_PRIVACY_STORAGE_KEY = 'remote-code-gui-workspace-overview-privacy';
+
+function loadWorkspacePrivacyMode(): boolean {
+  if (typeof window === 'undefined') return false;
+  try {
+    return window.localStorage.getItem(WORKSPACE_PRIVACY_STORAGE_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+function persistWorkspacePrivacyMode(enabled: boolean): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(WORKSPACE_PRIVACY_STORAGE_KEY, enabled ? '1' : '0');
+  } catch {
+    // Ignore storage failures in restricted webviews.
+  }
+}
+
 function upsertSubtask(
   sessionTasks: Record<string, SessionSubtask[]>,
   sessionId: string,
@@ -116,6 +136,7 @@ interface AppState {
 
   projects: ProjectInfo[];
   activeProjectPath: string | null;
+  workspacePrivacyMode: boolean;
 
   sessions: SessionSummary[];
   archivedSessions: SessionSummary[];
@@ -167,6 +188,7 @@ interface AppState {
   addProject: (path: string) => Promise<void>;
   removeProject: (path: string) => Promise<void>;
   setActiveProject: (path: string | null) => void;
+  setWorkspacePrivacyMode: (enabled: boolean) => void;
   loadSettings: () => Promise<void>;
   updateSettings: (updates: Record<string, unknown>) => Promise<void>;
   pickFolderAndAddProject: () => Promise<void>;
@@ -478,6 +500,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   runtimeStatus: null,
   projects: [],
   activeProjectPath: null,
+  workspacePrivacyMode: loadWorkspacePrivacyMode(),
   sessions: [],
   archivedSessions: [],
   sessionsLoading: false,
@@ -954,6 +977,10 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   setActiveProject: (path: string | null) => {
     set({ activeProjectPath: path });
+  },
+  setWorkspacePrivacyMode: (enabled: boolean) => {
+    persistWorkspacePrivacyMode(enabled);
+    set({ workspacePrivacyMode: enabled });
   },
 
   loadSettings: async () => {

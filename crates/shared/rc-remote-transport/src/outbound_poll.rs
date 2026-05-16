@@ -54,8 +54,8 @@ impl RemoteTransport for OutboundPollTransport {
         self.state = ConnectionState::Connecting;
 
         let sse_url = format!(
-            "{cp_url}/v1/sessions/{}/events/stream?after={}&access_token={}",
-            config.session_id, config.after_sequence, config.auth_token
+            "{cp_url}/v1/sessions/{}/events/stream?after={}",
+            config.session_id, config.after_sequence
         );
 
         let (tx, rx) = mpsc::channel(256);
@@ -68,6 +68,7 @@ impl RemoteTransport for OutboundPollTransport {
             tx,
             cancel_rx,
             self.client.clone(),
+            config.auth_token.clone(),
         ));
 
         self.state = ConnectionState::Open {
@@ -178,6 +179,7 @@ async fn poll_events_loop(
     tx: mpsc::Sender<TransportEvent>,
     mut cancel: tokio::sync::watch::Receiver<bool>,
     client: reqwest::Client,
+    auth_token: String,
 ) {
     let interval = std::time::Duration::from_millis(poll_interval_ms as u64);
 
@@ -186,7 +188,7 @@ async fn poll_events_loop(
             break;
         }
 
-        match client.get(&sse_url).send().await {
+        match client.get(&sse_url).bearer_auth(&auth_token).send().await {
             Ok(response) => {
                 if response.status().is_success() {
                     let body = response.text().await.unwrap_or_default();

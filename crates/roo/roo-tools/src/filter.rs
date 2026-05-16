@@ -183,13 +183,13 @@ pub fn apply_model_tool_customization(
         // If the tool was specified as an alias, track the rename
         for tool in &model_info.included_tools {
             let resolved = resolve_tool_alias(tool);
-            if let Some(tool_group) = tool_to_group.get(&resolved) {
-                if allowed_groups.contains(tool_group) {
-                    result.insert(resolved.clone());
-                    // If the tool was specified as an alias, rename it in the API
-                    if tool != &resolved {
-                        alias_renames.insert(resolved, tool.clone());
-                    }
+            if let Some(tool_group) = tool_to_group.get(&resolved)
+                && allowed_groups.contains(tool_group)
+            {
+                result.insert(resolved.clone());
+                // If the tool was specified as an alias, rename it in the API
+                if tool != &resolved {
+                    alias_renames.insert(resolved, tool.clone());
                 }
             }
         }
@@ -378,26 +378,26 @@ pub fn is_tool_allowed_in_mode(
     let mode_slug = mode.unwrap_or("code");
 
     // Check if it's an always-available tool
-    if let Some(tool) = ToolName::all().iter().find(|t| t.as_str() == tool_name) {
-        if is_always_available(tool) {
-            // Still check conditional exclusions
-            if tool_name == "update_todo_list" {
-                return settings.todo_list_enabled;
-            }
-            if tool_name == "generate_image" {
-                return experiments
-                    .and_then(|e| e.get("imageGeneration"))
-                    .copied()
-                    .unwrap_or(false);
-            }
-            if tool_name == "run_slash_command" {
-                return experiments
-                    .and_then(|e| e.get("runSlashCommand"))
-                    .copied()
-                    .unwrap_or(false);
-            }
-            return true;
+    if let Some(tool) = ToolName::all().iter().find(|t| t.as_str() == tool_name)
+        && is_always_available(tool)
+    {
+        // Still check conditional exclusions
+        if tool_name == "update_todo_list" {
+            return settings.todo_list_enabled;
         }
+        if tool_name == "generate_image" {
+            return experiments
+                .and_then(|e| e.get("imageGeneration"))
+                .copied()
+                .unwrap_or(false);
+        }
+        if tool_name == "run_slash_command" {
+            return experiments
+                .and_then(|e| e.get("runSlashCommand"))
+                .copied()
+                .unwrap_or(false);
+        }
+        return true;
     }
 
     // Resolve alias and check mode permissions

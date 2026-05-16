@@ -127,9 +127,7 @@ pub fn will_manage_context(options: &WillManageContextOptions) -> bool {
         if profile_threshold == -1.0 {
             // Special case: -1 means inherit from global setting
             effective_threshold = *auto_condense_context_percent;
-        } else if profile_threshold >= MIN_CONDENSE_THRESHOLD
-            && profile_threshold <= MAX_CONDENSE_THRESHOLD
-        {
+        } else if (MIN_CONDENSE_THRESHOLD..=MAX_CONDENSE_THRESHOLD).contains(&profile_threshold) {
             // Valid custom threshold
             effective_threshold = profile_threshold;
         }
@@ -194,9 +192,7 @@ pub async fn manage_context(
         if profile_threshold == -1.0 {
             // Special case: -1 means inherit from global setting
             effective_threshold = auto_condense_context_percent;
-        } else if profile_threshold >= MIN_CONDENSE_THRESHOLD
-            && profile_threshold <= MAX_CONDENSE_THRESHOLD
-        {
+        } else if (MIN_CONDENSE_THRESHOLD..=MAX_CONDENSE_THRESHOLD).contains(&profile_threshold) {
             // Valid custom threshold
             effective_threshold = profile_threshold;
         } else {
@@ -375,10 +371,10 @@ pub fn get_effective_api_history(messages: &[ApiMessage]) -> Vec<ApiMessage> {
         // Still need to filter out any truncated messages within this range
         let mut existing_truncation_ids: HashSet<String> = HashSet::new();
         for msg in &messages_from_summary {
-            if msg.is_truncation_marker.unwrap_or(false) {
-                if let Some(ref tid) = msg.truncation_id {
-                    existing_truncation_ids.insert(tid.clone());
-                }
+            if msg.is_truncation_marker.unwrap_or(false)
+                && let Some(ref tid) = msg.truncation_id
+            {
+                existing_truncation_ids.insert(tid.clone());
             }
         }
 
@@ -386,10 +382,10 @@ pub fn get_effective_api_history(messages: &[ApiMessage]) -> Vec<ApiMessage> {
             .into_iter()
             .filter(|msg| {
                 // Filter out truncated messages if their truncation marker exists
-                if let Some(ref parent) = msg.truncation_parent {
-                    if existing_truncation_ids.contains(parent) {
-                        return false;
-                    }
+                if let Some(ref parent) = msg.truncation_parent
+                    && existing_truncation_ids.contains(parent)
+                {
+                    return false;
                 }
                 true
             })
@@ -404,15 +400,15 @@ pub fn get_effective_api_history(messages: &[ApiMessage]) -> Vec<ApiMessage> {
         let mut existing_truncation_ids: HashSet<String> = HashSet::new();
 
         for msg in messages {
-            if msg.is_summary.unwrap_or(false) {
-                if let Some(ref cid) = msg.condense_id {
-                    existing_summary_ids.insert(cid.clone());
-                }
+            if msg.is_summary.unwrap_or(false)
+                && let Some(ref cid) = msg.condense_id
+            {
+                existing_summary_ids.insert(cid.clone());
             }
-            if msg.is_truncation_marker.unwrap_or(false) {
-                if let Some(ref tid) = msg.truncation_id {
-                    existing_truncation_ids.insert(tid.clone());
-                }
+            if msg.is_truncation_marker.unwrap_or(false)
+                && let Some(ref tid) = msg.truncation_id
+            {
+                existing_truncation_ids.insert(tid.clone());
             }
         }
 
@@ -423,16 +419,16 @@ pub fn get_effective_api_history(messages: &[ApiMessage]) -> Vec<ApiMessage> {
             .iter()
             .filter(|msg| {
                 // Filter out condensed messages if their summary exists
-                if let Some(ref parent) = msg.condense_parent {
-                    if existing_summary_ids.contains(parent) {
-                        return false;
-                    }
+                if let Some(ref parent) = msg.condense_parent
+                    && existing_summary_ids.contains(parent)
+                {
+                    return false;
                 }
                 // Filter out truncated messages if their truncation marker exists
-                if let Some(ref parent) = msg.truncation_parent {
-                    if existing_truncation_ids.contains(parent) {
-                        return false;
-                    }
+                if let Some(ref parent) = msg.truncation_parent
+                    && existing_truncation_ids.contains(parent)
+                {
+                    return false;
                 }
                 true
             })
@@ -466,15 +462,15 @@ pub fn cleanup_after_truncation(messages: &[ApiMessage]) -> Vec<ApiMessage> {
     let mut existing_truncation_ids: HashSet<String> = HashSet::new();
 
     for msg in messages {
-        if msg.is_summary.unwrap_or(false) {
-            if let Some(ref cid) = msg.condense_id {
-                existing_summary_ids.insert(cid.clone());
-            }
+        if msg.is_summary.unwrap_or(false)
+            && let Some(ref cid) = msg.condense_id
+        {
+            existing_summary_ids.insert(cid.clone());
         }
-        if msg.is_truncation_marker.unwrap_or(false) {
-            if let Some(ref tid) = msg.truncation_id {
-                existing_truncation_ids.insert(tid.clone());
-            }
+        if msg.is_truncation_marker.unwrap_or(false)
+            && let Some(ref tid) = msg.truncation_id
+        {
+            existing_truncation_ids.insert(tid.clone());
         }
     }
 
@@ -486,32 +482,32 @@ pub fn cleanup_after_truncation(messages: &[ApiMessage]) -> Vec<ApiMessage> {
             let mut needs_update = false;
 
             // Check for orphaned condenseParent
-            if let Some(ref parent) = msg.condense_parent {
-                if !existing_summary_ids.contains(parent) {
-                    needs_update = true;
-                }
+            if let Some(ref parent) = msg.condense_parent
+                && !existing_summary_ids.contains(parent)
+            {
+                needs_update = true;
             }
 
             // Check for orphaned truncationParent
-            if let Some(ref parent) = msg.truncation_parent {
-                if !existing_truncation_ids.contains(parent) {
-                    needs_update = true;
-                }
+            if let Some(ref parent) = msg.truncation_parent
+                && !existing_truncation_ids.contains(parent)
+            {
+                needs_update = true;
             }
 
             if needs_update {
                 let mut updated = msg.clone();
                 // Keep condenseParent only if its summary still exists
-                if let Some(ref parent) = updated.condense_parent {
-                    if !existing_summary_ids.contains(parent) {
-                        updated.condense_parent = None;
-                    }
+                if let Some(ref parent) = updated.condense_parent
+                    && !existing_summary_ids.contains(parent)
+                {
+                    updated.condense_parent = None;
                 }
                 // Keep truncationParent only if its truncation marker still exists
-                if let Some(ref parent) = updated.truncation_parent {
-                    if !existing_truncation_ids.contains(parent) {
-                        updated.truncation_parent = None;
-                    }
+                if let Some(ref parent) = updated.truncation_parent
+                    && !existing_truncation_ids.contains(parent)
+                {
+                    updated.truncation_parent = None;
                 }
                 updated
             } else {

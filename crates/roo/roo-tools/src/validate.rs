@@ -57,10 +57,11 @@ pub fn is_valid_tool_name(tool_name: &str, experiments: Option<&HashMap<String, 
     }
 
     // Check custom tools experiment
-    if let Some(exp) = experiments {
-        if exp.get("customTools").copied().unwrap_or(false) && tool_name == "custom_tool" {
-            return true;
-        }
+    if let Some(exp) = experiments
+        && exp.get("customTools").copied().unwrap_or(false)
+        && tool_name == "custom_tool"
+    {
+        return true;
     }
 
     // Check if it's a dynamic MCP tool (mcp_serverName_toolName format)
@@ -174,23 +175,23 @@ pub fn is_tool_allowed_for_mode(
 
     // Check tool requirements first — explicit disabling takes priority
     if let Some(reqs) = tool_requirements {
-        if let Some(enabled) = reqs.get(tool) {
-            if !enabled {
-                return false;
-            }
+        if let Some(enabled) = reqs.get(tool)
+            && !enabled
+        {
+            return false;
         }
-        if let Some(enabled) = reqs.get(&resolved_tool) {
-            if !enabled {
-                return false;
-            }
+        if let Some(enabled) = reqs.get(&resolved_tool)
+            && !enabled
+        {
+            return false;
         }
     }
 
     // Always allow these tools (unless explicitly disabled above)
-    if let Some(tool_name) = ToolName::all().iter().find(|t| t.as_str() == tool) {
-        if is_always_available(tool_name) {
-            return true;
-        }
+    if let Some(tool_name) = ToolName::all().iter().find(|t| t.as_str() == tool)
+        && is_always_available(tool_name)
+    {
+        return true;
     }
 
     // Check if this is a dynamic MCP tool
@@ -243,43 +244,38 @@ pub fn is_tool_allowed_for_mode(
         };
 
         // For the edit group, check file regex if specified
-        if group_name == ToolGroup::Edit {
-            if let Some(ref file_regex) = opts.file_regex {
-                if let Some(params) = tool_params {
-                    let file_path = params
-                        .get("path")
-                        .or_else(|| params.get("file_path"))
-                        .and_then(|v| v.as_str());
+        if group_name == ToolGroup::Edit
+            && let Some(ref file_regex) = opts.file_regex
+            && let Some(params) = tool_params
+        {
+            let file_path = params
+                .get("path")
+                .or_else(|| params.get("file_path"))
+                .and_then(|v| v.as_str());
 
-                    let is_edit_operation = EDIT_OPERATION_PARAMS
-                        .iter()
-                        .any(|param| params.get(param).is_some());
+            let is_edit_operation = EDIT_OPERATION_PARAMS
+                .iter()
+                .any(|param| params.get(param).is_some());
 
-                    if let (Some(fp), true) = (file_path, is_edit_operation) {
-                        if !does_file_match_regex(fp, file_regex) {
-                            tracing::warn!(
-                                "File restriction: {} does not match {}",
-                                fp,
-                                file_regex
-                            );
-                            return false;
-                        }
-                    }
+            if let (Some(fp), true) = (file_path, is_edit_operation)
+                && !does_file_match_regex(fp, file_regex)
+            {
+                tracing::warn!("File restriction: {} does not match {}", fp, file_regex);
+                return false;
+            }
 
-                    // Handle apply_patch: extract file paths from patch content
-                    if tool == "apply_patch" {
-                        if let Some(patch) = params.get("patch").and_then(|v| v.as_str()) {
-                            for patch_fp in extract_file_paths_from_patch(patch) {
-                                if !does_file_match_regex(&patch_fp, file_regex) {
-                                    tracing::warn!(
-                                        "File restriction: {} does not match {}",
-                                        patch_fp,
-                                        file_regex
-                                    );
-                                    return false;
-                                }
-                            }
-                        }
+            // Handle apply_patch: extract file paths from patch content
+            if tool == "apply_patch"
+                && let Some(patch) = params.get("patch").and_then(|v| v.as_str())
+            {
+                for patch_fp in extract_file_paths_from_patch(patch) {
+                    if !does_file_match_regex(&patch_fp, file_regex) {
+                        tracing::warn!(
+                            "File restriction: {} does not match {}",
+                            patch_fp,
+                            file_regex
+                        );
+                        return false;
                     }
                 }
             }
@@ -292,7 +288,7 @@ pub fn is_tool_allowed_for_mode(
 }
 
 /// Find a mode configuration by slug.
-fn find_mode_by_slug<'a>(slug: &str, custom_modes: &'a [ModeConfig]) -> Option<ModeConfig> {
+fn find_mode_by_slug(slug: &str, custom_modes: &[ModeConfig]) -> Option<ModeConfig> {
     // Check custom modes first
     if let Some(mode) = custom_modes.iter().find(|m| m.slug == slug) {
         return Some(mode.clone());

@@ -343,19 +343,19 @@ impl MessageBuilder {
             // In the TS source, messages with type === "reasoning" are handled specially.
             // In our Rust ApiMessage, reasoning is indicated by the `reasoning` field
             // and `reasoning_details` field.
-            if let Some(ref reasoning) = msg.reasoning {
-                if !reasoning.is_empty() {
-                    // Check for encrypted reasoning content
-                    // The encrypted content is stored in the reasoning field
-                    if reasoning.starts_with("enc_") || reasoning.contains("encrypted_content") {
-                        clean.push(CleanConversationItem::Reasoning {
-                            item_type: "reasoning".to_string(),
-                            encrypted_content: reasoning.clone(),
-                            id: msg.truncation_id.clone(),
-                            summary: None,
-                        });
-                        continue;
-                    }
+            if let Some(ref reasoning) = msg.reasoning
+                && !reasoning.is_empty()
+            {
+                // Check for encrypted reasoning content
+                // The encrypted content is stored in the reasoning field
+                if reasoning.starts_with("enc_") || reasoning.contains("encrypted_content") {
+                    clean.push(CleanConversationItem::Reasoning {
+                        item_type: "reasoning".to_string(),
+                        encrypted_content: reasoning.clone(),
+                        id: msg.truncation_id.clone(),
+                        summary: None,
+                    });
+                    continue;
                 }
             }
 
@@ -364,17 +364,17 @@ impl MessageBuilder {
                 let raw_content = &msg.content;
 
                 // Check if this message has reasoning_details (OpenRouter format)
-                if let Some(ref details) = msg.reasoning_details {
-                    if !details.is_empty() {
-                        // Build the assistant message with reasoning_details
-                        let content_value = content_blocks_to_api_value(raw_content);
-                        clean.push(CleanConversationItem::Message {
-                            role: "assistant".to_string(),
-                            content: content_value,
-                            reasoning_details: Some(serde_json::Value::Array(details.clone())),
-                        });
-                        continue;
-                    }
+                if let Some(ref details) = msg.reasoning_details
+                    && !details.is_empty()
+                {
+                    // Build the assistant message with reasoning_details
+                    let content_value = content_blocks_to_api_value(raw_content);
+                    clean.push(CleanConversationItem::Message {
+                        role: "assistant".to_string(),
+                        content: content_value,
+                        reasoning_details: Some(serde_json::Value::Array(details.clone())),
+                    });
+                    continue;
                 }
 
                 // Check for embedded reasoning as first content block
@@ -383,35 +383,28 @@ impl MessageBuilder {
                     if let ContentBlock::Text { text } = first_block {
                         if text.starts_with("{\"type\":\"reasoning\"") {
                             // Try to parse as encrypted reasoning
-                            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(text) {
-                                if parsed.get("type").and_then(|v| v.as_str()) == Some("reasoning")
-                                {
-                                    if let Some(enc) =
-                                        parsed.get("encrypted_content").and_then(|v| v.as_str())
-                                    {
-                                        // Send as separate reasoning item
-                                        clean.push(CleanConversationItem::Reasoning {
-                                            item_type: "reasoning".to_string(),
-                                            encrypted_content: enc.to_string(),
-                                            id: parsed
-                                                .get("id")
-                                                .and_then(|v| v.as_str())
-                                                .map(String::from),
-                                            summary: parsed.get("summary").cloned(),
-                                        });
+                            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(text)
+                                && parsed.get("type").and_then(|v| v.as_str()) == Some("reasoning")
+                                && let Some(enc) =
+                                    parsed.get("encrypted_content").and_then(|v| v.as_str())
+                            {
+                                // Send as separate reasoning item
+                                clean.push(CleanConversationItem::Reasoning {
+                                    item_type: "reasoning".to_string(),
+                                    encrypted_content: enc.to_string(),
+                                    id: parsed.get("id").and_then(|v| v.as_str()).map(String::from),
+                                    summary: parsed.get("summary").cloned(),
+                                });
 
-                                        // Send assistant message without reasoning
-                                        let rest: Vec<&ContentBlock> =
-                                            raw_content.iter().skip(1).collect();
-                                        let assistant_content = content_refs_to_api_value(&rest);
-                                        clean.push(CleanConversationItem::Message {
-                                            role: "assistant".to_string(),
-                                            content: assistant_content,
-                                            reasoning_details: None,
-                                        });
-                                        continue;
-                                    }
-                                }
+                                // Send assistant message without reasoning
+                                let rest: Vec<&ContentBlock> = raw_content.iter().skip(1).collect();
+                                let assistant_content = content_refs_to_api_value(&rest);
+                                clean.push(CleanConversationItem::Message {
+                                    role: "assistant".to_string(),
+                                    content: assistant_content,
+                                    reasoning_details: None,
+                                });
+                                continue;
                             }
                         }
 
@@ -642,10 +635,10 @@ fn content_blocks_to_api_value(blocks: &[ContentBlock]) -> serde_json::Value {
         return serde_json::Value::String(String::new());
     }
 
-    if blocks.len() == 1 {
-        if let ContentBlock::Text { ref text } = blocks[0] {
-            return serde_json::Value::String(text.clone());
-        }
+    if blocks.len() == 1
+        && let ContentBlock::Text { ref text } = blocks[0]
+    {
+        return serde_json::Value::String(text.clone());
     }
 
     // Multiple blocks or non-text single block: return as array
@@ -658,10 +651,10 @@ fn content_refs_to_api_value(blocks: &[&ContentBlock]) -> serde_json::Value {
         return serde_json::Value::String(String::new());
     }
 
-    if blocks.len() == 1 {
-        if let ContentBlock::Text { text } = blocks[0] {
-            return serde_json::Value::String(text.clone());
-        }
+    if blocks.len() == 1
+        && let ContentBlock::Text { text } = blocks[0]
+    {
+        return serde_json::Value::String(text.clone());
     }
 
     serde_json::to_value(blocks).unwrap_or(serde_json::Value::Array(Vec::new()))
@@ -880,10 +873,9 @@ pub fn validate_and_fix_tool_result_ids(history: &[ApiMessage]) -> Vec<ApiMessag
                 if let ContentBlock::ToolResult {
                     ref tool_use_id, ..
                 } = msg.content[pos]
+                    && valid_tool_use_ids.contains(tool_use_id.as_str())
                 {
-                    if valid_tool_use_ids.contains(tool_use_id.as_str()) {
-                        used_ids.insert(tool_use_id.clone());
-                    }
+                    used_ids.insert(tool_use_id.clone());
                 }
             }
 
@@ -997,7 +989,7 @@ pub fn validate_and_fix_tool_result_ids(history: &[ApiMessage]) -> Vec<ApiMessag
 
                 // Insert placeholder results at the beginning of the content array
                 // (before any text blocks that may summarize the results)
-                placeholder_results.extend(msg.content.drain(..));
+                placeholder_results.append(&mut msg.content);
                 msg.content = placeholder_results;
             }
         }

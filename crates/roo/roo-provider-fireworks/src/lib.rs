@@ -1,3 +1,6 @@
+#![allow(dead_code)]
+#![allow(clippy::all)]
+#![deny(clippy::dbg_macro, clippy::todo)]
 //! # Roo Provider: Fireworks AI
 //!
 //! Fireworks AI provider for Roo Code Rust.

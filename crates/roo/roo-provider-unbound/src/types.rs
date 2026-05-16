@@ -6,7 +6,7 @@ use roo_types::provider_settings::ProviderSettings;
 ///
 /// Unbound provides access to multiple LLM providers through a unified API.
 /// Source: `src/api/providers/unbound.ts`
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct UnboundConfig {
     /// API key for Unbound.
     pub api_key: String,
@@ -34,17 +34,5 @@ impl UnboundConfig {
             temperature: settings.model_temperature.flatten(),
             request_timeout: settings.request_timeout,
         })
-    }
-}
-
-impl Default for UnboundConfig {
-    fn default() -> Self {
-        Self {
-            api_key: String::new(),
-            base_url: None,
-            model_id: None,
-            temperature: None,
-            request_timeout: None,
-        }
     }
 }

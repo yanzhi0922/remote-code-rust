@@ -414,17 +414,17 @@ impl McpClient {
             match receive_result {
                 Ok(Ok(Some(msg))) => {
                     // Check if this is a response to our request
-                    if let Some(msg_id) = msg.id_as_u64() {
-                        if msg_id == expected_id {
-                            // Check for JSON-RPC error
-                            if let Some(error) = &msg.error {
-                                return Err(McpError::JsonRpcError {
-                                    code: error.code,
-                                    message: error.message.clone(),
-                                });
-                            }
-                            return Ok(msg);
+                    if let Some(msg_id) = msg.id_as_u64()
+                        && msg_id == expected_id
+                    {
+                        // Check for JSON-RPC error
+                        if let Some(error) = &msg.error {
+                            return Err(McpError::JsonRpcError {
+                                code: error.code,
+                                message: error.message.clone(),
+                            });
                         }
+                        return Ok(msg);
                     }
                     // Not our response, skip it (could be a notification)
                     tracing::trace!("Skipping message with unexpected ID");

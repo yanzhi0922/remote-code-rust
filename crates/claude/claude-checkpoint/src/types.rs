@@ -17,6 +17,12 @@ impl CheckpointId {
     }
 }
 
+impl Default for CheckpointId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl std::fmt::Display for CheckpointId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.0)

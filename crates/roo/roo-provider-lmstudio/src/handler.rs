@@ -176,9 +176,7 @@ pub struct LmStudioHandler {
 impl LmStudioHandler {
     /// Create a new LM Studio handler from configuration.
     pub fn new(config: LmStudioConfig) -> Result<Self> {
-        let model_id = config
-            .model_id
-            .unwrap_or_else(|| models::default_model_id());
+        let model_id = config.model_id.unwrap_or_else(models::default_model_id);
         let model_info = models::default_model_info();
 
         let compatible_config = OpenAiCompatibleConfig {
@@ -292,12 +290,11 @@ impl LmStudioHandler {
     /// check dynamic cache first, then fall back to defaults.
     fn resolve_model_info(&self) -> (String, ModelInfo) {
         // Try dynamic cache first (LM Studio models are loaded dynamically)
-        if let Ok(cache) = self.dynamic_models.read() {
-            if let Some(ref dynamic) = *cache {
-                if let Some(info) = dynamic.get(&self.model_id) {
-                    return (self.model_id.clone(), info.clone());
-                }
-            }
+        if let Ok(cache) = self.dynamic_models.read()
+            && let Some(ref dynamic) = *cache
+            && let Some(info) = dynamic.get(&self.model_id)
+        {
+            return (self.model_id.clone(), info.clone());
         }
 
         // Fallback to stored model info (set at construction from defaults)

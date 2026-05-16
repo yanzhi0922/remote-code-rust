@@ -113,10 +113,10 @@ impl CodeIndexManager {
 
         for path in &self.indexed_files {
             // Filter by directory prefix if provided
-            if let Some(prefix) = directory_prefix {
-                if !path.starts_with(prefix) {
-                    continue;
-                }
+            if let Some(prefix) = directory_prefix
+                && !path.starts_with(prefix)
+            {
+                continue;
             }
 
             let path_lower = path.to_lowercase();
@@ -274,10 +274,10 @@ impl CodeIndexManager {
             // Try to read and cache file content when workspace_path is configured
             if let Some(ref workspace) = self.config.workspace_path {
                 let full_path = std::path::Path::new(workspace).join(path);
-                if let Ok(content) = std::fs::read_to_string(&full_path) {
-                    if content.len() as u64 <= self.config.max_file_size {
-                        self.file_contents.insert(path.to_string(), content);
-                    }
+                if let Ok(content) = std::fs::read_to_string(&full_path)
+                    && content.len() as u64 <= self.config.max_file_size
+                {
+                    self.file_contents.insert(path.to_string(), content);
                 }
             }
 
@@ -411,10 +411,10 @@ impl CodeIndexManager {
     /// Simple glob matching — supports `**` (any path segments) and `*` (any segment).
     fn matches_glob(path: &str, pattern: &str) -> bool {
         // Simple implementation: check if the pattern's extension matches
-        if pattern.contains("**/*.") {
-            if let Some(ext) = pattern.split("**/*.").last() {
-                return path.ends_with(ext) || path.contains(&format!(".{ext}"));
-            }
+        if pattern.contains("**/*.")
+            && let Some(ext) = pattern.split("**/*.").last()
+        {
+            return path.ends_with(ext) || path.contains(&format!(".{ext}"));
         }
         if pattern.contains("*/") {
             let suffix = pattern.replace("*/", "/");

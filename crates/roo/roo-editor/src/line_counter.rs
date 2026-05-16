@@ -60,13 +60,13 @@ pub fn count_file_lines_and_tokens(
         line_count += 1;
 
         // Check budget every chunk_lines
-        if line_count % options.chunk_lines == 0 {
-            if let Some(budget) = options.budget_tokens {
-                let token_estimate = char_count / 4; // rough: ~4 chars per token
-                if token_estimate > budget {
-                    complete = false;
-                    break;
-                }
+        if line_count.is_multiple_of(options.chunk_lines)
+            && let Some(budget) = options.budget_tokens
+        {
+            let token_estimate = char_count / 4; // rough: ~4 chars per token
+            if token_estimate > budget {
+                complete = false;
+                break;
             }
         }
     }

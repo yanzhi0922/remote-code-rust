@@ -735,13 +735,12 @@ impl SseTransport {
                     }
 
                     // SSE events with "message" event type (or default) contain JSON-RPC messages
-                    if sse_event.event == "message" || sse_event.event.is_empty() {
-                        if let Ok(msg) = serde_json::from_str::<JsonRpcMessage>(&sse_event.data) {
-                            if tx.send(msg).await.is_err() {
-                                // Receiver dropped
-                                return Ok(());
-                            }
-                        }
+                    if (sse_event.event == "message" || sse_event.event.is_empty())
+                        && let Ok(msg) = serde_json::from_str::<JsonRpcMessage>(&sse_event.data)
+                        && tx.send(msg).await.is_err()
+                    {
+                        // Receiver dropped
+                        return Ok(());
                     }
                 }
                 Err(e) => {

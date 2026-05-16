@@ -149,9 +149,6 @@ mod tests {
 
     #[test]
     fn test_debug_log_writes_when_enabled() {
-        let tmp = tempfile::tempdir().unwrap();
-        let log_path = tmp.path().join("test-debug.log");
-
         set_debug_log_enabled(true);
         // Note: debug_log writes to ~/.roo/cli-debug.log, we just verify it doesn't panic
         debug_log("test message", Some(&serde_json::json!({"key": "value"})));

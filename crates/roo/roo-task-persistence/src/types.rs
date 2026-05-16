@@ -20,17 +20,13 @@ use roo_types::task::TaskStatus;
 /// and uses lowercase serialization to match the TypeScript source.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum PersistenceTaskStatus {
+    #[default]
     Active,
     Completed,
     Aborted,
     Delegated,
-}
-
-impl Default for PersistenceTaskStatus {
-    fn default() -> Self {
-        Self::Active
-    }
 }
 
 impl std::fmt::Display for PersistenceTaskStatus {

@@ -38,9 +38,9 @@ fn parse_diff_blocks(diff_content: &str) -> Vec<DiffBlock> {
             // Check for optional :start_line: marker
             if i < lines.len() {
                 let trimmed = lines[i].trim();
-                if trimmed.starts_with(":start_line:") {
+                if let Some(stripped) = trimmed.strip_prefix(":start_line:") {
                     // Parse the line number
-                    let rest = trimmed[":start_line:".len()..].trim();
+                    let rest = stripped.trim();
                     if let Ok(num) = rest.parse::<usize>() {
                         start_line = num;
                     }
@@ -131,8 +131,8 @@ fn is_search_marker(line: &str) -> bool {
 
 /// Trims a single trailing newline from the content, matching the JS regex `(?:\n)?` behavior.
 fn trim_trailing_newline(content: &str) -> String {
-    if content.ends_with('\n') {
-        content[..content.len() - 1].to_string()
+    if let Some(stripped) = content.strip_suffix('\n') {
+        stripped.to_string()
     } else {
         content.to_string()
     }
@@ -169,17 +169,17 @@ impl MultiSearchReplaceDiffStrategy {
     fn unescape_markers(content: &str) -> String {
         let mut result = String::new();
         for line in content.split('\n') {
-            let processed = if line.starts_with("\\<<<<<<<") {
-                &line[1..]
-            } else if line.starts_with("\\=======") {
-                &line[1..]
-            } else if line.starts_with("\\>>>>>>>") {
-                &line[1..]
-            } else if line.starts_with("\\-------") {
-                &line[1..]
-            } else if line.starts_with("\\:end_line:") {
-                &line[1..]
-            } else if line.starts_with("\\:start_line:") {
+            let processed = if [
+                "\\<<<<<<<",
+                "\\=======",
+                "\\>>>>>>>",
+                "\\-------",
+                "\\:end_line:",
+                "\\:start_line:",
+            ]
+            .iter()
+            .any(|marker| line.starts_with(marker))
+            {
                 &line[1..]
             } else {
                 line
@@ -210,9 +210,7 @@ impl MultiSearchReplaceDiffStrategy {
         let parsed_blocks = parse_diff_blocks(diff_content);
 
         if parsed_blocks.is_empty() {
-            return DiffResult::fail(format!(
-                "Invalid diff format - missing required sections\n\nDebug Info:\n- Expected Format: <<<<<<< SEARCH\\n:start_line: start line\\n-------\\n[search content]\\n=======\\n[replace content]\\n>>>>>>> REPLACE\n- Tip: Make sure to include start_line/SEARCH/=======/REPLACE sections with correct markers on new lines"
-            ));
+            return DiffResult::fail("Invalid diff format - missing required sections\n\nDebug Info:\n- Expected Format: <<<<<<< SEARCH\\n:start_line: start line\\n-------\\n[search content]\\n=======\\n[replace content]\\n>>>>>>> REPLACE\n- Tip: Make sure to include start_line/SEARCH/=======/REPLACE sections with correct markers on new lines".to_string());
         }
 
         // Detect line ending from original content
@@ -257,14 +255,13 @@ impl MultiSearchReplaceDiffStrategy {
                 || (every_line_has_line_numbers(&search_content)
                     && replace_content.trim().is_empty());
 
-            if has_all_line_numbers && start_line == 0 {
-                if let Some(first_line) = search_content.split('\n').next() {
-                    if let Some(num_part) = first_line.split('|').next() {
-                        if let Ok(num) = num_part.trim().parse::<i64>() {
-                            start_line = num;
-                        }
-                    }
-                }
+            if has_all_line_numbers
+                && start_line == 0
+                && let Some(first_line) = search_content.split('\n').next()
+                && let Some(num_part) = first_line.split('|').next()
+                && let Ok(num) = num_part.trim().parse::<i64>()
+            {
+                start_line = num;
             }
 
             if has_all_line_numbers {
@@ -274,12 +271,13 @@ impl MultiSearchReplaceDiffStrategy {
 
             // Validate that search and replace content are not identical
             if search_content == replace_content {
-                diff_results.push(DiffResult::fail(format!(
+                diff_results.push(DiffResult::fail(
                     "Search and replace content are identical - no changes would be made\n\n\
                      Debug Info:\n\
                      - Search and replace must be different to make changes\n\
                      - Use read_file to verify the content you want to change"
-                )));
+                        .to_string(),
+                ));
                 continue;
             }
 
@@ -305,9 +303,7 @@ impl MultiSearchReplaceDiffStrategy {
 
             // Validate that search content is not empty
             if search_lines.is_empty() {
-                diff_results.push(DiffResult::fail(format!(
-                    "Empty search content is not allowed\n\nDebug Info:\n- Search content cannot be empty\n- For insertions, provide a specific line using :start_line: and include content to search for\n- For example, match a single line to insert before/after it"
-                )));
+                diff_results.push(DiffResult::fail("Empty search content is not allowed\n\nDebug Info:\n- Search content cannot be empty\n- For insertions, provide a specific line using :start_line: and include content to search for\n- For example, match a single line to insert before/after it".to_string()));
                 continue;
             }
 

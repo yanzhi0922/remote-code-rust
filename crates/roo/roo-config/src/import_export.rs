@@ -108,18 +108,18 @@ pub fn sanitize_provider_config(config_name: &str, api_config: &Value) -> (Value
         "zai",
     ];
 
-    if let Some(api_provider) = obj.get("apiProvider").and_then(|v| v.as_str()) {
-        if !valid_providers.contains(&api_provider) {
-            let mut sanitized = obj.clone();
-            sanitized.remove("apiProvider");
-            return (
-                Value::Object(sanitized),
-                Some(format!(
-                    "Profile \"{}\": Invalid provider \"{}\" was removed. Please reconfigure this profile.",
-                    config_name, api_provider
-                )),
-            );
-        }
+    if let Some(api_provider) = obj.get("apiProvider").and_then(|v| v.as_str())
+        && !valid_providers.contains(&api_provider)
+    {
+        let mut sanitized = obj.clone();
+        sanitized.remove("apiProvider");
+        return (
+            Value::Object(sanitized),
+            Some(format!(
+                "Profile \"{}\": Invalid provider \"{}\" was removed. Please reconfigure this profile.",
+                config_name, api_provider
+            )),
+        );
     }
 
     (api_config.clone(), None)

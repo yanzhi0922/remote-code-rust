@@ -135,10 +135,7 @@ impl RooIgnoreController {
             ignore::Match::None => {
                 // Also check with is_dir=true in case the path itself is a
                 // directory that matches a directory-only pattern
-                match self.gitignore.matched(path, true) {
-                    ignore::Match::Ignore(_) => false,
-                    _ => true,
-                }
+                !matches!(self.gitignore.matched(path, true), ignore::Match::Ignore(_))
             }
             ignore::Match::Ignore(_) => false,
             ignore::Match::Whitelist(_) => true,
@@ -150,11 +147,9 @@ impl RooIgnoreController {
     /// or `None` if the command is allowed.
     pub fn validate_command(&self, command: &str) -> Option<String> {
         // Always allow if no patterns loaded
-        if self.content.is_none() {
-            return None;
-        }
+        self.content.as_ref()?;
 
-        let parts: Vec<&str> = command.trim().split_whitespace().collect();
+        let parts: Vec<&str> = command.split_whitespace().collect();
         if parts.is_empty() {
             return None;
         }

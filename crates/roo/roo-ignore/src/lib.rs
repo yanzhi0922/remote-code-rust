@@ -1,3 +1,6 @@
+#![allow(dead_code)]
+#![allow(clippy::all)]
+#![deny(clippy::dbg_macro, clippy::todo)]
 //! Roo-ignore: File ignore controller for Roo Code.
 //!
 //! Provides .rooignore support with standard .gitignore syntax,

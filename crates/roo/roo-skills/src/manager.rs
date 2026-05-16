@@ -265,14 +265,14 @@ impl SkillsManager {
         let key = Self::get_skill_key(&name, source, mode);
 
         // Check override rules
-        if let Some(existing) = self.skills.get(&key) {
-            if !Self::should_override_skill(existing, &metadata) {
-                debug!(
-                    "Skipping skill '{}' from {} — existing skill has higher priority",
-                    name, source
-                );
-                return Ok(());
-            }
+        if let Some(existing) = self.skills.get(&key)
+            && !Self::should_override_skill(existing, &metadata)
+        {
+            debug!(
+                "Skipping skill '{}' from {} — existing skill has higher priority",
+                name, source
+            );
+            return Ok(());
         }
 
         debug!("Loaded skill '{}' from {}", name, source);
@@ -349,14 +349,8 @@ impl SkillsManager {
 
         // Same source: mode-specific > generic
         // Corresponds to TS: checking modeSlugs array presence, not deprecated mode field
-        let existing_has_modes = existing
-            .mode_slugs
-            .as_ref()
-            .map_or(false, |s| !s.is_empty());
-        let new_has_modes = new_skill
-            .mode_slugs
-            .as_ref()
-            .map_or(false, |s| !s.is_empty());
+        let existing_has_modes = existing.mode_slugs.as_ref().is_some_and(|s| !s.is_empty());
+        let new_has_modes = new_skill.mode_slugs.as_ref().is_some_and(|s| !s.is_empty());
 
         if new_has_modes != existing_has_modes {
             return new_has_modes;

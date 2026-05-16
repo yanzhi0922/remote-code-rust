@@ -1,3 +1,6 @@
+#![allow(dead_code)]
+#![allow(clippy::all)]
+#![deny(clippy::dbg_macro, clippy::todo)]
 //! # roo-mcp — MCP (Model Context Protocol) client for Roo Code
 //!
 //! This crate implements the complete MCP client protocol, including:

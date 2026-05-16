@@ -20,7 +20,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; img-src 'self' asset: https:// asset: https://data:; font-src 'self' https://cdn.jsdelivr.net; connect-src 'self' http://localhost:* https://api.anthropic.com https://api.openai.com https://open.bigmodel.cn ws://localhost:* wss://; worker-src 'self' blob:"
+      "csp": "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; img-src 'self' asset: https:// data:; font-src 'self' https://cdn.jsdelivr.net; connect-src 'self' http://localhost:* http://127.0.0.1:* https://localhost:* https://127.0.0.1:* ws://localhost:* ws://127.0.0.1:* wss://localhost:* wss://127.0.0.1:* https://remote-code.yz520gzy.top wss://remote-code.yz520gzy.top https://api.anthropic.com https://api.openai.com https://open.bigmodel.cn; worker-src 'self' blob:"
     }
   },
   "bundle": {

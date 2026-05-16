@@ -7,9 +7,10 @@ use tokio::sync::Mutex;
 use crate::types::{CommandResult, ShellExecutionDetails};
 
 /// The state of a terminal process.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum ProcessState {
     /// The process has been created but not yet started.
+    #[default]
     Pending,
     /// The process is currently running.
     Running,
@@ -27,12 +28,6 @@ impl std::fmt::Display for ProcessState {
             ProcessState::Completed => write!(f, "completed"),
             ProcessState::Failed => write!(f, "failed"),
         }
-    }
-}
-
-impl Default for ProcessState {
-    fn default() -> Self {
-        ProcessState::Pending
     }
 }
 

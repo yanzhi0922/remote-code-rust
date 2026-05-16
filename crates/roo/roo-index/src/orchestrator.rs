@@ -84,11 +84,9 @@ impl CodeIndexOrchestrator {
         // Initialize vector store
         let collection_created = self.vector_store.initialize()?;
 
-        if collection_created {
-            if let Err(e) = self.cache_manager.clear_cache_file() {
-                // Log but don't fail
-                eprintln!("Warning: Failed to clear cache: {}", e);
-            }
+        if collection_created && let Err(e) = self.cache_manager.clear_cache_file() {
+            // Log but don't fail
+            eprintln!("Warning: Failed to clear cache: {}", e);
         }
 
         // Check for existing data

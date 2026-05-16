@@ -539,6 +539,7 @@ impl BedrockEmbedder {
 // SigV4 signing helpers (inline — mirrors roo-provider-aws/src/signing.rs)
 // ---------------------------------------------------------------------------
 
+#[allow(clippy::too_many_arguments)]
 fn sign_sigv4(
     method: &str,
     url: &str,

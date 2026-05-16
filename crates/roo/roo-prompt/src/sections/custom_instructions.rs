@@ -198,10 +198,10 @@ fn collect_files_recursive(
                     content,
                 ));
             }
-        } else if resolved_path.is_dir() {
-            if let Ok(sub_entries) = fs::read_dir(&resolved_path) {
-                collect_files_recursive(&resolved_path, sub_entries, file_info, depth + 1);
-            }
+        } else if resolved_path.is_dir()
+            && let Ok(sub_entries) = fs::read_dir(&resolved_path)
+        {
+            collect_files_recursive(&resolved_path, sub_entries, file_info, depth + 1);
         }
     }
 }
@@ -257,10 +257,10 @@ fn get_roo_directories_for_cwd(cwd: &str) -> Vec<PathBuf> {
     }
 
     // Global .roo directory
-    if let Some(global_roo) = get_global_roo_directory() {
-        if global_roo.is_dir() {
-            dirs.push(global_roo);
-        }
+    if let Some(global_roo) = get_global_roo_directory()
+        && global_roo.is_dir()
+    {
+        dirs.push(global_roo);
     }
 
     dirs
@@ -289,10 +289,10 @@ fn get_all_roo_directories_for_cwd(cwd: &str) -> Vec<PathBuf> {
     }
 
     // Global .roo directory
-    if let Some(global_roo) = get_global_roo_directory() {
-        if global_roo.is_dir() {
-            dirs.push(global_roo);
-        }
+    if let Some(global_roo) = get_global_roo_directory()
+        && global_roo.is_dir()
+    {
+        dirs.push(global_roo);
     }
 
     dirs
@@ -575,10 +575,10 @@ pub fn add_custom_instructions(
         }
     }
 
-    if let Some(roo_ignore) = roo_ignore_instructions {
-        if !roo_ignore.trim().is_empty() {
-            rules.push(roo_ignore.to_string());
-        }
+    if let Some(roo_ignore) = roo_ignore_instructions
+        && !roo_ignore.trim().is_empty()
+    {
+        rules.push(roo_ignore.to_string());
     }
 
     // Add AGENTS.md content if enabled (default: true)

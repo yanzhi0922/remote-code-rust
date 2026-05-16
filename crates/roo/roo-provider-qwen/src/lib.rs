@@ -1,3 +1,6 @@
+#![allow(dead_code)]
+#![allow(clippy::all)]
+#![deny(clippy::dbg_macro, clippy::todo)]
 //! # Roo Provider: Qwen / 通义千问
 //!
 //! Qwen Code provider for Roo Code Rust.

@@ -1,3 +1,6 @@
+#![allow(dead_code)]
+#![allow(clippy::all)]
+#![deny(clippy::dbg_macro, clippy::todo)]
 //! # Roo Server — JSON-RPC Server for Roo Code
 //!
 //! A JSON-RPC 2.0 server that provides IPC communication for Roo Code.

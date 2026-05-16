@@ -138,8 +138,8 @@ impl ToolRunner for GuiToolRunner {
             APP_EVENT_TOOL_START,
             ToolProgressDto {
                 tool_call_id: tool_call.id.clone(),
-                tool_name: tool_call.name.clone().into(),
-                message: "running".to_owned().into(),
+                tool_name: tool_call.name.clone(),
+                message: "running".to_owned(),
                 active_form,
             },
         );
@@ -223,7 +223,7 @@ impl ToolRunner for GuiToolRunner {
             APP_EVENT_TOOL_RESULT,
             ToolResultDto {
                 tool_call_id: tool_call.id.clone(),
-                tool_name: tool_call.name.clone().into(),
+                tool_name: tool_call.name.clone(),
                 is_error: tool_result.is_error,
                 output: tool_result.content.clone(),
             },
@@ -276,8 +276,8 @@ fn emit_delegate_progress(
             APP_EVENT_TOOL_PROGRESS,
             ToolProgressDto {
                 tool_call_id: String::new(),
-                tool_name: "agent".to_owned().into(),
-                message: message.to_owned().into(),
+                tool_name: "agent".to_owned(),
+                message: message.to_owned(),
                 active_form: None,
             },
         );
@@ -294,7 +294,7 @@ fn emit_delegate_progress(
             let _ = app.emit(
                 APP_EVENT_SUBTASK_STARTED,
                 SubtaskStartedDto {
-                    session_id: session_id_str.to_owned().into(),
+                    session_id: session_id_str.to_owned(),
                     task_id,
                     parent_task_id,
                     description,
@@ -312,8 +312,8 @@ fn emit_delegate_progress(
             let _ = app.emit(
                 APP_EVENT_SUBTASK_PROGRESS,
                 SubtaskProgressDto {
-                    session_id: session_id_str.to_owned().into(),
-                    task_id: task_id.clone().into(),
+                    session_id: session_id_str.to_owned(),
+                    task_id: task_id.clone(),
                     turn,
                     max_turns,
                     summary: summary.clone(),
@@ -323,8 +323,8 @@ fn emit_delegate_progress(
                 APP_EVENT_TOOL_PROGRESS,
                 ToolProgressDto {
                     tool_call_id: task_id,
-                    tool_name: "agent".to_owned().into(),
-                    message: summary.into(),
+                    tool_name: "agent".to_owned(),
+                    message: summary,
                     active_form: None,
                 },
             );
@@ -339,7 +339,7 @@ fn emit_delegate_progress(
             let _ = app.emit(
                 APP_EVENT_SUBTASK_COMPLETED,
                 SubtaskCompletedDto {
-                    session_id: session_id_str.to_owned().into(),
+                    session_id: session_id_str.to_owned(),
                     task_id,
                     success,
                     output_preview,
@@ -356,7 +356,7 @@ fn emit_delegate_progress(
             let _ = app.emit(
                 APP_EVENT_BATCH_PROGRESS,
                 BatchProgressDto {
-                    session_id: session_id_str.to_owned().into(),
+                    session_id: session_id_str.to_owned(),
                     total,
                     completed,
                     running,
@@ -398,7 +398,7 @@ impl QueryObserver for GuiQueryObserver {
                 let _ = self.app.emit(
                     APP_EVENT_STREAMING_DELTA,
                     StreamingDeltaDto {
-                        session_id: session_id_str.into(),
+                        session_id: session_id_str,
                         delta,
                     },
                 );
@@ -411,7 +411,7 @@ impl QueryObserver for GuiQueryObserver {
                     ToolProgressDto {
                         tool_call_id: tool_call.id,
                         tool_name: tool_call.name,
-                        message: "running".to_owned().into(),
+                        message: "running".to_owned(),
                         active_form: None,
                     },
                 );
@@ -428,7 +428,7 @@ impl QueryObserver for GuiQueryObserver {
                     ToolProgressDto {
                         tool_call_id,
                         tool_name,
-                        message: "running".to_owned().into(),
+                        message: "running".to_owned(),
                         active_form: None,
                     },
                 );
@@ -465,7 +465,7 @@ impl QueryObserver for GuiQueryObserver {
                 let _ = self.app.emit(
                     APP_EVENT_CONTEXT_USAGE,
                     ContextUsageDto {
-                        session_id: session_id_str.clone().into(),
+                        session_id: session_id_str.clone(),
                         estimated_tokens: context.estimated_tokens,
                         max_input_tokens: context.max_input_tokens,
                         threshold_tokens: context.threshold_tokens,
@@ -477,7 +477,7 @@ impl QueryObserver for GuiQueryObserver {
                     let _ = self.app.emit(
                         APP_EVENT_CONTEXT_OVERFLOW,
                         ContextOverflowDto {
-                            session_id: session_id_str.into(),
+                            session_id: session_id_str,
                             estimated_tokens: context.estimated_tokens,
                             max_input_tokens: context.max_input_tokens,
                             threshold_tokens: context.threshold_tokens,
@@ -515,7 +515,7 @@ impl QueryObserver for GuiQueryObserver {
                     let _ = self.app.emit(
                         APP_EVENT_CONTEXT_COMPACTED,
                         ContextCompactedDto {
-                            session_id: self.session_id.to_string().into(),
+                            session_id: self.session_id.to_string(),
                             entries_removed: removed,
                             usage_ratio: usage_ratio_after,
                         },

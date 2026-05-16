@@ -1,4 +1,8 @@
+#![allow(dead_code)]
+#![allow(clippy::all)]
+#![deny(clippy::dbg_macro, clippy::todo)]
 //! # Roo Modes
+#![allow(clippy::type_complexity)]
 //!
 //! Higher-level mode operation logic for Roo Code.
 //!

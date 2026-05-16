@@ -38,8 +38,7 @@ fn find_closing_delimiter(rest: &str) -> Option<(usize, usize)> {
     }
 
     // Case 2: closing --- at the very start of rest (empty frontmatter)
-    if rest.starts_with("---") {
-        let after = &rest[3..];
+    if let Some(after) = rest.strip_prefix("---") {
         // Must be followed by newline or end-of-string
         if after.is_empty() || after.starts_with('\n') || after.starts_with("\r\n") {
             let skip = if after.starts_with("\r\n") {

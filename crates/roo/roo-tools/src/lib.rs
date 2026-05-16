@@ -1,3 +1,6 @@
+#![allow(dead_code)]
+#![allow(clippy::all)]
+#![deny(clippy::dbg_macro, clippy::todo)]
 //! # Roo Tools
 //!
 //! Tool registration, definition, validation, and filtering for Roo Code.

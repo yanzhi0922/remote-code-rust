@@ -238,7 +238,7 @@ pub fn unescape_rule_content(content: &str) -> String {
         if c == '\\' {
             match chars.peek() {
                 Some('\\') | Some('(') | Some(')') => {
-                    out.push(chars.next().unwrap());
+                    out.push(chars.next().expect("peeked escape character must exist"));
                 }
                 _ => out.push(c),
             }

@@ -238,15 +238,15 @@ impl StreamParser {
 
         let tracked = if let Some(id) = id {
             // Initialize new tool call tracking when we receive an id
-            if !self.raw_chunk_tracker.contains_key(&index) {
+            self.raw_chunk_tracker.entry(index).or_insert_with(|| {
                 let entry = RawChunkTrackerEntry {
                     id: id.to_string(),
                     name: name.unwrap_or("").to_string(),
                     has_started: false,
                     delta_buffer: Vec::new(),
                 };
-                self.raw_chunk_tracker.insert(index, entry);
-            }
+                entry
+            });
             self.raw_chunk_tracker.get_mut(&index)
         } else {
             self.raw_chunk_tracker.get_mut(&index)
@@ -434,13 +434,12 @@ impl StreamParser {
         let tool_call = self.streaming_tool_calls.remove(id)?;
 
         // Parse the complete accumulated JSON
-        let result = self.parse_tool_call(
+
+        self.parse_tool_call(
             &tool_call.id,
             &tool_call.name,
             &tool_call.arguments_accumulator,
-        );
-
-        result
+        )
     }
 
     /// Clear all streaming tool call state.

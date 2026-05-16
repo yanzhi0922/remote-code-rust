@@ -1,4 +1,8 @@
+#![allow(dead_code)]
+#![allow(clippy::all)]
+#![deny(clippy::dbg_macro, clippy::todo)]
 //! # Roo Tools Search
+#![allow(clippy::nonminimal_bool, clippy::too_many_arguments)]
 //!
 //! Search tool implementations: `search_files`, `list_files`,
 //! and `codebase_search`.

@@ -139,15 +139,15 @@ impl CodeIndexServiceFactory {
         let config = self.config_manager.get_config();
         let dimension = config.model_dimension.unwrap_or(1536) as usize;
 
-        if let Some(ref qdrant_url) = config.qdrant_url {
-            if !qdrant_url.is_empty() {
-                return Ok(Box::new(QdrantVectorStore::new(
-                    &self.workspace_path,
-                    qdrant_url,
-                    dimension,
-                    config.qdrant_api_key.clone(),
-                )));
-            }
+        if let Some(ref qdrant_url) = config.qdrant_url
+            && !qdrant_url.is_empty()
+        {
+            return Ok(Box::new(QdrantVectorStore::new(
+                &self.workspace_path,
+                qdrant_url,
+                dimension,
+                config.qdrant_api_key.clone(),
+            )));
         }
 
         Ok(Box::new(InMemoryVectorStore::new(dimension)))

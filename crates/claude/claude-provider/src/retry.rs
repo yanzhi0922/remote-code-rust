@@ -966,15 +966,15 @@ where
                     context.auth_refresh_attempted = true;
 
                     // Invoke OAuth refresh callback if available and error is 401.
-                    if error_str.contains("401") {
-                        if let Some(ref callback) = options.on_auth_error {
-                            warn!(
-                                attempt = attempt + 1,
-                                "invoking OAuth token refresh callback on 401"
-                            );
-                            if let Err(refresh_err) = callback().await {
-                                warn!("OAuth refresh callback failed: {refresh_err:#}");
-                            }
+                    if error_str.contains("401")
+                        && let Some(ref callback) = options.on_auth_error
+                    {
+                        warn!(
+                            attempt = attempt + 1,
+                            "invoking OAuth token refresh callback on 401"
+                        );
+                        if let Err(refresh_err) = callback().await {
+                            warn!("OAuth refresh callback failed: {refresh_err:#}");
                         }
                     }
 
@@ -1016,17 +1016,17 @@ where
                         h.rate_limit_wait.map(|d| d.as_millis() as u64)
                     });
 
-                    if let Some(ms) = retry_after_ms {
-                        if ms < SHORT_RETRY_THRESHOLD_MS {
-                            // Short retry-after: keep fast mode active to preserve cache.
-                            warn!(
-                                attempt = attempt + 1,
-                                retry_after_ms = ms,
-                                "fast mode: short retry-after, keeping fast mode active"
-                            );
-                            sleep(Duration::from_millis(ms)).await;
-                            continue;
-                        }
+                    if let Some(ms) = retry_after_ms
+                        && ms < SHORT_RETRY_THRESHOLD_MS
+                    {
+                        // Short retry-after: keep fast mode active to preserve cache.
+                        warn!(
+                            attempt = attempt + 1,
+                            retry_after_ms = ms,
+                            "fast mode: short retry-after, keeping fast mode active"
+                        );
+                        sleep(Duration::from_millis(ms)).await;
+                        continue;
                     }
 
                     // Long or unknown retry-after: enter cooldown.

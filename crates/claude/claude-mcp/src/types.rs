@@ -27,10 +27,10 @@ const MAX_MCP_OUTPUT_TOKENS_ENV: &str = "MAX_MCP_OUTPUT_TOKENS";
 /// Otherwise the default of 50,000 characters is used.
 #[must_use]
 pub fn mcp_tool_result_max_chars() -> usize {
-    if let Ok(val) = std::env::var(MAX_MCP_OUTPUT_TOKENS_ENV) {
-        if let Ok(tokens) = val.parse::<usize>() {
-            return tokens.saturating_mul(4);
-        }
+    if let Ok(val) = std::env::var(MAX_MCP_OUTPUT_TOKENS_ENV)
+        && let Ok(tokens) = val.parse::<usize>()
+    {
+        return tokens.saturating_mul(4);
     }
     DEFAULT_MCP_TOOL_RESULT_MAX_CHARS
 }

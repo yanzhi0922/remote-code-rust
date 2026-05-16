@@ -123,10 +123,10 @@ pub async fn auto_import_settings(settings_path: Option<&str>) -> AutoImportResu
 /// Source: `src/utils/autoImportSettings.ts` — `resolvePath`
 fn resolve_path(settings_path: &str) -> PathBuf {
     // Handle home directory expansion
-    if settings_path.starts_with("~/") {
-        if let Some(home) = dirs::home_dir() {
-            return home.join(&settings_path[2..]);
-        }
+    if settings_path.starts_with("~/")
+        && let Some(home) = dirs::home_dir()
+    {
+        return home.join(&settings_path[2..]);
     }
 
     let path = PathBuf::from(settings_path);

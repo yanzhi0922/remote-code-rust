@@ -35,9 +35,7 @@ pub struct MiniMaxHandler {
 impl MiniMaxHandler {
     /// Create a new MiniMax handler from configuration.
     pub fn new(config: MiniMaxConfig) -> Result<Self, roo_provider::ProviderError> {
-        let model_id = config
-            .model_id
-            .unwrap_or_else(|| models::default_model_id());
+        let model_id = config.model_id.unwrap_or_else(models::default_model_id);
         let model_info = models::models()
             .get(&model_id)
             .cloned()

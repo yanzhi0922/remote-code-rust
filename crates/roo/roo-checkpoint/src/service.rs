@@ -785,23 +785,21 @@ impl ShadowCheckpointService {
             }
 
             // Hard reset to current HEAD.
-            if let Ok(head_ref) = repo.head() {
-                if let Some(oid) = head_ref.target() {
-                    if let Ok(commit) = repo.find_commit(oid) {
-                        let _ = repo.reset(commit.as_object(), git2::ResetType::Hard, None);
-                    }
-                }
+            if let Ok(head_ref) = repo.head()
+                && let Some(oid) = head_ref.target()
+                && let Ok(commit) = repo.find_commit(oid)
+            {
+                let _ = repo.reset(commit.as_object(), git2::ResetType::Hard, None);
             }
 
             // Checkout default branch.
             let ref_name = format!("refs/heads/{}", default_branch);
-            if let Ok(ref_obj) = repo.find_reference(&ref_name) {
-                if let Some(target) = ref_obj.target() {
-                    if let Ok(commit) = repo.find_commit(target) {
-                        let _ = repo.checkout_tree(commit.as_object(), None);
-                        let _ = repo.set_head(&ref_name);
-                    }
-                }
+            if let Ok(ref_obj) = repo.find_reference(&ref_name)
+                && let Some(target) = ref_obj.target()
+                && let Ok(commit) = repo.find_commit(target)
+            {
+                let _ = repo.checkout_tree(commit.as_object(), None);
+                let _ = repo.set_head(&ref_name);
             }
 
             // Delete the branch.

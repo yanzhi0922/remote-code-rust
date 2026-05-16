@@ -200,6 +200,11 @@ pub(crate) async fn require_api_auth(
         }
     }
 
+    if let Some(principal) = consume_stream_ticket(&service, &mut request).await {
+        request.extensions_mut().insert(principal);
+        return next.run(request).await;
+    }
+
     let Some(provided) = extract_request_auth_token(&mut request) else {
         return ApiError::unauthorized("missing or invalid control plane bearer token".to_owned())
             .into_response();
@@ -232,11 +237,7 @@ pub(crate) async fn require_api_auth(
         return next.run(request).await;
     }
 
-    // If a bearer token was provided but didn't match the shared token or any
-    // device token, treat it as a user-derived tenant identity.  The token is
-    // `sha256(username:password)` computed client-side — the server never
-    // stores the password, it just uses this value as a tenant-scoping key.
-    if request_allows_tenant_user_auth(&request) {
+    if request_allows_tenant_user_auth(&request) && service.accepts_derived_user_key(&provided) {
         request
             .extensions_mut()
             .insert(AuthPrincipal::User { user_id: provided });
@@ -245,6 +246,23 @@ pub(crate) async fn require_api_auth(
 
     ApiError::unauthorized("missing or invalid control plane bearer token".to_owned())
         .into_response()
+}
+
+async fn consume_stream_ticket(
+    service: &ControlPlaneService,
+    request: &mut Request,
+) -> Option<AuthPrincipal> {
+    if !request_allows_query_auth(request) {
+        return None;
+    }
+    let ticket = request
+        .uri()
+        .query()
+        .and_then(extract_stream_ticket_from_query)?;
+    strip_auth_from_request_uri(request);
+    service
+        .consume_stream_ticket(&ticket, request.uri().path())
+        .await
 }
 
 fn extract_request_auth_token(request: &mut Request) -> Option<String> {
@@ -259,7 +277,7 @@ fn extract_request_auth_token(request: &mut Request) -> Option<String> {
     if bearer.is_some() {
         return bearer;
     }
-    if !request_allows_query_auth(request) {
+    if !legacy_query_access_tokens_enabled() || !request_allows_query_auth(request) {
         return None;
     }
     let token = request
@@ -295,6 +313,9 @@ fn request_allows_tenant_user_auth(request: &Request) -> bool {
     if path == "/v1/devices/push-token" && method == Method::POST {
         return true;
     }
+    if path == "/v1/stream-ticket" && method == Method::POST {
+        return true;
+    }
     if path.starts_with("/v1/runners") {
         return true;
     }
@@ -320,6 +341,18 @@ fn extract_auth_token_from_query(query: &str) -> Option<String> {
         let key = parts.next()?.trim();
         let value = parts.next().unwrap_or_default().trim();
         if matches!(key, "token" | "access_token") && !value.is_empty() {
+            return Some(percent_decode_query_value(value));
+        }
+    }
+    None
+}
+
+fn extract_stream_ticket_from_query(query: &str) -> Option<String> {
+    for pair in query.split('&') {
+        let mut parts = pair.splitn(2, '=');
+        let key = parts.next()?.trim();
+        let value = parts.next().unwrap_or_default().trim();
+        if key == "stream_ticket" && !value.is_empty() {
             return Some(percent_decode_query_value(value));
         }
     }
@@ -356,7 +389,7 @@ fn percent_decode_query_value(raw: &str) -> String {
     String::from_utf8_lossy(&decoded).into_owned()
 }
 
-/// Strip access_token and token query parameters from the request URI
+/// Strip auth query parameters from the request URI
 /// so they don't appear in access logs or error messages.
 fn strip_auth_from_request_uri(request: &mut Request) {
     let uri = request.uri().clone();
@@ -367,18 +400,24 @@ fn strip_auth_from_request_uri(request: &mut Request) {
         .split('&')
         .filter(|pair| {
             let key = pair.split('=').next().unwrap_or("").trim();
-            !matches!(key, "token" | "access_token")
+            !matches!(key, "token" | "access_token" | "stream_ticket")
         })
         .collect::<Vec<_>>()
         .join("&");
     let new_uri = if cleaned.is_empty() {
-        format!("{}?", uri.path())
+        uri.path().to_owned()
     } else {
         format!("{}?{cleaned}", uri.path())
     };
     if let Ok(parsed) = new_uri.parse::<axum::http::Uri>() {
         *request.uri_mut() = parsed;
     }
+}
+
+fn legacy_query_access_tokens_enabled() -> bool {
+    std::env::var("REMOTE_CODE_ALLOW_QUERY_ACCESS_TOKEN")
+        .as_deref()
+        .is_ok_and(|value| value.eq_ignore_ascii_case("true"))
 }
 
 fn constant_time_token_eq(provided: &str, expected: &str) -> bool {

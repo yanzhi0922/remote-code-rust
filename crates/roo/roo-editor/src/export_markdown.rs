@@ -64,7 +64,7 @@ pub fn get_task_file_name(date_ts: i64) -> String {
     let dt = Utc
         .timestamp_opt(date_ts, 0)
         .single()
-        .unwrap_or_else(|| Utc::now());
+        .unwrap_or_else(Utc::now);
 
     let month = dt.format("%b").to_string().to_lowercase();
     let day = dt.day();
@@ -73,7 +73,7 @@ pub fn get_task_file_name(date_ts: i64) -> String {
     let minutes = dt.format("%M");
     let seconds = dt.format("%S");
     let ampm = if hours >= 12 { "pm" } else { "am" };
-    hours = hours % 12;
+    hours %= 12;
     if hours == 0 {
         hours = 12;
     }
@@ -125,8 +125,7 @@ pub fn format_content_block_to_markdown(block: &ContentBlock) -> String {
             match content {
                 Some(Value::String(s)) => format!("[Tool{}]\n{}", error_suffix, s),
                 Some(Value::Array(arr)) => {
-                    let parts: Vec<String> =
-                        arr.iter().map(|v| format_value_to_markdown(v)).collect();
+                    let parts: Vec<String> = arr.iter().map(format_value_to_markdown).collect();
                     format!("[Tool{}]\n{}", error_suffix, parts.join("\n"))
                 }
                 _ => format!("[Tool{}]", error_suffix),
@@ -156,7 +155,7 @@ pub fn conversation_to_markdown(messages: &[ConversationMessage]) -> String {
                     .as_array()
                     .unwrap()
                     .iter()
-                    .map(|block| format_value_to_markdown(block))
+                    .map(format_value_to_markdown)
                     .collect::<Vec<_>>()
                     .join("\n")
             } else {
@@ -188,16 +187,15 @@ pub fn find_tool_name(tool_call_id: &str, messages: &[ConversationMessage]) -> S
     for message in messages {
         if message.content.is_array() {
             for block in message.content.as_array().unwrap() {
-                if let Some(block_type) = block.get("type") {
-                    if block_type == "tool_use" {
-                        if block.get("id").and_then(|v| v.as_str()) == Some(tool_call_id) {
-                            return block
-                                .get("name")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("Unknown Tool")
-                                .to_string();
-                        }
-                    }
+                if let Some(block_type) = block.get("type")
+                    && block_type == "tool_use"
+                    && block.get("id").and_then(|v| v.as_str()) == Some(tool_call_id)
+                {
+                    return block
+                        .get("name")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("Unknown Tool")
+                        .to_string();
                 }
             }
         }

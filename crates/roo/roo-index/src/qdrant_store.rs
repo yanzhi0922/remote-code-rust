@@ -533,8 +533,8 @@ impl QdrantVectorStore {
             let normalized = normalized.trim_end_matches('/');
             // Normalise: treat "." or "./" as "no filter".
             if !normalized.is_empty() && normalized != "." && normalized != "./" {
-                let cleaned = if normalized.starts_with("./") {
-                    &normalized[2..]
+                let cleaned = if let Some(stripped) = normalized.strip_prefix("./") {
+                    stripped
                 } else {
                     normalized
                 };
@@ -580,7 +580,7 @@ impl QdrantVectorStore {
                     .and_then(|v| v.as_str())
                 {
                     let segments: Vec<&str> = file_path
-                        .split(|c: char| c == '/' || c == '\\')
+                        .split(['/', '\\'])
                         .filter(|s| !s.is_empty())
                         .collect();
                     let path_segments: serde_json::Map<String, serde_json::Value> = segments
@@ -901,14 +901,12 @@ impl QdrantVectorStore {
                     IndexError::GeneralError(format!("Failed to parse retrieve response: {e}"))
                 })?;
 
-                if let Some(point) = retrieved.result.first() {
-                    if let Some(ref payload) = point.payload {
-                        if let Some(complete) =
-                            payload.get("indexing_complete").and_then(|v| v.as_bool())
-                        {
-                            return Ok(complete);
-                        }
-                    }
+                if let Some(point) = retrieved.result.first()
+                    && let Some(ref payload) = point.payload
+                    && let Some(complete) =
+                        payload.get("indexing_complete").and_then(|v| v.as_bool())
+                {
+                    return Ok(complete);
                 }
 
                 // Backward compatibility: no marker — fall back to checking points_count > 0.

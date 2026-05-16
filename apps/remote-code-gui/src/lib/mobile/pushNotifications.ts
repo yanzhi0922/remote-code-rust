@@ -46,9 +46,13 @@ export async function initPushNotifications(options: PushNotificationOptions): P
 export async function registerPushTokenWithControlPlane(
   baseUrl: string,
   accessToken: string,
-): Promise<void> {
-  if (!hasTauriRuntime()) return;
-  await invoke('mobile_push_register_token', { baseUrl, accessToken });
+): Promise<boolean> {
+  if (!hasTauriRuntime() || !_permissionGranted || !_pushToken) return false;
+  return await invoke<boolean>('mobile_push_register_token', {
+    baseUrl,
+    accessToken,
+    pushToken: _pushToken,
+  });
 }
 
 export async function showLocalNotification(title: string, body: string, data?: string): Promise<void> {

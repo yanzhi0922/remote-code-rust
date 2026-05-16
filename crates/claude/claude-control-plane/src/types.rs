@@ -31,6 +31,7 @@ pub(crate) const DEFAULT_EVENT_LIST_LIMIT: usize = 50;
 pub(crate) const MAX_EVENT_LIST_LIMIT: usize = 200;
 pub(crate) const DEFAULT_PAIRING_TTL_SECS: u64 = 600;
 pub(crate) const MAX_PAIRING_TTL_SECS: u64 = 3600;
+pub(crate) const STREAM_TICKET_TTL_SECS: u64 = 45;
 pub(crate) const MAX_ARTIFACT_SIZE_BYTES: usize = 10 * 1024 * 1024; // 10 MiB
 pub(crate) const EVENT_STREAM_BUFFER: usize = 256;
 pub(crate) const PHASE: &str = "phase5-remote-stable";
@@ -271,6 +272,21 @@ pub struct TokenRefreshResponse {
 }
 
 // ---------------------------------------------------------------------------
+// WebSocket stream tickets
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StreamTicketRequest {
+    pub path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StreamTicketResponse {
+    pub stream_ticket: String,
+    pub expires_in_secs: u64,
+}
+
+// ---------------------------------------------------------------------------
 // Push-token registration (mobile devices)
 // ---------------------------------------------------------------------------
 
@@ -378,9 +394,9 @@ pub struct SessionRecord {
     pub metadata: BTreeMap<String, String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
-    /// Tenant-scoping user identity.  Set to `sha256(username:password)` when
-    /// the session is created by an `AuthPrincipal::User`.  `None` for legacy
-    /// sessions or admin-created sessions (visible to all).
+    /// Tenant-scoping user identity.  Set to an explicitly provisioned
+    /// user-key token when the session is created by an `AuthPrincipal::User`.
+    /// `None` for legacy sessions or admin-created sessions (visible to all).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub owner_user_id: Option<String>,
 }

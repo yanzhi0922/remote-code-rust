@@ -89,6 +89,7 @@ import {
 } from './i18n';
 import { appendRemoteTimelineEvent, resolveRemoteSessionTitle } from '../session/normalize/fromRemote';
 import { loadRemoteSessionBundle } from './transport';
+import { resolveRemoteRunnerBaseUrl, resolveRemoteTransportStrategy } from './transportMode';
 import { useConnection } from './useConnection';
 import type { TransportConfig } from './connection-manager';
 import type {
@@ -328,7 +329,10 @@ export default function MobileRemoteApp() {
           if (sessionId === activeSessionIdRef.current) void refreshSessionBundle(sessionId).catch(reportAsyncError);
         },
       });
-      if (!cancelled) await registerPushTokenWithControlPlane(baseUrl, accessToken);
+      if (!cancelled) {
+        const registered = await registerPushTokenWithControlPlane(baseUrl, accessToken);
+        if (!cancelled && !registered) showStatusMessage(copy.mobileNotificationsUnavailable);
+      }
     })();
     return () => { cancelled = true; };
   }, [accessToken, baseUrl, copy]);
@@ -477,10 +481,11 @@ export default function MobileRemoteApp() {
       try {
         await refreshSessionBundle(selectedSessionId);
         if (!cancelled) {
+          const runnerBaseUrl = resolveRemoteRunnerBaseUrl(activeSession);
           const config: TransportConfig = {
-            strategy: 'server_relay',
+            strategy: resolveRemoteTransportStrategy(activeSession),
             baseUrl,
-            runnerBaseUrl: null,
+            runnerBaseUrl,
             sessionId: selectedSessionId,
             authToken: accessToken,
           };
@@ -492,7 +497,7 @@ export default function MobileRemoteApp() {
     };
     void bootstrap();
     return () => { cancelled = true; connectedSessionRef.current = null; transportDisconnect(); };
-  }, [accessToken, authRequired, baseUrl, health, selectedSessionId]);
+  }, [accessToken, activeSession, authRequired, baseUrl, health, selectedSessionId]);
 
   // ── Action handlers ───────────────────────────────────────────────────
 
@@ -501,7 +506,7 @@ export default function MobileRemoteApp() {
         !composer.trim() || sending || !activeSessionControlStatus.canSendPrompt) return;
     setSending(true);
     try {
-      await sendPrompt(baseUrl, selectedSessionId, composer.trim(), activeSession?.owner_runner_public_base_url);
+      await sendPrompt(baseUrl, selectedSessionId, composer.trim(), resolveRemoteRunnerBaseUrl(activeSession) ?? undefined);
       setComposer('');
       showStatusMessage(copy.statusPromptForwarded);
     } catch (e) { reportAsyncError(e); }
@@ -513,7 +518,7 @@ export default function MobileRemoteApp() {
         interrupting || !activeSessionControlStatus.canInterrupt) return;
     setInterrupting(true);
     try {
-      await interruptSession(baseUrl, selectedSessionId, activeSession?.owner_runner_public_base_url);
+      await interruptSession(baseUrl, selectedSessionId, resolveRemoteRunnerBaseUrl(activeSession) ?? undefined);
       showStatusMessage(copy.statusInterruptForwarded);
     } catch (e) { reportAsyncError(e); }
     finally { setInterrupting(false); }
@@ -523,7 +528,7 @@ export default function MobileRemoteApp() {
     if (!baseUrl || (authRequired && !accessToken) || approvingId) return;
     setApprovingId(approvalId);
     try {
-      await respondToApproval(baseUrl, approvalId, decision, undefined, activeSession?.owner_runner_public_base_url);
+      await respondToApproval(baseUrl, approvalId, decision, undefined, resolveRemoteRunnerBaseUrl(activeSession) ?? undefined);
       showStatusMessage(copy.statusApprovalDecision(copy.approvalDecisionLabels[decision]));
       if (selectedSessionId) await refreshApprovals(selectedSessionId);
     } catch (e) { reportAsyncError(e); }

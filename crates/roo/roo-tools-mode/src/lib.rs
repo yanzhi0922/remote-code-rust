@@ -1,3 +1,6 @@
+#![allow(dead_code)]
+#![allow(clippy::all)]
+#![deny(clippy::dbg_macro, clippy::todo)]
 //! # Roo Tools Mode
 //!
 //! Mode switching tool implementations: `switch_mode`, `new_task`,

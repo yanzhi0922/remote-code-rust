@@ -155,13 +155,13 @@ pub fn parse_markdown(content: &str) -> Vec<MarkdownCapture> {
         if gi < group_indices.len() - 1 {
             // End position is the start of the next header minus 1
             let next_start = captures_mut[group_indices[gi + 1].0].start_row;
-            for ci in start_idx..=end_idx {
-                captures_mut[ci].end_row = next_start.saturating_sub(1);
+            for capture in captures_mut.iter_mut().take(end_idx + 1).skip(start_idx) {
+                capture.end_row = next_start.saturating_sub(1);
             }
         } else {
             // Last header extends to the end of the file
-            for ci in start_idx..=end_idx {
-                captures_mut[ci].end_row = lines.len().saturating_sub(1);
+            for capture in captures_mut.iter_mut().take(end_idx + 1).skip(start_idx) {
+                capture.end_row = lines.len().saturating_sub(1);
             }
         }
     }

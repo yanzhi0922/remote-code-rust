@@ -52,8 +52,7 @@ pub fn find_highest_matching_version(
 
     versions
         .into_iter()
-        .filter(|v| compare_semver(current_version, v) >= std::cmp::Ordering::Equal)
-        .next()
+        .find(|v| compare_semver(current_version, v) >= std::cmp::Ordering::Equal)
         .cloned()
 }
 

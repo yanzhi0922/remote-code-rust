@@ -265,10 +265,10 @@ pub fn yield_missing_tool_result_messages(messages: &[Message], error_text: &str
                 tool_call_ids.push(tc.id.clone());
             }
             for block in &assistant.blocks {
-                if let AssistantContentBlock::ToolUse { id, .. } = block {
-                    if !tool_call_ids.contains(id) {
-                        tool_call_ids.push(id.clone());
-                    }
+                if let AssistantContentBlock::ToolUse { id, .. } = block
+                    && !tool_call_ids.contains(id)
+                {
+                    tool_call_ids.push(id.clone());
                 }
             }
         }

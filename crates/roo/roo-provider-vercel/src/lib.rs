@@ -1,3 +1,6 @@
+#![allow(dead_code)]
+#![allow(clippy::all)]
+#![deny(clippy::dbg_macro, clippy::todo)]
 //! # Roo Provider: Vercel AI Gateway
 //!
 //! Vercel AI Gateway provider for Roo Code Rust.

@@ -47,6 +47,7 @@ const REMOTE_USER_KEY_FILE: &str = "remote_user_key.txt";
 const REMOTE_USERNAME_FILE: &str = "remote_username.txt";
 const REMOTE_PASSWORD_HASH_KEY: &str = "remote-control-password-hash";
 const REMOTE_USER_KEY_KEY: &str = "remote-control-user-key";
+const MIN_REMOTE_PASSWORD_LEN: usize = 12;
 
 // ─── Public API ─────────────────────────────────────────────────────────────
 
@@ -273,7 +274,7 @@ fn hash_password(password: &str) -> String {
 }
 
 /// Derive the tenant-scoping user_key from username and password.
-/// `user_key = sha256(username:password)` — serves as both auth token and tenant ID.
+/// The control plane accepts it only when sha256(user_key) is configured.
 fn derive_user_key(username: &str, password: &str) -> String {
     hash_password(&format!("{username}:{password}"))
 }
@@ -309,7 +310,7 @@ pub fn verify_remote_password(app: &AppHandle, provided: &str) -> bool {
         None => {
             // No password set yet — first-time pairing accepts any password
             // and auto-saves it for future verification.
-            if provided.len() >= 4 {
+            if provided.len() >= MIN_REMOTE_PASSWORD_LEN {
                 let _ = set_remote_password(app, provided);
                 true
             } else {
@@ -325,7 +326,7 @@ pub fn get_remote_user_key(app: &AppHandle) -> Option<String> {
     read_secret_with_legacy_file_migration(app, REMOTE_USER_KEY_KEY, REMOTE_USER_KEY_FILE)
 }
 
-/// Save the derived user_key for use as auth token.
+/// Save the derived user_key for use as an explicitly provisioned auth token.
 fn save_remote_user_key(app: &AppHandle, user_key: &str) -> Result<()> {
     save_secret_with_file_fallback(app, REMOTE_USER_KEY_KEY, REMOTE_USER_KEY_FILE, user_key)
 }
@@ -442,8 +443,10 @@ pub fn remote_get_status(app: AppHandle) -> String {
 
 #[tauri::command]
 pub fn remote_set_password(app: AppHandle, password: String) -> Result<(), String> {
-    if password.len() < 4 {
-        return Err("Password must be at least 4 characters".to_string());
+    if password.len() < MIN_REMOTE_PASSWORD_LEN {
+        return Err(format!(
+            "Password must be at least {MIN_REMOTE_PASSWORD_LEN} characters"
+        ));
     }
     set_remote_password(&app, &password).map_err(|e| e.to_string())?;
     // If username is already set, derive and save the user_key.
@@ -478,8 +481,10 @@ pub fn remote_set_credentials(
     if username.is_empty() {
         return Err("Username cannot be empty".to_string());
     }
-    if password.len() < 4 {
-        return Err("Password must be at least 4 characters".to_string());
+    if password.len() < MIN_REMOTE_PASSWORD_LEN {
+        return Err(format!(
+            "Password must be at least {MIN_REMOTE_PASSWORD_LEN} characters"
+        ));
     }
     set_remote_username(&app, &username).map_err(|e| e.to_string())?;
     set_remote_password(&app, &password).map_err(|e| e.to_string())?;
@@ -811,7 +816,7 @@ impl InProcessSessionManager {
         let agent_type = session
             .metadata
             .get("agent_type")
-            .and_then(|v| Some(v.as_str()))
+            .map(|v| v.as_str())
             .map(|s| match s {
                 "remote_codex" | "codex" => AgentType::RemoteCodex,
                 "remote_roo" | "roo" => AgentType::RemoteRoo,
@@ -822,7 +827,7 @@ impl InProcessSessionManager {
         let model = session
             .metadata
             .get("model")
-            .and_then(|v| Some(v.as_str()))
+            .map(|v| v.as_str())
             .unwrap_or("claude-sonnet-4-20250514")
             .to_string();
 

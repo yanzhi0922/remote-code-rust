@@ -69,14 +69,14 @@ pub fn is_auto_compact_env_enabled(user_config_auto_compact: Option<bool>) -> bo
     if std::env::var("DISABLE_COMPACT")
         .ok()
         .as_deref()
-        .map_or(false, is_env_truthy)
+        .is_some_and(is_env_truthy)
     {
         return false;
     }
     if std::env::var("DISABLE_AUTO_COMPACT")
         .ok()
         .as_deref()
-        .map_or(false, is_env_truthy)
+        .is_some_and(is_env_truthy)
     {
         return false;
     }
@@ -93,12 +93,11 @@ pub fn get_effective_context_window(base_context_window: u64, max_output_tokens:
     let reserved = max_output_tokens.min(MAX_OUTPUT_TOKENS_FOR_SUMMARY);
     let mut context_window = base_context_window;
 
-    if let Ok(val) = std::env::var("CLAUDE_CODE_AUTO_COMPACT_WINDOW") {
-        if let Ok(parsed) = val.parse::<u64>() {
-            if parsed > 0 {
-                context_window = context_window.min(parsed);
-            }
-        }
+    if let Ok(val) = std::env::var("CLAUDE_CODE_AUTO_COMPACT_WINDOW")
+        && let Ok(parsed) = val.parse::<u64>()
+        && parsed > 0
+    {
+        context_window = context_window.min(parsed);
     }
 
     context_window.saturating_sub(reserved)
@@ -112,13 +111,13 @@ pub fn get_auto_compact_threshold(base_context_window: u64, max_output_tokens: u
     let effective = get_effective_context_window(base_context_window, max_output_tokens);
     let default_threshold = effective.saturating_sub(AUTOCOMPACT_BUFFER_TOKENS);
 
-    if let Ok(val) = std::env::var("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE") {
-        if let Ok(pct) = val.parse::<f64>() {
-            if pct > 0.0 && pct <= 100.0 {
-                let pct_threshold = (effective as f64 * (pct / 100.0)) as u64;
-                return pct_threshold.min(default_threshold);
-            }
-        }
+    if let Ok(val) = std::env::var("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE")
+        && let Ok(pct) = val.parse::<f64>()
+        && pct > 0.0
+        && pct <= 100.0
+    {
+        let pct_threshold = (effective as f64 * (pct / 100.0)) as u64;
+        return pct_threshold.min(default_threshold);
     }
 
     default_threshold

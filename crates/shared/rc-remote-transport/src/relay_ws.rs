@@ -44,14 +44,11 @@ impl RemoteTransport for RelayWsTransport {
         self.config = Some(config.clone());
         self.state = ConnectionState::Connecting;
 
-        let ws_url = build_cp_ws_url(
-            &cp_url,
-            &config.session_id,
-            config.after_sequence,
-            &config.auth_token,
-        );
+        let ws_url = build_cp_ws_url(&cp_url, &config.session_id, config.after_sequence);
+        let request =
+            super::direct_ws::build_authenticated_ws_request(&ws_url, &config.auth_token)?;
 
-        let (stream, _response) = tokio_tungstenite::connect_async(&ws_url)
+        let (stream, _response) = tokio_tungstenite::connect_async(request)
             .await
             .map_err(|e| {
                 self.state = ConnectionState::Error(e.to_string());
@@ -155,9 +152,9 @@ impl RemoteTransport for RelayWsTransport {
     }
 }
 
-fn build_cp_ws_url(cp_url: &str, session_id: &str, after: u64, token: &str) -> String {
+fn build_cp_ws_url(cp_url: &str, session_id: &str, after: u64) -> String {
     let ws_base = cp_url
         .replace("https://", "wss://")
         .replace("http://", "ws://");
-    format!("{ws_base}/v1/sessions/{session_id}/events/stream?after={after}&access_token={token}")
+    format!("{ws_base}/v1/sessions/{session_id}/events/stream?after={after}")
 }

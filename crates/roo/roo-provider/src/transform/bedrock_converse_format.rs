@@ -86,7 +86,7 @@ pub fn convert_to_bedrock_converse_messages(messages: &[ApiMessage]) -> Vec<Valu
             let content: Vec<Value> = msg
                 .content
                 .iter()
-                .filter_map(|block| convert_content_block(block))
+                .filter_map(convert_content_block)
                 .collect();
 
             json!({

@@ -1,32 +1,32 @@
 # Remote Code Rust — 项目状态与路线图
 
-> 更新日期: 2026-05-02
-> 当前阶段: Phase 17 已完成 — ZCode 启发功能（Checkpoint + Specialized Agents + Git Panel）
-> 代码规模: ~95,000 行 (Rust + TypeScript)，154 个 workspace crates（Claude 41 + Codex 105 + Adapters 3 + Apps 5）+ Roo 67（独立）
-> 当前验证基线: `cargo test --workspace` 全绿（14,000+ 测试），`cargo clippy` 零警告，三 Agent 适配器 + ZCode 启发 crate 编译通过。
-> 基准提交: `46b4ac8`
+> 更新日期: 2026-05-16
+> 当前阶段: 发布收敛与安全加固 — 核心门禁已恢复，安装包与真实设备链路仍需发布验收
+> 代码规模: `cargo metadata --no-deps` 实测 231 个 Rust packages；Roo/Codex/Claude 均纳入当前 workspace 视角
+> 当前验证基线: 以本地 `cargo check --workspace --all-targets` / `cargo clippy --workspace -- -D warnings` / `cargo audit --quiet` / `npm test` / `npm run build` 实测为准，不再使用旧的“全绿”静态结论；`tauri build --bundles nsis` 仍需在磁盘空间充足的发布机上完成。
+> 基准分支: `main`
 
 ---
 
 ## 一、当前产品状态
 
-### 1.1 总体评估: 生产就绪
+### 1.1 总体评估: 发布候选收敛中
 
 | 维度 | 状态 | 详情 |
 |------|------|------|
-| 编译 | ✅ 通过 | `cargo build --release`、GUI build、mobile build 通过 |
-| 安全 | ✅ 强化 | `unsafe_code = "warn"`，`unwrap_used = "warn"`，`todo`/`dbg` 禁止 |
-| 测试 | ✅ 通过 | `cargo test --workspace` 14,000+ 测试全绿，0 failures |
-| Clippy | ✅ 零警告 | `cargo clippy --workspace -- -D warnings` 通过 |
+| 编译 | 🟡 核心通过 | `cargo check --workspace --all-targets` 与 `npm run build` 已通过；NSIS 桌面安装包仍需独立发布机完成 |
+| 安全 | 🟡 加固后待验收 | WebSocket 改用一次性 stream ticket，默认 relay-only，CI 增加 gitleaks；`cargo audit` 使用显式风险接受文件并仍跟踪上游 warning-only advisories |
+| 测试 | 🟡 分批通过 | 前端测试与关键 Rust 包通过；Windows 全 workspace 测试可能受 PDB 写入/磁盘压力影响，需要分包或限并发重跑 |
+| Clippy | ✅ 门禁恢复 | `cargo clippy --workspace -- -D warnings` 已恢复通过，Roo 来源代码采用 scoped quarantine |
 | CLI | ✅ 可发布 | clap 命令树、doctor 与核心子命令可构建并通过回归 |
 | TUI | ✅ 可发布 | 交互式终端 + Vim 模式回归通过 |
 | GUI (Tauri) | ✅ 可构建 | Rust/Tauri crate 纳入工作区回归，Phase 2-5 GUI Redesign 完成 |
-| GUI (Web/PWA) | ✅ 可发布 | 远程控制面、中英双语、错误边界、PWA 缓存更新链路通过 |
-| GUI (Mobile/Tauri v2) | 📋 Rust 后端就绪 | mobile.rs 20 个 Tauri 命令已实现，待 `tauri android/ios init` |
+| GUI (Web/PWA) | ✅ 门禁通过 | 远程控制面、中英双语、错误边界、PWA 缓存更新链路通过 |
+| GUI (Mobile/Tauri v2) | 🟡 预览可用 | Android 配置已整理；推送 token 获取仍依赖原生 FCM/APNs 插件，未拿到 token 时明确返回 unavailable |
 | Provider | ✅ 完整 | OpenAI/Anthropic 协议，流式，多 key 轮换，故障转移 |
 | 工具系统 | ✅ 丰富 | 62 内置工具 + MCP + 插件扩展 |
-| Control Plane | ✅ 完整 | Runner/Session/Approval/Artifact/Event 全链路 |
-| Runner | ✅ 完整 | Daemon 模式，心跳，命令拉取，审批中继 |
+| Control Plane | 🟡 核心可用 | Runner/Session/Approval/Artifact/Event 全链路；远程流改为一次性 stream ticket |
+| Runner | 🟡 本地执行 | Daemon、心跳和审批中继可用；生产目标要求桌面端首启自动上线仍需端到端打包验收 |
 | 多 Agent | ✅ 三引擎独立适配器 | Claude (QueryEngine) + Codex (AppServer) + Roo (AgentLoop, 26 Provider backends) 三条独立 in-process 路径 |
 | 国际化 | ✅ 完整 | Web GUI / mobile shell 支持中文界面 |
 
@@ -65,15 +65,13 @@
 └─────────────────────────────────────────────────────────────┘
 ```
 
-### 1.3 Crate 结构 (154 workspace crates)
+### 1.3 Crate 结构（当前 metadata 视角约 231 packages）
 
 | 分类 | 数量 | 说明 |
 |------|------|------|
-| Claude 核心 | 41 | claude-core, claude-provider, claude-session, claude-checkpoint, claude-specialized-agents, claude-git, ... |
-| Codex 核心 | 105 | protocol, core, exec, app-server, ... |
-| Adapters | 3 | rc-claude-adapter, rc-codex-adapter, rc-roo-adapter |
-| Apps | 5 | CLI (claudecode), GUI (Tauri), Control Plane, Runner, Migrate |
-| Roo（独立） | 67 | 独立 workspace，被 exclude 排除 |
+| Claude / Apps / Adapters | 多个 | claude-core, claude-provider, claude-session, claude-checkpoint, claude-git, rc-* adapters, GUI, Control Plane, Runner, Migrate |
+| Codex | 多个 | protocol, core, exec, app-server 等当前 workspace 依赖图中的 package |
+| Roo | 多个 | provider, task, tools, terminal, checkpoint, config 等来源代码当前纳入 clippy quarantine 管理 |
 
 ---
 
@@ -199,6 +197,9 @@
 | Roo Token 估算粗糙 | 使用 `text.len() / 4` 而非 Roo 原生 tiktoken | P2 |
 | Roo MCP 未接入 | 声明了 McpSupport 但未集成 McpServerConnection | P2 |
 | `rama-*` 依赖为预发布 | 锁定 `0.3.0-alpha.4`，待迁移至稳定版 | P3 |
+| RustSec accepted advisories | `hickory-proto` / `rsa` 上游暂无直接 fixed version，已在 `.cargo/audit.toml` 明确接受并要求后续复核 | P1 |
+| 移动端系统推送 | 当前可注册控制平面 endpoint，但原生 FCM/APNs token 获取仍依赖平台插件；无 token 时返回 unavailable | P1 |
+| 用户名/密码远控 | 仅接受服务端预配置 SHA-256 user-key hash；生产优先 bootstrap/pairing | P1 |
 
 ---
 
@@ -223,7 +224,7 @@
 - [ ] Task Flow 可视化 — 任务依赖图 + 进度追踪
 
 ### Phase 21: 可选扩展
-- [ ] 云端 Runner — 腾讯云执行代码
+- [ ] 多工作站本地 Runner — 多台可信电脑协同，服务器仍只做中继
 - [ ] 多工作站调度 — 多台机器协同
 - [ ] 团队协作 — 多用户共享会话
 - [ ] TTS 真实实现 — 接入语音合成服务
@@ -259,12 +260,15 @@
 
 | 机制 | 实现 |
 |------|------|
-| `unsafe_code = "warn"` | 编译器警告 unsafe 代码 |
+| `unsafe_code = "allow"` | 平台 FFI 允许；新增 unsafe 需 code review，CI 继续执行 clippy/audit |
 | `unwrap_used = "warn"` | 生产代码不建议 unwrap |
 | `todo!` / `dbg!` / `unimplemented!` 禁止 | 防止调试/未实现代码进入生产 |
 | OS Keychain | Tauri 桌面端 API key 存储在系统钥匙串 |
 | SHA-256 哈希 | Bootstrap secret 不明文存储 |
 | Bearer Token | 所有 `/v1/*` API 受认证保护 |
+| 一次性 Stream Ticket | WebSocket 事件流不再把长期 token 放入 URL query |
+| Relay-only 默认模式 | 手机/Web 默认只经控制平面中继，直连 runner 需要显式高级开关 |
+| User-key Hash Allowlist | 派生 user-key 只接受 `REMOTE_CODE_CONTROL_PLANE_USER_KEY_HASHES` 配置的 SHA-256 哈希 |
 | 设备信任链 | Bootstrap → 配对 → 二次授权 |
 | URL 敏感参数清理 | Web 端自动移除 URL 中的 token/secret |
 | Mutex poison recovery | 所有 Mutex 使用 `into_inner()` 恢复，不 panic |

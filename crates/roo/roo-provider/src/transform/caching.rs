@@ -27,7 +27,7 @@ use serde_json::{Value, json};
 /// `cache_control` can be attached to individual parts.
 ///
 /// Source: `src/api/transform/caching/anthropic.ts` — `addCacheBreakpoints`
-pub fn apply_anthropic_caching(system_prompt: &str, messages: &mut Vec<Value>) {
+pub fn apply_anthropic_caching(system_prompt: &str, messages: &mut [Value]) {
     if messages.is_empty() {
         return;
     }
@@ -90,7 +90,7 @@ pub fn apply_anthropic_caching(system_prompt: &str, messages: &mut Vec<Value>) {
 ///    `cache_control` on its last text part.
 ///
 /// Source: `src/api/transform/caching/gemini.ts` — `addCacheBreakpoints`
-pub fn apply_gemini_caching(system_prompt: &str, messages: &mut Vec<Value>, frequency: usize) {
+pub fn apply_gemini_caching(system_prompt: &str, messages: &mut [Value], frequency: usize) {
     if messages.is_empty() {
         return;
     }
@@ -117,21 +117,19 @@ pub fn apply_gemini_caching(system_prompt: &str, messages: &mut Vec<Value>, freq
         // Check if this is the N-th user message (0-indexed: mark when count % frequency == frequency - 1)
         let is_nth = count % frequency == frequency - 1;
 
-        if is_nth {
-            if let Some(content) = msg["content"].as_array_mut() {
-                let last_text_idx = content.iter().rposition(|part| part["type"] == "text");
+        if is_nth && let Some(content) = msg["content"].as_array_mut() {
+            let last_text_idx = content.iter().rposition(|part| part["type"] == "text");
 
-                if let Some(text_idx) = last_text_idx {
-                    if let Some(obj) = content[text_idx].as_object_mut() {
-                        obj.insert("cache_control".to_string(), json!({ "type": "ephemeral" }));
-                    }
-                } else {
-                    content.push(json!({
-                        "type": "text",
-                        "text": "...",
-                        "cache_control": { "type": "ephemeral" }
-                    }));
+            if let Some(text_idx) = last_text_idx {
+                if let Some(obj) = content[text_idx].as_object_mut() {
+                    obj.insert("cache_control".to_string(), json!({ "type": "ephemeral" }));
                 }
+            } else {
+                content.push(json!({
+                    "type": "text",
+                    "text": "...",
+                    "cache_control": { "type": "ephemeral" }
+                }));
             }
         }
 
@@ -152,7 +150,7 @@ pub fn apply_gemini_caching(system_prompt: &str, messages: &mut Vec<Value>, freq
 ///    part (only if the text is non-empty).
 ///
 /// Source: `src/api/transform/caching/vercel-ai-gateway.ts` — `addCacheBreakpoints`
-pub fn apply_vercel_caching(system_prompt: &str, messages: &mut Vec<Value>) {
+pub fn apply_vercel_caching(system_prompt: &str, messages: &mut [Value]) {
     if messages.is_empty() {
         return;
     }
@@ -178,7 +176,7 @@ pub fn apply_vercel_caching(system_prompt: &str, messages: &mut Vec<Value>) {
         let msg = &mut messages[idx];
 
         // Convert string content to array if needed
-        if msg["content"].is_string() && msg["content"].as_str().unwrap_or("").len() > 0 {
+        if msg["content"].is_string() && !msg["content"].as_str().unwrap_or("").is_empty() {
             let text = msg["content"].as_str().unwrap_or("").to_string();
             msg["content"] = json!([{ "type": "text", "text": text }]);
         }
@@ -190,13 +188,13 @@ pub fn apply_vercel_caching(system_prompt: &str, messages: &mut Vec<Value>) {
                     && part
                         .get("text")
                         .and_then(|t| t.as_str())
-                        .map_or(false, |t| !t.is_empty())
+                        .is_some_and(|t| !t.is_empty())
             });
 
-            if let Some(text_idx) = last_text_idx {
-                if let Some(obj) = content[text_idx].as_object_mut() {
-                    obj.insert("cache_control".to_string(), json!({ "type": "ephemeral" }));
-                }
+            if let Some(text_idx) = last_text_idx
+                && let Some(obj) = content[text_idx].as_object_mut()
+            {
+                obj.insert("cache_control".to_string(), json!({ "type": "ephemeral" }));
             }
         }
     }
@@ -217,7 +215,7 @@ pub fn apply_vercel_caching(system_prompt: &str, messages: &mut Vec<Value>) {
 /// within Vertex's 4-block limit.
 ///
 /// Source: `src/api/transform/caching/vertex.ts` — `addCacheBreakpoints`
-pub fn apply_vertex_caching(messages: &mut Vec<Value>) {
+pub fn apply_vertex_caching(messages: &mut [Value]) {
     // Find indices of user messages
     let user_indices: Vec<usize> = messages
         .iter()
@@ -255,10 +253,10 @@ pub fn apply_vertex_caching(messages: &mut Vec<Value>) {
             if let Some(content) = msg["content"].as_array_mut() {
                 let last_text_idx = content.iter().rposition(|part| part["type"] == "text");
 
-                if let Some(text_idx) = last_text_idx {
-                    if let Some(obj) = content[text_idx].as_object_mut() {
-                        obj.insert("cache_control".to_string(), json!({ "type": "ephemeral" }));
-                    }
+                if let Some(text_idx) = last_text_idx
+                    && let Some(obj) = content[text_idx].as_object_mut()
+                {
+                    obj.insert("cache_control".to_string(), json!({ "type": "ephemeral" }));
                 }
             }
         }

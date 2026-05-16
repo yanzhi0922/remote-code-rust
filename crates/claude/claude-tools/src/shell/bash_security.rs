@@ -46,19 +46,19 @@ pub fn check_bash_security(command: &str) -> SecurityCheckResult {
 }
 
 fn check_command_substitution(command: &str, result: &mut SecurityCheckResult) {
-    if command.contains('`') && count_unescaped_single_quotes(command) % 2 == 0 {
+    if command.contains('`') && count_unescaped_single_quotes(command).is_multiple_of(2) {
         result.safe = false;
         result
             .reasons
             .push("Command substitution via backticks detected".into());
     }
-    if let Some(pos) = command.find("$(") {
-        if !is_inside_single_quotes(command, pos) {
-            result.safe = false;
-            result
-                .reasons
-                .push("Command substitution via $() detected".into());
-        }
+    if let Some(pos) = command.find("$(")
+        && !is_inside_single_quotes(command, pos)
+    {
+        result.safe = false;
+        result
+            .reasons
+            .push("Command substitution via $() detected".into());
     }
     for m in command.match_indices("${") {
         if !is_inside_single_quotes(command, m.0) {
@@ -79,11 +79,12 @@ fn check_command_substitution(command: &str, result: &mut SecurityCheckResult) {
 
 fn check_process_substitution(command: &str, result: &mut SecurityCheckResult) {
     for (i, c) in command.char_indices() {
-        if (c == '<' || c == '>') && command.get(i + 1..).is_some_and(|r| r.starts_with('(')) {
-            if !is_inside_single_quotes(command, i) {
-                result.safe = false;
-                result.reasons.push("Process substitution detected".into());
-            }
+        if (c == '<' || c == '>')
+            && command.get(i + 1..).is_some_and(|r| r.starts_with('('))
+            && !is_inside_single_quotes(command, i)
+        {
+            result.safe = false;
+            result.reasons.push("Process substitution detected".into());
         }
     }
 }
@@ -144,13 +145,14 @@ fn check_brace_expansion(command: &str, result: &mut SecurityCheckResult) {
             let rest = &command[i + 1..];
             if let Some(end) = rest.find('}') {
                 let inner = &rest[..end];
-                if (inner.contains(',') && !inner.contains(' ')) || inner.contains("..") {
-                    if !inner.starts_with('$') && !is_inside_single_quotes(command, i) {
-                        result.safe = false;
-                        result
-                            .reasons
-                            .push(format!("Brace expansion {{{}}} detected", inner));
-                    }
+                if ((inner.contains(',') && !inner.contains(' ')) || inner.contains(".."))
+                    && !inner.starts_with('$')
+                    && !is_inside_single_quotes(command, i)
+                {
+                    result.safe = false;
+                    result
+                        .reasons
+                        .push(format!("Brace expansion {{{}}} detected", inner));
                 }
             }
         }
@@ -244,15 +246,16 @@ fn check_backslash_escaped_operators(command: &str, result: &mut SecurityCheckRe
 
 fn check_git_commit_injection(command: &str, result: &mut SecurityCheckResult) {
     let lower = command.to_ascii_lowercase();
-    if lower.contains("git") && lower.contains("commit") {
-        if let Some(m_pos) = lower.find("-m ") {
-            let after_m = &command[m_pos + 3..];
-            if after_m.contains("$(") || after_m.contains('`') {
-                result.safe = false;
-                result
-                    .reasons
-                    .push("Command substitution in git commit message detected".into());
-            }
+    if lower.contains("git")
+        && lower.contains("commit")
+        && let Some(m_pos) = lower.find("-m ")
+    {
+        let after_m = &command[m_pos + 3..];
+        if after_m.contains("$(") || after_m.contains('`') {
+            result.safe = false;
+            result
+                .reasons
+                .push("Command substitution in git commit message detected".into());
         }
     }
 }

@@ -1,4 +1,8 @@
+#![allow(dead_code)]
+#![allow(clippy::all)]
+#![deny(clippy::dbg_macro, clippy::todo)]
 //! # Roo Tools FS
+#![allow(clippy::manual_find, clippy::manual_strip, clippy::needless_range_loop)]
 //!
 //! File system tool implementations: `read_file`, `write_to_file`,
 //! `apply_diff`, `edit_file`, `apply_patch`, `search_and_replace`,

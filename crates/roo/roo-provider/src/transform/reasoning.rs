@@ -362,13 +362,12 @@ pub fn get_roo_reasoning(opts: &GetModelReasoningOptions) -> Option<Value> {
 
     // Required reasoning effort: honor the provided effort if valid
     if opts.model.required_reasoning_effort.unwrap_or(false) {
-        if let Some(effort) = opts.reasoning_effort {
-            if effort != ReasoningEffortSetting::Disable
-                && effort != ReasoningEffortSetting::Minimal
-            {
-                let effort_str = effort_setting_to_str(effort);
-                return Some(json!({ "enabled": true, "effort": effort_str }));
-            }
+        if let Some(effort) = opts.reasoning_effort
+            && effort != ReasoningEffortSetting::Disable
+            && effort != ReasoningEffortSetting::Minimal
+        {
+            let effort_str = effort_setting_to_str(effort);
+            return Some(json!({ "enabled": true, "effort": effort_str }));
         }
         return Some(json!({ "enabled": true }));
     }

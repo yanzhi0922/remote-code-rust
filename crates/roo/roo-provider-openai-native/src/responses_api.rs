@@ -286,12 +286,12 @@ pub fn parse_sse_event(data: &str, provider_name: &str) -> Result<Option<ApiStre
     match event_type {
         // Text content deltas
         "response.output_text.delta" | "response.text.delta" => {
-            if let Some(delta) = event["delta"].as_str() {
-                if !delta.is_empty() {
-                    return Ok(Some(ApiStreamChunk::Text {
-                        text: delta.to_string(),
-                    }));
-                }
+            if let Some(delta) = event["delta"].as_str()
+                && !delta.is_empty()
+            {
+                return Ok(Some(ApiStreamChunk::Text {
+                    text: delta.to_string(),
+                }));
             }
             Ok(None)
         }
@@ -302,12 +302,12 @@ pub fn parse_sse_event(data: &str, provider_name: &str) -> Result<Option<ApiStre
                 .as_str()
                 .or_else(|| event["output_text"].as_str())
                 .or_else(|| event["delta"].as_str());
-            if let Some(text) = done_text {
-                if !text.is_empty() {
-                    return Ok(Some(ApiStreamChunk::Text {
-                        text: text.to_string(),
-                    }));
-                }
+            if let Some(text) = done_text
+                && !text.is_empty()
+            {
+                return Ok(Some(ApiStreamChunk::Text {
+                    text: text.to_string(),
+                }));
             }
             Ok(None)
         }
@@ -321,12 +321,12 @@ pub fn parse_sse_event(data: &str, provider_name: &str) -> Result<Option<ApiStre
                     .and_then(|t| t.get("value"))
                     .and_then(|v| v.as_str())
             });
-            if let Some(text) = part_text {
-                if !text.is_empty() {
-                    return Ok(Some(ApiStreamChunk::Text {
-                        text: text.to_string(),
-                    }));
-                }
+            if let Some(text) = part_text
+                && !text.is_empty()
+            {
+                return Ok(Some(ApiStreamChunk::Text {
+                    text: text.to_string(),
+                }));
             }
             Ok(None)
         }
@@ -336,25 +336,25 @@ pub fn parse_sse_event(data: &str, provider_name: &str) -> Result<Option<ApiStre
         | "response.reasoning.delta"
         | "response.reasoning_summary_text.delta"
         | "response.reasoning_summary.delta" => {
-            if let Some(delta) = event["delta"].as_str() {
-                if !delta.is_empty() {
-                    return Ok(Some(ApiStreamChunk::Reasoning {
-                        text: delta.to_string(),
-                        signature: None,
-                    }));
-                }
+            if let Some(delta) = event["delta"].as_str()
+                && !delta.is_empty()
+            {
+                return Ok(Some(ApiStreamChunk::Reasoning {
+                    text: delta.to_string(),
+                    signature: None,
+                }));
             }
             Ok(None)
         }
 
         // Refusal deltas
         "response.refusal.delta" => {
-            if let Some(delta) = event["delta"].as_str() {
-                if !delta.is_empty() {
-                    return Ok(Some(ApiStreamChunk::Text {
-                        text: format!("[Refusal] {}", delta),
-                    }));
-                }
+            if let Some(delta) = event["delta"].as_str()
+                && !delta.is_empty()
+            {
+                return Ok(Some(ApiStreamChunk::Text {
+                    text: format!("[Refusal] {}", delta),
+                }));
             }
             Ok(None)
         }
@@ -375,15 +375,16 @@ pub fn parse_sse_event(data: &str, provider_name: &str) -> Result<Option<ApiStre
             let index = event["index"].as_u64().unwrap_or(0);
 
             // TS requires both id and name to be non-empty for a valid partial
-            if let (Some(id), Some(n)) = (call_id, name) {
-                if !id.is_empty() && !n.is_empty() {
-                    return Ok(Some(ApiStreamChunk::ToolCallPartial {
-                        index,
-                        id: Some(id.to_string()),
-                        name: Some(n.to_string()),
-                        arguments: args.map(|s| s.to_string()),
-                    }));
-                }
+            if let (Some(id), Some(n)) = (call_id, name)
+                && !id.is_empty()
+                && !n.is_empty()
+            {
+                return Ok(Some(ApiStreamChunk::ToolCallPartial {
+                    index,
+                    id: Some(id.to_string()),
+                    name: Some(n.to_string()),
+                    arguments: args.map(|s| s.to_string()),
+                }));
             }
             Ok(None)
         }
@@ -401,34 +402,33 @@ pub fn parse_sse_event(data: &str, provider_name: &str) -> Result<Option<ApiStre
 
             match item_type {
                 "text" | "output_text" => {
-                    if let Some(text) = item["text"].as_str() {
-                        if !text.is_empty() {
-                            return Ok(Some(ApiStreamChunk::Text {
-                                text: text.to_string(),
-                            }));
-                        }
+                    if let Some(text) = item["text"].as_str()
+                        && !text.is_empty()
+                    {
+                        return Ok(Some(ApiStreamChunk::Text {
+                            text: text.to_string(),
+                        }));
                     }
                 }
                 "reasoning" => {
-                    if let Some(text) = item["text"].as_str() {
-                        if !text.is_empty() {
-                            return Ok(Some(ApiStreamChunk::Reasoning {
-                                text: text.to_string(),
-                                signature: None,
-                            }));
-                        }
+                    if let Some(text) = item["text"].as_str()
+                        && !text.is_empty()
+                    {
+                        return Ok(Some(ApiStreamChunk::Reasoning {
+                            text: text.to_string(),
+                            signature: None,
+                        }));
                     }
                     if let Some(summary) = item["summary"].as_array() {
                         for s in summary {
-                            if s["type"] == "summary_text" {
-                                if let Some(text) = s["text"].as_str() {
-                                    if !text.is_empty() {
-                                        return Ok(Some(ApiStreamChunk::Reasoning {
-                                            text: text.to_string(),
-                                            signature: None,
-                                        }));
-                                    }
-                                }
+                            if s["type"] == "summary_text"
+                                && let Some(text) = s["text"].as_str()
+                                && !text.is_empty()
+                            {
+                                return Ok(Some(ApiStreamChunk::Reasoning {
+                                    text: text.to_string(),
+                                    signature: None,
+                                }));
                             }
                         }
                     }
@@ -436,14 +436,13 @@ pub fn parse_sse_event(data: &str, provider_name: &str) -> Result<Option<ApiStre
                 "message" => {
                     if let Some(content) = item["content"].as_array() {
                         for c in content {
-                            if c["type"] == "text" || c["type"] == "output_text" {
-                                if let Some(text) = c["text"].as_str() {
-                                    if !text.is_empty() {
-                                        return Ok(Some(ApiStreamChunk::Text {
-                                            text: text.to_string(),
-                                        }));
-                                    }
-                                }
+                            if (c["type"] == "text" || c["type"] == "output_text")
+                                && let Some(text) = c["text"].as_str()
+                                && !text.is_empty()
+                            {
+                                return Ok(Some(ApiStreamChunk::Text {
+                                    text: text.to_string(),
+                                }));
                             }
                         }
                     }
@@ -489,34 +488,32 @@ pub fn parse_sse_event(data: &str, provider_name: &str) -> Result<Option<ApiStre
                 .and_then(|o| o.as_array())
             {
                 for output_item in output {
-                    if output_item["type"] == "message" {
-                        if let Some(content) = output_item["content"].as_array() {
-                            for c in content {
-                                if c["type"] == "output_text" || c["type"] == "text" {
-                                    if let Some(text) = c["text"].as_str() {
-                                        if !text.is_empty() {
-                                            return Ok(Some(ApiStreamChunk::Text {
-                                                text: text.to_string(),
-                                            }));
-                                        }
-                                    }
-                                }
+                    if output_item["type"] == "message"
+                        && let Some(content) = output_item["content"].as_array()
+                    {
+                        for c in content {
+                            if (c["type"] == "output_text" || c["type"] == "text")
+                                && let Some(text) = c["text"].as_str()
+                                && !text.is_empty()
+                            {
+                                return Ok(Some(ApiStreamChunk::Text {
+                                    text: text.to_string(),
+                                }));
                             }
                         }
                     }
-                    if output_item["type"] == "reasoning" {
-                        if let Some(summary) = output_item["summary"].as_array() {
-                            for s in summary {
-                                if s["type"] == "summary_text" {
-                                    if let Some(text) = s["text"].as_str() {
-                                        if !text.is_empty() {
-                                            return Ok(Some(ApiStreamChunk::Reasoning {
-                                                text: text.to_string(),
-                                                signature: None,
-                                            }));
-                                        }
-                                    }
-                                }
+                    if output_item["type"] == "reasoning"
+                        && let Some(summary) = output_item["summary"].as_array()
+                    {
+                        for s in summary {
+                            if s["type"] == "summary_text"
+                                && let Some(text) = s["text"].as_str()
+                                && !text.is_empty()
+                            {
+                                return Ok(Some(ApiStreamChunk::Reasoning {
+                                    text: text.to_string(),
+                                    signature: None,
+                                }));
                             }
                         }
                     }

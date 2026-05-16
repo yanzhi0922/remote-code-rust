@@ -9,11 +9,11 @@ use crate::download::{download_file, download_page};
 use crate::handlers::{
     accept_pairing_offer, apply_approval_decision, claim_bootstrap_device, create_approval,
     create_artifact, create_pairing_offer, create_session, create_session_runtime_event,
-    download_artifact, get_approval, get_artifact, get_health, get_meta, get_runner, get_session,
-    list_approvals, list_artifacts, list_devices, list_recent_events, list_runner_approvals,
-    list_runner_artifacts, list_runner_events, list_runner_sessions, list_runners,
-    list_session_approvals, list_session_artifacts, list_session_events, list_sessions,
-    post_session_command, pull_runner_commands, refresh_token, register_push_token,
+    create_stream_ticket, download_artifact, get_approval, get_artifact, get_health, get_meta,
+    get_runner, get_session, list_approvals, list_artifacts, list_devices, list_recent_events,
+    list_runner_approvals, list_runner_artifacts, list_runner_events, list_runner_sessions,
+    list_runners, list_session_approvals, list_session_artifacts, list_session_events,
+    list_sessions, post_session_command, pull_runner_commands, refresh_token, register_push_token,
     register_runner, revoke_device, subscribe_approvals, subscribe_events,
     subscribe_runner_approvals, subscribe_runner_events, subscribe_session_approvals,
     subscribe_session_events, update_runner_heartbeat, update_session_state,
@@ -24,6 +24,7 @@ impl ControlPlaneService {
     pub fn router(self) -> Router {
         let protected = Router::new()
             .route("/v1/meta", get(get_meta))
+            .route("/v1/stream-ticket", post(create_stream_ticket))
             .route("/v1/devices", get(list_devices))
             .route("/v1/devices/{device_id}", delete(revoke_device))
             .route("/v1/events", get(list_recent_events))

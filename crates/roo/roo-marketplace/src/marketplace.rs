@@ -47,10 +47,10 @@ impl MarketplaceManager {
                 }
 
                 // Item type filter
-                if let Some(ref item_type) = filter.item_type {
-                    if item.item_type != *item_type {
-                        return false;
-                    }
+                if let Some(ref item_type) = filter.item_type
+                    && item.item_type != *item_type
+                {
+                    return false;
                 }
 
                 // Tags filter: item must contain all requested tags

@@ -63,18 +63,18 @@ pub fn validate_read_file_params(params: &ReadFileParams) -> Result<(), FsToolEr
         ));
     }
 
-    if let Some(offset) = params.offset {
-        if offset == 0 {
-            return Err(FsToolError::Validation(
-                "offset must be >= 1 (1-based line number)".to_string(),
-            ));
-        }
+    if let Some(offset) = params.offset
+        && offset == 0
+    {
+        return Err(FsToolError::Validation(
+            "offset must be >= 1 (1-based line number)".to_string(),
+        ));
     }
 
-    if let Some(limit) = params.limit {
-        if limit == 0 {
-            return Err(FsToolError::Validation("limit must be >= 1".to_string()));
-        }
+    if let Some(limit) = params.limit
+        && limit == 0
+    {
+        return Err(FsToolError::Validation("limit must be >= 1".to_string()));
     }
 
     // Validate indentation mode params
@@ -85,12 +85,12 @@ pub fn validate_read_file_params(params: &ReadFileParams) -> Result<(), FsToolEr
                     "indentation mode requires anchor_line".to_string(),
                 ));
             }
-            if let Some(anchor) = indent.anchor_line {
-                if anchor == 0 {
-                    return Err(FsToolError::Validation(
-                        "anchor_line must be >= 1 (1-based line number)".to_string(),
-                    ));
-                }
+            if let Some(anchor) = indent.anchor_line
+                && anchor == 0
+            {
+                return Err(FsToolError::Validation(
+                    "anchor_line must be >= 1 (1-based line number)".to_string(),
+                ));
             }
         } else {
             return Err(FsToolError::Validation(

@@ -208,9 +208,9 @@ pub fn parse_arn(arn: &str, configured_region: Option<&str>) -> ArnInfo {
     let original_model_id = caps.get(4).map(|m| m.as_str().to_string());
 
     let model_id = original_model_id.as_deref().map(parse_base_model_id);
-    let cross_region = original_model_id.as_deref().map_or(false, |id| {
-        model_id.as_deref().map_or(false, |base| base != id)
-    });
+    let cross_region = original_model_id
+        .as_deref()
+        .is_some_and(|id| model_id.as_deref().is_some_and(|base| base != id));
 
     let error_message = if let (Some(arn_region), Some(cfg)) = (&region, configured_region) {
         if arn_region != cfg {
@@ -270,9 +270,7 @@ pub struct AwsBedrockHandler {
 impl AwsBedrockHandler {
     /// Create a new AWS Bedrock handler from configuration.
     pub fn new(config: AwsBedrockConfig) -> Result<Self> {
-        let model_id = config
-            .model_id
-            .unwrap_or_else(|| models::default_model_id());
+        let model_id = config.model_id.unwrap_or_else(models::default_model_id);
         let model_info = models::models()
             .get(&model_id)
             .cloned()
@@ -417,75 +415,75 @@ impl AwsBedrockHandler {
         });
 
         // Add tools if provided (Bedrock Converse toolSpec format)
-        if let Some(tools) = tools {
-            if !tools.is_empty() {
-                let tool_list: Vec<Value> = tools
-                    .iter()
-                    .filter_map(|tool| {
-                        let tool_type = tool.get("type").and_then(|t| t.as_str()).unwrap_or("");
-                        if tool_type != "function" {
-                            return None;
+        if let Some(tools) = tools
+            && !tools.is_empty()
+        {
+            let tool_list: Vec<Value> = tools
+                .iter()
+                .filter_map(|tool| {
+                    let tool_type = tool.get("type").and_then(|t| t.as_str()).unwrap_or("");
+                    if tool_type != "function" {
+                        return None;
+                    }
+                    let function = tool.get("function")?;
+                    Some(json!({
+                        "toolSpec": {
+                            "name": function.get("name"),
+                            "description": function.get("description"),
+                            "inputSchema": {
+                                "json": function.get("parameters"),
+                            },
                         }
-                        let function = tool.get("function")?;
-                        Some(json!({
-                            "toolSpec": {
-                                "name": function.get("name"),
-                                "description": function.get("description"),
-                                "inputSchema": {
-                                    "json": function.get("parameters"),
-                                },
-                            }
-                        }))
-                    })
-                    .collect();
+                    }))
+                })
+                .collect();
 
-                if !tool_list.is_empty() {
-                    body["tools"] = json!(tool_list);
+            if !tool_list.is_empty() {
+                body["tools"] = json!(tool_list);
 
-                    // Add tool choice configuration
-                    // Maps TS tool_choice values to Bedrock Converse toolChoice format
-                    if let Some(choice) = tool_choice {
-                        let tool_choice_value = match choice.as_str() {
-                            Some("auto") => json!({ "auto": {} }),
-                            Some("any") | Some("required") => json!({ "any": {} }),
-                            Some("none") => json!({ "auto": {} }), // Bedrock doesn't have "none", use auto
-                            _ => {
-                                // Check for specific function choice: { type: "function", function: { name: "..." } }
-                                if choice.get("type").and_then(|t| t.as_str()) == Some("function") {
-                                    if let Some(name) = choice
-                                        .get("function")
-                                        .and_then(|f| f.get("name"))
-                                        .and_then(|n| n.as_str())
-                                    {
-                                        json!({ "tool": { "name": name } })
-                                    } else {
-                                        json!({ "auto": {} })
-                                    }
+                // Add tool choice configuration
+                // Maps TS tool_choice values to Bedrock Converse toolChoice format
+                if let Some(choice) = tool_choice {
+                    let tool_choice_value = match choice.as_str() {
+                        Some("auto") => json!({ "auto": {} }),
+                        Some("any") | Some("required") => json!({ "any": {} }),
+                        Some("none") => json!({ "auto": {} }), // Bedrock doesn't have "none", use auto
+                        _ => {
+                            // Check for specific function choice: { type: "function", function: { name: "..." } }
+                            if choice.get("type").and_then(|t| t.as_str()) == Some("function") {
+                                if let Some(name) = choice
+                                    .get("function")
+                                    .and_then(|f| f.get("name"))
+                                    .and_then(|n| n.as_str())
+                                {
+                                    json!({ "tool": { "name": name } })
                                 } else {
                                     json!({ "auto": {} })
                                 }
+                            } else {
+                                json!({ "auto": {} })
                             }
-                        };
-                        body["toolConfig"] = json!({
-                            "tools": body["tools"],
-                            "toolChoice": tool_choice_value,
-                        });
-                    }
+                        }
+                    };
+                    body["toolConfig"] = json!({
+                        "tools": body["tools"],
+                        "toolChoice": tool_choice_value,
+                    });
                 }
             }
         }
 
         // Add additionalModelRequestFields for thinking/reasoning budget
         // when the model supports it
-        if self.model_info.supports_reasoning_budget.unwrap_or(false) {
-            if let Some(budget) = self.model_info.max_thinking_tokens {
-                body["additionalModelRequestFields"] = json!({
-                    "thinking": {
-                        "type": "enabled",
-                        "budget_tokens": budget,
-                    }
-                });
-            }
+        if self.model_info.supports_reasoning_budget.unwrap_or(false)
+            && let Some(budget) = self.model_info.max_thinking_tokens
+        {
+            body["additionalModelRequestFields"] = json!({
+                "thinking": {
+                    "type": "enabled",
+                    "budget_tokens": budget,
+                }
+            });
         }
 
         // Add anthropic_beta for 1M context and fine-grained tool streaming
@@ -619,15 +617,14 @@ impl Provider for AwsBedrockHandler {
                         let _ = signature;
                     }
                 },
-                BedrockEvent::ContentBlockStart { content_block, .. } => match content_block {
-                    ContentBlockStartData::ToolUse { tool_use_id, name } => {
+                BedrockEvent::ContentBlockStart { content_block, .. } => {
+                    if let ContentBlockStartData::ToolUse { tool_use_id, name } = content_block {
                         chunks.push(Ok(ApiStreamChunk::ToolCallStart {
                             id: tool_use_id,
                             name,
                         }));
                     }
-                    _ => {}
-                },
+                }
                 BedrockEvent::ContentBlockStop { .. } => {
                     // No action needed for stop events
                 }
@@ -705,23 +702,23 @@ impl Provider for AwsBedrockHandler {
                     if let Some(_model_id) = invoked_model_id {
                         tracing::debug!(model_id = %_model_id, "Bedrock prompt router invoked model");
                     }
-                    if let Some(router_usage) = usage {
-                        if !usage_emitted {
-                            let input_tokens = router_usage.input_tokens;
-                            let output_tokens = router_usage.output_tokens;
-                            let cache_read_tokens = router_usage.cache_read_input_tokens;
-                            let cache_write_tokens = router_usage.cache_write_input_tokens;
+                    if let Some(router_usage) = usage
+                        && !usage_emitted
+                    {
+                        let input_tokens = router_usage.input_tokens;
+                        let output_tokens = router_usage.output_tokens;
+                        let cache_read_tokens = router_usage.cache_read_input_tokens;
+                        let cache_write_tokens = router_usage.cache_write_input_tokens;
 
-                            chunks.push(Ok(ApiStreamChunk::Usage {
-                                input_tokens,
-                                output_tokens,
-                                cache_write_tokens,
-                                cache_read_tokens,
-                                reasoning_tokens: None,
-                                total_cost: None,
-                            }));
-                            usage_emitted = true;
-                        }
+                        chunks.push(Ok(ApiStreamChunk::Usage {
+                            input_tokens,
+                            output_tokens,
+                            cache_write_tokens,
+                            cache_read_tokens,
+                            reasoning_tokens: None,
+                            total_cost: None,
+                        }));
+                        usage_emitted = true;
                     }
                 }
             }
@@ -806,14 +803,13 @@ impl Provider for AwsBedrockHandler {
             .get("output")
             .and_then(|o| o.get("message"))
             .and_then(|m| m.get("content"))
+            && let Some(arr) = content.as_array()
         {
-            if let Some(arr) = content.as_array() {
-                let text: String = arr
-                    .iter()
-                    .filter_map(|c| c.get("text").and_then(|t| t.as_str()))
-                    .collect();
-                return Ok(text);
-            }
+            let text: String = arr
+                .iter()
+                .filter_map(|c| c.get("text").and_then(|t| t.as_str()))
+                .collect();
+            return Ok(text);
         }
 
         Ok(String::new())

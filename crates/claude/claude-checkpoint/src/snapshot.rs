@@ -197,7 +197,6 @@ pub enum FileChangeEntry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
 
     #[test]
     fn test_hash_content_deterministic() {

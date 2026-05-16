@@ -80,20 +80,18 @@ fn convert_tool_choice_for_anthropic(
     }
 
     // Object variant: { "type": "function", "function": { "name": "…" } }
-    if let Some(obj) = tool_choice.as_object() {
-        if obj.get("type").and_then(|v| v.as_str()) == Some("function") {
-            if let Some(name) = obj
-                .get("function")
-                .and_then(|f| f.get("name"))
-                .and_then(|n| n.as_str())
-            {
-                return Some(json!({
-                    "type": "tool",
-                    "name": name,
-                    "disable_parallel_tool_use": disable_parallel,
-                }));
-            }
-        }
+    if let Some(obj) = tool_choice.as_object()
+        && obj.get("type").and_then(|v| v.as_str()) == Some("function")
+        && let Some(name) = obj
+            .get("function")
+            .and_then(|f| f.get("name"))
+            .and_then(|n| n.as_str())
+    {
+        return Some(json!({
+            "type": "tool",
+            "name": name,
+            "disable_parallel_tool_use": disable_parallel,
+        }));
     }
 
     None
@@ -120,9 +118,7 @@ pub struct AnthropicHandler {
 impl AnthropicHandler {
     /// Create a new Anthropic handler from configuration.
     pub fn new(config: AnthropicConfig) -> Result<Self> {
-        let model_id = config
-            .model_id
-            .unwrap_or_else(|| models::default_model_id());
+        let model_id = config.model_id.unwrap_or_else(models::default_model_id);
         let mut model_info =
             models::models()
                 .get(&model_id)
@@ -143,21 +139,22 @@ impl AnthropicHandler {
         // If 1M context beta is enabled for supported models, update the model info
         // Source: `src/api/providers/anthropic.ts` — `getModel()` lines 340-354
         let supports_1m = ANTHROPIC_1M_CONTEXT_MODEL_IDS.contains(&model_id.as_str());
-        if config.enable_1m_context && supports_1m {
-            if let Some(tier) = model_info.tiers.as_ref().and_then(|t| t.first()) {
-                model_info.context_window = tier.context_window;
-                if let Some(p) = tier.input_price {
-                    model_info.input_price = Some(p);
-                }
-                if let Some(p) = tier.output_price {
-                    model_info.output_price = Some(p);
-                }
-                if let Some(p) = tier.cache_writes_price {
-                    model_info.cache_writes_price = Some(p);
-                }
-                if let Some(p) = tier.cache_reads_price {
-                    model_info.cache_reads_price = Some(p);
-                }
+        if config.enable_1m_context
+            && supports_1m
+            && let Some(tier) = model_info.tiers.as_ref().and_then(|t| t.first())
+        {
+            model_info.context_window = tier.context_window;
+            if let Some(p) = tier.input_price {
+                model_info.input_price = Some(p);
+            }
+            if let Some(p) = tier.output_price {
+                model_info.output_price = Some(p);
+            }
+            if let Some(p) = tier.cache_writes_price {
+                model_info.cache_writes_price = Some(p);
+            }
+            if let Some(p) = tier.cache_reads_price {
+                model_info.cache_reads_price = Some(p);
             }
         }
 
@@ -312,24 +309,21 @@ impl AnthropicHandler {
         // Add tools if provided
         // Source: `src/api/providers/anthropic.ts` — tools are passed without
         // cache_control; caching is applied only to system and user messages.
-        if let Some(tools) = tools {
-            if !tools.is_empty() {
-                let anthropic_tools: Vec<Value> = tools
-                    .iter()
-                    .map(|tool| convert_tool_for_anthropic(tool))
-                    .collect();
+        if let Some(tools) = tools
+            && !tools.is_empty()
+        {
+            let anthropic_tools: Vec<Value> =
+                tools.iter().map(convert_tool_for_anthropic).collect();
 
-                body["tools"] = json!(anthropic_tools);
-            }
+            body["tools"] = json!(anthropic_tools);
         }
 
         // Add tool_choice if specified in metadata
-        if let Some(ref tool_choice) = metadata.tool_choice {
-            if let Some(anthropic_choice) =
+        if let Some(ref tool_choice) = metadata.tool_choice
+            && let Some(anthropic_choice) =
                 convert_tool_choice_for_anthropic(tool_choice, metadata.parallel_tool_calls)
-            {
-                body["tool_choice"] = anthropic_choice;
-            }
+        {
+            body["tool_choice"] = anthropic_choice;
         }
 
         body
@@ -399,7 +393,7 @@ impl AnthropicHandler {
                                 crate::types::AnthropicContentBlock::Text { text } => {
                                     // TS emits text at content_block_start with newline
                                     // separator between multiple text blocks
-                                    if prev_text && prev_idx.map_or(false, |p| p > 0) {
+                                    if prev_text && prev_idx.is_some_and(|p| p > 0) {
                                         results.push(Ok(ApiStreamChunk::Text {
                                             text: "\n".to_string(),
                                         }));
@@ -414,7 +408,7 @@ impl AnthropicHandler {
                                 crate::types::AnthropicContentBlock::Thinking { thinking } => {
                                     // TS emits reasoning at content_block_start with newline
                                     // separator between multiple thinking blocks
-                                    if prev_thinking && prev_idx.map_or(false, |p| p > 0) {
+                                    if prev_thinking && prev_idx.is_some_and(|p| p > 0) {
                                         results.push(Ok(ApiStreamChunk::Reasoning {
                                             text: "\n".to_string(),
                                             signature: None,
@@ -782,12 +776,11 @@ fn apply_cache_control_to_user_messages(messages: &mut Vec<Value>) {
     // Mark the last two user messages
     for idx in user_indices.into_iter().rev().take(2) {
         let msg = &mut messages[idx];
-        if let Some(content) = msg["content"].as_array_mut() {
-            if let Some(last_block) = content.last_mut() {
-                if let Some(obj) = last_block.as_object_mut() {
-                    obj.insert("cache_control".to_string(), json!({ "type": "ephemeral" }));
-                }
-            }
+        if let Some(content) = msg["content"].as_array_mut()
+            && let Some(last_block) = content.last_mut()
+            && let Some(obj) = last_block.as_object_mut()
+        {
+            obj.insert("cache_control".to_string(), json!({ "type": "ephemeral" }));
         }
     }
 }
@@ -943,10 +936,10 @@ impl Provider for AnthropicHandler {
         // Extract text from content blocks — return first text block (matches TS `.find()`)
         if let Some(content) = resp.get("content").and_then(|c| c.as_array()) {
             for block in content {
-                if block.get("type").and_then(|t| t.as_str()) == Some("text") {
-                    if let Some(text) = block.get("text").and_then(|t| t.as_str()) {
-                        return Ok(text.to_string());
-                    }
+                if block.get("type").and_then(|t| t.as_str()) == Some("text")
+                    && let Some(text) = block.get("text").and_then(|t| t.as_str())
+                {
+                    return Ok(text.to_string());
                 }
             }
         }
@@ -998,7 +991,7 @@ impl AnthropicVertexHandler {
         let model_id = config
             .model_id
             .clone()
-            .unwrap_or_else(|| anthropic_vertex_default_model_id());
+            .unwrap_or_else(anthropic_vertex_default_model_id);
 
         let mut model_info = anthropic_vertex_models()
             .get(&model_id)
@@ -1164,23 +1157,20 @@ impl AnthropicVertexHandler {
         }
 
         // Add tools if provided (no cache_control on tools — matches TS)
-        if let Some(tools) = tools {
-            if !tools.is_empty() {
-                let anthropic_tools: Vec<Value> = tools
-                    .iter()
-                    .map(|tool| convert_tool_for_anthropic(tool))
-                    .collect();
-                body["tools"] = json!(anthropic_tools);
-            }
+        if let Some(tools) = tools
+            && !tools.is_empty()
+        {
+            let anthropic_tools: Vec<Value> =
+                tools.iter().map(convert_tool_for_anthropic).collect();
+            body["tools"] = json!(anthropic_tools);
         }
 
         // Add tool_choice if specified in metadata
-        if let Some(ref tool_choice) = metadata.tool_choice {
-            if let Some(anthropic_choice) =
+        if let Some(ref tool_choice) = metadata.tool_choice
+            && let Some(anthropic_choice) =
                 convert_tool_choice_for_anthropic(tool_choice, metadata.parallel_tool_calls)
-            {
-                body["tool_choice"] = anthropic_choice;
-            }
+        {
+            body["tool_choice"] = anthropic_choice;
         }
 
         body
@@ -1349,10 +1339,10 @@ impl Provider for AnthropicVertexHandler {
         // Extract text from content blocks — return first text block (matches TS `.find()`)
         if let Some(content) = resp.get("content").and_then(|c| c.as_array()) {
             for block in content {
-                if block.get("type").and_then(|t| t.as_str()) == Some("text") {
-                    if let Some(text) = block.get("text").and_then(|t| t.as_str()) {
-                        return Ok(text.to_string());
-                    }
+                if block.get("type").and_then(|t| t.as_str()) == Some("text")
+                    && let Some(text) = block.get("text").and_then(|t| t.as_str())
+                {
+                    return Ok(text.to_string());
                 }
             }
         }

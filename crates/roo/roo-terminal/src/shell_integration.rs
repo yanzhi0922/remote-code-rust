@@ -328,22 +328,22 @@ unset ROO_ZDOTDIR
 
         // Remove .zshrc
         let zshrc_path = tmp_dir.join(".zshrc");
-        if zshrc_path.exists() {
-            if let Err(e) = std::fs::remove_file(&zshrc_path) {
-                tracing::warn!("Failed to remove .zshrc: {}", e);
-            }
+        if zshrc_path.exists()
+            && let Err(e) = std::fs::remove_file(&zshrc_path)
+        {
+            tracing::warn!("Failed to remove .zshrc: {}", e);
         }
 
         // Remove directory
-        if tmp_dir.exists() {
-            if let Err(e) = std::fs::remove_dir(&tmp_dir) {
-                tracing::error!(
-                    "[ShellIntegrationManager] Error cleaning up temp dir {}: {}",
-                    tmp_dir.display(),
-                    e
-                );
-                return false;
-            }
+        if tmp_dir.exists()
+            && let Err(e) = std::fs::remove_dir(&tmp_dir)
+        {
+            tracing::error!(
+                "[ShellIntegrationManager] Error cleaning up temp dir {}: {}",
+                tmp_dir.display(),
+                e
+            );
+            return false;
         }
 
         true

@@ -38,12 +38,12 @@ pub fn validate_config(config: &TaskConfig) -> Result<(), TaskError> {
         return Err(TaskError::General("mode cannot be empty".to_string()));
     }
 
-    if let Some(max) = config.max_iterations {
-        if max == 0 {
-            return Err(TaskError::General(
-                "max_iterations must be greater than 0".to_string(),
-            ));
-        }
+    if let Some(max) = config.max_iterations
+        && max == 0
+    {
+        return Err(TaskError::General(
+            "max_iterations must be greater than 0".to_string(),
+        ));
     }
 
     // Validate checkpoint timeout

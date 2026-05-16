@@ -28,21 +28,21 @@ pub fn normalize_tool_schema(schema: &mut Value) {
     match schema {
         Value::Object(map) => {
             // Convert type array to anyOf
-            if let Some(Value::Array(types)) = map.get("type") {
-                if types.len() == 2 {
-                    let non_null: Vec<_> = types
-                        .iter()
-                        .filter(|t| t.as_str() != Some("null"))
-                        .cloned()
-                        .collect();
-                    let has_null = types.iter().any(|t| t.as_str() == Some("null"));
-                    if has_null && non_null.len() == 1 {
-                        let non_null_val = non_null.into_iter().next().unwrap();
-                        map.insert("type".to_string(), non_null_val.clone());
-                        map.entry("anyOf".to_string()).or_insert_with(|| {
-                            vec![non_null_val, Value::String("null".to_string())].into()
-                        });
-                    }
+            if let Some(Value::Array(types)) = map.get("type")
+                && types.len() == 2
+            {
+                let non_null: Vec<_> = types
+                    .iter()
+                    .filter(|t| t.as_str() != Some("null"))
+                    .cloned()
+                    .collect();
+                let has_null = types.iter().any(|t| t.as_str() == Some("null"));
+                if has_null && non_null.len() == 1 {
+                    let non_null_val = non_null.into_iter().next().unwrap();
+                    map.insert("type".to_string(), non_null_val.clone());
+                    map.entry("anyOf".to_string()).or_insert_with(|| {
+                        vec![non_null_val, Value::String("null".to_string())].into()
+                    });
                 }
             }
 
@@ -53,10 +53,10 @@ pub fn normalize_tool_schema(schema: &mut Value) {
             }
 
             // Strip unsupported format values
-            if let Some(Value::String(fmt)) = map.get("format") {
-                if !valid_formats.contains(&fmt.as_str()) {
-                    map.remove("format");
-                }
+            if let Some(Value::String(fmt)) = map.get("format")
+                && !valid_formats.contains(&fmt.as_str())
+            {
+                map.remove("format");
             }
 
             // Recurse into nested schemas

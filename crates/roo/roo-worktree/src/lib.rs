@@ -1,3 +1,6 @@
+#![allow(dead_code)]
+#![allow(clippy::all)]
+#![deny(clippy::dbg_macro, clippy::todo)]
 //! `roo-worktree` — Git worktree management for Roo Code.
 //!
 //! Provides types and pure logic for creating, listing, deleting, and

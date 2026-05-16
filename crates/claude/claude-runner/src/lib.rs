@@ -1149,8 +1149,8 @@ async fn require_runner_auth(
         return next.run(request).await;
     }
 
-    // For WebSocket upgrade endpoints, also accept ?access_token= or ?token=
-    // query parameters — browsers cannot set custom headers on WS upgrade.
+    // Query-token WebSocket auth is a temporary legacy path. Native clients use
+    // Authorization headers; browser clients should use control-plane tickets.
     let is_stream_path = request.uri().path().ends_with("/stream");
     let is_ws_upgrade = request.headers().get("upgrade").is_some_and(|v| {
         v.to_str()
@@ -1160,6 +1160,7 @@ async fn require_runner_auth(
 
     if is_stream_path
         && (is_ws_upgrade || is_get)
+        && runner_query_access_tokens_enabled()
         && let Some(token) = extract_query_auth_token(request.uri().query())
         && constant_time_token_eq(&token, expected)
     {
@@ -1227,13 +1228,19 @@ fn strip_auth_from_request_uri(request: &mut axum::extract::Request) {
         .collect::<Vec<_>>()
         .join("&");
     let new_uri = if cleaned.is_empty() {
-        format!("{}?", uri.path())
+        uri.path().to_owned()
     } else {
         format!("{}?{cleaned}", uri.path())
     };
     if let Ok(parsed) = new_uri.parse::<axum::http::Uri>() {
         *request.uri_mut() = parsed;
     }
+}
+
+fn runner_query_access_tokens_enabled() -> bool {
+    std::env::var("REMOTE_CODE_RUNNER_ALLOW_QUERY_ACCESS_TOKEN")
+        .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
+        .unwrap_or(false)
 }
 
 fn constant_time_token_eq(provided: &str, expected: &str) -> bool {
@@ -1675,6 +1682,21 @@ mod tests {
         assert_eq!(workspaces.len(), 2);
         assert!(workspaces[0].writable);
         assert!(!workspaces[1].writable);
+    }
+
+    #[test]
+    fn strip_auth_from_runner_uri_removes_secret_query_without_trailing_marker() {
+        let mut request = Request::get("/v1/events/stream?access_token=secret")
+            .body(Body::empty())
+            .expect("request should build");
+        strip_auth_from_request_uri(&mut request);
+        assert_eq!(request.uri().to_string(), "/v1/events/stream");
+
+        let mut request = Request::get("/v1/events/stream?after=7&token=secret")
+            .body(Body::empty())
+            .expect("request should build");
+        strip_auth_from_request_uri(&mut request);
+        assert_eq!(request.uri().to_string(), "/v1/events/stream?after=7");
     }
 
     #[test]

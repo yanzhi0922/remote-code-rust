@@ -175,7 +175,7 @@ pub struct ModelTier {
 /// Information about an AI model.
 ///
 /// Source: `packages/types/src/model.ts` — `modelInfoSchema`
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModelInfo {
     /// Maximum tokens the model can output in a single response.
@@ -246,45 +246,6 @@ pub struct ModelInfo {
     pub included_tools: Option<Vec<String>>,
     /// Service tiers with pricing information.
     pub tiers: Option<Vec<ModelTier>>,
-}
-
-impl Default for ModelInfo {
-    fn default() -> Self {
-        Self {
-            max_tokens: None,
-            max_thinking_tokens: None,
-            context_window: 0,
-            supports_images: None,
-            supports_prompt_cache: false,
-            prompt_cache_retention: None,
-            supports_verbosity: None,
-            supports_reasoning_budget: None,
-            supports_reasoning_binary: None,
-            supports_temperature: None,
-            default_temperature: None,
-            required_reasoning_budget: None,
-            supports_reasoning_effort: None,
-            required_reasoning_effort: None,
-            preserve_reasoning: None,
-            supported_parameters: None,
-            input_price: None,
-            output_price: None,
-            cache_writes_price: None,
-            cache_reads_price: None,
-            long_context_pricing: None,
-            description: None,
-            reasoning_effort: None,
-            min_tokens_per_cache_point: None,
-            max_cache_points: None,
-            cachable_fields: None,
-            deprecated: None,
-            is_stealth_model: None,
-            is_free: None,
-            excluded_tools: None,
-            included_tools: None,
-            tiers: None,
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------

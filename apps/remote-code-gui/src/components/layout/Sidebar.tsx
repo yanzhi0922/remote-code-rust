@@ -214,6 +214,7 @@ function SessionRow({
   active,
   tasks,
   expanded,
+  privacyMode,
   onToggleExpanded,
   onSelect,
   onArchive,
@@ -222,6 +223,7 @@ function SessionRow({
   active: boolean;
   tasks: SessionTaskItem[];
   expanded: boolean;
+  privacyMode: boolean;
   onToggleExpanded: () => void;
   onSelect: () => void;
   onArchive: () => void;
@@ -257,7 +259,9 @@ function SessionRow({
         </button>
 
         <button type="button" onClick={onSelect} className="min-w-0 flex-1 text-left">
-          <div className="truncate text-sm font-medium text-rc-text-primary">{session.title}</div>
+          <div className="truncate text-sm font-medium text-rc-text-primary">
+            {privacyMode ? '会话已隐藏' : session.title}
+          </div>
           <div className="mt-1 flex items-center gap-2 text-xs text-rc-text-tertiary">
             <span className="truncate">
               {session.provider_name}
@@ -298,6 +302,7 @@ export function Sidebar() {
   const createSession = useAppStore((state) => state.createSession);
   const projects = useAppStore((state) => state.projects);
   const activeProjectPath = useAppStore((state) => state.activeProjectPath);
+  const privacyMode = useAppStore((state) => state.workspacePrivacyMode);
   const setActiveProject = useAppStore((state) => state.setActiveProject);
   const removeProject = useAppStore((state) => state.removeProject);
   const archiveSession = useAppStore((state) => state.archiveSession);
@@ -353,11 +358,12 @@ export function Sidebar() {
           return { project, sessions: projectSessions };
         }
 
-        const projectMatches = `${project.name} ${project.path}`.toLowerCase().includes(normalizedSearch);
+        const projectSearchText = privacyMode ? project.name : `${project.name} ${project.path}`;
+        const projectMatches = projectSearchText.toLowerCase().includes(normalizedSearch);
         const matchedSessions = projectSessions.filter((session) =>
           [
-            session.title,
-            session.cwd,
+            privacyMode ? '' : session.title,
+            privacyMode ? '' : session.cwd,
             session.provider_name,
             session.model ?? '',
           ]
@@ -376,7 +382,7 @@ export function Sidebar() {
         };
       })
       .filter((row): row is { project: typeof projects[number]; sessions: SessionSummary[] } => !!row);
-  }, [normalizedSearch, projectSessionGroups.projectMap, projects]);
+  }, [normalizedSearch, privacyMode, projectSessionGroups.projectMap, projects]);
 
   useEffect(() => {
     if (!activeProjectPath) return;
@@ -552,7 +558,8 @@ export function Sidebar() {
                                 </span>
                               </div>
                               <div className="mt-1 truncate text-xs text-rc-text-tertiary">
-                                {projectSessions.length} 个会话 · {truncateMiddle(project.path, 36)}
+                                {projectSessions.length} 个会话 ·{' '}
+                                {privacyMode ? '路径已隐藏' : truncateMiddle(project.path, 36)}
                               </div>
                             </button>
 
@@ -596,6 +603,7 @@ export function Sidebar() {
                                     key={session.id}
                                     session={session}
                                     active={session.id === activeSessionId}
+                                    privacyMode={privacyMode}
                                     tasks={
                                       session.id === activeSessionId
                                         ? activeSessionTasks

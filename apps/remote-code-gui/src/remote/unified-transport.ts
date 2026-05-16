@@ -1,8 +1,11 @@
 import type { RemoteTimelineEvent } from './types';
 import { subscribeToRemoteSessionEvents } from './transport';
-import { resolveRemoteAccessToken } from '../lib/runtime';
+import { invoke } from '@tauri-apps/api/core';
+import { listen as tauriListen } from '@tauri-apps/api/event';
+import { hasTauriRuntime, resolveRemoteAccessToken } from '../lib/runtime';
 import { enqueueCommand, drainCommands } from './offline-queue';
 import type { TransportCommandPayload } from './offline-queue';
+import { listSessionEvents, requestJson } from './api';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Strategy types — mirrors the Rust rc-remote-transport crate
@@ -217,7 +220,6 @@ export class UnifiedTransport implements TransportHandle {
         ? this._config.runnerBaseUrl!
         : this._config.baseUrl;
 
-      const { requestJson } = await import('./api');
       await this.executeCommand(target, command);
 
       // Drain any queued commands after successful send.
@@ -372,7 +374,6 @@ export class UnifiedTransport implements TransportHandle {
     const poll = async () => {
       if (this._cancelled) return;
       try {
-        const { listSessionEvents } = await import('./api');
         const response = await listSessionEvents(
           this._config.baseUrl,
           this._config.sessionId,
@@ -402,7 +403,6 @@ export class UnifiedTransport implements TransportHandle {
   }
 
   private async connectQuic(_after: number): Promise<void> {
-    const { hasTauriRuntime } = await import('../lib/runtime');
     if (!hasTauriRuntime()) {
       this._strategy = 'server_relay';
       await this.connectWebSocket(this._config.baseUrl, _after);
@@ -410,9 +410,6 @@ export class UnifiedTransport implements TransportHandle {
     }
 
     try {
-      const { invoke } = await import('@tauri-apps/api/core');
-      const { listen: tauriListen } = await import('@tauri-apps/api/event');
-
       await invoke('quic_connect', {
         url: this._config.quicServerUrl ?? this._config.baseUrl,
         token: this._config.authToken ?? '',
@@ -444,8 +441,6 @@ export class UnifiedTransport implements TransportHandle {
     target: string,
     command: TransportCommandPayload,
   ): Promise<void> {
-    const { requestJson } = await import('./api');
-
     if (command.kind === 'send_prompt') {
       await requestJson(target, `/v1/sessions/${encodeURIComponent(this._config.sessionId)}/commands`, {
         method: 'POST',

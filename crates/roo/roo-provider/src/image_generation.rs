@@ -210,11 +210,10 @@ fn extract_image_from_response(resp: &serde_json::Value) -> ImageGenerationResul
             .and_then(|c| c.get("message"))
             .and_then(|m| m.get("content"))
             .and_then(|c| c.as_str())
+            && content.starts_with("data:image/")
         {
-            if content.starts_with("data:image/") {
-                let fmt = extract_format_from_data_url(content);
-                return ImageGenerationResult::ok(content.to_string(), fmt);
-            }
+            let fmt = extract_format_from_data_url(content);
+            return ImageGenerationResult::ok(content.to_string(), fmt);
         }
         return ImageGenerationResult::err("No image found in response");
     };
@@ -235,10 +234,10 @@ fn extract_image_from_response(resp: &serde_json::Value) -> ImageGenerationResul
 
 /// Extract the image format from a data URL (e.g. "data:image/png;base64,..." -> "png").
 fn extract_format_from_data_url(data_url: &str) -> String {
-    if let Some(start) = data_url.strip_prefix("data:image/") {
-        if let Some(end) = start.find(';') {
-            return start[..end].to_string();
-        }
+    if let Some(start) = data_url.strip_prefix("data:image/")
+        && let Some(end) = start.find(';')
+    {
+        return start[..end].to_string();
     }
     "png".to_string()
 }

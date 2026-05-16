@@ -331,7 +331,7 @@ fn get_latest_date_for_field(
         .files_in_context
         .iter()
         .filter(|entry| entry.path == path)
-        .filter_map(|entry| field_accessor(entry))
+        .filter_map(field_accessor)
         .max()
 }
 

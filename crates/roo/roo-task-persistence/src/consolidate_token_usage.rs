@@ -54,25 +54,25 @@ pub fn consolidate_token_usage(messages: &[ClineMessageRef<'_>]) -> TokenUsage {
     // Calculate running totals
     for message in messages {
         if message.msg_type == "say" && message.say == Some("api_req_started") {
-            if let Some(text) = message.text {
-                if let Ok(parsed) = serde_json::from_str::<ParsedApiReqStartedText>(text) {
-                    if let Some(tokens_in) = parsed.tokens_in {
-                        result.total_tokens_in += tokens_in;
-                    }
-                    if let Some(tokens_out) = parsed.tokens_out {
-                        result.total_tokens_out += tokens_out;
-                    }
-                    if let Some(cache_writes) = parsed.cache_writes {
-                        result.total_cache_writes =
-                            Some(result.total_cache_writes.unwrap_or(0) + cache_writes);
-                    }
-                    if let Some(cache_reads) = parsed.cache_reads {
-                        result.total_cache_reads =
-                            Some(result.total_cache_reads.unwrap_or(0) + cache_reads);
-                    }
-                    if let Some(cost) = parsed.cost {
-                        result.total_cost += cost;
-                    }
+            if let Some(text) = message.text
+                && let Ok(parsed) = serde_json::from_str::<ParsedApiReqStartedText>(text)
+            {
+                if let Some(tokens_in) = parsed.tokens_in {
+                    result.total_tokens_in += tokens_in;
+                }
+                if let Some(tokens_out) = parsed.tokens_out {
+                    result.total_tokens_out += tokens_out;
+                }
+                if let Some(cache_writes) = parsed.cache_writes {
+                    result.total_cache_writes =
+                        Some(result.total_cache_writes.unwrap_or(0) + cache_writes);
+                }
+                if let Some(cache_reads) = parsed.cache_reads {
+                    result.total_cache_reads =
+                        Some(result.total_cache_reads.unwrap_or(0) + cache_reads);
+                }
+                if let Some(cost) = parsed.cost {
+                    result.total_cost += cost;
                 }
             }
         } else if message.msg_type == "say" && message.say == Some("condense_context") {
@@ -85,12 +85,12 @@ pub fn consolidate_token_usage(messages: &[ClineMessageRef<'_>]) -> TokenUsage {
 
     for message in messages.iter().rev() {
         if message.msg_type == "say" && message.say == Some("api_req_started") {
-            if let Some(text) = message.text {
-                if let Ok(parsed) = serde_json::from_str::<ParsedApiReqStartedText>(text) {
-                    let tokens_in = parsed.tokens_in.unwrap_or(0);
-                    let tokens_out = parsed.tokens_out.unwrap_or(0);
-                    result.context_tokens = tokens_in + tokens_out;
-                }
+            if let Some(text) = message.text
+                && let Ok(parsed) = serde_json::from_str::<ParsedApiReqStartedText>(text)
+            {
+                let tokens_in = parsed.tokens_in.unwrap_or(0);
+                let tokens_out = parsed.tokens_out.unwrap_or(0);
+                result.context_tokens = tokens_in + tokens_out;
             }
         } else if message.msg_type == "say" && message.say == Some("condense_context") {
             result.context_tokens = message.context_condense_new_context_tokens.unwrap_or(0);

@@ -128,13 +128,14 @@ impl TerminalRegistry {
         if let Some(ref tid) = task_id {
             for (_, terminal_arc) in terminals.iter() {
                 let terminal = terminal_arc.lock().await;
-                if !terminal.is_busy() && !terminal.is_closed() && terminal.get_cwd() == cwd {
-                    if let Some(ref terminal_task_id) = terminal.task_id() {
-                        if terminal_task_id == tid {
-                            drop(terminal);
-                            return Arc::clone(terminal_arc);
-                        }
-                    }
+                if !terminal.is_busy()
+                    && !terminal.is_closed()
+                    && terminal.get_cwd() == cwd
+                    && let Some(ref terminal_task_id) = terminal.task_id()
+                    && terminal_task_id == tid
+                {
+                    drop(terminal);
+                    return Arc::clone(terminal_arc);
                 }
             }
         }
@@ -175,8 +176,8 @@ impl TerminalRegistry {
                 continue;
             }
             if let Some(tid) = task_id {
-                if let Some(ref terminal_tid) = terminal.task_id() {
-                    if *terminal_tid != tid {
+                if let Some(terminal_tid) = terminal.task_id() {
+                    if terminal_tid != tid {
                         continue;
                     }
                 } else {
@@ -205,10 +206,10 @@ impl TerminalRegistry {
             if terminal.task_id().is_some() || terminal.is_closed() {
                 continue;
             }
-            if let Some(b) = busy {
-                if terminal.is_busy() != b {
-                    continue;
-                }
+            if let Some(b) = busy
+                && terminal.is_busy() != b
+            {
+                continue;
             }
             drop(terminal);
             result.push(Arc::clone(terminal_arc));
@@ -223,10 +224,10 @@ impl TerminalRegistry {
         let terminals = self.terminals.lock().await;
         for (_, terminal_arc) in terminals.iter() {
             let mut terminal = terminal_arc.lock().await;
-            if let Some(ref tid) = terminal.task_id() {
-                if *tid == task_id {
-                    terminal.set_task_id(String::new());
-                }
+            if let Some(tid) = terminal.task_id()
+                && tid == task_id
+            {
+                terminal.set_task_id(String::new());
             }
         }
     }

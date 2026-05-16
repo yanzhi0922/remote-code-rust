@@ -338,7 +338,6 @@ where
             // We use a pin to make the future `Unpin`-safe for `select!`.
             let cmd_future = Box::pin(cmd_future);
             let mut cmd_future = cmd_future;
-            let agent_elapsed;
 
             // Check if agent timeout already exceeds user timeout.
             if at >= user_timeout {
@@ -365,7 +364,7 @@ where
                 }
             };
 
-            agent_elapsed = phase1;
+            let agent_elapsed = phase1;
 
             // If we get here the agent timeout fired.  Emit a warning.
             streamer.on_output(
@@ -454,19 +453,19 @@ pub async fn execute_command_with_opts(
     }
 
     // --- 2. RooIgnore command validation ------------------------------
-    if let Some(controller) = roo_ignore {
-        if let Some(blocked_path) = controller.validate_command(&command) {
-            return Ok(ExecuteCommandResult {
-                output: format!(
-                    "Command blocked by .rooignore rules: '{}' accesses a restricted file. \
+    if let Some(controller) = roo_ignore
+        && let Some(blocked_path) = controller.validate_command(&command)
+    {
+        return Ok(ExecuteCommandResult {
+            output: format!(
+                "Command blocked by .rooignore rules: '{}' accesses a restricted file. \
                      Please check your .rooignore configuration.",
-                    blocked_path
-                ),
-                exit_code: None,
-                artifact_id: None,
-                was_timed_out: false,
-            });
-        }
+                blocked_path
+            ),
+            exit_code: None,
+            artifact_id: None,
+            was_timed_out: false,
+        });
     }
 
     // --- 3. Resolve working directory ---------------------------------

@@ -125,6 +125,7 @@ pub fn generate_system_prompt(params: SystemPromptParams) -> String {
 /// High-level API to build the system prompt.
 ///
 /// Source: `src/core/prompts/system.ts` — `SYSTEM_PROMPT`
+#[allow(clippy::too_many_arguments)]
 pub fn build_system_prompt(
     cwd: &str,
     mode: &str,

@@ -193,10 +193,10 @@ pub fn validate_server_config(
     }
 
     // Validate type if provided
-    if let Some(t) = effective_type {
-        if !["stdio", "sse", "streamable-http"].contains(&t) {
-            return Err(McpError::ConfigError(TYPE_ERROR_MSG.to_string()));
-        }
+    if let Some(t) = effective_type
+        && !["stdio", "sse", "streamable-http"].contains(&t)
+    {
+        return Err(McpError::ConfigError(TYPE_ERROR_MSG.to_string()));
     }
 
     // Check for type/field mismatch

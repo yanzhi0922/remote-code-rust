@@ -225,7 +225,7 @@ pub fn delete_worktree(cwd: &Path, worktree_path: &str, force: bool) -> Result<S
     }
     args.push(worktree_path);
 
-    let args_refs: Vec<&str> = args.iter().map(|s| *s).collect();
+    let args_refs: Vec<&str> = args.to_vec();
     git_cmd(cwd, &args_refs)?;
 
     // Best-effort branch deletion (matching TS behavior)

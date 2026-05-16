@@ -282,22 +282,21 @@ pub async fn summarize_conversation(
     // Generate folded file context (smart code folding using tree-sitter).
     // Each file gets its own <system-reminder> block as a separate content block.
     // Source: `src/core/condense/index.ts` — `generateFoldedFileContext()` call
-    if let Some(ref file_paths) = files_read_by_roo {
-        if !file_paths.is_empty() {
-            if let Some(ref workdir) = cwd {
-                let folded_options = FoldedFileContextOptions {
-                    max_characters: 50_000,
-                    cwd: workdir.clone(),
-                };
-                let folded_result = generate_folded_file_context(file_paths, &folded_options);
-                if !folded_result.sections.is_empty() {
-                    for section in &folded_result.sections {
-                        if !section.trim().is_empty() {
-                            summary_content.push(ContentBlock::Text {
-                                text: section.clone(),
-                            });
-                        }
-                    }
+    if let Some(ref file_paths) = files_read_by_roo
+        && !file_paths.is_empty()
+        && let Some(ref workdir) = cwd
+    {
+        let folded_options = FoldedFileContextOptions {
+            max_characters: 50_000,
+            cwd: workdir.clone(),
+        };
+        let folded_result = generate_folded_file_context(file_paths, &folded_options);
+        if !folded_result.sections.is_empty() {
+            for section in &folded_result.sections {
+                if !section.trim().is_empty() {
+                    summary_content.push(ContentBlock::Text {
+                        text: section.clone(),
+                    });
                 }
             }
         }
@@ -305,14 +304,12 @@ pub async fn summarize_conversation(
     let _ = (files_read_by_roo, cwd);
 
     // Add environment details as a separate text block if provided AND this is an automatic trigger
-    if is_automatic_trigger {
-        if let Some(env_details) = environment_details.as_ref() {
-            let trimmed = env_details.trim();
-            if !trimmed.is_empty() {
-                summary_content.push(ContentBlock::Text {
-                    text: trimmed.to_string(),
-                });
-            }
+    if is_automatic_trigger && let Some(env_details) = environment_details.as_ref() {
+        let trimmed = env_details.trim();
+        if !trimmed.is_empty() {
+            summary_content.push(ContentBlock::Text {
+                text: trimmed.to_string(),
+            });
         }
     }
 
@@ -373,14 +370,13 @@ pub async fn summarize_conversation(
 
     // Count tool definition tokens if tools are provided
     let mut tool_tokens: u64 = 0;
-    if let Some(ref meta) = metadata {
-        if let Some(ref tools) = meta.tools {
-            if !tools.is_empty() {
-                let tools_text = serde_json::to_string(tools)?;
-                let tool_blocks = vec![ContentBlock::Text { text: tools_text }];
-                tool_tokens = api_handler.count_tokens(&tool_blocks).await?;
-            }
-        }
+    if let Some(ref meta) = metadata
+        && let Some(ref tools) = meta.tools
+        && !tools.is_empty()
+    {
+        let tools_text = serde_json::to_string(tools)?;
+        let tool_blocks = vec![ContentBlock::Text { text: tools_text }];
+        tool_tokens = api_handler.count_tokens(&tool_blocks).await?;
     }
 
     let new_context_tokens = message_tokens + tool_tokens;

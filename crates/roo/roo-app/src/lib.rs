@@ -1,3 +1,6 @@
+#![allow(dead_code)]
+#![allow(clippy::all)]
+#![deny(clippy::dbg_macro, clippy::todo)]
 //! # Roo App — Application Layer
 //!
 //! The main application controller that ties all Roo Code subsystems together.

@@ -43,7 +43,7 @@ impl RooHandler {
         let model_id = config
             .model_id
             .clone()
-            .unwrap_or_else(|| models::default_model_id());
+            .unwrap_or_else(models::default_model_id);
         let model_info = models::models()
             .get(&model_id)
             .cloned()
@@ -178,12 +178,11 @@ impl RooHandler {
         }
 
         // Try dynamic cache
-        if let Ok(cache) = self.dynamic_models.read() {
-            if let Some(ref dynamic) = *cache {
-                if let Some(info) = dynamic.get(&self.model_id) {
-                    return (self.model_id.clone(), info.clone());
-                }
-            }
+        if let Ok(cache) = self.dynamic_models.read()
+            && let Some(ref dynamic) = *cache
+            && let Some(info) = dynamic.get(&self.model_id)
+        {
+            return (self.model_id.clone(), info.clone());
         }
 
         // Fallback to inner provider

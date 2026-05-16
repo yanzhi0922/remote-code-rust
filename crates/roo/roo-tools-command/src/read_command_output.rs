@@ -17,27 +17,26 @@ pub fn validate_read_command_output_params(
 ) -> Result<(), CommandToolError> {
     validate_artifact_id(&params.artifact_id)?;
 
-    if let Some(offset) = params.offset {
-        if offset > i64::MAX as u64 {
-            return Err(CommandToolError::Validation("offset too large".to_string()));
-        }
+    if let Some(offset) = params.offset
+        && offset > i64::MAX as u64
+    {
+        return Err(CommandToolError::Validation("offset too large".to_string()));
     }
 
-    if let Some(limit) = params.limit {
-        if limit == 0 {
-            return Err(CommandToolError::Validation(
-                "limit must be > 0".to_string(),
-            ));
-        }
+    if let Some(limit) = params.limit
+        && limit == 0
+    {
+        return Err(CommandToolError::Validation(
+            "limit must be > 0".to_string(),
+        ));
     }
 
     // Validate search regex if provided
-    if let Some(ref search) = params.search {
-        if !search.is_empty() {
-            regex::Regex::new(search).map_err(|e| {
-                CommandToolError::InvalidRegex(format!("Invalid search pattern: {e}"))
-            })?;
-        }
+    if let Some(ref search) = params.search
+        && !search.is_empty()
+    {
+        regex::Regex::new(search)
+            .map_err(|e| CommandToolError::InvalidRegex(format!("Invalid search pattern: {e}")))?;
     }
 
     Ok(())

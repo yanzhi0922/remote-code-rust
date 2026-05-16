@@ -23,9 +23,7 @@ pub struct MoonshotHandler {
 impl MoonshotHandler {
     /// Create a new Moonshot handler from configuration.
     pub fn new(config: MoonshotConfig) -> Result<Self, roo_provider::ProviderError> {
-        let model_id = config
-            .model_id
-            .unwrap_or_else(|| models::default_model_id());
+        let model_id = config.model_id.unwrap_or_else(models::default_model_id);
         let model_info = models::models()
             .get(&model_id)
             .cloned()

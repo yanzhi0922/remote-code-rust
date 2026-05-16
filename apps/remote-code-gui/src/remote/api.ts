@@ -8,6 +8,7 @@ import type {
   RemoteListResponse,
   RemotePairingAcceptResponse,
   RemoteSessionRecord,
+  RemoteStreamTicketResponse,
   RemoteTimelineEvent,
 } from './types';
 import {
@@ -73,6 +74,16 @@ export async function listSessionEvents(
     baseUrl,
     `/v1/sessions/${encodeURIComponent(sessionId)}/events?limit=${limit}`,
   );
+}
+
+export async function createStreamTicket(
+  baseUrl: string,
+  path: string,
+): Promise<RemoteStreamTicketResponse> {
+  return requestJson<RemoteStreamTicketResponse>(baseUrl, '/v1/stream-ticket', {
+    method: 'POST',
+    body: JSON.stringify({ path }),
+  });
 }
 
 export async function listSessionApprovals(
@@ -160,15 +171,15 @@ export function buildSessionEventsStreamUrl(
   baseUrl: string,
   sessionId: string,
   after: number,
+  streamTicket?: string | null,
 ): string {
   const wsUrl = new URL(
     `/v1/sessions/${encodeURIComponent(sessionId)}/events/stream?after=${after}`,
     buildHttpUrl(baseUrl, '/'),
   );
   wsUrl.protocol = wsUrl.protocol === 'https:' ? 'wss:' : 'ws:';
-  const token = resolveRemoteAccessToken();
-  if (token) {
-    wsUrl.searchParams.set('access_token', token);
+  if (streamTicket) {
+    wsUrl.searchParams.set('stream_ticket', streamTicket);
   }
   return wsUrl.toString();
 }

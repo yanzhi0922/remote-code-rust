@@ -530,14 +530,6 @@ impl ContextProxy {
         all_values
             .into_iter()
             .filter(|(key, value)| !excluded_keys.contains(&key.as_str()) && !value.is_null())
-            .filter(|(key, _)| {
-                // Filter custom modes to only include global source
-                if key == "customModes" {
-                    true // Filtering would happen at a higher level
-                } else {
-                    true
-                }
-            })
             .collect()
     }
 }

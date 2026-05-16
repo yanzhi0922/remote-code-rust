@@ -168,10 +168,10 @@ pub fn get_shell() -> String {
     }
 
     // Validate the shell against allowlist
-    if let Some(ref s) = shell {
-        if !is_shell_allowed(s) {
-            shell = Some(get_safe_fallback_shell().to_string());
-        }
+    if let Some(ref s) = shell
+        && !is_shell_allowed(s)
+    {
+        shell = Some(get_safe_fallback_shell().to_string());
     }
 
     shell.unwrap_or_else(|| ShellPaths::FALLBACK.to_string())

@@ -142,6 +142,7 @@ export interface RemoteCopy {
   deepLinkPairingReceived: string;
   mobileNotificationsEnabled: string;
   mobileNotificationsDenied: string;
+  mobileNotificationsUnavailable: string;
   mobileTabSessions: string;
   mobileTabTimeline: string;
   mobileTabApprovals: string;
@@ -309,7 +310,7 @@ const ENGLISH_COPY: RemoteCopy = {
   openSessionDrawer: 'Open session drawer',
   multiUserTitle: 'Sign in with credentials',
   multiUserDescription:
-    'Enter the same username and password you set on the desktop app. The server never stores your password — only a one-way hash.',
+    'Enter the same username and password you provisioned on the desktop and control plane. The server accepts only configured user-key hashes.',
   usernameLabel: 'Username',
   usernamePlaceholder: 'your-name',
   passwordLabel: 'Password',
@@ -335,6 +336,7 @@ const ENGLISH_COPY: RemoteCopy = {
   deepLinkPairingReceived: 'Pairing details received from link.',
   mobileNotificationsEnabled: 'Push notifications enabled.',
   mobileNotificationsDenied: 'Push notification permission denied.',
+  mobileNotificationsUnavailable: 'Push notifications are unavailable; foreground refresh remains active.',
   mobileTabSessions: 'Sessions',
   mobileTabTimeline: 'Timeline',
   mobileTabApprovals: 'Approvals',
@@ -495,7 +497,7 @@ const CHINESE_COPY: RemoteCopy = {
   openSessionDrawer: '打开会话抽屉',
   multiUserTitle: '使用账户登录',
   multiUserDescription:
-    '输入与桌面端相同的用户名和密码。服务器不会存储你的密码，只会保存一个不可逆的哈希值。',
+    '输入已在桌面端和控制面配置过的用户名和密码。服务器只接受显式配置的 user-key 哈希。',
   usernameLabel: '用户名',
   usernamePlaceholder: '你的用户名',
   passwordLabel: '密码',
@@ -521,6 +523,7 @@ const CHINESE_COPY: RemoteCopy = {
   deepLinkPairingReceived: '已从链接获取配对信息。',
   mobileNotificationsEnabled: '推送通知已启用。',
   mobileNotificationsDenied: '推送通知权限被拒绝。',
+  mobileNotificationsUnavailable: '推送通知当前不可用，前台刷新仍会保持运行。',
   mobileTabSessions: '会话',
   mobileTabTimeline: '时间线',
   mobileTabApprovals: '审批',

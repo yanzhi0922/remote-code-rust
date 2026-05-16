@@ -402,11 +402,11 @@ impl LspClient {
         for (idx, line) in contents.lines().enumerate() {
             let trimmed = line.trim();
             for (pattern, kind) in &patterns {
-                let re = regex::Regex::new(pattern).unwrap();
-                if let Some(cap) = re.captures(trimmed) {
-                    if let Some(name) = cap.get(1) {
-                        results.push(format!("[{}] {} (line {})", kind, name.as_str(), idx + 1));
-                    }
+                let re = regex::Regex::new(pattern).expect("hard-coded symbol regex must compile");
+                if let Some(cap) = re.captures(trimmed)
+                    && let Some(name) = cap.get(1)
+                {
+                    results.push(format!("[{}] {} (line {})", kind, name.as_str(), idx + 1));
                 }
             }
             if results.len() >= 100 {
@@ -463,21 +463,22 @@ impl LspClient {
 
             for (idx, line) in file_contents.lines().enumerate() {
                 for (pattern, kind) in &patterns {
-                    let re = regex::Regex::new(pattern).unwrap();
-                    if let Some(cap) = re.captures(line) {
-                        if let Some(name) = cap.get(1) {
-                            let key = format!("{kind}:{}", name.as_str());
-                            if seen.insert(key) {
-                                results.push(format!(
-                                    "[{}] {} ({}:{})",
-                                    kind,
-                                    name.as_str(),
-                                    relative,
-                                    idx + 1
-                                ));
-                                if results.len() >= 50 {
-                                    return Ok(results);
-                                }
+                    let re =
+                        regex::Regex::new(pattern).expect("hard-coded symbol regex must compile");
+                    if let Some(cap) = re.captures(line)
+                        && let Some(name) = cap.get(1)
+                    {
+                        let key = format!("{kind}:{}", name.as_str());
+                        if seen.insert(key) {
+                            results.push(format!(
+                                "[{}] {} ({}:{})",
+                                kind,
+                                name.as_str(),
+                                relative,
+                                idx + 1
+                            ));
+                            if results.len() >= 50 {
+                                return Ok(results);
                             }
                         }
                     }
@@ -571,11 +572,14 @@ impl LspClient {
         let target_line = contents.lines().nth(line_index).unwrap_or("");
 
         // Look for a function/method definition on or near this line.
-        let fn_re = regex::Regex::new(r"(?:pub\s+)?(?:async\s+)?fn\s+(\w+)").unwrap();
+        let fn_re = regex::Regex::new(r"(?:pub\s+)?(?:async\s+)?fn\s+(\w+)")
+            .expect("hard-coded function regex must compile");
         if let Some(cap) = fn_re.captures(target_line) {
             return Ok(vec![format!(
                 "[function] {} ({}:{})",
-                cap.get(1).unwrap().as_str(),
+                cap.get(1)
+                    .expect("function regex has capture group")
+                    .as_str(),
                 file_path,
                 line
             )]);
@@ -588,7 +592,9 @@ impl LspClient {
             if let Some(cap) = fn_re.captures(lines[i]) {
                 return Ok(vec![format!(
                     "[function] {} ({}:{})",
-                    cap.get(1).unwrap().as_str(),
+                    cap.get(1)
+                        .expect("function regex has capture group")
+                        .as_str(),
                     file_path,
                     i + 1
                 )]);

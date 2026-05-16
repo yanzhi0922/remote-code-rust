@@ -48,20 +48,20 @@ pub fn process_skill(
     if let Some(skill_meta) = all_skills.iter().find(|s| s.name == params.skill) {
         // Try to read the SKILL.md file synchronously
         let skill_md_path = Path::new(&skill_meta.path).join("SKILL.md");
-        if let Ok(file_content) = std::fs::read_to_string(&skill_md_path) {
-            if let Some((_frontmatter, instructions)) = parse_skill_md(&file_content) {
-                let content = if let Some(args) = &params.args {
-                    format!("{}\n\nContext: {}", instructions, args)
-                } else {
-                    instructions
-                };
-                return Ok(SkillResult {
-                    skill_name: params.skill.clone(),
-                    args: params.args.clone(),
-                    is_valid: true,
-                    content: Some(content),
-                });
-            }
+        if let Ok(file_content) = std::fs::read_to_string(&skill_md_path)
+            && let Some((_frontmatter, instructions)) = parse_skill_md(&file_content)
+        {
+            let content = if let Some(args) = &params.args {
+                format!("{}\n\nContext: {}", instructions, args)
+            } else {
+                instructions
+            };
+            return Ok(SkillResult {
+                skill_name: params.skill.clone(),
+                args: params.args.clone(),
+                is_valid: true,
+                content: Some(content),
+            });
         }
     }
 

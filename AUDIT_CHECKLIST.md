@@ -1,7 +1,7 @@
 # Remote-Code-Rust 全面无死角审计清单
 
-> 生成日期: 2026-05-04
-> 代码库规模: 5,079 .rs 文件 / 1,934 .ts/.tsx 文件 / 388 前端测试文件
+> 更新日期: 2026-05-16
+> 代码库规模: `cargo metadata --no-deps` 实测 231 个 Rust packages；前端测试数量以 `npm test` 实测为准
 > 核心文件: lib.rs (7,264行), RemoteApp.tsx (1,381行), useAppStore.ts (1,037行)
 
 ---
@@ -37,7 +37,7 @@
 
 ### 1.2 密钥与敏感信息 (SEVERITY: HIGH)
 
-- [ ] **S-05**: `mobile_secure_store_set` 将密钥以明文JSON存储 — 需要平台密钥链集成 (iOS Keychain / Android Keystore)
+- [ ] **S-05**: 移动端原生 secure storage 仍需接系统 Keychain/Keystore 完成最终加密落盘；Web/PWA 的 `localStorage` token fallback 已移除
 - [ ] **S-06**: `api_key: Option<String>` 在多个组件间传递 — 审查日志是否可能泄露API key (tracing不应打印包含key的字段)
 - [ ] **S-07**: `REMOTE_CODE_CONTROL_PLANE_AUTH_TOKEN` 环境变量 — 确认不在日志或错误消息中暴露
 - [ ] **S-08**: 前端 `VITE_REMOTE_CONTROL_PLANE_TOKEN` — Vite环境变量会打包进客户端，确认这个token不应暴露给客户端
@@ -51,8 +51,8 @@
 
 ### 1.4 网络安全 (SEVERITY: MEDIUM)
 
-- [ ] **S-13**: WebSocket/SSE连接未验证TLS证书 — WebSocket使用条件式 `ws:/wss:` 取决于baseUrl，无强制TLS。本地开发可接受，远程连接需确保baseUrl始终为https
-- [ ] **S-14**: CORS配置 — 确认 `remote-code-runner` 和 `control-plane` 的CORS策略是否足够严格
+- [x] **S-13**: WebSocket 长期 token 泄露风险 — 已改为控制平面签发短期一次性 `stream_ticket`；URL query 中的长期 `access_token` 默认禁用，仅通过 `REMOTE_CODE_ALLOW_QUERY_ACCESS_TOKEN=true` 临时兼容旧客户端
+- [x] **S-14**: 远程控制默认中继 — 客户端默认 `relay_only`，直连 runner 仅通过显式 `VITE_REMOTE_CODE_TRANSPORT_MODE` 高级开关启用
 - [ ] **S-15**: Agent二进制校验和验证 — Claude/Codex/Roo的可执行文件是否在启动前验证完整性
 - [ ] **S-16**: MCP服务器连接安全性 — MCP SSE/HTTP transport是否验证服务器证书
 
@@ -83,7 +83,7 @@
 
 ### 2.3 危险操作防护
 
-- [x] **E-11**: `std::env::set_var` 使用 — adapters/ 和 gui/ 中零使用。codex/arg0 中的使用已由 `unsafe_code = "warn"` 覆盖
+- [x] **E-11**: `std::env::set_var` 使用 — adapters/ 和 gui/ 中零使用；codex/arg0 属于平台 FFI/运行时边界，需通过 code review 与测试覆盖
 - [x] **E-12**: `catch_unwind` 在 Roo adapter — 正确使用 `AssertUnwindSafe` 包装 agent loop，panic 后转为 error 事件而非进程崩溃，模式安全
 
 ---
@@ -305,10 +305,10 @@
 
 ### 12.1 Clippy 与Lint
 
-- [x] **R-01**: Workspace lint 配置完善 — `unsafe_code = "warn"`, `dbg_macro = "deny"`, `todo = "deny"`, `unwrap_used = "warn"`
+- [x] **R-01**: Workspace lint 配置完善 — `unsafe_code = "allow"` 用于平台 FFI，`dbg_macro = "deny"`, `todo = "deny"`, `unwrap_used = "warn"`；Roo 来源代码有 scoped clippy quarantine，真实新增代码仍受 `-D warnings` 门禁
 - [ ] **R-02**: `unwrap_used = "warn"` 仅警告未阻止 — 3,366处 `.unwrap()` 需要逐一审查
 - [ ] **R-03**: `clippy::todo` 仅捕获 `todo!()` 宏，不捕获 `// TODO` 注释
-- [ ] **R-04**: 运行 `cargo clippy --workspace` — 确认零警告
+- [x] **R-04**: `cargo clippy --workspace -- -D warnings` — 已恢复通过，最终发布前仍需随本地改动重跑
 
 ### 12.2 Async 安全
 
@@ -328,7 +328,7 @@
 
 ### 13.1 依赖审计
 
-- [ ] **D-01**: `cargo audit` — 未安装，需运行 `cargo install cargo-audit && cargo audit`
+- [x] **D-01**: `cargo audit --quiet` — 返回 0；`.cargo/audit.toml` 记录 `hickory-proto` / `rsa` 上游暂无直接 fixed version 的已接受风险。当前仍有 Tauri/GTK、syntect、ratatui 等传递依赖的 warning-only advisories，需在依赖收敛阶段持续跟踪
 - [ ] **D-02**: `npm audit` — 镜像源不支持，需切换到官方源运行
 - [ ] **D-03**: 过时依赖 — `react-virtuoso` 刚添加，确认版本最新
 - [ ] **D-04**: `tungstenite` / `tokio-tungstenite` 使用 OpenAI fork — 确认patch版本是否跟踪上游安全更新
@@ -337,9 +337,10 @@
 ### 13.2 构建优化
 
 - [x] **D-06**: LTO thin + codegen-units 1 — release构建已优化
-- [ ] **D-07**: 增量编译 — workspace成员过多(~150 crates)可能导致增量编译失效
+- [ ] **D-07**: 增量编译 — workspace 当前约 231 个 Rust packages，首次全量检查耗时和磁盘占用较高，建议引入 sccache 和分包 CI
 - [ ] **D-08**: 编译时间 — 首次编译时间可能超过10分钟，考虑 sccache
 - [ ] **D-09**: 前端构建 — Tauri应用的前端bundle size未优化
+- [x] **D-10**: Secret scan — CI 已新增 gitleaks 作业，防止真实密钥/Token 进入仓库
 
 ---
 

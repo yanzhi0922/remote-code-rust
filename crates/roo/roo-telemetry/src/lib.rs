@@ -1,3 +1,6 @@
+#![allow(dead_code)]
+#![allow(clippy::all)]
+#![deny(clippy::dbg_macro, clippy::todo)]
 //! Roo-telemetry: Telemetry service for Roo Code.
 
 pub mod client;

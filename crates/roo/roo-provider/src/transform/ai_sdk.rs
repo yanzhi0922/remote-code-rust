@@ -347,9 +347,9 @@ fn process_assistant_message_ai_sdk(message: &ApiMessage, out: &mut Vec<Value>) 
 fn extract_tool_result_text(content: &[ToolResultContent]) -> String {
     content
         .iter()
-        .filter_map(|c| match c {
-            ToolResultContent::Text { text } => Some(text.as_str()),
-            ToolResultContent::Image { .. } => Some("(image)"),
+        .map(|c| match c {
+            ToolResultContent::Text { text } => text.as_str(),
+            ToolResultContent::Image { .. } => "(image)",
         })
         .collect::<Vec<&str>>()
         .join("\n")

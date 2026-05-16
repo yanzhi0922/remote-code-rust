@@ -648,9 +648,9 @@ impl AskSayHandler {
                         let _ = last;
                         self.emit_message_updated(msg);
                     }
-                    return Err(AskIgnoredError {
+                    Err(AskIgnoredError {
                         reason: "updating existing partial".to_string(),
-                    });
+                    })
                 } else {
                     // Source: TS lines 1305–1313 — new partial message
                     let ask_ts = now_ts();
@@ -674,9 +674,9 @@ impl AskSayHandler {
                         is_answered: None,
                     };
                     self.add_to_cline_messages(message);
-                    return Err(AskIgnoredError {
+                    Err(AskIgnoredError {
                         reason: "new partial".to_string(),
-                    });
+                    })
                 }
             }
 
@@ -861,11 +861,11 @@ impl AskSayHandler {
                 self.emit_task_resumable();
             }
         // Source: TS lines 1417–1428 — idle ask
-        } else if ask_type.is_idle() {
-            if let Some(msg) = self.find_message_by_timestamp(ask_ts) {
-                self.idle_ask = Some(msg.clone());
-                self.emit_task_idle();
-            }
+        } else if ask_type.is_idle()
+            && let Some(msg) = self.find_message_by_timestamp(ask_ts)
+        {
+            self.idle_ask = Some(msg.clone());
+            self.emit_task_idle();
         }
     }
 
@@ -921,37 +921,37 @@ impl AskSayHandler {
             // "If a queued message arrives while we're blocked on an ask (e.g. a
             // follow-up suggestion click that was incorrectly queued due to UI
             // state), consume it immediately so the task doesn't hang."
-            if let Some(ref checker) = self.queued_message_checker {
-                if let Some((ask_resp, text, images)) = checker() {
-                    // Auto-respond the ask with the queued message, matching TS
-                    // behavior where `messageResponse` is sent for followup-type
-                    // asks and `yesButtonClicked` for tool/command/mcp asks.
-                    let result = AskResult {
-                        response: ask_resp,
-                        text,
-                        images,
-                    };
-                    {
-                        let mut guard = response.lock().await;
-                        *guard = Some(result.clone());
-                    }
-                    let _ = self.ask_signal.send(true);
-                    return Ok(result);
+            if let Some(ref checker) = self.queued_message_checker
+                && let Some((ask_resp, text, images)) = checker()
+            {
+                // Auto-respond the ask with the queued message, matching TS
+                // behavior where `messageResponse` is sent for followup-type
+                // asks and `yesButtonClicked` for tool/command/mcp asks.
+                let result = AskResult {
+                    response: ask_resp,
+                    text,
+                    images,
+                };
+                {
+                    let mut guard = response.lock().await;
+                    *guard = Some(result.clone());
                 }
+                let _ = self.ask_signal.send(true);
+                return Ok(result);
             }
 
             // Check if the message was superseded
             // Source: TS line 1474 — `this.lastMessageTs !== askTs`
-            if let Some(ts) = self.last_message_ts {
-                if (ts - ask_ts).abs() > 0.001 {
-                    // Message was superseded — check if there's a response
-                    let guard = response.lock().await;
-                    if let Some(result) = guard.as_ref() {
-                        return Ok(result.clone());
-                    }
-                    // No response but superseded
-                    warn!("Ask was superseded without a response");
+            if let Some(ts) = self.last_message_ts
+                && (ts - ask_ts).abs() > 0.001
+            {
+                // Message was superseded — check if there's a response
+                let guard = response.lock().await;
+                if let Some(result) = guard.as_ref() {
+                    return Ok(result.clone());
                 }
+                // No response but superseded
+                warn!("Ask was superseded without a response");
             }
 
             // Wait for signal
@@ -1309,28 +1309,28 @@ impl AskSayHandler {
 
     /// Emit a task interactive event.
     fn emit_task_interactive(&self) {
-        if let Some(ref emitter) = self.event_emitter {
-            if let Some(ref task_id) = self.task_id {
-                emitter.emit_task_interactive(task_id);
-            }
+        if let Some(ref emitter) = self.event_emitter
+            && let Some(ref task_id) = self.task_id
+        {
+            emitter.emit_task_interactive(task_id);
         }
     }
 
     /// Emit a task idle event.
     fn emit_task_idle(&self) {
-        if let Some(ref emitter) = self.event_emitter {
-            if let Some(ref task_id) = self.task_id {
-                emitter.emit_task_idle(task_id);
-            }
+        if let Some(ref emitter) = self.event_emitter
+            && let Some(ref task_id) = self.task_id
+        {
+            emitter.emit_task_idle(task_id);
         }
     }
 
     /// Emit a task resumable event.
     fn emit_task_resumable(&self) {
-        if let Some(ref emitter) = self.event_emitter {
-            if let Some(ref task_id) = self.task_id {
-                emitter.emit_task_resumable(task_id);
-            }
+        if let Some(ref emitter) = self.event_emitter
+            && let Some(ref task_id) = self.task_id
+        {
+            emitter.emit_task_resumable(task_id);
         }
     }
 
@@ -1338,10 +1338,10 @@ impl AskSayHandler {
     ///
     /// Source: TS line 1494 — `this.emit(RooCodeEventName.TaskActive, this.taskId)`
     fn emit_task_active(&self) {
-        if let Some(ref emitter) = self.event_emitter {
-            if let Some(ref task_id) = self.task_id {
-                emitter.emit_task_active(task_id);
-            }
+        if let Some(ref emitter) = self.event_emitter
+            && let Some(ref task_id) = self.task_id
+        {
+            emitter.emit_task_active(task_id);
         }
     }
 
@@ -1349,10 +1349,10 @@ impl AskSayHandler {
     ///
     /// Source: TS line 1402 — `provider?.postMessageToWebview({ type: "interactionRequired" })`
     fn emit_interaction_required(&self) {
-        if let Some(ref emitter) = self.event_emitter {
-            if let Some(ref task_id) = self.task_id {
-                emitter.emit_interaction_required(task_id);
-            }
+        if let Some(ref emitter) = self.event_emitter
+            && let Some(ref task_id) = self.task_id
+        {
+            emitter.emit_interaction_required(task_id);
         }
     }
 
@@ -1360,10 +1360,10 @@ impl AskSayHandler {
     ///
     /// Source: TS line 1497 — `this.emit(RooCodeEventName.TaskAskResponded)`
     fn emit_task_ask_responded(&self) {
-        if let Some(ref emitter) = self.event_emitter {
-            if let Some(ref task_id) = self.task_id {
-                emitter.emit_task_ask_responded(task_id);
-            }
+        if let Some(ref emitter) = self.event_emitter
+            && let Some(ref task_id) = self.task_id
+        {
+            emitter.emit_task_ask_responded(task_id);
         }
     }
 

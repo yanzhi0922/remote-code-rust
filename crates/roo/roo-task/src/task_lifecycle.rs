@@ -725,15 +725,13 @@ impl TaskLifecycle {
         if let Some(idx) = modified_cline_messages
             .iter()
             .rposition(|m| m.r#type == MessageType::Say && m.say == Some(ClineSay::ApiReqStarted))
+            && let Some(ref text) = modified_cline_messages[idx].text
+            && let Ok(data) = serde_json::from_str::<serde_json::Value>(text)
         {
-            if let Some(ref text) = modified_cline_messages[idx].text {
-                if let Ok(data) = serde_json::from_str::<serde_json::Value>(text) {
-                    let cost = data.get("cost");
-                    let cancel_reason = data.get("cancelReason");
-                    if cost.is_none() && cancel_reason.is_none() {
-                        modified_cline_messages.remove(idx);
-                    }
-                }
+            let cost = data.get("cost");
+            let cancel_reason = data.get("cancelReason");
+            if cost.is_none() && cancel_reason.is_none() {
+                modified_cline_messages.remove(idx);
             }
         }
 
@@ -953,10 +951,10 @@ impl TaskLifecycle {
         // (In Rust, this is handled by dropping the event emitter)
 
         // Source: TS lines 2315–2324 — dispose message queue and remove listeners
-        if let Some(ref queue) = self.services.message_queue {
-            if let Ok(mut q) = queue.try_lock() {
-                while q.dequeue_message().is_some() {}
-            }
+        if let Some(ref queue) = self.services.message_queue
+            && let Ok(mut q) = queue.try_lock()
+        {
+            while q.dequeue_message().is_some() {}
         }
 
         // Source: TS lines 2327–2331 — remove all event listeners
@@ -987,16 +985,16 @@ impl TaskLifecycle {
         }
 
         // Source: TS lines 2367–2374 — revert diff changes if editing
-        if self.engine.streaming().is_streaming {
-            if let Some(mut diff_view) = self.diff_view_provider.take() {
-                // TS: `this.diffViewProvider.revertChanges().catch(console.error)`
-                let cwd = std::path::PathBuf::from(&self.engine.config().cwd);
-                let _handle = tokio::spawn(async move {
-                    if let Err(e) = diff_view.revert_changes(&cwd).await {
-                        warn!("Failed to revert diff changes: {}", e);
-                    }
-                });
-            }
+        if self.engine.streaming().is_streaming
+            && let Some(mut diff_view) = self.diff_view_provider.take()
+        {
+            // TS: `this.diffViewProvider.revertChanges().catch(console.error)`
+            let cwd = std::path::PathBuf::from(&self.engine.config().cwd);
+            let _handle = tokio::spawn(async move {
+                if let Err(e) = diff_view.revert_changes(&cwd).await {
+                    warn!("Failed to revert diff changes: {}", e);
+                }
+            });
         }
     }
 
@@ -1179,10 +1177,10 @@ impl TaskLifecycle {
         // Source: TS lines 1528–1530, 1543–1545 — save cline messages after
         // marking followup/tool asks as answered. The handler sets needs_save
         // in handle_response_full when response is messageResponse.
-        if self.ask_say.take_needs_save() {
-            if let Err(e) = self.engine.save_cline_messages().await {
-                tracing::error!("Failed to save cline messages after messageResponse: {}", e);
-            }
+        if self.ask_say.take_needs_save()
+            && let Err(e) = self.engine.save_cline_messages().await
+        {
+            tracing::error!("Failed to save cline messages after messageResponse: {}", e);
         }
 
         // Telemetry: conversation message
@@ -1345,49 +1343,48 @@ impl TaskLifecycle {
         // Source: TS `flushPendingToolResultsToHistory()` — iterates pending
         // userMessageContent and appends tool_result blocks to the history.
         let history = self.engine.api_conversation_history();
-        if let Some(last_msg) = history.last() {
-            if last_msg.role == roo_types::api::MessageRole::Assistant {
-                let has_tool_use = last_msg
+        if let Some(last_msg) = history.last()
+            && last_msg.role == roo_types::api::MessageRole::Assistant
+        {
+            let has_tool_use = last_msg
+                .content
+                .iter()
+                .any(|b| matches!(b, roo_types::api::ContentBlock::ToolUse { .. }));
+            if has_tool_use {
+                // Check if the history already has a matching tool_result message
+                let tool_use_ids: Vec<String> = last_msg
                     .content
                     .iter()
-                    .any(|b| matches!(b, roo_types::api::ContentBlock::ToolUse { .. }));
-                if has_tool_use {
-                    // Check if the history already has a matching tool_result message
-                    let tool_use_ids: Vec<String> = last_msg
-                        .content
-                        .iter()
-                        .filter_map(|b| {
-                            if let roo_types::api::ContentBlock::ToolUse { id, .. } = b {
-                                Some(id.clone())
-                            } else {
-                                None
-                            }
-                        })
-                        .collect();
+                    .filter_map(|b| {
+                        if let roo_types::api::ContentBlock::ToolUse { id, .. } = b {
+                            Some(id.clone())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
 
-                    let mut covered = std::collections::HashSet::new();
-                    for msg in history.iter().rev().take(2) {
-                        if msg.role == roo_types::api::MessageRole::User {
-                            for b in &msg.content {
-                                if let roo_types::api::ContentBlock::ToolResult {
-                                    tool_use_id,
-                                    ..
-                                } = b
-                                {
-                                    covered.insert(tool_use_id.clone());
-                                }
+                let mut covered = std::collections::HashSet::new();
+                for msg in history.iter().rev().take(2) {
+                    if msg.role == roo_types::api::MessageRole::User {
+                        for b in &msg.content {
+                            if let roo_types::api::ContentBlock::ToolResult {
+                                tool_use_id, ..
+                            } = b
+                            {
+                                covered.insert(tool_use_id.clone());
                             }
                         }
                     }
+                }
 
-                    let missing: Vec<_> = tool_use_ids
-                        .iter()
-                        .filter(|id| !covered.contains(*id))
-                        .collect();
+                let missing: Vec<_> = tool_use_ids
+                    .iter()
+                    .filter(|id| !covered.contains(*id))
+                    .collect();
 
-                    if !missing.is_empty() {
-                        return Ok(true);
-                    }
+                if !missing.is_empty() {
+                    return Ok(true);
                 }
             }
         }
@@ -1825,57 +1822,57 @@ impl TaskLifecycle {
 
     /// Emit a telemetry "task created" event.
     fn emit_telemetry_task_created(&self) {
-        if let Some(ref telemetry) = self.services.telemetry {
-            if let Ok(svc) = telemetry.read() {
-                svc.capture_task_created(self.task_id());
-            }
+        if let Some(ref telemetry) = self.services.telemetry
+            && let Ok(svc) = telemetry.read()
+        {
+            svc.capture_task_created(self.task_id());
         }
     }
 
     /// Emit a telemetry "task restarted" event.
     fn emit_telemetry_task_restarted(&self) {
-        if let Some(ref telemetry) = self.services.telemetry {
-            if let Ok(svc) = telemetry.read() {
-                svc.capture_task_restarted(self.task_id());
-            }
+        if let Some(ref telemetry) = self.services.telemetry
+            && let Ok(svc) = telemetry.read()
+        {
+            svc.capture_task_restarted(self.task_id());
         }
     }
 
     /// Emit a telemetry "conversation message" event.
     fn emit_telemetry_conversation_message(&self, source: &str) {
-        if let Some(ref telemetry) = self.services.telemetry {
-            if let Ok(svc) = telemetry.read() {
-                svc.capture_conversation_message(self.task_id(), source);
-            }
+        if let Some(ref telemetry) = self.services.telemetry
+            && let Ok(svc) = telemetry.read()
+        {
+            svc.capture_conversation_message(self.task_id(), source);
         }
     }
 
     /// Emit a telemetry "tool used" event.
     fn emit_telemetry_tool_usage(&self, tool: &str) {
-        if let Some(ref telemetry) = self.services.telemetry {
-            if let Ok(svc) = telemetry.read() {
-                svc.capture_tool_usage(self.task_id(), tool);
-            }
+        if let Some(ref telemetry) = self.services.telemetry
+            && let Ok(svc) = telemetry.read()
+        {
+            svc.capture_tool_usage(self.task_id(), tool);
         }
     }
 
     /// Emit a telemetry "LLM completion" event with token usage.
     fn emit_telemetry_llm_completion(&self, usage: &roo_types::message::TokenUsage) {
-        if let Some(ref telemetry) = self.services.telemetry {
-            if let Ok(svc) = telemetry.read() {
-                svc.capture_llm_completion(
-                    self.task_id(),
-                    usage.total_tokens_in,
-                    usage.total_tokens_out,
-                    usage.total_cache_writes.unwrap_or(0),
-                    usage.total_cache_reads.unwrap_or(0),
-                    if usage.total_cost > 0.0 {
-                        Some(usage.total_cost)
-                    } else {
-                        None
-                    },
-                );
-            }
+        if let Some(ref telemetry) = self.services.telemetry
+            && let Ok(svc) = telemetry.read()
+        {
+            svc.capture_llm_completion(
+                self.task_id(),
+                usage.total_tokens_in,
+                usage.total_tokens_out,
+                usage.total_cache_writes.unwrap_or(0),
+                usage.total_cache_reads.unwrap_or(0),
+                if usage.total_cost > 0.0 {
+                    Some(usage.total_cost)
+                } else {
+                    None
+                },
+            );
         }
     }
 }

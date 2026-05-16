@@ -102,19 +102,16 @@ pub fn check_auto_approval(params: CheckAutoApprovalParams<'_>) -> CheckAutoAppr
     // 3. Followup handling
     if *params.ask == AskType::Followup {
         if params.state.always_allow_followup_questions {
-            if let Some(text) = params.text {
-                if let Ok(data) = serde_json::from_str::<FollowUpData>(text) {
-                    if let Some(suggestion) = data.suggest.first() {
-                        if let Some(timeout) = params.state.followup_auto_approve_timeout_ms {
-                            if timeout > 0 {
-                                return CheckAutoApprovalResult::Timeout {
-                                    timeout_ms: timeout,
-                                    auto_response: suggestion.answer.clone(),
-                                };
-                            }
-                        }
-                    }
-                }
+            if let Some(text) = params.text
+                && let Ok(data) = serde_json::from_str::<FollowUpData>(text)
+                && let Some(suggestion) = data.suggest.first()
+                && let Some(timeout) = params.state.followup_auto_approve_timeout_ms
+                && timeout > 0
+            {
+                return CheckAutoApprovalResult::Timeout {
+                    timeout_ms: timeout,
+                    auto_response: suggestion.answer.clone(),
+                };
             }
             // If we can't parse or no suggestion, ask
             return CheckAutoApprovalResult::Ask;

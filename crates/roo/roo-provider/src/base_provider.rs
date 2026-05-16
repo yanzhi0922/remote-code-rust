@@ -36,7 +36,7 @@ pub fn convert_tools_for_openai(tools: Option<&Vec<Value>>) -> Option<Vec<Value>
                 } else {
                     function
                         .get("parameters")
-                        .map(|p| convert_tool_schema_for_openai(p))
+                        .map(convert_tool_schema_for_openai)
                 };
 
                 json!({
@@ -106,12 +106,12 @@ pub fn convert_tool_schema_for_openai(schema: &Value) -> Value {
             let prop_type = prop.get("type").and_then(|t| t.as_str()).unwrap_or("");
             if prop_type == "object" {
                 prop = convert_tool_schema_for_openai(&prop);
-            } else if prop_type == "array" {
-                if let Some(items) = prop.get("items") {
-                    let items_type = items.get("type").and_then(|t| t.as_str()).unwrap_or("");
-                    if items_type == "object" {
-                        prop["items"] = convert_tool_schema_for_openai(items);
-                    }
+            } else if prop_type == "array"
+                && let Some(items) = prop.get("items")
+            {
+                let items_type = items.get("type").and_then(|t| t.as_str()).unwrap_or("");
+                if items_type == "object" {
+                    prop["items"] = convert_tool_schema_for_openai(items);
                 }
             }
 

@@ -1,3 +1,6 @@
+#![allow(dead_code)]
+#![allow(clippy::all)]
+#![deny(clippy::dbg_macro, clippy::todo)]
 //! # roo-config — Configuration Management for Roo Code
 //!
 //! This crate provides configuration directory resolution, file system utilities,

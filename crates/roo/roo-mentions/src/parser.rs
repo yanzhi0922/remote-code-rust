@@ -69,8 +69,7 @@ pub async fn parse_mentions(text: &str, cwd: &Path) -> ParseMentionsResult {
 
             if mention.starts_with("http") {
                 format!("'{}'", mention)
-            } else if mention.starts_with('/') {
-                let mention_path = &mention[1..];
+            } else if let Some(mention_path) = mention.strip_prefix('/') {
                 format!("'{}'", mention_path)
             } else if mention == "problems" {
                 "Workspace Problems (see below for diagnostics)".to_string()
@@ -88,8 +87,7 @@ pub async fn parse_mentions(text: &str, cwd: &Path) -> ParseMentionsResult {
 
     // Process each mention and gather content
     for mention in &mentions {
-        if mention.starts_with('/') {
-            let mention_path = &mention[1..];
+        if let Some(mention_path) = mention.strip_prefix('/') {
             match get_file_or_folder_content(mention_path, cwd).await {
                 Ok(block) => {
                     content_blocks.push(block);

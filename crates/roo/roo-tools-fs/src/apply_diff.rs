@@ -13,7 +13,7 @@ use roo_types::tool::ApplyDiffParams;
 /// Matches TS: `if (modelId.includes("claude")) { ... } else {
 ///     diffContent = unescapeHtmlEntities(diffContent) }`
 pub fn clean_diff_content(diff: &str, model_id: Option<&str>) -> String {
-    let is_claude = model_id.map_or(false, |id| id.contains("claude"));
+    let is_claude = model_id.is_some_and(|id| id.contains("claude"));
     if is_claude {
         diff.to_string()
     } else {
@@ -236,10 +236,10 @@ pub fn apply_diff_blocks(
     }
 
     // L5.3: Post-apply verification
-    if applied > 0 {
-        if let Err(verify_warning) = verify_diff_result(&content) {
-            warnings.push(verify_warning);
-        }
+    if applied > 0
+        && let Err(verify_warning) = verify_diff_result(&content)
+    {
+        warnings.push(verify_warning);
     }
 
     Ok(DiffApplyResult {

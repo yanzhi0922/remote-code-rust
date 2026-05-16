@@ -131,7 +131,7 @@ pub fn format_persisted_output(
     //   "",
     //   "Use read_command_output tool to view full output if needed.",
     // ].join("\n")
-    vec![
+    [
         format!("Command executed in '{}'. {}", working_dir, exit_status),
         String::new(),
         format!(

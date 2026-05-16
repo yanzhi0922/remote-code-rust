@@ -34,6 +34,9 @@ Production uses a local-execution, cloud-relay model:
 - The cloud host runs only `remote-code-control-plane`, static Web/PWA assets, authentication/pairing, event relay, and optional app-binary downloads.
 - The cloud host must not run `remote-code-runner`, `remote-code`, Codex/Roo/Claude agent loops, workspace tools, or provider-key backed coding sessions.
 - Mobile clients connect to the control plane and control a paired desktop runner; the server is an auxiliary communication surface, not an execution environment.
+- Client transport defaults to relay-only. Direct runner URLs are treated as an explicit advanced mode selected by `VITE_REMOTE_CODE_TRANSPORT_MODE=hybrid` or `direct_only`.
+- WebSocket event streams use short-lived one-time stream tickets minted by the control plane. Long-lived bearer tokens in WebSocket query strings are disabled by default and only available behind `REMOTE_CODE_ALLOW_QUERY_ACCESS_TOKEN=true` on the control plane or `REMOTE_CODE_RUNNER_ALLOW_QUERY_ACCESS_TOKEN=true` on the local runner for temporary legacy compatibility.
+- Username/password-derived user keys are accepted only when the control plane is configured with matching SHA-256 hashes in `REMOTE_CODE_CONTROL_PLANE_USER_KEY_HASHES`; normal production pairing should use the bootstrap and device trust chain.
 
 ### Shared Crates (`crates/shared/`)
 
@@ -144,10 +147,10 @@ The control plane does not execute coding tools, read workspaces, or hold provid
 
 The mobile build target shares the same `remote-code-gui` Tauri v2 application with platform-specific compilation:
 
-- **Backend** (`mobile.rs`, ~400 lines): 20 Tauri commands gated behind `#[cfg(feature = "mobile")]` covering haptics, biometric auth, secure storage (JSON file), artifact download/share, push notifications (permission, display, FCM/APNs token registration), and deep linking (`remotecode://` scheme)
+- **Backend** (`mobile.rs`, ~400 lines): 20 Tauri commands gated behind `#[cfg(feature = "mobile")]` covering haptics, biometric auth, mobile secure-storage commands, artifact download/share, push notification registration/display, and deep linking (`remotecode://` scheme). Browser/PWA builds no longer fall back to `localStorage` for remote secrets.
 - **Frontend** (`RemoteApp.tsx`, ~1,300 lines): the existing remote-control UI already has responsive layout (floating FABs, bottom sheets for mobile), making it directly reusable in the mobile WebView
-- **Config**: `Cargo.mobile.toml` overlays 6 Tauri mobile plugins; `capabilities/mobile.json` declares 15 platform permissions scoped to iOS/Android
-- **Status**: Rust backend commands are implemented in the shared Tauri app; native `android/`/`ios/` projects have not been initialized yet (requires `tauri android init` / `tauri ios init`)
+- **Config**: `Cargo.mobile.toml` overlays 6 Tauri mobile plugins; `capabilities/mobile.json` declares platform permissions scoped to iOS/Android; Android disables backup and requests notification permission.
+- **Status**: Rust backend commands are implemented in the shared Tauri app; native FCM/APNs token acquisition still depends on the platform notification plugin returning a token, and push registration reports unavailable when no native token is present.
 
 ## Data Flow
 
@@ -177,7 +180,7 @@ The full conversation loop operates as follows:
 1. A client asks the control plane to create or resume a session.
 2. The control plane selects a paired desktop runner that owns the requested workspace.
 3. The desktop runner launches a local `remote-code` backend session with the correct profile and workspace mapping.
-4. Runtime events flow from the backend to the runner, then to the control plane, then to subscribed clients.
+4. Runtime events flow from the backend to the runner, then to the control plane, then to subscribed clients. Clients mint a one-time stream ticket before opening the WebSocket subscription.
 5. Approval responses and follow-up prompts flow back through the same chain in reverse.
 
 ## Session Storage

@@ -52,6 +52,11 @@ export interface RemotePairingAcceptResponse {
   refresh_token: string;
 }
 
+export interface RemoteStreamTicketResponse {
+  stream_ticket: string;
+  expires_in_secs: number;
+}
+
 export type RemoteSessionState =
   | 'pending'
   | 'assigned'
