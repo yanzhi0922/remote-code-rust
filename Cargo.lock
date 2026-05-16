@@ -2111,7 +2111,7 @@ dependencies = [
  "chrono",
  "claude-config",
  "claude-runner",
- "constant_time_eq 0.3.1",
+ "constant_time_eq 0.4.2",
  "futures",
  "quinn",
  "rc-engine-events",
@@ -2423,7 +2423,7 @@ dependencies = [
  "axum",
  "chrono",
  "claude-config",
- "constant_time_eq 0.3.1",
+ "constant_time_eq 0.4.2",
  "futures",
  "rc-agent-protocol",
  "reqwest 0.12.28",
@@ -3048,7 +3048,7 @@ dependencies = [
  "codex-uds",
  "codex-utils-absolute-path",
  "codex-utils-rustls-provider",
- "constant_time_eq 0.3.1",
+ "constant_time_eq 0.4.2",
  "futures",
  "gethostname 1.1.0",
  "hmac 0.12.1",
@@ -5105,12 +5105,6 @@ name = "constant_time_eq"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "245097e9a4535ee1e3e3931fcfcd55a796a44c643e8596ff6566d68f09b87bbc"
-
-[[package]]
-name = "constant_time_eq"
-version = "0.3.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7c74b8349d32d297c9134b8c88677813a227df8f779daa29bfc29c183fe3dca6"
 
 [[package]]
 name = "constant_time_eq"
