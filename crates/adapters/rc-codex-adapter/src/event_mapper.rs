@@ -1090,7 +1090,7 @@ mod tests {
             });
         let events = map_server_notification(notification, "s");
         // Should produce ContextUsage + codex_token_usage progress
-        assert!(events.len() >= 1);
+        assert!(!events.is_empty());
         match &events[0] {
             UnifiedAgentEvent::ContextUsage {
                 session_id,

@@ -1356,10 +1356,9 @@ mod tests {
     #[test]
     fn truncate_head_strips_prior_retry_marker() {
         let marker = Message::User(UserMessage {
-            base: {
-                let mut b = MessageBase::default();
-                b.is_meta = true;
-                b
+            base: MessageBase {
+                is_meta: true,
+                ..Default::default()
             },
             text: PTL_RETRY_MARKER.to_string(),
             attachments: Vec::new(),
@@ -1699,7 +1698,8 @@ mod tests {
         let boundary = create_compact_boundary_message("manual", 5000, Some(uuid), None);
         match &boundary {
             Message::System(s) => {
-                let meta: serde_json::Value = serde_json::from_str(&s.text).unwrap();
+                let meta: serde_json::Value =
+                    serde_json::from_str(&s.text).expect("boundary metadata should be JSON");
                 assert_eq!(meta["trigger"], "manual");
                 assert_eq!(meta["preTokens"], 5000);
                 assert_eq!(meta["lastPreCompactMessageUuid"], uuid.to_string());
@@ -1713,7 +1713,8 @@ mod tests {
         let boundary = create_compact_boundary_message("auto", 1000, None, None);
         match &boundary {
             Message::System(s) => {
-                let meta: serde_json::Value = serde_json::from_str(&s.text).unwrap();
+                let meta: serde_json::Value =
+                    serde_json::from_str(&s.text).expect("boundary metadata should be JSON");
                 assert_eq!(meta["trigger"], "auto");
                 assert_eq!(meta["preTokens"], 1000);
                 assert!(meta.get("lastPreCompactMessageUuid").is_none());
@@ -1747,7 +1748,8 @@ mod tests {
         );
         match &annotated {
             Message::System(s) => {
-                let meta: serde_json::Value = serde_json::from_str(&s.text).unwrap();
+                let meta: serde_json::Value =
+                    serde_json::from_str(&s.text).expect("boundary metadata should be JSON");
                 let seg = &meta["preservedSegment"];
                 assert_eq!(seg["headUuid"], head.uuid().to_string());
                 assert_eq!(seg["anchorUuid"], anchor_uuid.to_string());
@@ -1777,7 +1779,8 @@ mod tests {
         });
         match &enriched {
             Message::System(s) => {
-                let meta: serde_json::Value = serde_json::from_str(&s.text).unwrap();
+                let meta: serde_json::Value =
+                    serde_json::from_str(&s.text).expect("boundary metadata should be JSON");
                 assert_eq!(meta["trigger"], "manual");
                 assert_eq!(meta["userContext"], "test feedback");
                 assert_eq!(meta["messagesSummarized"], 42);
@@ -1840,8 +1843,11 @@ mod tests {
         let boundary = create_compact_boundary_message("manual", 5000, None, Some(&tools));
         match &boundary {
             Message::System(s) => {
-                let meta: serde_json::Value = serde_json::from_str(&s.text).unwrap();
-                let arr = meta["preCompactDiscoveredTools"].as_array().unwrap();
+                let meta: serde_json::Value =
+                    serde_json::from_str(&s.text).expect("boundary metadata should be JSON");
+                let arr = meta["preCompactDiscoveredTools"]
+                    .as_array()
+                    .expect("discovered tools should be an array");
                 assert_eq!(arr.len(), 3);
                 assert_eq!(arr[0], "Read");
                 assert_eq!(arr[1], "Write");
@@ -1857,7 +1863,8 @@ mod tests {
         let boundary = create_compact_boundary_message("manual", 5000, None, Some(&tools));
         match &boundary {
             Message::System(s) => {
-                let meta: serde_json::Value = serde_json::from_str(&s.text).unwrap();
+                let meta: serde_json::Value =
+                    serde_json::from_str(&s.text).expect("boundary metadata should be JSON");
                 assert!(meta.get("preCompactDiscoveredTools").is_none());
             }
             other => panic!("expected System, got {other:?}"),
@@ -1869,7 +1876,8 @@ mod tests {
         let boundary = create_compact_boundary_message("manual", 5000, None, None);
         match &boundary {
             Message::System(s) => {
-                let meta: serde_json::Value = serde_json::from_str(&s.text).unwrap();
+                let meta: serde_json::Value =
+                    serde_json::from_str(&s.text).expect("boundary metadata should be JSON");
                 assert!(meta.get("preCompactDiscoveredTools").is_none());
             }
             other => panic!("expected System, got {other:?}"),

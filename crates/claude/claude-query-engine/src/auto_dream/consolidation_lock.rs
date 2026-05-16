@@ -103,29 +103,32 @@ mod tests {
 
     #[test]
     fn read_returns_zero_when_no_lock_file() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = tempfile::tempdir().expect("temp dir should be created");
         let lock = ConsolidationLock::new(dir.path());
         assert_eq!(lock.read_last_consolidated_at(), 0);
     }
 
     #[test]
     fn acquire_creates_lock_file() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = tempfile::tempdir().expect("temp dir should be created");
         let lock = ConsolidationLock::new(dir.path());
-        let prior = lock.try_acquire().unwrap();
+        let prior = lock
+            .try_acquire()
+            .expect("lock acquisition should create lock file");
         assert_eq!(prior, 0);
         assert!(lock.path().exists());
     }
 
     #[test]
     fn acquire_twice_with_stale_gap_succeeds() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = tempfile::tempdir().expect("temp dir should be created");
         let lock = ConsolidationLock::new(dir.path());
-        lock.try_acquire().unwrap();
+        lock.try_acquire()
+            .expect("initial lock acquisition should succeed");
         // Artificially age the lock file past stale threshold
         let old_time = UNIX_EPOCH + Duration::from_secs(1000);
         let ft = filetime::FileTime::from_system_time(old_time);
-        filetime::set_file_mtime(lock.path(), ft).unwrap();
+        filetime::set_file_mtime(lock.path(), ft).expect("lock mtime should be settable");
 
         // Should succeed because lock is stale
         assert!(lock.try_acquire().is_ok());
@@ -133,20 +136,22 @@ mod tests {
 
     #[test]
     fn rollback_removes_file_when_prior_zero() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = tempfile::tempdir().expect("temp dir should be created");
         let lock = ConsolidationLock::new(dir.path());
-        lock.try_acquire().unwrap();
+        lock.try_acquire()
+            .expect("initial lock acquisition should succeed");
         lock.rollback(0);
         assert!(!lock.path().exists());
     }
 
     #[test]
     fn read_mtime_increases_after_consolidation() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = tempfile::tempdir().expect("temp dir should be created");
         let lock = ConsolidationLock::new(dir.path());
         let before = lock.read_last_consolidated_at();
         thread::sleep(Duration::from_millis(50));
-        lock.record_consolidation().unwrap();
+        lock.record_consolidation()
+            .expect("consolidation timestamp should be written");
         let after = lock.read_last_consolidated_at();
         assert!(after > before);
     }

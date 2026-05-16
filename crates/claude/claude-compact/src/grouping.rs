@@ -512,8 +512,10 @@ mod tests {
             tool_calls: Vec::new(),
             provider_content_blocks: Vec::new(),
         });
-        let mut base2 = MessageBase::default();
-        base2.uuid = shared_uuid;
+        let base2 = MessageBase {
+            uuid: shared_uuid,
+            ..Default::default()
+        };
         let a2 = Message::Assistant(claude_core::AssistantMessage {
             base: base2,
             text: "chunk2".into(),

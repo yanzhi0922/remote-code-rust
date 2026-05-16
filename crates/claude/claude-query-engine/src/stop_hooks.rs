@@ -1199,7 +1199,12 @@ mod tests {
             result.blocking_error.is_some(),
             "Expected blocking error for nonexistent command"
         );
-        assert!(result.blocking_error.unwrap().contains("Failed to spawn"));
+        assert!(
+            result
+                .blocking_error
+                .expect("nonexistent command should produce blocking error")
+                .contains("Failed to spawn")
+        );
     }
 
     #[tokio::test]
@@ -1233,25 +1238,33 @@ mod tests {
         // Write a temp script to avoid Windows echo quoting issues.
         let json_output = r#"{"preventContinuation":true,"stopReason":"hook says stop"}"#;
 
-        let temp_dir = tempfile::tempdir().unwrap();
+        let temp_dir = tempfile::tempdir().expect("temp dir should be created");
         let script_path = if cfg!(windows) {
             let path = temp_dir.path().join("hook.bat");
-            std::fs::write(&path, format!("@echo {json_output}")).unwrap();
+            std::fs::write(&path, format!("@echo {json_output}"))
+                .expect("Windows hook fixture should be written");
             path
         } else {
             let path = temp_dir.path().join("hook.sh");
-            std::fs::write(&path, format!("#!/bin/sh\necho '{json_output}'")).unwrap();
+            std::fs::write(&path, format!("#!/bin/sh\necho '{json_output}'"))
+                .expect("Unix hook fixture should be written");
             #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt;
-                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
+                    .expect("Unix hook fixture should be executable");
             }
             path
         };
 
         let hook = HookDefinition {
             event: "Stop".to_owned(),
-            command: vec![script_path.to_str().unwrap().to_owned()],
+            command: vec![
+                script_path
+                    .to_str()
+                    .expect("script fixture path should be valid UTF-8")
+                    .to_owned(),
+            ],
             timeout_ms: Some(5_000),
         };
 
@@ -1510,12 +1523,13 @@ mod tests {
             timeout_ms: Some(30_000),
         };
 
-        let json = serde_json::to_string(&hook).unwrap();
+        let json = serde_json::to_string(&hook).expect("hook definition should serialize");
         assert!(json.contains("\"event\":\"Stop\""));
         assert!(json.contains("\"command\""));
         assert!(json.contains("\"timeout_ms\":30000"));
 
-        let deserialized: HookDefinition = serde_json::from_str(&json).unwrap();
+        let deserialized: HookDefinition =
+            serde_json::from_str(&json).expect("hook definition should deserialize");
         assert_eq!(deserialized.event, "Stop");
         assert_eq!(deserialized.command, vec!["node", "script.js", "--arg"]);
         assert_eq!(deserialized.timeout_ms, Some(30_000));
@@ -1529,7 +1543,7 @@ mod tests {
             timeout_ms: None,
         };
 
-        let json = serde_json::to_string(&hook).unwrap();
+        let json = serde_json::to_string(&hook).expect("hook definition should serialize");
         assert!(!json.contains("timeout_ms"));
     }
 }

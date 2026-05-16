@@ -621,13 +621,19 @@ async fn router_register_and_send_message_routes_correctly() {
     });
 
     let mut boxed: Box<dyn AgentAdapter> = Box::new(adapter);
-    boxed.start(&protocol_test_config()).await.unwrap();
+    boxed
+        .start(&protocol_test_config())
+        .await
+        .expect("adapter should start for router test");
     router.register("sess-1".into(), boxed).await;
 
     assert!(router.has_session("sess-1"));
     assert_eq!(router.session_count(), 1);
 
-    let mut rx = router.send_message("sess-1", "hello").await.unwrap();
+    let mut rx = router
+        .send_message("sess-1", "hello")
+        .await
+        .expect("router should send message to registered session");
     let event = rx.recv().await.expect("should receive event");
     match event {
         UnifiedAgentEvent::MessageDelta { delta, .. } => {
@@ -649,7 +655,10 @@ async fn router_multiple_sessions_route_independently() {
         }])
     });
     let mut boxed_a: Box<dyn AgentAdapter> = Box::new(adapter_a);
-    boxed_a.start(&protocol_test_config()).await.unwrap();
+    boxed_a
+        .start(&protocol_test_config())
+        .await
+        .expect("adapter A should start");
     router.register("sess-a".into(), boxed_a).await;
 
     // Session B
@@ -660,22 +669,31 @@ async fn router_multiple_sessions_route_independently() {
         }])
     });
     let mut boxed_b: Box<dyn AgentAdapter> = Box::new(adapter_b);
-    boxed_b.start(&protocol_test_config()).await.unwrap();
+    boxed_b
+        .start(&protocol_test_config())
+        .await
+        .expect("adapter B should start");
     router.register("sess-b".into(), boxed_b).await;
 
     assert_eq!(router.session_count(), 2);
 
     // Route to A
-    let mut rx_a = router.send_message("sess-a", "test").await.unwrap();
-    let ev_a = rx_a.recv().await.unwrap();
+    let mut rx_a = router
+        .send_message("sess-a", "test")
+        .await
+        .expect("router should send to session A");
+    let ev_a = rx_a.recv().await.expect("session A should emit one event");
     match ev_a {
         UnifiedAgentEvent::MessageDelta { delta, .. } => assert_eq!(delta, "A:test"),
         _ => panic!("expected MessageDelta"),
     }
 
     // Route to B
-    let mut rx_b = router.send_message("sess-b", "test").await.unwrap();
-    let ev_b = rx_b.recv().await.unwrap();
+    let mut rx_b = router
+        .send_message("sess-b", "test")
+        .await
+        .expect("router should send to session B");
+    let ev_b = rx_b.recv().await.expect("session B should emit one event");
     match ev_b {
         UnifiedAgentEvent::MessageDelta { delta, .. } => assert_eq!(delta, "B:test"),
         _ => panic!("expected MessageDelta"),
@@ -688,11 +706,17 @@ async fn router_close_session_removes_adapter() {
 
     let adapter = RemoteClaudeAdapter::new_claude().with_send_message(|_sid, _msg| Ok(vec![]));
     let mut boxed: Box<dyn AgentAdapter> = Box::new(adapter);
-    boxed.start(&protocol_test_config()).await.unwrap();
+    boxed
+        .start(&protocol_test_config())
+        .await
+        .expect("adapter should start before close test");
     router.register("sess-x".into(), boxed).await;
 
     assert_eq!(router.session_count(), 1);
-    router.close_session("sess-x").await.unwrap();
+    router
+        .close_session("sess-x")
+        .await
+        .expect("registered session should close");
     assert_eq!(router.session_count(), 0);
     assert!(!router.has_session("sess-x"));
 }
@@ -705,17 +729,29 @@ async fn router_cancel_delegates_to_adapter() {
     let adapter = RemoteClaudeAdapter::new_claude()
         .with_send_message(|_sid, _msg| Ok(vec![]))
         .with_cancel(move |_sid| {
-            *canceled_clone.lock().unwrap() = true;
+            *canceled_clone
+                .lock()
+                .expect("canceled test mutex should be lockable") = true;
             Ok(())
         });
 
     let mut boxed: Box<dyn AgentAdapter> = Box::new(adapter);
-    boxed.start(&protocol_test_config()).await.unwrap();
+    boxed
+        .start(&protocol_test_config())
+        .await
+        .expect("adapter should start before cancel test");
     let mut router = AgentRouter::new();
     router.register("sess-c".into(), boxed).await;
 
-    router.cancel("sess-c").await.unwrap();
-    assert!(*canceled.lock().unwrap());
+    router
+        .cancel("sess-c")
+        .await
+        .expect("registered session should cancel");
+    assert!(
+        *canceled
+            .lock()
+            .expect("canceled test mutex should be lockable")
+    );
 }
 
 // 鈹€鈹€鈹€ RemoteClaudeAdapter integration tests 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
@@ -726,7 +762,10 @@ async fn remotecode_adapter_lifecycle_start_send_stop() {
     let messages_clone = messages_received.clone();
 
     let adapter = RemoteClaudeAdapter::new_claude().with_send_message(move |_sid, msg| {
-        messages_clone.lock().unwrap().push(msg.to_string());
+        messages_clone
+            .lock()
+            .expect("messages test mutex should be lockable")
+            .push(msg.to_string());
         Ok(vec![
             UnifiedAgentEvent::Ready,
             UnifiedAgentEvent::MessageDelta {
@@ -751,12 +790,18 @@ async fn remotecode_adapter_lifecycle_start_send_stop() {
     assert!(adapter.is_alive());
 
     // Start
-    adapter.start(&protocol_test_config()).await.unwrap();
+    adapter
+        .start(&protocol_test_config())
+        .await
+        .expect("adapter should start");
     assert!(adapter.is_alive());
     assert_eq!(adapter.info().status, AgentStatus::Ready);
 
     // Send message
-    let mut rx = adapter.send_message("s1", "hello world").await.unwrap();
+    let mut rx = adapter
+        .send_message("s1", "hello world")
+        .await
+        .expect("adapter should send message with configured callback");
     let mut events = Vec::new();
     while let Some(ev) = rx.recv().await {
         events.push(ev);
@@ -767,11 +812,16 @@ async fn remotecode_adapter_lifecycle_start_send_stop() {
     assert!(matches!(events[2], UnifiedAgentEvent::Completed { .. }));
 
     // Verify callback received the message
-    assert_eq!(messages_received.lock().unwrap().len(), 1);
-    assert_eq!(messages_received.lock().unwrap()[0], "hello world");
+    {
+        let messages = messages_received
+            .lock()
+            .expect("messages test mutex should be lockable");
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0], "hello world");
+    }
 
     // Stop
-    adapter.stop().await.unwrap();
+    adapter.stop().await.expect("adapter should stop");
     assert!(!adapter.is_alive());
     assert_eq!(adapter.info().status, AgentStatus::Stopped);
 }
@@ -781,10 +831,13 @@ async fn remotecode_adapter_is_alive_state_changes() {
     let mut adapter = RemoteClaudeAdapter::new_claude();
     assert!(adapter.is_alive()); // Starting
 
-    adapter.start(&protocol_test_config()).await.unwrap();
+    adapter
+        .start(&protocol_test_config())
+        .await
+        .expect("adapter should start");
     assert!(adapter.is_alive()); // Ready
 
-    adapter.stop().await.unwrap();
+    adapter.stop().await.expect("adapter should stop");
     assert!(!adapter.is_alive()); // Stopped
 }
 
@@ -811,20 +864,25 @@ async fn remotecode_adapter_resolve_permission_delegates() {
         RemoteClaudeAdapter::new_claude().with_resolve_permission(move |sid, rid, dec| {
             resolved_clone
                 .lock()
-                .unwrap()
+                .expect("resolved test mutex should be lockable")
                 .push((sid.to_string(), rid.to_string(), dec));
             Ok(())
         });
 
     let mut adapter = adapter;
-    adapter.start(&protocol_test_config()).await.unwrap();
+    adapter
+        .start(&protocol_test_config())
+        .await
+        .expect("adapter should start");
 
     adapter
         .resolve_permission("sess-1", "req-1", PermissionDecision::Allow)
         .await
-        .unwrap();
+        .expect("permission resolution should delegate");
 
-    let lock = resolved.lock().unwrap();
+    let lock = resolved
+        .lock()
+        .expect("resolved test mutex should be lockable");
     assert_eq!(lock.len(), 1);
     assert_eq!(lock[0].0, "sess-1");
     assert_eq!(lock[0].1, "req-1");
@@ -942,7 +1000,8 @@ fn all_unified_agent_event_variants_roundtrip() {
             .unwrap_or_else(|e| panic!("failed to deserialize {json}: {e}"));
 
         // Re-serialize the deserialized value and compare JSON strings.
-        let json2 = serde_json::to_string(&back).unwrap();
+        let json2 =
+            serde_json::to_string(&back).expect("event should serialize after deserialization");
         assert_eq!(json, json2, "roundtrip mismatch for {event:?}");
     }
 }
@@ -972,20 +1031,26 @@ async fn events_flow_from_adapter_through_router() {
     });
 
     let mut boxed: Box<dyn AgentAdapter> = Box::new(adapter);
-    boxed.start(&protocol_test_config()).await.unwrap();
+    boxed
+        .start(&protocol_test_config())
+        .await
+        .expect("adapter should start for event flow test");
 
     let mut router = AgentRouter::new();
     router.register("sess-flow".into(), boxed).await;
 
-    let mut rx = router.send_message("sess-flow", "test-flow").await.unwrap();
+    let mut rx = router
+        .send_message("sess-flow", "test-flow")
+        .await
+        .expect("router should send event flow message");
 
-    let ev1 = rx.recv().await.unwrap();
+    let ev1 = rx.recv().await.expect("first event should be emitted");
     assert!(matches!(ev1, UnifiedAgentEvent::MessageDelta { .. }));
 
-    let ev2 = rx.recv().await.unwrap();
+    let ev2 = rx.recv().await.expect("second event should be emitted");
     assert!(matches!(ev2, UnifiedAgentEvent::MessageDelta { .. }));
 
-    let ev3 = rx.recv().await.unwrap();
+    let ev3 = rx.recv().await.expect("completion event should be emitted");
     assert!(matches!(ev3, UnifiedAgentEvent::Completed { .. }));
 
     assert!(rx.recv().await.is_none(), "channel should be closed");
@@ -998,7 +1063,9 @@ async fn router_send_message_unregistered_session_returns_error() {
     let mut router = AgentRouter::new();
     let result = router.send_message("nonexistent", "hello").await;
     assert!(result.is_err());
-    let err_msg = result.unwrap_err().to_string();
+    let err_msg = result
+        .expect_err("unregistered session should fail")
+        .to_string();
     assert!(
         err_msg.contains("no adapter found for session nonexistent"),
         "unexpected error: {err_msg}"
@@ -1010,7 +1077,9 @@ async fn router_cancel_unregistered_session_returns_error() {
     let mut router = AgentRouter::new();
     let result = router.cancel("ghost").await;
     assert!(result.is_err());
-    let err_msg = result.unwrap_err().to_string();
+    let err_msg = result
+        .expect_err("unregistered cancel should fail")
+        .to_string();
     assert!(
         err_msg.contains("no adapter found for session ghost"),
         "unexpected error: {err_msg}"
@@ -1020,11 +1089,16 @@ async fn router_cancel_unregistered_session_returns_error() {
 #[tokio::test]
 async fn adapter_send_message_without_callback_returns_error() {
     let mut adapter = RemoteClaudeAdapter::new_claude();
-    adapter.start(&protocol_test_config()).await.unwrap();
+    adapter
+        .start(&protocol_test_config())
+        .await
+        .expect("adapter should start");
 
     let result = adapter.send_message("s1", "hello").await;
     assert!(result.is_err());
-    let err = result.unwrap_err().to_string();
+    let err = result
+        .expect_err("missing send callback should fail")
+        .to_string();
     assert!(
         err.contains("send_message callback not configured"),
         "unexpected error: {err}"
@@ -1034,11 +1108,16 @@ async fn adapter_send_message_without_callback_returns_error() {
 #[tokio::test]
 async fn adapter_cancel_without_callback_returns_error() {
     let mut adapter = RemoteClaudeAdapter::new_claude();
-    adapter.start(&protocol_test_config()).await.unwrap();
+    adapter
+        .start(&protocol_test_config())
+        .await
+        .expect("adapter should start");
 
     let result = adapter.cancel("s1").await;
     assert!(result.is_err());
-    let err = result.unwrap_err().to_string();
+    let err = result
+        .expect_err("missing cancel callback should fail")
+        .to_string();
     assert!(
         err.contains("cancel callback not configured"),
         "unexpected error: {err}"
@@ -1117,13 +1196,19 @@ fn restart_tracker_allows_backoff_and_reset() {
         backoff_multiplier: 2.0,
     });
 
-    let b1 = tracker.request_restart().unwrap();
+    let b1 = tracker
+        .request_restart()
+        .expect("first restart should be allowed");
     assert_eq!(b1, std::time::Duration::from_millis(100));
 
-    let b2 = tracker.request_restart().unwrap();
+    let b2 = tracker
+        .request_restart()
+        .expect("second restart should be allowed");
     assert_eq!(b2, std::time::Duration::from_millis(200));
 
-    let b3 = tracker.request_restart().unwrap();
+    let b3 = tracker
+        .request_restart()
+        .expect("third restart should be allowed");
     assert_eq!(b3, std::time::Duration::from_millis(400));
 
     // Exhausted
@@ -1132,7 +1217,9 @@ fn restart_tracker_allows_backoff_and_reset() {
     // After successful run 鈫?reset
     tracker.reset();
     assert!(tracker.can_restart());
-    let b_after = tracker.request_restart().unwrap();
+    let b_after = tracker
+        .request_restart()
+        .expect("restart should be allowed after reset");
     assert_eq!(b_after, std::time::Duration::from_millis(100));
 }
 
@@ -1183,7 +1270,10 @@ async fn remote_roo_adapter_lifecycle_and_routing() {
         api_key: None,
         base_url: None,
     };
-    boxed.start(&config).await.unwrap();
+    boxed
+        .start(&config)
+        .await
+        .expect("Remote Roo adapter should start");
     assert_eq!(boxed.agent_type(), AgentType::RemoteRoo);
     assert!(boxed.is_alive());
     assert_eq!(boxed.info().name, "Remote Roo");
@@ -1191,12 +1281,18 @@ async fn remote_roo_adapter_lifecycle_and_routing() {
     let mut rx = boxed
         .send_message("roo-s1", "hello from roo")
         .await
-        .unwrap();
-    let ev1 = rx.recv().await.unwrap();
+        .expect("Remote Roo adapter should send message");
+    let ev1 = rx
+        .recv()
+        .await
+        .expect("Remote Roo adapter should emit delta");
     assert!(
         matches!(ev1, UnifiedAgentEvent::MessageDelta { ref delta, .. } if delta == "roo: hello from roo")
     );
-    let ev2 = rx.recv().await.unwrap();
+    let ev2 = rx
+        .recv()
+        .await
+        .expect("Remote Roo adapter should emit completion");
     assert!(matches!(ev2, UnifiedAgentEvent::Completed { .. }));
 }
 
@@ -1234,7 +1330,10 @@ async fn remote_codex_adapter_lifecycle_and_routing() {
         api_key: None,
         base_url: None,
     };
-    boxed.start(&config).await.unwrap();
+    boxed
+        .start(&config)
+        .await
+        .expect("Remote Codex adapter should start");
     assert_eq!(boxed.agent_type(), AgentType::RemoteCodex);
     assert!(boxed.is_alive());
     assert_eq!(boxed.info().name, "Remote Codex");
@@ -1242,8 +1341,11 @@ async fn remote_codex_adapter_lifecycle_and_routing() {
     let mut rx = boxed
         .send_message("codex-s1", "hello from codex")
         .await
-        .unwrap();
-    let ev1 = rx.recv().await.unwrap();
+        .expect("Remote Codex adapter should send message");
+    let ev1 = rx
+        .recv()
+        .await
+        .expect("Remote Codex adapter should emit delta");
     assert!(
         matches!(ev1, UnifiedAgentEvent::MessageDelta { ref delta, .. } if delta == "codex: hello from codex")
     );
@@ -1260,7 +1362,10 @@ async fn three_agents_route_through_same_router() {
         }])
     });
     let mut boxed_c: Box<dyn AgentAdapter> = Box::new(claude);
-    boxed_c.start(&protocol_test_config()).await.unwrap();
+    boxed_c
+        .start(&protocol_test_config())
+        .await
+        .expect("Remote Claude adapter should start");
     router.register("s-claude".into(), boxed_c).await;
 
     let roo =
@@ -1284,7 +1389,7 @@ async fn three_agents_route_through_same_router() {
             base_url: None,
         })
         .await
-        .unwrap();
+        .expect("Remote Roo adapter should start");
     router.register("s-roo".into(), boxed_r).await;
 
     let codex = rc_agent_protocol::adapters::RemoteCodexAdapter::new_codex().with_send_message(
@@ -1309,25 +1414,46 @@ async fn three_agents_route_through_same_router() {
             base_url: None,
         })
         .await
-        .unwrap();
+        .expect("Remote Codex adapter should start");
     router.register("s-codex".into(), boxed_x).await;
 
     assert_eq!(router.session_count(), 3);
 
-    let mut rx_c = router.send_message("s-claude", "hi").await.unwrap();
-    match rx_c.recv().await.unwrap() {
+    let mut rx_c = router
+        .send_message("s-claude", "hi")
+        .await
+        .expect("router should send to Claude session");
+    match rx_c
+        .recv()
+        .await
+        .expect("Claude session should emit one event")
+    {
         UnifiedAgentEvent::MessageDelta { delta, .. } => assert_eq!(delta, "claude:hi"),
         _ => panic!("expected MessageDelta"),
     }
 
-    let mut rx_r = router.send_message("s-roo", "hi").await.unwrap();
-    match rx_r.recv().await.unwrap() {
+    let mut rx_r = router
+        .send_message("s-roo", "hi")
+        .await
+        .expect("router should send to Roo session");
+    match rx_r
+        .recv()
+        .await
+        .expect("Roo session should emit one event")
+    {
         UnifiedAgentEvent::MessageDelta { delta, .. } => assert_eq!(delta, "roo:hi"),
         _ => panic!("expected MessageDelta"),
     }
 
-    let mut rx_x = router.send_message("s-codex", "hi").await.unwrap();
-    match rx_x.recv().await.unwrap() {
+    let mut rx_x = router
+        .send_message("s-codex", "hi")
+        .await
+        .expect("router should send to Codex session");
+    match rx_x
+        .recv()
+        .await
+        .expect("Codex session should emit one event")
+    {
         UnifiedAgentEvent::MessageDelta { delta, .. } => assert_eq!(delta, "codex:hi"),
         _ => panic!("expected MessageDelta"),
     }
@@ -1341,21 +1467,21 @@ async fn agent_type_serialization_covers_all_three_variants() {
         AgentType::RemoteRoo,
     ];
     for at in &types {
-        let json = serde_json::to_string(at).unwrap();
-        let back: AgentType = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(at).expect("agent type should serialize");
+        let back: AgentType = serde_json::from_str(&json).expect("agent type should deserialize");
         assert_eq!(*at, back, "round-trip failed for {at:?}");
     }
 
     assert_eq!(
-        serde_json::to_string(&AgentType::RemoteClaude).unwrap(),
+        serde_json::to_string(&AgentType::RemoteClaude).expect("RemoteClaude should serialize"),
         "\"remote_claude\""
     );
     assert_eq!(
-        serde_json::to_string(&AgentType::RemoteCodex).unwrap(),
+        serde_json::to_string(&AgentType::RemoteCodex).expect("RemoteCodex should serialize"),
         "\"remote_codex\""
     );
     assert_eq!(
-        serde_json::to_string(&AgentType::RemoteRoo).unwrap(),
+        serde_json::to_string(&AgentType::RemoteRoo).expect("RemoteRoo should serialize"),
         "\"remote_roo\""
     );
 }
@@ -1370,8 +1496,9 @@ async fn permission_request_event_carries_tool_info() {
         input: serde_json::json!({"command": "rm -rf /tmp/test"}),
     };
 
-    let json = serde_json::to_string(&event).unwrap();
-    let back: UnifiedAgentEvent = serde_json::from_str(&json).unwrap();
+    let json = serde_json::to_string(&event).expect("permission request should serialize");
+    let back: UnifiedAgentEvent =
+        serde_json::from_str(&json).expect("permission request should deserialize");
 
     match back {
         UnifiedAgentEvent::PermissionRequest {

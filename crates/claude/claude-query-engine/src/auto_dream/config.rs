@@ -152,8 +152,9 @@ mod tests {
     #[test]
     fn serialization_roundtrip() {
         let cfg = AutoDreamConfig::default();
-        let json = serde_json::to_string(&cfg).unwrap();
-        let parsed: AutoDreamConfig = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&cfg).expect("auto dream config should serialize");
+        let parsed: AutoDreamConfig =
+            serde_json::from_str(&json).expect("auto dream config should deserialize");
         assert_eq!(parsed.min_hours, cfg.min_hours);
         assert_eq!(parsed.min_sessions, cfg.min_sessions);
     }

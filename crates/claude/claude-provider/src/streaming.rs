@@ -2306,8 +2306,10 @@ mod tests {
     #[test]
     fn process_anthropic_event_extracts_message_delta_stop_reason() {
         let mut accumulators = BTreeMap::new();
-        let mut usage = UsageSummary::default();
-        usage.input_tokens = 100;
+        let mut usage = UsageSummary {
+            input_tokens: 100,
+            ..Default::default()
+        };
         let mut stop_reason = "end_turn".to_owned();
         let mut request_id: Option<String> = None;
         let mut research: Option<Value> = None;
@@ -3240,8 +3242,10 @@ mod tests {
     #[test]
     fn process_anthropic_event_message_delta_with_model_context_window_exceeded() {
         let mut accumulators = BTreeMap::new();
-        let mut usage = UsageSummary::default();
-        usage.input_tokens = 100;
+        let mut usage = UsageSummary {
+            input_tokens: 100,
+            ..Default::default()
+        };
         let mut stop_reason = "end_turn".to_owned();
         let mut request_id: Option<String> = None;
         let mut research: Option<Value> = None;

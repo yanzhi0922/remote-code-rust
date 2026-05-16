@@ -1774,10 +1774,8 @@ mod tests {
         let mgr = ContextWindowManager::new(100, 20);
         let mut conv = vec![ConversationEntry::system("sys")];
         for i in 0..20 {
-            conv.push(ConversationEntry::user(&format!("user msg {i}")));
-            conv.push(ConversationEntry::assistant(&format!(
-                "assistant reply {i}"
-            )));
+            conv.push(ConversationEntry::user(format!("user msg {i}")));
+            conv.push(ConversationEntry::assistant(format!("assistant reply {i}")));
         }
 
         let result = mgr.sliding_window_compact(&conv);
@@ -1807,8 +1805,8 @@ mod tests {
         let mgr = ContextWindowManager::new(100, 20);
         let mut conv = vec![ConversationEntry::system("IMPORTANT SYS")];
         for i in 0..10 {
-            conv.push(ConversationEntry::user(&format!("msg {i}")));
-            conv.push(ConversationEntry::assistant(&format!("reply {i}")));
+            conv.push(ConversationEntry::user(format!("msg {i}")));
+            conv.push(ConversationEntry::assistant(format!("reply {i}")));
         }
 
         let result = mgr.priority_compact(&conv);
@@ -1855,8 +1853,8 @@ mod tests {
         let mgr = ContextWindowManager::new(100, 20);
         let mut conv = vec![ConversationEntry::system("sys")];
         for i in 0..10 {
-            conv.push(ConversationEntry::user(&format!("user {i}")));
-            conv.push(ConversationEntry::assistant(&format!("reply {i}")));
+            conv.push(ConversationEntry::user(format!("user {i}")));
+            conv.push(ConversationEntry::assistant(format!("reply {i}")));
         }
 
         let result = mgr.semantic_chunk_compact(&conv);

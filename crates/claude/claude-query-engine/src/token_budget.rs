@@ -319,7 +319,7 @@ mod tests {
         } = decision
         {
             assert!(completion_event.is_some());
-            let event = completion_event.unwrap();
+            let event = completion_event.expect("completion event should be present");
             assert_eq!(event.continuation_count, 1);
             assert!(!event.diminishing_returns);
         }

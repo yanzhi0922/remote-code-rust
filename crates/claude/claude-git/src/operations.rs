@@ -14,7 +14,22 @@ impl GitOperations {
     /// Open a Git repository at the given path.
     pub fn open(repo_path: impl Into<PathBuf>) -> Result<Self> {
         let path = repo_path.into();
-        if !path.join(".git").exists() && !gix::discover(&path).is_ok() {
+        if let Ok(output) = std::process::Command::new("git")
+            .args(["rev-parse", "--show-toplevel"])
+            .current_dir(&path)
+            .output()
+        {
+            if output.status.success() {
+                let top_level = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+                if !top_level.is_empty() {
+                    return Ok(Self {
+                        repo_path: PathBuf::from(top_level),
+                    });
+                }
+            }
+        }
+
+        if !path.join(".git").exists() && gix::discover(&path).is_err() {
             return Err(anyhow::anyhow!("Not a Git repository: {}", path.display()));
         }
         Ok(Self { repo_path: path })
@@ -418,31 +433,33 @@ mod tests {
 
     #[test]
     fn test_current_branch() {
-        let git = GitOperations::open(".").unwrap();
-        let branch = git.current_branch().unwrap();
+        let git = GitOperations::open(".").expect("current directory should be a git repo");
+        let branch = git
+            .current_branch()
+            .expect("current branch should be readable");
         assert!(branch.is_some());
     }
 
     #[test]
     fn test_status() {
-        let git = GitOperations::open(".").unwrap();
-        let status = git.status().unwrap();
+        let git = GitOperations::open(".").expect("current directory should be a git repo");
+        let status = git.status().expect("git status should be readable");
         // Should have a branch
         assert!(status.branch.is_some());
     }
 
     #[test]
     fn test_branches() {
-        let git = GitOperations::open(".").unwrap();
-        let branches = git.branches().unwrap();
+        let git = GitOperations::open(".").expect("current directory should be a git repo");
+        let branches = git.branches().expect("branches should be readable");
         assert!(!branches.is_empty());
         assert!(branches.iter().any(|b| b.is_current));
     }
 
     #[test]
     fn test_log() {
-        let git = GitOperations::open(".").unwrap();
-        let commits = git.log(5).unwrap();
+        let git = GitOperations::open(".").expect("current directory should be a git repo");
+        let commits = git.log(5).expect("git log should be readable");
         assert!(!commits.is_empty());
         assert!(commits.len() <= 5);
     }

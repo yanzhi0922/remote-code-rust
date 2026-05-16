@@ -49,7 +49,9 @@ mod tests {
         // Synthetic tool_result is merged into the existing user message at index 2.
         let user_msg = &messages[2];
         assert_eq!(user_msg["role"], "user");
-        let content = user_msg["content"].as_array().unwrap();
+        let content = user_msg["content"]
+            .as_array()
+            .expect("normalized user content should be an array");
         assert!(
             content
                 .iter()
@@ -81,7 +83,9 @@ mod tests {
         ];
         normalize_messages_for_api(&mut messages);
         assert_eq!(messages.len(), 1);
-        let content = messages[0]["content"].as_array().unwrap();
+        let content = messages[0]["content"]
+            .as_array()
+            .expect("merged user content should be an array");
         assert_eq!(content.len(), 2);
     }
 
@@ -95,7 +99,9 @@ mod tests {
             ]
         })];
         normalize_messages_for_api(&mut messages);
-        let content = messages[0]["content"].as_array().unwrap();
+        let content = messages[0]["content"]
+            .as_array()
+            .expect("stripped user content should be an array");
         assert!(content.iter().all(|b| {
             b["type"].as_str() != Some("text") || b["text"].as_str().is_none_or(|s| !s.is_empty())
         }));
@@ -121,7 +127,9 @@ mod tests {
             ]
         })];
         normalize_messages_for_api(&mut messages);
-        let content = messages[0]["content"].as_array().unwrap();
+        let content = messages[0]["content"]
+            .as_array()
+            .expect("normalized user content should be an array");
         // unknown_type should be replaced with a text block
         assert!(
             content

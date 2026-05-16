@@ -1907,7 +1907,9 @@ mod tests {
         // abort the test process.
         let handle_clone = Arc::clone(&handle);
         let join = std::thread::spawn(move || {
-            let _guard = handle_clone.lock().unwrap();
+            let _guard = handle_clone
+                .lock()
+                .expect("test mutex should be lockable before intentional poisoning");
             panic!("intentional panic to poison mutex");
         });
         // The thread panicked, so the mutex is now poisoned.
@@ -2075,7 +2077,9 @@ mod tests {
         // Take the sender out, simulating it was already consumed by a prior
         // approval resolution.
         {
-            let mut guard = handle.lock().unwrap();
+            let mut guard = handle
+                .lock()
+                .expect("test mutex should be lockable before consuming sender");
             guard.take();
         }
 

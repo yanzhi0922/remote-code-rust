@@ -308,7 +308,7 @@ mod tests {
 
     #[test]
     fn executor_skips_sub_agents() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = tempfile::tempdir().expect("temp dir should be created");
         let executor =
             AutoDreamExecutor::new(AutoDreamConfig::default(), dir.path().to_path_buf(), None);
         assert!(!executor.should_trigger(false, true, Some("agent-123")));
@@ -316,7 +316,7 @@ mod tests {
 
     #[test]
     fn executor_skips_remote_sessions() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = tempfile::tempdir().expect("temp dir should be created");
         let executor =
             AutoDreamExecutor::new(AutoDreamConfig::default(), dir.path().to_path_buf(), None);
         assert!(!executor.should_trigger(true, true, None));
@@ -324,7 +324,7 @@ mod tests {
 
     #[test]
     fn executor_skips_when_auto_memory_disabled() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = tempfile::tempdir().expect("temp dir should be created");
         let executor =
             AutoDreamExecutor::new(AutoDreamConfig::default(), dir.path().to_path_buf(), None);
         assert!(!executor.should_trigger(false, false, None));
@@ -332,7 +332,7 @@ mod tests {
 
     #[test]
     fn build_prompt_returns_nonempty() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = tempfile::tempdir().expect("temp dir should be created");
         let executor = AutoDreamExecutor::new(
             AutoDreamConfig::default(),
             dir.path().to_path_buf(),
@@ -345,7 +345,7 @@ mod tests {
 
     #[test]
     fn system_prompt_is_dream_prompt() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = tempfile::tempdir().expect("temp dir should be created");
         let executor =
             AutoDreamExecutor::new(AutoDreamConfig::default(), dir.path().to_path_buf(), None);
         assert!(executor.system_prompt().contains("Phase 4"));
@@ -353,7 +353,7 @@ mod tests {
 
     #[test]
     fn session_count_with_no_dir() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = tempfile::tempdir().expect("temp dir should be created");
         let executor =
             AutoDreamExecutor::new(AutoDreamConfig::default(), dir.path().to_path_buf(), None);
         assert_eq!(executor.count_sessions_since(0), 0);
@@ -361,11 +361,13 @@ mod tests {
 
     #[test]
     fn session_count_counts_recent_files() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = tempfile::tempdir().expect("temp dir should be created");
         let session_dir = dir.path().join("sessions");
-        fs::create_dir_all(&session_dir).unwrap();
-        fs::write(session_dir.join("sess1.jsonl"), "test").unwrap();
-        fs::write(session_dir.join("sess2.jsonl"), "test").unwrap();
+        fs::create_dir_all(&session_dir).expect("session dir should be created");
+        fs::write(session_dir.join("sess1.jsonl"), "test")
+            .expect("first session fixture should be written");
+        fs::write(session_dir.join("sess2.jsonl"), "test")
+            .expect("second session fixture should be written");
 
         let executor = AutoDreamExecutor::new(
             AutoDreamConfig::default(),
