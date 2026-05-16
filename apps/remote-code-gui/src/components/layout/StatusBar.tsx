@@ -28,7 +28,7 @@ export function StatusBar() {
   const contextPercent = contextUsage ? Math.round(contextUsage.ratio * 100) : null;
 
   return (
-    <div className="flex h-status-bar shrink-0 items-center border-t border-rc-border-primary bg-rc-bg-surface px-4 text-xs text-rc-text-tertiary select-none">
+    <div className="mt-3 flex h-9 shrink-0 items-center rounded-lg border border-white/80 bg-white/80 px-4 text-xs text-rc-text-tertiary shadow-sm backdrop-blur select-none dark:border-rc-border-primary dark:bg-rc-bg-surface/80">
       <div className="flex items-center gap-4">
         {/* Agent type */}
         <span className="flex items-center gap-2">
