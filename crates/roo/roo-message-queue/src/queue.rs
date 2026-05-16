@@ -28,7 +28,7 @@ impl MessageQueueService {
         text: &str,
         images: Option<Vec<String>>,
     ) -> Option<QueuedMessage> {
-        if text.is_empty() && images.as_ref().map_or(true, |imgs| imgs.is_empty()) {
+        if text.is_empty() && images.as_ref().is_none_or(|imgs| imgs.is_empty()) {
             return None;
         }
 

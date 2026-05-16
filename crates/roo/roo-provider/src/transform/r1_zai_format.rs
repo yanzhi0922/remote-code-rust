@@ -154,23 +154,23 @@ fn process_user_message(
 
         if should_merge {
             // Merge text into the last tool message
-            if let Some(last) = result.last_mut() {
-                if last["role"] == "tool" {
-                    let additional = text_parts.join("\n");
-                    let existing = last["content"].as_str().unwrap_or("").to_string();
-                    last["content"] = json!(format!("{existing}\n\n{additional}"));
-                }
+            if let Some(last) = result.last_mut()
+                && last["role"] == "tool"
+            {
+                let additional = text_parts.join("\n");
+                let existing = last["content"].as_str().unwrap_or("").to_string();
+                last["content"] = json!(format!("{existing}\n\n{additional}"));
             }
         } else {
             // Build user content
             let content = build_user_content(&text_parts, &image_parts);
 
             // Try to merge with last message if it's also a user message
-            if let Some(last) = result.last_mut() {
-                if last["role"] == "user" {
-                    merge_user_content(last, &content);
-                    return;
-                }
+            if let Some(last) = result.last_mut()
+                && last["role"] == "user"
+            {
+                merge_user_content(last, &content);
+                return;
             }
             result.push(json!({ "role": "user", "content": content }));
         }
@@ -242,42 +242,42 @@ fn process_assistant_message(
             .insert("tool_calls".to_string(), json!(tool_calls));
     }
 
-    if options.preserve_reasoning {
-        if let Some(ref reasoning) = final_reasoning {
-            assistant_msg
-                .as_object_mut()
-                .expect("assistant_msg is always an object")
-                .insert("reasoning_content".to_string(), json!(reasoning));
-        }
+    if options.preserve_reasoning
+        && let Some(ref reasoning) = final_reasoning
+    {
+        assistant_msg
+            .as_object_mut()
+            .expect("assistant_msg is always an object")
+            .insert("reasoning_content".to_string(), json!(reasoning));
     }
 
     // Try to merge with last message if it's also an assistant message
     // (only if neither has tool_calls)
     let can_merge = tool_calls.is_empty();
-    if can_merge {
-        if let Some(last) = result.last_mut() {
-            if last["role"] == "assistant" && last.get("tool_calls").is_none() {
-                // Merge text content
-                let new_text = assistant_msg["content"].as_str().unwrap_or("");
-                if !new_text.is_empty() {
-                    let existing = last["content"].as_str().unwrap_or("");
-                    if !existing.is_empty() {
-                        last["content"] = json!(format!("{existing}\n{new_text}"));
-                    } else {
-                        last["content"] = json!(new_text);
-                    }
-                }
-                // Preserve reasoning_content from the new message
-                if options.preserve_reasoning {
-                    if let Some(ref reasoning) = final_reasoning {
-                        last.as_object_mut()
-                            .expect("last is always an object")
-                            .insert("reasoning_content".to_string(), json!(reasoning));
-                    }
-                }
-                return;
+    if can_merge
+        && let Some(last) = result.last_mut()
+        && last["role"] == "assistant"
+        && last.get("tool_calls").is_none()
+    {
+        // Merge text content
+        let new_text = assistant_msg["content"].as_str().unwrap_or("");
+        if !new_text.is_empty() {
+            let existing = last["content"].as_str().unwrap_or("");
+            if !existing.is_empty() {
+                last["content"] = json!(format!("{existing}\n{new_text}"));
+            } else {
+                last["content"] = json!(new_text);
             }
         }
+        // Preserve reasoning_content from the new message
+        if options.preserve_reasoning
+            && let Some(ref reasoning) = final_reasoning
+        {
+            last.as_object_mut()
+                .expect("last is always an object")
+                .insert("reasoning_content".to_string(), json!(reasoning));
+        }
+        return;
     }
 
     result.push(assistant_msg);

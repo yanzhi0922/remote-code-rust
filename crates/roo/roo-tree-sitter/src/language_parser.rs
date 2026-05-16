@@ -327,27 +327,24 @@ pub fn process_captures(
             // If this is part of a larger definition, include its non-HTML context
             if let Some(parent) = node.parent() {
                 let child_count = parent.child_count();
-                if child_count > 0 {
-                    if let Ok(last_child_index) = u32::try_from(child_count - 1)
-                        && let Some(last_child) = parent.child(last_child_index)
-                    {
-                        let context_end = last_child.end_position().row;
-                        let context_span = context_end - parent.start_position().row + 1;
+                if child_count > 0
+                    && let Ok(last_child_index) = u32::try_from(child_count - 1)
+                    && let Some(last_child) = parent.child(last_child_index)
+                {
+                    let context_end = last_child.end_position().row;
+                    let context_span = context_end - parent.start_position().row + 1;
 
-                        if context_span >= DEFAULT_MIN_COMPONENT_LINES {
-                            let range_key =
-                                format!("{}-{}", parent.start_position().row, context_end);
-                            if !processed_lines.contains(&range_key) {
-                                let parent_line =
-                                    lines.get(parent.start_position().row).unwrap_or(&"");
-                                formatted_output.push_str(&format!(
-                                    "{}--{} | {}\n",
-                                    parent.start_position().row + 1,
-                                    context_end + 1,
-                                    parent_line
-                                ));
-                                processed_lines.insert(range_key);
-                            }
+                    if context_span >= DEFAULT_MIN_COMPONENT_LINES {
+                        let range_key = format!("{}-{}", parent.start_position().row, context_end);
+                        if !processed_lines.contains(&range_key) {
+                            let parent_line = lines.get(parent.start_position().row).unwrap_or(&"");
+                            formatted_output.push_str(&format!(
+                                "{}--{} | {}\n",
+                                parent.start_position().row + 1,
+                                context_end + 1,
+                                parent_line
+                            ));
+                            processed_lines.insert(range_key);
                         }
                     }
                 }

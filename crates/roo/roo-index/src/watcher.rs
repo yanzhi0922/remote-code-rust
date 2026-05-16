@@ -215,32 +215,32 @@ impl FileWatcher {
         };
 
         for path in &event.paths {
-            if let Some(path_str) = path.to_str() {
-                if Self::is_supported_file(path_str) {
-                    let key = path_str.to_string();
-                    // Insert or update. Delete takes precedence if already deleted,
-                    // otherwise the latest event type wins.
-                    inner
-                        .accumulated_events
-                        .entry(key)
-                        .and_modify(|existing| {
-                            // If it was deleted and now created/changed, treat as change.
-                            // If it was created/changed and now deleted, treat as delete.
-                            match (&existing, &file_event_type) {
-                                (FileEventType::Delete, FileEventType::Create) => {
-                                    *existing = FileEventType::Change;
-                                }
-                                (FileEventType::Delete, FileEventType::Change) => {
-                                    *existing = FileEventType::Change;
-                                }
-                                (_, FileEventType::Delete) => {
-                                    *existing = FileEventType::Delete;
-                                }
-                                _ => {} // Keep the existing event type for create/change
+            if let Some(path_str) = path.to_str()
+                && Self::is_supported_file(path_str)
+            {
+                let key = path_str.to_string();
+                // Insert or update. Delete takes precedence if already deleted,
+                // otherwise the latest event type wins.
+                inner
+                    .accumulated_events
+                    .entry(key)
+                    .and_modify(|existing| {
+                        // If it was deleted and now created/changed, treat as change.
+                        // If it was created/changed and now deleted, treat as delete.
+                        match (&existing, &file_event_type) {
+                            (FileEventType::Delete, FileEventType::Create) => {
+                                *existing = FileEventType::Change;
                             }
-                        })
-                        .or_insert(file_event_type.clone());
-                }
+                            (FileEventType::Delete, FileEventType::Change) => {
+                                *existing = FileEventType::Change;
+                            }
+                            (_, FileEventType::Delete) => {
+                                *existing = FileEventType::Delete;
+                            }
+                            _ => {} // Keep the existing event type for create/change
+                        }
+                    })
+                    .or_insert(file_event_type.clone());
             }
         }
     }

@@ -87,7 +87,7 @@ impl AwsBedrockConfig {
             endpoint_url: settings.aws_bedrock_endpoint.clone(),
             request_timeout: settings.request_timeout,
             temperature: settings.model_temperature.flatten(),
-            service_tier: settings.aws_bedrock_service_tier.clone(),
+            service_tier: settings.aws_bedrock_service_tier,
             enable_1m_context: settings.aws_bedrock_1m_context.unwrap_or(false),
             use_profile: settings.aws_use_profile.unwrap_or(false),
             profile_name: settings.aws_profile.clone(),

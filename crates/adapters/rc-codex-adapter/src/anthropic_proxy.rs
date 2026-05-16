@@ -608,7 +608,10 @@ fn merge_content(a: &serde_json::Value, b: &serde_json::Value) -> serde_json::Va
     collect_text(b, &mut parts);
 
     if parts.len() == 1 {
-        parts.into_iter().next().unwrap()
+        parts
+            .into_iter()
+            .next()
+            .expect("single part is present after length check")
     } else {
         serde_json::Value::Array(parts)
     }

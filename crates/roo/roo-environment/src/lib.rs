@@ -1,3 +1,6 @@
+#![allow(dead_code)]
+#![allow(clippy::all)]
+#![deny(clippy::dbg_macro, clippy::todo)]
 //! # Roo Environment
 //!
 //! Pure-function library for generating Roo Code's `<environment_details>`

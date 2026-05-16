@@ -35,8 +35,9 @@ use crate::types::{
     PairingAcceptResponse, PairingOfferCreateRequest, PairingOfferCreateResponse,
     PushTokenRegistrationRequest, PushTokenRegistrationResponse, RecentEventsQuery,
     RunnerCommandPullQuery, RunnerCommandPullResponse, RunnerQueuedCommandBody,
-    RunnerRegistrationResponse, RuntimeEventCreateRequest, RuntimeEventDetail, SessionRecord,
-    SessionState, SessionStateUpdateRequest, SessionView, TimelineEvent, TimelineEventDetail,
+    RunnerRegistrationResponse, RuntimeEventCreateRequest, RuntimeEventDetail,
+    STREAM_TICKET_TTL_SECS, SessionRecord, SessionState, SessionStateUpdateRequest, SessionView,
+    StreamTicketRequest, StreamTicketResponse, TimelineEvent, TimelineEventDetail,
     TimelineEventDraft, TokenRefreshRequest, TokenRefreshResponse, TrustedDeviceRecord,
 };
 use crate::{AuthPrincipal, ControlPlaneService, PersistedEventQuery};
@@ -302,6 +303,36 @@ pub(crate) async fn refresh_token(
     };
     persist_state_logged(&service).await;
     Ok(Json(response))
+}
+
+pub(crate) async fn create_stream_ticket(
+    State(service): State<ControlPlaneService>,
+    Extension(principal): Extension<AuthPrincipal>,
+    Json(request): Json<StreamTicketRequest>,
+) -> Result<Json<StreamTicketResponse>, ApiError> {
+    let path = normalize_stream_ticket_path(&request.path)?;
+    let stream_ticket = service
+        .mint_stream_ticket(principal, path, STREAM_TICKET_TTL_SECS)
+        .await;
+    Ok(Json(StreamTicketResponse {
+        stream_ticket,
+        expires_in_secs: STREAM_TICKET_TTL_SECS,
+    }))
+}
+
+fn normalize_stream_ticket_path(raw: &str) -> Result<String, ApiError> {
+    let path = raw.trim();
+    if !path.starts_with("/v1/")
+        || !path.ends_with("/stream")
+        || path.contains('?')
+        || path.contains('#')
+        || path.contains("://")
+    {
+        return Err(ApiError::bad_request(
+            "stream ticket path must be a /v1/*/stream path without query parameters".to_owned(),
+        ));
+    }
+    Ok(path.to_owned())
 }
 
 // ---------------------------------------------------------------------------

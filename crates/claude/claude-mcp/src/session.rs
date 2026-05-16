@@ -1834,34 +1834,34 @@ fn check_sse_session_errors(
         // Not valid JSON — nothing to check.
         Err(_) => return Ok(()),
     };
-    if let Some(error) = &envelope.error {
-        if error.code == MCP_SSE_CONNECTION_ERROR_CODE {
-            let msg = error.message.to_lowercase();
-            // Distinguish between connection-closed and request-timeout.
-            if msg.contains("connection closed") || msg.contains("connectionclosed") {
-                tracing::warn!(
-                    server = %server_name,
-                    "MCP SSE connection closed by server (code {})", error.code
-                );
-                return Err(McpRuntimeError::JsonRpc {
-                    server: server_name.to_owned(),
-                    phase,
-                    code: error.code,
-                    message: error.message.clone(),
-                });
-            }
-            if msg.contains("request timeout") || msg.contains("requesttimeout") {
-                tracing::warn!(
-                    server = %server_name,
-                    "MCP SSE request timeout from server (code {})", error.code
-                );
-                return Err(McpRuntimeError::JsonRpc {
-                    server: server_name.to_owned(),
-                    phase,
-                    code: error.code,
-                    message: error.message.clone(),
-                });
-            }
+    if let Some(error) = &envelope.error
+        && error.code == MCP_SSE_CONNECTION_ERROR_CODE
+    {
+        let msg = error.message.to_lowercase();
+        // Distinguish between connection-closed and request-timeout.
+        if msg.contains("connection closed") || msg.contains("connectionclosed") {
+            tracing::warn!(
+                server = %server_name,
+                "MCP SSE connection closed by server (code {})", error.code
+            );
+            return Err(McpRuntimeError::JsonRpc {
+                server: server_name.to_owned(),
+                phase,
+                code: error.code,
+                message: error.message.clone(),
+            });
+        }
+        if msg.contains("request timeout") || msg.contains("requesttimeout") {
+            tracing::warn!(
+                server = %server_name,
+                "MCP SSE request timeout from server (code {})", error.code
+            );
+            return Err(McpRuntimeError::JsonRpc {
+                server: server_name.to_owned(),
+                phase,
+                code: error.code,
+                message: error.message.clone(),
+            });
         }
     }
     Ok(())

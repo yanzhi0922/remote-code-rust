@@ -1,3 +1,6 @@
+#![allow(dead_code)]
+#![allow(clippy::all)]
+#![deny(clippy::dbg_macro, clippy::todo)]
 //! # Roo Provider: Google Gemini & Vertex AI
 //!
 //! Google Gemini and Vertex AI API provider for Roo Code Rust.

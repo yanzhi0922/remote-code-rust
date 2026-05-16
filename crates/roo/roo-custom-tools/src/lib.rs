@@ -1,3 +1,6 @@
+#![allow(dead_code)]
+#![allow(clippy::all)]
+#![deny(clippy::dbg_macro, clippy::todo)]
 //! Roo-custom-tools: Custom tool registry for Roo Code.
 
 pub mod format_native;

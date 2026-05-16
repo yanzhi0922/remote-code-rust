@@ -181,12 +181,12 @@ impl<R> TagMatcher<R> {
         let data: String = self.cached.iter().collect();
         let matched = self.matched;
 
-        if let Some(last) = self.chunks.last() {
-            if last.matched == matched {
-                self.chunks.last_mut().unwrap().data.push_str(&data);
-                self.cached.clear();
-                return;
-            }
+        if let Some(last) = self.chunks.last()
+            && last.matched == matched
+        {
+            self.chunks.last_mut().unwrap().data.push_str(&data);
+            self.cached.clear();
+            return;
         }
 
         self.chunks.push(TagMatcherResult { data, matched });

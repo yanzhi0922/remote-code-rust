@@ -57,34 +57,34 @@ pub fn cleanup_after_truncation(api_history: &[ApiMessage]) -> Vec<ApiMessage> {
             let mut needs_update = false;
 
             // Check for orphaned condense_parent
-            if let Some(ref parent) = msg.condense_parent {
-                if !existing_summary_ids.contains(parent) {
-                    needs_update = true;
-                }
+            if let Some(ref parent) = msg.condense_parent
+                && !existing_summary_ids.contains(parent)
+            {
+                needs_update = true;
             }
 
             // Check for orphaned truncation_parent
-            if let Some(ref parent) = msg.truncation_parent {
-                if !existing_truncation_ids.contains(parent) {
-                    needs_update = true;
-                }
+            if let Some(ref parent) = msg.truncation_parent
+                && !existing_truncation_ids.contains(parent)
+            {
+                needs_update = true;
             }
 
             if needs_update {
                 let mut result = msg.clone();
 
                 // Keep condense_parent only if its summary still exists
-                if let Some(ref parent) = msg.condense_parent {
-                    if !existing_summary_ids.contains(parent) {
-                        result.condense_parent = None;
-                    }
+                if let Some(ref parent) = msg.condense_parent
+                    && !existing_summary_ids.contains(parent)
+                {
+                    result.condense_parent = None;
                 }
 
                 // Keep truncation_parent only if its truncation marker still exists
-                if let Some(ref parent) = msg.truncation_parent {
-                    if !existing_truncation_ids.contains(parent) {
-                        result.truncation_parent = None;
-                    }
+                if let Some(ref parent) = msg.truncation_parent
+                    && !existing_truncation_ids.contains(parent)
+                {
+                    result.truncation_parent = None;
                 }
 
                 result

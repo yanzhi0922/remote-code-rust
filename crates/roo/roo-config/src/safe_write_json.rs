@@ -19,18 +19,10 @@ pub enum SafeWriteJsonError {
 }
 
 /// Options for safe JSON write.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct SafeWriteJsonOptions {
     /// Whether to pretty-print the JSON output with indentation.
     pub pretty_print: bool,
-}
-
-impl Default for SafeWriteJsonOptions {
-    fn default() -> Self {
-        Self {
-            pretty_print: false,
-        }
-    }
 }
 
 /// Safely writes JSON data to a file.

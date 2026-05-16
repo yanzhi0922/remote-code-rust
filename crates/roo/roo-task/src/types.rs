@@ -69,7 +69,9 @@ pub const MCP_TOOL_SEPARATOR: &str = "--";
 /// - `Completed` | `Aborted` | `Delegated` → (terminal, no transitions)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum TaskState {
+    #[default]
     Idle,
     Running,
     Paused,
@@ -120,12 +122,6 @@ impl fmt::Display for TaskState {
             TaskState::Aborted => write!(f, "aborted"),
             TaskState::Delegated => write!(f, "delegated"),
         }
-    }
-}
-
-impl Default for TaskState {
-    fn default() -> Self {
-        Self::Idle
     }
 }
 

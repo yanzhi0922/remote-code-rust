@@ -160,10 +160,9 @@ impl StdioTransport {
 
             // Read the blank line separator
             line.clear();
-            match reader.read_line(&mut line).await {
-                Ok(0) => break,
-                _ => {}
-            };
+            if let Ok(0) = reader.read_line(&mut line).await {
+                break;
+            }
 
             // Read the JSON body
             let mut buf = vec![0u8; content_length];

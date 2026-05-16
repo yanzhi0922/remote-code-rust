@@ -72,7 +72,7 @@ pub fn get_mode_selection(
     ModeSelection {
         role_definition: prompt_component
             .and_then(|pc| pc.role_definition.as_deref())
-            .unwrap_or_else(|| base_mode.role_definition.as_str())
+            .unwrap_or(base_mode.role_definition.as_str())
             .to_string(),
         base_instructions: prompt_component
             .and_then(|pc| pc.custom_instructions.as_deref())

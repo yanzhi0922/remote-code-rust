@@ -348,7 +348,7 @@ impl McpHub {
         }
         tracing::debug!("McpHub: Client unregistered. Ref count: {}", *count);
 
-        if *count <= 0 {
+        if *count == 0 {
             tracing::info!("McpHub: Last client unregistered. Disposing hub.");
             drop(count);
             self.dispose().await?;
@@ -596,15 +596,14 @@ impl McpHub {
                 .map(|c| c.name().to_string())
                 .collect()
         };
-        let new_names: std::collections::HashSet<String> =
-            new_servers.keys().map(|s| s.clone()).collect();
+        let new_names: std::collections::HashSet<String> = new_servers.keys().cloned().collect();
 
         // Delete removed servers
         for name in &current_names {
-            if !new_names.contains(name) {
-                if let Err(e) = self.delete_connection(name, source).await {
-                    tracing::error!("Failed to delete connection '{}': {}", name, e);
-                }
+            if !new_names.contains(name)
+                && let Err(e) = self.delete_connection(name, source).await
+            {
+                tracing::error!("Failed to delete connection '{}': {}", name, e);
             }
         }
 
@@ -625,10 +624,10 @@ impl McpHub {
                 None => {
                     // New server - setup file watcher for enabled servers.
                     // Corresponds to TS: setup file watcher before connectToServer
-                    if let Ok(validated) = validate_server_config(config, Some(name)) {
-                        if !validated.is_disabled() {
-                            self.setup_file_watcher(name, &validated, source);
-                        }
+                    if let Ok(validated) = validate_server_config(config, Some(name))
+                        && !validated.is_disabled()
+                    {
+                        self.setup_file_watcher(name, &validated, source);
                     }
                     if let Err(e) = self.connect_to_server(name, config, source).await {
                         tracing::error!("Failed to connect to new MCP server {}: {}", name, e);
@@ -1440,7 +1439,7 @@ impl McpHub {
                 // Build result from deduplicated connections
                 enabled
                     .into_iter()
-                    .filter(|conn| seen.get(conn.name()).map_or(false, |s| *s == conn.source()))
+                    .filter(|conn| seen.get(conn.name()).is_some_and(|s| *s == conn.source()))
                     .map(|conn| McpServerConnection {
                         name: conn.name().to_string(),
                         status: conn.server().status,
@@ -1497,7 +1496,7 @@ impl McpHub {
         // Build result from deduplicated connections
         let mut servers: Vec<McpServerConnection> = enabled
             .into_iter()
-            .filter(|conn| seen.get(conn.name()).map_or(false, |s| *s == conn.source()))
+            .filter(|conn| seen.get(conn.name()).is_some_and(|s| *s == conn.source()))
             .map(|conn| McpServerConnection {
                 name: conn.name().to_string(),
                 status: conn.server().status,
@@ -1748,29 +1747,28 @@ impl McpHub {
 
             // Setup watchers for custom watchPaths if defined.
             // Corresponds to TS: `if (config.watchPaths && config.watchPaths.length > 0)`
-            if let Some(wp) = watch_paths {
-                if !wp.is_empty() {
-                    for watch_path in wp {
-                        if let Some(handle) = Self::create_path_watcher(
-                            watch_path,
-                            name.to_string(),
-                            source,
-                            weak_hub.clone(),
-                        ) {
-                            watchers.push(handle);
-                        }
+            if let Some(wp) = watch_paths
+                && !wp.is_empty()
+            {
+                for watch_path in wp {
+                    if let Some(handle) = Self::create_path_watcher(
+                        watch_path,
+                        name.to_string(),
+                        source,
+                        weak_hub.clone(),
+                    ) {
+                        watchers.push(handle);
                     }
                 }
             }
 
             // Also setup the fallback build/index.js watcher if applicable.
             // Corresponds to TS: finding `build/index.js` in args
-            if let Some(file_path) = args.iter().find(|arg| arg.contains("build/index.js")) {
-                if let Some(handle) =
+            if let Some(file_path) = args.iter().find(|arg| arg.contains("build/index.js"))
+                && let Some(handle) =
                     Self::create_path_watcher(file_path, name.to_string(), source, weak_hub)
-                {
-                    watchers.push(handle);
-                }
+            {
+                watchers.push(handle);
             }
 
             if !watchers.is_empty() {
@@ -1955,10 +1953,10 @@ impl McpHub {
 
         let mut watcher = match RecommendedWatcher::new(
             move |res: Result<notify::Event, notify::Error>| {
-                if let Ok(event) = res {
-                    if matches!(event.kind, EventKind::Modify(_) | EventKind::Create(_)) {
-                        let _ = tx.send(());
-                    }
+                if let Ok(event) = res
+                    && matches!(event.kind, EventKind::Modify(_) | EventKind::Create(_))
+                {
+                    let _ = tx.send(());
                 }
             },
             NotifyConfig::default(),
@@ -2027,13 +2025,13 @@ impl McpHub {
 
         let mut watcher = match RecommendedWatcher::new(
             move |res: Result<notify::Event, notify::Error>| {
-                if let Ok(event) = res {
-                    if matches!(
+                if let Ok(event) = res
+                    && matches!(
                         event.kind,
                         EventKind::Modify(_) | EventKind::Create(_) | EventKind::Remove(_)
-                    ) {
-                        let _ = tx.send(event.kind);
-                    }
+                    )
+                {
+                    let _ = tx.send(event.kind);
                 }
             },
             NotifyConfig::default(),

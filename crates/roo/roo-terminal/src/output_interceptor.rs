@@ -35,26 +35,26 @@ impl OutputInterceptor {
 
         for line in data.lines() {
             // Apply filter if set
-            if let Some(filter) = self.line_filter {
-                if !filter(line) {
-                    continue;
-                }
+            if let Some(filter) = self.line_filter
+                && !filter(line)
+            {
+                continue;
             }
 
             // Process carriage returns (overwrite current line)
-            if line.contains('\r') {
-                if let Some(pos) = line.rfind('\r') {
-                    let after_cr = &line[pos + 1..];
-                    // Replace last line in buffer
-                    if let Some(last_newline) = buffer.rfind('\n') {
-                        buffer.truncate(last_newline + 1);
-                        buffer.push_str(after_cr);
-                    } else {
-                        buffer.clear();
-                        buffer.push_str(after_cr);
-                    }
-                    continue;
+            if line.contains('\r')
+                && let Some(pos) = line.rfind('\r')
+            {
+                let after_cr = &line[pos + 1..];
+                // Replace last line in buffer
+                if let Some(last_newline) = buffer.rfind('\n') {
+                    buffer.truncate(last_newline + 1);
+                    buffer.push_str(after_cr);
+                } else {
+                    buffer.clear();
+                    buffer.push_str(after_cr);
                 }
+                continue;
             }
 
             if !buffer.is_empty() && !buffer.ends_with('\n') {

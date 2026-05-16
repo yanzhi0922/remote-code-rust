@@ -266,12 +266,12 @@ pub fn parse_responses_api_stream(data: &str) -> Result<Option<ResponseApiEvent>
 
     // Text content deltas
     if event_type == "response.output_text.delta" || event_type == "response.text.delta" {
-        if let Some(delta) = event["delta"].as_str() {
-            if !delta.is_empty() {
-                return Ok(Some(ResponseApiEvent::TextDelta {
-                    delta: delta.to_string(),
-                }));
-            }
+        if let Some(delta) = event["delta"].as_str()
+            && !delta.is_empty()
+        {
+            return Ok(Some(ResponseApiEvent::TextDelta {
+                delta: delta.to_string(),
+            }));
         }
         return Ok(None);
     }
@@ -282,12 +282,12 @@ pub fn parse_responses_api_stream(data: &str) -> Result<Option<ResponseApiEvent>
         || event_type == "response.reasoning_summary_text.delta"
         || event_type == "response.reasoning_summary.delta"
     {
-        if let Some(delta) = event["delta"].as_str() {
-            if !delta.is_empty() {
-                return Ok(Some(ResponseApiEvent::ReasoningDelta {
-                    delta: delta.to_string(),
-                }));
-            }
+        if let Some(delta) = event["delta"].as_str()
+            && !delta.is_empty()
+        {
+            return Ok(Some(ResponseApiEvent::ReasoningDelta {
+                delta: delta.to_string(),
+            }));
         }
         return Ok(None);
     }

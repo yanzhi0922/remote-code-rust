@@ -187,10 +187,9 @@ pub fn extract_text_from_message(message: &VsCodeLmChatMessage) -> String {
                 if !input.is_null()
                     && input.is_object()
                     && input.as_object().map(|o| !o.is_empty()).unwrap_or(false)
+                    && let Ok(s) = serde_json::to_string(input)
                 {
-                    if let Ok(s) = serde_json::to_string(input) {
-                        text.push_str(&s);
-                    }
+                    text.push_str(&s);
                 }
             }
         }
@@ -210,10 +209,10 @@ fn as_object_safe(value: &Value) -> Value {
         return serde_json::json!({});
     }
     if value.is_string() {
-        if let Ok(parsed) = serde_json::from_str::<Value>(value.as_str().unwrap_or("{}")) {
-            if parsed.is_object() {
-                return parsed;
-            }
+        if let Ok(parsed) = serde_json::from_str::<Value>(value.as_str().unwrap_or("{}"))
+            && parsed.is_object()
+        {
+            return parsed;
         }
         return serde_json::json!({});
     }

@@ -250,8 +250,7 @@ fn should_ignore(relative_path: &str, patterns: &[String]) -> bool {
 
         // **/pattern — match at any depth (including root level)
         // Must check before *.ext to avoid ** being caught by *
-        if pat.starts_with("**/") {
-            let suffix = &pat[3..];
+        if let Some(suffix) = pat.strip_prefix("**/") {
             if relative_path == suffix
                 || relative_path.ends_with(&format!("/{}", suffix))
                 || relative_path.ends_with(suffix)
@@ -260,15 +259,14 @@ fn should_ignore(relative_path: &str, patterns: &[String]) -> bool {
             }
         }
         // *.ext pattern
-        else if pat.starts_with('*') {
-            let suffix = &pat[1..]; // e.g., ".rs"
+        else if let Some(suffix) = pat.strip_prefix('*') {
+            // e.g., ".rs"
             if relative_path.ends_with(suffix) {
                 return true;
             }
         }
         // pattern/** — match directory prefix
-        else if pat.ends_with("/**") {
-            let prefix = &pat[..pat.len() - 3];
+        else if let Some(prefix) = pat.strip_suffix("/**") {
             if relative_path.starts_with(prefix) {
                 return true;
             }

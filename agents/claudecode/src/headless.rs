@@ -657,8 +657,8 @@ impl ChannelPermissionFallbackBroker {
                 warn!("failed to emit state change: {error}");
             }
             if let Err(error) = emitter.emit_permission_request(PermissionRequestPayload {
-                request_id: request_id.clone().into(),
-                tool_name: request.tool_name.clone().into(),
+                request_id: request_id.clone(),
+                tool_name: request.tool_name.clone(),
                 tool_use_id: request.tool_use_id.unwrap_or_default(),
                 title: request.title.unwrap_or_default(),
                 description: request.description.unwrap_or_default(),

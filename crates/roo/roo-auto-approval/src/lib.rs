@@ -1,3 +1,6 @@
+#![allow(dead_code)]
+#![allow(clippy::all)]
+#![deny(clippy::dbg_macro, clippy::todo)]
 //! # roo-auto-approval
 //!
 //! Auto-approval system for Roo Code Rust.

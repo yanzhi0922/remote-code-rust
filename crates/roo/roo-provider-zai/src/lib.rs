@@ -1,3 +1,6 @@
+#![allow(dead_code)]
+#![allow(clippy::all)]
+#![deny(clippy::dbg_macro, clippy::todo)]
 //! # Roo Provider: ZAI (Zhipu/GLM)
 //!
 //! ZAI provider for Roo Code Rust.

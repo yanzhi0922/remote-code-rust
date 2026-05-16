@@ -143,9 +143,8 @@ fn check_is_anthropic_context_error(error: &ProviderError) -> bool {
     let is_anthropic_invalid_request = match error {
         ProviderError::ApiErrorResponse(provider, _status, msg) => {
             // Anthropic errors come through as ApiErrorResponse.
-            let is_anthropic_provider = provider.to_lowercase().contains("anthropic")
-                || msg.contains("invalid_request_error");
-            is_anthropic_provider
+
+            provider.to_lowercase().contains("anthropic") || msg.contains("invalid_request_error")
         }
         ProviderError::ApiError(_, msg) => msg.contains("invalid_request_error"),
         ProviderError::Other(msg) => msg.contains("invalid_request_error"),

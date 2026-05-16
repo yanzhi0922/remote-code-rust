@@ -1,3 +1,6 @@
+#![allow(dead_code)]
+#![allow(clippy::all)]
+#![deny(clippy::dbg_macro, clippy::todo)]
 //! # roo-mentions — @ Mention Parsing and Processing
 //!
 //! This crate provides the @ mention parsing and processing infrastructure for

@@ -1,6 +1,7 @@
 // Rust 2024 surfaces this lint across the crate; keep the edition bump separate
 // from the eventual unsafe cleanup.
 #![allow(unsafe_op_in_unsafe_fn)]
+#![allow(clippy::not_unsafe_ptr_arg_deref)]
 
 #[cfg(any(target_os = "windows", test))]
 mod ssh_config_dependencies;

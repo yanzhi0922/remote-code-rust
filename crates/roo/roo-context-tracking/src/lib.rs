@@ -1,3 +1,6 @@
+#![allow(dead_code)]
+#![allow(clippy::all)]
+#![deny(clippy::dbg_macro, clippy::todo)]
 //! File context tracking for Roo Code Rust.
 //!
 //! This crate tracks file operations that may result in stale context.

@@ -299,17 +299,17 @@ fn build_detailed_error(
     let mut diagnostics = Vec::new();
 
     // Check if old_string first line exists somewhere
-    if let Some(first_line) = old_string.lines().next() {
-        if content.contains(first_line) {
-            diagnostics.push(format!(
-                "  - First line of old_string found in file: \"{}\"",
-                if first_line.len() > 80 {
-                    format!("{}...", &first_line[..80])
-                } else {
-                    first_line.to_string()
-                }
-            ));
-        }
+    if let Some(first_line) = old_string.lines().next()
+        && content.contains(first_line)
+    {
+        diagnostics.push(format!(
+            "  - First line of old_string found in file: \"{}\"",
+            if first_line.len() > 80 {
+                format!("{}...", &first_line[..80])
+            } else {
+                first_line.to_string()
+            }
+        ));
     }
 
     // Check whitespace-tolerant regex diagnostics

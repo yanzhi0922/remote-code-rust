@@ -3,6 +3,7 @@
 use async_trait::async_trait;
 use tokio::sync::mpsc;
 use tokio_tungstenite::Connector;
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::{connect_async_tls_with_config, tungstenite};
 
 use crate::reconnect::ReconnectPolicy;
@@ -44,19 +45,15 @@ impl RemoteTransport for DirectWsTransport {
         self.config = Some(config.clone());
         self.state = ConnectionState::Connecting;
 
-        let ws_url = build_runner_ws_url(
-            &runner_url,
-            &config.session_id,
-            config.after_sequence,
-            &config.auth_token,
-        );
+        let ws_url = build_runner_ws_url(&runner_url, &config.session_id, config.after_sequence);
+        let request = build_authenticated_ws_request(&ws_url, &config.auth_token)?;
 
         // Build a real TLS connector from the config so self-signed certs
         // and fingerprint pinning actually work for direct connections.
         let tls_config = crate::tls::build_client_tls_config(&config.tls)?;
         let connector = Some(Connector::Rustls(tls_config));
 
-        let (stream, _response) = connect_async_tls_with_config(&ws_url, None, false, connector)
+        let (stream, _response) = connect_async_tls_with_config(request, None, false, connector)
             .await
             .map_err(|e| {
                 self.state = ConnectionState::Error(e.to_string());
@@ -162,11 +159,23 @@ impl RemoteTransport for DirectWsTransport {
     }
 }
 
-fn build_runner_ws_url(runner_url: &str, session_id: &str, after: u64, token: &str) -> String {
+fn build_runner_ws_url(runner_url: &str, session_id: &str, after: u64) -> String {
     let ws_base = runner_url
         .replace("https://", "wss://")
         .replace("http://", "ws://");
-    format!("{ws_base}/v1/sessions/{session_id}/events/stream?after={after}&access_token={token}")
+    format!("{ws_base}/v1/sessions/{session_id}/events/stream?after={after}")
+}
+
+pub(crate) fn build_authenticated_ws_request(
+    ws_url: &str,
+    token: &str,
+) -> anyhow::Result<tungstenite::handshake::client::Request> {
+    let mut request = ws_url.into_client_request()?;
+    let auth_value = format!("Bearer {token}").parse()?;
+    request
+        .headers_mut()
+        .insert(tungstenite::http::header::AUTHORIZATION, auth_value);
+    Ok(request)
 }
 
 pub(crate) async fn read_ws_events(

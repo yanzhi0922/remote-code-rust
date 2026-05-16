@@ -198,17 +198,21 @@ function formatRelativeTime(iso: string): string {
 
 function ArchiveRow({
   session,
+  privacyMode,
   onRestore,
 }: {
   session: SessionSummary;
+  privacyMode: boolean;
   onRestore: () => void;
 }) {
   return (
     <div className="flex items-center gap-3 rounded-[24px] border border-transparent bg-[#f5f1e9] px-4 py-3">
       <div className="min-w-0 flex-1">
-        <div className="truncate text-sm font-semibold text-slate-800">{session.title}</div>
+        <div className="truncate text-sm font-semibold text-slate-800">
+          {privacyMode ? '会话已隐藏' : session.title}
+        </div>
         <div className="mt-1 truncate text-xs text-slate-500">
-          {session.cwd}
+          {privacyMode ? '路径已隐藏' : session.cwd}
         </div>
         <div className="mt-1 text-[11px] text-slate-500">
           {session.provider_name}
@@ -230,6 +234,7 @@ function ArchiveRow({
 function ArchiveTab() {
   const archivedSessions = useAppStore((state) => state.archivedSessions);
   const restoreSession = useAppStore((state) => state.restoreSession);
+  const privacyMode = useAppStore((state) => state.workspacePrivacyMode);
 
   return (
     <div className="space-y-5">
@@ -246,6 +251,7 @@ function ArchiveTab() {
             <ArchiveRow
               key={session.id}
               session={session}
+              privacyMode={privacyMode}
               onRestore={() => {
                 void restoreSession(session.id);
               }}

@@ -1,0 +1,13 @@
+[advisories]
+# Accepted 2026-05-16:
+# hickory-proto 0.25.2 is pulled through rama 0.3.0-alpha.4 in codex-network-proxy.
+# No fixed 0.25.x release exists; revisit when rama upgrades to hickory 0.26.
+#
+# rsa 0.9.10 is pulled through sqlx's optional MySQL dependency graph in Cargo.lock.
+# The application uses SQLite-only sqlx features; remove this ignore when sqlx no
+# longer resolves sqlx-mysql/rsa into the workspace lockfile.
+ignore = [
+    "RUSTSEC-2026-0118",
+    "RUSTSEC-2026-0119",
+    "RUSTSEC-2023-0071",
+]

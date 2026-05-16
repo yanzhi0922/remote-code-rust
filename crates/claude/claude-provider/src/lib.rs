@@ -1,4 +1,5 @@
 //! LLM provider client with retry logic and message formatting.
+#![allow(clippy::doc_lazy_continuation, clippy::option_map_unit_fn)]
 //!
 //! Supports OpenAI, Anthropic, Amazon Bedrock, and Google Vertex AI protocols.
 //! Handles message conversion, response parsing, exponential back-off retries,

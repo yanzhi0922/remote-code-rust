@@ -167,30 +167,30 @@ impl NativeToolCallParser {
                         .iter()
                         .filter_map(|range| {
                             // Handle tuple format: [start, end]
-                            if let Some(arr) = range.as_array() {
-                                if arr.len() >= 2 {
-                                    let start = arr[0].as_f64().unwrap_or(0.0) as u64;
-                                    let end = arr[1].as_f64().unwrap_or(0.0) as u64;
-                                    return Some(json!({"start": start, "end": end}));
-                                }
+                            if let Some(arr) = range.as_array()
+                                && arr.len() >= 2
+                            {
+                                let start = arr[0].as_f64().unwrap_or(0.0) as u64;
+                                let end = arr[1].as_f64().unwrap_or(0.0) as u64;
+                                return Some(json!({"start": start, "end": end}));
                             }
                             // Handle object format: { start: number, end: number }
-                            if let Some(obj) = range.as_object() {
-                                if let (Some(s), Some(e)) = (obj.get("start"), obj.get("end")) {
-                                    let start = s.as_f64().unwrap_or(0.0) as u64;
-                                    let end = e.as_f64().unwrap_or(0.0) as u64;
-                                    return Some(json!({"start": start, "end": end}));
-                                }
+                            if let Some(obj) = range.as_object()
+                                && let (Some(s), Some(e)) = (obj.get("start"), obj.get("end"))
+                            {
+                                let start = s.as_f64().unwrap_or(0.0) as u64;
+                                let end = e.as_f64().unwrap_or(0.0) as u64;
+                                return Some(json!({"start": start, "end": end}));
                             }
                             // Handle legacy string format: "1-50"
                             if let Some(s) = range.as_str() {
                                 let re = regex::Regex::new(r"^(\d+)-(\d+)$").ok();
-                                if let Some(re) = re {
-                                    if let Some(caps) = re.captures(s) {
-                                        let start: u64 = caps[1].parse().unwrap_or(0);
-                                        let end: u64 = caps[2].parse().unwrap_or(0);
-                                        return Some(json!({"start": start, "end": end}));
-                                    }
+                                if let Some(re) = re
+                                    && let Some(caps) = re.captures(s)
+                                {
+                                    let start: u64 = caps[1].parse().unwrap_or(0);
+                                    let end: u64 = caps[2].parse().unwrap_or(0);
+                                    return Some(json!({"start": start, "end": end}));
                                 }
                             }
                             None
@@ -245,15 +245,15 @@ impl NativeToolCallParser {
 
         // Initialize new tool call tracking when we receive an id
         let tracked = if let Some(id) = id {
-            if !self.raw_chunk_tracker.contains_key(&index) {
+            self.raw_chunk_tracker.entry(index).or_insert_with(|| {
                 let entry = RawChunkTrackerEntry {
                     id: id.to_string(),
                     name: name.unwrap_or("").to_string(),
                     has_started: false,
                     delta_buffer: Vec::new(),
                 };
-                self.raw_chunk_tracker.insert(index, entry);
-            }
+                entry
+            });
             self.raw_chunk_tracker.get_mut(&index)
         } else {
             self.raw_chunk_tracker.get_mut(&index)
@@ -416,10 +416,7 @@ impl NativeToolCallParser {
         // Try to parse whatever we can from the incomplete JSON
         // In TS this uses partial-json-parser. Here we try a simple approach:
         // try full parse, and if that fails, try to fix common issues.
-        let partial_args = match Self::try_parse_partial_json(&tool_call.arguments_accumulator) {
-            Some(v) => v,
-            None => return None,
-        };
+        let partial_args = Self::try_parse_partial_json(&tool_call.arguments_accumulator)?;
 
         // Resolve tool alias to canonical name
         let resolved_name = Self::resolve_tool_alias(&tool_call.name);
@@ -451,13 +448,12 @@ impl NativeToolCallParser {
         let tool_call = self.streaming_tool_calls.remove(id)?;
 
         // Parse the complete accumulated JSON via parseToolCall
-        let result = self.parse_tool_call(
+
+        self.parse_tool_call(
             &tool_call.id,
             &tool_call.name,
             &tool_call.arguments_accumulator,
-        );
-
-        result
+        )
     }
 
     // ===================================================================
@@ -663,12 +659,11 @@ impl NativeToolCallParser {
         let mut used_legacy_format = false;
 
         // Check for legacy format (read_file with files array)
-        if resolved_name == "read_file" {
-            if let Some(obj) = args.as_object() {
-                if obj.contains_key("files") {
-                    used_legacy_format = true;
-                }
-            }
+        if resolved_name == "read_file"
+            && let Some(obj) = args.as_object()
+            && obj.contains_key("files")
+        {
+            used_legacy_format = true;
         }
 
         // Native-only: core tools must always have typed nativeArgs
@@ -687,7 +682,7 @@ impl NativeToolCallParser {
             params,
             partial: false, // Native tool calls are always complete when yielded
             id: id.to_string(),
-            native_args: native_args,
+            native_args,
             original_name: if name != resolved_name {
                 Some(name.to_string())
             } else {
@@ -763,46 +758,46 @@ impl NativeToolCallParser {
             // -----------------------------------------------------------------
             "read_file" => {
                 // Check for legacy format first: { files: [...] }
-                if let Some(obj) = obj {
-                    if let Some(files_val) = obj.get("files") {
-                        let files_array = Self::extract_files_array(files_val);
-                        if let Some(files) = files_array {
-                            if !files.is_empty() {
-                                return Some(json!({
-                                    "files": Self::convert_file_entries(&files),
-                                    "_legacyFormat": true,
-                                }));
-                            }
-                        }
+                if let Some(obj) = obj
+                    && let Some(files_val) = obj.get("files")
+                {
+                    let files_array = Self::extract_files_array(files_val);
+                    if let Some(files) = files_array
+                        && !files.is_empty()
+                    {
+                        return Some(json!({
+                            "files": Self::convert_file_entries(&files),
+                            "_legacyFormat": true,
+                        }));
                     }
                 }
                 // New format: { path: "...", mode: "..." }
-                if let Some(obj) = obj {
-                    if let Some(path) = obj.get("path") {
-                        let indentation = if let Some(indent) = obj.get("indentation") {
-                            if indent.is_object() {
-                                Some(json!({
-                                    "anchor_line": indent.get("anchor_line").and_then(|v| Self::coerce_optional_number(v)),
-                                    "max_levels": indent.get("max_levels").and_then(|v| Self::coerce_optional_number(v)),
-                                    "max_lines": indent.get("max_lines").and_then(|v| Self::coerce_optional_number(v)),
-                                    "include_siblings": indent.get("include_siblings").and_then(|v| Self::coerce_optional_boolean(v)),
-                                    "include_header": indent.get("include_header").and_then(|v| Self::coerce_optional_boolean(v)),
-                                }))
-                            } else {
-                                None
-                            }
+                if let Some(obj) = obj
+                    && let Some(path) = obj.get("path")
+                {
+                    let indentation = if let Some(indent) = obj.get("indentation") {
+                        if indent.is_object() {
+                            Some(json!({
+                                "anchor_line": indent.get("anchor_line").and_then(Self::coerce_optional_number),
+                                "max_levels": indent.get("max_levels").and_then(Self::coerce_optional_number),
+                                "max_lines": indent.get("max_lines").and_then(Self::coerce_optional_number),
+                                "include_siblings": indent.get("include_siblings").and_then(Self::coerce_optional_boolean),
+                                "include_header": indent.get("include_header").and_then(Self::coerce_optional_boolean),
+                            }))
                         } else {
                             None
-                        };
+                        }
+                    } else {
+                        None
+                    };
 
-                        return Some(json!({
-                            "path": path,
-                            "mode": obj.get("mode"),
-                            "offset": obj.get("offset").and_then(|v| Self::coerce_optional_number(v)),
-                            "limit": obj.get("limit").and_then(|v| Self::coerce_optional_number(v)),
-                            "indentation": indentation,
-                        }));
-                    }
+                    return Some(json!({
+                        "path": path,
+                        "mode": obj.get("mode"),
+                        "offset": obj.get("offset").and_then(Self::coerce_optional_number),
+                        "limit": obj.get("limit").and_then(Self::coerce_optional_number),
+                        "indentation": indentation,
+                    }));
                 }
                 None
             }
@@ -811,12 +806,12 @@ impl NativeToolCallParser {
             // attempt_completion
             // -----------------------------------------------------------------
             "attempt_completion" => {
-                if let Some(obj) = obj {
-                    if obj.contains_key("result") {
-                        return Some(json!({
-                            "result": obj.get("result"),
-                        }));
-                    }
+                if let Some(obj) = obj
+                    && obj.contains_key("result")
+                {
+                    return Some(json!({
+                        "result": obj.get("result"),
+                    }));
                 }
                 None
             }
@@ -825,14 +820,14 @@ impl NativeToolCallParser {
             // execute_command
             // -----------------------------------------------------------------
             "execute_command" => {
-                if let Some(obj) = obj {
-                    if obj.contains_key("command") {
-                        return Some(json!({
-                            "command": obj.get("command"),
-                            "cwd": obj.get("cwd"),
-                            "timeout": obj.get("timeout"),
-                        }));
-                    }
+                if let Some(obj) = obj
+                    && obj.contains_key("command")
+                {
+                    return Some(json!({
+                        "command": obj.get("command"),
+                        "cwd": obj.get("cwd"),
+                        "timeout": obj.get("timeout"),
+                    }));
                 }
                 None
             }
@@ -841,13 +836,14 @@ impl NativeToolCallParser {
             // apply_diff
             // -----------------------------------------------------------------
             "apply_diff" => {
-                if let Some(obj) = obj {
-                    if obj.contains_key("path") && obj.contains_key("diff") {
-                        return Some(json!({
-                            "path": obj.get("path"),
-                            "diff": obj.get("diff"),
-                        }));
-                    }
+                if let Some(obj) = obj
+                    && obj.contains_key("path")
+                    && obj.contains_key("diff")
+                {
+                    return Some(json!({
+                        "path": obj.get("path"),
+                        "diff": obj.get("diff"),
+                    }));
                 }
                 None
             }
@@ -856,18 +852,17 @@ impl NativeToolCallParser {
             // edit / search_and_replace (alias)
             // -----------------------------------------------------------------
             "edit" | "search_and_replace" => {
-                if let Some(obj) = obj {
-                    if obj.contains_key("file_path")
-                        && obj.contains_key("old_string")
-                        && obj.contains_key("new_string")
-                    {
-                        return Some(json!({
-                            "file_path": obj.get("file_path"),
-                            "old_string": obj.get("old_string"),
-                            "new_string": obj.get("new_string"),
-                            "replace_all": obj.get("replace_all").and_then(|v| Self::coerce_optional_boolean(v)),
-                        }));
-                    }
+                if let Some(obj) = obj
+                    && obj.contains_key("file_path")
+                    && obj.contains_key("old_string")
+                    && obj.contains_key("new_string")
+                {
+                    return Some(json!({
+                        "file_path": obj.get("file_path"),
+                        "old_string": obj.get("old_string"),
+                        "new_string": obj.get("new_string"),
+                        "replace_all": obj.get("replace_all").and_then(Self::coerce_optional_boolean),
+                    }));
                 }
                 None
             }
@@ -876,13 +871,14 @@ impl NativeToolCallParser {
             // ask_followup_question
             // -----------------------------------------------------------------
             "ask_followup_question" => {
-                if let Some(obj) = obj {
-                    if obj.contains_key("question") && obj.contains_key("follow_up") {
-                        return Some(json!({
-                            "question": obj.get("question"),
-                            "follow_up": obj.get("follow_up"),
-                        }));
-                    }
+                if let Some(obj) = obj
+                    && obj.contains_key("question")
+                    && obj.contains_key("follow_up")
+                {
+                    return Some(json!({
+                        "question": obj.get("question"),
+                        "follow_up": obj.get("follow_up"),
+                    }));
                 }
                 None
             }
@@ -891,13 +887,13 @@ impl NativeToolCallParser {
             // codebase_search
             // -----------------------------------------------------------------
             "codebase_search" => {
-                if let Some(obj) = obj {
-                    if obj.contains_key("query") {
-                        return Some(json!({
-                            "query": obj.get("query"),
-                            "path": obj.get("path"),
-                        }));
-                    }
+                if let Some(obj) = obj
+                    && obj.contains_key("query")
+                {
+                    return Some(json!({
+                        "query": obj.get("query"),
+                        "path": obj.get("path"),
+                    }));
                 }
                 None
             }
@@ -906,14 +902,15 @@ impl NativeToolCallParser {
             // generate_image
             // -----------------------------------------------------------------
             "generate_image" => {
-                if let Some(obj) = obj {
-                    if obj.contains_key("prompt") && obj.contains_key("path") {
-                        return Some(json!({
-                            "prompt": obj.get("prompt"),
-                            "path": obj.get("path"),
-                            "image": obj.get("image"),
-                        }));
-                    }
+                if let Some(obj) = obj
+                    && obj.contains_key("prompt")
+                    && obj.contains_key("path")
+                {
+                    return Some(json!({
+                        "prompt": obj.get("prompt"),
+                        "path": obj.get("path"),
+                        "image": obj.get("image"),
+                    }));
                 }
                 None
             }
@@ -922,13 +919,13 @@ impl NativeToolCallParser {
             // run_slash_command
             // -----------------------------------------------------------------
             "run_slash_command" => {
-                if let Some(obj) = obj {
-                    if obj.contains_key("command") {
-                        return Some(json!({
-                            "command": obj.get("command"),
-                            "args": obj.get("args"),
-                        }));
-                    }
+                if let Some(obj) = obj
+                    && obj.contains_key("command")
+                {
+                    return Some(json!({
+                        "command": obj.get("command"),
+                        "args": obj.get("args"),
+                    }));
                 }
                 None
             }
@@ -937,13 +934,13 @@ impl NativeToolCallParser {
             // skill
             // -----------------------------------------------------------------
             "skill" => {
-                if let Some(obj) = obj {
-                    if obj.contains_key("skill") {
-                        return Some(json!({
-                            "skill": obj.get("skill"),
-                            "args": obj.get("args"),
-                        }));
-                    }
+                if let Some(obj) = obj
+                    && obj.contains_key("skill")
+                {
+                    return Some(json!({
+                        "skill": obj.get("skill"),
+                        "args": obj.get("args"),
+                    }));
                 }
                 None
             }
@@ -952,14 +949,15 @@ impl NativeToolCallParser {
             // search_files
             // -----------------------------------------------------------------
             "search_files" => {
-                if let Some(obj) = obj {
-                    if obj.contains_key("path") && obj.contains_key("regex") {
-                        return Some(json!({
-                            "path": obj.get("path"),
-                            "regex": obj.get("regex"),
-                            "file_pattern": obj.get("file_pattern"),
-                        }));
-                    }
+                if let Some(obj) = obj
+                    && obj.contains_key("path")
+                    && obj.contains_key("regex")
+                {
+                    return Some(json!({
+                        "path": obj.get("path"),
+                        "regex": obj.get("regex"),
+                        "file_pattern": obj.get("file_pattern"),
+                    }));
                 }
                 None
             }
@@ -968,13 +966,14 @@ impl NativeToolCallParser {
             // switch_mode
             // -----------------------------------------------------------------
             "switch_mode" => {
-                if let Some(obj) = obj {
-                    if obj.contains_key("mode_slug") && obj.contains_key("reason") {
-                        return Some(json!({
-                            "mode_slug": obj.get("mode_slug"),
-                            "reason": obj.get("reason"),
-                        }));
-                    }
+                if let Some(obj) = obj
+                    && obj.contains_key("mode_slug")
+                    && obj.contains_key("reason")
+                {
+                    return Some(json!({
+                        "mode_slug": obj.get("mode_slug"),
+                        "reason": obj.get("reason"),
+                    }));
                 }
                 None
             }
@@ -983,12 +982,12 @@ impl NativeToolCallParser {
             // update_todo_list
             // -----------------------------------------------------------------
             "update_todo_list" => {
-                if let Some(obj) = obj {
-                    if obj.contains_key("todos") {
-                        return Some(json!({
-                            "todos": obj.get("todos"),
-                        }));
-                    }
+                if let Some(obj) = obj
+                    && obj.contains_key("todos")
+                {
+                    return Some(json!({
+                        "todos": obj.get("todos"),
+                    }));
                 }
                 None
             }
@@ -997,15 +996,15 @@ impl NativeToolCallParser {
             // read_command_output
             // -----------------------------------------------------------------
             "read_command_output" => {
-                if let Some(obj) = obj {
-                    if obj.contains_key("artifact_id") {
-                        return Some(json!({
-                            "artifact_id": obj.get("artifact_id"),
-                            "search": obj.get("search"),
-                            "offset": obj.get("offset"),
-                            "limit": obj.get("limit"),
-                        }));
-                    }
+                if let Some(obj) = obj
+                    && obj.contains_key("artifact_id")
+                {
+                    return Some(json!({
+                        "artifact_id": obj.get("artifact_id"),
+                        "search": obj.get("search"),
+                        "offset": obj.get("offset"),
+                        "limit": obj.get("limit"),
+                    }));
                 }
                 None
             }
@@ -1014,13 +1013,14 @@ impl NativeToolCallParser {
             // write_to_file
             // -----------------------------------------------------------------
             "write_to_file" => {
-                if let Some(obj) = obj {
-                    if obj.contains_key("path") && obj.contains_key("content") {
-                        return Some(json!({
-                            "path": obj.get("path"),
-                            "content": obj.get("content"),
-                        }));
-                    }
+                if let Some(obj) = obj
+                    && obj.contains_key("path")
+                    && obj.contains_key("content")
+                {
+                    return Some(json!({
+                        "path": obj.get("path"),
+                        "content": obj.get("content"),
+                    }));
                 }
                 None
             }
@@ -1029,14 +1029,15 @@ impl NativeToolCallParser {
             // use_mcp_tool
             // -----------------------------------------------------------------
             "use_mcp_tool" => {
-                if let Some(obj) = obj {
-                    if obj.contains_key("server_name") && obj.contains_key("tool_name") {
-                        return Some(json!({
-                            "server_name": obj.get("server_name"),
-                            "tool_name": obj.get("tool_name"),
-                            "arguments": obj.get("arguments"),
-                        }));
-                    }
+                if let Some(obj) = obj
+                    && obj.contains_key("server_name")
+                    && obj.contains_key("tool_name")
+                {
+                    return Some(json!({
+                        "server_name": obj.get("server_name"),
+                        "tool_name": obj.get("tool_name"),
+                        "arguments": obj.get("arguments"),
+                    }));
                 }
                 None
             }
@@ -1045,13 +1046,14 @@ impl NativeToolCallParser {
             // access_mcp_resource
             // -----------------------------------------------------------------
             "access_mcp_resource" => {
-                if let Some(obj) = obj {
-                    if obj.contains_key("server_name") && obj.contains_key("uri") {
-                        return Some(json!({
-                            "server_name": obj.get("server_name"),
-                            "uri": obj.get("uri"),
-                        }));
-                    }
+                if let Some(obj) = obj
+                    && obj.contains_key("server_name")
+                    && obj.contains_key("uri")
+                {
+                    return Some(json!({
+                        "server_name": obj.get("server_name"),
+                        "uri": obj.get("uri"),
+                    }));
                 }
                 None
             }
@@ -1060,12 +1062,12 @@ impl NativeToolCallParser {
             // apply_patch
             // -----------------------------------------------------------------
             "apply_patch" => {
-                if let Some(obj) = obj {
-                    if obj.contains_key("patch") {
-                        return Some(json!({
-                            "patch": obj.get("patch"),
-                        }));
-                    }
+                if let Some(obj) = obj
+                    && obj.contains_key("patch")
+                {
+                    return Some(json!({
+                        "patch": obj.get("patch"),
+                    }));
                 }
                 None
             }
@@ -1074,17 +1076,16 @@ impl NativeToolCallParser {
             // search_replace (legacy alias)
             // -----------------------------------------------------------------
             "search_replace" => {
-                if let Some(obj) = obj {
-                    if obj.contains_key("file_path")
-                        && obj.contains_key("old_string")
-                        && obj.contains_key("new_string")
-                    {
-                        return Some(json!({
-                            "file_path": obj.get("file_path"),
-                            "old_string": obj.get("old_string"),
-                            "new_string": obj.get("new_string"),
-                        }));
-                    }
+                if let Some(obj) = obj
+                    && obj.contains_key("file_path")
+                    && obj.contains_key("old_string")
+                    && obj.contains_key("new_string")
+                {
+                    return Some(json!({
+                        "file_path": obj.get("file_path"),
+                        "old_string": obj.get("old_string"),
+                        "new_string": obj.get("new_string"),
+                    }));
                 }
                 None
             }
@@ -1093,18 +1094,17 @@ impl NativeToolCallParser {
             // edit_file
             // -----------------------------------------------------------------
             "edit_file" => {
-                if let Some(obj) = obj {
-                    if obj.contains_key("file_path")
-                        && obj.contains_key("old_string")
-                        && obj.contains_key("new_string")
-                    {
-                        return Some(json!({
-                            "file_path": obj.get("file_path"),
-                            "old_string": obj.get("old_string"),
-                            "new_string": obj.get("new_string"),
-                            "expected_replacements": obj.get("expected_replacements"),
-                        }));
-                    }
+                if let Some(obj) = obj
+                    && obj.contains_key("file_path")
+                    && obj.contains_key("old_string")
+                    && obj.contains_key("new_string")
+                {
+                    return Some(json!({
+                        "file_path": obj.get("file_path"),
+                        "old_string": obj.get("old_string"),
+                        "new_string": obj.get("new_string"),
+                        "expected_replacements": obj.get("expected_replacements"),
+                    }));
                 }
                 None
             }
@@ -1113,13 +1113,13 @@ impl NativeToolCallParser {
             // list_files
             // -----------------------------------------------------------------
             "list_files" => {
-                if let Some(obj) = obj {
-                    if obj.contains_key("path") {
-                        return Some(json!({
-                            "path": obj.get("path"),
-                            "recursive": obj.get("recursive").and_then(|v| Self::coerce_optional_boolean(v)),
-                        }));
-                    }
+                if let Some(obj) = obj
+                    && obj.contains_key("path")
+                {
+                    return Some(json!({
+                        "path": obj.get("path"),
+                        "recursive": obj.get("recursive").and_then(Self::coerce_optional_boolean),
+                    }));
                 }
                 None
             }
@@ -1128,14 +1128,15 @@ impl NativeToolCallParser {
             // new_task
             // -----------------------------------------------------------------
             "new_task" => {
-                if let Some(obj) = obj {
-                    if obj.contains_key("mode") && obj.contains_key("message") {
-                        return Some(json!({
-                            "mode": obj.get("mode"),
-                            "message": obj.get("message"),
-                            "todos": obj.get("todos"),
-                        }));
-                    }
+                if let Some(obj) = obj
+                    && obj.contains_key("mode")
+                    && obj.contains_key("message")
+                {
+                    return Some(json!({
+                        "mode": obj.get("mode"),
+                        "message": obj.get("message"),
+                        "todos": obj.get("todos"),
+                    }));
                 }
                 None
             }
@@ -1155,20 +1156,18 @@ impl NativeToolCallParser {
     /// Source: TS `parseToolCall()` — read_file legacy format handling
     fn extract_files_array(files_val: &Value) -> Option<Vec<Value>> {
         // Handle array directly
-        if let Some(arr) = files_val.as_array() {
-            if !arr.is_empty() {
-                return Some(arr.clone());
-            }
+        if let Some(arr) = files_val.as_array()
+            && !arr.is_empty()
+        {
+            return Some(arr.clone());
         }
         // Handle double-stringified case: files is a string containing JSON array
-        if let Some(s) = files_val.as_str() {
-            if let Ok(parsed) = serde_json::from_str::<Value>(s) {
-                if let Some(arr) = parsed.as_array() {
-                    if !arr.is_empty() {
-                        return Some(arr.clone());
-                    }
-                }
-            }
+        if let Some(s) = files_val.as_str()
+            && let Ok(parsed) = serde_json::from_str::<Value>(s)
+            && let Some(arr) = parsed.as_array()
+            && !arr.is_empty()
+        {
+            return Some(arr.clone());
         }
         None
     }
@@ -1244,13 +1243,13 @@ impl NativeToolCallParser {
                 // Check for legacy format first: { files: [...] }
                 if let Some(files_val) = partial_args.get("files") {
                     let files_array = Self::extract_files_array(files_val);
-                    if let Some(files) = files_array {
-                        if !files.is_empty() {
-                            return Some(json!({
-                                "files": Self::convert_file_entries(&files),
-                                "_legacyFormat": true,
-                            }));
-                        }
+                    if let Some(files) = files_array
+                        && !files.is_empty()
+                    {
+                        return Some(json!({
+                            "files": Self::convert_file_entries(&files),
+                            "_legacyFormat": true,
+                        }));
                     }
                 }
                 // New format: { path: "...", mode: "..." }
@@ -1258,11 +1257,11 @@ impl NativeToolCallParser {
                     let indentation = if let Some(indent) = partial_args.get("indentation") {
                         if indent.is_object() {
                             Some(json!({
-                                "anchor_line": indent.get("anchor_line").and_then(|v| Self::coerce_optional_number(v)),
-                                "max_levels": indent.get("max_levels").and_then(|v| Self::coerce_optional_number(v)),
-                                "max_lines": indent.get("max_lines").and_then(|v| Self::coerce_optional_number(v)),
-                                "include_siblings": indent.get("include_siblings").and_then(|v| Self::coerce_optional_boolean(v)),
-                                "include_header": indent.get("include_header").and_then(|v| Self::coerce_optional_boolean(v)),
+                                "anchor_line": indent.get("anchor_line").and_then(Self::coerce_optional_number),
+                                "max_levels": indent.get("max_levels").and_then(Self::coerce_optional_number),
+                                "max_lines": indent.get("max_lines").and_then(Self::coerce_optional_number),
+                                "include_siblings": indent.get("include_siblings").and_then(Self::coerce_optional_boolean),
+                                "include_header": indent.get("include_header").and_then(Self::coerce_optional_boolean),
                             }))
                         } else {
                             None
@@ -1274,8 +1273,8 @@ impl NativeToolCallParser {
                     return Some(json!({
                         "path": partial_args.get("path"),
                         "mode": partial_args.get("mode"),
-                        "offset": partial_args.get("offset").and_then(|v| Self::coerce_optional_number(v)),
-                        "limit": partial_args.get("limit").and_then(|v| Self::coerce_optional_number(v)),
+                        "offset": partial_args.get("offset").and_then(Self::coerce_optional_number),
+                        "limit": partial_args.get("limit").and_then(Self::coerce_optional_number),
                         "indentation": indentation,
                     }));
                 }
@@ -1496,7 +1495,7 @@ impl NativeToolCallParser {
                         "file_path": partial_args.get("file_path"),
                         "old_string": partial_args.get("old_string"),
                         "new_string": partial_args.get("new_string"),
-                        "replace_all": partial_args.get("replace_all").and_then(|v| Self::coerce_optional_boolean(v)),
+                        "replace_all": partial_args.get("replace_all").and_then(Self::coerce_optional_boolean),
                     }));
                 }
                 None
@@ -1527,7 +1526,7 @@ impl NativeToolCallParser {
                 if partial_args.contains_key("path") {
                     return Some(json!({
                         "path": partial_args.get("path"),
-                        "recursive": partial_args.get("recursive").and_then(|v| Self::coerce_optional_boolean(v)),
+                        "recursive": partial_args.get("recursive").and_then(Self::coerce_optional_boolean),
                     }));
                 }
                 None

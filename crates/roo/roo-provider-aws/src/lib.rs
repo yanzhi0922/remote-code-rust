@@ -1,3 +1,6 @@
+#![allow(dead_code)]
+#![allow(clippy::all)]
+#![deny(clippy::dbg_macro, clippy::todo)]
 //! # Roo Provider: AWS Bedrock
 //!
 //! AWS Bedrock provider for Roo Code Rust.

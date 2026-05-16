@@ -837,18 +837,18 @@ impl PresentAssistantMessage {
         // Source: TS lines 627-676
         // Note: The actual repetition detection is done by the caller using
         // ToolRepetitionDetector. The state machine checks a flag.
-        if !block.partial {
-            if let Some(repetition_error) = self.check_tool_repetition(block) {
-                // TS: pushToolResult(formatResponse.toolError(...))
-                self.push_tool_result_to_user_content(
-                    sanitize_tool_use_id(tool_call_id),
-                    format_tool_error(&repetition_error),
-                    true,
-                );
-                return BlockProcessingResult::ToolRepetitionLimit {
-                    tool_name: block.name.clone(),
-                };
-            }
+        if !block.partial
+            && let Some(repetition_error) = self.check_tool_repetition(block)
+        {
+            // TS: pushToolResult(formatResponse.toolError(...))
+            self.push_tool_result_to_user_content(
+                sanitize_tool_use_id(tool_call_id),
+                format_tool_error(&repetition_error),
+                true,
+            );
+            return BlockProcessingResult::ToolRepetitionLimit {
+                tool_name: block.name.clone(),
+            };
         }
 
         // --- Step 8: Dispatch to specific tool handler ---
@@ -1061,12 +1061,7 @@ impl PresentAssistantMessage {
     ///
     /// Faithfully replicates the TS `toolDescription()` function (lines 327-389).
     pub fn get_tool_description(&self, block: &ToolUse) -> String {
-        let get_param = |key: &str| -> Option<&str> {
-            block.params.get(key).and_then(|v| {
-                // params values are String, not Value
-                Some(v.as_str())
-            })
-        };
+        let get_param = |key: &str| -> Option<&str> { block.params.get(key).map(|v| v.as_str()) };
 
         match block.name.as_str() {
             "execute_command" => {
@@ -1597,13 +1592,13 @@ impl PresentAssistantMessage {
         feedback_images: Option<Vec<String>>,
     ) {
         // Source: TS lines 214-217
-        if let Some(text) = feedback_text {
-            if !text.is_empty() {
-                callbacks.set_approval_feedback(ApprovalFeedback {
-                    text,
-                    images: feedback_images,
-                });
-            }
+        if let Some(text) = feedback_text
+            && !text.is_empty()
+        {
+            callbacks.set_approval_feedback(ApprovalFeedback {
+                text,
+                images: feedback_images,
+            });
         }
     }
 
@@ -1620,13 +1615,13 @@ impl PresentAssistantMessage {
         self.state.did_reject_tool = true;
 
         // Source: TS lines 201-206
-        if let Some(text) = feedback_text {
-            if !text.is_empty() {
-                return ToolResult::success(format_tool_result(
-                    &format_tool_denied_with_feedback(&text),
-                    feedback_images.as_deref(),
-                ));
-            }
+        if let Some(text) = feedback_text
+            && !text.is_empty()
+        {
+            return ToolResult::success(format_tool_result(
+                &format_tool_denied_with_feedback(&text),
+                feedback_images.as_deref(),
+            ));
         }
 
         ToolResult::success(format_tool_denied())
@@ -1813,10 +1808,10 @@ pub fn format_tool_approved_with_feedback(feedback: &str) -> String {
 /// Source: TS `formatResponse.toolResult()`.
 pub fn format_tool_result(text: &str, images: Option<&[String]>) -> String {
     let mut result = text.to_string();
-    if let Some(imgs) = images {
-        if !imgs.is_empty() {
-            result.push_str(&format!("\n\n[{} images attached]", imgs.len()));
-        }
+    if let Some(imgs) = images
+        && !imgs.is_empty()
+    {
+        result.push_str(&format!("\n\n[{} images attached]", imgs.len()));
     }
     result
 }

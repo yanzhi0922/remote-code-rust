@@ -180,74 +180,74 @@ pub fn sanitize_gemini_messages(messages: &[Value], model_id: &str) -> Vec<Value
             let tool_calls = msg.get("tool_calls").and_then(|tc| tc.as_array());
             let reasoning_details = msg.get("reasoning_details").and_then(|rd| rd.as_array());
 
-            if let Some(calls) = tool_calls {
-                if !calls.is_empty() {
-                    let has_reasoning_details =
-                        reasoning_details.is_some() && !reasoning_details.unwrap().is_empty();
+            if let Some(calls) = tool_calls
+                && !calls.is_empty()
+            {
+                let has_reasoning_details =
+                    reasoning_details.is_some() && !reasoning_details.unwrap().is_empty();
 
-                    if !has_reasoning_details {
-                        // No reasoning_details at all — drop all tool calls
-                        for tc in calls {
-                            if let Some(id) = tc.get("id").and_then(|i| i.as_str()) {
-                                dropped_tool_call_ids.insert(id.to_string());
-                            }
-                        }
-                        // Keep any textual content, but drop the tool_calls themselves
-                        if msg.get("content").and_then(|c| c.as_str()).is_some() {
-                            sanitized.push(json!({
-                                "role": "assistant",
-                                "content": msg["content"]
-                            }));
-                        }
-                        continue;
-                    }
-
-                    // Filter reasoning_details to only include entries matching tool call IDs
-                    let rd_array = reasoning_details.unwrap();
-                    let mut valid_tool_calls: Vec<Value> = Vec::new();
-                    let mut valid_reasoning_details: Vec<Value> = Vec::new();
-
+                if !has_reasoning_details {
+                    // No reasoning_details at all — drop all tool calls
                     for tc in calls {
-                        let tc_id = tc.get("id").and_then(|i| i.as_str()).unwrap_or("");
-                        let matching_details: Vec<&Value> = rd_array
-                            .iter()
-                            .filter(|d| d.get("id").and_then(|i| i.as_str()) == Some(tc_id))
-                            .collect();
-
-                        if !matching_details.is_empty() {
-                            valid_tool_calls.push(tc.clone());
-                            valid_reasoning_details.extend(matching_details.into_iter().cloned());
-                        } else if !tc_id.is_empty() {
-                            dropped_tool_call_ids.insert(tc_id.to_string());
+                        if let Some(id) = tc.get("id").and_then(|i| i.as_str()) {
+                            dropped_tool_call_ids.insert(id.to_string());
                         }
                     }
-
-                    // Also include reasoning_details that don't have an id (legacy format)
-                    let details_without_id: Vec<&Value> =
-                        rd_array.iter().filter(|d| d.get("id").is_none()).collect();
-                    valid_reasoning_details.extend(details_without_id.into_iter().cloned());
-
-                    // Build the sanitized message
-                    let content_str = msg.get("content").and_then(|c| c.as_str()).unwrap_or("");
-                    let mut sanitized_msg = json!({
-                        "role": "assistant",
-                        "content": content_str
-                    });
-
-                    if !valid_reasoning_details.is_empty() {
-                        sanitized_msg["reasoning_details"] = serde_json::to_value(
-                            consolidate_reasoning_details_from_values(&valid_reasoning_details),
-                        )
-                        .unwrap_or(json!([]));
+                    // Keep any textual content, but drop the tool_calls themselves
+                    if msg.get("content").and_then(|c| c.as_str()).is_some() {
+                        sanitized.push(json!({
+                            "role": "assistant",
+                            "content": msg["content"]
+                        }));
                     }
-
-                    if !valid_tool_calls.is_empty() {
-                        sanitized_msg["tool_calls"] = Value::Array(valid_tool_calls);
-                    }
-
-                    sanitized.push(sanitized_msg);
                     continue;
                 }
+
+                // Filter reasoning_details to only include entries matching tool call IDs
+                let rd_array = reasoning_details.unwrap();
+                let mut valid_tool_calls: Vec<Value> = Vec::new();
+                let mut valid_reasoning_details: Vec<Value> = Vec::new();
+
+                for tc in calls {
+                    let tc_id = tc.get("id").and_then(|i| i.as_str()).unwrap_or("");
+                    let matching_details: Vec<&Value> = rd_array
+                        .iter()
+                        .filter(|d| d.get("id").and_then(|i| i.as_str()) == Some(tc_id))
+                        .collect();
+
+                    if !matching_details.is_empty() {
+                        valid_tool_calls.push(tc.clone());
+                        valid_reasoning_details.extend(matching_details.into_iter().cloned());
+                    } else if !tc_id.is_empty() {
+                        dropped_tool_call_ids.insert(tc_id.to_string());
+                    }
+                }
+
+                // Also include reasoning_details that don't have an id (legacy format)
+                let details_without_id: Vec<&Value> =
+                    rd_array.iter().filter(|d| d.get("id").is_none()).collect();
+                valid_reasoning_details.extend(details_without_id.into_iter().cloned());
+
+                // Build the sanitized message
+                let content_str = msg.get("content").and_then(|c| c.as_str()).unwrap_or("");
+                let mut sanitized_msg = json!({
+                    "role": "assistant",
+                    "content": content_str
+                });
+
+                if !valid_reasoning_details.is_empty() {
+                    sanitized_msg["reasoning_details"] = serde_json::to_value(
+                        consolidate_reasoning_details_from_values(&valid_reasoning_details),
+                    )
+                    .unwrap_or(json!([]));
+                }
+
+                if !valid_tool_calls.is_empty() {
+                    sanitized_msg["tool_calls"] = Value::Array(valid_tool_calls);
+                }
+
+                sanitized.push(sanitized_msg);
+                continue;
             }
         }
 
@@ -283,22 +283,16 @@ fn consolidate_reasoning_details_from_values(details: &[Value]) -> Vec<Reasoning
 /// Options for converting Anthropic messages to OpenAI format.
 ///
 /// Source: `src/api/transform/openai-format.ts` — `ConvertToOpenAiMessagesOptions`
+type ToolCallIdNormalizer = dyn Fn(&str) -> String + Send + Sync;
+
+#[derive(Default)]
 pub struct ConvertToOpenAiMessagesOptions {
     /// Optional function to normalize tool call IDs for providers with strict
     /// ID requirements.
-    pub normalize_tool_call_id: Option<Box<dyn Fn(&str) -> String + Send + Sync>>,
+    pub normalize_tool_call_id: Option<Box<ToolCallIdNormalizer>>,
     /// If true, merge text content after tool_results into the last tool message
     /// instead of creating a separate user message.
     pub merge_tool_result_text: bool,
-}
-
-impl Default for ConvertToOpenAiMessagesOptions {
-    fn default() -> Self {
-        Self {
-            normalize_tool_call_id: None,
-            merge_tool_result_text: false,
-        }
-    }
 }
 
 /// Converts Anthropic-style messages to OpenAI Chat Completion message format.
@@ -389,28 +383,27 @@ pub fn convert_to_openai_messages(
 
                     if should_merge_into_tool_message {
                         // Merge text content into the last tool message
-                        if let Some(last_msg) = openai_messages.last_mut() {
-                            if last_msg.get("role").and_then(|r| r.as_str()) == Some("tool") {
-                                let additional_text: String = filtered_non_tool
-                                    .iter()
-                                    .filter_map(|p| {
-                                        if let ContentBlock::Text { text } = p {
-                                            Some(text.as_str())
-                                        } else {
-                                            None
-                                        }
-                                    })
-                                    .collect::<Vec<_>>()
-                                    .join("\n");
+                        if let Some(last_msg) = openai_messages.last_mut()
+                            && last_msg.get("role").and_then(|r| r.as_str()) == Some("tool")
+                        {
+                            let additional_text: String = filtered_non_tool
+                                .iter()
+                                .filter_map(|p| {
+                                    if let ContentBlock::Text { text } = p {
+                                        Some(text.as_str())
+                                    } else {
+                                        None
+                                    }
+                                })
+                                .collect::<Vec<_>>()
+                                .join("\n");
 
-                                let existing_content = last_msg
-                                    .get("content")
-                                    .and_then(|c| c.as_str())
-                                    .unwrap_or("");
-                                last_msg["content"] = Value::String(format!(
-                                    "{existing_content}\n\n{additional_text}"
-                                ));
-                            }
+                            let existing_content = last_msg
+                                .get("content")
+                                .and_then(|c| c.as_str())
+                                .unwrap_or("");
+                            last_msg["content"] =
+                                Value::String(format!("{existing_content}\n\n{additional_text}"));
                         }
                     } else {
                         // Standard behavior: add user message with text/image content
@@ -508,10 +501,10 @@ pub fn convert_to_openai_messages(
 
                 // Pass through reasoning_details to preserve the original shape from the API.
                 // The `id` field is stripped from openai-responses-v1 blocks (see map_reasoning_details).
-                if let Some(ref details) = anthropic_message.reasoning_details {
-                    if let Some(mapped) = map_reasoning_details(details) {
-                        base_message["reasoning_details"] = Value::Array(mapped);
-                    }
+                if let Some(ref details) = anthropic_message.reasoning_details
+                    && let Some(mapped) = map_reasoning_details(details)
+                {
+                    base_message["reasoning_details"] = Value::Array(mapped);
                 }
 
                 // Cannot be an empty array. API expects minimum length 1

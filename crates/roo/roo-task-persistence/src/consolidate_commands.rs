@@ -53,24 +53,24 @@ pub fn consolidate_commands(messages: &[ClineMessage]) -> Vec<ClineMessage> {
 
         // Check for use_mcp_server + mcp_server_response pair:
         //   ask=UseMcpServer followed by say=McpServerResponse
-        if msg.r#type == MessageType::Ask && msg.ask == Some(ClineAsk::UseMcpServer) {
-            if i + 1 < messages.len() {
-                let next = &messages[i + 1];
-                if next.r#type == MessageType::Say && next.say == Some(ClineSay::McpServerResponse)
-                {
-                    // Merge: combine the response text into the use_mcp_server message
-                    let mut merged = msg.clone();
-                    if let Some(response_text) = &next.text {
-                        let combined = match &msg.text {
-                            Some(t) => format!("{}\n{}", t, response_text),
-                            None => response_text.clone(),
-                        };
-                        merged.text = Some(combined);
-                    }
-                    result.push(merged);
-                    i += 2;
-                    continue;
+        if msg.r#type == MessageType::Ask
+            && msg.ask == Some(ClineAsk::UseMcpServer)
+            && i + 1 < messages.len()
+        {
+            let next = &messages[i + 1];
+            if next.r#type == MessageType::Say && next.say == Some(ClineSay::McpServerResponse) {
+                // Merge: combine the response text into the use_mcp_server message
+                let mut merged = msg.clone();
+                if let Some(response_text) = &next.text {
+                    let combined = match &msg.text {
+                        Some(t) => format!("{}\n{}", t, response_text),
+                        None => response_text.clone(),
+                    };
+                    merged.text = Some(combined);
                 }
+                result.push(merged);
+                i += 2;
+                continue;
             }
         }
 
@@ -100,46 +100,47 @@ pub fn consolidate_api_requests(messages: &[ClineMessage]) -> Vec<ClineMessage> 
         let msg = &messages[i];
 
         // Check for api_req_started + api_req_finished pair
-        if msg.r#type == MessageType::Say && msg.say == Some(ClineSay::ApiReqStarted) {
-            if i + 1 < messages.len() {
-                let next = &messages[i + 1];
-                if next.r#type == MessageType::Say && next.say == Some(ClineSay::ApiReqFinished) {
-                    // Merge the two JSON text fields
-                    let mut merged = msg.clone();
-                    let started_obj: Option<serde_json::Value> =
-                        safe_json_parse(msg.text.as_deref(), None);
-                    let finished_obj: Option<serde_json::Value> =
-                        safe_json_parse(next.text.as_deref(), None);
+        if msg.r#type == MessageType::Say
+            && msg.say == Some(ClineSay::ApiReqStarted)
+            && i + 1 < messages.len()
+        {
+            let next = &messages[i + 1];
+            if next.r#type == MessageType::Say && next.say == Some(ClineSay::ApiReqFinished) {
+                // Merge the two JSON text fields
+                let mut merged = msg.clone();
+                let started_obj: Option<serde_json::Value> =
+                    safe_json_parse(msg.text.as_deref(), None);
+                let finished_obj: Option<serde_json::Value> =
+                    safe_json_parse(next.text.as_deref(), None);
 
-                    match (started_obj, finished_obj) {
-                        (Some(mut s), Some(f)) => {
-                            // Merge finished into started (started values take precedence)
-                            if let (
-                                serde_json::Value::Object(s_map),
-                                serde_json::Value::Object(f_map),
-                            ) = (&mut s, f)
-                            {
-                                for (k, v) in f_map {
-                                    s_map.entry(k).or_insert(v);
-                                }
+                match (started_obj, finished_obj) {
+                    (Some(mut s), Some(f)) => {
+                        // Merge finished into started (started values take precedence)
+                        if let (
+                            serde_json::Value::Object(s_map),
+                            serde_json::Value::Object(f_map),
+                        ) = (&mut s, f)
+                        {
+                            for (k, v) in f_map {
+                                s_map.entry(k).or_insert(v);
                             }
-                            merged.text = Some(serde_json::to_string(&s).unwrap_or_default());
                         }
-                        (Some(s), None) => {
-                            merged.text = Some(serde_json::to_string(&s).unwrap_or_default());
-                        }
-                        (None, Some(f)) => {
-                            merged.text = Some(serde_json::to_string(&f).unwrap_or_default());
-                        }
-                        (None, None) => {
-                            // Keep original text
-                        }
+                        merged.text = Some(serde_json::to_string(&s).unwrap_or_default());
                     }
-
-                    result.push(merged);
-                    i += 2;
-                    continue;
+                    (Some(s), None) => {
+                        merged.text = Some(serde_json::to_string(&s).unwrap_or_default());
+                    }
+                    (None, Some(f)) => {
+                        merged.text = Some(serde_json::to_string(&f).unwrap_or_default());
+                    }
+                    (None, None) => {
+                        // Keep original text
+                    }
                 }
+
+                result.push(merged);
+                i += 2;
+                continue;
             }
         }
 

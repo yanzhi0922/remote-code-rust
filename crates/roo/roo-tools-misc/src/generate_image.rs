@@ -264,14 +264,14 @@ impl ImageGenerationProvider for OpenRouterImageProvider {
                 .await
                 .unwrap_or_else(|_| "<no body>".to_string());
             // Try to extract a structured error message from the JSON body
-            if let Ok(err_json) = serde_json::from_str::<serde_json::Value>(&error_text) {
-                if let Some(msg) = err_json["error"]["message"].as_str() {
-                    return Ok(ImageProviderResponse {
-                        success: false,
-                        image_data: None,
-                        error: Some(msg.to_string()),
-                    });
-                }
+            if let Ok(err_json) = serde_json::from_str::<serde_json::Value>(&error_text)
+                && let Some(msg) = err_json["error"]["message"].as_str()
+            {
+                return Ok(ImageProviderResponse {
+                    success: false,
+                    image_data: None,
+                    error: Some(msg.to_string()),
+                });
             }
             return Ok(ImageProviderResponse {
                 success: false,
@@ -426,14 +426,14 @@ impl ImageGenerationProvider for RooImageProvider {
                 .text()
                 .await
                 .unwrap_or_else(|_| "<no body>".to_string());
-            if let Ok(err_json) = serde_json::from_str::<serde_json::Value>(&error_text) {
-                if let Some(msg) = err_json["error"]["message"].as_str() {
-                    return Ok(ImageProviderResponse {
-                        success: false,
-                        image_data: None,
-                        error: Some(msg.to_string()),
-                    });
-                }
+            if let Ok(err_json) = serde_json::from_str::<serde_json::Value>(&error_text)
+                && let Some(msg) = err_json["error"]["message"].as_str()
+            {
+                return Ok(ImageProviderResponse {
+                    success: false,
+                    image_data: None,
+                    error: Some(msg.to_string()),
+                });
             }
             return Ok(ImageProviderResponse {
                 success: false,

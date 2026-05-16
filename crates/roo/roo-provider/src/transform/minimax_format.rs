@@ -27,7 +27,7 @@ use roo_types::api::{ApiMessage, ContentBlock, MessageRole, ToolResultContent};
 ///   the last `tool_result`'s content.
 ///
 /// Source: `src/api/transform/minimax-format.ts` — `mergeEnvironmentDetailsForMiniMax`
-pub fn merge_environment_details_for_minimax(messages: &mut Vec<ApiMessage>) {
+pub fn merge_environment_details_for_minimax(messages: &mut [ApiMessage]) {
     for message in messages.iter_mut() {
         if message.role != MessageRole::User {
             continue;
@@ -128,9 +128,9 @@ pub fn merge_environment_details_for_minimax(messages: &mut Vec<ApiMessage>) {
 fn extract_tool_result_text(content: &[ToolResultContent]) -> String {
     content
         .iter()
-        .filter_map(|c| match c {
-            ToolResultContent::Text { text } => Some(text.as_str()),
-            ToolResultContent::Image { .. } => Some("(image)"),
+        .map(|c| match c {
+            ToolResultContent::Text { text } => text.as_str(),
+            ToolResultContent::Image { .. } => "(image)",
         })
         .collect::<Vec<&str>>()
         .join("\n")

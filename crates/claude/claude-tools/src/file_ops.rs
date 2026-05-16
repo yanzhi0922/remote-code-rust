@@ -238,7 +238,9 @@ fn gather_hunks(
     let mut current_group = vec![change_indices[0]];
 
     for &idx in &change_indices[1..] {
-        let prev = *current_group.last().unwrap();
+        let prev = *current_group
+            .last()
+            .expect("current diff group is initialized before grouping");
         // If the gap between changes is more than 2*context, start a new group
         if idx > prev + 2 * context + 1 {
             groups.push(std::mem::take(&mut current_group));
@@ -251,14 +253,12 @@ fn gather_hunks(
 
     for group in &groups {
         let first_change = group[0];
-        let last_change = *group.last().unwrap();
+        let last_change = *group
+            .last()
+            .expect("diff groups are never empty after grouping");
 
         // Expand to include context lines
-        let start = if first_change >= context {
-            first_change - context
-        } else {
-            0
-        };
+        let start = first_change.saturating_sub(context);
         let end = (last_change + context + 1).min(ops.len());
 
         let mut hunk_lines = Vec::new();

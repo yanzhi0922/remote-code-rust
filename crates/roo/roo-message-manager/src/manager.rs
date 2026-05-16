@@ -194,16 +194,16 @@ impl MessageManager {
         let mut truncation_ids = HashSet::new();
 
         for msg in cline_messages.iter().skip(from_index) {
-            if msg.say == "condense_context" {
-                if let Some(ref info) = msg.context_condense {
-                    condense_ids.insert(info.condense_id.clone());
-                }
+            if msg.say == "condense_context"
+                && let Some(ref info) = msg.context_condense
+            {
+                condense_ids.insert(info.condense_id.clone());
             }
 
-            if msg.say == "sliding_window_truncation" {
-                if let Some(ref info) = msg.context_truncation {
-                    truncation_ids.insert(info.truncation_id.clone());
-                }
+            if msg.say == "sliding_window_truncation"
+                && let Some(ref info) = msg.context_truncation
+            {
+                truncation_ids.insert(info.truncation_id.clone());
             }
         }
 
@@ -265,12 +265,11 @@ impl MessageManager {
         // Step 3: Remove Summaries whose condense_context was removed
         if !removed_ids.condense_ids.is_empty() {
             api.retain(|msg| {
-                if msg.is_summary {
-                    if let Some(ref condense_id) = msg.condense_id {
-                        if removed_ids.condense_ids.contains(condense_id) {
-                            return false;
-                        }
-                    }
+                if msg.is_summary
+                    && let Some(ref condense_id) = msg.condense_id
+                    && removed_ids.condense_ids.contains(condense_id)
+                {
+                    return false;
                 }
                 true
             });
@@ -279,12 +278,11 @@ impl MessageManager {
         // Step 4: Remove truncation markers whose event was removed
         if !removed_ids.truncation_ids.is_empty() {
             api.retain(|msg| {
-                if msg.is_truncation_marker {
-                    if let Some(ref truncation_id) = msg.truncation_id {
-                        if removed_ids.truncation_ids.contains(truncation_id) {
-                            return false;
-                        }
-                    }
+                if msg.is_truncation_marker
+                    && let Some(ref truncation_id) = msg.truncation_id
+                    && removed_ids.truncation_ids.contains(truncation_id)
+                {
+                    return false;
                 }
                 true
             });

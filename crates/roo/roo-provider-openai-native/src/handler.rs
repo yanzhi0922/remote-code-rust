@@ -340,14 +340,14 @@ impl Provider for OpenAiNativeHandler {
         // Extract text from the response
         if let Some(output) = response_data["output"].as_array() {
             for output_item in output {
-                if output_item["type"] == "message" {
-                    if let Some(content) = output_item["content"].as_array() {
-                        for c in content {
-                            if c["type"] == "output_text" || c["type"] == "text" {
-                                if let Some(text) = c["text"].as_str() {
-                                    return Ok(text.to_string());
-                                }
-                            }
+                if output_item["type"] == "message"
+                    && let Some(content) = output_item["content"].as_array()
+                {
+                    for c in content {
+                        if (c["type"] == "output_text" || c["type"] == "text")
+                            && let Some(text) = c["text"].as_str()
+                        {
+                            return Ok(text.to_string());
                         }
                     }
                 }

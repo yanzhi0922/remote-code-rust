@@ -81,19 +81,18 @@ pub fn apply_cache_breakpoints(
                 .collect();
 
             for &idx in user_indices.iter().rev().take(config.max_breakpoints) {
-                if let Some(msg) = messages.get_mut(idx) {
-                    if let Some(content) = msg.get_mut("content") {
-                        if let Some(arr) = content.as_array_mut() {
-                            if let Some(last_block) = arr.last_mut() {
-                                last_block["cache_control"] =
-                                    serde_json::json!({"type": "ephemeral"});
-                            }
-                        } else {
-                            let text = content.as_str().unwrap_or("").to_string();
-                            *content = serde_json::json!([
-                                {"type": "text", "text": text, "cache_control": {"type": "ephemeral"}}
-                            ]);
+                if let Some(msg) = messages.get_mut(idx)
+                    && let Some(content) = msg.get_mut("content")
+                {
+                    if let Some(arr) = content.as_array_mut() {
+                        if let Some(last_block) = arr.last_mut() {
+                            last_block["cache_control"] = serde_json::json!({"type": "ephemeral"});
                         }
+                    } else {
+                        let text = content.as_str().unwrap_or("").to_string();
+                        *content = serde_json::json!([
+                            {"type": "text", "text": text, "cache_control": {"type": "ephemeral"}}
+                        ]);
                     }
                 }
                 breakpoints.push(CacheBreakpoint {
@@ -504,15 +503,15 @@ impl MultiPointStrategy {
                     }
 
                     // If we freed up a cache point, use it for the new messages.
-                    if placements.len() < remaining_cache_points {
-                        if let Some(new_placement) = self.find_optimal_placement_for_range(
+                    if placements.len() < remaining_cache_points
+                        && let Some(new_placement) = self.find_optimal_placement_for_range(
                             last_previous_index + 1,
                             total_messages - 1,
                             min_tokens_per_point,
                             &previous_placements,
-                        ) {
-                            placements.push(new_placement);
-                        }
+                        )
+                    {
+                        placements.push(new_placement);
                     }
                 } else {
                     // Not beneficial to combine — keep all previous placements.

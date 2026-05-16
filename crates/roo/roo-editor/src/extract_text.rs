@@ -8,13 +8,14 @@ pub fn extract_text(file_path: &Path, max_bytes: Option<usize>) -> std::io::Resu
     let metadata = std::fs::metadata(file_path)?;
 
     // Check file size if max_bytes is specified
-    if let Some(max) = max_bytes {
-        if metadata.len() as usize > max {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                format!("File too large: {} bytes (max: {})", metadata.len(), max),
-            ));
-        }
+    if let Some(max) = max_bytes
+        && metadata.len() as usize > max
+    {
+        return Err(std::io::Error::other(format!(
+            "File too large: {} bytes (max: {})",
+            metadata.len(),
+            max
+        )));
     }
 
     let extension = file_path

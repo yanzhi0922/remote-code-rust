@@ -1,3 +1,6 @@
+#![allow(dead_code)]
+#![allow(clippy::all)]
+#![deny(clippy::dbg_macro, clippy::todo)]
 //! # Roo Tools MCP
 //!
 //! MCP (Model Context Protocol) tool implementations: `use_mcp_tool`

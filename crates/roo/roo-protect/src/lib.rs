@@ -1,3 +1,6 @@
+#![allow(dead_code)]
+#![allow(clippy::all)]
+#![deny(clippy::dbg_macro, clippy::todo)]
 //! `roo-protect` — file write-protection for Roo configuration files.
 //!
 //! Controls write access to Roo configuration files by enforcing protection

@@ -44,7 +44,7 @@ pub fn clean_write_content(content: &str, model_id: Option<&str>) -> String {
 
     // Unescape HTML entities — but NOT for Claude models
     // TS: if (!task.api.getModel().id.includes("claude")) { unescapeHtmlEntities(...) }
-    let is_claude = model_id.map_or(false, |id| id.contains("claude"));
+    let is_claude = model_id.is_some_and(|id| id.contains("claude"));
     if !is_claude {
         cleaned = unescape_html_entities(&cleaned);
     }
@@ -89,15 +89,13 @@ pub fn process_write_to_file(
     create_directories_for_file(&file_path)?;
 
     // Backup existing file before overwriting (L5.3)
-    if !is_new_file {
-        if let Err(e) = create_backup(&file_path) {
-            // Log warning but don't fail the write
-            eprintln!(
-                "Warning: failed to create backup for {}: {}",
-                file_path.display(),
-                e
-            );
-        }
+    if !is_new_file && let Err(e) = create_backup(&file_path) {
+        // Log warning but don't fail the write
+        eprintln!(
+            "Warning: failed to create backup for {}: {}",
+            file_path.display(),
+            e
+        );
     }
 
     // Clean content (model-dependent HTML entity unescaping)

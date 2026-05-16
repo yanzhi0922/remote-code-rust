@@ -320,17 +320,15 @@ fn parse_one_chunk(
     };
 
     let mut parsed_lines = 0;
-    for i in start_index..lines.len() {
-        let line = lines[i];
-
+    for line in lines.iter().skip(start_index) {
         // Stop at next file marker or context marker
         if line.trim().starts_with("*** ") {
             break;
         }
-        if line == EMPTY_CHANGE_CONTEXT_MARKER || line.starts_with(CHANGE_CONTEXT_MARKER) {
-            if parsed_lines > 0 {
-                break;
-            }
+        if (*line == EMPTY_CHANGE_CONTEXT_MARKER || line.starts_with(CHANGE_CONTEXT_MARKER))
+            && parsed_lines > 0
+        {
+            break;
         }
 
         if line.is_empty() {
@@ -376,18 +374,16 @@ fn parse_one_chunk(
 
 /// Find a single line in `lines` starting from `start`.
 fn find_line(lines: &[String], target: &str, start: usize) -> Option<usize> {
-    for i in start..lines.len() {
-        if lines[i] == target {
-            return Some(i);
-        }
+    if let Some((i, _)) = lines
+        .iter()
+        .enumerate()
+        .skip(start)
+        .find(|(_, line)| line.as_str() == target)
+    {
+        return Some(i);
     }
     // Try trim matching
-    for i in start..lines.len() {
-        if lines[i].trim() == target.trim() {
-            return Some(i);
-        }
-    }
-    None
+    (start..lines.len()).find(|&i| lines[i].trim() == target.trim())
 }
 
 /// Find a sequence of pattern lines within lines, starting at or after `start`.
@@ -446,9 +442,9 @@ fn seek_lines_trim_end(
 }
 
 fn exact_match(lines: &[String], pattern: &[String], start_index: usize) -> bool {
-    for i in 0..pattern.len() {
+    for (i, pat) in pattern.iter().enumerate() {
         match lines.get(start_index + i) {
-            Some(line) if line == &pattern[i] => continue,
+            Some(line) if line == pat => continue,
             _ => return false,
         }
     }

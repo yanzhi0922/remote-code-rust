@@ -47,15 +47,13 @@ impl ConsolidationLock {
         let prior_ms = self.read_last_consolidated_at();
 
         // Check for stale lock
-        if let Ok(meta) = fs::metadata(&self.lock_path) {
-            if let Ok(modified) = meta.modified() {
-                if let Ok(elapsed) = modified.elapsed() {
-                    if elapsed < Duration::from_secs(STALE_SECS) {
-                        // Lock is held and not stale — bail
-                        anyhow::bail!("consolidation lock is held by another process");
-                    }
-                }
-            }
+        if let Ok(meta) = fs::metadata(&self.lock_path)
+            && let Ok(modified) = meta.modified()
+            && let Ok(elapsed) = modified.elapsed()
+            && elapsed < Duration::from_secs(STALE_SECS)
+        {
+            // Lock is held and not stale — bail
+            anyhow::bail!("consolidation lock is held by another process");
         }
 
         // Write our PID

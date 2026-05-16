@@ -196,7 +196,7 @@ impl ProviderSettingsManager {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default();
-        format!("{:013}", now.as_nanos() % 1_000_000_000_000_0)
+        format!("{:013}", now.as_nanos() % 10_000_000_000_000)
     }
 
     // -- Private helpers -------------------------------------------------------
@@ -230,8 +230,8 @@ impl ProviderSettingsManager {
     }
 
     fn apply_model_migrations(&mut self) {
-        for (_name, config) in &mut self.profiles.api_configs {
-            let should_migrate = config.model_id.as_deref().map_or(false, |model_id| {
+        for config in self.profiles.api_configs.values_mut() {
+            let should_migrate = config.model_id.as_deref().is_some_and(|model_id| {
                 MODEL_MIGRATIONS.iter().any(|(provider, old_model, _)| {
                     config.api_provider.as_deref() == Some(*provider) && model_id == *old_model
                 })

@@ -298,10 +298,8 @@ fn filter_orphaned_thinking_only(messages: &mut Vec<Value>) {
             let btype = b["type"].as_str().unwrap_or("");
             btype != "thinking" && btype != "redacted_thinking"
         });
-        if has_non_thinking {
-            if let Some(id) = msg.get("id").and_then(|v| v.as_str()) {
-                non_thinking_ids.insert(id.to_string());
-            }
+        if has_non_thinking && let Some(id) = msg.get("id").and_then(|v| v.as_str()) {
+            non_thinking_ids.insert(id.to_string());
         }
     }
 
@@ -610,16 +608,15 @@ fn sanitize_error_tool_result_content(messages: &mut [Value]) {
             for block in content.iter_mut() {
                 if block["type"].as_str() == Some("tool_result")
                     && block["is_error"].as_bool() == Some(true)
+                    && let Some(inner) = block.get_mut("content").and_then(|c| c.as_array_mut())
                 {
-                    if let Some(inner) = block.get_mut("content").and_then(|c| c.as_array_mut()) {
-                        for inner_block in inner.iter_mut() {
-                            let btype = inner_block["type"].as_str().unwrap_or("");
-                            if btype == "image" || btype == "document" {
-                                *inner_block = json!({
-                                    "type": "text",
-                                    "text": format!("[{} content removed from error result]", btype)
-                                });
-                            }
+                    for inner_block in inner.iter_mut() {
+                        let btype = inner_block["type"].as_str().unwrap_or("");
+                        if btype == "image" || btype == "document" {
+                            *inner_block = json!({
+                                "type": "text",
+                                "text": format!("[{} content removed from error result]", btype)
+                            });
                         }
                     }
                 }
@@ -1089,19 +1086,18 @@ fn validate_images_for_api(messages: &mut [Value]) {
     for msg in messages.iter_mut() {
         if let Some(content) = msg.get_mut("content").and_then(|c| c.as_array_mut()) {
             for block in content.iter_mut() {
-                if block["type"].as_str() == Some("image") {
-                    if let Some(data) = block
+                if block["type"].as_str() == Some("image")
+                    && let Some(data) = block
                         .get("source")
                         .and_then(|s| s.get("data"))
                         .and_then(|d| d.as_str())
-                    {
-                        // Check base64 string length directly (matches TS behavior)
-                        if data.len() > API_IMAGE_MAX_BASE64_SIZE {
-                            *block = json!({
-                                "type": "text",
-                                "text": "[Image too large for API]"
-                            });
-                        }
+                {
+                    // Check base64 string length directly (matches TS behavior)
+                    if data.len() > API_IMAGE_MAX_BASE64_SIZE {
+                        *block = json!({
+                            "type": "text",
+                            "text": "[Image too large for API]"
+                        });
                     }
                 }
             }
@@ -2345,15 +2341,14 @@ fn smoosh_system_reminder_siblings(messages: &mut [Value]) {
 
         // Guard: don't smoosh into tool_results that contain tool_reference blocks.
         // Mixing text with tool_reference inside a tool_result is a server ValueError.
-        if let Some(tr_content) = kept[tr_idx].get("content").and_then(|c| c.as_array()) {
-            if tr_content
+        if let Some(tr_content) = kept[tr_idx].get("content").and_then(|c| c.as_array())
+            && tr_content
                 .iter()
                 .any(|b| b["type"].as_str() == Some("tool_reference"))
-            {
-                kept.extend(sr_texts);
-                *content = kept;
-                continue;
-            }
+        {
+            kept.extend(sr_texts);
+            *content = kept;
+            continue;
         }
 
         if kept[tr_idx].get("is_error").and_then(|v| v.as_bool()) == Some(true) {

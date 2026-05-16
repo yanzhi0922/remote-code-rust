@@ -58,9 +58,10 @@ pub struct ToolExecutionResult {
 /// In the TS source, tools like `ask_followup_question` and `attempt_completion`
 /// call `task.ask()` which blocks until the user responds. In our architecture,
 /// tools return a result with an action, and the agent loop handles the interaction.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub enum ToolExecutionAction {
     /// No special action — tool result is appended as a tool_result message.
+    #[default]
     None,
     /// `ask_followup_question` — the agent loop should present the question,
     /// wait for user input, and feed the response back as a tool_result.
@@ -81,12 +82,6 @@ pub enum ToolExecutionAction {
         message: String,
         todos: Option<String>,
     },
-}
-
-impl Default for ToolExecutionAction {
-    fn default() -> Self {
-        Self::None
-    }
 }
 
 impl ToolExecutionResult {
@@ -459,17 +454,16 @@ impl ToolDispatcher {
         context: &ToolContext,
     ) -> ToolExecutionResult {
         // --- Repetition check ---
-        if let Some(detector_mtx) = &self.repetition_detector {
-            if let Ok(mut detector) = detector_mtx.lock() {
-                if !detector.check_and_record(tool_name, &params) {
-                    return ToolExecutionResult::success(format!(
-                        "Warning: The tool '{}' has been called with similar \
+        if let Some(detector_mtx) = &self.repetition_detector
+            && let Ok(mut detector) = detector_mtx.lock()
+            && !detector.check_and_record(tool_name, &params)
+        {
+            return ToolExecutionResult::success(format!(
+                "Warning: The tool '{}' has been called with similar \
                          parameters multiple times. Consider using a different \
                          approach.",
-                        tool_name
-                    ));
-                }
-            }
+                tool_name
+            ));
         }
 
         match self.handlers.get(tool_name) {
@@ -524,30 +518,31 @@ impl ToolHandler for ReadFileHandler {
             });
 
         // Parse indentation params if present
-        let indentation = params.get("indentation").and_then(|v| {
-            Some(roo_types::tool_params::IndentationParams {
-                anchor_line: v
-                    .get("anchorLine")
-                    .or_else(|| v.get("anchor_line"))
-                    .and_then(|v2| v2.as_u64()),
-                max_levels: v
-                    .get("maxLevels")
-                    .or_else(|| v.get("max_levels"))
-                    .and_then(|v2| v2.as_u64()),
-                include_siblings: v
-                    .get("includeSiblings")
-                    .or_else(|| v.get("include_siblings"))
-                    .and_then(|v2| v2.as_bool()),
-                include_header: v
-                    .get("includeHeader")
-                    .or_else(|| v.get("include_header"))
-                    .and_then(|v2| v2.as_bool()),
-                max_lines: v
-                    .get("maxLines")
-                    .or_else(|| v.get("max_lines"))
-                    .and_then(|v2| v2.as_u64()),
-            })
-        });
+        let indentation =
+            params
+                .get("indentation")
+                .map(|v| roo_types::tool_params::IndentationParams {
+                    anchor_line: v
+                        .get("anchorLine")
+                        .or_else(|| v.get("anchor_line"))
+                        .and_then(|v2| v2.as_u64()),
+                    max_levels: v
+                        .get("maxLevels")
+                        .or_else(|| v.get("max_levels"))
+                        .and_then(|v2| v2.as_u64()),
+                    include_siblings: v
+                        .get("includeSiblings")
+                        .or_else(|| v.get("include_siblings"))
+                        .and_then(|v2| v2.as_bool()),
+                    include_header: v
+                        .get("includeHeader")
+                        .or_else(|| v.get("include_header"))
+                        .and_then(|v2| v2.as_bool()),
+                    max_lines: v
+                        .get("maxLines")
+                        .or_else(|| v.get("max_lines"))
+                        .and_then(|v2| v2.as_u64()),
+                });
 
         let read_params = roo_types::tool_params::ReadFileParams {
             path,
@@ -1080,21 +1075,18 @@ impl ToolHandler for ApplyPatchHandler {
 
             match change.change_type {
                 roo_tools_fs::apply_patch::FileChangeType::Add => {
-                    if let Some(parent) = full_path.parent() {
-                        if let Err(e) = std::fs::create_dir_all(parent) {
-                            return ToolExecutionResult::error(format!(
-                                "Failed to create directory: {}",
-                                e
-                            ));
-                        }
+                    if let Some(parent) = full_path.parent()
+                        && let Err(e) = std::fs::create_dir_all(parent)
+                    {
+                        return ToolExecutionResult::error(format!(
+                            "Failed to create directory: {}",
+                            e
+                        ));
                     }
-                    if let Some(ref content) = change.new_content {
-                        if let Err(e) = std::fs::write(&full_path, content) {
-                            return ToolExecutionResult::error(format!(
-                                "Failed to write file: {}",
-                                e
-                            ));
-                        }
+                    if let Some(ref content) = change.new_content
+                        && let Err(e) = std::fs::write(&full_path, content)
+                    {
+                        return ToolExecutionResult::error(format!("Failed to write file: {}", e));
                     }
                     results.push(format!("Added: {}", change.path));
                 }
@@ -1105,13 +1097,10 @@ impl ToolHandler for ApplyPatchHandler {
                     results.push(format!("Deleted: {}", change.path));
                 }
                 roo_tools_fs::apply_patch::FileChangeType::Update => {
-                    if let Some(ref content) = change.new_content {
-                        if let Err(e) = std::fs::write(&full_path, content) {
-                            return ToolExecutionResult::error(format!(
-                                "Failed to write file: {}",
-                                e
-                            ));
-                        }
+                    if let Some(ref content) = change.new_content
+                        && let Err(e) = std::fs::write(&full_path, content)
+                    {
+                        return ToolExecutionResult::error(format!("Failed to write file: {}", e));
                     }
                     if let Some(ref move_path) = change.move_path {
                         let new_full_path = if std::path::Path::new(move_path).is_absolute() {
@@ -1375,10 +1364,10 @@ fn search_in_dir(
                 // Check file pattern
                 let relative = path.strip_prefix(base).unwrap_or(path.as_path());
                 let relative_str = relative.to_string_lossy();
-                if let Some(pattern) = file_pattern {
-                    if !roo_tools_search::matches_file_pattern(&relative_str, pattern) {
-                        continue;
-                    }
+                if let Some(pattern) = file_pattern
+                    && !roo_tools_search::matches_file_pattern(&relative_str, pattern)
+                {
+                    continue;
                 }
 
                 // Read and search
@@ -1524,7 +1513,7 @@ impl ToolHandler for ExecuteCommandHandler {
         let cwd = params
             .get("cwd")
             .and_then(|v| v.as_str())
-            .map(|s| PathBuf::from(s));
+            .map(PathBuf::from);
 
         // The tool schema documents timeout in seconds; convert to milliseconds.
         let timeout_ms = params
@@ -2418,15 +2407,14 @@ impl ToolHandler for GenerateImageHandler {
                         let full_save_path = std::path::Path::new(&context.cwd).join(&final_path);
 
                         // Create parent directories if needed
-                        if let Some(parent) = full_save_path.parent() {
-                            if !parent.exists() {
-                                if let Err(e) = std::fs::create_dir_all(parent) {
-                                    return ToolExecutionResult::error(format!(
-                                        "Failed to create directory for '{}': {}",
-                                        final_path, e
-                                    ));
-                                }
-                            }
+                        if let Some(parent) = full_save_path.parent()
+                            && !parent.exists()
+                            && let Err(e) = std::fs::create_dir_all(parent)
+                        {
+                            return ToolExecutionResult::error(format!(
+                                "Failed to create directory for '{}': {}",
+                                final_path, e
+                            ));
                         }
 
                         match std::fs::write(&full_save_path, &raw_bytes) {
@@ -2530,13 +2518,11 @@ impl CustomToolHandler {
                                 // an internal dependency of roo-custom-tools)
                                 let def_result: Result<roo_custom_tools::CustomToolDefinition, _> =
                                     serde_json::from_str(&content);
-                                if let Ok(def) = def_result {
-                                    if result.loaded.contains(&def.name) {
-                                        if let Ok(mut registry) = self.registry.lock() {
-                                            registry
-                                                .register(def, Some(&tools_dir.to_string_lossy()));
-                                        }
-                                    }
+                                if let Ok(def) = def_result
+                                    && result.loaded.contains(&def.name)
+                                    && let Ok(mut registry) = self.registry.lock()
+                                {
+                                    registry.register(def, Some(&tools_dir.to_string_lossy()));
                                 }
                                 // For YAML files, they were validated by load_from_directory
                                 // but we can't parse them here without serde_yaml.

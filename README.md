@@ -7,11 +7,11 @@
 | 指标 | 数值 |
 |------|------|
 | 应用程序 | 5 个（CLI、GUI、Control Plane、Runner、Migrate） |
-| Workspace Crates | 多个 Rust workspace 成员（Claude / Codex / Adapters / Apps 等；Roo 为独立来源，数量随同步变化） |
+| Workspace Packages | 当前 `cargo metadata --no-deps` 实测 231 个 Rust packages（Claude / Codex / Roo / Adapters / Apps） |
 | 内置工具 | 62 |
 | 测试 | 按 crate 和功能维护单元 / 集成测试 |
 | Clippy 状态 | 以 CI 和本地检查结果为准 |
-| `unsafe` 代码 | 警告（`warn`） |
+| `unsafe` 代码 | 平台 FFI 允许，CI 通过 clippy / audit / secret scan 约束风险 |
 | Rust 版本 | 1.93 (Edition 2024) |
 | 许可证 | Proprietary |
 
@@ -53,6 +53,9 @@
 - 用户电脑运行独立桌面应用和本地 Runner，Agent、Provider Key、工作区文件、工具执行都留在用户电脑。
 - 云服务器只运行 `remote-code-control-plane`、Web/PWA 静态资源、认证/配对/事件中继和安装包下载，不运行 coding agent，不运行 `remote-code-runner`，不保存本地工作区。
 - 手机 App 或 PWA 连接控制平面后，通过已配对的本机 Runner 远程控制桌面软件。
+- 远程客户端默认使用 `relay_only` 中继模式；直连/混合模式必须显式设置 `VITE_REMOTE_CODE_TRANSPORT_MODE=hybrid` 或 `direct_only`。
+- WebSocket 事件流使用短期一次性 `stream_ticket`，URL 中的长期 `access_token` 查询参数默认禁用；控制平面旧兼容开关为 `REMOTE_CODE_ALLOW_QUERY_ACCESS_TOKEN=true`，本地 Runner 旧兼容开关为 `REMOTE_CODE_RUNNER_ALLOW_QUERY_ACCESS_TOKEN=true`，两者都只应临时使用。
+- 用户名/密码派生的 user-key 认证只接受服务端 `REMOTE_CODE_CONTROL_PLANE_USER_KEY_HASHES` 中预配置的 SHA-256 哈希；生产环境优先使用 bootstrap/pairing 设备信任链。
 - 腾讯云部署材料位于 [`deploy/tencent-cloud`](deploy/tencent-cloud)，默认面向 `remote-code.yz520gzy.top`。
 
 ### 本地发布验证
@@ -258,6 +261,9 @@ npm run desktop:build
 ```
 
 桌面安装包由 Tauri NSIS 生成。安装后打开 `Remote Code`，在 `设置 -> 远程控制` 填写控制平面 URL、保存配对账号密码，即可让手机 App 通过控制平面远程控制本机 GUI 内置 Agent。
+正式发布必须在磁盘空间充足的 Windows 发布机上完成 `npm run desktop:build`，
+并做一次真实桌面 Runner 上线、手机/PWA 配对、审批和事件流回归；普通 `npm run build`
+只验证 Web 前端产物，不等价于可安装的桌面发行包。
 
 ### 构建 Agent 二进制
 
@@ -322,11 +328,13 @@ npm run tauri dev
 
 | 规则 | 级别 |
 |------|------|
-| `unsafe_code` | `warn` — 编译器警告 |
+| `unsafe_code` | `allow` — 允许 Windows PTY、UDS、sandbox、exec policy parser 等平台 FFI；新增 unsafe 必须接受 code review |
 | `dbg_macro` | `deny` — 禁止调试宏 |
 | `todo!` / `unimplemented!` | `deny` — 禁止未实现代码 |
 | `unwrap_used` | `warn` — 不建议直接 unwrap |
 | Release LTO | `thin` + `codegen-units = 1` |
+| `cargo audit` | CI 运行；`.cargo/audit.toml` 记录已接受的上游未修复 RustSec 风险 |
+| Secret Scan | CI 运行 gitleaks，防止密钥进入仓库 |
 
 ### 验证
 
@@ -337,11 +345,14 @@ cargo check --workspace
 # 运行全部测试（耗时较长，依赖当前 workspace 状态）
 cargo test --workspace
 
-# Clippy 静态分析
-cargo clippy --workspace
+# Clippy 静态分析（CI 门禁）
+cargo clippy --workspace -- -D warnings
+
+# RustSec 审计（已接受风险写入 .cargo/audit.toml）
+cargo audit --quiet
 
 # 格式检查
-cargo fmt --check
+cargo fmt --all -- --check
 ```
 
 ## 权限模式

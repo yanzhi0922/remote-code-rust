@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { buildArtifactDownloadUrl, requestJson } from './api';
+import { buildArtifactDownloadUrl, buildSessionEventsStreamUrl, createStreamTicket, requestJson } from './api';
 
 const mockRuntime = vi.hoisted(() => ({
   resolveRemoteAccessToken: vi.fn(() => 'device-token'),
@@ -28,6 +28,21 @@ describe('remote api', () => {
     );
 
     expect(url).toBe('https://remote-code.yz520gzy.top/v1/artifacts/artifact-1/download');
+    expect(url).not.toContain('access_token');
+    expect(url).not.toContain('device-token');
+  });
+
+  it('builds session stream urls with one-time tickets instead of access tokens', () => {
+    const url = buildSessionEventsStreamUrl(
+      'https://remote-code.yz520gzy.top',
+      'session-1',
+      42,
+      'rcst_test',
+    );
+
+    expect(url).toBe(
+      'wss://remote-code.yz520gzy.top/v1/sessions/session-1/events/stream?after=42&stream_ticket=rcst_test',
+    );
     expect(url).not.toContain('access_token');
     expect(url).not.toContain('device-token');
   });
@@ -76,6 +91,27 @@ describe('remote api', () => {
     const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     const headers = new Headers(init.headers);
     expect(headers.get('content-type')).toBe('application/json');
+  });
+
+  it('requests stream tickets over authenticated HTTP', async () => {
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify({ stream_ticket: 'rcst_1', expires_in_secs: 45 }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+
+    const response = await createStreamTicket(
+      'https://remote-code.yz520gzy.top',
+      '/v1/sessions/session-1/events/stream',
+    );
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const headers = new Headers(init.headers);
+    expect(url).toBe('https://remote-code.yz520gzy.top/v1/stream-ticket');
+    expect(init.method).toBe('POST');
+    expect(headers.get('authorization')).toBe('Bearer device-token');
+    expect(response.stream_ticket).toBe('rcst_1');
   });
 
   it('retries one transient GET failure before succeeding', async () => {

@@ -12,7 +12,7 @@ import {
   ShieldCheck,
   ShieldAlert,
 } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo } from 'react';
 import { truncateMiddle } from '../../lib/utils';
 import { useAgentStore } from '../../stores/useAgentStore';
 import { useAppStore } from '../../stores/useAppStore';
@@ -38,8 +38,6 @@ function permissionLabel(mode: string | null | undefined): string {
       return mode || '未配置';
   }
 }
-
-const PRIVACY_STORAGE_KEY = 'remote-code-gui-workspace-overview-privacy';
 
 function MetricTile({
   icon: Icon,
@@ -80,14 +78,6 @@ function MetricTile({
 }
 
 export function WorkspaceOverview() {
-  const [privacyMode, setPrivacyMode] = useState(() => {
-    try {
-      return window.localStorage.getItem(PRIVACY_STORAGE_KEY) === '1';
-    } catch {
-      return false;
-    }
-  });
-
   const provider = useAppStore((state) => state.provider);
   const runtimeStatus = useAppStore((state) => state.runtimeStatus);
   const sessions = useAppStore((state) => state.sessions);
@@ -98,6 +88,8 @@ export function WorkspaceOverview() {
   const contextUsageBySession = useAppStore((state) => state.contextUsageBySession);
   const settings = useAppStore((state) => state.settings);
   const lastPromptResult = useAppStore((state) => state.lastPromptResult);
+  const privacyMode = useAppStore((state) => state.workspacePrivacyMode);
+  const setPrivacyMode = useAppStore((state) => state.setWorkspacePrivacyMode);
   const refreshSessions = useAppStore((state) => state.refreshSessions);
   const refreshRuntimeStatus = useAppStore((state) => state.refreshRuntimeStatus);
   const pickFolderAndAddProject = useAppStore((state) => state.pickFolderAndAddProject);
@@ -129,14 +121,6 @@ export function WorkspaceOverview() {
     ? '当前会话已隐藏'
     : activeSession?.title ?? '未选择会话';
 
-  useEffect(() => {
-    try {
-      window.localStorage.setItem(PRIVACY_STORAGE_KEY, privacyMode ? '1' : '0');
-    } catch {
-      // Ignore storage failures in restricted webviews.
-    }
-  }, [privacyMode]);
-
   return (
     <section className="shrink-0 px-6 pb-4 pt-5">
       <div className="mx-auto w-full max-w-[1400px]">
@@ -158,7 +142,7 @@ export function WorkspaceOverview() {
               type="button"
               title={privacyMode ? '显示敏感信息' : '隐藏敏感信息'}
               aria-pressed={privacyMode}
-              onClick={() => setPrivacyMode((current) => !current)}
+              onClick={() => setPrivacyMode(!privacyMode)}
               className="flex h-9 w-9 items-center justify-center rounded-md text-rc-text-secondary transition-colors hover:bg-rc-bg-hover hover:text-rc-text-primary active:scale-[0.98]"
             >
               {privacyMode ? <EyeOff size={17} /> : <Eye size={17} />}

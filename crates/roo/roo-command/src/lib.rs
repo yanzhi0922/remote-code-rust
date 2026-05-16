@@ -1,3 +1,6 @@
+#![allow(dead_code)]
+#![allow(clippy::all)]
+#![deny(clippy::dbg_macro, clippy::todo)]
 //! # roo-command — Slash Command Loading and Management
 //!
 //! This crate provides the command loading infrastructure for Roo Code's slash

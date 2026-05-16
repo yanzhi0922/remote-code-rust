@@ -29,10 +29,10 @@ pub fn validate_search_files_params(params: &SearchFilesParams) -> Result<(), Se
     validate_regex_detailed(&params.regex)?;
 
     // Validate file pattern if provided
-    if let Some(ref pattern) = params.file_pattern {
-        if !pattern.is_empty() {
-            validate_file_pattern(pattern)?;
-        }
+    if let Some(ref pattern) = params.file_pattern
+        && !pattern.is_empty()
+    {
+        validate_file_pattern(pattern)?;
     }
 
     Ok(())
@@ -96,12 +96,11 @@ pub fn search_files(
     }
 
     // Try ripgrep first
-    if is_ripgrep_available() {
-        if let Ok(results) =
+    if is_ripgrep_available()
+        && let Ok(results) =
             search_with_ripgrep(&params.regex, &search_path, params.file_pattern.as_deref())
-        {
-            return Ok(results);
-        }
+    {
+        return Ok(results);
     }
 
     // Fallback to pure Rust search
@@ -127,17 +126,18 @@ fn search_with_ripgrep(
         .arg(search_path);
 
     // Add glob filter if file_pattern is specified
-    if let Some(fp) = file_pattern {
-        if !fp.is_empty() && fp != "*" {
-            cmd.arg("--glob").arg(fp);
-        }
+    if let Some(fp) = file_pattern
+        && !fp.is_empty()
+        && fp != "*"
+    {
+        cmd.arg("--glob").arg(fp);
     }
 
     let output = cmd
         .output()
         .map_err(|e| SearchToolError::Validation(format!("Failed to execute ripgrep: {}", e)))?;
 
-    if !output.status.success() && !output.status.code().map_or(false, |c| c == 1) {
+    if !output.status.success() && !(output.status.code() == Some(1)) {
         // Exit code 1 means no matches, which is fine.
         // Other errors fall through to the regex fallback.
         return Err(SearchToolError::Validation(
@@ -348,27 +348,25 @@ fn search_in_dir_pure(
         let path = entry.path();
 
         // Skip hidden directories and common ignored directories
-        if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-            if name.starts_with('.')
+        if let Some(name) = path.file_name().and_then(|n| n.to_str())
+            && (name.starts_with('.')
                 || name == "node_modules"
                 || name == "target"
-                || name == "__pycache__"
-            {
-                continue;
-            }
+                || name == "__pycache__")
+        {
+            continue;
         }
 
         if path.is_dir() {
             search_in_dir_pure(re, &path, file_pattern, results, max_results);
         } else if path.is_file() {
             // Apply file pattern filter
-            if let Some(fp) = file_pattern {
-                if !fp.is_empty()
-                    && fp != "*"
-                    && !matches_file_pattern(path.to_str().unwrap_or(""), fp)
-                {
-                    continue;
-                }
+            if let Some(fp) = file_pattern
+                && !fp.is_empty()
+                && fp != "*"
+                && !matches_file_pattern(path.to_str().unwrap_or(""), fp)
+            {
+                continue;
             }
 
             // Try to read and search the file

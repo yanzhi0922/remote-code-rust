@@ -146,9 +146,7 @@ pub struct OpenRouterHandler {
 impl OpenRouterHandler {
     /// Create a new OpenRouter handler from configuration.
     pub fn new(config: OpenRouterConfig) -> Result<Self> {
-        let model_id = config
-            .model_id
-            .unwrap_or_else(|| models::default_model_id());
+        let model_id = config.model_id.unwrap_or_else(models::default_model_id);
         let model_info = models::models()
             .get(&model_id)
             .cloned()
@@ -287,12 +285,11 @@ impl OpenRouterHandler {
         }
 
         // Try dynamic cache
-        if let Ok(cache) = self.dynamic_models.read() {
-            if let Some(ref dynamic) = *cache {
-                if let Some(info) = dynamic.get(&model_id) {
-                    return (model_id, info.clone());
-                }
-            }
+        if let Ok(cache) = self.dynamic_models.read()
+            && let Some(ref dynamic) = *cache
+            && let Some(info) = dynamic.get(&model_id)
+        {
+            return (model_id, info.clone());
         }
 
         // Fallback to the base model info (set at construction)
@@ -447,10 +444,10 @@ impl OpenRouterHandler {
             "stream_options": { "include_usage": true },
         });
 
-        if let Some(max_tokens) = max_tokens {
-            if max_tokens > 0 {
-                body["max_tokens"] = json!(max_tokens);
-            }
+        if let Some(max_tokens) = max_tokens
+            && max_tokens > 0
+        {
+            body["max_tokens"] = json!(max_tokens);
         }
 
         body["temperature"] = json!(self.temperature);

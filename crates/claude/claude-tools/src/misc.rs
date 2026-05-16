@@ -167,13 +167,10 @@ pub(crate) async fn lsp_tool(input: &Value, context: &ToolExecutionContext) -> R
 
     match operation {
         "goToDefinition" | "definitions" => {
-            let symbol = input
-                .get("symbol")
-                .and_then(Value::as_str)
-                .unwrap_or_else(|| {
-                    // Best-effort: use position-based lookup when no explicit symbol given.
-                    ""
-                });
+            let symbol = input.get("symbol").and_then(Value::as_str).unwrap_or({
+                // Best-effort: use position-based lookup when no explicit symbol given.
+                ""
+            });
             if symbol.is_empty() {
                 // Position-based: try to find a symbol at the given line/character.
                 let locations =

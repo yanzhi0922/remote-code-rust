@@ -7,6 +7,7 @@ const mockApi = vi.hoisted(() => ({
   bootstrapControlPlane: vi.fn(),
   buildArtifactDownloadUrl: vi.fn(() => '#artifact'),
   buildSessionEventsStreamUrl: vi.fn(() => 'wss://example.test/events'),
+  createStreamTicket: vi.fn(() => Promise.resolve({ stream_ticket: 'rcst_test', expires_in_secs: 45 })),
   getControlPlaneHealth: vi.fn(),
   interruptSession: vi.fn(),
   listSessionApprovals: vi.fn(),
@@ -24,7 +25,7 @@ const mockFileDownload = vi.hoisted(() => ({
 
 const mockPush = vi.hoisted(() => ({
   initPushNotifications: vi.fn(() => Promise.resolve()),
-  registerPushTokenWithControlPlane: vi.fn(() => Promise.resolve()),
+  registerPushTokenWithControlPlane: vi.fn(() => Promise.resolve(true)),
   showLocalNotification: vi.fn(() => Promise.resolve()),
 }));
 

@@ -11,19 +11,14 @@ use serde::{Deserialize, Serialize};
 /// Read mode for the read_file tool.
 ///
 /// Source: `packages/types/src/tool-params.ts` — `ReadFileMode`
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ReadFileMode {
     /// Simple offset/limit reading (default).
+    #[default]
     Slice,
     /// Semantic block extraction based on code structure.
     Indentation,
-}
-
-impl Default for ReadFileMode {
-    fn default() -> Self {
-        Self::Slice
-    }
 }
 
 // ---------------------------------------------------------------------------

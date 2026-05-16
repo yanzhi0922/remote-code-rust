@@ -1145,16 +1145,16 @@ impl TaskEngine {
     ///
     /// Source: `src/core/task/Task.ts` — `getEnvironmentDetails()` injection
     pub fn add_environment_context(&mut self, details: &str) {
-        if let Some(last_msg) = self.api_conversation_history.last_mut() {
-            if last_msg.role == roo_types::api::MessageRole::User {
-                last_msg.content.push(roo_types::api::ContentBlock::Text {
-                    text: format!(
-                        "\n\n<environment_details>\n{}\n</environment_details>",
-                        details
-                    ),
-                });
-                return;
-            }
+        if let Some(last_msg) = self.api_conversation_history.last_mut()
+            && last_msg.role == roo_types::api::MessageRole::User
+        {
+            last_msg.content.push(roo_types::api::ContentBlock::Text {
+                text: format!(
+                    "\n\n<environment_details>\n{}\n</environment_details>",
+                    details
+                ),
+            });
+            return;
         }
         // No last user message — create a new one
         self.api_conversation_history

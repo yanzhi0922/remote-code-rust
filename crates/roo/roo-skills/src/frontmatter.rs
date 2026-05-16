@@ -164,12 +164,12 @@ pub fn generate_skill_md(
     content.push_str(&format!("name: {}\n", name));
     content.push_str(&format!("description: {}\n", description));
 
-    if let Some(slugs) = mode_slugs {
-        if !slugs.is_empty() {
-            content.push_str("modeSlugs:\n");
-            for slug in slugs {
-                content.push_str(&format!("  - {}\n", slug));
-            }
+    if let Some(slugs) = mode_slugs
+        && !slugs.is_empty()
+    {
+        content.push_str("modeSlugs:\n");
+        for slug in slugs {
+            content.push_str(&format!("  - {}\n", slug));
         }
     }
 

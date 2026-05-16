@@ -75,7 +75,7 @@ pub trait Provider: Send + Sync {
                     match source {
                         roo_types::api::ImageSource::Base64 { data, .. } => {
                             // Estimate based on base64 data length
-                            (data.len() / 100).max(85).min(1000)
+                            (data.len() / 100).clamp(85, 1000)
                         }
                         roo_types::api::ImageSource::Url { .. } => 256,
                     }

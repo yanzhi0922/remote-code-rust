@@ -110,14 +110,14 @@ impl App {
         // ── Initialize RooIgnore controller ─────────────────────────────
         let mut roo_ignore = roo_ignore::RooIgnoreController::new(&self.config.cwd);
         let rooignore_path = std::path::Path::new(&self.config.cwd).join(".rooignore");
-        if rooignore_path.exists() {
-            if let Ok(content) = std::fs::read_to_string(&rooignore_path) {
-                roo_ignore.load_patterns(&content);
-                tracing::info!(
-                    "Loaded .rooignore patterns from {}",
-                    rooignore_path.display()
-                );
-            }
+        if rooignore_path.exists()
+            && let Ok(content) = std::fs::read_to_string(&rooignore_path)
+        {
+            roo_ignore.load_patterns(&content);
+            tracing::info!(
+                "Loaded .rooignore patterns from {}",
+                rooignore_path.display()
+            );
         }
         self.roo_ignore = Some(Arc::new(roo_ignore));
 
@@ -141,8 +141,53 @@ impl App {
         let project_mcp_path = std::path::Path::new(&self.config.cwd)
             .join(".roo")
             .join("mcp.json");
-        if project_mcp_path.exists() {
-            if let Ok(content) = std::fs::read_to_string(&project_mcp_path) {
+        if project_mcp_path.exists()
+            && let Ok(content) = std::fs::read_to_string(&project_mcp_path)
+        {
+            match serde_json::from_str::<serde_json::Value>(&content) {
+                Ok(config) => {
+                    if let Some(servers) = config.get("mcpServers").and_then(|v| v.as_object()) {
+                        let server_map: std::collections::HashMap<String, serde_json::Value> =
+                            servers
+                                .into_iter()
+                                .map(|(k, v)| (k.clone(), v.clone()))
+                                .collect();
+                        if let Err(e) = hub
+                            .update_server_connections(
+                                &server_map,
+                                roo_mcp::McpSource::Project,
+                                true,
+                            )
+                            .await
+                        {
+                            tracing::warn!("Failed to load project MCP servers: {}", e);
+                        } else {
+                            tracing::info!(
+                                "Loaded {} project MCP servers from {}",
+                                server_map.len(),
+                                project_mcp_path.display()
+                            );
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "Failed to parse project MCP config {}: {}",
+                        project_mcp_path.display(),
+                        e
+                    );
+                }
+            }
+        }
+
+        // Load global MCP config (<global_storage>/settings/mcp_settings.json)
+        if !self.config.global_storage_path.is_empty() {
+            let global_mcp_path = std::path::Path::new(&self.config.global_storage_path)
+                .join("settings")
+                .join("mcp_settings.json");
+            if global_mcp_path.exists()
+                && let Ok(content) = std::fs::read_to_string(&global_mcp_path)
+            {
                 match serde_json::from_str::<serde_json::Value>(&content) {
                     Ok(config) => {
                         if let Some(servers) = config.get("mcpServers").and_then(|v| v.as_object())
@@ -155,76 +200,27 @@ impl App {
                             if let Err(e) = hub
                                 .update_server_connections(
                                     &server_map,
-                                    roo_mcp::McpSource::Project,
+                                    roo_mcp::McpSource::Global,
                                     true,
                                 )
                                 .await
                             {
-                                tracing::warn!("Failed to load project MCP servers: {}", e);
+                                tracing::warn!("Failed to load global MCP servers: {}", e);
                             } else {
                                 tracing::info!(
-                                    "Loaded {} project MCP servers from {}",
+                                    "Loaded {} global MCP servers from {}",
                                     server_map.len(),
-                                    project_mcp_path.display()
+                                    global_mcp_path.display()
                                 );
                             }
                         }
                     }
                     Err(e) => {
                         tracing::warn!(
-                            "Failed to parse project MCP config {}: {}",
-                            project_mcp_path.display(),
+                            "Failed to parse global MCP config {}: {}",
+                            global_mcp_path.display(),
                             e
                         );
-                    }
-                }
-            }
-        }
-
-        // Load global MCP config (<global_storage>/settings/mcp_settings.json)
-        if !self.config.global_storage_path.is_empty() {
-            let global_mcp_path = std::path::Path::new(&self.config.global_storage_path)
-                .join("settings")
-                .join("mcp_settings.json");
-            if global_mcp_path.exists() {
-                if let Ok(content) = std::fs::read_to_string(&global_mcp_path) {
-                    match serde_json::from_str::<serde_json::Value>(&content) {
-                        Ok(config) => {
-                            if let Some(servers) =
-                                config.get("mcpServers").and_then(|v| v.as_object())
-                            {
-                                let server_map: std::collections::HashMap<
-                                    String,
-                                    serde_json::Value,
-                                > = servers
-                                    .into_iter()
-                                    .map(|(k, v)| (k.clone(), v.clone()))
-                                    .collect();
-                                if let Err(e) = hub
-                                    .update_server_connections(
-                                        &server_map,
-                                        roo_mcp::McpSource::Global,
-                                        true,
-                                    )
-                                    .await
-                                {
-                                    tracing::warn!("Failed to load global MCP servers: {}", e);
-                                } else {
-                                    tracing::info!(
-                                        "Loaded {} global MCP servers from {}",
-                                        server_map.len(),
-                                        global_mcp_path.display()
-                                    );
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            tracing::warn!(
-                                "Failed to parse global MCP config {}: {}",
-                                global_mcp_path.display(),
-                                e
-                            );
-                        }
                     }
                 }
             }
@@ -446,10 +442,10 @@ impl App {
         }
 
         // Shut down telemetry
-        if let Some(telemetry) = &self.telemetry {
-            if let Ok(svc) = telemetry.read() {
-                svc.shutdown();
-            }
+        if let Some(telemetry) = &self.telemetry
+            && let Ok(svc) = telemetry.read()
+        {
+            svc.shutdown();
         }
 
         tracing::info!("App disposed");

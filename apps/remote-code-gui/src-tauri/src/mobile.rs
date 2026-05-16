@@ -144,7 +144,7 @@ pub async fn mobile_secure_store_get(
     match entry.get_password() {
         Ok(value) => Ok(Some(value)),
         Err(keyring::Error::NoEntry) => {
-            if let Some(dir) = app.path().app_config_dir().ok() {
+            if let Ok(dir) = app.path().app_config_dir() {
                 let legacy_path = dir.join("secure_store.json");
                 if legacy_path.exists() {
                     if let Ok(data) = std::fs::read_to_string(&legacy_path) {
@@ -382,12 +382,47 @@ pub async fn mobile_push_get_token(app: AppHandle<impl Runtime>) -> Result<Optio
 #[tauri::command]
 pub async fn mobile_push_register_token(
     _app: AppHandle<impl Runtime>,
-    _base_url: String,
-    _access_token: String,
-) -> Result<(), String> {
-    // Push token registration requires platform-specific FCM/APNs integration.
-    // Will be implemented with a dedicated push plugin.
-    Ok(())
+    base_url: String,
+    access_token: String,
+    push_token: Option<String>,
+) -> Result<bool, String> {
+    let Some(push_token) = push_token
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(false);
+    };
+    let platform = mobile_push_platform();
+    let url = format!("{}/v1/devices/push-token", base_url.trim_end_matches('/'));
+    let response = reqwest::Client::new()
+        .post(url)
+        .bearer_auth(access_token)
+        .json(&serde_json::json!({
+            "push_token": push_token,
+            "platform": platform,
+        }))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    if response.status().is_success() {
+        Ok(true)
+    } else {
+        Err(format!(
+            "push token registration failed: HTTP {}",
+            response.status()
+        ))
+    }
+}
+
+fn mobile_push_platform() -> &'static str {
+    #[cfg(target_os = "ios")]
+    {
+        "apns"
+    }
+    #[cfg(not(target_os = "ios"))]
+    {
+        "fcm"
+    }
 }
 
 /// Get the current QUIC connection state (idle, connecting, open, etc.).

@@ -1,4 +1,4 @@
-﻿//! History management utilities.
+//! History management utilities.
 //!
 //! Functions for filtering and retrieving conversation history,
 //! including messages since last summary and effective API history.
@@ -68,7 +68,7 @@ pub fn get_effective_api_history(messages: &[ApiMessage]) -> Vec<ApiMessage> {
         // Filter out orphan tool_result blocks from user messages
         messages_from_summary = messages_from_summary
             .into_iter()
-            .map(|mut msg| {
+            .filter_map(|mut msg| {
                 if msg.role == roo_types::api::MessageRole::User {
                     let original_len = msg.content.len();
                     msg.content.retain(|block| {
@@ -87,16 +87,15 @@ pub fn get_effective_api_history(messages: &[ApiMessage]) -> Vec<ApiMessage> {
                 }
                 Some(msg)
             })
-            .flatten()
             .collect();
 
         // Still need to filter out any truncated messages within this range
         let mut existing_truncation_ids = std::collections::HashSet::new();
         for msg in &messages_from_summary {
-            if msg.is_truncation_marker.unwrap_or(false) {
-                if let Some(ref truncation_id) = msg.truncation_id {
-                    existing_truncation_ids.insert(truncation_id.clone());
-                }
+            if msg.is_truncation_marker.unwrap_or(false)
+                && let Some(ref truncation_id) = msg.truncation_id
+            {
+                existing_truncation_ids.insert(truncation_id.clone());
             }
         }
 
@@ -104,10 +103,10 @@ pub fn get_effective_api_history(messages: &[ApiMessage]) -> Vec<ApiMessage> {
             .into_iter()
             .filter(|msg| {
                 // Filter out truncated messages if their truncation marker exists
-                if let Some(ref parent) = msg.truncation_parent {
-                    if existing_truncation_ids.contains(parent) {
-                        return false;
-                    }
+                if let Some(ref parent) = msg.truncation_parent
+                    && existing_truncation_ids.contains(parent)
+                {
+                    return false;
                 }
                 true
             })
@@ -123,15 +122,15 @@ pub fn get_effective_api_history(messages: &[ApiMessage]) -> Vec<ApiMessage> {
     let mut existing_truncation_ids = std::collections::HashSet::new();
 
     for msg in messages {
-        if msg.is_summary.unwrap_or(false) {
-            if let Some(ref condense_id) = msg.condense_id {
-                existing_summary_ids.insert(condense_id.clone());
-            }
+        if msg.is_summary.unwrap_or(false)
+            && let Some(ref condense_id) = msg.condense_id
+        {
+            existing_summary_ids.insert(condense_id.clone());
         }
-        if msg.is_truncation_marker.unwrap_or(false) {
-            if let Some(ref truncation_id) = msg.truncation_id {
-                existing_truncation_ids.insert(truncation_id.clone());
-            }
+        if msg.is_truncation_marker.unwrap_or(false)
+            && let Some(ref truncation_id) = msg.truncation_id
+        {
+            existing_truncation_ids.insert(truncation_id.clone());
         }
     }
 
@@ -142,16 +141,16 @@ pub fn get_effective_api_history(messages: &[ApiMessage]) -> Vec<ApiMessage> {
         .iter()
         .filter(|msg| {
             // Filter out condensed messages if their summary exists
-            if let Some(ref parent) = msg.condense_parent {
-                if existing_summary_ids.contains(parent) {
-                    return false;
-                }
+            if let Some(ref parent) = msg.condense_parent
+                && existing_summary_ids.contains(parent)
+            {
+                return false;
             }
             // Filter out truncated messages if their truncation marker exists
-            if let Some(ref parent) = msg.truncation_parent {
-                if existing_truncation_ids.contains(parent) {
-                    return false;
-                }
+            if let Some(ref parent) = msg.truncation_parent
+                && existing_truncation_ids.contains(parent)
+            {
+                return false;
             }
             true
         })

@@ -376,7 +376,7 @@ fn extract_subshells(command: &str) -> Vec<String> {
             '`' => {
                 // Backtick subshell
                 let mut content = String::new();
-                while let Some(c) = chars.next() {
+                for c in chars.by_ref() {
                     if c == '`' {
                         break;
                     }
@@ -392,7 +392,7 @@ fn extract_subshells(command: &str) -> Vec<String> {
                     chars.next(); // consume '('
                     let mut depth = 1i32;
                     let mut content = String::new();
-                    while let Some(c) = chars.next() {
+                    for c in chars.by_ref() {
                         if c == '(' {
                             depth += 1;
                         } else if c == ')' {
@@ -465,7 +465,7 @@ pub fn get_command_decision(
         .collect();
 
     // If any sub-command is denied, deny the whole command
-    if decisions.iter().any(|d| *d == CommandDecision::AutoDeny) {
+    if decisions.contains(&CommandDecision::AutoDeny) {
         return CommandDecision::AutoDeny;
     }
 

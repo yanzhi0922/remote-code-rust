@@ -54,7 +54,7 @@ pub fn generate_worktree_name() -> String {
 /// (i.e. it starts with `workspace_root` but is not equal).
 pub fn is_workspace_subfolder(cwd: &str, workspace_root: &str) -> bool {
     let cwd_n = normalize_path(cwd);
-    let root_n = normalize_path(&workspace_root);
+    let root_n = normalize_path(workspace_root);
 
     if cwd_n == root_n {
         return false;

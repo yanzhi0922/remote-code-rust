@@ -140,10 +140,10 @@ impl ReasoningDetailsAccumulator {
             }
 
             // Update metadata from later chunks (take last seen)
-            if let Some(ref id) = detail.id {
-                if let Some(inner_id) = id.as_deref() {
-                    entry.id = Some(inner_id.to_string());
-                }
+            if let Some(ref id) = detail.id
+                && let Some(inner_id) = id.as_deref()
+            {
+                entry.id = Some(inner_id.to_string());
             }
             if let Some(ref format) = detail.format {
                 entry.format = Some(format.clone());
@@ -533,13 +533,12 @@ impl OpenAiCompatibleProvider {
         }
 
         // Merge extra body fields (e.g. Ollama's `num_ctx`).
-        if let Some(ref extra) = self.extra_body_fields {
-            if let Some(obj) = body.as_object_mut() {
-                if let Some(extra_obj) = extra.as_object() {
-                    for (key, value) in extra_obj {
-                        obj.insert(key.clone(), value.clone());
-                    }
-                }
+        if let Some(ref extra) = self.extra_body_fields
+            && let Some(obj) = body.as_object_mut()
+            && let Some(extra_obj) = extra.as_object()
+        {
+            for (key, value) in extra_obj {
+                obj.insert(key.clone(), value.clone());
             }
         }
 
@@ -738,14 +737,14 @@ impl OpenAiCompatibleProvider {
                                     Some("reasoning.summary") => detail.summary.as_deref(),
                                     _ => None, // Skip reasoning.encrypted and other types
                                 };
-                                if let Some(text) = reasoning_text {
-                                    if !text.is_empty() {
-                                        has_reasoning_from_details = true;
-                                        results.push(Ok(ApiStreamChunk::Reasoning {
-                                            text: text.to_string(),
-                                            signature: None,
-                                        }));
-                                    }
+                                if let Some(text) = reasoning_text
+                                    && !text.is_empty()
+                                {
+                                    has_reasoning_from_details = true;
+                                    results.push(Ok(ApiStreamChunk::Reasoning {
+                                        text: text.to_string(),
+                                        signature: None,
+                                    }));
                                 }
                             }
                         }
@@ -759,13 +758,13 @@ impl OpenAiCompatibleProvider {
                                         signature: None,
                                     }));
                                 }
-                            } else if let Some(ref reasoning) = delta.reasoning {
-                                if !reasoning.trim().is_empty() {
-                                    results.push(Ok(ApiStreamChunk::Reasoning {
-                                        text: reasoning.clone(),
-                                        signature: None,
-                                    }));
-                                }
+                            } else if let Some(ref reasoning) = delta.reasoning
+                                && !reasoning.trim().is_empty()
+                            {
+                                results.push(Ok(ApiStreamChunk::Reasoning {
+                                    text: reasoning.clone(),
+                                    signature: None,
+                                }));
                             }
                         }
 
@@ -840,14 +839,12 @@ impl OpenAiCompatibleProvider {
         )?;
 
         // Ensure the system message uses "developer" role
-        if let Some(msgs) = body.get_mut("messages") {
-            if let Some(msgs_arr) = msgs.as_array_mut() {
-                if let Some(first) = msgs_arr.first_mut() {
-                    if first.get("role").and_then(|r| r.as_str()) == Some("system") {
-                        first["role"] = serde_json::Value::String("developer".to_string());
-                    }
-                }
-            }
+        if let Some(msgs) = body.get_mut("messages")
+            && let Some(msgs_arr) = msgs.as_array_mut()
+            && let Some(first) = msgs_arr.first_mut()
+            && first.get("role").and_then(|r| r.as_str()) == Some("system")
+        {
+            first["role"] = serde_json::Value::String("developer".to_string());
         }
 
         // Remove temperature for O-family models
@@ -861,10 +858,10 @@ impl OpenAiCompatibleProvider {
         }
 
         // Use max_completion_tokens instead of max_tokens
-        if let Some(obj) = body.as_object_mut() {
-            if let Some(max_tokens) = obj.remove("max_tokens") {
-                obj.insert("max_completion_tokens".to_string(), max_tokens);
-            }
+        if let Some(obj) = body.as_object_mut()
+            && let Some(max_tokens) = obj.remove("max_tokens")
+        {
+            obj.insert("max_completion_tokens".to_string(), max_tokens);
         }
 
         // When streaming is disabled, convert to non-streaming body
@@ -1079,14 +1076,14 @@ impl Provider for OpenAiCompatibleProvider {
                                     Some("reasoning.summary") => detail.summary.as_deref(),
                                     _ => None,
                                 };
-                                if let Some(text) = reasoning_text {
-                                    if !text.is_empty() {
-                                        has_reasoning_from_details = true;
-                                        results.push(Ok(ApiStreamChunk::Reasoning {
-                                            text: text.to_string(),
-                                            signature: None,
-                                        }));
-                                    }
+                                if let Some(text) = reasoning_text
+                                    && !text.is_empty()
+                                {
+                                    has_reasoning_from_details = true;
+                                    results.push(Ok(ApiStreamChunk::Reasoning {
+                                        text: text.to_string(),
+                                        signature: None,
+                                    }));
                                 }
                             }
                         }
@@ -1100,13 +1097,13 @@ impl Provider for OpenAiCompatibleProvider {
                                         signature: None,
                                     }));
                                 }
-                            } else if let Some(ref reasoning) = delta.reasoning {
-                                if !reasoning.trim().is_empty() {
-                                    results.push(Ok(ApiStreamChunk::Reasoning {
-                                        text: reasoning.clone(),
-                                        signature: None,
-                                    }));
-                                }
+                            } else if let Some(ref reasoning) = delta.reasoning
+                                && !reasoning.trim().is_empty()
+                            {
+                                results.push(Ok(ApiStreamChunk::Reasoning {
+                                    text: reasoning.clone(),
+                                    signature: None,
+                                }));
                             }
                         }
 

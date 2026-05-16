@@ -1,16 +1,13 @@
 import {
   Bot,
   MessageSquare,
-  FolderTree,
-  Search,
-  Plug,
   Settings2,
   Moon,
   Sun,
 } from 'lucide-react';
 import { useTheme } from '../design/ThemeProvider';
 
-export type ActivityTab = 'chat' | 'files' | 'search' | 'mcp' | 'settings';
+export type ActivityTab = 'chat' | 'settings';
 
 interface ActivityBarProps {
   activeTab: ActivityTab;
@@ -19,9 +16,6 @@ interface ActivityBarProps {
 
 const tabs: { id: ActivityTab; icon: typeof MessageSquare; label: string }[] = [
   { id: 'chat', icon: MessageSquare, label: '会话' },
-  { id: 'files', icon: FolderTree, label: '文件' },
-  { id: 'search', icon: Search, label: '搜索' },
-  { id: 'mcp', icon: Plug, label: 'MCP' },
 ];
 
 export function ActivityBar({ activeTab, onTabChange }: ActivityBarProps) {

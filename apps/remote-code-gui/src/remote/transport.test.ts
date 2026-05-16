@@ -3,6 +3,7 @@ import { loadRemoteSessionBundle, subscribeToRemoteSessionEvents } from './trans
 
 const mockApi = vi.hoisted(() => ({
   buildSessionEventsStreamUrl: vi.fn(() => 'wss://example.test/events'),
+  createStreamTicket: vi.fn(() => Promise.resolve({ stream_ticket: 'rcst_test', expires_in_secs: 45 })),
   listSessionApprovals: vi.fn(),
   listSessionArtifacts: vi.fn(),
   listSessionEvents: vi.fn(),
@@ -153,11 +154,13 @@ describe('remote transport', () => {
     });
 
     await Promise.resolve();
+    await Promise.resolve();
 
     expect(mockApi.buildSessionEventsStreamUrl).toHaveBeenCalledWith(
       'https://remote-code.yz520gzy.top',
       'session-1',
       3,
+      'rcst_test',
     );
     expect(states).toEqual(['reconnecting', 'open']);
 
@@ -195,6 +198,9 @@ describe('remote transport', () => {
       onEvent: () => {},
     });
 
+    await Promise.resolve();
+    await Promise.resolve();
+
     expect(MockWebSocket.instances).toHaveLength(1);
 
     MockWebSocket.instances[0].onclose?.();
@@ -217,6 +223,8 @@ describe('remote transport', () => {
       value: true,
     });
     window.dispatchEvent(new Event('online'));
+    await Promise.resolve();
+    await Promise.resolve();
     expect(MockWebSocket.instances).toHaveLength(3);
     expect(states).toContain('reconnecting');
 

@@ -1,4 +1,8 @@
+#![allow(dead_code)]
+#![allow(clippy::all)]
+#![deny(clippy::dbg_macro, clippy::todo)]
 //! # Roo Tools Command
+#![allow(clippy::too_many_arguments)]
 //!
 //! Command execution tool implementations: `execute_command` and
 //! `read_command_output`.

@@ -1,3 +1,6 @@
+#![allow(dead_code)]
+#![allow(clippy::all)]
+#![deny(clippy::dbg_macro, clippy::todo)]
 //! # roo-jsonrpc
 //!
 //! A JSON-RPC 2.0 protocol library for Roo Code.

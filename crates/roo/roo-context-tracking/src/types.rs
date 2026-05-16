@@ -39,17 +39,9 @@ pub struct FileMetadataEntry {
 /// Task-level metadata containing all tracked file entries.
 ///
 /// Corresponds to `TaskMetadata` in `FileContextTrackerTypes.ts`.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct TaskMetadata {
     pub files_in_context: Vec<FileMetadataEntry>,
-}
-
-impl Default for TaskMetadata {
-    fn default() -> Self {
-        Self {
-            files_in_context: Vec::new(),
-        }
-    }
 }
 
 #[cfg(test)]

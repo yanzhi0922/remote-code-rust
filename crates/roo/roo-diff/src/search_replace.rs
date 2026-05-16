@@ -158,8 +158,8 @@ fn parse_blocks(diff: &str) -> Vec<SearchReplaceBlock> {
 
 /// Trims a single trailing newline from the content.
 fn trim_trailing_newline(content: &str) -> String {
-    if content.ends_with('\n') {
-        content[..content.len() - 1].to_string()
+    if let Some(stripped) = content.strip_suffix('\n') {
+        stripped.to_string()
     } else {
         content.to_string()
     }

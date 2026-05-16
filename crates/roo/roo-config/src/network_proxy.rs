@@ -140,7 +140,7 @@ pub fn redact_proxy_url(proxy_url: &str) -> String {
         Err(_) => {
             // Fallback: redact basic auth if present
             regex::Regex::new(r"//[^@/]+@")
-                .and_then(|re| Ok(re.replace(proxy_url, "//REDACTED@").to_string()))
+                .map(|re| re.replace(proxy_url, "//REDACTED@").to_string())
                 .unwrap_or_else(|_| "(invalid url)".to_string())
         }
     }

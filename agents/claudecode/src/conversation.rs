@@ -357,7 +357,7 @@ impl PromptStreamEvent {
         match self {
             Self::MessageDelta { delta } => Some(RuntimeEventDetail::MessageDelta {
                 role: MessageRole::Assistant,
-                delta: delta.clone().into(),
+                delta: delta.clone(),
                 message_id: None,
             }),
             Self::MessageCommitted { text } => Some(RuntimeEventDetail::MessageCommitted {
@@ -379,7 +379,7 @@ impl PromptStreamEvent {
             } => Some(RuntimeEventDetail::ToolProgress {
                 tool_call_id: tool_call_id.clone().map(Into::into),
                 tool_name: None,
-                delta: delta.clone().into(),
+                delta: delta.clone(),
                 elapsed_time_seconds: *elapsed_time_seconds,
             }),
             Self::ToolFinished {
@@ -532,7 +532,7 @@ fn build_streaming_callbacks(
                     return;
                 }
                 text_sink(PromptStreamEvent::MessageDelta {
-                    delta: delta.to_owned().into(),
+                    delta: delta.to_owned(),
                 });
             }) as Box<dyn Fn(&str) + Send + Sync>
         }),
@@ -542,7 +542,7 @@ fn build_streaming_callbacks(
             }
             start_sink(PromptStreamEvent::ToolStarted {
                 tool_call_id: tool_call_id.to_owned(),
-                tool_name: tool_name.to_owned().into(),
+                tool_name: tool_name.to_owned(),
             });
         })),
         on_tool_call_delta: Some(Box::new(move |tool_call_id: &str, delta: &str| {
@@ -551,7 +551,7 @@ fn build_streaming_callbacks(
             }
             progress_sink(PromptStreamEvent::ToolProgress {
                 tool_call_id: Some(tool_call_id.to_owned()),
-                delta: Some(delta.to_owned().into()),
+                delta: Some(delta.to_owned()),
                 elapsed_time_seconds: None,
             });
         })),
@@ -1248,7 +1248,7 @@ async fn run_prompt_legacy(
             if let Some(event_sink) = event_sink.as_ref() {
                 event_sink(PromptStreamEvent::ToolFinished {
                     tool_call_id: effective_tool_call.id.clone(),
-                    tool_name: effective_tool_call.name.clone().into(),
+                    tool_name: effective_tool_call.name.clone(),
                     is_error: tool_result.is_error,
                     summary: Some(tool_preview.clone()),
                 });

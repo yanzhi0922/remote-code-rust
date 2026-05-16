@@ -34,12 +34,12 @@ pub fn format_active_terminals(terminals: &[TerminalInfo]) -> String {
             terminal.last_command
         ));
 
-        if let Some(ref output) = terminal.new_output {
-            if !output.is_empty() {
-                // Compress terminal output (strips ANSI codes, collapses blanks, truncates)
-                let compressed = compress_terminal_output(output);
-                details.push_str(&format!("\n### New Output\n{}", compressed));
-            }
+        if let Some(ref output) = terminal.new_output
+            && !output.is_empty()
+        {
+            // Compress terminal output (strips ANSI codes, collapses blanks, truncates)
+            let compressed = compress_terminal_output(output);
+            details.push_str(&format!("\n### New Output\n{}", compressed));
         }
     }
 

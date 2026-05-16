@@ -181,12 +181,11 @@ impl VertexTokenProvider {
         // Check the cache first
         {
             let cached = self.cached_token.lock().await;
-            if let Some(token) = cached.as_ref() {
-                if token.expires_at
+            if let Some(token) = cached.as_ref()
+                && token.expires_at
                     > Instant::now() + Duration::from_secs(Self::REFRESH_MARGIN_SECS)
-                {
-                    return Ok(token.access_token.clone());
-                }
+            {
+                return Ok(token.access_token.clone());
             }
         }
 

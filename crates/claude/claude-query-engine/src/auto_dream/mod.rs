@@ -26,21 +26,12 @@ use consolidation_lock::ConsolidationLock;
 use consolidation_prompt::AUTO_DREAM_SYSTEM_PROMPT;
 
 /// Shared state for auto-dream gating across invocations.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct AutoDreamState {
     /// Timestamp of last directory scan (ms since epoch).
     last_session_scan_at: Option<u128>,
     /// Number of sessions found in last scan.
     last_session_count: usize,
-}
-
-impl Default for AutoDreamState {
-    fn default() -> Self {
-        Self {
-            last_session_scan_at: None,
-            last_session_count: 0,
-        }
-    }
 }
 
 /// Auto-dream executor that manages the 5-gate chain.
@@ -133,10 +124,7 @@ impl AutoDreamExecutor {
         }
 
         // Gate 5: Lock gate
-        match lock.try_acquire() {
-            Ok(_) => true,
-            Err(_) => false,
-        }
+        lock.try_acquire().is_ok()
     }
 
     /// Count sessions modified since the given timestamp.

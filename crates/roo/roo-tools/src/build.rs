@@ -127,7 +127,7 @@ pub fn build_native_tools_array_with_restrictions(options: BuildToolsOptions) ->
     // Combine filtered tools (native + MCP)
     let filtered_tools: Vec<ToolDefinition> = filtered_native_tools
         .into_iter()
-        .chain(filtered_mcp_tools.into_iter())
+        .chain(filtered_mcp_tools)
         .collect();
 
     if options.include_all_tools_with_restrictions {
@@ -138,10 +138,8 @@ pub fn build_native_tools_array_with_restrictions(options: BuildToolsOptions) ->
             .collect();
 
         // Combine ALL tools (unfiltered native + all MCP)
-        let all_tools: Vec<ToolDefinition> = native_tools
-            .into_iter()
-            .chain(options.mcp_tools.into_iter())
-            .collect();
+        let all_tools: Vec<ToolDefinition> =
+            native_tools.into_iter().chain(options.mcp_tools).collect();
 
         BuildToolsResult {
             tools: all_tools,

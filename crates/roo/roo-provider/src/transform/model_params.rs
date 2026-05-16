@@ -141,7 +141,7 @@ pub fn get_model_max_output_tokens(
     }
 
     // For Anthropic contexts, always ensure a maxTokens value is set
-    if is_anthropic_context && model.max_tokens.map_or(true, |t| t == 0) {
+    if is_anthropic_context && model.max_tokens.is_none_or(|t| t == 0) {
         return Some(ANTHROPIC_DEFAULT_MAX_TOKENS);
     }
 
@@ -287,10 +287,10 @@ pub fn calculate_model_params(opts: GetModelParamsOptions) -> ModelParams {
         // Capability and settings checks are handled by should_use_reasoning_effort.
         // Here we simply propagate the resolved effort, while still treating
         // "disable" as an omission.
-        if let Some(e) = effort {
-            if e != ReasoningEffortSetting::Disable {
-                reasoning_effort = effort_setting_to_extended(e);
-            }
+        if let Some(e) = effort
+            && e != ReasoningEffortSetting::Disable
+        {
+            reasoning_effort = effort_setting_to_extended(e);
         }
     }
 
@@ -298,7 +298,7 @@ pub fn calculate_model_params(opts: GetModelParamsOptions) -> ModelParams {
     let reasoning_opts = GetModelReasoningOptions {
         model,
         reasoning_budget,
-        reasoning_effort: reasoning_effort.map(|e| effort_extended_to_setting(e)),
+        reasoning_effort: reasoning_effort.map(effort_extended_to_setting),
         settings,
     };
 
@@ -331,11 +331,10 @@ pub fn calculate_model_params(opts: GetModelParamsOptions) -> ModelParams {
     };
 
     // Handle temperature suppression for specific models
-    let temperature = if matches!(format, Format::OpenAi)
+    let suppress_temperature = matches!(format, Format::OpenAi)
         && (model_id.starts_with("o1") || model_id.starts_with("o3-mini"))
-    {
-        None
-    } else if matches!(format, Format::OpenRouter) && model_id == "openai/o1-pro" {
+        || matches!(format, Format::OpenRouter) && model_id == "openai/o1-pro";
+    let temperature = if suppress_temperature {
         None
     } else {
         Some(temperature)

@@ -81,7 +81,7 @@ pub fn resolve_slash_command(
     skills_manager: Option<&SkillsManager>,
     current_mode: Option<&str>,
 ) -> Result<String, String> {
-    validate_run_slash_command_params(params).map_err(|e| e)?;
+    validate_run_slash_command_params(params)?;
 
     let command_name = normalize_command_name(&params.command);
 
@@ -103,27 +103,26 @@ pub fn resolve_slash_command(
         if let Some(skill) = relevant_skills.iter().find(|s| s.name == command_name) {
             // Try to read the skill's SKILL.md synchronously
             let skill_md_path = std::path::Path::new(&skill.path).join("SKILL.md");
-            if let Ok(file_content) = std::fs::read_to_string(&skill_md_path) {
-                if let Some((_frontmatter, instructions)) =
+            if let Ok(file_content) = std::fs::read_to_string(&skill_md_path)
+                && let Some((_frontmatter, instructions)) =
                     roo_skills::frontmatter::parse_skill_md(&file_content)
-                {
-                    let content = if let Some(args) = &params.args {
-                        format!("{}\n\nContext: {}", instructions, args)
-                    } else {
-                        instructions
-                    };
+            {
+                let content = if let Some(args) = &params.args {
+                    format!("{}\n\nContext: {}", instructions, args)
+                } else {
+                    instructions
+                };
 
-                    let result = RunSlashCommandResult {
-                        command: command_name.to_string(),
-                        description: Some(skill.description.clone()),
-                        argument_hint: None,
-                        mode: None,
-                        args: params.args.clone(),
-                        source: Some(format!("{:?}", skill.source).to_lowercase()),
-                        content,
-                    };
-                    return Ok(format_slash_command_result(&result));
-                }
+                let result = RunSlashCommandResult {
+                    command: command_name.to_string(),
+                    description: Some(skill.description.clone()),
+                    argument_hint: None,
+                    mode: None,
+                    args: params.args.clone(),
+                    source: Some(format!("{:?}", skill.source).to_lowercase()),
+                    content,
+                };
+                return Ok(format_slash_command_result(&result));
             }
         }
 

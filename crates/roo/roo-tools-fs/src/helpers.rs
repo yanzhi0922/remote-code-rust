@@ -129,10 +129,10 @@ fn consume_html_entity(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -> 
 
 /// Create all parent directories for a given file path.
 pub fn create_directories_for_file(path: &std::path::Path) -> Result<(), FsToolError> {
-    if let Some(parent) = path.parent() {
-        if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent).map_err(FsToolError::Io)?;
-        }
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent).map_err(FsToolError::Io)?;
     }
     Ok(())
 }
@@ -276,16 +276,16 @@ pub fn check_roo_ignore(
     path: &str,
     controller: Option<&RooIgnoreController>,
 ) -> Result<(), FsToolError> {
-    if let Some(ctrl) = controller {
-        if !ctrl.validate_access(path) {
-            return Err(FsToolError::AccessDenied(format!(
-                "Access to '{}' is blocked by .rooignore rules. \
+    if let Some(ctrl) = controller
+        && !ctrl.validate_access(path)
+    {
+        return Err(FsToolError::AccessDenied(format!(
+            "Access to '{}' is blocked by .rooignore rules. \
                  This file or directory has been excluded from access. \
                  If you believe this is an error, check the .rooignore file \
                  at the project root.",
-                path
-            )));
-        }
+            path
+        )));
     }
     Ok(())
 }
@@ -303,15 +303,15 @@ pub fn check_roo_protect(
     path: &str,
     controller: Option<&RooProtectedController>,
 ) -> Result<(), FsToolError> {
-    if let Some(ctrl) = controller {
-        if ctrl.is_write_protected(path) {
-            return Err(FsToolError::WriteProtected(format!(
-                "Access to '{}' is protected. {}. \
+    if let Some(ctrl) = controller
+        && ctrl.is_write_protected(path)
+    {
+        return Err(FsToolError::WriteProtected(format!(
+            "Access to '{}' is protected. {}. \
                  If you believe this is an error, ask the user to approve this change.",
-                path,
-                ctrl.get_protection_message()
-            )));
-        }
+            path,
+            ctrl.get_protection_message()
+        )));
     }
     Ok(())
 }

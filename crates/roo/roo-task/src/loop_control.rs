@@ -126,10 +126,10 @@ impl LoopControl {
             return false;
         }
 
-        if let Some(max) = self.max_iterations {
-            if self.current_iteration >= max {
-                return false;
-            }
+        if let Some(max) = self.max_iterations
+            && self.current_iteration >= max
+        {
+            return false;
         }
 
         true
@@ -328,7 +328,7 @@ impl LoopControl {
         }
         self.consecutive_errors
             .get(tool_name)
-            .map_or(false, |&count| count >= max)
+            .is_some_and(|&count| count >= max)
     }
 }
 

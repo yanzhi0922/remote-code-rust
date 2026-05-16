@@ -76,8 +76,8 @@ export function clearRemoteAccessToken(): void {
 
 /**
  * Derive a tenant-scoping user key from username and password.
- * Uses SHA-256(username:password) — the server never sees the plaintext,
- * only the irreversible hash which serves as both auth token and tenant ID.
+ * The control plane only accepts this key when its sha256(user_key) hash is
+ * explicitly configured server-side.
  */
 export async function deriveUserKey(username: string, password: string): Promise<string> {
   const raw = `${username}:${password}`;

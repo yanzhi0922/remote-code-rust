@@ -1,3 +1,6 @@
+#![allow(dead_code)]
+#![allow(clippy::all)]
+#![deny(clippy::dbg_macro, clippy::todo)]
 pub mod cloud_api;
 pub mod cloud_settings_service;
 pub mod cloud_share_service;

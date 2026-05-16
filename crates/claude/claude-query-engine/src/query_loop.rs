@@ -1467,12 +1467,12 @@ pub enum PromptTooLongReason {
 
 fn classify_prompt_too_long_error(error: &anyhow::Error) -> Option<PromptTooLongReason> {
     // Fast path: check for structured ProviderError in the error chain.
-    if let Some(pe) = extract_provider_error(error) {
-        if pe.category == ErrorCategory::PromptTooLong {
-            match pe.status_code {
-                Some(413) => return Some(PromptTooLongReason::ContextCollapse),
-                _ => return Some(PromptTooLongReason::PromptTooLong),
-            }
+    if let Some(pe) = extract_provider_error(error)
+        && pe.category == ErrorCategory::PromptTooLong
+    {
+        match pe.status_code {
+            Some(413) => return Some(PromptTooLongReason::ContextCollapse),
+            _ => return Some(PromptTooLongReason::PromptTooLong),
         }
     }
 
@@ -1808,10 +1808,10 @@ async fn commit_tool_result(
         record_permission_denial(state, tool_call, &tool_run.result);
     }
     // Record sub-agent token consumption against the task budget.
-    if let Some(tokens) = tool_run.output_tokens_consumed {
-        if let Some(budget) = lock_unpoison(&context.task_budget).as_mut() {
-            budget.record_sub_agent_usage(tokens);
-        }
+    if let Some(tokens) = tool_run.output_tokens_consumed
+        && let Some(budget) = lock_unpoison(&context.task_budget).as_mut()
+    {
+        budget.record_sub_agent_usage(tokens);
     }
     let _ = config
         .observer
@@ -2242,7 +2242,7 @@ mod tests {
 
     #[test]
     fn strip_image_blocks_also_strips_provider_image_blocks() {
-        let mut msg = Message::User(UserMessage {
+        let msg = Message::User(UserMessage {
             base: claude_core::MessageBase::default(),
             text: "msg".to_owned(),
             attachments: vec![make_image_attachment(100)],

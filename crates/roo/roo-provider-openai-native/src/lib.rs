@@ -1,3 +1,6 @@
+#![allow(dead_code)]
+#![allow(clippy::all)]
+#![deny(clippy::dbg_macro, clippy::todo)]
 //! # Roo Provider: OpenAI Native + Codex
 //!
 //! OpenAI Native and Codex API providers for Roo Code Rust.

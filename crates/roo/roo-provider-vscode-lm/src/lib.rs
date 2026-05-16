@@ -1,3 +1,6 @@
+#![allow(dead_code)]
+#![allow(clippy::all)]
+#![deny(clippy::dbg_macro, clippy::todo)]
 //! # Roo Provider: VS Code Language Model API
 //!
 //! VS Code Language Model API provider for Roo Code Rust.

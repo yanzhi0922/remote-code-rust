@@ -1,4 +1,4 @@
-﻿//! Post-truncation cleanup utilities.
+//! Post-truncation cleanup utilities.
 //!
 //! Cleans up orphaned `condense_parent` and `truncation_parent` references
 //! after a truncation operation (rewind/delete).
@@ -26,15 +26,15 @@ pub fn cleanup_after_truncation(messages: &[ApiMessage]) -> Vec<ApiMessage> {
     let mut existing_truncation_ids = std::collections::HashSet::new();
 
     for msg in messages {
-        if msg.is_summary.unwrap_or(false) {
-            if let Some(ref condense_id) = msg.condense_id {
-                existing_summary_ids.insert(condense_id.clone());
-            }
+        if msg.is_summary.unwrap_or(false)
+            && let Some(ref condense_id) = msg.condense_id
+        {
+            existing_summary_ids.insert(condense_id.clone());
         }
-        if msg.is_truncation_marker.unwrap_or(false) {
-            if let Some(ref truncation_id) = msg.truncation_id {
-                existing_truncation_ids.insert(truncation_id.clone());
-            }
+        if msg.is_truncation_marker.unwrap_or(false)
+            && let Some(ref truncation_id) = msg.truncation_id
+        {
+            existing_truncation_ids.insert(truncation_id.clone());
         }
     }
 
@@ -46,34 +46,34 @@ pub fn cleanup_after_truncation(messages: &[ApiMessage]) -> Vec<ApiMessage> {
             let mut needs_update = false;
 
             // Check for orphaned condense_parent
-            if let Some(ref parent) = msg.condense_parent {
-                if !existing_summary_ids.contains(parent) {
-                    needs_update = true;
-                }
+            if let Some(ref parent) = msg.condense_parent
+                && !existing_summary_ids.contains(parent)
+            {
+                needs_update = true;
             }
 
             // Check for orphaned truncation_parent
-            if let Some(ref parent) = msg.truncation_parent {
-                if !existing_truncation_ids.contains(parent) {
-                    needs_update = true;
-                }
+            if let Some(ref parent) = msg.truncation_parent
+                && !existing_truncation_ids.contains(parent)
+            {
+                needs_update = true;
             }
 
             if needs_update {
                 let mut result = msg.clone();
 
                 // Keep condense_parent only if its summary still exists
-                if let Some(ref parent) = msg.condense_parent {
-                    if !existing_summary_ids.contains(parent) {
-                        result.condense_parent = None;
-                    }
+                if let Some(ref parent) = msg.condense_parent
+                    && !existing_summary_ids.contains(parent)
+                {
+                    result.condense_parent = None;
                 }
 
                 // Keep truncation_parent only if its truncation marker still exists
-                if let Some(ref parent) = msg.truncation_parent {
-                    if !existing_truncation_ids.contains(parent) {
-                        result.truncation_parent = None;
-                    }
+                if let Some(ref parent) = msg.truncation_parent
+                    && !existing_truncation_ids.contains(parent)
+                {
+                    result.truncation_parent = None;
                 }
 
                 result

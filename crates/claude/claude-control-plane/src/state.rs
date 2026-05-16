@@ -1,9 +1,11 @@
 //! ControlPlaneService struct, state persistence, and configuration helpers.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
+use chrono::{DateTime, Duration, Utc};
 use rusqlite::Row;
 use rusqlite::params_from_iter;
 use rusqlite::types::Value as SqlValue;
@@ -43,9 +45,8 @@ pub(crate) enum AuthPrincipal {
     SharedToken,
     /// Legacy device token from pairing flow.
     Device(TrustedDeviceRecord),
-    /// User-derived tenant identity.  `user_id` is `sha256(username:password)`,
-    /// computed client-side.  The server never stores the password — it only
-    /// uses `user_id` as a tenant key for data isolation.
+    /// User-derived tenant identity.  `user_id` is accepted only when the
+    /// control plane is configured with a matching user-key hash.
     User { user_id: String },
 }
 
@@ -83,12 +84,21 @@ pub struct ControlPlaneService {
     pub(crate) bootstrap_secret_hash: Option<String>,
     pub(crate) registry: Arc<RwLock<Registry>>,
     pub(crate) timeline: TimelineStore,
+    pub(crate) stream_tickets: Arc<RwLock<BTreeMap<String, StreamTicket>>>,
+    pub(crate) allowed_user_key_hashes: Vec<String>,
     /// Shared HTTP client for runner relay requests.  Reusing a single
     /// client keeps TCP connections alive and avoids a TLS handshake
     /// per request.
     pub(crate) http_client: reqwest::Client,
     /// Directory containing downloadable app binaries (APK, dmg, etc.).
     pub(crate) downloads_dir: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct StreamTicket {
+    pub(crate) principal: AuthPrincipal,
+    pub(crate) path: String,
+    pub(crate) expires_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -134,6 +144,8 @@ impl ControlPlaneService {
             bootstrap_secret_hash,
             registry: Arc::new(RwLock::new(registry)),
             timeline,
+            stream_tickets: Arc::new(RwLock::new(BTreeMap::new())),
+            allowed_user_key_hashes: load_allowed_user_key_hashes_from_env(),
             http_client: reqwest::Client::new(),
             downloads_dir: config.downloads_dir,
         }
@@ -149,6 +161,52 @@ impl ControlPlaneService {
             return true;
         }
         self.registry.read().await.owner_claimed()
+    }
+
+    pub(crate) fn accepts_derived_user_key(&self, provided: &str) -> bool {
+        if self.allowed_user_key_hashes.is_empty() {
+            return false;
+        }
+        let provided_hash = hash_secret_value(provided);
+        self.allowed_user_key_hashes
+            .iter()
+            .any(|expected| constant_time_value_eq(&provided_hash, expected))
+    }
+
+    pub(crate) async fn mint_stream_ticket(
+        &self,
+        principal: AuthPrincipal,
+        path: String,
+        ttl_secs: u64,
+    ) -> String {
+        let ticket = format!(
+            "rcst_{}{}",
+            Uuid::new_v4().simple(),
+            Uuid::new_v4().simple()
+        );
+        let expires_at = Utc::now() + Duration::seconds(ttl_secs as i64);
+        let mut tickets = self.stream_tickets.write().await;
+        prune_expired_stream_tickets(&mut tickets);
+        tickets.insert(
+            ticket.clone(),
+            StreamTicket {
+                principal,
+                path,
+                expires_at,
+            },
+        );
+        ticket
+    }
+
+    pub(crate) async fn consume_stream_ticket(
+        &self,
+        ticket: &str,
+        request_path: &str,
+    ) -> Option<AuthPrincipal> {
+        let mut tickets = self.stream_tickets.write().await;
+        prune_expired_stream_tickets(&mut tickets);
+        let stored = tickets.remove(ticket)?;
+        (stored.path == request_path && stored.expires_at > Utc::now()).then_some(stored.principal)
     }
 
     pub(crate) async fn list_persisted_events(
@@ -209,6 +267,48 @@ impl ControlPlaneService {
         .context("control-plane snapshot task failed to join")??;
         Ok(())
     }
+}
+
+fn load_allowed_user_key_hashes_from_env() -> Vec<String> {
+    let Ok(raw) = std::env::var("REMOTE_CODE_CONTROL_PLANE_USER_KEY_HASHES") else {
+        return Vec::new();
+    };
+    raw.split(',')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .filter_map(|value| {
+            let normalized = value
+                .strip_prefix("sha256:")
+                .unwrap_or(value)
+                .trim()
+                .to_ascii_lowercase();
+            if is_sha256_hex(&normalized) {
+                Some(normalized)
+            } else {
+                tracing::warn!(
+                    "Ignoring invalid REMOTE_CODE_CONTROL_PLANE_USER_KEY_HASHES entry; expected sha256 hex"
+                );
+                None
+            }
+        })
+        .collect()
+}
+
+fn is_sha256_hex(value: &str) -> bool {
+    value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn constant_time_value_eq(provided: &str, expected: &str) -> bool {
+    use sha2::{Digest, Sha256};
+
+    let provided_digest: [u8; 32] = Sha256::digest(provided.as_bytes()).into();
+    let expected_digest: [u8; 32] = Sha256::digest(expected.as_bytes()).into();
+    constant_time_eq::constant_time_eq_32(&provided_digest, &expected_digest)
+}
+
+fn prune_expired_stream_tickets(tickets: &mut BTreeMap<String, StreamTicket>) {
+    let now = Utc::now();
+    tickets.retain(|_, ticket| ticket.expires_at > now);
 }
 
 // ---------------------------------------------------------------------------

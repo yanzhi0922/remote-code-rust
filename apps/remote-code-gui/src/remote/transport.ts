@@ -1,5 +1,6 @@
 import {
   buildSessionEventsStreamUrl,
+  createStreamTicket,
   listSessionApprovals,
   listSessionArtifacts,
   listSessionEvents,
@@ -59,6 +60,10 @@ export function subscribeToRemoteSessionEvents(input: {
   const streamBaseUrl = input.runnerBaseUrl ?? input.baseUrl;
 
   const openSocket = (after: number) => {
+    void openSocketWithTicket(after);
+  };
+
+  const openSocketWithTicket = async (after: number) => {
     if (cancelled) {
       return;
     }
@@ -69,7 +74,29 @@ export function subscribeToRemoteSessionEvents(input: {
     }
 
     input.onConnectionStateChange(after > 0 ? 'reconnecting' : 'connecting');
-    socket = new WebSocket(buildSessionEventsStreamUrl(streamBaseUrl, input.sessionId, after));
+
+    let streamTicket: string | null = null;
+    try {
+      if (streamBaseUrl === input.baseUrl) {
+        const streamPath = `/v1/sessions/${encodeURIComponent(input.sessionId)}/events/stream`;
+        const response = await createStreamTicket(input.baseUrl, streamPath);
+        streamTicket = response.stream_ticket;
+      }
+    } catch {
+      if (!cancelled) {
+        input.onConnectionStateChange('error');
+        scheduleReconnect();
+      }
+      return;
+    }
+
+    if (cancelled) {
+      return;
+    }
+
+    socket = new WebSocket(
+      buildSessionEventsStreamUrl(streamBaseUrl, input.sessionId, after, streamTicket),
+    );
 
     socket.onopen = () => {
       if (!cancelled) {

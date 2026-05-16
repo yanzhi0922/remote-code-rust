@@ -23,9 +23,7 @@ pub struct QwenHandler {
 impl QwenHandler {
     /// Create a new Qwen handler from configuration.
     pub fn new(config: QwenConfig) -> Result<Self, roo_provider::ProviderError> {
-        let model_id = config
-            .model_id
-            .unwrap_or_else(|| models::default_model_id());
+        let model_id = config.model_id.unwrap_or_else(models::default_model_id);
         let model_info = models::models()
             .get(&model_id)
             .cloned()

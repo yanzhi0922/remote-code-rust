@@ -84,10 +84,10 @@ async fn fetch_openai_model_list(url: &str, api_key: Option<&str>) -> Result<Mod
     let client = reqwest::Client::new();
     let mut request = client.get(url);
 
-    if let Some(key) = api_key {
-        if !key.is_empty() {
-            request = request.bearer_auth(key);
-        }
+    if let Some(key) = api_key
+        && !key.is_empty()
+    {
+        request = request.bearer_auth(key);
     }
 
     let response = request.send().await?;
@@ -137,10 +137,10 @@ pub async fn fetch_models_raw<T: serde::de::DeserializeOwned>(
     let client = reqwest::Client::new();
     let mut request = client.get(url);
 
-    if let Some(key) = api_key {
-        if !key.is_empty() {
-            request = request.bearer_auth(key);
-        }
+    if let Some(key) = api_key
+        && !key.is_empty()
+    {
+        request = request.bearer_auth(key);
     }
 
     let response = request.send().await?;

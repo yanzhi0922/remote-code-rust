@@ -1,3 +1,6 @@
+#![allow(dead_code)]
+#![allow(clippy::all)]
+#![deny(clippy::dbg_macro, clippy::todo)]
 //! Roo CLI — command-line interface for Roo Code Rust.
 //!
 //! Supports sending messages to AI providers and streaming responses.

@@ -1,3 +1,6 @@
+#![allow(dead_code)]
+#![allow(clippy::all)]
+#![deny(clippy::dbg_macro, clippy::todo)]
 //! # Roo Editor
 //!
 //! Editor integration for Roo Code Rust — diff view, file editing, undo stack,

@@ -79,6 +79,7 @@ import {
 import { RemoteAuthGate } from './RemoteAuthGate';
 import { RemoteShell, EmptyCard } from './RemoteShell';
 import { loadRemoteSessionBundle } from './transport';
+import { resolveRemoteRunnerBaseUrl, resolveRemoteTransportStrategy } from './transportMode';
 import { useConnection } from './useConnection';
 import type { TransportConfig } from './connection-manager';
 import type {
@@ -305,7 +306,10 @@ export default function RemoteApp() {
 
       // Register the push token with the control plane.
       if (!cancelled) {
-        await registerPushTokenWithControlPlane(baseUrl, accessToken);
+        const registered = await registerPushTokenWithControlPlane(baseUrl, accessToken);
+        if (!cancelled && !registered) {
+          showStatusMessage(copy.mobileNotificationsUnavailable);
+        }
       }
     })();
 
@@ -656,10 +660,11 @@ export default function RemoteApp() {
       try {
         await refreshSessionBundle(selectedSessionId);
         if (!cancelled) {
+          const runnerBaseUrl = resolveRemoteRunnerBaseUrl(activeSession);
           const config: TransportConfig = {
-            strategy: 'server_relay',
+            strategy: resolveRemoteTransportStrategy(activeSession),
             baseUrl,
-            runnerBaseUrl: null,
+            runnerBaseUrl,
             sessionId: selectedSessionId,
             authToken: accessToken,
           };
@@ -684,7 +689,7 @@ export default function RemoteApp() {
       connectedSessionRef.current = null;
       transportDisconnect();
     };
-  }, [accessToken, authRequired, baseUrl, health, selectedSessionId]);
+  }, [accessToken, activeSession, authRequired, baseUrl, health, selectedSessionId]);
 
   // ── Action handlers ────────────────────────────────────────────────────
 
@@ -702,7 +707,7 @@ export default function RemoteApp() {
 
     setSending(true);
     try {
-      await sendPrompt(baseUrl, selectedSessionId, composer.trim(), activeSession?.owner_runner_public_base_url);
+      await sendPrompt(baseUrl, selectedSessionId, composer.trim(), resolveRemoteRunnerBaseUrl(activeSession) ?? undefined);
       setComposer('');
       showStatusMessage(copy.statusPromptForwarded);
     } catch (error) {
@@ -725,7 +730,7 @@ export default function RemoteApp() {
 
     setInterrupting(true);
     try {
-      await interruptSession(baseUrl, selectedSessionId, activeSession?.owner_runner_public_base_url);
+      await interruptSession(baseUrl, selectedSessionId, resolveRemoteRunnerBaseUrl(activeSession) ?? undefined);
       showStatusMessage(copy.statusInterruptForwarded);
     } catch (error) {
       reportAsyncError(error);
@@ -744,7 +749,7 @@ export default function RemoteApp() {
 
     setApprovingId(approvalId);
     try {
-      await respondToApproval(baseUrl, approvalId, decision, undefined, activeSession?.owner_runner_public_base_url);
+      await respondToApproval(baseUrl, approvalId, decision, undefined, resolveRemoteRunnerBaseUrl(activeSession) ?? undefined);
       showStatusMessage(copy.statusApprovalDecision(copy.approvalDecisionLabels[decision]));
       if (selectedSessionId) {
         await refreshApprovals(selectedSessionId);

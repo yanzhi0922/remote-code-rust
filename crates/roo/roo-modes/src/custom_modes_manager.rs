@@ -398,12 +398,12 @@ impl CustomModesManager {
         }
 
         // Delete from project file if present
-        if project_mode.is_some() {
-            if let Some(roomodes_path) = &self.project_roomodes_path {
-                self.update_modes_in_file(roomodes_path, |modes| {
-                    modes.into_iter().filter(|m| m.slug != slug).collect()
-                })?;
-            }
+        if project_mode.is_some()
+            && let Some(roomodes_path) = &self.project_roomodes_path
+        {
+            self.update_modes_in_file(roomodes_path, |modes| {
+                modes.into_iter().filter(|m| m.slug != slug).collect()
+            })?;
         }
 
         // Delete from global file if present
@@ -525,14 +525,12 @@ impl CustomModesManager {
         match std::fs::read_dir(&rules_dir) {
             Ok(entries) => {
                 for entry in entries.flatten() {
-                    if let Ok(file_type) = entry.file_type() {
-                        if file_type.is_file() {
-                            if let Ok(content) = std::fs::read_to_string(entry.path()) {
-                                if !content.trim().is_empty() {
-                                    return true;
-                                }
-                            }
-                        }
+                    if let Ok(file_type) = entry.file_type()
+                        && file_type.is_file()
+                        && let Ok(content) = std::fs::read_to_string(entry.path())
+                        && !content.trim().is_empty()
+                    {
+                        return true;
                     }
                 }
             }
@@ -590,27 +588,25 @@ impl CustomModesManager {
 
         // Collect rules files
         let mut rules_files = Vec::new();
-        if rules_dir.is_dir() {
-            if let Ok(entries) = std::fs::read_dir(&rules_dir) {
-                for entry in entries.flatten() {
-                    if let Ok(file_type) = entry.file_type() {
-                        if file_type.is_file() {
-                            if let Ok(content) = std::fs::read_to_string(entry.path()) {
-                                if !content.trim().is_empty() {
-                                    let relative = entry
-                                        .path()
-                                        .strip_prefix(&rules_dir)
-                                        .unwrap_or(entry.path().as_path())
-                                        .to_string_lossy()
-                                        .replace('\\', "/");
-                                    rules_files.push(RuleFile {
-                                        relative_path: relative,
-                                        content: content.trim().to_string(),
-                                    });
-                                }
-                            }
-                        }
-                    }
+        if rules_dir.is_dir()
+            && let Ok(entries) = std::fs::read_dir(&rules_dir)
+        {
+            for entry in entries.flatten() {
+                if let Ok(file_type) = entry.file_type()
+                    && file_type.is_file()
+                    && let Ok(content) = std::fs::read_to_string(entry.path())
+                    && !content.trim().is_empty()
+                {
+                    let relative = entry
+                        .path()
+                        .strip_prefix(&rules_dir)
+                        .unwrap_or(entry.path().as_path())
+                        .to_string_lossy()
+                        .replace('\\', "/");
+                    rules_files.push(RuleFile {
+                        relative_path: relative,
+                        content: content.trim().to_string(),
+                    });
                 }
             }
         }
@@ -746,17 +742,16 @@ impl CustomModesManager {
             }
 
             // Import rules files if present
-            if let Some(rules_files) = mode_value.get("rulesFiles") {
-                if let Ok(files) = serde_yaml::from_value::<Vec<RuleFile>>(rules_files.clone()) {
-                    if let Err(e) = self.import_rules_files(
-                        &first_slug.as_ref().unwrap().clone(),
-                        &files,
-                        source,
-                        workspace_path,
-                    ) {
-                        tracing::warn!("Failed to import rules files: {}", e);
-                    }
-                }
+            if let Some(rules_files) = mode_value.get("rulesFiles")
+                && let Ok(files) = serde_yaml::from_value::<Vec<RuleFile>>(rules_files.clone())
+                && let Err(e) = self.import_rules_files(
+                    &first_slug.as_ref().unwrap().clone(),
+                    &files,
+                    source,
+                    workspace_path,
+                )
+            {
+                tracing::warn!("Failed to import rules files: {}", e);
             }
         }
 
@@ -831,7 +826,6 @@ impl CustomModesManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
 
     fn create_temp_modes_file(content: &str) -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();

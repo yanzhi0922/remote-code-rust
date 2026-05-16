@@ -83,12 +83,12 @@ fn process_single_event(
 
     // Text content deltas
     if event_type == "response.output_text.delta" || event_type == "response.text.delta" {
-        if let Some(delta) = event["delta"].as_str() {
-            if !delta.is_empty() {
-                return Some(ApiStreamChunk::Text {
-                    text: delta.to_string(),
-                });
-            }
+        if let Some(delta) = event["delta"].as_str()
+            && !delta.is_empty()
+        {
+            return Some(ApiStreamChunk::Text {
+                text: delta.to_string(),
+            });
         }
         return None;
     }
@@ -99,13 +99,13 @@ fn process_single_event(
         || event_type == "response.reasoning_summary_text.delta"
         || event_type == "response.reasoning_summary.delta"
     {
-        if let Some(delta) = event["delta"].as_str() {
-            if !delta.is_empty() {
-                return Some(ApiStreamChunk::Reasoning {
-                    text: delta.to_string(),
-                    signature: None,
-                });
-            }
+        if let Some(delta) = event["delta"].as_str()
+            && !delta.is_empty()
+        {
+            return Some(ApiStreamChunk::Reasoning {
+                text: delta.to_string(),
+                signature: None,
+            });
         }
         return None;
     }

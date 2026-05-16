@@ -106,16 +106,15 @@ fn aggregate_token_usage(messages: &[ClineMessage]) -> (u64, u64, u64, u64, f64)
 
     for msg in messages {
         // API request finished messages carry token usage data
-        if msg.r#type == MessageType::Say {
-            if let Some(text) = &msg.text {
-                if let Ok(usage) = serde_json::from_str::<TokenUsageData>(text) {
-                    tokens_in += usage.total_tokens_in.unwrap_or(0);
-                    tokens_out += usage.total_tokens_out.unwrap_or(0);
-                    cache_writes += usage.total_cache_writes.unwrap_or(0);
-                    cache_reads += usage.total_cache_reads.unwrap_or(0);
-                    total_cost += usage.total_cost.unwrap_or(0.0);
-                }
-            }
+        if msg.r#type == MessageType::Say
+            && let Some(text) = &msg.text
+            && let Ok(usage) = serde_json::from_str::<TokenUsageData>(text)
+        {
+            tokens_in += usage.total_tokens_in.unwrap_or(0);
+            tokens_out += usage.total_tokens_out.unwrap_or(0);
+            cache_writes += usage.total_cache_writes.unwrap_or(0);
+            cache_reads += usage.total_cache_reads.unwrap_or(0);
+            total_cost += usage.total_cost.unwrap_or(0.0);
         }
     }
 
@@ -141,23 +140,21 @@ struct TokenUsageData {
 /// Extract the task description from the first user text message.
 fn extract_task_description(messages: &[ClineMessage]) -> String {
     for msg in messages {
-        if msg.r#type == MessageType::Ask {
-            if let Some(text) = &msg.text {
-                if !text.is_empty() {
-                    // Truncate to a reasonable length for display
-                    return truncate_description(text, 200);
-                }
-            }
+        if msg.r#type == MessageType::Ask
+            && let Some(text) = &msg.text
+            && !text.is_empty()
+        {
+            // Truncate to a reasonable length for display
+            return truncate_description(text, 200);
         }
     }
     // Fallback: use first say text
     for msg in messages {
-        if msg.r#type == MessageType::Say {
-            if let Some(text) = &msg.text {
-                if !text.is_empty() {
-                    return truncate_description(text, 200);
-                }
-            }
+        if msg.r#type == MessageType::Say
+            && let Some(text) = &msg.text
+            && !text.is_empty()
+        {
+            return truncate_description(text, 200);
         }
     }
     String::new()

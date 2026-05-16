@@ -43,10 +43,10 @@ pub fn format_current_time() -> String {
 /// Falls back to "Local" if detection fails.
 fn get_timezone_name() -> String {
     // Try the TZ environment variable first.
-    if let Ok(tz) = std::env::var("TZ") {
-        if !tz.is_empty() {
-            return tz;
-        }
+    if let Ok(tz) = std::env::var("TZ")
+        && !tz.is_empty()
+    {
+        return tz;
     }
 
     // Try to get the system timezone via chrono-tz or iana-time-zone.

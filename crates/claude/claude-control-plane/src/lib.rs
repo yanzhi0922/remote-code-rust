@@ -242,14 +242,28 @@ mod tests {
         let (mut socket, _) = connect_async(ws_request)
             .await
             .expect("authenticated websocket should connect");
-        let query_ws_url =
-            base_url.replacen("http://", "ws://", 1) + "/v1/events/stream?access_token=test-secret";
+        let client = Client::new();
+        let ticket_response: serde_json::Value = client
+            .post(format!("{base_url}/v1/stream-ticket"))
+            .bearer_auth("test-secret")
+            .json(&serde_json::json!({ "path": "/v1/events/stream" }))
+            .send()
+            .await
+            .expect("stream ticket request should succeed")
+            .json()
+            .await
+            .expect("stream ticket response should parse");
+        let stream_ticket = ticket_response
+            .get("stream_ticket")
+            .and_then(serde_json::Value::as_str)
+            .expect("stream ticket should be returned");
+        let query_ws_url = base_url.replacen("http://", "ws://", 1)
+            + &format!("/v1/events/stream?stream_ticket={stream_ticket}");
         let (query_socket, _) = connect_async(&query_ws_url)
             .await
-            .expect("query websocket should remain supported for browser clients");
+            .expect("ticket websocket should remain supported for browser clients");
         drop(query_socket);
 
-        let client = Client::new();
         let response = client
             .post(format!("{base_url}/v1/runners/register"))
             .bearer_auth("test-secret")

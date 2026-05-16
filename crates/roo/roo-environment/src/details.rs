@@ -49,12 +49,11 @@ pub fn build_environment_details(input: &EnvironmentInput) -> String {
     }
 
     // 6. Git Status
-    if input.settings.max_git_status_files > 0 {
-        if let Some(ref git_status) = input.git_status {
-            if !git_status.is_empty() {
-                details.push_str(&format!("\n\n# Git Status\n{}", git_status));
-            }
-        }
+    if input.settings.max_git_status_files > 0
+        && let Some(ref git_status) = input.git_status
+        && !git_status.is_empty()
+    {
+        details.push_str(&format!("\n\n# Git Status\n{}", git_status));
     }
 
     // 7. Current Cost

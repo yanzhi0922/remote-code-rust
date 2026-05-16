@@ -146,20 +146,15 @@ impl EditResult {
 }
 
 /// The current state of the editor.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum EditorState {
     /// The editor is idle, no file is being edited.
+    #[default]
     Idle,
     /// A file is currently being edited.
     Editing,
     /// A diff view is open for review.
     DiffViewOpen,
-}
-
-impl Default for EditorState {
-    fn default() -> Self {
-        Self::Idle
-    }
 }
 
 #[cfg(test)]

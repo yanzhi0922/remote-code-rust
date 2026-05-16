@@ -1010,10 +1010,10 @@ fn parse_block_xml(text: &str) -> Option<BlockDecision> {
 /// Mirrors TS model selection: env var → GrowthBook → main loop model.
 pub fn resolve_yolo_model(main_model: &str) -> String {
     // 1. Check env var override
-    if let Ok(model) = std::env::var("CLAUDE_CODE_AUTO_MODE_MODEL") {
-        if !model.is_empty() {
-            return model;
-        }
+    if let Ok(model) = std::env::var("CLAUDE_CODE_AUTO_MODE_MODEL")
+        && !model.is_empty()
+    {
+        return model;
     }
 
     // 2. Fall back to main loop model

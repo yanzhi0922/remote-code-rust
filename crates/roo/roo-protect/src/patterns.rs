@@ -87,10 +87,10 @@ fn matches_pattern(path: &str, pattern: &str) -> bool {
     if !has_slash {
         // Unanchored pattern — try each path component as a basename.
         for component in path.split('/') {
-            if let Ok(p) = Pattern::new(pattern) {
-                if p.matches(component) {
-                    return true;
-                }
+            if let Ok(p) = Pattern::new(pattern)
+                && p.matches(component)
+            {
+                return true;
             }
         }
         return false;

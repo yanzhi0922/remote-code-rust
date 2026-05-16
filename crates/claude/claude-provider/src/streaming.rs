@@ -532,13 +532,12 @@ impl ProviderClient {
         }
 
         let raw_text = text_parts.join("");
-        if message_started {
-            if let Some(cb) = callbacks
+        if message_started
+            && let Some(cb) = callbacks
                 .as_ref()
                 .and_then(|c| c.on_lifecycle_event.as_ref())
-            {
-                cb(StreamingLifecycleEvent::MessageStop);
-            }
+        {
+            cb(StreamingLifecycleEvent::MessageStop);
         }
         let tool_calls = tool_calls_map
             .into_iter()
@@ -1197,12 +1196,12 @@ fn parse_sse_events_from_buffer(sse_buffer: &mut String) -> Vec<Value> {
 
         if let Ok(mut event) = serde_json::from_str::<Value>(&joined) {
             // If JSON has no "type" but SSE `event:` field was present, inject it
-            if event.get("type").is_none() {
-                if let Some(ev_type) = event_type {
-                    event
-                        .as_object_mut()
-                        .map(|o| o.insert("type".to_owned(), Value::String(ev_type.to_owned())));
-                }
+            if event.get("type").is_none()
+                && let Some(ev_type) = event_type
+            {
+                event
+                    .as_object_mut()
+                    .map(|o| o.insert("type".to_owned(), Value::String(ev_type.to_owned())));
             }
             events.push(event);
         } else {
@@ -1213,12 +1212,12 @@ fn parse_sse_events_from_buffer(sse_buffer: &mut String) -> Vec<Value> {
                     continue;
                 }
                 if let Ok(mut event) = serde_json::from_str::<Value>(data) {
-                    if event.get("type").is_none() {
-                        if let Some(ev_type) = event_type {
-                            event.as_object_mut().map(|o| {
-                                o.insert("type".to_owned(), Value::String(ev_type.to_owned()))
-                            });
-                        }
+                    if event.get("type").is_none()
+                        && let Some(ev_type) = event_type
+                    {
+                        event.as_object_mut().map(|o| {
+                            o.insert("type".to_owned(), Value::String(ev_type.to_owned()))
+                        });
                     }
                     events.push(event);
                 }
@@ -1259,10 +1258,10 @@ fn process_anthropic_event(
                     *request_id = msg.get("id").and_then(Value::as_str).map(ToOwned::to_owned);
                 }
                 // Extract the `research` field from the message if present.
-                if research.is_none() {
-                    if let Some(r) = msg.get("research").cloned() {
-                        *research = Some(r);
-                    }
+                if research.is_none()
+                    && let Some(r) = msg.get("research").cloned()
+                {
+                    *research = Some(r);
                 }
                 if let Some(u) = msg.get("usage") {
                     let inp = u.get("input_tokens").and_then(Value::as_u64).unwrap_or(0);
@@ -1565,12 +1564,11 @@ fn process_anthropic_event(
                 // document_index, document_title, url) for a text block.
                 // We accumulate citations into the text accumulator so they
                 // can be emitted in the finalised content block.
-                if let Some(citation) = delta.and_then(|d| d.get("citation")).cloned() {
-                    if let Some(AnthropicContentAccumulator::Text { citations, .. }) =
+                if let Some(citation) = delta.and_then(|d| d.get("citation")).cloned()
+                    && let Some(AnthropicContentAccumulator::Text { citations, .. }) =
                         content_block_accumulators.get_mut(&index)
-                    {
-                        citations.push(citation);
-                    }
+                {
+                    citations.push(citation);
                 }
             }
 
@@ -2214,7 +2212,7 @@ mod tests {
             "delta": { "type": "text_delta", "text": "hello" }
         });
 
-        process_anthropic_event(
+        let _ = process_anthropic_event(
             &event,
             &mut accumulators,
             &mut usage,
@@ -2252,7 +2250,7 @@ mod tests {
             }
         });
 
-        process_anthropic_event(
+        let _ = process_anthropic_event(
             &event,
             &mut accumulators,
             &mut usage,
@@ -2289,7 +2287,7 @@ mod tests {
             }
         });
 
-        process_anthropic_event(
+        let _ = process_anthropic_event(
             &event,
             &mut accumulators,
             &mut usage,
@@ -2320,7 +2318,7 @@ mod tests {
             "usage": { "output_tokens": 42 }
         });
 
-        process_anthropic_event(
+        let _ = process_anthropic_event(
             &event,
             &mut accumulators,
             &mut usage,
@@ -2487,7 +2485,7 @@ mod tests {
             }
         });
 
-        process_anthropic_event(
+        let _ = process_anthropic_event(
             &event,
             &mut accumulators,
             &mut usage,
@@ -2518,7 +2516,7 @@ mod tests {
             }
         });
 
-        process_anthropic_event(
+        let _ = process_anthropic_event(
             &event,
             &mut accumulators,
             &mut usage,
@@ -2547,7 +2545,7 @@ mod tests {
             "content_block": { "type": "text", "text": "Hello" }
         });
 
-        process_anthropic_event(
+        let _ = process_anthropic_event(
             &event,
             &mut accumulators,
             &mut usage,
@@ -2582,7 +2580,7 @@ mod tests {
             }
         });
 
-        process_anthropic_event(
+        let _ = process_anthropic_event(
             &event,
             &mut accumulators,
             &mut usage,
@@ -2618,7 +2616,7 @@ mod tests {
             }
         });
 
-        process_anthropic_event(
+        let _ = process_anthropic_event(
             &event,
             &mut accumulators,
             &mut usage,
@@ -2657,7 +2655,7 @@ mod tests {
             "delta": { "type": "text_delta", "text": "world!" }
         });
 
-        process_anthropic_event(
+        let _ = process_anthropic_event(
             &event,
             &mut accumulators,
             &mut usage,
@@ -2695,7 +2693,7 @@ mod tests {
             "delta": { "type": "thinking_delta", "thinking": "Step 2." }
         });
 
-        process_anthropic_event(
+        let _ = process_anthropic_event(
             &event,
             &mut accumulators,
             &mut usage,
@@ -2734,7 +2732,7 @@ mod tests {
             "delta": { "type": "signature_delta", "signature": "sig-final" }
         });
 
-        process_anthropic_event(
+        let _ = process_anthropic_event(
             &event,
             &mut accumulators,
             &mut usage,
@@ -2775,7 +2773,7 @@ mod tests {
             "delta": { "type": "input_json_delta", "partial_json": "\"src/lib.rs\"}" }
         });
 
-        process_anthropic_event(
+        let _ = process_anthropic_event(
             &event,
             &mut accumulators,
             &mut usage,
@@ -2803,7 +2801,7 @@ mod tests {
 
         let event = json!({ "type": "content_block_stop", "index": 0 });
 
-        process_anthropic_event(
+        let _ = process_anthropic_event(
             &event,
             &mut accumulators,
             &mut usage,
@@ -2829,7 +2827,7 @@ mod tests {
 
         let event = json!({ "type": "message_stop" });
 
-        process_anthropic_event(
+        let _ = process_anthropic_event(
             &event,
             &mut accumulators,
             &mut usage,
@@ -2854,7 +2852,7 @@ mod tests {
 
         let event = json!({ "type": "ping" });
 
-        process_anthropic_event(
+        let _ = process_anthropic_event(
             &event,
             &mut accumulators,
             &mut usage,
@@ -2884,7 +2882,7 @@ mod tests {
             "usage": { "output_tokens": 99 }
         });
 
-        process_anthropic_event(
+        let _ = process_anthropic_event(
             &event,
             &mut accumulators,
             &mut usage,
@@ -2919,7 +2917,7 @@ mod tests {
             }
         });
 
-        process_anthropic_event(
+        let _ = process_anthropic_event(
             &event,
             &mut accumulators,
             &mut usage,
@@ -3254,7 +3252,7 @@ mod tests {
             "usage": { "output_tokens": 500 }
         });
 
-        process_anthropic_event(
+        let _ = process_anthropic_event(
             &event,
             &mut accumulators,
             &mut usage,

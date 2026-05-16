@@ -37,9 +37,10 @@ impl From<TerminalId> for u32 {
 }
 
 /// The current state of a terminal.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum TerminalState {
     /// Terminal is idle and ready to accept commands.
+    #[default]
     Idle,
     /// Terminal is currently executing a command.
     Busy,
@@ -57,14 +58,8 @@ impl fmt::Display for TerminalState {
     }
 }
 
-impl Default for TerminalState {
-    fn default() -> Self {
-        TerminalState::Idle
-    }
-}
-
 /// The result of a completed command execution.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct CommandResult {
     /// The exit code of the process. `None` if the process was terminated by a signal.
     pub exit_code: Option<i32>,
@@ -115,16 +110,6 @@ impl CommandResult {
             self.stderr.clone()
         } else {
             format!("{}\n{}", self.stdout, self.stderr)
-        }
-    }
-}
-
-impl Default for CommandResult {
-    fn default() -> Self {
-        Self {
-            exit_code: None,
-            stdout: String::new(),
-            stderr: String::new(),
         }
     }
 }

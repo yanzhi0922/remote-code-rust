@@ -63,9 +63,10 @@ impl Default for CodeIndexFullConfig {
 }
 
 /// Embedder provider types.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum EmbedderProvider {
     #[serde(rename = "openai")]
+    #[default]
     Openai,
     #[serde(rename = "ollama")]
     Ollama,
@@ -81,12 +82,6 @@ pub enum EmbedderProvider {
     Bedrock,
     #[serde(rename = "openrouter")]
     Openrouter,
-}
-
-impl Default for EmbedderProvider {
-    fn default() -> Self {
-        Self::Openai
-    }
 }
 
 /// API handler options for different providers.

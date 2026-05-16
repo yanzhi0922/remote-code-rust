@@ -180,7 +180,6 @@ impl RestoreEngine {
 mod tests {
     use super::*;
     use crate::storage::CheckpointStore;
-    use crate::types::*;
     use chrono::Utc;
     use std::fs;
 
