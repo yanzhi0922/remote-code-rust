@@ -65,16 +65,11 @@ import type {
   CodexTurnStartRequest,
   CodexTurnSteerRequest,
   ConversationEntry,
-  CheckpointSummaryInfo,
   ContextCompactedInfo,
   ContextOverflowInfo,
   ContextUsageInfo,
   DoctorReportInfo,
   FullSettings,
-  GitBranchInfo,
-  GitCommitInfo,
-  GitCommitResult,
-  GitStatusInfo,
   InitResult,
   McpMutationResult,
   McpServerDraft,
@@ -128,36 +123,6 @@ export function createSession(title?: string, projectPath?: string, agentType?: 
     projectPath: projectPath ?? null,
     agentType: agentType ?? null,
   });
-}
-
-// ── Native Git / Checkpoint ─────────────────────────────────────────
-
-export function gitStatus(projectPath: string): Promise<GitStatusInfo> {
-  return invoke<GitStatusInfo>('git_status', { projectPath });
-}
-
-export function gitBranches(projectPath: string): Promise<GitBranchInfo[]> {
-  return invoke<GitBranchInfo[]>('git_branches', { projectPath });
-}
-
-export function gitLog(projectPath: string, maxCount = 50): Promise<GitCommitInfo[]> {
-  return invoke<GitCommitInfo[]>('git_log', { projectPath, maxCount });
-}
-
-export function gitStage(projectPath: string, path: string): Promise<void> {
-  return invoke<void>('git_stage', { projectPath, path });
-}
-
-export function gitCommit(projectPath: string, message: string): Promise<GitCommitResult> {
-  return invoke<GitCommitResult>('git_commit', { projectPath, message });
-}
-
-export function gitSwitchBranch(projectPath: string, name: string): Promise<void> {
-  return invoke<void>('git_switch_branch', { projectPath, name });
-}
-
-export function checkpointList(sessionId: string): Promise<CheckpointSummaryInfo[]> {
-  return invoke<CheckpointSummaryInfo[]>('checkpoint_list', { sessionId });
 }
 
 export function getProviderInfo(): Promise<ProviderInfo | null> {

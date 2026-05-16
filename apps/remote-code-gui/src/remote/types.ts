@@ -3,7 +3,7 @@ export interface RemoteListResponse<T> {
   latest_sequence?: number | null;
 }
 
-export type RemoteDeviceKind = 'runner' | 'browser' | 'cli';
+type RemoteDeviceKind = 'runner' | 'browser' | 'cli';
 
 export interface RemoteControlPlaneHealth {
   ok: boolean;
@@ -20,7 +20,7 @@ export interface RemoteControlPlaneHealth {
   device_count: number;
 }
 
-export interface RemoteTrustedDeviceRecord {
+interface RemoteTrustedDeviceRecord {
   device_id: string;
   name: string;
   kind: RemoteDeviceKind;
@@ -36,7 +36,7 @@ export interface RemoteBootstrapClaimResponse {
   refresh_token: string;
 }
 
-export interface RemotePairingOfferCreateResponse {
+interface RemotePairingOfferCreateResponse {
   offer_id: string;
   device_name: string;
   device_kind: RemoteDeviceKind;
@@ -77,7 +77,7 @@ export interface RemoteSessionRecord {
   updated_at: string;
 }
 
-export type RemoteApprovalState = 'pending' | 'approved' | 'denied' | 'cancelled';
+type RemoteApprovalState = 'pending' | 'approved' | 'denied' | 'cancelled';
 export type RemoteApprovalDecision = Exclude<RemoteApprovalState, 'pending'>;
 
 export interface RemoteApprovalRecord {
@@ -109,7 +109,7 @@ export interface RemoteArtifactRecord {
 
 export type RemoteMessageRole = 'assistant' | 'user' | 'system';
 export type RemoteDaemonPresenceState = 'online' | 'offline' | 'reconnecting';
-export type RemoteRunnerState =
+type RemoteRunnerState =
   | 'starting'
   | 'idle'
   | 'busy'
@@ -269,13 +269,13 @@ export interface RemoteCommandResponse {
 // Push token registration (mobile devices)
 // ---------------------------------------------------------------------------
 
-export type RemotePushPlatform = 'apns' | 'fcm';
+type RemotePushPlatform = 'apns' | 'fcm';
 
-export interface RemotePushTokenRegistrationRequest {
+interface RemotePushTokenRegistrationRequest {
   push_token: string;
   platform?: RemotePushPlatform;
 }
 
-export interface RemotePushTokenRegistrationResponse {
+interface RemotePushTokenRegistrationResponse {
   registered: boolean;
 }

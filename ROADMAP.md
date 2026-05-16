@@ -263,10 +263,7 @@ Deliverables:
 - ✅ `claude-checkpoint` crate — snapshot scanner (SHA256 hashes), SQLite storage (3 tables), unified diff via `similar` crate, restore engine (undo/rollback/preview), workspace exclusion patterns
 - ✅ `claude-specialized-agents` crate — Markdown+YAML frontmatter agent definitions, 3-layer discovery (built-in/user/project), `@agent-name` mention parsing, 5 built-in agents (code-reviewer, bug-analyzer, dev-planner, architect, test-writer)
 - ✅ `claude-git` crate — `gix` for branch resolution, CLI-based status/staging/commit/diff/log/branch switching, structured types for `GitStatus`/`GitDiff`/`CommitInfo`
-- ✅ `PermissionModeSwitch` GUI component — 4 permission modes with Shift+Tab cycling, icon+color indicators
-- ✅ `GitPanel` GUI component — 3 tabs (Changes/History/Branches), file status coloring, Cmd+Enter commit
-- ✅ `CheckpointTimeline` GUI component — timeline dots, expandable details, Review/Restore/Undo actions, diff stats
-- ✅ `AgentPicker` GUI component — dropdown with filter, keyboard navigation (↑↓ Enter Esc), `useAgentMention` hook
+- 🧹 Deprecated GUI prototypes removed — `PermissionModeSwitch`, `GitPanel`, `CheckpointTimeline`, and `AgentPicker` were not wired into the production app and were removed during dead-code cleanup.
 - ✅ All three new crates compile and pass unit tests
 
 ## Phase 18: Roo Agent Deepening — 📋 PLANNED

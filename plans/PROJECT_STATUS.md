@@ -184,10 +184,7 @@
 - ✅ `claude-checkpoint` crate — 对话级版本控制（SHA256 快照扫描、SQLite 存储、unified diff、恢复引擎）
 - ✅ `claude-specialized-agents` crate — 专业化 Agent 系统（Markdown+YAML frontmatter 定义、3 层发现、5 个内置 Agent）
 - ✅ `claude-git` crate — Git 操作封装（gix 分支解析 + CLI status/stage/commit/diff/log）
-- ✅ `PermissionModeSwitch` GUI 组件 — 4 模式快捷切换（Shift+Tab 循环）
-- ✅ `GitPanel` GUI 组件 — 3 标签（Changes/History/Branches），文件状态着色，Cmd+Enter 提交
-- ✅ `CheckpointTimeline` GUI 组件 — 时间轴展示、展开详情、Review/Restore/Undo 操作
-- ✅ `AgentPicker` GUI 组件 — @ 引用下拉选择、键盘导航、过滤搜索
+- 🧹 废弃 GUI 原型已清理 — `PermissionModeSwitch`、`GitPanel`、`CheckpointTimeline`、`AgentPicker` 未接入生产界面，已在废弃代码清理中删除
 - ✅ 灵感分析文档 [zcode-inspiration-plan.md](zcode-inspiration-plan.md)
 - ✅ 三个新 crate 编译验证通过
 
@@ -249,10 +246,10 @@
 | 国际化 | ✅ 中/英 | ❌ | ❌ | ✅ 中文优先 | ❌ | ❌ |
 | 多 Agent 统一架构 | ✅ 三引擎独立适配器 (26 Provider) | ❌ | ❌ | ✅ @agent 提及 | ❌ | ❌ |
 | QueryEngine 执行路径 | ✅ Claude Agent | ❌ | ❌ | ❌ | ❌ | ❌ |
-| 对话级 Checkpoint | ✅ claude-checkpoint | ❌ | ❌ | ✅ Review/Undo/Restore | ❌ | ❌ |
+| 对话级 Checkpoint | 🟡 后端 crate 保留，废弃 GUI 原型已删除 | ❌ | ❌ | ✅ Review/Undo/Restore | ❌ | ❌ |
 | 专业化 Agent | ✅ claude-specialized-agents | ❌ | ❌ | ✅ Markdown+YAML 定义 | ❌ | ❌ |
-| 内置 Git 面板 | ✅ claude-git + GitPanel | ❌ | ❌ | ✅ 完整 Git 管理 | ❌ | ❌ |
-| 权限模式快捷切换 | ✅ PermissionModeSwitch | ❌ | ❌ | ✅ Shift+Tab 4 模式 | ❌ | ❌ |
+| 内置 Git 面板 | 🟡 `claude-git` 保留，废弃 GitPanel 原型已删除 | ❌ | ❌ | ✅ 完整 Git 管理 | ❌ | ❌ |
+| 权限模式快捷切换 | 🟡 废弃 GUI 原型已删除 | ❌ | ❌ | ✅ Shift+Tab 4 模式 | ❌ | ❌ |
 
 **独有优势**: Rust 原生性能 + 三引擎独立 in-process 适配器架构 (Claude/Codex/Roo 26 Provider) + 分布式远程执行 + Circuit Breaker + PWA 移动端 + 多 Provider 故障转移 + 62 内置工具 + IDE 级 GUI (ActivityBar/Terminal/Diff/Preview/Command Palette) + ZCode 启发功能 (Checkpoint/专业化 Agent/Git 面板)
 

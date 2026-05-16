@@ -6,7 +6,9 @@ import {
   FolderOpen,
   FolderPlus,
   Plus,
+  Search,
   Trash2,
+  X,
 } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import type { ConversationEntry, SessionSubtask, SessionSummary, ToolCallInfo } from '../../lib/types';
@@ -306,6 +308,7 @@ export function Sidebar() {
 
   const [expandedProjects, setExpandedProjects] = useState<Record<string, boolean>>({});
   const [expandedSessions, setExpandedSessions] = useState<Record<string, boolean>>({});
+  const [searchQuery, setSearchQuery] = useState('');
 
   const projectSessionGroups = useMemo(() => {
     const projectMap = new Map<string, SessionSummary[]>();
@@ -338,6 +341,42 @@ export function Sidebar() {
     }
     return deriveAgentTasks(conversation);
   }, [activeSessionId, conversation, liveSessionTasks]);
+
+  const normalizedSearch = searchQuery.trim().toLowerCase();
+  const visibleProjectRows = useMemo(() => {
+    return projects
+      .map((project) => {
+        const projectKey = normalizePathKey(project.path);
+        const projectSessions = projectSessionGroups.projectMap.get(projectKey) ?? [];
+
+        if (!normalizedSearch) {
+          return { project, sessions: projectSessions };
+        }
+
+        const projectMatches = `${project.name} ${project.path}`.toLowerCase().includes(normalizedSearch);
+        const matchedSessions = projectSessions.filter((session) =>
+          [
+            session.title,
+            session.cwd,
+            session.provider_name,
+            session.model ?? '',
+          ]
+            .join(' ')
+            .toLowerCase()
+            .includes(normalizedSearch),
+        );
+
+        if (!projectMatches && matchedSessions.length === 0) {
+          return null;
+        }
+
+        return {
+          project,
+          sessions: projectMatches ? projectSessions : matchedSessions,
+        };
+      })
+      .filter((row): row is { project: typeof projects[number]; sessions: SessionSummary[] } => !!row);
+  }, [normalizedSearch, projectSessionGroups.projectMap, projects]);
 
   useEffect(() => {
     if (!activeProjectPath) return;
@@ -399,6 +438,30 @@ export function Sidebar() {
               添加项目
             </button>
           </div>
+
+          <div className="relative mt-3">
+            <Search
+              size={15}
+              className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-rc-text-tertiary"
+            />
+            <input
+              value={searchQuery}
+              onChange={(event) => setSearchQuery(event.target.value)}
+              aria-label="搜索项目和会话"
+              placeholder="搜索项目或会话"
+              className="h-9 w-full rounded-lg border border-rc-border-primary bg-white/75 px-9 text-sm text-rc-text-primary outline-none transition-colors placeholder:text-rc-text-tertiary focus:border-rc-border-focus focus:bg-white dark:bg-rc-bg-elevated"
+            />
+            {searchQuery && (
+              <button
+                type="button"
+                title="清空搜索"
+                onClick={() => setSearchQuery('')}
+                className="absolute right-2 top-1/2 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-md text-rc-text-tertiary transition-colors hover:bg-rc-bg-hover hover:text-rc-text-primary"
+              >
+                <X size={14} />
+              </button>
+            )}
+          </div>
         </div>
 
         {/* Content */}
@@ -432,12 +495,19 @@ export function Sidebar() {
                     <br />
                     <span className="text-xs text-rc-text-tertiary">添加项目后，会话将按项目管理</span>
                   </div>
+                ) : visibleProjectRows.length === 0 ? (
+                  <div className="rounded-lg border border-dashed border-rc-border-primary px-4 py-6 text-center text-sm leading-6 text-rc-text-secondary">
+                    没有匹配结果
+                    <br />
+                    <span className="text-xs text-rc-text-tertiary">换个项目名、路径或会话标题试试</span>
+                  </div>
                 ) : (
                   <div className="space-y-3">
-                    {projects.map((project) => {
+                    {visibleProjectRows.map(({ project, sessions: projectSessions }) => {
                       const projectKey = normalizePathKey(project.path);
-                      const projectSessions = projectSessionGroups.projectMap.get(projectKey) ?? [];
-                      const expanded = expandedProjects[projectKey] ?? normalizePathKey(activeProjectPath ?? '') === projectKey;
+                      const expanded = normalizedSearch
+                        ? true
+                        : expandedProjects[projectKey] ?? normalizePathKey(activeProjectPath ?? '') === projectKey;
                       const active = normalizePathKey(activeProjectPath ?? '') === projectKey;
 
                       return (

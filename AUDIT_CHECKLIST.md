@@ -294,8 +294,8 @@
 
 ### 11.3 UI组件质量
 
-- [ ] **F-11**: GitPanel — 7个 `// TODO: Call Tauri backend` 未实现
-- [ ] **F-12**: CheckpointTimeline — `// TODO: Call Tauri backend checkpoint_list` 未实现
+- [x] **F-11**: GitPanel — 废弃未挂载原型已删除
+- [x] **F-12**: CheckpointTimeline — 废弃未挂载原型已删除
 - [ ] **F-13**: 主题/暗色模式 — 部分组件使用硬编码颜色，部分使用CSS变量
 - [ ] **F-14**: 响应式布局 — 移动端适配是否完整测试
 
@@ -364,7 +364,7 @@
 ### 14.3 TODO 管理
 
 - [ ] **DOC-11**: 全库 1,329 个 TODO/FIXME 标记 — 需要分类和优先级排序
-- [ ] **DOC-12**: 前端 7个 GitPanel TODO — 明确是否计划实现或标记为 wontfix
+- [x] **DOC-12**: 前端 GitPanel TODO — 随废弃未挂载原型删除
 - [ ] **DOC-13**: 适配器中仅1个 TODO (Claude `session rule for auto-approval`) — 优先级低
 
 ---

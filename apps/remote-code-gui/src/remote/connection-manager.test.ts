@@ -42,7 +42,9 @@ const mockNetwork = vi.hoisted(() => ({
 }));
 
 vi.mock('./unified-transport', () => ({
-  UnifiedTransport: vi.fn(() => mockUnifiedTransport),
+  UnifiedTransport: vi.fn(function UnifiedTransportMock() {
+    return mockUnifiedTransport;
+  }),
   probeEndpointHealth: vi.fn(),
 }));
 

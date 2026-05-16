@@ -416,7 +416,9 @@ crates/
     └── src/events.rs
 ```
 
-### 4.3 GUI 新增组件
+### 4.3 GUI 原型组件（历史方案，当前生产树已清理）
+
+下面这些组件属于 ZCode 启发方案的历史设计草案。未接入当前生产 GUI 的原型已经在废弃代码清理中删除；后续若恢复相关功能，需要按当前 Tauri/React 架构重新实现。
 
 ```
 apps/remote-code-gui/src/components/

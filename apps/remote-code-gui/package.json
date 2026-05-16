@@ -22,26 +22,14 @@
   },
   "dependencies": {
     "@radix-ui/react-dialog": "^1.1.15",
-    "@radix-ui/react-dropdown-menu": "^2.1.16",
-    "@radix-ui/react-scroll-area": "^1.2.10",
-    "@radix-ui/react-slot": "^1.2.4",
     "@tanstack/react-virtual": "^3.13.24",
     "@tauri-apps/api": "^2",
-    "@tauri-apps/plugin-biometric": "^2.3.2",
-    "@tauri-apps/plugin-deep-link": "^2.4.9",
-    "@tauri-apps/plugin-dialog": "^2.7.1",
-    "@tauri-apps/plugin-fs": "^2",
-    "@tauri-apps/plugin-haptics": "^2.3.2",
-    "@tauri-apps/plugin-notification": "^2.3.3",
-    "@tauri-apps/plugin-opener": "^2",
-    "@xterm/addon-fit": "^0.11.0",
-    "@xterm/xterm": "^6.0.0",
-    "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
+    "highlight.js": "^11.11.1",
     "katex": "^0.16.45",
     "lucide-react": "^0.542.0",
     "react": "^19.2.6",
-    "react-dom": "^19.1.0",
+    "react-dom": "^19.2.6",
     "react-markdown": "^10.1.0",
     "react-virtuoso": "^4.18.6",
     "rehype-highlight": "^7.0.2",
@@ -52,8 +40,7 @@
     "zustand": "^5.0.12"
   },
   "optionalDependencies": {
-    "@tauri-apps/plugin-network": "file:./plugins/plugin-network",
-    "@tauri-apps/plugin-share": "file:./plugins/plugin-share"
+    "@tauri-apps/plugin-network": "file:./plugins/plugin-network"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.11.1",

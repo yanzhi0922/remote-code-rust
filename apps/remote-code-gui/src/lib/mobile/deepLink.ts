@@ -20,7 +20,7 @@ export async function initDeepLinks(handler: DeepLinkHandler): Promise<void> {
   });
 }
 
-export function parseDeepLink(url: string): { path: string; params: Record<string, string> } | null {
+function parseDeepLink(url: string): { path: string; params: Record<string, string> } | null {
   try {
     const parsed = new URL(url);
     const params: Record<string, string> = {};
@@ -40,8 +40,4 @@ export function parsePairingUrl(url: string): DeepLinkPairing | null {
     if (offerId && secret) return { offerId, secret };
   }
   return null;
-}
-
-export function buildPairingUrl(baseUrl: string, offerId: string, secret: string): string {
-  return `${baseUrl}/pair?offerId=${encodeURIComponent(offerId)}&secret=${encodeURIComponent(secret)}`;
 }

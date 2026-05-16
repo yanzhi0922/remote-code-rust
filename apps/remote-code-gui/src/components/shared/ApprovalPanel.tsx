@@ -19,7 +19,7 @@ import { LoaderCircle } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { truncateMiddle } from '../../lib/utils';
 
-export interface ApprovalItem {
+interface ApprovalItem {
   approval_id: string;
   title: string;
   description: string;
@@ -29,7 +29,7 @@ export interface ApprovalItem {
   };
 }
 
-export interface ApprovalAction {
+interface ApprovalAction {
   decision: string;
   label: string;
   className: string;

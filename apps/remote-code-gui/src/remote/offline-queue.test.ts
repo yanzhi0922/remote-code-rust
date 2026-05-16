@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { enqueueCommand, drainCommands, clearQueue, getQueueSize } from './offline-queue';
+import { enqueueCommand, drainCommands } from './offline-queue';
 
 // ---------------------------------------------------------------------------
 // Minimal IndexedDB mock — in-memory store
@@ -117,7 +117,7 @@ describe('offline-queue', () => {
     vi.clearAllMocks();
   });
 
-  it('enqueues a command and reports it via getQueueSize', async () => {
+  it('enqueues a command', async () => {
     const entry = await enqueueCommand('session-1', {
       kind: 'send_prompt',
       content: 'hello',
@@ -128,8 +128,7 @@ describe('offline-queue', () => {
     expect(entry.command).toEqual({ kind: 'send_prompt', content: 'hello' });
     expect(entry.retryCount).toBe(0);
 
-    const size = await getQueueSize();
-    expect(size).toBe(1);
+    expect(store.size).toBe(1);
   });
 
   it('drains commands for the matching session and removes them', async () => {
@@ -143,8 +142,7 @@ describe('offline-queue', () => {
     expect(drained[1].command.kind).toBe('send_prompt');
 
     // session-2 should still be in the store
-    const remaining = await getQueueSize();
-    expect(remaining).toBe(1);
+    expect(store.size).toBe(1);
   });
 
   it('filters out stale commands older than 5 minutes during drain', async () => {
@@ -175,16 +173,6 @@ describe('offline-queue', () => {
     expect(store.has('stale-1')).toBe(false);
 
     vi.useRealTimers();
-  });
-
-  it('clearQueue removes all entries', async () => {
-    await enqueueCommand('session-1', { kind: 'interrupt' });
-    await enqueueCommand('session-2', { kind: 'interrupt' });
-
-    expect(await getQueueSize()).toBe(2);
-
-    await clearQueue();
-    expect(await getQueueSize()).toBe(0);
   });
 
   it('drain returns empty array when nothing is queued', async () => {

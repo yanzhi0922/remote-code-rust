@@ -5,7 +5,7 @@ export interface ProviderInfo {
   base_url: string | null;
 }
 
-export interface RuntimeProviderStatus {
+interface RuntimeProviderStatus {
   name: string;
   model: string | null;
   protocol: string;
@@ -15,14 +15,14 @@ export interface RuntimeProviderStatus {
   fallback_model: string | null;
 }
 
-export interface RuntimeMcpOriginCounts {
+interface RuntimeMcpOriginCounts {
   cwd: number;
   profile: number;
   explicit: number;
   plugin: number;
 }
 
-export interface RuntimeMcpStatusCounts {
+interface RuntimeMcpStatusCounts {
   connected: number;
   failed: number;
   needs_auth: number;
@@ -30,7 +30,7 @@ export interface RuntimeMcpStatusCounts {
   disabled: number;
 }
 
-export interface RuntimeMcpInventorySummary {
+interface RuntimeMcpInventorySummary {
   total_servers: number;
   enabled_servers: number;
   disabled_servers: number;
@@ -65,71 +65,7 @@ export interface SessionExportResult {
   path: string;
 }
 
-// ── Git Panel (native) ──────────────────────────────────────────────
-
-export type GitFileStatusCode = 'M' | 'A' | 'D' | 'R' | 'C' | '?' | '!';
-
-export interface GitFileStatusInfo {
-  path: string;
-  status: GitFileStatusCode;
-  isStaged: boolean;
-}
-
-export interface GitStatusInfo {
-  branch: string | null;
-  files: GitFileStatusInfo[];
-  ahead: number;
-  behind: number;
-  hasChanges: boolean;
-}
-
-export interface GitBranchInfo {
-  name: string;
-  isCurrent: boolean;
-  isRemote: boolean;
-  upstream: string | null;
-  ahead: number;
-  behind: number;
-}
-
-export interface GitCommitInfo {
-  hash: string;
-  shortHash: string;
-  author: string;
-  email: string;
-  message: string;
-  timestamp: number;
-}
-
-export interface GitCommitResult {
-  hash: string;
-  shortHash: string;
-  filesChanged: number;
-  insertions: number;
-  deletions: number;
-}
-
-// ── Checkpoints (native) ────────────────────────────────────────────
-
-export interface CheckpointStatsInfo {
-  filesAdded: number;
-  filesModified: number;
-  filesDeleted: number;
-  linesAdded: number;
-  linesRemoved: number;
-}
-
-export interface CheckpointSummaryInfo {
-  id: string;
-  sessionId: string;
-  messageId: string;
-  messageIndex: number;
-  createdAt: string;
-  summary: string;
-  stats: CheckpointStatsInfo;
-}
-
-export type DoctorProbeOutcome =
+type DoctorProbeOutcome =
   | 'reachable'
   | 'auth_rejected'
   | 'rate_limited'
@@ -137,7 +73,7 @@ export type DoctorProbeOutcome =
   | 'transport_error';
 
 
-export interface DoctorProbeInfo {
+interface DoctorProbeInfo {
   label: string;
   url: string;
   outcome: DoctorProbeOutcome;
@@ -146,7 +82,7 @@ export interface DoctorProbeInfo {
   detail: string;
 }
 
-export interface DoctorRuntimeInfo {
+interface DoctorRuntimeInfo {
   version: string;
   cwd: string;
   profile_dir: string;
@@ -158,7 +94,7 @@ export interface DoctorRuntimeInfo {
   settings_files: string[];
 }
 
-export interface DoctorProviderInfo {
+interface DoctorProviderInfo {
   name: string;
   protocol: string;
   base_url: string | null;
@@ -176,23 +112,23 @@ export interface DoctorProviderInfo {
   probe: DoctorProbeInfo | null;
 }
 
-export interface DoctorToolsInfo {
+interface DoctorToolsInfo {
   builtin_tools: number;
   allowed_tools: string[];
   disallowed_tools: string[];
 }
 
-export interface DoctorRuleSourceInfo {
+interface DoctorRuleSourceInfo {
   source: string;
   count: number;
 }
 
-export interface DoctorPermissionsInfo {
+interface DoctorPermissionsInfo {
   layered_rules: number;
   rule_sources: DoctorRuleSourceInfo[];
 }
 
-export interface DoctorExtensionsInfo {
+interface DoctorExtensionsInfo {
   skills: number;
   plugins: number;
   disabled_plugins: number;
@@ -200,7 +136,7 @@ export interface DoctorExtensionsInfo {
   plugin_mcp_servers: number;
 }
 
-export interface DoctorMcpRuntimeServerInfo {
+interface DoctorMcpRuntimeServerInfo {
   name: string;
   status: string;
   enabled: boolean;
@@ -211,13 +147,13 @@ export interface DoctorMcpRuntimeServerInfo {
   error: string | null;
 }
 
-export interface DoctorMcpRuntimeInfo {
+interface DoctorMcpRuntimeInfo {
   probed: boolean;
   summary: RuntimeMcpInventorySummary;
   servers: DoctorMcpRuntimeServerInfo[];
 }
 
-export interface DoctorEnvProviderInfo {
+interface DoctorEnvProviderInfo {
   name: string;
   protocol: string;
   base_url: string | null;
@@ -239,13 +175,13 @@ export interface DoctorReportInfo {
   warnings: string[];
 }
 
-export interface McpToolInfo {
+interface McpToolInfo {
   name: string;
   description: string | null;
   inputSchema?: unknown;
 }
 
-export interface McpServerLiveInfo {
+interface McpServerLiveInfo {
   status: string;
   protocol_version: string | null;
   peer_name: string | null;
@@ -340,7 +276,7 @@ export interface SessionSummary {
   archived: boolean;
 }
 
-export type ConversationRole = 'system' | 'user' | 'assistant' | 'tool';
+type ConversationRole = 'system' | 'user' | 'assistant' | 'tool';
 
 export interface ToolCallInfo {
   id: string;
@@ -358,7 +294,7 @@ export interface ConversationEntry {
   is_error: boolean;
 }
 
-export interface UsageInfo {
+interface UsageInfo {
   input_tokens: number;
   output_tokens: number;
   total_tokens: number;
@@ -548,7 +484,7 @@ export interface CodexSkillsListRequest {
   forceReload?: boolean | null;
 }
 
-export type CodexNativeParams = Record<string, unknown>;
+type CodexNativeParams = Record<string, unknown>;
 
 export interface CodexThreadNativeRequest {
   sessionId?: string | null;
@@ -689,7 +625,7 @@ export interface CodexConfigValueWriteRequest {
   expectedVersion?: string | null;
 }
 
-export interface CodexConfigBatchEditRequest {
+interface CodexConfigBatchEditRequest {
   keyPath: string;
   value: unknown;
   mergeStrategy?: 'replace' | 'upsert' | null;
@@ -945,7 +881,7 @@ export interface ContextCompactedInfo {
   usage_ratio: number;
 }
 
-export type SubtaskStatus = 'pending' | 'running' | 'completed' | 'failed' | 'stopped';
+type SubtaskStatus = 'pending' | 'running' | 'completed' | 'failed' | 'stopped';
 
 export interface SessionSubtask {
   session_id: string;
@@ -968,30 +904,15 @@ export interface TaskSnapshotInfo {
   tasks: SessionSubtask[];
 }
 
-// ── Scheduled Tasks ──────────────────────────────────────────────────
-
-export type ScheduledTaskWizardData = {
-  name?: string;
-  description?: string;
-  prompt?: string;
-  model?: string;
-  permissionMode?: string;
-  folder?: string;
-  worktree?: boolean;
-  frequency?: string;
-  scheduledTime?: string;
-  cron?: string;
-};
-
 // ── Context Visualization ────────────────────────────────────────────
 
-export interface ContextCategory {
+interface ContextCategory {
   name: string;
   tokens: number;
   color: string;
 }
 
-export interface ContextData {
+interface ContextData {
   categories: ContextCategory[];
   totalTokens: number;
   maxTokens: number;
@@ -1001,9 +922,9 @@ export interface ContextData {
 
 // ── Task List V2 ─────────────────────────────────────────────────────
 
-export type TaskStatus = 'pending' | 'in_progress' | 'completed';
+type TaskStatus = 'pending' | 'in_progress' | 'completed';
 
-export interface TaskItem {
+interface TaskItem {
   id: string;
   title: string;
   status: TaskStatus;
@@ -1013,13 +934,13 @@ export interface TaskItem {
 
 // ── File Edit Diff ───────────────────────────────────────────────────
 
-export interface FileEdit {
+interface FileEdit {
   old_string: string;
   new_string: string;
   replace_all?: boolean;
 }
 
-export interface DiffLine {
+interface DiffLine {
   type: 'add' | 'remove' | 'context';
   content: string;
   lineNumber?: number;
@@ -1027,7 +948,7 @@ export interface DiffLine {
 
 // ── Agent Progress ───────────────────────────────────────────────────
 
-export interface AgentProgressInfo {
+interface AgentProgressInfo {
   agentType: string;
   description?: string;
   name?: string;
@@ -1041,7 +962,7 @@ export interface AgentProgressInfo {
 
 // ── Coordinator Agent ────────────────────────────────────────────────
 
-export interface CoordinatorTask {
+interface CoordinatorTask {
   id: string;
   name?: string;
   status: TaskStatus;
@@ -1053,7 +974,7 @@ export interface CoordinatorTask {
 
 // ── Teammate View ────────────────────────────────────────────────────
 
-export interface TeammateInfo {
+interface TeammateInfo {
   agentName: string;
   color?: string;
   prompt?: string;
@@ -1061,7 +982,7 @@ export interface TeammateInfo {
 
 // ── Session Preview ──────────────────────────────────────────────────
 
-export interface SessionInfo {
+interface SessionInfo {
   id: string;
   title: string;
   messageCount: number;
@@ -1072,14 +993,14 @@ export interface SessionInfo {
 
 // ── Quick Open ───────────────────────────────────────────────────────
 
-export interface QuickOpenResult {
+interface QuickOpenResult {
   path: string;
   label: string;
 }
 
 // ── Compact Summary ──────────────────────────────────────────────────
 
-export interface SummarizeMetadata {
+interface SummarizeMetadata {
   messagesSummarized: number;
   direction: 'up_to' | 'from_here';
   userContext?: string;
@@ -1087,9 +1008,9 @@ export interface SummarizeMetadata {
 
 // ── Memory Usage ─────────────────────────────────────────────────────
 
-export type MemoryStatus = 'normal' | 'high' | 'critical';
+type MemoryStatus = 'normal' | 'high' | 'critical';
 
-export interface MemoryUsageData {
+interface MemoryUsageData {
   heapUsed: number;
   status: MemoryStatus;
 }

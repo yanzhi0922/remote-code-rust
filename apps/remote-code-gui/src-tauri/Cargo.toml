@@ -53,8 +53,6 @@ claude-voice = { path = "../../../crates/claude/claude-voice", optional = true }
 claude-runner = { path = "../../../crates/claude/claude-runner", optional = true }
 claude-control-plane = { path = "../../../crates/claude/claude-control-plane", optional = true }
 claude-telemetry = { path = "../../../crates/claude/claude-telemetry", optional = true }
-claude-git = { path = "../../../crates/claude/claude-git", optional = true }
-claude-checkpoint = { path = "../../../crates/claude/claude-checkpoint", optional = true }
 rc-codex-adapter = { path = "../../../crates/adapters/rc-codex-adapter", optional = true }
 rc-roo-adapter = { path = "../../../crates/adapters/rc-roo-adapter", optional = true }
 rc-claude-adapter = { path = "../../../crates/adapters/rc-claude-adapter", optional = true }
@@ -96,8 +94,6 @@ desktop = [
     "dep:claude-runner",
     "dep:claude-control-plane",
     "dep:claude-telemetry",
-    "dep:claude-git",
-    "dep:claude-checkpoint",
     "dep:rc-codex-adapter",
     "dep:rc-roo-adapter",
     "dep:rc-claude-adapter",

@@ -180,12 +180,12 @@ interface AppState {
 
 /**
  * Fix #9: stored cleanup functions for registered event listeners.
- * Written during init; can be invoked via {@link cleanupEventListeners}.
+ * Written during init so stale listeners can be removed before re-registration.
  */
 let listenerCleanupFns: (() => void)[] | null = null;
 
 /** Tear down all registered Tauri event listeners (useful for HMR / tests). */
-export function cleanupEventListeners(): void {
+function cleanupEventListeners(): void {
   if (listenerCleanupFns) {
     listenerCleanupFns.forEach((fn) => fn());
     listenerCleanupFns = null;
@@ -505,6 +505,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   init: async () => {
     try {
       if (!get().listenersRegistered) {
+        cleanupEventListeners();
         // Fix #9: store cleanup functions so listeners can be torn down later.
         const unlistenFns = await registerEventListeners();
         listenerCleanupFns = unlistenFns;

@@ -1,3 +1,6 @@
+import { invoke } from '@tauri-apps/api/core';
+import { hasTauriRuntime } from './runtime';
+
 export interface RemoteArtifactDownloadRequest {
   url: string;
   fileName: string;
@@ -6,10 +9,18 @@ export interface RemoteArtifactDownloadRequest {
 
 export async function downloadRemoteArtifact(
   request: RemoteArtifactDownloadRequest,
-): Promise<void> {
+): Promise<string | null> {
   const token = request.token?.trim();
   if (!token) {
     throw new Error('Remote artifact download requires an authenticated device token.');
+  }
+
+  if (hasTauriRuntime()) {
+    return invoke<string>('mobile_download_artifact', {
+      url: request.url,
+      fileName: sanitizeFileName(request.fileName),
+      token,
+    });
   }
 
   const response = await fetch(request.url, {
@@ -40,6 +51,8 @@ export async function downloadRemoteArtifact(
       window.URL.revokeObjectURL(objectUrl);
     }, 60_000);
   }
+
+  return null;
 }
 
 function sanitizeFileName(value: string): string {

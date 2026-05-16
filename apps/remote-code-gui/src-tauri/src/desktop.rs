@@ -83,78 +83,6 @@ use uuid::Uuid;
 use crate::dto::*;
 use crate::state::*;
 
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct GitFileStatusDto {
-    path: String,
-    status: String,
-    is_staged: bool,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct GitStatusDto {
-    branch: Option<String>,
-    files: Vec<GitFileStatusDto>,
-    ahead: usize,
-    behind: usize,
-    has_changes: bool,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct GitBranchDto {
-    name: String,
-    is_current: bool,
-    is_remote: bool,
-    upstream: Option<String>,
-    ahead: usize,
-    behind: usize,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct GitCommitDto {
-    hash: String,
-    short_hash: String,
-    author: String,
-    email: String,
-    message: String,
-    timestamp: i64,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct GitCommitResultDto {
-    hash: String,
-    short_hash: String,
-    files_changed: usize,
-    insertions: usize,
-    deletions: usize,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct CheckpointStatsDto {
-    files_added: usize,
-    files_modified: usize,
-    files_deleted: usize,
-    lines_added: usize,
-    lines_removed: usize,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct CheckpointSummaryDto {
-    id: String,
-    session_id: String,
-    message_id: String,
-    message_index: usize,
-    created_at: String,
-    summary: String,
-    stats: CheckpointStatsDto,
-}
-
 fn codex_permission_decision(
     allowed: bool,
     permission_updates: &[PermissionUpdate],
@@ -3395,170 +3323,6 @@ async fn create_session(
     Ok(config.session_id.to_string())
 }
 
-fn git_file_status_code(status: claude_git::FileStatus) -> &'static str {
-    match status {
-        claude_git::FileStatus::Modified => "M",
-        claude_git::FileStatus::Added => "A",
-        claude_git::FileStatus::Deleted => "D",
-        claude_git::FileStatus::Renamed => "R",
-        claude_git::FileStatus::Copied => "C",
-        claude_git::FileStatus::Untracked => "?",
-        claude_git::FileStatus::Ignored => "!",
-    }
-}
-
-fn open_git(project_path: String) -> std::result::Result<claude_git::GitOperations, String> {
-    let path =
-        normalize_existing_path(Path::new(&project_path)).map_err(|error| format!("{error:#}"))?;
-    claude_git::GitOperations::open(path).map_err(|error| format!("{error:#}"))
-}
-
-#[tauri::command]
-async fn git_status(project_path: String) -> std::result::Result<GitStatusDto, String> {
-    let repo = open_git(project_path)?;
-    let status = repo.status().map_err(|error| format!("{error:#}"))?;
-    Ok(GitStatusDto {
-        branch: status.branch,
-        files: status
-            .files
-            .into_iter()
-            .map(|file| GitFileStatusDto {
-                path: file.path,
-                status: git_file_status_code(file.status).to_owned(),
-                is_staged: file.is_staged,
-            })
-            .collect(),
-        ahead: status.ahead,
-        behind: status.behind,
-        has_changes: status.has_changes,
-    })
-}
-
-#[tauri::command]
-async fn git_branches(project_path: String) -> std::result::Result<Vec<GitBranchDto>, String> {
-    let repo = open_git(project_path)?;
-    let branches = repo.branches().map_err(|error| format!("{error:#}"))?;
-    Ok(branches
-        .into_iter()
-        .map(|branch| GitBranchDto {
-            name: branch.name,
-            is_current: branch.is_current,
-            is_remote: branch.is_remote,
-            upstream: branch.upstream,
-            ahead: branch.ahead,
-            behind: branch.behind,
-        })
-        .collect())
-}
-
-#[tauri::command]
-async fn git_log(
-    project_path: String,
-    max_count: Option<usize>,
-) -> std::result::Result<Vec<GitCommitDto>, String> {
-    let repo = open_git(project_path)?;
-    let commits = repo
-        .log(max_count.unwrap_or(50).min(500))
-        .map_err(|error| format!("{error:#}"))?;
-    Ok(commits
-        .into_iter()
-        .map(|commit| GitCommitDto {
-            hash: commit.hash,
-            short_hash: commit.short_hash,
-            author: commit.author,
-            email: commit.email,
-            message: commit.message,
-            timestamp: commit.timestamp,
-        })
-        .collect())
-}
-
-#[tauri::command]
-async fn git_stage(project_path: String, path: String) -> std::result::Result<(), String> {
-    if path.trim().is_empty() {
-        return Err("path cannot be empty".to_owned());
-    }
-    let repo = open_git(project_path)?;
-    repo.stage(&[path.as_str()])
-        .map_err(|error| format!("{error:#}"))
-}
-
-#[tauri::command]
-async fn git_commit(
-    project_path: String,
-    message: String,
-) -> std::result::Result<GitCommitResultDto, String> {
-    let message = message.trim();
-    if message.is_empty() {
-        return Err("commit message cannot be empty".to_owned());
-    }
-    let repo = open_git(project_path)?;
-    let result = repo.commit(message).map_err(|error| format!("{error:#}"))?;
-    Ok(GitCommitResultDto {
-        hash: result.hash,
-        short_hash: result.short_hash,
-        files_changed: result.files_changed,
-        insertions: result.insertions,
-        deletions: result.deletions,
-    })
-}
-
-#[tauri::command]
-async fn git_switch_branch(project_path: String, name: String) -> std::result::Result<(), String> {
-    let name = name.trim();
-    if name.is_empty() {
-        return Err("branch name cannot be empty".to_owned());
-    }
-    let repo = open_git(project_path)?;
-    repo.switch_branch(name)
-        .map_err(|error| format!("{error:#}"))
-}
-
-#[tauri::command]
-async fn checkpoint_list(
-    state: State<'_, AppState>,
-    session_id: String,
-) -> std::result::Result<Vec<CheckpointSummaryDto>, String> {
-    let session_id = session_id.trim();
-    if session_id.is_empty() {
-        return Err("sessionId cannot be empty".to_owned());
-    }
-
-    let db_path = {
-        let runtime = state.runtime.lock().await;
-        runtime.config.paths.state_db_path.clone()
-    };
-
-    if !db_path.exists() {
-        return Ok(Vec::new());
-    }
-
-    let store =
-        claude_checkpoint::CheckpointStore::open(&db_path).map_err(|error| format!("{error:#}"))?;
-    let checkpoints = store
-        .list_checkpoints(session_id)
-        .map_err(|error| format!("{error:#}"))?;
-
-    Ok(checkpoints
-        .into_iter()
-        .map(|checkpoint| CheckpointSummaryDto {
-            id: checkpoint.id.to_string(),
-            session_id: checkpoint.session_id,
-            message_id: checkpoint.message_id,
-            message_index: checkpoint.message_index,
-            created_at: checkpoint.created_at.to_rfc3339(),
-            summary: checkpoint.summary,
-            stats: CheckpointStatsDto {
-                files_added: checkpoint.stats.files_added,
-                files_modified: checkpoint.stats.files_modified,
-                files_deleted: checkpoint.stats.files_deleted,
-                lines_added: checkpoint.stats.lines_added,
-                lines_removed: checkpoint.stats.lines_removed,
-            },
-        })
-        .collect())
-}
-
 #[tauri::command]
 async fn send_prompt(
     app: AppHandle,
@@ -6682,13 +6446,6 @@ pub fn run() {
             list_sessions,
             get_session_conversation,
             get_session_tasks,
-            git_status,
-            git_branches,
-            git_log,
-            git_stage,
-            git_commit,
-            git_switch_branch,
-            checkpoint_list,
             send_prompt,
             cancel_prompt,
             get_provider_info,
@@ -6816,16 +6573,11 @@ pub fn run() {
             install_agent,
             uninstall_agent,
             transcribe_audio,
-            crate::mobile::mobile_platform,
             crate::mobile::mobile_is_mobile,
-            crate::mobile::mobile_haptic_impact,
             crate::mobile::mobile_haptic_notification,
-            crate::mobile::mobile_haptic_selection,
             crate::mobile::mobile_biometric_check_availability,
             crate::mobile::mobile_biometric_authenticate,
             crate::mobile::mobile_secure_store_get,
-            crate::mobile::mobile_secure_store_set,
-            crate::mobile::mobile_secure_store_remove,
             crate::mobile::mobile_download_artifact,
             crate::mobile::mobile_share_file,
             crate::mobile::mobile_push_request_permission,
