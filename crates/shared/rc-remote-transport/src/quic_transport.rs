@@ -62,10 +62,15 @@ impl RemoteTransport for QuicTransport {
 
         // Parse server address.
         let addr = parse_quic_addr(&server_url)?;
+        if cert_fp.is_none() && !addr.ip().is_loopback() {
+            anyhow::bail!(
+                "QUIC requires a pinned server certificate fingerprint for non-loopback hosts"
+            );
+        }
 
         // Build TLS config for QUIC.
         let tls = crate::tls::build_client_tls_config(&crate::TlsConfig {
-            accept_self_signed: cert_fp.is_none(), // Accept self-signed if no fingerprint
+            accept_self_signed: cert_fp.is_some() || addr.ip().is_loopback(),
             cert_fingerprints: cert_fp.map(|fp| vec![fp]).unwrap_or_default(),
             enforce_https: false, // QUIC has its own addressing
         })?;
@@ -85,6 +90,22 @@ impl RemoteTransport for QuicTransport {
             self.state = ConnectionState::Error(e.to_string());
             anyhow::anyhow!("QUIC connect failed: {e}")
         })?;
+
+        // Authenticate the QUIC event stream before accepting server events.
+        let auth_payload = serde_json::to_vec(&QuicAuthMessage {
+            token: config.auth_token.clone(),
+            session_id: config.session_id.clone(),
+        })?;
+        let mut auth_stream = conn
+            .open_uni()
+            .await
+            .map_err(|e| anyhow::anyhow!("QUIC open auth stream: {e}"))?;
+        use tokio::io::AsyncWriteExt;
+        auth_stream
+            .write_all(&(auth_payload.len() as u32).to_le_bytes())
+            .await?;
+        auth_stream.write_all(&auth_payload).await?;
+        auth_stream.shutdown().await?;
 
         self.connection = Some(conn.clone());
         self.endpoint = Some(endpoint);
@@ -179,6 +200,12 @@ impl RemoteTransport for QuicTransport {
     fn metrics(&self) -> TransportMetrics {
         self.metrics.clone()
     }
+}
+
+#[derive(serde::Serialize)]
+struct QuicAuthMessage {
+    token: String,
+    session_id: String,
 }
 
 /// Read events from a QUIC unidirectional stream.

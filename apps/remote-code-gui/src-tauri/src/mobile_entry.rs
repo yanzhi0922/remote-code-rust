@@ -42,6 +42,10 @@ pub fn run() {
             crate::mobile::mobile_list_downloaded_files,
             crate::mobile::mobile_quic_status,
             crate::mobile::mobile_connection_strategy,
+            crate::quic_bridge::quic_connect,
+            crate::quic_bridge::quic_send_command,
+            crate::quic_bridge::quic_disconnect,
+            crate::quic_bridge::quic_state,
         ])
         .run(tauri::generate_context!())
         .unwrap_or_else(|error| panic!("error while running tauri application: {error}"));

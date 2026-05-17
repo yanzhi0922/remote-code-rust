@@ -414,6 +414,7 @@ export class UnifiedTransport implements TransportHandle {
         url: this._config.quicServerUrl ?? this._config.baseUrl,
         token: this._config.authToken ?? '',
         sessionId: this._config.sessionId,
+        serverCertFingerprint: this._config.quicCertFingerprint ?? null,
       });
       this.setState('open');
 

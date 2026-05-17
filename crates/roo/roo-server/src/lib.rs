@@ -68,6 +68,14 @@ pub use transport::Transport;
 use roo_provider::{Provider, register_provider};
 use roo_types::api::ProviderName;
 
+macro_rules! register_provider_handler {
+    ($name:expr, $handler:path) => {
+        register_provider($name, |settings| {
+            $handler(settings).map(|h| Box::new(h) as Box<dyn Provider>)
+        });
+    };
+}
+
 /// Register all built-in provider factories.
 ///
 /// Must be called once during application startup, before any
@@ -112,9 +120,88 @@ pub fn register_providers() {
             .map(|h| Box::new(h) as Box<dyn Provider>)
     });
 
+    // Vertex AI
+    register_provider(ProviderName::Vertex, |settings| {
+        roo_provider_google::VertexHandler::from_settings(settings)
+            .map(|h| Box::new(h) as Box<dyn Provider>)
+    });
+
     // Ollama
     register_provider(ProviderName::Ollama, |settings| {
         roo_provider_ollama::OllamaHandler::from_settings(settings)
             .map(|h| Box::new(h) as Box<dyn Provider>)
     });
+
+    register_provider_handler!(
+        ProviderName::OpenaiNative,
+        roo_provider_openai_native::OpenAiNativeHandler::from_settings
+    );
+    register_provider_handler!(
+        ProviderName::OpenaiCodex,
+        roo_provider_openai_native::OpenAiCodexHandler::from_settings
+    );
+    register_provider_handler!(
+        ProviderName::Bedrock,
+        roo_provider_aws::AwsBedrockHandler::from_settings
+    );
+    register_provider_handler!(
+        ProviderName::LmStudio,
+        roo_provider_lmstudio::LmStudioHandler::from_settings
+    );
+    register_provider_handler!(
+        ProviderName::Xai,
+        roo_provider_xai::XaiHandler::from_settings
+    );
+    register_provider_handler!(
+        ProviderName::Moonshot,
+        roo_provider_moonshot::MoonshotHandler::from_settings
+    );
+    register_provider_handler!(
+        ProviderName::QwenCode,
+        roo_provider_qwen::QwenHandler::from_settings
+    );
+    register_provider_handler!(
+        ProviderName::Zai,
+        roo_provider_zai::ZaiHandler::from_settings
+    );
+    register_provider_handler!(
+        ProviderName::Mistral,
+        roo_provider_mistral::MistralHandler::from_settings
+    );
+    register_provider_handler!(
+        ProviderName::Fireworks,
+        roo_provider_fireworks::FireworksHandler::from_settings
+    );
+    register_provider_handler!(
+        ProviderName::SambaNova,
+        roo_provider_sambanova::SambaNovaHandler::from_settings
+    );
+    register_provider_handler!(
+        ProviderName::Baseten,
+        roo_provider_baseten::BasetenHandler::from_settings
+    );
+    register_provider_handler!(
+        ProviderName::Poe,
+        roo_provider_poe::PoeHandler::from_settings
+    );
+    register_provider_handler!(
+        ProviderName::LiteLlm,
+        roo_provider_litellm::LiteLlmHandler::from_settings
+    );
+    register_provider_handler!(
+        ProviderName::Requesty,
+        roo_provider_requesty::RequestyHandler::from_settings
+    );
+    register_provider_handler!(
+        ProviderName::Unbound,
+        roo_provider_unbound::UnboundHandler::from_settings
+    );
+    register_provider_handler!(
+        ProviderName::Roo,
+        roo_provider_roo::RooHandler::from_settings
+    );
+    register_provider_handler!(
+        ProviderName::VercelAiGateway,
+        roo_provider_vercel::VercelHandler::from_settings
+    );
 }

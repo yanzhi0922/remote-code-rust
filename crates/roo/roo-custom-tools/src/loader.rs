@@ -43,10 +43,29 @@ pub fn validate_definition(definition: &CustomToolDefinition) -> Result<(), Cust
 ///
 /// Supported file extensions: `.json`, `.yaml`, `.yml`
 pub fn load_from_directory(dir: &Path) -> Result<LoadResult, CustomToolError> {
+    let (definitions, errors) = load_definitions_from_directory(dir)?;
     let mut result = LoadResult::default();
 
+    for definition in definitions {
+        result.loaded.push(definition.name);
+    }
+    result.errors = errors;
+
+    Ok(result)
+}
+
+/// Load validated custom tool definitions from a directory.
+///
+/// Unlike [`load_from_directory`], this returns the parsed definitions so
+/// callers can register JSON and YAML tools without reparsing files.
+pub fn load_definitions_from_directory(
+    dir: &Path,
+) -> Result<(Vec<CustomToolDefinition>, Vec<String>), CustomToolError> {
+    let mut definitions = Vec::new();
+    let mut errors = Vec::new();
+
     if !dir.exists() {
-        return Ok(result);
+        return Ok((definitions, errors));
     }
 
     let entries = std::fs::read_dir(dir)?;
@@ -72,19 +91,19 @@ pub fn load_from_directory(dir: &Path) -> Result<LoadResult, CustomToolError> {
         match load_single_file(&path) {
             Ok(definition) => match validate_definition(&definition) {
                 Ok(()) => {
-                    result.loaded.push(definition.name.clone());
+                    definitions.push(definition);
                 }
                 Err(e) => {
-                    result.errors.push(format!("{file_name}: {e}"));
+                    errors.push(format!("{file_name}: {e}"));
                 }
             },
             Err(e) => {
-                result.errors.push(format!("{file_name}: {e}"));
+                errors.push(format!("{file_name}: {e}"));
             }
         }
     }
 
-    Ok(result)
+    Ok((definitions, errors))
 }
 
 /// Load a single tool definition from a file.

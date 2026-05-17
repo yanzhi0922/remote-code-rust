@@ -15,7 +15,7 @@ use roo_prompt::types::SystemPromptSettings;
 /// Parameters for system prompt generation.
 ///
 /// Source: `src/core/webview/generateSystemPrompt.ts`
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct GenerateSystemPromptParams {
     pub mode: Option<String>,
     pub cwd: String,
@@ -30,6 +30,26 @@ pub struct GenerateSystemPromptParams {
     pub new_task_require_todos: bool,
     pub is_stealth_model: Option<bool>,
     pub roo_ignore_instructions: Option<String>,
+}
+
+impl Default for GenerateSystemPromptParams {
+    fn default() -> Self {
+        Self {
+            mode: None,
+            cwd: String::new(),
+            custom_mode_prompts: None,
+            custom_instructions: None,
+            mcp_enabled: false,
+            experiments: None,
+            language: None,
+            enable_subfolder_rules: false,
+            todo_list_enabled: true,
+            use_agent_rules: true,
+            new_task_require_todos: false,
+            is_stealth_model: None,
+            roo_ignore_instructions: None,
+        }
+    }
 }
 
 /// Result of system prompt generation.
@@ -54,9 +74,15 @@ pub fn generate_system_prompt(params: GenerateSystemPromptParams) -> GenerateSys
     let mode = params.mode.as_deref().unwrap_or("architect");
 
     let settings = SystemPromptSettings {
+        todo_list_enabled: params.todo_list_enabled,
+        use_agent_rules: params.use_agent_rules,
+        enable_subfolder_rules: params.enable_subfolder_rules,
+        new_task_require_todos: params.new_task_require_todos,
         is_stealth_model: params.is_stealth_model.unwrap_or(false),
-        ..Default::default()
     };
+    let custom_mode_prompts: Option<roo_types::mode::CustomModePrompts> = params
+        .custom_mode_prompts
+        .and_then(|value| serde_json::from_value(value).ok());
 
     let os_info = format!("{} {}", std::env::consts::OS, env!("CARGO_PKG_VERSION"));
     let shell = if cfg!(windows) { "powershell" } else { "bash" };
@@ -67,8 +93,8 @@ pub fn generate_system_prompt(params: GenerateSystemPromptParams) -> GenerateSys
     let system_prompt = roo_prompt::build_system_prompt(
         &params.cwd,
         mode,
-        None,               // custom_modes
-        None,               // custom_mode_prompts
+        None, // custom_modes
+        custom_mode_prompts.as_ref(),
         params.mcp_enabled, // has_mcp
         params.custom_instructions.as_deref(),
         params.language.as_deref(),

@@ -467,18 +467,55 @@ impl App {
             is_stealth_model: false,
             ..Default::default()
         };
+        let state_snapshot = self.state.try_read().ok().map(|state| {
+            (
+                state.current_mode.clone(),
+                state.custom_instructions.clone(),
+            )
+        });
+        let mode = state_snapshot
+            .as_ref()
+            .map(|(mode, _)| mode.as_str())
+            .filter(|mode| !mode.trim().is_empty())
+            .unwrap_or(&self.config.mode);
+        let custom_instructions = state_snapshot
+            .as_ref()
+            .and_then(|(_, instructions)| instructions.as_deref());
+        let custom_modes = self.custom_modes_manager.as_ref().and_then(|manager| {
+            manager
+                .write()
+                .ok()
+                .map(|mut manager| manager.get_custom_modes())
+        });
+        let skills = self
+            .skills_manager
+            .as_ref()
+            .and_then(|manager| manager.try_read().ok())
+            .map(|manager| {
+                manager
+                    .get_skills_for_mode(mode)
+                    .into_iter()
+                    .map(|skill| roo_prompt::SkillInfo {
+                        name: skill.name.clone(),
+                        description: skill.description.clone(),
+                        path: skill.path.clone(),
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let roo_ignore_instructions = self.roo_ignore.as_ref().and_then(|c| c.get_instructions());
 
         roo_prompt::build_system_prompt(
             &self.config.cwd,
-            &self.config.mode,
-            None,                   // custom_modes
+            mode,
+            custom_modes.as_deref(),
             None,                   // custom_mode_prompts
             self.mcp_hub.is_some(), // has_mcp
-            None,                   // global_custom_instructions
+            custom_instructions,
             self.config.language.as_deref(),
-            None, // roo_ignore_instructions
+            roo_ignore_instructions.as_deref(),
             Some(&settings),
-            &[], // skills
+            &skills,
             &format!("{} {}", std::env::consts::OS, env!("CARGO_PKG_VERSION")),
             "bash", // shell
             &std::env::var("HOME")

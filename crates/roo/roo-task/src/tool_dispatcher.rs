@@ -1491,6 +1491,7 @@ impl ToolHandler for CodebaseSearchHandler {
             directory_prefix: params
                 .get("directoryPrefix")
                 .or_else(|| params.get("directory_prefix"))
+                .or_else(|| params.get("path"))
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string()),
         };
@@ -2608,42 +2609,15 @@ impl CustomToolHandler {
                 continue;
             }
 
-            // Use the official loader which handles JSON and YAML
-            match roo_custom_tools::load_from_directory(&tools_dir) {
-                Ok(result) => {
-                    // The official loader validates but doesn't register.
-                    // Re-scan the directory to parse and register each definition.
-                    if let Ok(entries) = std::fs::read_dir(&tools_dir) {
-                        for entry in entries.flatten() {
-                            let path = entry.path();
-                            if !path.is_file() {
-                                continue;
-                            }
-                            let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-                            if ext != "json" && ext != "yaml" && ext != "yml" {
-                                continue;
-                            }
-                            if let Ok(content) = std::fs::read_to_string(&path) {
-                                // Try JSON parsing (YAML requires serde_yaml which is
-                                // an internal dependency of roo-custom-tools)
-                                let def_result: Result<roo_custom_tools::CustomToolDefinition, _> =
-                                    serde_json::from_str(&content);
-                                if let Ok(def) = def_result
-                                    && result.loaded.contains(&def.name)
-                                    && let Ok(mut registry) = self.registry.lock()
-                                {
-                                    registry.register(def, Some(&tools_dir.to_string_lossy()));
-                                }
-                                // For YAML files, they were validated by load_from_directory
-                                // but we can't parse them here without serde_yaml.
-                                // The tool names are tracked but definitions need to be
-                                // registered at a higher layer or via the registry API.
-                            }
+            match roo_custom_tools::load_definitions_from_directory(&tools_dir) {
+                Ok((definitions, errors)) => {
+                    for definition in definitions {
+                        combined.loaded.push(definition.name.clone());
+                        if let Ok(mut registry) = self.registry.lock() {
+                            registry.register(definition, Some(&tools_dir.to_string_lossy()));
                         }
                     }
-
-                    combined.loaded.extend(result.loaded.clone());
-                    combined.errors.extend(result.errors);
+                    combined.errors.extend(errors);
                 }
                 Err(e) => {
                     combined
@@ -4363,6 +4337,35 @@ mod tests {
         let ctx = make_context();
         let result = handler.execute(serde_json::json!({}), &ctx).await;
         assert!(result.is_error); // "custom_tool" not in empty registry
+    }
+
+    #[tokio::test]
+    async fn test_custom_tool_handler_registers_yaml_definitions() {
+        let dir = tempfile::tempdir().unwrap();
+        let tools_dir = dir.path().join(".roo").join("tools");
+        std::fs::create_dir_all(&tools_dir).unwrap();
+        std::fs::write(
+            tools_dir.join("yaml_tool.yaml"),
+            r#"name: yaml_tool
+description: A YAML-defined test tool
+parameters_schema:
+  type: object
+handler_type: builtin
+"#,
+        )
+        .unwrap();
+
+        let handler = CustomToolHandler::new_empty();
+        let load_result = handler.load_tools_from_dirs(dir.path());
+        assert!(load_result.errors.is_empty(), "{:?}", load_result.errors);
+        assert_eq!(load_result.loaded, vec!["yaml_tool".to_string()]);
+
+        let ctx = make_context();
+        let result = handler
+            .execute(serde_json::json!({"_custom_tool_name": "yaml_tool"}), &ctx)
+            .await;
+        assert!(!result.is_error, "unexpected error: {}", result.text);
+        assert!(result.text.contains("YAML-defined"));
     }
 
     // ---- Repetition detector integration tests ----

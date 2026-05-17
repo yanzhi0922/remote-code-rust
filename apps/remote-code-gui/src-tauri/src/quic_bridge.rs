@@ -28,11 +28,12 @@ pub async fn quic_connect(
     url: String,
     token: String,
     session_id: String,
+    server_cert_fingerprint: Option<String>,
 ) -> std::result::Result<(), String> {
     let config = TransportConfig {
         strategy: TransportStrategy::Quic {
             server_url: url,
-            server_cert_fingerprint: None,
+            server_cert_fingerprint,
         },
         auth_token: token,
         session_id,

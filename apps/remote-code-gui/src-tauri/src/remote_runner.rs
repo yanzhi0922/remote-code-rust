@@ -10,8 +10,8 @@
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
@@ -41,6 +41,8 @@ use claude_runner::{
 
 static REMOTE_SERVICE_STARTED: AtomicBool = AtomicBool::new(false);
 static REMOTE_SERVICE_CONNECTED: AtomicBool = AtomicBool::new(false);
+static REMOTE_SERVICE_SHUTDOWN: StdMutex<Option<watch::Sender<bool>>> = StdMutex::new(None);
+static REMOTE_SERVICE_LAST_ERROR: StdMutex<Option<String>> = StdMutex::new(None);
 
 const REMOTE_PASSWORD_HASH_FILE: &str = "remote_password_hash.txt";
 const REMOTE_USER_KEY_FILE: &str = "remote_user_key.txt";
@@ -479,14 +481,21 @@ fn remote_connection_info(app: &AppHandle) -> serde_json::Value {
     let configured = !control_plane_url.is_empty();
     let running = REMOTE_SERVICE_STARTED.load(Ordering::SeqCst);
     let connected = REMOTE_SERVICE_CONNECTED.load(Ordering::SeqCst);
+    let credentials_configured = configured_control_plane_auth_token(app).is_some();
+    let last_error = REMOTE_SERVICE_LAST_ERROR
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone();
 
     serde_json::json!({
         "control_plane_url": control_plane_url,
         "runner_id": runner_id,
         "auto_start": settings.auto_start,
         "configured": configured,
+        "credentials_configured": credentials_configured,
         "running": running,
         "connected": connected,
+        "last_error": last_error,
     })
 }
 
@@ -503,17 +512,43 @@ fn start_configured_remote_service(app: AppHandle) -> std::result::Result<(), St
         return Ok(());
     }
     REMOTE_SERVICE_CONNECTED.store(false, Ordering::SeqCst);
+    *REMOTE_SERVICE_LAST_ERROR
+        .lock()
+        .unwrap_or_else(|e| e.into_inner()) = None;
+
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    *REMOTE_SERVICE_SHUTDOWN
+        .lock()
+        .unwrap_or_else(|e| e.into_inner()) = Some(shutdown_tx.clone());
 
     info!("Remote control: starting background service for {control_plane_url}");
     tauri::async_runtime::spawn(async move {
-        if let Err(error) = run_remote_service(app).await {
+        if let Err(error) = run_remote_service(app, shutdown_tx, shutdown_rx).await {
             error!("Remote control service error: {error:#}");
-            REMOTE_SERVICE_STARTED.store(false, Ordering::SeqCst);
-            REMOTE_SERVICE_CONNECTED.store(false, Ordering::SeqCst);
+            *REMOTE_SERVICE_LAST_ERROR
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()) = Some(format!("{error:#}"));
         }
+        REMOTE_SERVICE_STARTED.store(false, Ordering::SeqCst);
+        REMOTE_SERVICE_CONNECTED.store(false, Ordering::SeqCst);
     });
 
     Ok(())
+}
+
+fn stop_configured_remote_service() -> bool {
+    let sender = REMOTE_SERVICE_SHUTDOWN
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .take();
+    if let Some(sender) = sender {
+        let _ = sender.send(true);
+        REMOTE_SERVICE_STARTED.store(false, Ordering::SeqCst);
+        REMOTE_SERVICE_CONNECTED.store(false, Ordering::SeqCst);
+        true
+    } else {
+        false
+    }
 }
 
 /// Get the stored remote control password hash (if any).
@@ -572,14 +607,9 @@ pub fn verify_remote_password(app: &AppHandle, provided: &str) -> bool {
             constant_time_eq(stored_hash.as_bytes(), provided_hash.as_bytes())
         }
         None => {
-            // No password set yet — first-time pairing accepts any password
-            // and auto-saves it for future verification.
-            if provided.len() >= MIN_REMOTE_PASSWORD_LEN {
-                let _ = set_remote_password(app, provided);
-                true
-            } else {
-                false
-            }
+            // Pairing must be explicitly enabled from the desktop GUI first.
+            // Never trust a remote-provided password as the initial secret.
+            false
         }
     }
 }
@@ -811,6 +841,12 @@ pub fn remote_set_connection(
     settings.auto_start = auto_start.unwrap_or(settings.auto_start);
     save_remote_settings(&app, &settings).map_err(|e| e.to_string())?;
 
+    let was_running = REMOTE_SERVICE_STARTED.load(Ordering::SeqCst);
+    if was_running {
+        stop_configured_remote_service();
+        start_configured_remote_service(app.clone())?;
+    }
+
     Ok(remote_connection_info(&app))
 }
 
@@ -827,7 +863,11 @@ pub fn remote_has_password(app: AppHandle) -> bool {
 
 // ─── Internal service ───────────────────────────────────────────────────────
 
-async fn run_remote_service(app: AppHandle) -> Result<()> {
+async fn run_remote_service(
+    app: AppHandle,
+    shutdown_tx: watch::Sender<bool>,
+    _shutdown_rx: watch::Receiver<bool>,
+) -> Result<()> {
     let control_plane_auth_token = configured_control_plane_auth_token(&app)
         .context("remote credentials are not configured; set username/password in the GUI first")?;
     let runner_api_auth_token = get_or_create_runner_api_token(&app)?;
@@ -879,8 +919,6 @@ async fn run_remote_service(app: AppHandle) -> Result<()> {
     let (event_tx, event_rx) = mpsc::channel(RUNNER_EVENT_CHANNEL_CAPACITY);
     let api = RunnerApi::new(config.clone(), "remote-code-gui", env!("CARGO_PKG_VERSION"))
         .with_event_channel(event_tx);
-
-    let (shutdown_tx, _shutdown_rx) = watch::channel(false);
 
     // Event uploader — relays agent events to the control plane.
     let event_uploader = Arc::new(EventUploader::new(cp_url, auth));
@@ -1082,6 +1120,14 @@ impl InProcessSessionManager {
                 session.session_id
             );
             return Err(anyhow!("pairing password required"));
+        } else {
+            warn!(
+                "Remote session {} rejected: desktop pairing password is not configured",
+                session.session_id
+            );
+            return Err(anyhow!(
+                "desktop pairing password is not configured; set credentials in the GUI first"
+            ));
         }
 
         let workspace = self
