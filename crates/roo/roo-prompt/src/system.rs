@@ -7,6 +7,10 @@ use roo_types::mode::{CustomModePrompts, ModeConfig, PromptComponent, get_mode_b
 use crate::sections::*;
 use crate::types::SystemPromptParams;
 
+fn non_empty_string(value: &str) -> Option<String> {
+    (!value.trim().is_empty()).then(|| value.to_string())
+}
+
 /// Helper function to get prompt component, filtering out empty objects.
 ///
 /// Source: `src/core/prompts/system.ts` — `getPromptComponent`
@@ -18,6 +22,17 @@ pub fn get_prompt_component(
         .and_then(|cmp| cmp.get(mode))
         .and_then(|opt| opt.as_ref())
         .cloned()
+        .map(|mut pc| {
+            pc.role_definition = pc
+                .role_definition
+                .and_then(|value| non_empty_string(&value));
+            pc.when_to_use = pc.when_to_use.and_then(|value| non_empty_string(&value));
+            pc.description = pc.description.and_then(|value| non_empty_string(&value));
+            pc.custom_instructions = pc
+                .custom_instructions
+                .and_then(|value| non_empty_string(&value));
+            pc
+        })
         .filter(|pc| {
             pc.role_definition.is_some()
                 || pc.when_to_use.is_some()
@@ -53,13 +68,19 @@ fn apply_prompt_overrides_to_modes(
 
     for mode in &mut modes {
         if let Some(Some(prompt)) = prompts.get(&mode.slug) {
-            if let Some(role_definition) = &prompt.role_definition {
+            if let Some(role_definition) = &prompt.role_definition
+                && !role_definition.trim().is_empty()
+            {
                 mode.role_definition = role_definition.clone();
             }
-            if let Some(when_to_use) = &prompt.when_to_use {
+            if let Some(when_to_use) = &prompt.when_to_use
+                && !when_to_use.trim().is_empty()
+            {
                 mode.when_to_use = Some(when_to_use.clone());
             }
-            if let Some(custom_instructions) = &prompt.custom_instructions {
+            if let Some(custom_instructions) = &prompt.custom_instructions
+                && !custom_instructions.trim().is_empty()
+            {
                 mode.custom_instructions = Some(custom_instructions.clone());
             }
         }
@@ -84,6 +105,7 @@ fn get_role_definition(
 
     prompt_component
         .and_then(|pc| pc.role_definition.clone())
+        .and_then(|value| non_empty_string(&value))
         .unwrap_or(base_mode.role_definition)
 }
 
@@ -103,6 +125,7 @@ fn get_base_instructions(
 
     prompt_component
         .and_then(|pc| pc.custom_instructions.clone())
+        .and_then(|value| non_empty_string(&value))
         .or(base_mode.custom_instructions)
         .filter(|s| !s.is_empty())
 }
@@ -338,6 +361,38 @@ mod tests {
 
         assert!(result.contains("Use the project incident playbook."));
         assert!(!result.contains("Reflect on 5-7 different possible sources"));
+    }
+
+    #[test]
+    fn test_empty_prompt_component_fields_fall_back_to_builtin_mode() {
+        let mut prompts = std::collections::HashMap::new();
+        prompts.insert(
+            "debug".to_string(),
+            Some(PromptComponent {
+                role_definition: Some("".to_string()),
+                custom_instructions: Some("   ".to_string()),
+                ..PromptComponent::default()
+            }),
+        );
+
+        let result = build_system_prompt(
+            "/home/user/project",
+            "debug",
+            None,
+            Some(&prompts),
+            false,
+            None,
+            None,
+            None,
+            None,
+            &[],
+            "Linux",
+            "/bin/bash",
+            "/home/user",
+        );
+
+        assert!(result.starts_with("You are Roo, an expert software debugger"));
+        assert!(result.contains("Reflect on 5-7 different possible sources"));
     }
 
     #[test]

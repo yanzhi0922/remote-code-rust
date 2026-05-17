@@ -9,7 +9,7 @@ use roo_types::message::{ClineMessage, MessageType};
 
 use crate::TaskPersistenceError;
 use crate::messages;
-use crate::storage::TaskFileSystem;
+use crate::storage::{self, TaskFileSystem};
 use crate::types::{HistoryItem, TaskMetadata, TaskMetadataOptions};
 
 // ---------------------------------------------------------------------------
@@ -27,11 +27,7 @@ pub fn compute_task_metadata(
 ) -> Result<TaskMetadata, TaskPersistenceError> {
     // Read messages from disk or use provided messages
     let messages = if opts.messages.is_empty() {
-        let msg_path = opts
-            .global_storage_path
-            .join("tasks")
-            .join(&opts.task_id)
-            .join("messages.json");
+        let msg_path = storage::messages_path(&opts.global_storage_path, &opts.task_id);
         messages::read_task_messages(fs, &msg_path).unwrap_or_default()
     } else {
         opts.messages.clone()

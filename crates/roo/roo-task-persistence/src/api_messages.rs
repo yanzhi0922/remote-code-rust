@@ -10,7 +10,25 @@ use std::path::Path;
 use roo_types::api::ApiMessage;
 
 use crate::TaskPersistenceError;
-use crate::storage::TaskFileSystem;
+use crate::storage::{API_MESSAGES_FILE_NAME, LEGACY_API_MESSAGES_FILE_NAME, TaskFileSystem};
+
+fn resolve_api_messages_path(
+    fs: &dyn TaskFileSystem,
+    path: &Path,
+) -> Result<Option<std::path::PathBuf>, TaskPersistenceError> {
+    if fs.file_exists(path)? {
+        return Ok(Some(path.to_path_buf()));
+    }
+
+    if path.file_name().and_then(|name| name.to_str()) == Some(API_MESSAGES_FILE_NAME) {
+        let legacy = path.with_file_name(LEGACY_API_MESSAGES_FILE_NAME);
+        if fs.file_exists(&legacy)? {
+            return Ok(Some(legacy));
+        }
+    }
+
+    Ok(None)
+}
 
 // ---------------------------------------------------------------------------
 // read_api_messages
@@ -27,11 +45,11 @@ pub fn read_api_messages(
     fs: &dyn TaskFileSystem,
     path: &Path,
 ) -> Result<Vec<ApiMessage>, TaskPersistenceError> {
-    if !fs.file_exists(path)? {
+    let Some(read_path) = resolve_api_messages_path(fs, path)? else {
         return Ok(Vec::new());
-    }
+    };
 
-    let content = fs.read_file(path)?;
+    let content = fs.read_file(&read_path)?;
 
     if content.trim().is_empty() {
         return Ok(Vec::new());
@@ -42,7 +60,7 @@ pub fn read_api_messages(
             if messages.is_empty() {
                 eprintln!(
                     "[readApiMessages] API conversation history file exists but is empty. Path: {}",
-                    path.display()
+                    read_path.display()
                 );
             }
             Ok(messages)
@@ -50,7 +68,7 @@ pub fn read_api_messages(
         Err(e) => {
             eprintln!(
                 "[readApiMessages] Error parsing API conversation history file, returning empty. Path: {}, Error: {}",
-                path.display(),
+                read_path.display(),
                 e
             );
             Ok(Vec::new())
@@ -161,6 +179,21 @@ mod tests {
         let msg = make_api_message(MessageRole::User, "Hello");
         let json = serde_json::to_string_pretty(&vec![msg]).unwrap();
         std::fs::write(&path, json).unwrap();
+
+        let fs = OsFileSystem;
+        let result = read_api_messages(&fs, &path).unwrap();
+        assert_eq!(result.len(), 1);
+    }
+
+    #[test]
+    fn test_read_api_messages_falls_back_to_legacy_claude_messages() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("api_conversation_history.json");
+        let legacy = dir.path().join("claude_messages.json");
+
+        let msg = make_api_message(MessageRole::User, "Hello from legacy");
+        let json = serde_json::to_string_pretty(&vec![msg]).unwrap();
+        std::fs::write(&legacy, json).unwrap();
 
         let fs = OsFileSystem;
         let result = read_api_messages(&fs, &path).unwrap();

@@ -8,7 +8,25 @@ use std::path::Path;
 use roo_types::message::ClineMessage;
 
 use crate::TaskPersistenceError;
-use crate::storage::TaskFileSystem;
+use crate::storage::{LEGACY_MESSAGES_FILE_NAME, TaskFileSystem, UI_MESSAGES_FILE_NAME};
+
+fn resolve_task_messages_path(
+    fs: &dyn TaskFileSystem,
+    path: &Path,
+) -> Result<Option<std::path::PathBuf>, TaskPersistenceError> {
+    if fs.file_exists(path)? {
+        return Ok(Some(path.to_path_buf()));
+    }
+
+    if path.file_name().and_then(|name| name.to_str()) == Some(UI_MESSAGES_FILE_NAME) {
+        let legacy = path.with_file_name(LEGACY_MESSAGES_FILE_NAME);
+        if fs.file_exists(&legacy)? {
+            return Ok(Some(legacy));
+        }
+    }
+
+    Ok(None)
+}
 
 // ---------------------------------------------------------------------------
 // read_task_messages
@@ -21,11 +39,11 @@ pub fn read_task_messages(
     fs: &dyn TaskFileSystem,
     path: &Path,
 ) -> Result<Vec<ClineMessage>, TaskPersistenceError> {
-    if !fs.file_exists(path)? {
+    let Some(read_path) = resolve_task_messages_path(fs, path)? else {
         return Ok(Vec::new());
-    }
+    };
 
-    let content = fs.read_file(path)?;
+    let content = fs.read_file(&read_path)?;
 
     if content.trim().is_empty() {
         return Ok(Vec::new());
@@ -39,7 +57,7 @@ pub fn read_task_messages(
             // returns `[]`.
             eprintln!(
                 "[readTaskMessages] Failed to parse {}: {}",
-                path.display(),
+                read_path.display(),
                 e
             );
             Ok(Vec::new())
@@ -82,7 +100,7 @@ mod tests {
     #[test]
     fn test_read_task_messages_nonexistent_file() {
         let fs = OsFileSystem;
-        let path = PathBuf::from("/nonexistent/path/messages.json");
+        let path = PathBuf::from("/nonexistent/path/ui_messages.json");
         let result = read_task_messages(&fs, &path).unwrap();
         assert!(result.is_empty());
     }
@@ -124,7 +142,7 @@ mod tests {
     #[test]
     fn test_read_task_messages_valid_json() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("messages.json");
+        let path = dir.path().join("ui_messages.json");
         let json = r#"[{"ts":1700000000.0,"type":"say","say":"text","text":"Hello"}]"#;
         std::fs::write(&path, json).unwrap();
 
@@ -132,6 +150,20 @@ mod tests {
         let result = read_task_messages(&fs, &path).unwrap();
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].text.as_deref(), Some("Hello"));
+    }
+
+    #[test]
+    fn test_read_task_messages_falls_back_to_legacy_messages_json() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ui_messages.json");
+        let legacy = dir.path().join("messages.json");
+        let json = r#"[{"ts":1700000000.0,"type":"say","say":"text","text":"Legacy"}]"#;
+        std::fs::write(&legacy, json).unwrap();
+
+        let fs = OsFileSystem;
+        let result = read_task_messages(&fs, &path).unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].text.as_deref(), Some("Legacy"));
     }
 
     #[test]

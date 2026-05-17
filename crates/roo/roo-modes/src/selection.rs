@@ -32,6 +32,10 @@ fn find_mode_by_slug<'a>(slug: &str, modes: Option<&'a [ModeConfig]>) -> Option<
     modes.and_then(|ms| ms.iter().find(|m| m.slug == slug))
 }
 
+fn non_empty(value: &str) -> Option<&str> {
+    (!value.trim().is_empty()).then_some(value)
+}
+
 // ---------------------------------------------------------------------------
 // getModeSelection
 // ---------------------------------------------------------------------------
@@ -72,10 +76,12 @@ pub fn get_mode_selection(
     ModeSelection {
         role_definition: prompt_component
             .and_then(|pc| pc.role_definition.as_deref())
+            .and_then(non_empty)
             .unwrap_or(base_mode.role_definition.as_str())
             .to_string(),
         base_instructions: prompt_component
             .and_then(|pc| pc.custom_instructions.as_deref())
+            .and_then(non_empty)
             .unwrap_or_else(|| base_mode.custom_instructions.as_deref().unwrap_or(""))
             .to_string(),
         description: base_mode.description.clone().unwrap_or_default(),
@@ -133,6 +139,26 @@ mod tests {
         let sel = get_mode_selection("code", Some(&pc), None);
         assert_eq!(sel.role_definition, "Overridden role");
         assert_eq!(sel.base_instructions, "Overridden instructions");
+    }
+
+    #[test]
+    fn test_get_mode_selection_empty_prompt_component_falls_back() {
+        let pc = PromptComponent {
+            role_definition: Some("".into()),
+            custom_instructions: Some("  ".into()),
+            when_to_use: None,
+            description: None,
+        };
+        let sel = get_mode_selection("debug", Some(&pc), None);
+        assert_eq!(
+            sel.role_definition,
+            default_modes()
+                .into_iter()
+                .find(|mode| mode.slug == "debug")
+                .unwrap()
+                .role_definition
+        );
+        assert!(sel.base_instructions.contains("Reflect on 5-7"));
     }
 
     #[test]

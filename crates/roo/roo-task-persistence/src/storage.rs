@@ -9,6 +9,11 @@ use std::path::{Path, PathBuf};
 use crate::TaskPersistenceError;
 use crate::types::DirEntry;
 
+pub const UI_MESSAGES_FILE_NAME: &str = "ui_messages.json";
+pub const LEGACY_MESSAGES_FILE_NAME: &str = "messages.json";
+pub const API_MESSAGES_FILE_NAME: &str = "api_conversation_history.json";
+pub const LEGACY_API_MESSAGES_FILE_NAME: &str = "claude_messages.json";
+
 // ---------------------------------------------------------------------------
 // TaskFileSystem trait
 // ---------------------------------------------------------------------------
@@ -35,6 +40,9 @@ pub trait TaskFileSystem: Send + Sync {
 
     /// Recursively remove a directory and all its contents.
     fn remove_dir_all(&self, path: &Path) -> Result<(), TaskPersistenceError>;
+
+    /// Remove a single file.
+    fn remove_file(&self, path: &Path) -> Result<(), TaskPersistenceError>;
 
     /// Read the entries of a directory (non-recursive).
     fn read_dir(&self, path: &Path) -> Result<Vec<DirEntry>, TaskPersistenceError>;
@@ -76,6 +84,14 @@ impl TaskFileSystem for OsFileSystem {
     fn remove_dir_all(&self, path: &Path) -> Result<(), TaskPersistenceError> {
         if path.exists() {
             Ok(std::fs::remove_dir_all(path)?)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn remove_file(&self, path: &Path) -> Result<(), TaskPersistenceError> {
+        if path.exists() {
+            Ok(std::fs::remove_file(path)?)
         } else {
             Ok(())
         }
@@ -125,14 +141,24 @@ pub fn task_dir(base_storage_path: &Path, task_id: &str) -> PathBuf {
 
 /// Get the messages file path for a given task ID.
 pub fn messages_path(base_storage_path: &Path, task_id: &str) -> PathBuf {
-    task_dir(base_storage_path, task_id).join("messages.json")
+    task_dir(base_storage_path, task_id).join(UI_MESSAGES_FILE_NAME)
+}
+
+/// Get the legacy messages file path used by early Rust builds.
+pub fn legacy_messages_path(base_storage_path: &Path, task_id: &str) -> PathBuf {
+    task_dir(base_storage_path, task_id).join(LEGACY_MESSAGES_FILE_NAME)
 }
 
 /// Get the API conversation history file path for a given task ID.
 ///
 /// Source: `src/core/task-persistence/apiMessages.ts` — `GlobalFileNames.apiConversationHistory`
 pub fn api_messages_path(base_storage_path: &Path, task_id: &str) -> PathBuf {
-    task_dir(base_storage_path, task_id).join("api_conversation_history.json")
+    task_dir(base_storage_path, task_id).join(API_MESSAGES_FILE_NAME)
+}
+
+/// Get the legacy API conversation history file path used by Claude-era tasks.
+pub fn legacy_api_messages_path(base_storage_path: &Path, task_id: &str) -> PathBuf {
+    task_dir(base_storage_path, task_id).join(LEGACY_API_MESSAGES_FILE_NAME)
 }
 
 /// Get the metadata file path for a given task ID.
@@ -172,6 +198,16 @@ mod tests {
         let path = messages_path(base, "abc-123");
         assert_eq!(
             path,
+            PathBuf::from("/data/storage/tasks/abc-123/ui_messages.json")
+        );
+    }
+
+    #[test]
+    fn test_legacy_messages_path() {
+        let base = Path::new("/data/storage");
+        let path = legacy_messages_path(base, "abc-123");
+        assert_eq!(
+            path,
             PathBuf::from("/data/storage/tasks/abc-123/messages.json")
         );
     }
@@ -183,6 +219,16 @@ mod tests {
         assert_eq!(
             path,
             PathBuf::from("/data/storage/tasks/abc-123/api_conversation_history.json")
+        );
+    }
+
+    #[test]
+    fn test_legacy_api_messages_path() {
+        let base = Path::new("/data/storage");
+        let path = legacy_api_messages_path(base, "abc-123");
+        assert_eq!(
+            path,
+            PathBuf::from("/data/storage/tasks/abc-123/claude_messages.json")
         );
     }
 

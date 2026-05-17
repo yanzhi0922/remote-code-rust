@@ -162,6 +162,7 @@ impl TaskHistoryStore {
             if item.parent_task_id.is_some() {
                 merged.parent_task_id = item.parent_task_id;
             }
+            merged.status = item.status;
             merged
         } else {
             item
@@ -198,7 +199,7 @@ impl TaskHistoryStore {
 
         // Remove per-task file (best-effort)
         if let Ok(file_path) = self.task_file_path(fs, task_id) {
-            let _ = fs.write_file(&file_path, ""); // best-effort delete
+            let _ = fs.remove_file(&file_path);
         }
 
         self.write_index(fs)?;
@@ -223,6 +224,12 @@ impl TaskHistoryStore {
             let mut cache = self.cache.lock();
             for task_id in task_ids {
                 cache.remove(task_id);
+            }
+        }
+
+        for task_id in task_ids {
+            if let Ok(file_path) = self.task_file_path(fs, task_id) {
+                let _ = fs.remove_file(&file_path);
             }
         }
 
@@ -529,12 +536,14 @@ mod tests {
 
         let mut item2 = make_item("task-1", "Updated", 2000);
         item2.tokens_in = 100;
+        item2.status = PersistenceTaskStatus::Completed;
         store.upsert(&fs, item2).unwrap();
 
         let retrieved = store.get("task-1").unwrap();
         assert_eq!(retrieved.task, "Updated");
         assert_eq!(retrieved.timestamp, 2000);
         assert_eq!(retrieved.tokens_in, 100);
+        assert_eq!(retrieved.status, PersistenceTaskStatus::Completed);
     }
 
     #[test]
@@ -595,6 +604,13 @@ mod tests {
 
         store.delete(&fs, "task-1").unwrap();
         assert!(store.get("task-1").is_none());
+        assert!(
+            !dir.path()
+                .join("tasks")
+                .join("task-1")
+                .join("history_item.json")
+                .exists()
+        );
     }
 
     #[test]
@@ -617,6 +633,20 @@ mod tests {
         let all = store.get_all();
         assert_eq!(all.len(), 1);
         assert_eq!(all[0].task, "Two");
+        assert!(
+            !dir.path()
+                .join("tasks")
+                .join("task-1")
+                .join("history_item.json")
+                .exists()
+        );
+        assert!(
+            !dir.path()
+                .join("tasks")
+                .join("task-3")
+                .join("history_item.json")
+                .exists()
+        );
     }
 
     #[test]

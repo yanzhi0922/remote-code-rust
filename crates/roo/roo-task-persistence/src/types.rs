@@ -169,7 +169,7 @@ impl TaskStorageInfo {
         let task_dir = base_dir.join("tasks").join(task_id);
         Self {
             task_id: task_id.to_string(),
-            messages_file: task_dir.join("messages.json"),
+            messages_file: task_dir.join("ui_messages.json"),
             meta_file: task_dir.join("meta.json"),
             base_path: task_dir,
         }
@@ -358,7 +358,7 @@ mod tests {
         );
         assert_eq!(
             info.messages_file,
-            std::path::PathBuf::from("/data/storage/tasks/abc-123/messages.json")
+            std::path::PathBuf::from("/data/storage/tasks/abc-123/ui_messages.json")
         );
         assert_eq!(
             info.meta_file,

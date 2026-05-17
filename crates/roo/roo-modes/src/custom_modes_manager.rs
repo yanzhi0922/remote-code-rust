@@ -38,6 +38,7 @@ pub const CACHE_TTL_MS: u64 = 10_000;
 
 /// A rules file associated with a custom mode.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RuleFile {
     pub relative_path: String,
     pub content: String,
@@ -45,6 +46,7 @@ pub struct RuleFile {
 
 /// Extended mode config for export (includes rules files).
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ExportedModeConfig {
     #[serde(flatten)]
     pub mode: ModeConfig,
@@ -1009,6 +1011,33 @@ customModes:
         let result = manager.export_mode_with_rules("export-test", None, None);
         assert!(result.success);
         assert!(result.yaml.is_some());
+    }
+
+    #[test]
+    fn test_exported_rules_files_use_roo_camel_case_fields() {
+        let mode = ModeConfig {
+            slug: "export-test".to_string(),
+            name: "Export Test".to_string(),
+            role_definition: "Test role".to_string(),
+            when_to_use: None,
+            description: None,
+            custom_instructions: None,
+            groups: vec![],
+            source: None,
+        };
+        let exported = ExportedModeConfig {
+            mode,
+            rules_files: Some(vec![RuleFile {
+                relative_path: ".roo/rules-export-test/rule.md".to_string(),
+                content: "rule".to_string(),
+            }]),
+        };
+        let yaml = serde_yaml::to_string(&exported).unwrap();
+
+        assert!(yaml.contains("rulesFiles:"));
+        assert!(yaml.contains("relativePath:"));
+        assert!(!yaml.contains("rules_files:"));
+        assert!(!yaml.contains("relative_path:"));
     }
 
     // ---- Test 12: Export non-existent mode ----

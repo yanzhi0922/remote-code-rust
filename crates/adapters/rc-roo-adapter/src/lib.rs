@@ -72,6 +72,43 @@ type ApprovalSender = Arc<
 // Provider builder — mirrors roo-cli's build_handler()
 // ---------------------------------------------------------------------------
 
+fn strip_trailing_path_segments<'a>(raw: &'a str, suffix: &[&str]) -> Option<&'a str> {
+    let trimmed = raw.trim().trim_end_matches('/');
+    let mut end = trimmed.len();
+    for segment in suffix.iter().rev() {
+        let candidate = &trimmed[..end];
+        let slash = candidate.rfind('/')?;
+        if !candidate[slash + 1..].eq_ignore_ascii_case(segment) {
+            return None;
+        }
+        end = slash;
+    }
+    Some(&trimmed[..end])
+}
+
+fn normalize_anthropic_base_url(raw: &str) -> String {
+    let trimmed = raw.trim().trim_end_matches('/');
+    strip_trailing_path_segments(trimmed, &["v1", "messages"])
+        .or_else(|| strip_trailing_path_segments(trimmed, &["messages"]))
+        .unwrap_or(trimmed)
+        .to_string()
+}
+
+fn normalize_openai_base_url(raw: &str) -> String {
+    let trimmed = raw.trim().trim_end_matches('/');
+    strip_trailing_path_segments(trimmed, &["chat", "completions"])
+        .unwrap_or(trimmed)
+        .to_string()
+}
+
+fn anthropic_base_url(base_url: Option<&str>, default: &str) -> String {
+    normalize_anthropic_base_url(base_url.unwrap_or(default))
+}
+
+fn openai_base_url(base_url: Option<&str>, default: &str) -> String {
+    normalize_openai_base_url(base_url.unwrap_or(default))
+}
+
 fn build_handler(
     provider_name: &str,
     api_key: Option<&str>,
@@ -84,9 +121,10 @@ fn build_handler(
                 api_key.ok_or_else(|| anyhow::anyhow!("api_key is required for anthropic"))?;
             let cfg = roo_provider_anthropic::AnthropicConfig {
                 api_key: api_key.to_string(),
-                base_url: base_url
-                    .unwrap_or(roo_provider_anthropic::AnthropicConfig::DEFAULT_BASE_URL)
-                    .to_string(),
+                base_url: anthropic_base_url(
+                    base_url,
+                    roo_provider_anthropic::AnthropicConfig::DEFAULT_BASE_URL,
+                ),
                 model_id: model_id.map(|s| s.to_string()),
                 temperature: None,
                 use_extended_thinking: None,
@@ -104,9 +142,10 @@ fn build_handler(
                 api_key.ok_or_else(|| anyhow::anyhow!("api_key is required for openai"))?;
             let cfg = roo_provider_openai::OpenAiConfig {
                 api_key: api_key.to_string(),
-                base_url: base_url
-                    .unwrap_or(roo_provider_openai::OpenAiConfig::DEFAULT_BASE_URL)
-                    .to_string(),
+                base_url: openai_base_url(
+                    base_url,
+                    roo_provider_openai::OpenAiConfig::DEFAULT_BASE_URL,
+                ),
                 org_id: None,
                 model_id: model_id.map(|s| s.to_string()),
                 temperature: None,
@@ -145,9 +184,10 @@ fn build_handler(
                 api_key.ok_or_else(|| anyhow::anyhow!("api_key is required for openrouter"))?;
             let cfg = roo_provider_openrouter::OpenRouterConfig {
                 api_key: api_key.to_string(),
-                base_url: base_url
-                    .unwrap_or(roo_provider_openrouter::OpenRouterConfig::DEFAULT_BASE_URL)
-                    .to_string(),
+                base_url: openai_base_url(
+                    base_url,
+                    roo_provider_openrouter::OpenRouterConfig::DEFAULT_BASE_URL,
+                ),
                 model_id: model_id.map(|s| s.to_string()),
                 temperature: None,
                 request_timeout: None,
@@ -162,9 +202,10 @@ fn build_handler(
                 api_key.ok_or_else(|| anyhow::anyhow!("api_key is required for deepseek"))?;
             let cfg = roo_provider_deepseek::DeepSeekConfig {
                 api_key: api_key.to_string(),
-                base_url: base_url
-                    .unwrap_or(roo_provider_deepseek::DeepSeekConfig::DEFAULT_BASE_URL)
-                    .to_string(),
+                base_url: openai_base_url(
+                    base_url,
+                    roo_provider_deepseek::DeepSeekConfig::DEFAULT_BASE_URL,
+                ),
                 model_id: model_id.map(|s| s.to_string()),
                 temperature: None,
                 request_timeout: None,
@@ -219,9 +260,7 @@ fn build_handler(
             let api_key = api_key.ok_or_else(|| anyhow::anyhow!("api_key is required for xai"))?;
             let cfg = roo_provider_xai::XaiConfig {
                 api_key: api_key.to_string(),
-                base_url: base_url
-                    .unwrap_or(roo_provider_xai::XaiConfig::DEFAULT_BASE_URL)
-                    .to_string(),
+                base_url: openai_base_url(base_url, roo_provider_xai::XaiConfig::DEFAULT_BASE_URL),
                 model_id: model_id.map(|s| s.to_string()),
                 temperature: None,
                 request_timeout: None,
@@ -234,9 +273,10 @@ fn build_handler(
                 api_key.ok_or_else(|| anyhow::anyhow!("api_key is required for mistral"))?;
             let cfg = roo_provider_mistral::MistralConfig {
                 api_key: api_key.to_string(),
-                base_url: base_url
-                    .unwrap_or(roo_provider_mistral::MistralConfig::DEFAULT_BASE_URL)
-                    .to_string(),
+                base_url: openai_base_url(
+                    base_url,
+                    roo_provider_mistral::MistralConfig::DEFAULT_BASE_URL,
+                ),
                 model_id: model_id.map(|s| s.to_string()),
                 temperature: None,
                 request_timeout: None,
@@ -249,9 +289,10 @@ fn build_handler(
                 api_key.ok_or_else(|| anyhow::anyhow!("api_key is required for fireworks"))?;
             let cfg = roo_provider_fireworks::FireworksConfig {
                 api_key: api_key.to_string(),
-                base_url: base_url
-                    .unwrap_or(roo_provider_fireworks::FireworksConfig::DEFAULT_BASE_URL)
-                    .to_string(),
+                base_url: openai_base_url(
+                    base_url,
+                    roo_provider_fireworks::FireworksConfig::DEFAULT_BASE_URL,
+                ),
                 model_id: model_id.map(|s| s.to_string()),
                 temperature: None,
                 request_timeout: None,
@@ -265,9 +306,10 @@ fn build_handler(
             let api_key = api_key.unwrap_or("dummy-key").to_string();
             let cfg = roo_provider_litellm::LiteLlmConfig {
                 api_key,
-                base_url: base_url
-                    .unwrap_or(roo_provider_litellm::LiteLlmConfig::DEFAULT_BASE_URL)
-                    .to_string(),
+                base_url: openai_base_url(
+                    base_url,
+                    roo_provider_litellm::LiteLlmConfig::DEFAULT_BASE_URL,
+                ),
                 model_id: model_id.map(|s| s.to_string()),
                 temperature: None,
                 use_prompt_cache: false,
@@ -280,9 +322,10 @@ fn build_handler(
             let api_key = api_key.ok_or_else(|| anyhow::anyhow!("api_key is required for qwen"))?;
             let cfg = roo_provider_qwen::QwenConfig {
                 api_key: api_key.to_string(),
-                base_url: base_url
-                    .unwrap_or(roo_provider_qwen::QwenConfig::DEFAULT_BASE_URL)
-                    .to_string(),
+                base_url: openai_base_url(
+                    base_url,
+                    roo_provider_qwen::QwenConfig::DEFAULT_BASE_URL,
+                ),
                 model_id: model_id.map(|s| s.to_string()),
                 temperature: None,
                 request_timeout: None,
@@ -295,9 +338,10 @@ fn build_handler(
                 api_key.ok_or_else(|| anyhow::anyhow!("api_key is required for minimax"))?;
             let cfg = roo_provider_minimax::MiniMaxConfig {
                 api_key: api_key.to_string(),
-                base_url: base_url
-                    .unwrap_or(roo_provider_minimax::MiniMaxConfig::DEFAULT_BASE_URL)
-                    .to_string(),
+                base_url: anthropic_base_url(
+                    base_url,
+                    roo_provider_minimax::MiniMaxConfig::DEFAULT_BASE_URL,
+                ),
                 group_id: None,
                 model_id: model_id.map(|s| s.to_string()),
                 temperature: None,
@@ -321,9 +365,10 @@ fn build_handler(
                 api_key.ok_or_else(|| anyhow::anyhow!("api_key is required for moonshot"))?;
             let cfg = roo_provider_moonshot::MoonshotConfig {
                 api_key: api_key.to_string(),
-                base_url: base_url
-                    .unwrap_or(roo_provider_moonshot::MoonshotConfig::DEFAULT_BASE_URL)
-                    .to_string(),
+                base_url: openai_base_url(
+                    base_url,
+                    roo_provider_moonshot::MoonshotConfig::DEFAULT_BASE_URL,
+                ),
                 model_id: model_id.map(|s| s.to_string()),
                 temperature: None,
                 request_timeout: None,
@@ -335,9 +380,7 @@ fn build_handler(
             let api_key = api_key.ok_or_else(|| anyhow::anyhow!("api_key is required for zai"))?;
             let cfg = roo_provider_zai::ZaiConfig {
                 api_key: api_key.to_string(),
-                base_url: base_url
-                    .unwrap_or(roo_provider_zai::ZaiConfig::DEFAULT_BASE_URL)
-                    .to_string(),
+                base_url: openai_base_url(base_url, roo_provider_zai::ZaiConfig::DEFAULT_BASE_URL),
                 model_id: model_id.map(|s| s.to_string()),
                 temperature: None,
                 request_timeout: None,
@@ -350,9 +393,10 @@ fn build_handler(
                 api_key.ok_or_else(|| anyhow::anyhow!("api_key is required for sambanova"))?;
             let cfg = roo_provider_sambanova::SambaNovaConfig {
                 api_key: api_key.to_string(),
-                base_url: base_url
-                    .unwrap_or(roo_provider_sambanova::SambaNovaConfig::DEFAULT_BASE_URL)
-                    .to_string(),
+                base_url: openai_base_url(
+                    base_url,
+                    roo_provider_sambanova::SambaNovaConfig::DEFAULT_BASE_URL,
+                ),
                 model_id: model_id.map(|s| s.to_string()),
                 temperature: None,
                 request_timeout: None,
@@ -367,9 +411,10 @@ fn build_handler(
                 api_key.ok_or_else(|| anyhow::anyhow!("api_key is required for baseten"))?;
             let cfg = roo_provider_baseten::BasetenConfig {
                 api_key: api_key.to_string(),
-                base_url: base_url
-                    .unwrap_or(roo_provider_baseten::BasetenConfig::DEFAULT_BASE_URL)
-                    .to_string(),
+                base_url: openai_base_url(
+                    base_url,
+                    roo_provider_baseten::BasetenConfig::DEFAULT_BASE_URL,
+                ),
                 model_id: model_id.map(|s| s.to_string()),
                 temperature: None,
                 request_timeout: None,
@@ -396,9 +441,10 @@ fn build_handler(
                 api_key.ok_or_else(|| anyhow::anyhow!("api_key is required for requesty"))?;
             let cfg = roo_provider_requesty::RequestyConfig {
                 api_key: api_key.to_string(),
-                base_url: base_url
-                    .unwrap_or(roo_provider_requesty::RequestyConfig::DEFAULT_BASE_URL)
-                    .to_string(),
+                base_url: openai_base_url(
+                    base_url,
+                    roo_provider_requesty::RequestyConfig::DEFAULT_BASE_URL,
+                ),
                 model_id: model_id.map(|s| s.to_string()),
                 temperature: None,
                 request_timeout: None,
@@ -436,7 +482,7 @@ fn build_handler(
             let cfg = roo_provider_roo::RooConfig {
                 api_key: api_key.map(|s| s.to_string()),
                 base_url: base_url
-                    .map(|s| s.to_string())
+                    .map(normalize_openai_base_url)
                     .or_else(|| Some(roo_provider_roo::RooConfig::DEFAULT_BASE_URL.to_string())),
                 model_id: model_id.map(|s| s.to_string()),
                 temperature: None,
@@ -787,6 +833,8 @@ pub struct RooInProcessAdapter {
     api_key: Option<String>,
     provider_name: Option<String>,
     base_url: Option<String>,
+    storage_path: Option<PathBuf>,
+    api_config_name: Option<String>,
     mode: String,
     cancel_token: Option<tokio_util::sync::CancellationToken>,
     worker_handle: Option<std::thread::JoinHandle<()>>,
@@ -819,6 +867,8 @@ impl RooInProcessAdapter {
             api_key: None,
             provider_name: None,
             base_url: None,
+            storage_path: None,
+            api_config_name: None,
             mode: roo_modes::default_mode_slug().to_string(),
             cancel_token: None,
             worker_handle: None,
@@ -827,6 +877,39 @@ impl RooInProcessAdapter {
             auto_approval_enabled: false,
             external_mcp_servers: std::collections::HashMap::new(),
         }
+    }
+
+    fn config_env_value(config: &AgentConfig, key: &str) -> Option<String> {
+        config
+            .env
+            .iter()
+            .find(|(name, value)| name == key && !value.trim().is_empty())
+            .map(|(_, value)| value.clone())
+    }
+
+    fn build_task_config(
+        task_id: &str,
+        cwd: &str,
+        mode: &str,
+        message: &str,
+        auto_approval: bool,
+        storage_path: Option<&str>,
+        api_config_name: Option<&str>,
+    ) -> TaskConfig {
+        let mut config = TaskConfig::new(task_id, cwd)
+            .with_mode(mode)
+            .with_task_text(message)
+            .with_auto_approval(auto_approval)
+            .with_start_task(true);
+
+        if let Some(storage_path) = storage_path.filter(|path| !path.trim().is_empty()) {
+            config = config.with_storage_path(storage_path);
+        }
+        if let Some(api_config_name) = api_config_name.filter(|name| !name.trim().is_empty()) {
+            config = config.with_api_config(api_config_name);
+        }
+
+        config
     }
 
     /// Set MCP servers discovered from the GUI's centralized configuration.
@@ -1012,12 +1095,18 @@ impl RooInProcessAdapter {
         custom_modes: Vec<roo_types::mode::ModeConfig>,
         cancel_token: tokio_util::sync::CancellationToken,
         approval_out: ApprovalSender,
+        storage_path: Option<String>,
+        api_config_name: Option<String>,
     ) {
-        let config = TaskConfig::new(&task_id, &cwd_str)
-            .with_mode(&mode)
-            .with_task_text(&message_owned)
-            .with_auto_approval(auto_approval)
-            .with_start_task(true);
+        let config = Self::build_task_config(
+            &task_id,
+            &cwd_str,
+            &mode,
+            &message_owned,
+            auto_approval,
+            storage_path.as_deref(),
+            api_config_name.as_deref(),
+        );
 
         let mut engine = match TaskEngine::new(config) {
             Ok(e) => e,
@@ -1207,6 +1296,9 @@ impl AgentAdapter for RooInProcessAdapter {
         self.model = config.model.clone();
         self.api_key = config.api_key.clone();
         self.base_url = config.base_url.clone();
+        self.storage_path =
+            Self::config_env_value(config, "ROO_TASK_STORAGE_PATH").map(PathBuf::from);
+        self.api_config_name = Self::config_env_value(config, "ROO_API_CONFIG_NAME");
         self.mode = parse_mode_from_config(config);
 
         self.provider_name = config.provider.clone().or_else(|| match config.agent_type {
@@ -1296,6 +1388,11 @@ impl AgentAdapter for RooInProcessAdapter {
         let auto_approval = self.auto_approval_enabled;
         let mcp_servers_owned = mcp_servers;
         let custom_modes_owned = custom_modes;
+        let storage_path = self
+            .storage_path
+            .as_ref()
+            .map(|path| path.to_string_lossy().to_string());
+        let api_config_name = self.api_config_name.clone();
 
         // Shared slot for the AgentLoop's approval handle to be passed back
         // from the worker thread to this adapter.
@@ -1332,6 +1429,8 @@ impl AgentAdapter for RooInProcessAdapter {
                     custom_modes_owned,
                     cancel_token,
                     approval_out_clone,
+                    storage_path,
+                    api_config_name,
                 );
             }));
 
@@ -1506,6 +1605,44 @@ mod tests {
 
         let default_config = test_config(Vec::new(), Vec::new());
         assert_eq!(parse_mode_from_config(&default_config), "architect");
+    }
+
+    #[test]
+    fn task_config_preserves_gui_storage_and_provider_profile() {
+        let config = RooInProcessAdapter::build_task_config(
+            "task-1",
+            "D:/work",
+            "code",
+            "hello",
+            false,
+            Some("D:/profile/roo"),
+            Some("minimax"),
+        );
+
+        assert_eq!(config.storage_path.as_deref(), Some("D:/profile/roo"));
+        assert_eq!(config.api_config_name.as_deref(), Some("minimax"));
+        assert_eq!(config.mode, "code");
+        assert_eq!(config.task_text.as_deref(), Some("hello"));
+    }
+
+    #[test]
+    fn normalizes_gui_endpoint_base_urls_before_provider_builders_append_paths() {
+        assert_eq!(
+            normalize_anthropic_base_url("https://api.minimaxi.com/anthropic/v1/messages"),
+            "https://api.minimaxi.com/anthropic"
+        );
+        assert_eq!(
+            normalize_anthropic_base_url("https://api.anthropic.com/v1/messages"),
+            "https://api.anthropic.com"
+        );
+        assert_eq!(
+            normalize_openai_base_url("https://api.openai.com/v1/chat/completions"),
+            "https://api.openai.com/v1"
+        );
+        assert_eq!(
+            normalize_openai_base_url("https://openrouter.ai/api/v1/"),
+            "https://openrouter.ai/api/v1"
+        );
     }
 
     #[test]

@@ -7,7 +7,7 @@
 //! gitignore semantics including negation patterns (`!`), directory-only
 //! patterns (trailing `/`), and glob patterns.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
 
@@ -104,23 +104,28 @@ impl RooIgnoreController {
     /// - Negation patterns: `!foo` un-ignores `foo` even if `*` ignores it
     /// - Directory patterns: `dir/` only matches directories
     /// - Glob patterns: `*.log`, `build/**`, etc.
-    pub fn validate_access(&self, path: &str) -> bool {
-        // Always allow access if no patterns loaded
-        if self.content.is_none() || self.gitignore.is_empty() {
-            return true;
-        }
-
-        // Normalize the path
+    fn candidate_relative_path(&self, path: &str) -> String {
         let normalized = path.replace('\\', "/");
+        normalized
+            .strip_prefix("./")
+            .unwrap_or(&normalized)
+            .to_string()
+    }
 
-        // Remove leading ./ if present
-        let relative_path = normalized.strip_prefix("./").unwrap_or(&normalized);
+    fn canonical_relative_path(&self, path: &str) -> Option<String> {
+        let requested = Path::new(path);
+        let absolute = if requested.is_absolute() {
+            PathBuf::from(requested)
+        } else {
+            Path::new(&self.cwd).join(requested)
+        };
+        let canonical = std::fs::canonicalize(absolute).ok()?;
+        let root = std::fs::canonicalize(&self.cwd).ok()?;
+        let relative = canonical.strip_prefix(root).ok()?;
+        Some(relative.to_string_lossy().replace('\\', "/"))
+    }
 
-        // Use the ignore crate for matching.
-        // `matched` returns:
-        //   - Match::None       -> not matched (file is allowed)
-        //   - Match::Ignore(_)  -> matched an ignore pattern (file is blocked)
-        //   - Match::Whitelist(_) -> matched a negation pattern (file is allowed)
+    fn validate_relative_access(&self, relative_path: &str) -> bool {
         let path = Path::new(relative_path);
 
         // Use matched_path_or_any_parents which properly handles directory patterns.
@@ -140,6 +145,20 @@ impl RooIgnoreController {
             ignore::Match::Ignore(_) => false,
             ignore::Match::Whitelist(_) => true,
         }
+    }
+
+    pub fn validate_access(&self, path: &str) -> bool {
+        // Always allow access if no patterns loaded
+        if self.content.is_none() || self.gitignore.is_empty() {
+            return true;
+        }
+
+        if let Some(relative_path) = self.canonical_relative_path(path) {
+            return self.validate_relative_access(&relative_path);
+        }
+
+        let relative_path = self.candidate_relative_path(path);
+        self.validate_relative_access(&relative_path)
     }
 
     /// Check if a terminal command should be allowed to execute based on file access patterns.
@@ -233,6 +252,16 @@ impl RooIgnoreController {
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
+    fn symlink_file(src: &Path, dst: &Path) -> std::io::Result<()> {
+        std::os::unix::fs::symlink(src, dst)
+    }
+
+    #[cfg(windows)]
+    fn symlink_file(src: &Path, dst: &Path) -> std::io::Result<()> {
+        std::os::windows::fs::symlink_file(src, dst)
+    }
+
     #[test]
     fn test_new_controller() {
         let controller = RooIgnoreController::new("/project");
@@ -291,6 +320,27 @@ mod tests {
         let mut controller = RooIgnoreController::new("/project");
         controller.load_patterns("*.log");
         assert!(!controller.validate_access(".rooignore"));
+    }
+
+    #[test]
+    fn test_validate_access_blocks_symlink_to_ignored_target() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let root = temp.path();
+        std::fs::create_dir_all(root.join("secrets")).expect("secrets dir");
+        std::fs::create_dir_all(root.join("public")).expect("public dir");
+        std::fs::write(root.join("secrets").join("key.txt"), "secret").expect("secret file");
+
+        let link_path = root.join("public").join("key-link.txt");
+        let target_path = root.join("secrets").join("key.txt");
+        if symlink_file(&target_path, &link_path).is_err() {
+            return;
+        }
+
+        let mut controller = RooIgnoreController::new(&root.to_string_lossy());
+        controller.load_patterns("secrets/**");
+
+        assert!(!controller.validate_access("public/key-link.txt"));
+        assert!(!controller.validate_access(&link_path.to_string_lossy()));
     }
 
     #[test]

@@ -8,7 +8,7 @@
 //! have the same password configured. Remote commands are rejected if
 //! passwords don't match.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -29,8 +29,8 @@ use tokio::sync::{Mutex, mpsc, watch};
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
-use crate::dto::ProjectListFile;
-use crate::state::{KEYRING_SERVICE, PROJECTS_FILE_NAME};
+use crate::dto::{GuiSettingsFile, ProjectListFile, ProviderConfig, ProviderConfigList};
+use crate::state::{KEYRING_SERVICE, PROJECTS_FILE_NAME, PROVIDERS_FILE_NAME, SETTINGS_FILE_NAME};
 
 use claude_control_plane::RunnerCommandPullResponse;
 use claude_runner::{
@@ -141,6 +141,260 @@ fn normalize_control_plane_url(raw: &str) -> Result<String> {
 
 fn normalize_runner_id(runner_id: Option<String>) -> Option<String> {
     runner_id.and_then(|value| normalize_nonempty(&value))
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct RemoteProviderSelection {
+    name: Option<String>,
+    model: Option<String>,
+    base_url: Option<String>,
+    api_key: Option<String>,
+}
+
+fn metadata_string(metadata: &BTreeMap<String, String>, keys: &[&str]) -> Option<String> {
+    keys.iter().find_map(|key| {
+        metadata
+            .get(*key)
+            .and_then(|value| normalize_nonempty(value))
+    })
+}
+
+fn metadata_base_url_for_provider(
+    metadata: &BTreeMap<String, String>,
+    provider_name: Option<&str>,
+) -> Option<String> {
+    let general = metadata_string(
+        metadata,
+        &[
+            "base_url",
+            "provider_base_url",
+            "provider-base-url",
+            "roo_base_url",
+            "roo-base-url",
+        ],
+    );
+    if general.is_some() {
+        return general;
+    }
+
+    match provider_name
+        .unwrap_or_default()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "anthropic" | "minimax" | "roo" => metadata_string(
+            metadata,
+            &["anthropic_url", "anthropic-url", "anthropic_base_url"],
+        ),
+        "openai" | "openai-native" | "codex" => {
+            metadata_string(metadata, &["openai_url", "openai-url", "openai_base_url"])
+        }
+        _ => None,
+    }
+}
+
+fn env_api_key_for_provider(provider_name: &str) -> Option<String> {
+    let normalized = provider_name
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() {
+                ch.to_ascii_uppercase()
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+    let provider_specific = format!("{normalized}_API_KEY");
+    let mut keys = vec![provider_specific];
+    match provider_name.to_ascii_lowercase().as_str() {
+        "anthropic" => keys.push("ANTHROPIC_API_KEY".to_string()),
+        "openai" | "openai-native" => keys.push("OPENAI_API_KEY".to_string()),
+        "minimax" => keys.push("MINIMAX_API_KEY".to_string()),
+        "roo" => keys.push("ROO_API_KEY".to_string()),
+        _ => {}
+    }
+    keys.iter().find_map(|key| read_nonempty_env(key))
+}
+
+fn keyring_api_key(provider_name: &str) -> Option<String> {
+    keyring::Entry::new(KEYRING_SERVICE, provider_name)
+        .ok()
+        .and_then(|entry| entry.get_password().ok())
+        .and_then(|value| normalize_nonempty(&value))
+}
+
+fn roo_provider_id_from_parts(
+    name: Option<&str>,
+    protocol: Option<&str>,
+    base_url: Option<&str>,
+) -> Option<String> {
+    let lowered_name = name.map(|value| value.trim().to_ascii_lowercase());
+    let lowered_url = base_url.map(|value| value.trim().to_ascii_lowercase());
+
+    if let Some(name) = lowered_name.as_deref() {
+        let compact = name.replace([' ', '_'], "-");
+        let exact = [
+            "anthropic",
+            "openai",
+            "openai-native",
+            "openrouter",
+            "deepseek",
+            "gemini",
+            "google",
+            "ollama",
+            "lmstudio",
+            "xai",
+            "mistral",
+            "fireworks",
+            "litellm",
+            "qwen",
+            "qwen-code",
+            "minimax",
+            "fake-ai",
+            "moonshot",
+            "zai",
+            "sambanova",
+            "baseten",
+            "poe",
+            "requesty",
+            "unbound",
+            "vercel",
+            "vercel-ai-gateway",
+            "bedrock",
+            "aws",
+        ];
+        if exact.contains(&compact.as_str()) {
+            return Some(compact);
+        }
+        if name.contains("minimax") {
+            return Some("minimax".to_string());
+        }
+        if name.contains("anthropic") || name.contains("claude") {
+            return Some("anthropic".to_string());
+        }
+        if name.contains("openai") || name.contains("gpt") {
+            return Some("openai".to_string());
+        }
+    }
+
+    if let Some(url) = lowered_url.as_deref() {
+        if url.contains("minimax") || url.contains("minimaxi") {
+            return Some("minimax".to_string());
+        }
+        if url.contains("anthropic") {
+            return Some("anthropic".to_string());
+        }
+        if url.contains("openai") {
+            return Some("openai".to_string());
+        }
+    }
+
+    match protocol.map(|value| value.trim().to_ascii_lowercase()) {
+        Some(protocol) if protocol == "anthropic" => Some("anthropic".to_string()),
+        Some(protocol) if protocol == "openai" => Some("openai".to_string()),
+        _ => name.and_then(normalize_nonempty),
+    }
+}
+
+fn active_profile_model(provider: &ProviderConfig) -> Option<String> {
+    provider.active_profile.as_ref().and_then(|profile_name| {
+        provider
+            .profiles
+            .iter()
+            .find(|profile| profile.name == *profile_name)
+            .and_then(|profile| profile.model.as_deref())
+            .and_then(normalize_nonempty)
+    })
+}
+
+fn read_json_file<T: for<'de> Deserialize<'de>>(path: PathBuf) -> Option<T> {
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|contents| serde_json::from_str::<T>(&contents).ok())
+}
+
+fn provider_from_configs(app: &AppHandle) -> Option<RemoteProviderSelection> {
+    let providers: ProviderConfigList =
+        read_json_file(app_config_path(app, PROVIDERS_FILE_NAME).ok()?)?;
+    let settings: GuiSettingsFile =
+        read_json_file(app_config_path(app, SETTINGS_FILE_NAME).ok()?).unwrap_or_default();
+    let selected_name = settings
+        .provider_name
+        .as_deref()
+        .and_then(normalize_nonempty)
+        .or_else(|| {
+            providers
+                .active_provider
+                .as_deref()
+                .and_then(normalize_nonempty)
+        });
+    let selected = selected_name
+        .as_deref()
+        .and_then(|name| {
+            providers
+                .providers
+                .iter()
+                .find(|provider| provider.name == name)
+        })
+        .or_else(|| providers.providers.first())?;
+
+    let model = settings
+        .provider_model
+        .as_deref()
+        .and_then(normalize_nonempty)
+        .or_else(|| active_profile_model(selected))
+        .or_else(|| selected.model.as_deref().and_then(normalize_nonempty));
+    let base_url = settings
+        .provider_base_url
+        .as_deref()
+        .and_then(normalize_nonempty)
+        .or_else(|| selected.base_url.as_deref().and_then(normalize_nonempty));
+    let name = roo_provider_id_from_parts(
+        selected_name.as_deref().or(Some(selected.name.as_str())),
+        Some(selected.protocol.as_str()),
+        base_url.as_deref(),
+    );
+    let api_key = name
+        .as_deref()
+        .and_then(keyring_api_key)
+        .or_else(|| keyring_api_key(&selected.name))
+        .or_else(|| selected.api_key.as_deref().and_then(normalize_nonempty));
+
+    Some(RemoteProviderSelection {
+        name,
+        model,
+        base_url,
+        api_key,
+    })
+}
+
+fn resolve_roo_provider_selection(
+    metadata: &BTreeMap<String, String>,
+    local: Option<RemoteProviderSelection>,
+    fallback_model: &str,
+) -> RemoteProviderSelection {
+    let local = local.unwrap_or_default();
+    let requested_name = metadata_string(
+        metadata,
+        &["provider", "provider_name", "provider-name", "roo_provider"],
+    )
+    .or(local.name)
+    .unwrap_or_else(|| "anthropic".to_string());
+    let model = metadata_string(metadata, &["model", "provider_model", "provider-model"])
+        .or(local.model)
+        .unwrap_or_else(|| fallback_model.to_string());
+    let base_url =
+        metadata_base_url_for_provider(metadata, Some(&requested_name)).or(local.base_url);
+    let name = roo_provider_id_from_parts(Some(&requested_name), None, base_url.as_deref())
+        .unwrap_or(requested_name);
+    let api_key = local.api_key.or_else(|| env_api_key_for_provider(&name));
+
+    RemoteProviderSelection {
+        name: Some(name),
+        model: Some(model),
+        base_url,
+        api_key,
+    }
 }
 
 fn generate_runner_id() -> String {
@@ -855,7 +1109,7 @@ impl InProcessSessionManager {
             })
             .unwrap_or(AgentType::RemoteClaude);
 
-        let model = session
+        let mut model = session
             .metadata
             .get("model")
             .map(|v| v.as_str())
@@ -917,23 +1171,49 @@ impl InProcessSessionManager {
             AgentType::RemoteRoo => {
                 let mut adapters = self.roo_adapters.lock().await;
                 if !adapters.contains_key(&sid) {
+                    let provider = resolve_roo_provider_selection(
+                        &session.metadata,
+                        provider_from_configs(&self.app),
+                        &model,
+                    );
+                    let provider_name = provider
+                        .name
+                        .clone()
+                        .unwrap_or_else(|| "anthropic".to_string());
+                    let effective_model = provider.model.clone().unwrap_or_else(|| model.clone());
+                    model = effective_model.clone();
+                    let api_key = provider.api_key.clone();
+                    let base_url = provider.base_url.clone();
                     let mut adapter = RooInProcessAdapter::new();
+                    let roo_storage_path = self.profile_dir.join("roo");
                     let agent_config = AgentConfig {
                         agent_type: AgentType::RemoteRoo,
                         binary_path: None,
                         args: Vec::new(),
-                        env: Vec::new(),
+                        env: vec![
+                            (
+                                "ROO_TASK_STORAGE_PATH".to_owned(),
+                                roo_storage_path.to_string_lossy().to_string(),
+                            ),
+                            ("ROO_API_CONFIG_NAME".to_owned(), provider_name.clone()),
+                        ],
                         working_dir: Some(workspace_dir.clone()),
-                        model: Some(model.clone()),
-                        provider: Some("anthropic".to_string()),
-                        api_key: std::env::var("ANTHROPIC_API_KEY").ok(),
-                        base_url: None,
+                        model: Some(effective_model.clone()),
+                        provider: Some(provider_name.clone()),
+                        api_key,
+                        base_url,
                     };
                     adapter
                         .start(&agent_config)
                         .await
                         .map_err(|e| anyhow!("Roo start: {e}"))?;
                     adapters.insert(sid.clone(), adapter);
+                    info!(
+                        session_id = %sid,
+                        provider = %provider_name,
+                        model = %effective_model,
+                        "Started remote Roo native adapter with local provider configuration"
+                    );
                 }
             }
             AgentType::RemoteCodex => {
@@ -1361,5 +1641,63 @@ async fn run_control_plane_sync(
                 if changed.is_err() || *shutdown.borrow() { break; }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn roo_provider_selection_prefers_remote_provider_without_remote_secret() {
+        let metadata = BTreeMap::from([
+            ("provider".to_string(), "minimax".to_string()),
+            ("model".to_string(), "minimax-m2.7".to_string()),
+            (
+                "anthropic-url".to_string(),
+                "https://api.minimaxi.com/anthropic".to_string(),
+            ),
+            (
+                "api_key".to_string(),
+                "must-not-cross-control-plane".to_string(),
+            ),
+        ]);
+        let local = RemoteProviderSelection {
+            name: Some("anthropic".to_string()),
+            model: Some("claude-sonnet".to_string()),
+            base_url: Some("https://api.anthropic.com".to_string()),
+            api_key: Some("local-key".to_string()),
+        };
+
+        let selected = resolve_roo_provider_selection(&metadata, Some(local), "fallback-model");
+
+        assert_eq!(selected.name.as_deref(), Some("minimax"));
+        assert_eq!(selected.model.as_deref(), Some("minimax-m2.7"));
+        assert_eq!(
+            selected.base_url.as_deref(),
+            Some("https://api.minimaxi.com/anthropic")
+        );
+        assert_eq!(selected.api_key.as_deref(), Some("local-key"));
+    }
+
+    #[test]
+    fn roo_provider_selection_uses_local_provider_when_remote_is_minimal() {
+        let metadata = BTreeMap::new();
+        let local = RemoteProviderSelection {
+            name: Some("openai".to_string()),
+            model: Some("gpt-5.1".to_string()),
+            base_url: Some("https://api.openai.com/v1".to_string()),
+            api_key: Some("local-key".to_string()),
+        };
+
+        let selected = resolve_roo_provider_selection(&metadata, Some(local), "fallback-model");
+
+        assert_eq!(selected.name.as_deref(), Some("openai"));
+        assert_eq!(selected.model.as_deref(), Some("gpt-5.1"));
+        assert_eq!(
+            selected.base_url.as_deref(),
+            Some("https://api.openai.com/v1")
+        );
+        assert_eq!(selected.api_key.as_deref(), Some("local-key"));
     }
 }

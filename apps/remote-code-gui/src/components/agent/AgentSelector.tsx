@@ -5,8 +5,8 @@ import type { AgentTypeInfo, AgentType } from '../../lib/types';
 /** Agent 类型对应的默认显示信息（后端未返回时用作 fallback） */
 const AGENT_DEFAULTS: Record<AgentType, { displayName: string; description: string }> = {
   remote_claude: { displayName: 'Remote Claude', description: '内置 Agent，直接调用 provider API' },
-  remote_roo: { displayName: 'Remote Roo', description: 'Remote Roo 外部 Agent 适配器' },
-  remote_codex: { displayName: 'Remote Codex', description: 'Remote Codex 外部 Agent 适配器' },
+  remote_roo: { displayName: 'Remote Roo', description: 'Rust 原生 in-process Agent' },
+  remote_codex: { displayName: 'Remote Codex', description: 'Rust 原生 in-process Agent' },
 };
 
 interface AgentSelectorProps {

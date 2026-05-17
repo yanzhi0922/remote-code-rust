@@ -14,6 +14,8 @@ use crate::groups::{
 };
 use crate::validate::is_tool_allowed_for_mode;
 
+const DEFAULT_MODE_SLUG: &str = "architect";
+
 // ---------------------------------------------------------------------------
 // Alias data structures (built once at module load)
 // ---------------------------------------------------------------------------
@@ -215,11 +217,11 @@ pub fn filter_native_tools_for_mode(
     experiments: Option<&HashMap<String, bool>>,
     settings: &FilterSettings,
 ) -> Vec<ToolDefinition> {
-    let mode_slug = mode.unwrap_or("code");
+    let mode_slug = mode.unwrap_or(DEFAULT_MODE_SLUG);
 
     // Find mode configuration
     let mode_config = find_mode_by_slug(mode_slug, custom_modes)
-        .or_else(|| find_mode_by_slug("code", custom_modes));
+        .or_else(|| find_mode_by_slug(DEFAULT_MODE_SLUG, custom_modes));
 
     let Some(mode_config) = mode_config else {
         tracing::warn!("No mode config found for {mode_slug}, returning empty tools");
@@ -332,7 +334,7 @@ pub fn filter_mcp_tools_for_mode(
     custom_modes: &[ModeConfig],
     experiments: Option<&HashMap<String, bool>>,
 ) -> Vec<ToolDefinition> {
-    let mode_slug = mode.unwrap_or("code");
+    let mode_slug = mode.unwrap_or(DEFAULT_MODE_SLUG);
 
     // MCP tools are always in the mcp group, check if use_mcp_tool is allowed
     let is_mcp_allowed = is_tool_allowed_for_mode(
@@ -375,7 +377,7 @@ pub fn is_tool_allowed_in_mode(
     experiments: Option<&HashMap<String, bool>>,
     settings: &FilterSettings,
 ) -> bool {
-    let mode_slug = mode.unwrap_or("code");
+    let mode_slug = mode.unwrap_or(DEFAULT_MODE_SLUG);
 
     // Check if it's an always-available tool
     if let Some(tool) = ToolName::all().iter().find(|t| t.as_str() == tool_name)
@@ -451,6 +453,16 @@ mod tests {
         // Architect mode has read and edit (for .md files), but not command
         assert!(names.contains(&"read_file"));
         // Architect has edit group (with .md restriction), so write_to_file is present
+        assert!(names.contains(&"write_to_file"));
+        assert!(!names.contains(&"execute_command"));
+    }
+
+    #[test]
+    fn test_filter_absent_mode_defaults_to_architect() {
+        let tools = crate::definition::get_native_tools(Default::default());
+        let filtered = filter_native_tools_for_mode(&tools, None, &[], None, &default_settings());
+        let names: Vec<&str> = filtered.iter().map(|t| t.name.as_str()).collect();
+        assert!(names.contains(&"read_file"));
         assert!(names.contains(&"write_to_file"));
         assert!(!names.contains(&"execute_command"));
     }

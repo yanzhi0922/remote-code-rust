@@ -1813,6 +1813,72 @@ fn store_provider_selection(state: &mut RuntimeState, config: &RuntimeProviderCo
     state.gui_settings.provider_protocol = Some(config.protocol.as_str().to_owned());
 }
 
+fn roo_provider_id_from_runtime(provider: &RuntimeProviderConfig) -> String {
+    let lowered_name = provider.name.trim().to_ascii_lowercase();
+    let compact = lowered_name.replace([' ', '_'], "-");
+    let exact = [
+        "anthropic",
+        "openai",
+        "openai-native",
+        "openrouter",
+        "deepseek",
+        "gemini",
+        "google",
+        "ollama",
+        "lmstudio",
+        "xai",
+        "mistral",
+        "fireworks",
+        "litellm",
+        "qwen",
+        "qwen-code",
+        "minimax",
+        "fake-ai",
+        "moonshot",
+        "zai",
+        "sambanova",
+        "baseten",
+        "poe",
+        "requesty",
+        "unbound",
+        "vercel",
+        "vercel-ai-gateway",
+        "bedrock",
+        "aws",
+    ];
+    if exact.contains(&compact.as_str()) {
+        return compact;
+    }
+    if lowered_name.contains("minimax") {
+        return "minimax".to_string();
+    }
+    if lowered_name.contains("anthropic") || lowered_name.contains("claude") {
+        return "anthropic".to_string();
+    }
+    if lowered_name.contains("openai") || lowered_name.contains("gpt") {
+        return "openai".to_string();
+    }
+
+    if let Some(url) = provider.base_url.as_deref() {
+        let lowered_url = url.to_ascii_lowercase();
+        if lowered_url.contains("minimax") || lowered_url.contains("minimaxi") {
+            return "minimax".to_string();
+        }
+        if lowered_url.contains("anthropic") {
+            return "anthropic".to_string();
+        }
+        if lowered_url.contains("openai") {
+            return "openai".to_string();
+        }
+    }
+
+    match provider.protocol {
+        ProviderProtocol::Anthropic => "anthropic".to_string(),
+        ProviderProtocol::OpenAi => "openai".to_string(),
+        _ => provider.name.clone(),
+    }
+}
+
 fn codex_provider_id(provider: &RuntimeProviderConfig, gui_settings: &GuiSettingsFile) -> String {
     gui_settings
         .codex_model_provider
@@ -2950,6 +3016,7 @@ async fn run_roo_in_process_prompt(
     provider_name: String,
     base_url: Option<String>,
     mcp_servers: HashMap<String, serde_json::Value>,
+    roo_storage_path: PathBuf,
     session_store: Arc<claude_session::SessionStore>,
 ) -> std::result::Result<String, String> {
     // Ensure the adapter exists for this session.
@@ -2965,7 +3032,13 @@ async fn run_roo_in_process_prompt(
                 agent_type: ProtocolAgentType::RemoteRoo,
                 binary_path: None,
                 args: Vec::new(),
-                env: Vec::new(),
+                env: vec![
+                    (
+                        "ROO_TASK_STORAGE_PATH".to_owned(),
+                        roo_storage_path.to_string_lossy().to_string(),
+                    ),
+                    ("ROO_API_CONFIG_NAME".to_owned(), provider_name.clone()),
+                ],
                 working_dir: Some(working_dir.clone()),
                 model: model.clone(),
                 provider: Some(provider_name.clone()),
@@ -3455,9 +3528,10 @@ async fn send_prompt(
                 let working_dir = config.cwd.clone();
                 let model = config.provider.model.clone();
                 let api_key = config.provider.api_key.clone();
-                let provider_name = config.provider.name.clone();
+                let provider_name = roo_provider_id_from_runtime(&config.provider);
                 let base_url = config.provider.base_url.clone();
                 let roo_mcp_servers = roo_mcp_server_overrides(&config);
+                let roo_storage_path = config.paths.profile_dir.join("roo");
                 let roo_session_store = Arc::clone(&session_store);
 
                 let app_for_cleanup = app.clone();
@@ -3474,6 +3548,7 @@ async fn send_prompt(
                         provider_name,
                         base_url,
                         roo_mcp_servers,
+                        roo_storage_path,
                         roo_session_store,
                     )
                     .await
@@ -6665,6 +6740,29 @@ mod tests {
             },
         )
         .expect("config should load")
+    }
+
+    #[test]
+    fn roo_provider_id_uses_protocol_and_endpoint_not_display_name() {
+        let project_dir = tempdir().unwrap();
+        let profile_dir = tempdir().unwrap();
+        let mut config = test_runtime_config(project_dir.path(), profile_dir.path());
+
+        config.provider.name = "MINIMAX TOKEN PLAN".to_string();
+        config.provider.protocol = ProviderProtocol::Anthropic;
+        config.provider.base_url =
+            Some("https://api.minimaxi.com/anthropic/v1/messages".to_string());
+        assert_eq!(roo_provider_id_from_runtime(&config.provider), "minimax");
+
+        config.provider.name = "Production Claude".to_string();
+        config.provider.base_url = Some("https://example.com/v1/messages".to_string());
+        assert_eq!(roo_provider_id_from_runtime(&config.provider), "anthropic");
+
+        config.provider.name = "OpenAI Work".to_string();
+        config.provider.protocol = ProviderProtocol::OpenAi;
+        config.provider.base_url =
+            Some("https://gateway.example.com/v1/chat/completions".to_string());
+        assert_eq!(roo_provider_id_from_runtime(&config.provider), "openai");
     }
 
     fn sample_stdio_mcp_server(name: &str, enabled: bool, command: &str) -> McpServerConfig {
