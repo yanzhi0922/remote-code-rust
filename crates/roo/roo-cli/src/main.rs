@@ -46,12 +46,12 @@ use roo_provider_unbound::{UnboundConfig, UnboundHandler};
 use roo_provider_vercel::{VercelConfig, VercelHandler};
 use roo_provider_xai::{XaiConfig, XaiHandler};
 use roo_provider_zai::{ZaiConfig, ZaiHandler};
+use roo_task::MessageBuilder;
 use roo_task::tool_dispatcher::{
     FileContextTrackerOps, ToolContext, ToolDispatcher, ToolExecutionResult,
-    default_dispatcher_with_terminal,
+    default_dispatcher_full,
 };
 use roo_terminal::TerminalRegistry;
-use roo_tools::definition::{NativeToolsOptions, get_native_tools};
 use roo_types::api::{ApiMessage, ApiStreamChunk, ContentBlock, MessageRole, ToolResultContent};
 
 // ---------------------------------------------------------------------------
@@ -155,7 +155,7 @@ struct Cli {
     working_dir: Option<String>,
 
     /// Mode to operate in (e.g. "code", "architect", "ask").
-    #[arg(long, default_value = "code")]
+    #[arg(long, default_value = "architect")]
     mode: String,
 }
 
@@ -247,12 +247,21 @@ async fn main() -> Result<()> {
         .system_prompt
         .unwrap_or_else(|| app.build_system_prompt());
 
-    // Build tool definitions (JSON values for the API).
-    let tool_defs = get_native_tools(NativeToolsOptions::default());
-    let tools_json: Vec<serde_json::Value> = tool_defs
-        .iter()
-        .map(|td| serde_json::to_value(td).unwrap_or_default())
-        .collect();
+    // Build tool definitions (JSON values for the API), including MCP tools
+    // discovered by the App layer.
+    let mcp_hub = app
+        .mcp_hub()
+        .cloned()
+        .unwrap_or_else(|| Arc::new(roo_mcp::McpHub::new()));
+    let mcp_servers = mcp_hub.get_servers();
+    let message_builder = MessageBuilder::new(&system_prompt);
+    let tools_json = message_builder.build_tool_definitions_with_options(
+        Some(&cli.mode),
+        &[],
+        None,
+        None,
+        &mcp_servers,
+    );
 
     // Use the terminal registry from the App layer.
     let registry = app
@@ -263,7 +272,7 @@ async fn main() -> Result<()> {
     let output_dir = std::env::temp_dir().join("roo-cli-output");
     std::fs::create_dir_all(&output_dir).ok();
 
-    let dispatcher = default_dispatcher_with_terminal(registry, output_dir, &cli.mode);
+    let dispatcher = default_dispatcher_full(registry, output_dir, &cli.mode, mcp_hub);
 
     // ── Build a fully-wired ToolContext ─────────────────────────────────
     // Load RooIgnore from the App layer (which already read .rooignore).

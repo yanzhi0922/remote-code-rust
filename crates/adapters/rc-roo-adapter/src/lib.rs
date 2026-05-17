@@ -306,6 +306,16 @@ fn build_handler(
             Ok(Box::new(roo_provider_minimax::MiniMaxHandler::new(cfg)?))
         }
 
+        "fake-ai" | "fake" => {
+            let cfg = roo_provider_fake_ai::FakeAiConfig {
+                model_id: model_id
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| "fake-ai-model".to_string()),
+                ..roo_provider_fake_ai::FakeAiConfig::default()
+            };
+            Ok(Box::new(roo_provider_fake_ai::FakeAiHandler::new(cfg)))
+        }
+
         "moonshot" => {
             let api_key =
                 api_key.ok_or_else(|| anyhow::anyhow!("api_key is required for moonshot"))?;
@@ -475,12 +485,66 @@ fn build_handler(
             anyhow::bail!(
                 "Unsupported Roo provider: '{}'. Supported: anthropic, openai, openai-native, \
                  openrouter, deepseek, gemini, ollama, lmstudio, xai, mistral, fireworks, \
-                 litellm, qwen, minimax, moonshot, zai, sambanova, baseten, poe, \
+                 litellm, qwen, minimax, fake-ai, moonshot, zai, sambanova, baseten, poe, \
                  requesty, unbound, vercel, roo, bedrock",
                 provider_name
             )
         }
     }
+}
+
+fn adapter_auto_approval_state(auto_approval_enabled: bool) -> AutoApprovalState {
+    AutoApprovalState {
+        auto_approval_enabled,
+        ..AutoApprovalState::default()
+    }
+}
+
+fn parse_mode_from_config(config: &AgentConfig) -> String {
+    let mut args = config.args.iter();
+    while let Some(arg) = args.next() {
+        if arg == "--mode" {
+            if let Some(mode) = args.next()
+                && !mode.trim().is_empty()
+            {
+                return mode.to_string();
+            }
+        } else if let Some(mode) = arg.strip_prefix("--mode=")
+            && !mode.trim().is_empty()
+        {
+            return mode.to_string();
+        }
+    }
+
+    config
+        .env
+        .iter()
+        .find_map(|(key, value)| {
+            if key.eq_ignore_ascii_case("ROO_MODE") && !value.trim().is_empty() {
+                Some(value.to_string())
+            } else {
+                None
+            }
+        })
+        .unwrap_or_else(|| roo_modes::default_mode_slug().to_string())
+}
+
+fn default_global_custom_modes_path() -> Option<PathBuf> {
+    let home = dirs::home_dir()?;
+    [
+        home.join(".roo").join("settings").join("custom_modes.yaml"),
+        home.join(".roo").join("custom_modes.yaml"),
+    ]
+    .into_iter()
+    .find(|path| path.exists())
+}
+
+fn load_custom_modes_for_cwd(cwd: &std::path::Path) -> Vec<roo_types::mode::ModeConfig> {
+    let project_roomodes = cwd.join(roo_modes::ROOMODES_FILENAME);
+    let project_roomodes = project_roomodes.exists().then_some(project_roomodes);
+    let global_settings = default_global_custom_modes_path().unwrap_or_default();
+    let mut manager = roo_modes::CustomModesManager::new(global_settings, project_roomodes);
+    manager.get_custom_modes()
 }
 
 // ---------------------------------------------------------------------------
@@ -723,6 +787,7 @@ pub struct RooInProcessAdapter {
     api_key: Option<String>,
     provider_name: Option<String>,
     base_url: Option<String>,
+    mode: String,
     cancel_token: Option<tokio_util::sync::CancellationToken>,
     worker_handle: Option<std::thread::JoinHandle<()>>,
     conversation_history: Arc<Mutex<Vec<ApiMessage>>>,
@@ -754,11 +819,12 @@ impl RooInProcessAdapter {
             api_key: None,
             provider_name: None,
             base_url: None,
+            mode: roo_modes::default_mode_slug().to_string(),
             cancel_token: None,
             worker_handle: None,
             approval_handle: None,
             conversation_history: Arc::new(Mutex::new(Vec::new())),
-            auto_approval_enabled: true,
+            auto_approval_enabled: false,
             external_mcp_servers: std::collections::HashMap::new(),
         }
     }
@@ -772,7 +838,11 @@ impl RooInProcessAdapter {
         self.external_mcp_servers = servers;
     }
 
-    fn build_system_prompt(&self) -> String {
+    fn build_system_prompt(
+        &self,
+        has_mcp: bool,
+        custom_modes: Option<&[roo_types::mode::ModeConfig]>,
+    ) -> String {
         let cwd_str = self.cwd.to_string_lossy();
         let shell = if cfg!(windows) {
             "cmd.exe".to_string()
@@ -786,10 +856,10 @@ impl RooInProcessAdapter {
 
         build_system_prompt(
             &cwd_str,
-            "code",
+            &self.mode,
+            custom_modes,
             None,
-            None,
-            false,
+            has_mcp,
             None,
             None,
             None,
@@ -801,10 +871,14 @@ impl RooInProcessAdapter {
         )
     }
 
-    fn build_dispatcher(cwd: &std::path::Path) -> ToolDispatcher {
+    fn build_dispatcher(
+        cwd: &std::path::Path,
+        mode: &str,
+        mcp_hub: Arc<roo_mcp::McpHub>,
+    ) -> ToolDispatcher {
         let registry = Arc::new(TerminalRegistry::new());
         let output_dir = cwd.join(".roo");
-        roo_task::tool_dispatcher::default_dispatcher_with_terminal(registry, output_dir, "code")
+        roo_task::tool_dispatcher::default_dispatcher_full(registry, output_dir, mode, mcp_hub)
     }
 
     pub fn set_auto_approval_enabled(&mut self, enabled: bool) {
@@ -817,10 +891,8 @@ impl RooInProcessAdapter {
 
     /// Resolve a pending Roo tool-approval request.
     ///
-    /// In the current auto-approval configuration the `AgentLoop` handles
-    /// all approvals internally, so this method simply logs the decision.
-    /// When non-auto-approval mode is implemented, this will bridge to
-    /// `AgentLoop::set_approval_response()` via shared state.
+    /// If the agent loop is waiting on a tool approval, forward the GUI
+    /// decision to its pending oneshot channel.
     pub async fn resolve_roo_approval(
         &mut self,
         _request_id: &str,
@@ -847,14 +919,14 @@ impl RooInProcessAdapter {
         Ok(())
     }
 
-    /// Load MCP servers from `.roo/mcp.json` in the workspace directory.
+    /// Load MCP servers from GUI configuration and `.roo/mcp.json`.
     ///
-    /// Creates a temporary `McpHub`, loads the project-level MCP config,
-    /// waits for servers to connect, and returns the list of connected
-    /// server descriptions (tools, resources, etc.).
-    async fn load_mcp_servers(&self) -> Vec<McpServerConnection> {
+    /// The returned hub must live for the whole task because MCP tool handlers
+    /// call through it when `use_mcp_tool` or `access_mcp_resource` executes.
+    async fn load_mcp_hub(&self) -> (Arc<roo_mcp::McpHub>, Vec<McpServerConnection>) {
         let cwd_str = self.cwd.to_string_lossy().to_string();
-        let hub = roo_mcp::McpHub::new_with_paths(Some(cwd_str.clone()), None);
+        let hub = Arc::new(roo_mcp::McpHub::new_with_paths(Some(cwd_str.clone()), None));
+        hub.initialize_weak_self();
 
         // 1. Load GUI-managed MCP servers (from centralized config: mcp.toml, .mcp.json).
         //    These are "global" scope — project-level config can override them.
@@ -915,7 +987,8 @@ impl RooInProcessAdapter {
             .await;
         }
 
-        hub.get_servers()
+        let servers = hub.get_servers();
+        (hub, servers)
     }
 
     /// Inner body of the Roo agent loop, extracted so it can be wrapped in
@@ -925,6 +998,7 @@ impl RooInProcessAdapter {
     fn run_agent_loop_inner(
         task_id: String,
         cwd_str: String,
+        mode: String,
         message_owned: String,
         auto_approval: bool,
         session_id: String,
@@ -935,11 +1009,12 @@ impl RooInProcessAdapter {
         dispatcher: ToolDispatcher,
         history: Arc<tokio::sync::Mutex<Vec<ApiMessage>>>,
         mcp_servers: Vec<McpServerConnection>,
+        custom_modes: Vec<roo_types::mode::ModeConfig>,
         cancel_token: tokio_util::sync::CancellationToken,
         approval_out: ApprovalSender,
     ) {
         let config = TaskConfig::new(&task_id, &cwd_str)
-            .with_mode("code")
+            .with_mode(&mode)
             .with_task_text(&message_owned)
             .with_auto_approval(auto_approval)
             .with_start_task(true);
@@ -968,23 +1043,14 @@ impl RooInProcessAdapter {
             }
         });
 
+        let has_mcp = !mcp_servers.is_empty();
         let loop_config = AgentLoopConfig {
             auto_approval_enabled: auto_approval,
-            auto_approval: AutoApprovalState {
-                auto_approval_enabled: auto_approval,
-                always_allow_read_only: true,
-                always_allow_read_only_outside_workspace: true,
-                always_allow_write: true,
-                always_allow_write_outside_workspace: true,
-                always_allow_write_protected: false,
-                always_allow_mcp: true,
-                always_allow_mode_switch: true,
-                always_allow_subtasks: true,
-                always_allow_execute: true,
-                always_allow_followup_questions: true,
-                ..AutoApprovalState::default()
-            },
+            auto_approval: adapter_auto_approval_state(auto_approval),
             enable_condense: true,
+            has_mcp,
+            mcp_servers: mcp_servers.clone(),
+            custom_modes: (!custom_modes.is_empty()).then_some(custom_modes),
             ..AgentLoopConfig::default()
         };
 
@@ -1141,6 +1207,7 @@ impl AgentAdapter for RooInProcessAdapter {
         self.model = config.model.clone();
         self.api_key = config.api_key.clone();
         self.base_url = config.base_url.clone();
+        self.mode = parse_mode_from_config(config);
 
         self.provider_name = config.provider.clone().or_else(|| match config.agent_type {
             AgentType::RemoteRoo => Some("anthropic".to_string()),
@@ -1183,19 +1250,23 @@ impl AgentAdapter for RooInProcessAdapter {
             self.model.as_deref(),
         )?;
 
-        // Build system prompt and message builder
-        let system_prompt = self.build_system_prompt();
-        let message_builder = MessageBuilder::new(&system_prompt);
-
-        // Build tool dispatcher
-        let dispatcher = Self::build_dispatcher(&self.cwd);
-
-        // Load MCP servers from .roo/mcp.json
-        let mcp_servers = self.load_mcp_servers().await;
+        // Load MCP servers before building prompt/tools so MCP capability
+        // signals and tool handlers match the connected server state.
+        let (mcp_hub, mcp_servers) = self.load_mcp_hub().await;
         info!(
             count = mcp_servers.len(),
             "Loaded MCP servers for agent loop"
         );
+
+        let custom_modes = load_custom_modes_for_cwd(&self.cwd);
+        let has_mcp = !mcp_servers.is_empty();
+
+        // Build system prompt and message builder.
+        let system_prompt = self.build_system_prompt(has_mcp, Some(&custom_modes));
+        let message_builder = MessageBuilder::new(&system_prompt);
+
+        // Build tool dispatcher with a live MCP hub so MCP tools can execute.
+        let dispatcher = Self::build_dispatcher(&self.cwd, &self.mode, mcp_hub);
 
         // Clone conversation history while in async context (before spawning).
         let history_snapshot = {
@@ -1220,9 +1291,11 @@ impl AgentAdapter for RooInProcessAdapter {
         // Prepare owned parameters for the worker thread.
         let task_id = uuid::Uuid::now_v7().to_string();
         let cwd_str = self.cwd.to_string_lossy().to_string();
+        let mode = self.mode.clone();
         let message_owned = message.to_string();
         let auto_approval = self.auto_approval_enabled;
         let mcp_servers_owned = mcp_servers;
+        let custom_modes_owned = custom_modes;
 
         // Shared slot for the AgentLoop's approval handle to be passed back
         // from the worker thread to this adapter.
@@ -1245,6 +1318,7 @@ impl AgentAdapter for RooInProcessAdapter {
                 Self::run_agent_loop_inner(
                     task_id,
                     cwd_str,
+                    mode,
                     message_owned,
                     auto_approval,
                     session_id_for_completion,
@@ -1255,6 +1329,7 @@ impl AgentAdapter for RooInProcessAdapter {
                     dispatcher,
                     history,
                     mcp_servers_owned,
+                    custom_modes_owned,
                     cancel_token,
                     approval_out_clone,
                 );
@@ -1353,11 +1428,7 @@ impl AgentAdapter for RooInProcessAdapter {
     }
 
     fn is_alive(&self) -> bool {
-        matches!(self.status, AgentStatus::Ready | AgentStatus::Busy)
-            && self
-                .worker_handle
-                .as_ref()
-                .is_some_and(|h| !h.is_finished())
+        !matches!(self.status, AgentStatus::Stopped)
     }
 
     fn info(&self) -> &AgentInfo {
@@ -1386,6 +1457,95 @@ mod tests {
             total_cost: 0.0,
             context_tokens: ctx,
         }
+    }
+
+    fn test_config(args: Vec<String>, env: Vec<(String, String)>) -> AgentConfig {
+        AgentConfig {
+            agent_type: AgentType::RemoteRoo,
+            binary_path: None,
+            args,
+            env,
+            working_dir: None,
+            model: None,
+            provider: Some("fake-ai".to_string()),
+            api_key: None,
+            base_url: None,
+        }
+    }
+
+    #[test]
+    fn adapter_defaults_do_not_auto_approve_tools() {
+        let adapter = RooInProcessAdapter::new();
+
+        assert!(!adapter.auto_approval_enabled);
+    }
+
+    #[test]
+    fn adapter_defaults_to_alive_before_worker_starts() {
+        let adapter = RooInProcessAdapter::new();
+
+        assert!(<RooInProcessAdapter as AgentAdapter>::is_alive(&adapter));
+    }
+
+    #[test]
+    fn parse_mode_prefers_cli_arg_then_env_then_roo_default() {
+        let arg_config = test_config(vec!["--mode=debug".to_string()], Vec::new());
+        assert_eq!(parse_mode_from_config(&arg_config), "debug");
+
+        let split_arg_config = test_config(
+            vec!["--mode".to_string(), "ask".to_string()],
+            vec![("ROO_MODE".to_string(), "code".to_string())],
+        );
+        assert_eq!(parse_mode_from_config(&split_arg_config), "ask");
+
+        let env_config = test_config(
+            Vec::new(),
+            vec![("ROO_MODE".to_string(), "code".to_string())],
+        );
+        assert_eq!(parse_mode_from_config(&env_config), "code");
+
+        let default_config = test_config(Vec::new(), Vec::new());
+        assert_eq!(parse_mode_from_config(&default_config), "architect");
+    }
+
+    #[test]
+    fn build_dispatcher_registers_mcp_handlers() {
+        let hub = Arc::new(roo_mcp::McpHub::new());
+        let dispatcher =
+            RooInProcessAdapter::build_dispatcher(std::path::Path::new("."), "code", hub);
+
+        assert!(dispatcher.has_handler("use_mcp_tool"));
+        assert!(dispatcher.has_handler("access_mcp_resource"));
+    }
+
+    #[test]
+    fn adapter_auto_approval_state_does_not_grant_broad_permissions() {
+        let state = adapter_auto_approval_state(true);
+
+        assert!(state.auto_approval_enabled);
+        assert!(!state.always_allow_read_only);
+        assert!(!state.always_allow_read_only_outside_workspace);
+        assert!(!state.always_allow_write);
+        assert!(!state.always_allow_write_outside_workspace);
+        assert!(!state.always_allow_mcp);
+        assert!(!state.always_allow_execute);
+    }
+
+    #[test]
+    fn build_handler_supports_fake_ai_without_api_key() {
+        let handler = build_handler("fake-ai", None, None, None).expect("fake-ai provider");
+        let (model_id, _) = handler.get_model();
+
+        assert_eq!(model_id, "fake-ai-model");
+    }
+
+    #[test]
+    fn build_handler_supports_fake_alias_and_model_override() {
+        let handler =
+            build_handler("fake", None, None, Some("fake-override")).expect("fake provider");
+        let (model_id, _) = handler.get_model();
+
+        assert_eq!(model_id, "fake-override");
     }
 
     // ── Streaming events ──────────────────────────────────────────

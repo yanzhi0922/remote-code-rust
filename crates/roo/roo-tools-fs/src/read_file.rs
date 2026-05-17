@@ -80,11 +80,6 @@ pub fn validate_read_file_params(params: &ReadFileParams) -> Result<(), FsToolEr
     // Validate indentation mode params
     if params.mode == Some(ReadFileMode::Indentation) {
         if let Some(ref indent) = params.indentation {
-            if indent.anchor_line.is_none() {
-                return Err(FsToolError::Validation(
-                    "indentation mode requires anchor_line".to_string(),
-                ));
-            }
             if let Some(anchor) = indent.anchor_line
                 && anchor == 0
             {
@@ -92,10 +87,6 @@ pub fn validate_read_file_params(params: &ReadFileParams) -> Result<(), FsToolEr
                     "anchor_line must be >= 1 (1-based line number)".to_string(),
                 ));
             }
-        } else {
-            return Err(FsToolError::Validation(
-                "indentation mode requires indentation params".to_string(),
-            ));
         }
     }
 
@@ -229,8 +220,17 @@ pub fn process_read_file(
             build_read_result(content, &params.path, params.offset, params.limit)
         }
         ReadFileMode::Indentation => {
-            let indent_params = params.indentation.as_ref().unwrap();
-            build_read_result_indentation(content, &params.path, indent_params)
+            let mut indent_params = params.indentation.clone().unwrap_or(IndentationParams {
+                anchor_line: None,
+                max_levels: None,
+                include_siblings: None,
+                include_header: None,
+                max_lines: None,
+            });
+            if indent_params.anchor_line.is_none() {
+                indent_params.anchor_line = Some(params.offset.unwrap_or(1));
+            }
+            build_read_result_indentation(content, &params.path, &indent_params)
         }
     }
 }
@@ -710,7 +710,7 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_indentation_mode_no_anchor() {
+    fn test_validate_indentation_mode_no_anchor_defaults_later() {
         let params = ReadFileParams {
             path: "test.txt".to_string(),
             mode: Some(ReadFileMode::Indentation),
@@ -724,11 +724,11 @@ mod tests {
                 max_lines: None,
             }),
         };
-        assert!(validate_read_file_params(&params).is_err());
+        assert!(validate_read_file_params(&params).is_ok());
     }
 
     #[test]
-    fn test_validate_indentation_mode_no_params() {
+    fn test_validate_indentation_mode_no_params_defaults_later() {
         let params = ReadFileParams {
             path: "test.txt".to_string(),
             mode: Some(ReadFileMode::Indentation),
@@ -736,7 +736,7 @@ mod tests {
             limit: None,
             indentation: None,
         };
-        assert!(validate_read_file_params(&params).is_err());
+        assert!(validate_read_file_params(&params).is_ok());
     }
 
     #[test]

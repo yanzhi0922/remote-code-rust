@@ -214,7 +214,7 @@ impl TaskConfig {
             parent_task_id: None,
             task_number: 0,
             cwd: cwd.into(),
-            mode: "code".to_string(),
+            mode: crate::config::DEFAULT_MODE.to_string(),
             api_config_name: None,
             workspace: String::new(),
             max_iterations: None,
@@ -1103,7 +1103,7 @@ mod tests {
         let config = TaskConfig::new("task-1", "/tmp/work");
         assert_eq!(config.task_id, "task-1");
         assert_eq!(config.cwd, "/tmp/work");
-        assert_eq!(config.mode, "code");
+        assert_eq!(config.mode, "architect");
         assert!(config.api_config_name.is_none());
         assert!(!config.auto_approval);
         assert!(config.max_iterations.is_none());

@@ -25,6 +25,7 @@ roo-provider-lmstudio = { path = "../../roo/roo-provider-lmstudio" }
 roo-provider-litellm = { path = "../../roo/roo-provider-litellm" }
 roo-provider-qwen = { path = "../../roo/roo-provider-qwen" }
 roo-provider-minimax = { path = "../../roo/roo-provider-minimax" }
+roo-provider-fake-ai = { path = "../../roo/roo-provider-fake-ai" }
 roo-provider-poe = { path = "../../roo/roo-provider-poe" }
 roo-provider-requesty = { path = "../../roo/roo-provider-requesty" }
 roo-provider-unbound = { path = "../../roo/roo-provider-unbound" }

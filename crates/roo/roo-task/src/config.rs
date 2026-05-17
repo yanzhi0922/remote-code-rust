@@ -14,7 +14,7 @@ use crate::types::{
 pub const DEFAULT_MAX_MISTAKES: usize = 3;
 
 /// Default mode.
-pub const DEFAULT_MODE: &str = "code";
+pub const DEFAULT_MODE: &str = "architect";
 
 // ---------------------------------------------------------------------------
 // Validation
@@ -207,7 +207,7 @@ mod tests {
     #[test]
     fn test_default_constants() {
         assert_eq!(DEFAULT_MAX_MISTAKES, 3);
-        assert_eq!(DEFAULT_MODE, "code");
+        assert_eq!(DEFAULT_MODE, "architect");
         assert_eq!(DEFAULT_CHECKPOINT_TIMEOUT_SECONDS, 30);
         assert_eq!(MAX_CHECKPOINT_TIMEOUT_SECONDS, 600);
         assert_eq!(MIN_CHECKPOINT_TIMEOUT_SECONDS, 1);

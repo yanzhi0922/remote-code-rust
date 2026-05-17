@@ -316,9 +316,8 @@ fn string_param<'a>(params: &'a serde_json::Value, keys: &[&str]) -> Option<&'a 
 
 fn tool_primary_path<'a>(tool_name: &str, params: &'a serde_json::Value) -> Option<&'a str> {
     match tool_name {
-        "read_file" | "list_files" | "search_files" | "write_to_file" | "apply_diff" => {
-            string_param(params, &["path"])
-        }
+        "read_file" | "list_files" | "search_files" | "write_to_file" | "apply_diff"
+        | "generate_image" => string_param(params, &["path"]),
         "edit_file" | "edit" | "search_replace" | "search_and_replace" => {
             string_param(params, &["filePath", "file_path", "path"])
         }
@@ -679,6 +678,10 @@ pub struct AgentLoopConfig {
     ///
     /// Source: TS `state.customModePrompts` — passed to `getRoleDefinition()` / `getPromptComponent`
     pub custom_mode_prompts: Option<roo_types::mode::CustomModePrompts>,
+    /// System prompt feature flags.
+    ///
+    /// Source: TS `SystemPromptSettings`.
+    pub system_prompt_settings: roo_prompt::SystemPromptSettings,
 }
 
 impl Default for AgentLoopConfig {
@@ -703,6 +706,7 @@ impl Default for AgentLoopConfig {
             mcp_servers: Vec::new(),
             custom_modes: None,
             custom_mode_prompts: None,
+            system_prompt_settings: roo_prompt::SystemPromptSettings::default(),
         }
     }
 }
@@ -2098,9 +2102,10 @@ impl AgentLoop {
             let messages = self
                 .message_builder
                 .build_api_messages(&clean_history, None, &[]);
+            let custom_modes = self.config.custom_modes.as_deref().unwrap_or(&[]);
             let tools = self.message_builder.build_tool_definitions_with_options(
                 Some(&self.engine.config().mode),
-                &[],
+                custom_modes,
                 None,
                 None,
                 &self.mcp_servers,
@@ -3950,8 +3955,6 @@ impl AgentLoop {
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_else(|| "~".to_string());
 
-        let settings = roo_prompt::SystemPromptSettings::default();
-
         // Auto-detect language from system locale when not configured
         let language = self.config.language.clone().unwrap_or_else(detect_language);
 
@@ -3967,7 +3970,7 @@ impl AgentLoop {
                 .as_ref()
                 .and_then(|c| c.get_instructions())
                 .as_deref(),
-            Some(&settings),
+            Some(&self.config.system_prompt_settings),
             &self.config.skills,
             &os_info,
             &shell,
@@ -6299,6 +6302,7 @@ mod tests {
             mcp_servers: Vec::new(),
             custom_modes: None,
             custom_mode_prompts: None,
+            system_prompt_settings: roo_prompt::SystemPromptSettings::default(),
         };
         assert_eq!(config.max_api_retries, 5);
         assert!(config.stop_on_tool_error);

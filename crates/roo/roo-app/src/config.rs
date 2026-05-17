@@ -38,7 +38,7 @@ impl Default for AppConfig {
                 .map(|p| p.to_string_lossy().to_string())
                 .unwrap_or_else(|_| ".".to_string()),
             global_storage_path: String::new(),
-            mode: "code".to_string(),
+            mode: "architect".to_string(),
             provider_settings: ProviderSettings::default(),
             telemetry_enabled: false,
             language: None,

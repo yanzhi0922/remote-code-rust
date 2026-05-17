@@ -42,6 +42,7 @@ roo-provider-aws = { path = "../roo-provider-aws" }
 roo-task = { path = "../roo-task" }
 roo-terminal = { path = "../roo-terminal" }
 roo-prompt = { path = "../roo-prompt" }
+roo-mcp = { path = "../roo-mcp" }
 roo-modes = { path = "../roo-modes" }
 roo-tools = { path = "../roo-tools" }
 roo-ignore = { path = "../roo-ignore" }

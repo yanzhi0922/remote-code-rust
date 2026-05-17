@@ -2,7 +2,14 @@ param(
     [string]$RooPath,
     [switch]$Debug,
     [switch]$BuildIfMissing,
-    [int]$Iterations = 3
+    [int]$Iterations = 3,
+    [switch]$RunNetwork,
+    [string]$Provider = "minimax",
+    [string]$BaseUrl = "https://api.minimaxi.com/anthropic",
+    [string]$Model = "MiniMax-M2.7",
+    [string]$ApiKeyEnv = "ROO_STRESS_API_KEY",
+    [int]$NetworkIterations = 1,
+    [string]$NetworkMessage = "Reply with exactly: roo-network-ok"
 )
 
 $ErrorActionPreference = "Stop"
@@ -89,10 +96,6 @@ try {
             "--working-dir", $WorkspaceDir,
             "--message", "hello"
         )
-        if ($result.ExitCode -ne 0 -and $result.Output -like "*Unsupported provider*fake-ai*") {
-            Write-Warning "Skipping fake provider smoke: current Roo CLI does not support fake-ai."
-            return
-        }
         Assert-Success $result "Roo fake provider config smoke"
         Assert-Contains $result "scripted fake reply" "Roo fake provider config smoke"
     }
@@ -104,12 +107,30 @@ try {
                 "--working-dir", $WorkspaceDir,
                 "--message", "stress $i"
             )
-            if ($result.ExitCode -ne 0 -and $result.Output -like "*Unsupported provider*fake-ai*") {
-                Write-Warning "Skipping fake provider stress: current Roo CLI does not support fake-ai."
-                return
-            }
             Assert-Success $result "Roo fake provider stress iteration $i"
             Assert-Contains $result "Hello from FakeAI" "Roo fake provider stress iteration $i"
+        }
+    }
+
+    if ($RunNetwork) {
+        Run-Step "Roo network provider smoke" {
+            $apiKey = [Environment]::GetEnvironmentVariable($ApiKeyEnv)
+            if ([string]::IsNullOrWhiteSpace($apiKey)) {
+                throw "RunNetwork requires API key in environment variable '$ApiKeyEnv'."
+            }
+
+            for ($i = 1; $i -le $NetworkIterations; $i++) {
+                $result = Invoke-Roo @(
+                    "--provider", $Provider,
+                    "--base-url", $BaseUrl,
+                    "--model", $Model,
+                    "--api-key", $apiKey,
+                    "--working-dir", $WorkspaceDir,
+                    "--message", $NetworkMessage
+                )
+                Assert-Success $result "Roo network provider smoke iteration $i"
+                Assert-Contains $result "roo-network-ok" "Roo network provider smoke iteration $i"
+            }
         }
     }
 }

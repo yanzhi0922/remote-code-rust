@@ -655,7 +655,7 @@ mod tests {
     #[test]
     fn test_config_default() {
         let config = AppConfig::default();
-        assert_eq!(config.mode, "code");
+        assert_eq!(config.mode, "architect");
         assert!(config.telemetry_enabled == false);
         assert!(config.checkpoints_enabled);
     }

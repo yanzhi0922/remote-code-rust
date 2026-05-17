@@ -1,8 +1,7 @@
 //! write_to_file tool implementation.
 //!
 //! Handles content cleaning (markdown fence stripping), directory creation,
-//! detecting whether a file is new or being modified, and creating backups
-//! of existing files before overwriting.
+//! detecting whether a file is new or being modified.
 
 use crate::helpers::*;
 use crate::types::*;
@@ -59,8 +58,6 @@ pub fn clean_write_content(content: &str, model_id: Option<&str>) -> String {
 
 /// Process a write_to_file operation.
 ///
-/// If the file already exists, creates a `.bak` backup before overwriting.
-///
 /// `model_id` is used for model-dependent content cleaning (e.g. skipping
 /// HTML entity unescaping for Claude models). Pass `None` to apply all
 /// cleaning steps unconditionally.
@@ -88,16 +85,6 @@ pub fn process_write_to_file(
     // Create parent directories if needed
     create_directories_for_file(&file_path)?;
 
-    // Backup existing file before overwriting (L5.3)
-    if !is_new_file && let Err(e) = create_backup(&file_path) {
-        // Log warning but don't fail the write
-        eprintln!(
-            "Warning: failed to create backup for {}: {}",
-            file_path.display(),
-            e
-        );
-    }
-
     // Clean content (model-dependent HTML entity unescaping)
     let cleaned_content = clean_write_content(&params.content, model_id);
 
@@ -116,10 +103,8 @@ pub fn process_write_to_file(
 
 /// Create a `.bak` backup of an existing file.
 ///
-/// The backup is placed alongside the original file with a `.bak` extension.
-/// For example, `src/main.rs` → `src/main.rs.bak`.
-///
-/// Returns `Ok(())` if the backup was created, or an error if it failed.
+/// Deprecated compatibility helper. Runtime writes use checkpoints/diff
+/// services instead of polluting the workspace with sidecar `.bak` files.
 pub fn create_backup(file_path: &std::path::Path) -> Result<(), std::io::Error> {
     if !file_path.exists() {
         return Ok(());
@@ -292,7 +277,7 @@ mod tests {
     }
 
     #[test]
-    fn test_write_creates_backup_for_existing() {
+    fn test_write_does_not_create_sidecar_backup_for_existing() {
         let dir = tempfile::tempdir().unwrap();
         let file_path = dir.path().join("existing.txt");
         std::fs::write(&file_path, "old content").unwrap();
@@ -306,13 +291,9 @@ mod tests {
         // Original should have new content
         assert_eq!(std::fs::read_to_string(&file_path).unwrap(), "new content");
 
-        // Backup should have old content
+        // Runtime writes should rely on checkpoints/diff state, not sidecar backups.
         let backup_path = dir.path().join("existing.txt.bak");
-        assert!(backup_path.exists());
-        assert_eq!(
-            std::fs::read_to_string(&backup_path).unwrap(),
-            "old content"
-        );
+        assert!(!backup_path.exists());
     }
 
     #[test]

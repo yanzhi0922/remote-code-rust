@@ -250,17 +250,17 @@ fn dirs_home_dir() -> Option<PathBuf> {
 fn get_roo_directories_for_cwd(cwd: &str) -> Vec<PathBuf> {
     let mut dirs = Vec::new();
 
-    // Project-local .roo directory
-    let local_roo = Path::new(cwd).join(".roo");
-    if local_roo.is_dir() {
-        dirs.push(local_roo);
-    }
-
     // Global .roo directory
     if let Some(global_roo) = get_global_roo_directory()
         && global_roo.is_dir()
     {
         dirs.push(global_roo);
+    }
+
+    // Project-local .roo directory
+    let local_roo = Path::new(cwd).join(".roo");
+    if local_roo.is_dir() {
+        dirs.push(local_roo);
     }
 
     dirs
@@ -271,6 +271,13 @@ fn get_roo_directories_for_cwd(cwd: &str) -> Vec<PathBuf> {
 /// Source: `src/services/roo-config.ts` — `getAllRooDirectoriesForCwd`
 fn get_all_roo_directories_for_cwd(cwd: &str) -> Vec<PathBuf> {
     let mut dirs = Vec::new();
+
+    // Global .roo directory
+    if let Some(global_roo) = get_global_roo_directory()
+        && global_roo.is_dir()
+    {
+        dirs.push(global_roo);
+    }
 
     // Project-local .roo directory
     let local_roo = Path::new(cwd).join(".roo");
@@ -286,13 +293,6 @@ fn get_all_roo_directories_for_cwd(cwd: &str) -> Vec<PathBuf> {
                 find_roo_dirs_recursive(&path, &mut dirs);
             }
         }
-    }
-
-    // Global .roo directory
-    if let Some(global_roo) = get_global_roo_directory()
-        && global_roo.is_dir()
-    {
-        dirs.push(global_roo);
     }
 
     dirs

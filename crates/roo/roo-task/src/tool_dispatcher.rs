@@ -1086,21 +1086,25 @@ impl ToolHandler for ApplyPatchHandler {
         // Apply changes to disk — check ignore/protect for each file
         let mut results = Vec::new();
         for change in &changes {
-            // Check .rooignore for each file path
-            if let Err(e) =
-                roo_tools_fs::check_roo_ignore(&change.path, context.roo_ignore_controller.as_ref())
-            {
-                return ToolExecutionResult::error(format!("apply_patch error: {}", e));
+            let mut paths_to_check = vec![change.path.as_str()];
+            if let Some(move_path) = change.move_path.as_deref() {
+                paths_to_check.push(move_path);
             }
-            // Check write protection for each file path unless this call
-            // already passed the approval gate.
-            if !context.allow_protected_write
-                && let Err(e) = roo_tools_fs::check_roo_protect(
-                    &change.path,
-                    context.roo_protected_controller.as_ref(),
-                )
-            {
-                return ToolExecutionResult::error(format!("apply_patch error: {}", e));
+
+            for path in paths_to_check {
+                if let Err(e) =
+                    roo_tools_fs::check_roo_ignore(path, context.roo_ignore_controller.as_ref())
+                {
+                    return ToolExecutionResult::error(format!("apply_patch error: {}", e));
+                }
+                if !context.allow_protected_write
+                    && let Err(e) = roo_tools_fs::check_roo_protect(
+                        path,
+                        context.roo_protected_controller.as_ref(),
+                    )
+                {
+                    return ToolExecutionResult::error(format!("apply_patch error: {}", e));
+                }
             }
 
             let full_path = if std::path::Path::new(&change.path).is_absolute() {
@@ -1111,6 +1115,12 @@ impl ToolHandler for ApplyPatchHandler {
 
             match change.change_type {
                 roo_tools_fs::apply_patch::FileChangeType::Add => {
+                    if full_path.exists() {
+                        return ToolExecutionResult::error(format!(
+                            "apply_patch error: Add File target already exists: {}",
+                            change.path
+                        ));
+                    }
                     if let Some(parent) = full_path.parent()
                         && let Err(e) = std::fs::create_dir_all(parent)
                     {
@@ -1133,17 +1143,38 @@ impl ToolHandler for ApplyPatchHandler {
                     results.push(format!("Deleted: {}", change.path));
                 }
                 roo_tools_fs::apply_patch::FileChangeType::Update => {
+                    let new_full_path = if let Some(ref move_path) = change.move_path {
+                        let new_full_path = if std::path::Path::new(move_path).is_absolute() {
+                            std::path::PathBuf::from(move_path)
+                        } else {
+                            context.cwd.join(move_path)
+                        };
+                        if new_full_path.exists() {
+                            return ToolExecutionResult::error(format!(
+                                "apply_patch error: Move target already exists: {}",
+                                move_path
+                            ));
+                        }
+                        if let Some(parent) = new_full_path.parent()
+                            && let Err(e) = std::fs::create_dir_all(parent)
+                        {
+                            return ToolExecutionResult::error(format!(
+                                "Failed to create move target directory: {}",
+                                e
+                            ));
+                        }
+                        Some(new_full_path)
+                    } else {
+                        None
+                    };
+
                     if let Some(ref content) = change.new_content
                         && let Err(e) = std::fs::write(&full_path, content)
                     {
                         return ToolExecutionResult::error(format!("Failed to write file: {}", e));
                     }
                     if let Some(ref move_path) = change.move_path {
-                        let new_full_path = if std::path::Path::new(move_path).is_absolute() {
-                            std::path::PathBuf::from(move_path)
-                        } else {
-                            context.cwd.join(move_path)
-                        };
+                        let new_full_path = new_full_path.expect("move target prepared");
                         if let Err(e) = std::fs::rename(&full_path, &new_full_path) {
                             return ToolExecutionResult::error(format!(
                                 "Failed to move file: {}",
@@ -2361,6 +2392,18 @@ impl ToolHandler for GenerateImageHandler {
             return ToolExecutionResult::error(format!("generate_image validation error: {}", e));
         }
 
+        if let Err(e) =
+            roo_tools_fs::check_roo_ignore(&path, context.roo_ignore_controller.as_ref())
+        {
+            return ToolExecutionResult::error(format!("generate_image error: {}", e));
+        }
+        if !context.allow_protected_write
+            && let Err(e) =
+                roo_tools_fs::check_roo_protect(&path, context.roo_protected_controller.as_ref())
+        {
+            return ToolExecutionResult::error(format!("generate_image error: {}", e));
+        }
+
         // Resolve the provider
         let provider = match &self.provider {
             Some(p) => p,
@@ -2378,6 +2421,17 @@ impl ToolHandler for GenerateImageHandler {
         let input_image_data = match &image_params.image {
             Some(img_path) => {
                 let full_path = std::path::Path::new(&context.cwd).join(img_path);
+                if let Err(e) =
+                    roo_tools_fs::check_roo_ignore(img_path, context.roo_ignore_controller.as_ref())
+                {
+                    return ToolExecutionResult::error(format!("generate_image error: {}", e));
+                }
+                if let Err(e) = roo_tools_fs::check_roo_protect(
+                    img_path,
+                    context.roo_protected_controller.as_ref(),
+                ) {
+                    return ToolExecutionResult::error(format!("generate_image error: {}", e));
+                }
                 if !full_path.exists() {
                     return ToolExecutionResult::error(format!(
                         "Input image not found: {}",
@@ -2441,6 +2495,26 @@ impl ToolHandler for GenerateImageHandler {
                         let final_path =
                             roo_tools_misc::generate_image::determine_final_path(&path, &format);
                         let full_save_path = std::path::Path::new(&context.cwd).join(&final_path);
+                        if let Err(e) = roo_tools_fs::check_roo_ignore(
+                            &final_path,
+                            context.roo_ignore_controller.as_ref(),
+                        ) {
+                            return ToolExecutionResult::error(format!(
+                                "generate_image error: {}",
+                                e
+                            ));
+                        }
+                        if !context.allow_protected_write
+                            && let Err(e) = roo_tools_fs::check_roo_protect(
+                                &final_path,
+                                context.roo_protected_controller.as_ref(),
+                            )
+                        {
+                            return ToolExecutionResult::error(format!(
+                                "generate_image error: {}",
+                                e
+                            ));
+                        }
 
                         // Create parent directories if needed
                         if let Some(parent) = full_save_path.parent()
@@ -2814,6 +2888,7 @@ pub fn default_dispatcher() -> ToolDispatcher {
     dispatcher.register("apply_diff", Box::new(ApplyDiffHandler));
     dispatcher.register("edit_file", Box::new(EditFileHandler));
     dispatcher.register("search_replace", Box::new(SearchReplaceHandler));
+    dispatcher.register("search_and_replace", Box::new(SearchReplaceHandler));
     dispatcher.register("edit", Box::new(EditHandler));
     dispatcher.register("apply_patch", Box::new(ApplyPatchHandler));
 
@@ -3081,7 +3156,7 @@ impl ToolCallValidator {
                     return Err("Missing required parameter: path".to_string());
                 }
             }
-            "search_replace" => {
+            "search_replace" | "search_and_replace" => {
                 if params
                     .get("filePath")
                     .or_else(|| params.get("file_path"))
@@ -3159,6 +3234,7 @@ impl ToolCallValidator {
                 | "apply_diff"
                 | "edit_file"
                 | "search_replace"
+                | "search_and_replace"
                 | "edit"
                 | "apply_patch"
                 | "execute_command"
@@ -3587,6 +3663,53 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_apply_patch_add_rejects_existing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join("existing.txt");
+        std::fs::write(&file_path, "original\n").unwrap();
+        let ctx = ToolContext::new(dir.path(), "test-task");
+        let handler = ApplyPatchHandler;
+
+        let result = handler
+            .execute(
+                serde_json::json!({
+                    "patch": "*** Begin Patch\n*** Add File: existing.txt\n+new\n*** End Patch\n"
+                }),
+                &ctx,
+            )
+            .await;
+
+        assert!(result.is_error);
+        assert!(result.text.contains("Add File target already exists"));
+        assert_eq!(std::fs::read_to_string(&file_path).unwrap(), "original\n");
+    }
+
+    #[tokio::test]
+    async fn test_apply_patch_move_rejects_existing_target_without_modifying_source() {
+        let dir = tempfile::tempdir().unwrap();
+        let source_path = dir.path().join("source.txt");
+        let target_path = dir.path().join("target.txt");
+        std::fs::write(&source_path, "old\n").unwrap();
+        std::fs::write(&target_path, "target\n").unwrap();
+        let ctx = ToolContext::new(dir.path(), "test-task");
+        let handler = ApplyPatchHandler;
+
+        let result = handler
+            .execute(
+                serde_json::json!({
+                    "patch": "*** Begin Patch\n*** Update File: source.txt\n*** Move to: target.txt\n@@\n-old\n+new\n*** End Patch\n"
+                }),
+                &ctx,
+            )
+            .await;
+
+        assert!(result.is_error);
+        assert!(result.text.contains("Move target already exists"));
+        assert_eq!(std::fs::read_to_string(&source_path).unwrap(), "old\n");
+        assert_eq!(std::fs::read_to_string(&target_path).unwrap(), "target\n");
+    }
+
+    #[tokio::test]
     async fn test_register_async_fn_handler() {
         let mut dispatcher = ToolDispatcher::new();
         dispatcher.register_async_fn("async_tool", |_params, _ctx| async move {
@@ -3660,9 +3783,12 @@ mod tests {
         assert!(dispatcher.has_handler("write_to_file"));
         assert!(dispatcher.has_handler("apply_diff"));
         assert!(dispatcher.has_handler("edit_file"));
+        assert!(dispatcher.has_handler("search_replace"));
+        assert!(dispatcher.has_handler("search_and_replace"));
         assert!(dispatcher.has_handler("list_files"));
         assert!(dispatcher.has_handler("search_files"));
         assert!(dispatcher.has_handler("codebase_search"));
+        assert!(ToolCallValidator::is_valid_tool_name("search_and_replace"));
     }
 
     #[tokio::test]
