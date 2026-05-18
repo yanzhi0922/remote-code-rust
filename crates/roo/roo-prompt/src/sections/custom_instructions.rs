@@ -251,17 +251,12 @@ fn get_roo_directories_for_cwd(cwd: &str) -> Vec<PathBuf> {
     let mut dirs = Vec::new();
 
     // Global .roo directory
-    if let Some(global_roo) = get_global_roo_directory()
-        && global_roo.is_dir()
-    {
+    if let Some(global_roo) = get_global_roo_directory() {
         dirs.push(global_roo);
     }
 
     // Project-local .roo directory
-    let local_roo = Path::new(cwd).join(".roo");
-    if local_roo.is_dir() {
-        dirs.push(local_roo);
-    }
+    dirs.push(Path::new(cwd).join(".roo"));
 
     dirs
 }
@@ -270,30 +265,27 @@ fn get_roo_directories_for_cwd(cwd: &str) -> Vec<PathBuf> {
 ///
 /// Source: `src/services/roo-config.ts` — `getAllRooDirectoriesForCwd`
 fn get_all_roo_directories_for_cwd(cwd: &str) -> Vec<PathBuf> {
+    let mut dirs = get_roo_directories_for_cwd(cwd);
+    dirs.extend(discover_subfolder_roo_directories(cwd));
+
+    dirs
+}
+
+/// Discover subfolder .roo directories, excluding the workspace root .roo.
+///
+/// Source: `src/services/roo-config/index.ts` — `discoverSubfolderRooDirectories`
+fn discover_subfolder_roo_directories(cwd: &str) -> Vec<PathBuf> {
     let mut dirs = Vec::new();
-
-    // Global .roo directory
-    if let Some(global_roo) = get_global_roo_directory()
-        && global_roo.is_dir()
-    {
-        dirs.push(global_roo);
-    }
-
-    // Project-local .roo directory
-    let local_roo = Path::new(cwd).join(".roo");
-    if local_roo.is_dir() {
-        dirs.push(local_roo);
-    }
-
-    // Recursively find .roo directories in subdirectories
     if let Ok(entries) = fs::read_dir(cwd) {
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.is_dir() {
+            if should_descend_into_directory(&path) {
                 find_roo_dirs_recursive(&path, &mut dirs);
             }
         }
     }
+    dirs.sort();
+    dirs.dedup();
 
     dirs
 }
@@ -308,11 +300,22 @@ fn find_roo_dirs_recursive(dir: &Path, result: &mut Vec<PathBuf>) {
     if let Ok(entries) = fs::read_dir(dir) {
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.is_dir() && !path.file_name().map(|n| n == ".git").unwrap_or(false) {
+            if should_descend_into_directory(&path) {
                 find_roo_dirs_recursive(&path, result);
             }
         }
     }
+}
+
+fn should_descend_into_directory(path: &Path) -> bool {
+    if !path.is_dir() {
+        return false;
+    }
+
+    !matches!(
+        path.file_name().and_then(|name| name.to_str()),
+        Some(".git" | "node_modules")
+    )
 }
 
 /// Load rule files from global, project-local, and optionally subfolder directories.
@@ -491,13 +494,9 @@ fn load_all_agent_rules_files(cwd: &str, enable_subfolder_rules: bool) -> String
 fn get_agents_directories_for_cwd(cwd: &str) -> Vec<PathBuf> {
     let mut dirs = vec![PathBuf::from(cwd)];
 
-    // Find subdirectories with .roo folders
-    if let Ok(entries) = fs::read_dir(cwd) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() && path.join(".roo").is_dir() {
-                dirs.push(path);
-            }
+    for roo_dir in discover_subfolder_roo_directories(cwd) {
+        if let Some(parent) = roo_dir.parent() {
+            dirs.push(parent.to_path_buf());
         }
     }
 
@@ -625,6 +624,18 @@ The following additional instructions are provided by the user, and should be fo
 mod tests {
     use super::*;
 
+    fn temp_test_dir(name: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path =
+            std::env::temp_dir().join(format!("roo-prompt-{name}-{}-{nanos}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&path);
+        std::fs::create_dir_all(&path).unwrap();
+        path
+    }
+
     #[test]
     fn test_should_include_rule_file() {
         assert!(should_include_rule_file("rules.md"));
@@ -677,5 +688,81 @@ mod tests {
         );
         assert!(result.contains("Mode-specific Instructions"));
         assert!(result.contains("Focus on testing"));
+    }
+
+    #[test]
+    fn load_rule_files_includes_nested_roo_dirs_in_sorted_order() {
+        let cwd = temp_test_dir("rules");
+
+        std::fs::create_dir_all(cwd.join(".roo").join("rules")).unwrap();
+        std::fs::write(cwd.join(".roo").join("rules").join("root.md"), "root").unwrap();
+        std::fs::create_dir_all(cwd.join("packages").join("b").join(".roo").join("rules")).unwrap();
+        std::fs::write(
+            cwd.join("packages")
+                .join("b")
+                .join(".roo")
+                .join("rules")
+                .join("b.md"),
+            "b",
+        )
+        .unwrap();
+        std::fs::create_dir_all(cwd.join("packages").join("a").join(".roo").join("rules")).unwrap();
+        std::fs::write(
+            cwd.join("packages")
+                .join("a")
+                .join(".roo")
+                .join("rules")
+                .join("a.md"),
+            "a",
+        )
+        .unwrap();
+        std::fs::create_dir_all(
+            cwd.join("node_modules")
+                .join("dep")
+                .join(".roo")
+                .join("rules"),
+        )
+        .unwrap();
+        std::fs::write(
+            cwd.join("node_modules")
+                .join("dep")
+                .join(".roo")
+                .join("rules")
+                .join("ignored.md"),
+            "ignored",
+        )
+        .unwrap();
+
+        let rules = load_rule_files(&cwd.to_string_lossy(), true);
+
+        let root_pos = rules.find("root.md").expect("root rules");
+        let a_pos = rules.find("packages/a/.roo/rules/a.md").expect("a rules");
+        let b_pos = rules.find("packages/b/.roo/rules/b.md").expect("b rules");
+        assert!(root_pos < a_pos);
+        assert!(a_pos < b_pos);
+        assert!(!rules.contains("ignored.md"));
+
+        let _ = std::fs::remove_dir_all(cwd);
+    }
+
+    #[test]
+    fn load_agent_rules_includes_nested_roo_parents() {
+        let cwd = temp_test_dir("agents");
+
+        std::fs::write(cwd.join("AGENTS.md"), "root agent").unwrap();
+        std::fs::create_dir_all(cwd.join("packages").join("a").join(".roo")).unwrap();
+        std::fs::write(
+            cwd.join("packages").join("a").join("AGENTS.local.md"),
+            "package agent",
+        )
+        .unwrap();
+
+        let rules = load_all_agent_rules_files(&cwd.to_string_lossy(), true);
+
+        assert!(rules.contains("root agent"));
+        assert!(rules.contains("# Agent Rules Local (AGENTS.local.md) from packages/a:"));
+        assert!(rules.contains("package agent"));
+
+        let _ = std::fs::remove_dir_all(cwd);
     }
 }

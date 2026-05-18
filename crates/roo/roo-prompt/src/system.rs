@@ -3,6 +3,7 @@
 //! Source: `src/core/prompts/system.ts`
 
 use roo_types::mode::{CustomModePrompts, ModeConfig, PromptComponent, get_mode_by_slug};
+use roo_types::tool::{GroupEntry, ToolGroup};
 
 use crate::sections::*;
 use crate::types::SystemPromptParams;
@@ -56,6 +57,54 @@ fn first_default_mode() -> ModeConfig {
         .into_iter()
         .next()
         .expect("at least one default mode must exist")
+}
+
+fn mode_has_mcp_group(mode: &ModeConfig) -> bool {
+    mode.groups.iter().any(|group| match group {
+        GroupEntry::Plain(group) | GroupEntry::WithOptions(group, _) => *group == ToolGroup::Mcp,
+    })
+}
+
+fn format_language(locale: &str) -> String {
+    if locale.trim().is_empty() {
+        return "en".to_string();
+    }
+
+    let locale = locale.split('.').next().unwrap_or(locale).replace('_', "-");
+    let mut parts = locale.splitn(2, '-');
+    let language = parts.next().unwrap_or_default().to_ascii_lowercase();
+    let formatted = match parts.next() {
+        Some(region) if !region.is_empty() => {
+            format!("{}-{}", language, region.to_ascii_uppercase())
+        }
+        _ => language,
+    };
+
+    const SUPPORTED: &[&str] = &[
+        "ca", "de", "en", "es", "fr", "hi", "id", "it", "ja", "ko", "nl", "pl", "pt-BR", "ru",
+        "tr", "vi", "zh-CN", "zh-TW",
+    ];
+
+    if SUPPORTED.contains(&formatted.as_str()) {
+        formatted
+    } else {
+        "en".to_string()
+    }
+}
+
+fn default_language() -> String {
+    if let Ok(raw_config) = std::env::var("VSCODE_NLS_CONFIG")
+        && let Ok(value) = serde_json::from_str::<serde_json::Value>(&raw_config)
+        && let Some(locale) = value.get("locale").and_then(|value| value.as_str())
+    {
+        return format_language(locale);
+    }
+
+    std::env::var("LC_ALL")
+        .or_else(|_| std::env::var("LC_MESSAGES"))
+        .or_else(|_| std::env::var("LANG"))
+        .map(|locale| format_language(&locale))
+        .unwrap_or_else(|_| "en".to_string())
 }
 
 fn apply_prompt_overrides_to_modes(
@@ -229,6 +278,10 @@ pub fn build_system_prompt(
 
     let role_definition = get_role_definition(mode, custom_modes, prompt_component.as_ref());
     let base_instructions = get_base_instructions(mode, custom_modes, prompt_component.as_ref());
+    let effective_has_mcp = has_mcp && mode_has_mcp_group(&current_mode);
+    let effective_language = language
+        .map(|value| value.to_string())
+        .unwrap_or_else(default_language);
 
     // Get all modes for the modes section
     let all_modes = apply_prompt_overrides_to_modes(
@@ -242,8 +295,8 @@ pub fn build_system_prompt(
         role_definition,
         base_instructions,
         global_custom_instructions: global_custom_instructions.map(|s| s.to_string()),
-        has_mcp,
-        language: language.map(|s| s.to_string()),
+        has_mcp: effective_has_mcp,
+        language: Some(effective_language),
         roo_ignore_instructions: roo_ignore_instructions.map(|s| s.to_string()),
         settings: settings.cloned(),
         modes: all_modes,
@@ -308,6 +361,7 @@ mod tests {
         assert!(result.contains("OBJECTIVE"));
         assert!(result.contains("SYSTEM INFORMATION"));
         assert!(result.contains("/home/user/project"));
+        assert!(result.contains("Language Preference:"));
     }
 
     #[test]
@@ -438,6 +492,38 @@ mod tests {
         assert!(result.contains("Custom mode instructions"));
         assert!(!result.starts_with("Prompt role override"));
         assert!(!result.contains("Prompt instruction override"));
+    }
+
+    #[test]
+    fn test_custom_mode_without_mcp_group_suppresses_mcp_capabilities() {
+        let custom_modes = vec![ModeConfig {
+            slug: "read-only".to_string(),
+            name: "Read Only".to_string(),
+            role_definition: "Read-only role".to_string(),
+            when_to_use: None,
+            description: None,
+            custom_instructions: None,
+            groups: vec![GroupEntry::Plain(ToolGroup::Read)],
+            source: None,
+        }];
+
+        let result = build_system_prompt(
+            "/home/user/project",
+            "read-only",
+            Some(&custom_modes),
+            None,
+            true,
+            None,
+            Some("en"),
+            None,
+            None,
+            &[],
+            "Linux",
+            "/bin/bash",
+            "/home/user",
+        );
+
+        assert!(!result.contains("MCP servers"));
     }
 
     #[test]

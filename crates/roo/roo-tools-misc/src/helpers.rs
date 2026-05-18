@@ -253,11 +253,21 @@ mod tests {
     fn test_followup_result_serde() {
         let r = crate::types::FollowupResult {
             question: "What next?".to_string(),
-            suggestions: vec!["A".to_string(), "B".to_string()],
+            suggestions: vec![
+                roo_types::tool::FollowUpOption {
+                    text: "A".to_string(),
+                    mode: None,
+                },
+                roo_types::tool::FollowUpOption {
+                    text: "B".to_string(),
+                    mode: Some("code".to_string()),
+                },
+            ],
         };
         let json = serde_json::to_string(&r).unwrap();
         let parsed: crate::types::FollowupResult = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.suggestions.len(), 2);
+        assert_eq!(parsed.suggestions[1].mode.as_deref(), Some("code"));
     }
 
     // ---- SkillResult tests ----

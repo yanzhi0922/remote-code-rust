@@ -1779,28 +1779,45 @@ pub fn sanitize_tool_use_id(id: &str) -> String {
 ///
 /// Source: TS `formatResponse.toolError()`.
 pub fn format_tool_error(message: &str) -> String {
-    format!("Error: {}", message)
+    serde_json::json!({
+        "status": "error",
+        "message": "The tool execution failed",
+        "error": message,
+    })
+    .to_string()
 }
 
 /// Format a tool denied message.
 ///
 /// Source: TS `formatResponse.toolDenied()`.
 pub fn format_tool_denied() -> String {
-    "Tool execution was denied by user.".to_string()
+    serde_json::json!({
+        "status": "denied",
+        "message": "The user denied this operation.",
+    })
+    .to_string()
 }
 
 /// Format a tool denied with feedback message.
 ///
 /// Source: TS `formatResponse.toolDeniedWithFeedback()`.
 pub fn format_tool_denied_with_feedback(feedback: &str) -> String {
-    format!("Tool execution was denied. User feedback: {}", feedback)
+    serde_json::json!({
+        "status": "denied",
+        "feedback": feedback,
+    })
+    .to_string()
 }
 
 /// Format a tool approved with feedback message.
 ///
 /// Source: TS `formatResponse.toolApprovedWithFeedback()`.
 pub fn format_tool_approved_with_feedback(feedback: &str) -> String {
-    format!("Tool approved with feedback: {}", feedback)
+    serde_json::json!({
+        "status": "approved",
+        "feedback": feedback,
+    })
+    .to_string()
 }
 
 /// Format a tool result.
@@ -2156,12 +2173,33 @@ mod tests {
     #[test]
     fn test_format_utilities() {
         assert_eq!(
-            format_tool_error("something failed"),
-            "Error: something failed"
+            serde_json::from_str::<serde_json::Value>(&format_tool_error("something failed"))
+                .unwrap()["status"],
+            "error"
         );
-        assert_eq!(format_tool_denied(), "Tool execution was denied by user.");
-        assert!(format_tool_denied_with_feedback("try again").contains("try again"));
-        assert!(format_tool_approved_with_feedback("looks good").contains("looks good"));
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&format_tool_error("something failed"))
+                .unwrap()["error"],
+            "something failed"
+        );
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&format_tool_denied()).unwrap()["status"],
+            "denied"
+        );
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&format_tool_denied_with_feedback(
+                "try again"
+            ))
+            .unwrap()["feedback"],
+            "try again"
+        );
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&format_tool_approved_with_feedback(
+                "looks good"
+            ))
+            .unwrap()["feedback"],
+            "looks good"
+        );
     }
 
     // ---- Test 16: MCP tool use processing ----

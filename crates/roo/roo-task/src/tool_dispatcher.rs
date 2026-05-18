@@ -67,7 +67,7 @@ pub enum ToolExecutionAction {
     /// wait for user input, and feed the response back as a tool_result.
     AskFollowup {
         question: String,
-        suggestions: Vec<String>,
+        suggestions: Vec<roo_types::tool::FollowUpOption>,
     },
     /// `attempt_completion` — the agent loop should present the completion result
     /// and wait for user acceptance or feedback.

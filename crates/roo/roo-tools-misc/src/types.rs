@@ -2,6 +2,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use roo_types::tool::FollowUpOption;
+
 /// Result of an attempt_completion operation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CompletionResult {
@@ -34,7 +36,7 @@ pub struct CompletionResultData {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FollowupResult {
     pub question: String,
-    pub suggestions: Vec<String>,
+    pub suggestions: Vec<FollowUpOption>,
 }
 
 /// Result of a skill operation.

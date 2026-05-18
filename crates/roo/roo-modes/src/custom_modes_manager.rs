@@ -12,11 +12,12 @@
 //! Source: `src/core/config/CustomModesManager.ts`
 
 use std::collections::HashSet;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
 use roo_types::mode::{ModeConfig, ModeSource, PromptComponent};
+use roo_types::tool::{GroupEntry, ToolGroup};
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -41,6 +42,7 @@ pub const CACHE_TTL_MS: u64 = 10_000;
 #[serde(rename_all = "camelCase")]
 pub struct RuleFile {
     pub relative_path: String,
+    #[serde(default)]
     pub content: String,
 }
 
@@ -214,10 +216,10 @@ impl CustomModesManager {
         // Strip BOM
         let content = content.strip_prefix('\u{FEFF}').unwrap_or(content);
         // Clean invisible characters
-        let content = Self::clean_invisible_characters(content);
+        let cleaned_content = Self::clean_invisible_characters(content);
 
         // Try YAML first
-        match serde_yaml::from_str(&content) {
+        match serde_yaml::from_str(&cleaned_content) {
             Ok(value) => value,
             Err(yaml_error) => {
                 // For .roomodes files, try JSON as fallback
@@ -226,7 +228,7 @@ impl CustomModesManager {
                     .map(|n| n == ROOMODES_FILENAME)
                     .unwrap_or(false)
                 {
-                    match serde_json::from_str::<serde_json::Value>(&content) {
+                    match serde_json::from_str::<serde_json::Value>(content) {
                         Ok(json_value) => {
                             // Convert JSON Value to YAML Value
                             serde_yaml::to_value(json_value).unwrap_or(serde_yaml::Value::Null)
@@ -250,6 +252,99 @@ impl CustomModesManager {
                 }
             }
         }
+    }
+
+    fn is_valid_slug(slug: &str) -> bool {
+        !slug.is_empty()
+            && slug
+                .chars()
+                .all(|ch| ch.is_ascii_alphanumeric() || ch == '-')
+    }
+
+    fn group_name(group: &GroupEntry) -> ToolGroup {
+        match group {
+            GroupEntry::Plain(group) | GroupEntry::WithOptions(group, _) => *group,
+        }
+    }
+
+    fn validate_mode_config(mode: &ModeConfig) -> Result<(), String> {
+        if !Self::is_valid_slug(&mode.slug) {
+            return Err("Slug must contain only letters numbers and dashes".to_string());
+        }
+        if mode.name.is_empty() {
+            return Err("Name is required".to_string());
+        }
+        if mode.role_definition.is_empty() {
+            return Err("Role definition is required".to_string());
+        }
+
+        let mut seen_groups = HashSet::new();
+        for group in &mode.groups {
+            let group_name = Self::group_name(group);
+            if !seen_groups.insert(group_name) {
+                return Err("Duplicate groups are not allowed".to_string());
+            }
+        }
+
+        Ok(())
+    }
+
+    fn is_deprecated_group_entry(entry: &serde_yaml::Value) -> bool {
+        match entry {
+            serde_yaml::Value::String(group) => group == "browser",
+            serde_yaml::Value::Sequence(items) => items
+                .first()
+                .and_then(|item| item.as_str())
+                .is_some_and(|group| group == "browser"),
+            _ => false,
+        }
+    }
+
+    fn preprocess_mode_value(mode_value: serde_yaml::Value) -> Result<serde_yaml::Value, String> {
+        let mut mapping = match mode_value {
+            serde_yaml::Value::Mapping(mapping) => mapping,
+            _ => return Err("Mode config must be an object".to_string()),
+        };
+
+        let groups_key = serde_yaml::Value::String("groups".to_string());
+        if let Some(groups_value) = mapping.get_mut(&groups_key) {
+            let groups = match groups_value {
+                serde_yaml::Value::Sequence(groups) => groups,
+                _ => return Err("groups must be an array".to_string()),
+            };
+
+            groups.retain(|entry| !Self::is_deprecated_group_entry(entry));
+        }
+
+        Ok(serde_yaml::Value::Mapping(mapping))
+    }
+
+    fn parse_mode_config_from_value(mode_value: serde_yaml::Value) -> Result<ModeConfig, String> {
+        let mode_value = Self::preprocess_mode_value(mode_value)?;
+        let mode: ModeConfig = serde_yaml::from_value(mode_value)
+            .map_err(|e| format!("Invalid mode configuration: {e}"))?;
+        Self::validate_mode_config(&mode)?;
+        Ok(mode)
+    }
+
+    fn parse_custom_modes_array(modes_value: serde_yaml::Value) -> Result<Vec<ModeConfig>, String> {
+        let modes_array = match modes_value {
+            serde_yaml::Value::Sequence(items) => items,
+            _ => return Err("customModes must be an array".to_string()),
+        };
+
+        let mut slugs = HashSet::new();
+        let mut modes = Vec::new();
+
+        for mode_value in modes_array {
+            let mode = Self::parse_mode_config_from_value(mode_value)?;
+            if !slugs.insert(mode.slug.clone()) {
+                return Err("Duplicate mode slugs are not allowed".to_string());
+            }
+            modes.push(mode);
+        }
+
+        Ok(modes)
     }
 
     // -------------------------------------------------------------------
@@ -276,8 +371,9 @@ impl CustomModesManager {
             None => return Vec::new(),
         };
 
-        // Parse into ModeConfig Vec
-        match serde_yaml::from_value::<Vec<ModeConfig>>(modes_value) {
+        // Parse into ModeConfig Vec, matching Roo-Code's schema preprocessing
+        // that strips deprecated tool groups before validation.
+        match Self::parse_custom_modes_array(modes_value) {
             Ok(modes) => {
                 let is_roomodes = file_path
                     .file_name()
@@ -385,15 +481,7 @@ impl CustomModesManager {
     /// Mirrors the TS `updateCustomMode()` method.
     pub fn update_custom_mode(&mut self, slug: &str, config: ModeConfig) -> Result<(), String> {
         // Validate the mode configuration
-        if config.slug.is_empty() {
-            return Err("Mode slug cannot be empty".to_string());
-        }
-        if config.name.is_empty() {
-            return Err("Mode name cannot be empty".to_string());
-        }
-        if config.role_definition.is_empty() {
-            return Err("Role definition cannot be empty".to_string());
-        }
+        Self::validate_mode_config(&config)?;
 
         let is_project_mode = config.source == Some(ModeSource::Project);
 
@@ -515,10 +603,9 @@ impl CustomModesManager {
     {
         // Read existing content
         let content = if file_path.exists() {
-            std::fs::read_to_string(file_path)
-                .unwrap_or_else(|_| "{{\"customModes\": []}}".to_string())
+            std::fs::read_to_string(file_path).unwrap_or_else(|_| "customModes: []\n".to_string())
         } else {
-            "{{\"customModes\": []}}".to_string()
+            "customModes: []\n".to_string()
         };
 
         // Parse
@@ -535,7 +622,7 @@ impl CustomModesManager {
             .cloned()
             .unwrap_or(serde_yaml::Value::Null);
         let existing_modes: Vec<ModeConfig> =
-            serde_yaml::from_value(modes_value).unwrap_or_default();
+            Self::parse_custom_modes_array(modes_value).unwrap_or_default();
 
         let updated_modes = operation(existing_modes);
 
@@ -573,7 +660,21 @@ impl CustomModesManager {
         workspace_path: Option<&Path>,
     ) -> bool {
         let all_modes = self.cached_modes.clone().unwrap_or_default();
-        let mode = all_modes.iter().find(|m| m.slug == slug);
+        let loaded_modes = if all_modes.is_empty() {
+            let global_modes = if self.global_settings_path.exists() {
+                self.load_modes_from_file(&self.global_settings_path)
+            } else {
+                Vec::new()
+            };
+            let project_modes = match &self.project_roomodes_path {
+                Some(path) if path.exists() => self.load_modes_from_file(path),
+                _ => Vec::new(),
+            };
+            Self::merge_custom_modes(&project_modes, &global_modes)
+        } else {
+            all_modes
+        };
+        let mode = loaded_modes.iter().find(|m| m.slug == slug);
 
         let rules_dir = match mode.and_then(|m| m.source) {
             Some(ModeSource::Global) => self.global_roo_dir().join(format!("rules-{slug}")),
@@ -619,13 +720,19 @@ impl CustomModesManager {
         let all_modes = self.get_custom_modes();
         let mode = match all_modes.iter().find(|m| m.slug == slug) {
             Some(m) => m.clone(),
-            None => {
-                return ExportResult {
-                    success: false,
-                    yaml: None,
-                    error: Some("Mode not found".to_string()),
-                };
-            }
+            None => match roo_types::mode::default_modes()
+                .into_iter()
+                .find(|m| m.slug == slug)
+            {
+                Some(m) => m,
+                None => {
+                    return ExportResult {
+                        success: false,
+                        yaml: None,
+                        error: Some("Mode not found".to_string()),
+                    };
+                }
+            },
         };
 
         // Determine rules directory
@@ -641,13 +748,16 @@ impl CustomModesManager {
                     };
                 }
             },
-            None => {
-                return ExportResult {
-                    success: false,
-                    yaml: None,
-                    error: Some("Mode source unknown".to_string()),
-                };
-            }
+            None => match workspace_path {
+                Some(wp) => wp.join(".roo").join(format!("rules-{slug}")),
+                None => {
+                    return ExportResult {
+                        success: false,
+                        yaml: None,
+                        error: Some("No workspace found".to_string()),
+                    };
+                }
+            },
         };
 
         // Collect rules files
@@ -778,16 +888,17 @@ impl CustomModesManager {
         // Process each mode
         let mut first_slug: Option<String> = None;
         for mode_value in &modes_array {
-            let mode_config: ModeConfig = match serde_yaml::from_value(mode_value.clone()) {
-                Ok(m) => m,
-                Err(e) => {
-                    return ImportResult {
-                        success: false,
-                        slug: None,
-                        error: Some(format!("Invalid mode configuration: {}", e)),
-                    };
-                }
-            };
+            let mode_config: ModeConfig =
+                match Self::parse_mode_config_from_value(mode_value.clone()) {
+                    Ok(m) => m,
+                    Err(e) => {
+                        return ImportResult {
+                            success: false,
+                            slug: None,
+                            error: Some(e),
+                        };
+                    }
+                };
 
             if first_slug.is_none() {
                 first_slug = Some(mode_config.slug.clone());
@@ -845,20 +956,10 @@ impl CustomModesManager {
                 continue;
             }
 
-            // Validate path (prevent traversal)
-            let normalized = rule_file.relative_path.replace('\\', "/");
-            if normalized.contains("..") || normalized.starts_with('/') {
+            let Some(normalized) = Self::normalize_import_rule_path(&rule_file.relative_path)
+            else {
                 tracing::warn!("Invalid file path detected: {}", rule_file.relative_path);
                 continue;
-            }
-            let normalized = if let Some((_, rest)) = normalized.split_once('/') {
-                if normalized.starts_with("rules-") {
-                    rest.to_string()
-                } else {
-                    normalized
-                }
-            } else {
-                normalized
             };
 
             let target_path = rules_folder.join(&normalized);
@@ -886,6 +987,50 @@ impl CustomModesManager {
         }
 
         Ok(())
+    }
+
+    fn normalize_import_rule_path(relative_path: &str) -> Option<String> {
+        fn has_unsafe_components(path: &Path) -> bool {
+            path.components().any(|component| {
+                matches!(
+                    component,
+                    Component::ParentDir | Component::Prefix(_) | Component::RootDir
+                )
+            })
+        }
+
+        let raw_path = Path::new(relative_path);
+        if raw_path.is_absolute() || has_unsafe_components(raw_path) {
+            return None;
+        }
+
+        let normalized = relative_path.replace('\\', "/");
+        if normalized.starts_with('/')
+            || normalized.is_empty()
+            || normalized.contains(":/")
+            || normalized
+                .as_bytes()
+                .get(1)
+                .is_some_and(|byte| *byte == b':')
+        {
+            return None;
+        }
+
+        let cleaned = if normalized.starts_with("rules-") {
+            normalized
+                .split_once('/')
+                .map(|(_, rest)| rest.to_string())
+                .unwrap_or(normalized)
+        } else {
+            normalized
+        };
+
+        let cleaned_path = Path::new(&cleaned);
+        if cleaned_path.is_absolute() || has_unsafe_components(cleaned_path) || cleaned.is_empty() {
+            return None;
+        }
+
+        Some(cleaned)
     }
 }
 
@@ -972,6 +1117,60 @@ customModes:
         let modes = manager.load_modes_from_file(&file_path);
         assert_eq!(modes.len(), 1);
         assert_eq!(modes[0].slug, "test-mode");
+    }
+
+    #[test]
+    fn load_modes_strips_deprecated_browser_groups_and_ignores_export_fields() {
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join(".roomodes");
+        let content = r#"
+customModes:
+  - slug: browser-compat
+    name: Browser Compat
+    roleDefinition: "Test role definition"
+    groups:
+      - read
+      - browser
+      - [edit, { fileRegex: "\\.md$", description: "Markdown" }]
+      - [browser, {}]
+    rulesFiles:
+      - relativePath: rule.md
+"#;
+        std::fs::write(&file_path, content).unwrap();
+
+        let manager = CustomModesManager::new(file_path.clone(), Some(file_path.clone()));
+        let modes = manager.load_modes_from_file(&file_path);
+
+        assert_eq!(modes.len(), 1);
+        assert_eq!(modes[0].source, Some(ModeSource::Project));
+        assert_eq!(modes[0].groups.len(), 2);
+        assert!(matches!(
+            modes[0].groups[0],
+            GroupEntry::Plain(ToolGroup::Read)
+        ));
+        assert!(matches!(
+            modes[0].groups[1],
+            GroupEntry::WithOptions(ToolGroup::Edit, _)
+        ));
+    }
+
+    #[test]
+    fn load_modes_rejects_invalid_slug_and_duplicate_groups() {
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join("custom_modes.yaml");
+        let content = r#"
+customModes:
+  - slug: "bad slug"
+    name: Bad
+    roleDefinition: "Test"
+    groups: [read, read]
+"#;
+        std::fs::write(&file_path, content).unwrap();
+
+        let manager = CustomModesManager::new(file_path.clone(), None);
+        let modes = manager.load_modes_from_file(&file_path);
+
+        assert!(modes.is_empty());
     }
 
     // ---- Test 6: Update custom mode ----
@@ -1181,6 +1380,75 @@ customModes:
                 .unwrap(),
             "two-rule"
         );
+    }
+
+    #[test]
+    fn import_rules_files_rejects_unsafe_paths_and_allows_missing_content() {
+        let dir = tempfile::tempdir().unwrap();
+        let global_path = dir
+            .path()
+            .join(".roo")
+            .join("settings")
+            .join("custom_modes.yaml");
+        std::fs::create_dir_all(global_path.parent().unwrap()).unwrap();
+        std::fs::write(&global_path, "customModes: []\n").unwrap();
+        let project_roomodes = dir.path().join(".roomodes");
+        let yaml = r#"
+customModes:
+  - slug: safe
+    name: Safe
+    roleDefinition: "Role"
+    groups: []
+    rulesFiles:
+      - relativePath: rules-safe/nested/rule.md
+        content: safe-rule
+      - relativePath: ../outside.md
+        content: unsafe-rule
+      - relativePath: C:\outside.md
+        content: absolute-rule
+      - relativePath: empty.md
+"#;
+
+        let mut manager = CustomModesManager::new(global_path, Some(project_roomodes));
+        let result = manager.import_mode_with_rules(yaml, ModeSource::Project, Some(dir.path()));
+
+        assert!(result.success, "{:?}", result.error);
+        assert_eq!(
+            std::fs::read_to_string(
+                dir.path()
+                    .join(".roo")
+                    .join("rules-safe")
+                    .join("nested")
+                    .join("rule.md")
+            )
+            .unwrap(),
+            "safe-rule"
+        );
+        assert!(!dir.path().join(".roo").join("outside.md").exists());
+        let entries = std::fs::read_dir(dir.path().join(".roo").join("rules-safe"))
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().to_string())
+            .collect::<Vec<_>>();
+        assert!(!entries.iter().any(|entry| entry.starts_with("C")));
+        assert!(
+            !dir.path()
+                .join(".roo")
+                .join("rules-safe")
+                .join("empty.md")
+                .exists()
+        );
+    }
+
+    #[test]
+    fn normalize_import_rule_path_rejects_absolute_and_traversal_paths() {
+        assert_eq!(
+            CustomModesManager::normalize_import_rule_path("rules-safe/nested/rule.md"),
+            Some("nested/rule.md".to_string())
+        );
+        assert!(CustomModesManager::normalize_import_rule_path("../rule.md").is_none());
+        assert!(CustomModesManager::normalize_import_rule_path("/tmp/rule.md").is_none());
+        assert!(CustomModesManager::normalize_import_rule_path(r"C:\tmp\rule.md").is_none());
+        assert!(CustomModesManager::normalize_import_rule_path("C:/tmp/rule.md").is_none());
     }
 
     #[test]

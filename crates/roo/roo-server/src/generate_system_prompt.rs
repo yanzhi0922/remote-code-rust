@@ -86,7 +86,7 @@ pub fn generate_system_prompt(params: GenerateSystemPromptParams) -> GenerateSys
         .custom_mode_prompts
         .and_then(|value| serde_json::from_value(value).ok());
 
-    let os_info = format!("{} {}", std::env::consts::OS, env!("CARGO_PKG_VERSION"));
+    let os_info = format!("{} {}", std::env::consts::OS, std::env::consts::ARCH);
     let shell = std::env::var("SHELL")
         .or_else(|_| std::env::var("COMSPEC"))
         .or_else(|_| std::env::var("ComSpec"))

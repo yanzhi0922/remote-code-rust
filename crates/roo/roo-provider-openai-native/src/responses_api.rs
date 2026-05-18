@@ -475,6 +475,12 @@ pub fn parse_sse_event(data: &str, provider_name: &str) -> Result<Option<ApiStre
                         }
                     }
                 }
+                "computer_call" | "computer_tool_call" => {
+                    return Err(ProviderError::api_error(
+                        provider_name,
+                        "Received unsupported Responses API computer tool call. Roo Code Rust does not enable browser/computer tools for this provider.",
+                    ));
+                }
                 _ => {}
             }
             Ok(None)
@@ -488,6 +494,13 @@ pub fn parse_sse_event(data: &str, provider_name: &str) -> Result<Option<ApiStre
                 .and_then(|o| o.as_array())
             {
                 for output_item in output {
+                    let output_type = output_item["type"].as_str().unwrap_or("");
+                    if matches!(output_type, "computer_call" | "computer_tool_call") {
+                        return Err(ProviderError::api_error(
+                            provider_name,
+                            "Received unsupported Responses API computer tool call. Roo Code Rust does not enable browser/computer tools for this provider.",
+                        ));
+                    }
                     if output_item["type"] == "message"
                         && let Some(content) = output_item["content"].as_array()
                     {
@@ -556,9 +569,13 @@ pub fn parse_sse_event(data: &str, provider_name: &str) -> Result<Option<ApiStre
         | "response.image_gen_call.partial_image"
         | "response.image_gen_call.completed" => Ok(None),
 
-        // Computer use events (silently consumed)
+        // Computer use events are not enabled by Roo Code Rust. Treat them as
+        // provider/protocol errors so unsupported actions cannot disappear.
         "response.computer_tool_call.output_item"
-        | "response.computer_tool_call.output_screenshot" => Ok(None),
+        | "response.computer_tool_call.output_screenshot" => Err(ProviderError::api_error(
+            provider_name,
+            "Received unsupported Responses API computer tool event. Roo Code Rust does not enable browser/computer tools for this provider.",
+        )),
 
         // File search events (silently consumed)
         "response.file_search_call.completed" => Ok(None),
@@ -836,6 +853,31 @@ mod tests {
         let data = r#"{"type":"error","error":{"message":"Rate limited"}}"#;
         let result = parse_sse_event(data, "OpenAI Native");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_sse_event_computer_tool_event_is_error() {
+        let data = r#"{"type":"response.computer_tool_call.output_screenshot","screenshot":"..."}"#;
+        let result = parse_sse_event(data, "OpenAI Native");
+        assert!(result.is_err());
+        assert!(format!("{}", result.unwrap_err()).contains("computer tool"));
+    }
+
+    #[test]
+    fn test_parse_sse_event_computer_output_item_is_error() {
+        let data = r#"{"type":"response.output_item.done","item":{"type":"computer_tool_call"}}"#;
+        let result = parse_sse_event(data, "OpenAI Native");
+        assert!(result.is_err());
+        assert!(format!("{}", result.unwrap_err()).contains("computer tool"));
+    }
+
+    #[test]
+    fn test_parse_sse_event_completed_computer_output_is_error() {
+        let data =
+            r#"{"type":"response.completed","response":{"output":[{"type":"computer_call"}]}}"#;
+        let result = parse_sse_event(data, "OpenAI Native");
+        assert!(result.is_err());
+        assert!(format!("{}", result.unwrap_err()).contains("computer tool"));
     }
 
     #[test]

@@ -1145,6 +1145,12 @@ pub struct AgentLoop {
     /// Source: TS `attemptApiRequest()` → `ask("api_req_failed")` → user retry flow
     pending_api_retry_tx: Arc<std::sync::Mutex<Option<oneshot::Sender<bool>>>>,
 
+    /// Pending oneshot sender for auto-approval limit response.
+    ///
+    /// Source: TS `AutoApprovalHandler.checkAutoApprovalLimits()` →
+    /// `ask("auto_approval_max_req_reached", ...)`.
+    pending_auto_approval_limit_tx: Arc<std::sync::Mutex<Option<oneshot::Sender<bool>>>>,
+
     /// Pending oneshot sender for mistake limit response.
     ///
     /// When the consecutive mistake limit is reached, a oneshot channel is
@@ -1252,6 +1258,7 @@ impl AgentLoop {
             mcp_servers: Vec::new(),
             pending_approval_tx: Arc::new(std::sync::Mutex::new(None)),
             pending_api_retry_tx: Arc::new(std::sync::Mutex::new(None)),
+            pending_auto_approval_limit_tx: Arc::new(std::sync::Mutex::new(None)),
             pending_mistake_limit_tx: Arc::new(std::sync::Mutex::new(None)),
             pending_followup_tx: Arc::new(std::sync::Mutex::new(None)),
             pending_completion_tx: Arc::new(std::sync::Mutex::new(None)),
@@ -1380,6 +1387,23 @@ impl AgentLoop {
         }
     }
 
+    /// Respond to a pending auto-approval limit prompt.
+    ///
+    /// Source: TS `AutoApprovalHandler.checkAutoApprovalLimits()`; approving
+    /// resets the limit window and allows the next API request to proceed.
+    pub fn set_auto_approval_limit_response(&self, approved: bool) -> bool {
+        if let Some(tx) = self
+            .pending_auto_approval_limit_tx
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take()
+        {
+            tx.send(approved).is_ok()
+        } else {
+            false
+        }
+    }
+
     /// Respond to a pending mistake limit reached prompt.
     ///
     /// When the consecutive mistake limit is reached and user interaction is
@@ -1473,6 +1497,13 @@ impl AgentLoop {
         Arc::clone(&self.pending_api_retry_tx)
     }
 
+    /// Get a shared handle to the pending auto-approval limit sender.
+    pub fn auto_approval_limit_handle(
+        &self,
+    ) -> Arc<std::sync::Mutex<Option<oneshot::Sender<bool>>>> {
+        Arc::clone(&self.pending_auto_approval_limit_tx)
+    }
+
     /// Get a shared handle to the pending mistake-limit sender.
     ///
     /// Adapter layers use this to answer `MistakeLimitReached` prompts emitted
@@ -1481,6 +1512,23 @@ impl AgentLoop {
         &self,
     ) -> Arc<std::sync::Mutex<Option<oneshot::Sender<MistakeLimitAction>>>> {
         Arc::clone(&self.pending_mistake_limit_tx)
+    }
+
+    /// Get a shared handle to the pending followup sender.
+    ///
+    /// Adapter layers use this to answer `ask_followup_question` prompts
+    /// emitted by the native loop without holding a direct `AgentLoop`
+    /// reference.
+    pub fn followup_handle(&self) -> Arc<std::sync::Mutex<Option<oneshot::Sender<String>>>> {
+        Arc::clone(&self.pending_followup_tx)
+    }
+
+    /// Get a shared handle to the pending completion sender.
+    ///
+    /// Adapter layers use this to accept an `attempt_completion` result with
+    /// an empty string or return user feedback as a non-empty string.
+    pub fn completion_handle(&self) -> Arc<std::sync::Mutex<Option<oneshot::Sender<String>>>> {
+        Arc::clone(&self.pending_completion_tx)
     }
 
     /// Get a mutable reference to the present-assistant-message state machine.
@@ -2159,6 +2207,12 @@ impl AgentLoop {
                         approval_count = ?limit_result.approval_count,
                         "Auto-approval limit reached"
                     );
+                    let (tx, rx) = oneshot::channel();
+                    *self
+                        .pending_auto_approval_limit_tx
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner()) = Some(tx);
+
                     self.engine.emitter().emit(
                         &crate::events::TaskEvent::AutoApprovalLimitReached {
                             task_id: task_id.clone(),
@@ -2166,12 +2220,17 @@ impl AgentLoop {
                             approval_count: limit_result.approval_count.clone(),
                         },
                     );
-                    // When limits are exceeded, abort the loop.
-                    // The UI handler can choose to reset limits and restart.
-                    if !limit_result.should_proceed {
-                        self.engine
-                            .abort_with_reason("auto_approval_limit_reached")?;
-                        break;
+
+                    match rx.await {
+                        Ok(true) => {
+                            self.config.auto_approval.reset_limits();
+                            debug!("Auto-approval limit approved; counters reset");
+                        }
+                        Ok(false) | Err(_) => {
+                            self.engine
+                                .abort_with_reason("auto_approval_limit_reached")?;
+                            break;
+                        }
                     }
                 }
             }
@@ -4531,7 +4590,10 @@ impl AgentLoop {
                     // via the followup channel pattern.
                     let followup_json = serde_json::json!({
                         "question": question,
-                        "suggest": suggestions.iter().map(|s| serde_json::json!({"answer": s})).collect::<Vec<_>>(),
+                        "suggest": suggestions.iter().map(|s| serde_json::json!({
+                            "answer": s.text,
+                            "mode": s.mode,
+                        })).collect::<Vec<_>>(),
                     });
                     let (tx, rx) = oneshot::channel();
                     *self

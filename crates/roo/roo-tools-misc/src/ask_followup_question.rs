@@ -36,21 +36,9 @@ pub fn process_followup(
 ) -> Result<FollowupResult, MiscToolError> {
     validate_followup_params(params)?;
 
-    let suggestions: Vec<String> = params
-        .follow_up
-        .iter()
-        .map(|opt| {
-            if let Some(ref mode) = opt.mode {
-                format!("{} (mode: {mode})", opt.text)
-            } else {
-                opt.text.clone()
-            }
-        })
-        .collect();
-
     Ok(FollowupResult {
         question: params.question.clone(),
-        suggestions,
+        suggestions: params.follow_up.clone(),
     })
 }
 
@@ -128,6 +116,7 @@ mod tests {
         let result = process_followup(&params).unwrap();
         assert_eq!(result.question, "Next step?");
         assert_eq!(result.suggestions.len(), 2);
-        assert!(result.suggestions[0].contains("mode: code"));
+        assert_eq!(result.suggestions[0].text, "Implement");
+        assert_eq!(result.suggestions[0].mode.as_deref(), Some("code"));
     }
 }

@@ -64,11 +64,13 @@ use roo_types::api::ApiMessage;
 use roo_types::mcp::McpServerConnection;
 
 type BoolDecisionHandle = Arc<std::sync::Mutex<Option<tokio::sync::oneshot::Sender<bool>>>>;
+type StringDecisionHandle = Arc<std::sync::Mutex<Option<tokio::sync::oneshot::Sender<String>>>>;
 type MistakeLimitDecisionHandle =
     Arc<std::sync::Mutex<Option<tokio::sync::oneshot::Sender<MistakeLimitAction>>>>;
 
 /// Type aliases for handles passed from the worker thread back to the adapter.
 type BoolDecisionSender = Arc<std::sync::Mutex<Option<BoolDecisionHandle>>>;
+type StringDecisionSender = Arc<std::sync::Mutex<Option<StringDecisionHandle>>>;
 type MistakeLimitDecisionSender = Arc<std::sync::Mutex<Option<MistakeLimitDecisionHandle>>>;
 
 // ---------------------------------------------------------------------------
@@ -756,12 +758,20 @@ fn map_task_event(event: &RooTaskEvent, session_id: &str) -> Option<UnifiedAgent
             tool_name,
             tool_id,
             reason,
-            ..
+            task_id,
         } => Some(UnifiedAgentEvent::PermissionRequest {
             session_id: session_id.to_string(),
             request_id: tool_id.clone(),
             tool_name: tool_name.clone(),
-            input: serde_json::json!({ "reason": reason }),
+            input: serde_json::json!({
+                "ask": "tool",
+                "task_id": task_id,
+                "tool_use_id": tool_id,
+                "tool": tool_name,
+                "reason": reason,
+                "feedback_supported": true,
+                "allow_all_supported": true,
+            }),
         }),
 
         // --- Subtask lifecycle ---
@@ -845,20 +855,20 @@ fn map_task_event(event: &RooTaskEvent, session_id: &str) -> Option<UnifiedAgent
         }),
 
         RooTaskEvent::AutoApprovalLimitReached {
+            task_id,
             approval_type,
             approval_count,
-            ..
-        } => Some(UnifiedAgentEvent::Error {
+        } => Some(UnifiedAgentEvent::PermissionRequest {
             session_id: session_id.to_string(),
-            message: format!(
-                "Auto-approval limit reached: {}{}",
-                approval_type,
-                approval_count
-                    .as_deref()
-                    .map(|count| format!(" ({count})"))
-                    .unwrap_or_default()
-            ),
-            recoverable: true,
+            request_id: format!("auto_approval_limit:{task_id}"),
+            tool_name: "auto_approval_max_req_reached".to_string(),
+            input: serde_json::json!({
+                "ask": "auto_approval_max_req_reached",
+                "task_id": task_id,
+                "type": approval_type,
+                "count": approval_count,
+                "decision": "allow continues after the auto-approval limit; deny cancels the task",
+            }),
         }),
 
         RooTaskEvent::ApiRateLimitWait { seconds, .. } => {
@@ -868,6 +878,43 @@ fn map_task_event(event: &RooTaskEvent, session_id: &str) -> Option<UnifiedAgent
                 progress: format!("{seconds}s remaining before next API request"),
             })
         }
+
+        RooTaskEvent::FollowupQuestion {
+            task_id,
+            tool_call_id,
+            question_json,
+        } => Some(UnifiedAgentEvent::PermissionRequest {
+            session_id: session_id.to_string(),
+            request_id: tool_call_id.clone(),
+            tool_name: "ask_followup_question".to_string(),
+            input: serde_json::json!({
+                "ask": "followup",
+                "task_id": task_id,
+                "tool_use_id": tool_call_id,
+                "question": serde_json::from_str::<serde_json::Value>(question_json)
+                    .unwrap_or_else(|_| serde_json::json!({ "question": question_json })),
+                "requires_text_response": true,
+                "response_via": "send_message",
+            }),
+        }),
+
+        RooTaskEvent::CompletionResult {
+            task_id,
+            tool_call_id,
+            completion_text,
+        } => Some(UnifiedAgentEvent::PermissionRequest {
+            session_id: session_id.to_string(),
+            request_id: tool_call_id.clone(),
+            tool_name: "attempt_completion".to_string(),
+            input: serde_json::json!({
+                "ask": "completion_result",
+                "task_id": task_id,
+                "tool_use_id": tool_call_id,
+                "result": completion_text,
+                "accepts_feedback": true,
+                "feedback_via": "send_message",
+            }),
+        }),
 
         // --- Streaming completed ---
         RooTaskEvent::StreamingCompleted { .. } => {
@@ -945,8 +992,14 @@ pub struct RooInProcessAdapter {
     approval_handle: Option<BoolDecisionHandle>,
     /// Shared handle to the AgentLoop's pending API retry prompt.
     api_retry_handle: Option<BoolDecisionHandle>,
+    /// Shared handle to the AgentLoop's pending auto-approval limit prompt.
+    auto_approval_limit_handle: Option<BoolDecisionHandle>,
     /// Shared handle to the AgentLoop's pending mistake-limit prompt.
     mistake_limit_handle: Option<MistakeLimitDecisionHandle>,
+    /// Shared handle to the AgentLoop's pending followup answer prompt.
+    followup_handle: Option<StringDecisionHandle>,
+    /// Shared handle to the AgentLoop's pending completion feedback prompt.
+    completion_handle: Option<StringDecisionHandle>,
 }
 
 impl RooInProcessAdapter {
@@ -977,7 +1030,10 @@ impl RooInProcessAdapter {
             worker_handle: None,
             approval_handle: None,
             api_retry_handle: None,
+            auto_approval_limit_handle: None,
             mistake_limit_handle: None,
+            followup_handle: None,
+            completion_handle: None,
             conversation_history: Arc::new(Mutex::new(Vec::new())),
             auto_approval_enabled: false,
             external_mcp_servers: std::collections::HashMap::new(),
@@ -1090,6 +1146,16 @@ impl RooInProcessAdapter {
         _request_id: &str,
         allowed: bool,
     ) -> anyhow::Result<()> {
+        if self.resolve_completion_feedback(if allowed {
+            String::new()
+        } else {
+            "The user rejected the completion result.".to_string()
+        }) {
+            return Ok(());
+        }
+        if self.resolve_followup_response(String::new()) {
+            return Ok(());
+        }
         if let Some(ref handle) = self.approval_handle {
             let mut guard = match handle.lock() {
                 Ok(g) => g,
@@ -1111,6 +1177,32 @@ impl RooInProcessAdapter {
         Ok(())
     }
 
+    fn resolve_text_handle(handle: &Option<StringDecisionHandle>, text: String) -> bool {
+        let Some(handle) = handle else {
+            return false;
+        };
+        let mut guard = match handle.lock() {
+            Ok(g) => g,
+            Err(e) => {
+                warn!("Text-response mutex poisoned, recovering: {e}");
+                e.into_inner()
+            }
+        };
+        if let Some(tx) = guard.take() {
+            let _ = tx.send(text);
+            return true;
+        }
+        false
+    }
+
+    fn resolve_followup_response(&mut self, response: String) -> bool {
+        Self::resolve_text_handle(&self.followup_handle, response)
+    }
+
+    fn resolve_completion_feedback(&mut self, feedback: String) -> bool {
+        Self::resolve_text_handle(&self.completion_handle, feedback)
+    }
+
     async fn resolve_api_retry(&mut self, allowed: bool) -> anyhow::Result<()> {
         if let Some(ref handle) = self.api_retry_handle {
             let mut guard = match handle.lock() {
@@ -1127,6 +1219,31 @@ impl RooInProcessAdapter {
             }
         }
         debug!(retry = allowed, "No pending API retry in AgentLoop");
+        Ok(())
+    }
+
+    async fn resolve_auto_approval_limit(&mut self, allowed: bool) -> anyhow::Result<()> {
+        if let Some(ref handle) = self.auto_approval_limit_handle {
+            let mut guard = match handle.lock() {
+                Ok(g) => g,
+                Err(e) => {
+                    warn!("Auto-approval-limit mutex poisoned, recovering: {e}");
+                    e.into_inner()
+                }
+            };
+            if let Some(tx) = guard.take() {
+                let _ = tx.send(allowed);
+                debug!(
+                    approved = allowed,
+                    "Sent auto-approval-limit response to AgentLoop"
+                );
+                return Ok(());
+            }
+        }
+        debug!(
+            approved = allowed,
+            "No pending auto-approval-limit prompt in AgentLoop"
+        );
         Ok(())
     }
 
@@ -1254,7 +1371,10 @@ impl RooInProcessAdapter {
         cancel_token: tokio_util::sync::CancellationToken,
         approval_out: BoolDecisionSender,
         api_retry_out: BoolDecisionSender,
+        auto_approval_limit_out: BoolDecisionSender,
         mistake_limit_out: MistakeLimitDecisionSender,
+        followup_out: StringDecisionSender,
+        completion_out: StringDecisionSender,
         storage_path: Option<String>,
         api_config_name: Option<String>,
     ) {
@@ -1363,12 +1483,39 @@ impl RooInProcessAdapter {
                 }
             }
 
+            let auto_approval_limit_handle = agent_loop.auto_approval_limit_handle();
+            match auto_approval_limit_out.lock() {
+                Ok(mut guard) => *guard = Some(auto_approval_limit_handle),
+                Err(e) => {
+                    warn!("Auto-approval-limit-out mutex poisoned, recovering: {e}");
+                    *e.into_inner() = Some(agent_loop.auto_approval_limit_handle());
+                }
+            }
+
             let mistake_limit_handle = agent_loop.mistake_limit_handle();
             match mistake_limit_out.lock() {
                 Ok(mut guard) => *guard = Some(mistake_limit_handle),
                 Err(e) => {
                     warn!("Mistake-limit-out mutex poisoned, recovering: {e}");
                     *e.into_inner() = Some(agent_loop.mistake_limit_handle());
+                }
+            }
+
+            let followup_handle = agent_loop.followup_handle();
+            match followup_out.lock() {
+                Ok(mut guard) => *guard = Some(followup_handle),
+                Err(e) => {
+                    warn!("Followup-out mutex poisoned, recovering: {e}");
+                    *e.into_inner() = Some(agent_loop.followup_handle());
+                }
+            }
+
+            let completion_handle = agent_loop.completion_handle();
+            match completion_out.lock() {
+                Ok(mut guard) => *guard = Some(completion_handle),
+                Err(e) => {
+                    warn!("Completion-out mutex poisoned, recovering: {e}");
+                    *e.into_inner() = Some(agent_loop.completion_handle());
                 }
             }
         }
@@ -1510,6 +1657,16 @@ impl AgentAdapter for RooInProcessAdapter {
         message: &str,
     ) -> anyhow::Result<mpsc::Receiver<UnifiedAgentEvent>> {
         let (tx, rx) = mpsc::channel(256);
+
+        if self.resolve_followup_response(message.to_string()) {
+            let _ = tx.send(UnifiedAgentEvent::Ready).await;
+            return Ok(rx);
+        }
+        if self.resolve_completion_feedback(message.to_string()) {
+            let _ = tx.send(UnifiedAgentEvent::Ready).await;
+            return Ok(rx);
+        }
+
         let panic_tx = tx.clone();
 
         // Build provider
@@ -1578,8 +1735,14 @@ impl AgentAdapter for RooInProcessAdapter {
         let approval_out_clone = Arc::clone(&approval_out);
         let api_retry_out: BoolDecisionSender = Arc::new(std::sync::Mutex::new(None));
         let api_retry_out_clone = Arc::clone(&api_retry_out);
+        let auto_approval_limit_out: BoolDecisionSender = Arc::new(std::sync::Mutex::new(None));
+        let auto_approval_limit_out_clone = Arc::clone(&auto_approval_limit_out);
         let mistake_limit_out: MistakeLimitDecisionSender = Arc::new(std::sync::Mutex::new(None));
         let mistake_limit_out_clone = Arc::clone(&mistake_limit_out);
+        let followup_out: StringDecisionSender = Arc::new(std::sync::Mutex::new(None));
+        let followup_out_clone = Arc::clone(&followup_out);
+        let completion_out: StringDecisionSender = Arc::new(std::sync::Mutex::new(None));
+        let completion_out_clone = Arc::clone(&completion_out);
 
         // Spawn in a dedicated OS thread.
         //
@@ -1612,7 +1775,10 @@ impl AgentAdapter for RooInProcessAdapter {
                     cancel_token,
                     approval_out_clone,
                     api_retry_out_clone,
+                    auto_approval_limit_out_clone,
                     mistake_limit_out_clone,
+                    followup_out_clone,
+                    completion_out_clone,
                     storage_path,
                     api_config_name,
                 );
@@ -1673,6 +1839,20 @@ impl AgentAdapter for RooInProcessAdapter {
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
         for _ in 0..50 {
+            let taken = match auto_approval_limit_out.lock() {
+                Ok(mut guard) => guard.take(),
+                Err(e) => {
+                    warn!("Auto-approval-limit-out mutex poisoned during pickup, recovering: {e}");
+                    e.into_inner().take()
+                }
+            };
+            if let Some(handle) = taken {
+                self.auto_approval_limit_handle = Some(handle);
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        for _ in 0..50 {
             let taken = match mistake_limit_out.lock() {
                 Ok(mut guard) => guard.take(),
                 Err(e) => {
@@ -1682,6 +1862,34 @@ impl AgentAdapter for RooInProcessAdapter {
             };
             if let Some(handle) = taken {
                 self.mistake_limit_handle = Some(handle);
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        for _ in 0..50 {
+            let taken = match followup_out.lock() {
+                Ok(mut guard) => guard.take(),
+                Err(e) => {
+                    warn!("Followup-out mutex poisoned during pickup, recovering: {e}");
+                    e.into_inner().take()
+                }
+            };
+            if let Some(handle) = taken {
+                self.followup_handle = Some(handle);
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        for _ in 0..50 {
+            let taken = match completion_out.lock() {
+                Ok(mut guard) => guard.take(),
+                Err(e) => {
+                    warn!("Completion-out mutex poisoned during pickup, recovering: {e}");
+                    e.into_inner().take()
+                }
+            };
+            if let Some(handle) = taken {
+                self.completion_handle = Some(handle);
                 break;
             }
             std::thread::sleep(std::time::Duration::from_millis(10));
@@ -1719,6 +1927,9 @@ impl AgentAdapter for RooInProcessAdapter {
         if request_id.starts_with("api_retry:") {
             return self.resolve_api_retry(approved).await;
         }
+        if request_id.starts_with("auto_approval_limit:") {
+            return self.resolve_auto_approval_limit(approved).await;
+        }
         if request_id.starts_with("mistake_limit:") {
             return self.resolve_mistake_limit(approved).await;
         }
@@ -1736,7 +1947,10 @@ impl AgentAdapter for RooInProcessAdapter {
         self.worker_handle = None;
         self.approval_handle = None;
         self.api_retry_handle = None;
+        self.auto_approval_limit_handle = None;
         self.mistake_limit_handle = None;
+        self.followup_handle = None;
+        self.completion_handle = None;
 
         self.conversation_history.lock().await.clear();
 
@@ -2459,24 +2673,82 @@ mod tests {
     }
 
     #[test]
-    fn auto_approval_limit_reached_maps_to_recoverable_error() {
+    fn auto_approval_limit_reached_maps_to_permission_request() {
         let event = RooTaskEvent::AutoApprovalLimitReached {
             task_id: "t1".into(),
             approval_type: "Requests".into(),
             approval_count: Some("5".into()),
         };
         let result = map_task_event(&event, SID).expect("should map");
-        if let UnifiedAgentEvent::Error {
-            message,
-            recoverable,
+        if let UnifiedAgentEvent::PermissionRequest {
+            request_id,
+            tool_name,
+            input,
             ..
         } = &result
         {
-            assert!(message.contains("Requests"));
-            assert!(message.contains("5"));
-            assert!(recoverable);
+            assert_eq!(request_id, "auto_approval_limit:t1");
+            assert_eq!(tool_name, "auto_approval_max_req_reached");
+            assert_eq!(input["ask"], "auto_approval_max_req_reached");
+            assert_eq!(input["type"], "Requests");
+            assert_eq!(input["count"], "5");
         } else {
-            panic!("expected Error");
+            panic!("expected PermissionRequest");
+        }
+    }
+
+    #[test]
+    fn followup_question_maps_to_permission_request_with_suggestions() {
+        let event = RooTaskEvent::FollowupQuestion {
+            task_id: "t1".into(),
+            tool_call_id: "tool-1".into(),
+            question_json: serde_json::json!({
+                "question": "Continue?",
+                "suggest": [{"answer": "Yes", "mode": "code"}],
+            })
+            .to_string(),
+        };
+        let result = map_task_event(&event, SID).expect("should map");
+        match result {
+            UnifiedAgentEvent::PermissionRequest {
+                request_id,
+                tool_name,
+                input,
+                ..
+            } => {
+                assert_eq!(request_id, "tool-1");
+                assert_eq!(tool_name, "ask_followup_question");
+                assert_eq!(input["ask"], "followup");
+                assert_eq!(input["question"]["question"], "Continue?");
+                assert_eq!(input["question"]["suggest"][0]["mode"], "code");
+                assert_eq!(input["requires_text_response"], true);
+            }
+            other => panic!("expected PermissionRequest, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn completion_result_maps_to_permission_request() {
+        let event = RooTaskEvent::CompletionResult {
+            task_id: "t1".into(),
+            tool_call_id: "tool-2".into(),
+            completion_text: "Done".into(),
+        };
+        let result = map_task_event(&event, SID).expect("should map");
+        match result {
+            UnifiedAgentEvent::PermissionRequest {
+                request_id,
+                tool_name,
+                input,
+                ..
+            } => {
+                assert_eq!(request_id, "tool-2");
+                assert_eq!(tool_name, "attempt_completion");
+                assert_eq!(input["ask"], "completion_result");
+                assert_eq!(input["result"], "Done");
+                assert_eq!(input["accepts_feedback"], true);
+            }
+            other => panic!("expected PermissionRequest, got {other:?}"),
         }
     }
 
@@ -2669,6 +2941,64 @@ mod tests {
 
         let retry = rx.await.expect("receiver should get retry decision");
         assert!(retry);
+    }
+
+    #[tokio::test]
+    async fn resolve_permission_auto_approval_limit_resolves_bool() {
+        let mut adapter = RooInProcessAdapter::new();
+
+        let (tx, rx) = tokio::sync::oneshot::channel::<bool>();
+        adapter.auto_approval_limit_handle = Some(Arc::new(std::sync::Mutex::new(Some(tx))));
+
+        let result = adapter
+            .resolve_permission(
+                "sid",
+                "auto_approval_limit:t1",
+                PermissionDecision::AllowAll,
+            )
+            .await;
+        assert!(result.is_ok());
+
+        let approved = rx
+            .await
+            .expect("receiver should get auto-approval-limit decision");
+        assert!(approved);
+    }
+
+    #[tokio::test]
+    async fn send_message_resolves_pending_followup_text() {
+        let mut adapter = RooInProcessAdapter::new();
+
+        let (tx, rx) = tokio::sync::oneshot::channel::<String>();
+        adapter.followup_handle = Some(Arc::new(std::sync::Mutex::new(Some(tx))));
+
+        let mut events = adapter
+            .send_message("sid", "Use TypeScript")
+            .await
+            .expect("send_message should resolve followup");
+        assert!(matches!(
+            events.recv().await,
+            Some(UnifiedAgentEvent::Ready)
+        ));
+
+        let response = rx.await.expect("receiver should get followup text");
+        assert_eq!(response, "Use TypeScript");
+    }
+
+    #[tokio::test]
+    async fn resolve_permission_accepts_pending_completion_with_empty_feedback() {
+        let mut adapter = RooInProcessAdapter::new();
+
+        let (tx, rx) = tokio::sync::oneshot::channel::<String>();
+        adapter.completion_handle = Some(Arc::new(std::sync::Mutex::new(Some(tx))));
+
+        let result = adapter
+            .resolve_permission("sid", "tool-2", PermissionDecision::Allow)
+            .await;
+        assert!(result.is_ok());
+
+        let feedback = rx.await.expect("receiver should get completion feedback");
+        assert_eq!(feedback, "");
     }
 
     #[tokio::test]
