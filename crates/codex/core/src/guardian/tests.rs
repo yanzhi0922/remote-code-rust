@@ -66,6 +66,10 @@ use std::time::Duration;
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
 
+fn guardian_snapshot_path() -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/guardian/snapshots")
+}
+
 fn fixed_guardian_parent_session_id() -> ThreadId {
     ThreadId::from_string("11111111-1111-4111-8111-111111111111")
         .expect("fixed parent session id should be a valid UUID")
@@ -859,7 +863,7 @@ async fn build_guardian_prompt_items_explains_network_access_review_scope() -> a
     assert!(!text.contains("Network access to \"example.com\" is blocked by policy."));
 
     let mut settings = Settings::clone_current();
-    settings.set_snapshot_path("snapshots");
+    settings.set_snapshot_path(guardian_snapshot_path());
     settings.set_prepend_module_to_snapshot(false);
     settings.bind(|| {
         assert_snapshot!(
@@ -1333,7 +1337,7 @@ async fn guardian_review_request_layout_matches_model_visible_request_snapshot()
     );
 
     let mut settings = Settings::clone_current();
-    settings.set_snapshot_path("snapshots");
+    settings.set_snapshot_path(guardian_snapshot_path());
     settings.set_prepend_module_to_snapshot(false);
     settings.bind(|| {
         assert_snapshot!(
@@ -1650,7 +1654,7 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
     assert!(!second_user_message.contains("[1] user: Please check the repo visibility"));
 
     let mut settings = Settings::clone_current();
-    settings.set_snapshot_path("snapshots");
+    settings.set_snapshot_path(guardian_snapshot_path());
     settings.set_prepend_module_to_snapshot(false);
     settings.bind(|| {
         assert_snapshot!(

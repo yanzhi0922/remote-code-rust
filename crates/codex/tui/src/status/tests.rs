@@ -121,9 +121,11 @@ fn render_lines(lines: &[Line<'static>]) -> Vec<String> {
 }
 
 fn sanitize_directory(lines: Vec<String>) -> Vec<String> {
+    let version_label = format!("OpenAI Codex (v{})", env!("CARGO_PKG_VERSION"));
     lines
         .into_iter()
         .map(|line| {
+            let line = line.replace(&version_label, "OpenAI Codex (v0.0.0)");
             if let (Some(dir_pos), Some(pipe_idx)) = (line.find("Directory: "), line.rfind('│')) {
                 let prefix = &line[..dir_pos + "Directory: ".len()];
                 let suffix = &line[pipe_idx..];

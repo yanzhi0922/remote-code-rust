@@ -5,6 +5,21 @@ serves the Web/PWA frontend, and stores downloadable app binaries. It must not
 run `remote-code-runner`, `remote-code`, Codex/Roo/Claude agent loops, workspace
 tools, or provider credentials.
 
+## One-Line Relay Install
+
+For a fresh Ubuntu 22.04 host, install the latest GitHub Release artifact with:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/yanzhi0922/remote-code-rust/main/deploy/install-relay.sh | sudo REMOTE_CODE_DOMAIN=remote-code.yz520gzy.top REMOTE_CODE_ACME_EMAIL=admin@example.com bash
+```
+
+The installer downloads the relay-only Linux control-plane artifact, deploys the
+Web/PWA frontend, binds the service to `127.0.0.1:8787`, creates a systemd unit,
+generates the bootstrap secret when needed, and refuses to leave runner/agent
+processes on the relay host.
+
+## Manual Deploy From Local Build
+
 1. Build the Linux `remote-code-control-plane` release binary and `apps/remote-code-gui/dist` on a trusted build machine, then upload only the release binary and built static files. On Windows, use the root [deploy.ps1](../deploy.ps1) script with `-ControlPlaneBin target\x86_64-unknown-linux-gnu\release\remote-code-control-plane`; on Linux/macOS, use [deploy.sh](../deploy.sh). Do not upload a Windows `.exe` as the cloud control-plane binary.
    For the GUI, upload the built directory to a temporary path on the server and then run [deploy-remote-code-gui.sh](deploy-remote-code-gui.sh) so static files land with nginx-safe permissions:
    `sudo bash /opt/remote-code/deploy/tencent-cloud/deploy-remote-code-gui.sh /tmp/remote-code-gui-dist /opt/remote-code/frontend`

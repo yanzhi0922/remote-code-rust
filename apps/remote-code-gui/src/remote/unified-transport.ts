@@ -22,6 +22,8 @@ export interface TransportConfig {
   strategy: TransportStrategyType;
   baseUrl: string;
   runnerBaseUrl?: string | null;
+  /** Direct runner links are an explicit advanced mode; production defaults to relay-only. */
+  allowDirectRunner?: boolean;
   sessionId: string;
   authToken?: string | null;
   /** QUIC-specific */
@@ -163,6 +165,11 @@ export class UnifiedTransport implements TransportHandle {
     try {
       switch (this._strategy) {
         case 'direct_websocket':
+          if (!this.canUseDirectRunner()) {
+            this._strategy = 'server_relay';
+            await this.connectWebSocket(this._config.baseUrl, afterSequence);
+            break;
+          }
           await this.connectWebSocket(this.getStreamBaseUrl('direct'), afterSequence);
           break;
         case 'server_relay':
@@ -245,9 +252,10 @@ export class UnifiedTransport implements TransportHandle {
   }
 
   async probeHealth(): Promise<HealthReport> {
+    const runnerBaseUrl = this.directRunnerBaseUrl();
     const [runner, cp] = await Promise.all([
-      this._config.runnerBaseUrl
-        ? probeEndpointHealth(this._config.runnerBaseUrl, 2000)
+      runnerBaseUrl
+        ? probeEndpointHealth(runnerBaseUrl, 2000)
         : Promise.resolve({ reachable: false, latencyMs: null as number | null, authValid: false }),
       probeEndpointHealth(this._config.baseUrl, 5000),
     ]);
@@ -260,7 +268,7 @@ export class UnifiedTransport implements TransportHandle {
       recommendedStrategy: null,
     };
 
-    if (runner.reachable && runner.authValid) {
+    if (this.canUseDirectRunner() && runner.reachable && runner.authValid) {
       report.recommendedStrategy = 'direct_websocket';
     } else if (cp.reachable && cp.authValid) {
       report.recommendedStrategy = 'server_relay';
@@ -277,10 +285,20 @@ export class UnifiedTransport implements TransportHandle {
   // ── Private methods ────────────────────────────────────────────────────
 
   private getStreamBaseUrl(preference: 'direct' | 'relay'): string {
-    if (preference === 'direct' && this._config.runnerBaseUrl) {
-      return this._config.runnerBaseUrl;
+    const runnerBaseUrl = this.directRunnerBaseUrl();
+    if (preference === 'direct' && runnerBaseUrl) {
+      return runnerBaseUrl;
     }
     return this._config.baseUrl;
+  }
+
+  private canUseDirectRunner(): boolean {
+    return this.directRunnerBaseUrl() !== null;
+  }
+
+  private directRunnerBaseUrl(): string | null {
+    if (this._config.allowDirectRunner !== true) return null;
+    return this._config.runnerBaseUrl?.trim() || null;
   }
 
   private setState(state: ConnectionState): void {
@@ -326,9 +344,9 @@ export class UnifiedTransport implements TransportHandle {
   private async connectHybrid(after: number): Promise<void> {
     const report = await this.probeHealth();
 
-    if (report.runnerReachable && report.runnerLatencyMs !== null) {
+    if (this.canUseDirectRunner() && report.runnerReachable && report.runnerLatencyMs !== null) {
       this._strategy = 'direct_websocket';
-      await this.connectWebSocket(this._config.runnerBaseUrl!, after);
+      await this.connectWebSocket(this.directRunnerBaseUrl()!, after);
     } else {
       this._strategy = 'server_relay';
       await this.connectWebSocket(this._config.baseUrl, after);
@@ -355,9 +373,9 @@ export class UnifiedTransport implements TransportHandle {
       this.notifyMetrics();
       this._handle?.close();
 
-      if (shouldDirect && this._config.runnerBaseUrl) {
+      if (shouldDirect && this.canUseDirectRunner()) {
         this._strategy = 'direct_websocket';
-        this.connectWebSocket(this._config.runnerBaseUrl, this._latestSequence);
+        this.connectWebSocket(this.directRunnerBaseUrl()!, this._latestSequence);
       } else {
         this._strategy = 'server_relay';
         this.connectWebSocket(this._config.baseUrl, this._latestSequence);

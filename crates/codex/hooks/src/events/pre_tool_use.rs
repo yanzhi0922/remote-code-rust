@@ -213,9 +213,13 @@ fn parse_completed(
             }
             Some(exit_code) => {
                 status = HookRunStatus::Failed;
+                let stderr = common::trimmed_non_empty(&run_result.stderr);
                 entries.push(HookOutputEntry {
                     kind: HookOutputEntryKind::Error,
-                    text: format!("hook exited with code {exit_code}"),
+                    text: match stderr {
+                        Some(stderr) => format!("hook exited with code {exit_code}: {stderr}"),
+                        None => format!("hook exited with code {exit_code}"),
+                    },
                 });
             }
             None => {

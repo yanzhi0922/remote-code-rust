@@ -536,7 +536,7 @@ mod tests {
             .get_exec_backend()
             .start(crate::ExecParams {
                 process_id: ProcessId::from("default-env-proc"),
-                argv: vec!["true".to_string()],
+                argv: successful_command(),
                 cwd: std::env::current_dir().expect("read current dir"),
                 env_policy: None,
                 env: Default::default(),
@@ -548,6 +548,20 @@ mod tests {
             .expect("start process");
 
         assert_eq!(response.process.process_id().as_str(), "default-env-proc");
+    }
+
+    #[cfg(windows)]
+    fn successful_command() -> Vec<String> {
+        vec![
+            "cmd.exe".to_string(),
+            "/C".to_string(),
+            "exit 0".to_string(),
+        ]
+    }
+
+    #[cfg(not(windows))]
+    fn successful_command() -> Vec<String> {
+        vec!["true".to_string()]
     }
 
     #[tokio::test]

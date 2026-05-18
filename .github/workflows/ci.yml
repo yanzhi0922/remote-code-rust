@@ -83,7 +83,14 @@ jobs:
         with:
           toolchain: 1.93.1
       - uses: Swatinem/rust-cache@v2
-      - run: cargo test --workspace --all-targets
+      - name: Test workspace
+        if: runner.os != 'Windows'
+        run: cargo test --workspace --all-targets
+      - name: Test workspace with Windows resource limits
+        if: runner.os == 'Windows'
+        env:
+          RUST_TEST_THREADS: "1"
+        run: cargo test --workspace --all-targets --exclude remote-code-gui -j 1
 
   frontend:
     name: Frontend (GUI)

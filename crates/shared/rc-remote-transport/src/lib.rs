@@ -37,7 +37,9 @@ pub mod transport;
 #[cfg(feature = "quic")]
 pub use quic_transport::QuicTransport;
 pub use reconnect::ReconnectPolicy;
-pub use transport::{CommandAck, HealthStatus, RemoteTransport, TransportCommand};
+pub use transport::{
+    CommandAck, HealthStatus, RemoteTransport, TransportApprovalDecision, TransportCommand,
+};
 
 use serde::{Deserialize, Serialize};
 

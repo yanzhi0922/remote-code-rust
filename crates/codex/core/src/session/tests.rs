@@ -1740,7 +1740,9 @@ async fn fork_startup_context_then_first_turn_diff_snapshot() -> anyhow::Result<
     );
 
     let mut settings = insta::Settings::clone_current();
-    settings.set_snapshot_path("snapshots");
+    settings.set_snapshot_path(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/session/snapshots"),
+    );
     settings.set_prepend_module_to_snapshot(false);
     settings.bind(|| {
         insta::assert_snapshot!(

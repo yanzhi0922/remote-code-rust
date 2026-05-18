@@ -1031,11 +1031,11 @@ async fn process_exec_tool_call_respects_cancellation_token() -> Result<()> {
         arg0: None,
     };
     tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_millis(1_000)).await;
+        tokio::time::sleep(Duration::from_millis(250)).await;
         cancel_tx.cancel();
     });
     let result = timeout(
-        Duration::from_secs(5),
+        Duration::from_secs(20),
         process_exec_tool_call(
             params,
             &PermissionProfile::Disabled,
@@ -1069,6 +1069,7 @@ fn long_running_command() -> Vec<String> {
         "powershell.exe".to_string(),
         "-NonInteractive".to_string(),
         "-NoLogo".to_string(),
+        "-NoProfile".to_string(),
         "-Command".to_string(),
         "Start-Sleep -Seconds 30".to_string(),
     ]

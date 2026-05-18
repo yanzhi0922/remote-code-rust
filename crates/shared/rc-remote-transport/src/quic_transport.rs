@@ -11,6 +11,8 @@ use crate::reconnect::ReconnectPolicy;
 use crate::transport::{CommandAck, HealthStatus, RemoteTransport, TransportCommand};
 use crate::{ConnectionState, TransportConfig, TransportEvent, TransportMetrics};
 
+const MAX_QUIC_FRAME_BYTES: usize = 1024 * 1024;
+
 /// QUIC transport using quinn.
 pub struct QuicTransport {
     state: ConnectionState,
@@ -70,7 +72,7 @@ impl RemoteTransport for QuicTransport {
 
         // Build TLS config for QUIC.
         let tls = crate::tls::build_client_tls_config(&crate::TlsConfig {
-            accept_self_signed: cert_fp.is_some() || addr.ip().is_loopback(),
+            accept_self_signed: cert_fp.is_some(),
             cert_fingerprints: cert_fp.map(|fp| vec![fp]).unwrap_or_default(),
             enforce_https: false, // QUIC has its own addressing
         })?;
@@ -96,6 +98,9 @@ impl RemoteTransport for QuicTransport {
             token: config.auth_token.clone(),
             session_id: config.session_id.clone(),
         })?;
+        if auth_payload.len() > MAX_QUIC_FRAME_BYTES {
+            anyhow::bail!("QUIC auth frame too large: {} bytes", auth_payload.len());
+        }
         let mut auth_stream = conn
             .open_uni()
             .await
@@ -115,12 +120,7 @@ impl RemoteTransport for QuicTransport {
         self.event_rx = Some(event_rx);
 
         let cancel_rx = self.cancel.subscribe();
-        tokio::spawn(quic_event_reader(
-            conn,
-            config.auth_token.clone(),
-            event_tx,
-            cancel_rx,
-        ));
+        tokio::spawn(quic_event_reader(conn, event_tx, cancel_rx));
 
         self.state = ConnectionState::Open {
             active_strategy: "quic".into(),
@@ -141,6 +141,9 @@ impl RemoteTransport for QuicTransport {
             .map_err(|e| anyhow::anyhow!("QUIC open stream: {e}"))?;
 
         let payload = serde_json::to_vec(&command)?;
+        if payload.len() > MAX_QUIC_FRAME_BYTES {
+            anyhow::bail!("QUIC command frame too large: {} bytes", payload.len());
+        }
         let len = (payload.len() as u32).to_le_bytes();
         use tokio::io::AsyncWriteExt;
         stream.0.write_all(&len).await?;
@@ -151,6 +154,9 @@ impl RemoteTransport for QuicTransport {
         let mut len_buf = [0u8; 4];
         stream.1.read_exact(&mut len_buf).await?;
         let resp_len = u32::from_le_bytes(len_buf) as usize;
+        if resp_len > MAX_QUIC_FRAME_BYTES {
+            anyhow::bail!("QUIC response frame too large: {resp_len} bytes");
+        }
         let mut resp_buf = vec![0u8; resp_len];
         stream.1.read_exact(&mut resp_buf).await?;
 
@@ -211,7 +217,6 @@ struct QuicAuthMessage {
 /// Read events from a QUIC unidirectional stream.
 async fn quic_event_reader(
     conn: quinn::Connection,
-    auth_token: String,
     tx: mpsc::Sender<TransportEvent>,
     mut cancel: tokio::sync::watch::Receiver<bool>,
 ) {
@@ -227,6 +232,10 @@ async fn quic_event_reader(
                             break;
                         }
                         let len = u32::from_le_bytes(len_buf) as usize;
+                        if len > MAX_QUIC_FRAME_BYTES {
+                            tracing::debug!("QUIC event frame too large: {len} bytes");
+                            break;
+                        }
                         let mut buf = vec![0u8; len];
                         if let Err(e) = tokio::io::AsyncReadExt::read_exact(&mut stream, &mut buf).await {
                             tracing::debug!("QUIC payload read error: {e}");
@@ -252,7 +261,6 @@ async fn quic_event_reader(
             }
         }
     }
-    let _ = auth_token;
 }
 
 fn parse_quic_addr(url: &str) -> anyhow::Result<std::net::SocketAddr> {

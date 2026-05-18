@@ -1051,6 +1051,27 @@ mod tests {
     use tokio_tungstenite::tungstenite::handshake::server::Response as WebSocketResponse;
     use tokio_tungstenite::tungstenite::http::header::AUTHORIZATION;
 
+    const TEST_STACK_SIZE_BYTES: usize = 16 * 1024 * 1024;
+
+    fn run_current_thread_test_with_stack<F>(name: &str, future: F)
+    where
+        F: std::future::Future<Output = ()> + Send + 'static,
+    {
+        let handle = std::thread::Builder::new()
+            .name(name.to_string())
+            .stack_size(TEST_STACK_SIZE_BYTES)
+            .spawn(move || {
+                let runtime = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("test runtime should build");
+                runtime.block_on(Box::pin(future));
+            })
+            .expect("test thread should spawn");
+
+        handle.join().expect("test thread should not panic");
+    }
+
     async fn build_test_config() -> Config {
         match ConfigBuilder::default().build().await {
             Ok(config) => config,
@@ -1314,35 +1335,40 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn threads_started_via_app_server_are_visible_through_typed_requests() {
-        let client = start_test_client(SessionSource::Cli).await;
+    #[test]
+    fn threads_started_via_app_server_are_visible_through_typed_requests() {
+        run_current_thread_test_with_stack(
+            "threads_started_via_app_server_are_visible_through_typed_requests",
+            async {
+                let client = start_test_client(SessionSource::Cli).await;
 
-        let response: ThreadStartResponse = client
-            .request_typed(ClientRequest::ThreadStart {
-                request_id: RequestId::Integer(3),
-                params: ThreadStartParams {
-                    ephemeral: Some(true),
-                    ..ThreadStartParams::default()
-                },
-            })
-            .await
-            .expect("thread/start should succeed");
-        let read = client
-            .request_typed::<codex_app_server_protocol::ThreadReadResponse>(
-                ClientRequest::ThreadRead {
-                    request_id: RequestId::Integer(4),
-                    params: codex_app_server_protocol::ThreadReadParams {
-                        thread_id: response.thread.id.clone(),
-                        include_turns: false,
-                    },
-                },
-            )
-            .await
-            .expect("thread/read should return the newly started thread");
-        assert_eq!(read.thread.id, response.thread.id);
+                let response: ThreadStartResponse = client
+                    .request_typed(ClientRequest::ThreadStart {
+                        request_id: RequestId::Integer(3),
+                        params: ThreadStartParams {
+                            ephemeral: Some(true),
+                            ..ThreadStartParams::default()
+                        },
+                    })
+                    .await
+                    .expect("thread/start should succeed");
+                let read = client
+                    .request_typed::<codex_app_server_protocol::ThreadReadResponse>(
+                        ClientRequest::ThreadRead {
+                            request_id: RequestId::Integer(4),
+                            params: codex_app_server_protocol::ThreadReadParams {
+                                thread_id: response.thread.id.clone(),
+                                include_turns: false,
+                            },
+                        },
+                    )
+                    .await
+                    .expect("thread/read should return the newly started thread");
+                assert_eq!(read.thread.id, response.thread.id);
 
-        client.shutdown().await.expect("shutdown should complete");
+                client.shutdown().await.expect("shutdown should complete");
+            },
+        );
     }
 
     #[tokio::test]

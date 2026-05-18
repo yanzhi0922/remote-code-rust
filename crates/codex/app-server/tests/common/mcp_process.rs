@@ -178,6 +178,11 @@ impl McpProcess {
         cmd.stderr(Stdio::piped());
         cmd.current_dir(codex_home);
         cmd.env("CODEX_HOME", codex_home);
+        cmd.env("HOME", codex_home);
+        cmd.env("USERPROFILE", codex_home);
+        cmd.env("XDG_CONFIG_HOME", codex_home.join(".config"));
+        cmd.env("APPDATA", codex_home.join("AppData").join("Roaming"));
+        cmd.env("LOCALAPPDATA", codex_home.join("AppData").join("Local"));
         cmd.env("RUST_LOG", "warn");
         // Keep integration tests isolated from host managed configuration.
         cmd.env(

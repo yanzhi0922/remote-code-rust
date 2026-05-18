@@ -2244,6 +2244,35 @@ async fn import_plugins_infers_external_official_marketplace_when_missing_from_s
         ),
     )
     .expect("write settings");
+    let installed_marketplace = codex_home
+        .join(".tmp")
+        .join("marketplaces")
+        .join(EXTERNAL_OFFICIAL_MARKETPLACE_NAME);
+    fs::create_dir_all(installed_marketplace.join(".agents").join("plugins"))
+        .expect("create installed marketplace manifest dir");
+    fs::write(
+        installed_marketplace
+            .join(".agents")
+            .join("plugins")
+            .join("marketplace.json"),
+        format!(
+            r#"{{
+          "name": "{EXTERNAL_OFFICIAL_MARKETPLACE_NAME}",
+          "plugins": []
+        }}"#
+        ),
+    )
+    .expect("write installed marketplace manifest");
+    fs::write(
+        codex_home.join("config.toml"),
+        format!(
+            r#"[marketplaces."{EXTERNAL_OFFICIAL_MARKETPLACE_NAME}"]
+source_type = "git"
+source = "https://github.com/{EXTERNAL_OFFICIAL_MARKETPLACE_SOURCE}.git"
+"#
+        ),
+    )
+    .expect("write existing marketplace config");
 
     let outcome = service_for_paths(external_agent_home, codex_home)
         .import_plugins(

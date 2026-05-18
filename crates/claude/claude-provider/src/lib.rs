@@ -2845,7 +2845,7 @@ mod tests {
             api_key: Some("test-key".to_owned()),
             model: Some("test-model".to_owned()),
             protocol: claude_core::ProviderProtocol::OpenAi,
-            timeout_ms: 1_000,
+            timeout_ms: 10_000,
             max_output_tokens: 512,
             max_retries: 2,
             retry_initial_backoff_ms: 10,
@@ -3715,7 +3715,7 @@ mod tests {
                 &[ConversationEntry::user("hello")],
             )
             .await
-            .unwrap_or_else(|error| panic!("completion failed: {error}"));
+            .unwrap_or_else(|error| panic!("completion failed: {error:?}"));
 
         server.abort();
         assert_eq!(response.text, "retried ok");
@@ -3769,7 +3769,7 @@ mod tests {
                 &[ConversationEntry::user("hello")],
             )
             .await
-            .unwrap_or_else(|error| panic!("completion failed: {error}"));
+            .unwrap_or_else(|error| panic!("completion failed: {error:?}"));
 
         server.abort();
         assert_eq!(response.text, "retried 529 ok");

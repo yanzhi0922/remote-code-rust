@@ -15,6 +15,7 @@ Set-Location $RepoRoot
 if ($UseProxy) {
     $env:HTTP_PROXY = $ProxyUrl
     $env:HTTPS_PROXY = $ProxyUrl
+    $env:ALL_PROXY = $ProxyUrl
 }
 
 function Run-Step([string]$Name, [scriptblock]$Command) {
@@ -26,6 +27,11 @@ function Run-Step([string]$Name, [scriptblock]$Command) {
 Run-Step "Git whitespace" { git diff --check }
 
 if (-not $SkipRust) {
+    $previousRustMinStack = $env:RUST_MIN_STACK
+    $previousRustTestThreads = $env:RUST_TEST_THREADS
+    $env:RUST_MIN_STACK = "16777216"
+    $env:RUST_TEST_THREADS = "1"
+    try {
     Run-Step "Rust format" { cargo fmt --all -- --check }
     Run-Step "Control plane check" { cargo check -p remote-code-control-plane --all-targets }
     Run-Step "Runner check" { cargo check -p remote-code-runner --all-targets }
@@ -51,6 +57,23 @@ if (-not $SkipRust) {
             } else {
                 $env:CARGO_PROFILE_TEST_DEBUG = $previousTestDebug
             }
+        }
+    }
+    Run-Step "Rust clippy" { cargo clippy --workspace --all-targets --exclude remote-code-gui -j 1 -- -D warnings }
+    if ($IncludeAudit) {
+        Run-Step "Rust audit" { cargo audit --quiet --no-fetch }
+    }
+    }
+    finally {
+        if ($null -eq $previousRustMinStack) {
+            Remove-Item Env:\RUST_MIN_STACK -ErrorAction SilentlyContinue
+        } else {
+            $env:RUST_MIN_STACK = $previousRustMinStack
+        }
+        if ($null -eq $previousRustTestThreads) {
+            Remove-Item Env:\RUST_TEST_THREADS -ErrorAction SilentlyContinue
+        } else {
+            $env:RUST_TEST_THREADS = $previousRustTestThreads
         }
     }
 }

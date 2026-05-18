@@ -80,7 +80,7 @@ import {
 import { RemoteAuthGate } from './RemoteAuthGate';
 import { RemoteShell, EmptyCard } from './RemoteShell';
 import { loadRemoteSessionBundle } from './transport';
-import { resolveRemoteRunnerBaseUrl, resolveRemoteTransportStrategy } from './transportMode';
+import { isDirectRunnerEnabled, resolveRemoteRunnerBaseUrl, resolveRemoteTransportStrategy } from './transportMode';
 import { useConnection } from './useConnection';
 import type { TransportConfig } from './connection-manager';
 import type {
@@ -677,6 +677,7 @@ export default function RemoteApp() {
             strategy: resolveRemoteTransportStrategy(activeSession),
             baseUrl,
             runnerBaseUrl,
+            allowDirectRunner: isDirectRunnerEnabled(),
             sessionId: selectedSessionId,
             authToken: accessToken,
           };

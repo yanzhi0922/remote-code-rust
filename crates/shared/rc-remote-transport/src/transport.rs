@@ -15,9 +15,18 @@ pub enum TransportCommand {
     Interrupt,
     RespondToApproval {
         approval_id: String,
-        decision: String,
+        decision: TransportApprovalDecision,
         note: Option<String>,
     },
+}
+
+/// Typed approval decision shared by every remote transport.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TransportApprovalDecision {
+    Approved,
+    Denied,
+    Cancelled,
 }
 
 /// Acknowledgement for a command.

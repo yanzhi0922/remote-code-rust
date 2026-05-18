@@ -133,12 +133,27 @@ describe('UnifiedTransport', () => {
     const config = makeConfig({
       strategy: 'direct_websocket',
       runnerBaseUrl: 'https://runner.test',
+      allowDirectRunner: true,
     });
     const transport = new UnifiedTransport(config, cb);
     await transport.connect(0);
 
     expect(transport.state).toBe('open');
     expect(transport.strategy).toBe('direct_websocket');
+    transport.close();
+  });
+
+  it('falls back to relay when direct_websocket is not explicitly allowed', async () => {
+    const cb = makeCallbacks();
+    const config = makeConfig({
+      strategy: 'direct_websocket',
+      runnerBaseUrl: 'https://runner.test',
+    });
+    const transport = new UnifiedTransport(config, cb);
+    await transport.connect(0);
+
+    expect(transport.state).toBe('open');
+    expect(transport.strategy).toBe('server_relay');
     transport.close();
   });
 
@@ -236,6 +251,7 @@ describe('UnifiedTransport', () => {
     const config = makeConfig({
       strategy: 'hybrid',
       runnerBaseUrl: 'https://runner.test',
+      allowDirectRunner: true,
     });
 
     // Mock fetch for health probe — runner reachable
@@ -259,6 +275,7 @@ describe('UnifiedTransport', () => {
     const config = makeConfig({
       strategy: 'hybrid',
       runnerBaseUrl: 'https://runner.test',
+      allowDirectRunner: true,
     });
 
     // Runner unreachable, control plane reachable

@@ -29,9 +29,7 @@ function MobileInitScreen() {
   return (
     <div className="flex h-screen w-screen items-center justify-center bg-rc-bg-base">
       <div className="flex flex-col items-center gap-4">
-        <div className="h-14 w-14 rounded-2xl bg-rc-bg-user-bubble flex items-center justify-center shadow-lg">
-          <span className="text-rc-text-inverse text-xl font-bold">RC</span>
-        </div>
+        <img src="/pwa-icon-192.png" alt="" className="h-14 w-14 rounded-2xl shadow-lg" draggable={false} />
         <div className="flex items-center gap-3 text-rc-text-secondary">
           <div role="status" className="h-5 w-5 rounded-full border-2 border-rc-border-primary border-t-rc-text-primary animate-spin" />
           <span className="text-sm font-medium">正在初始化...</span>

@@ -1,6 +1,24 @@
 # Remote Code Rust
 
+语言 / Languages: [简体中文快速版](README.zh-CN.md) | [English](README.en.md)
+
 高性能 Rust 实现的 AI 编码代理平台，兼容 Claude Code / OpenAI Codex 协议，支持多 Agent 统一管理。
+
+## 一键上手
+
+Windows 桌面端最新 Release：
+
+```powershell
+iwr -UseB https://raw.githubusercontent.com/yanzhi0922/remote-code-rust/main/scripts/install-windows.ps1 | iex
+```
+
+Ubuntu 22.04 中继服务器一行安装：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/yanzhi0922/remote-code-rust/main/deploy/install-relay.sh | sudo REMOTE_CODE_DOMAIN=remote-code.example.com REMOTE_CODE_ACME_EMAIL=admin@example.com bash
+```
+
+中继服务器只运行 control-plane 和 Web/PWA 静态资源，不运行 coding agent、不保存 Provider Key、不保存本地工作区。
 
 ## 项目概览
 
@@ -13,7 +31,7 @@
 | Clippy 状态 | `cargo clippy --workspace -- -D warnings` 是发布门禁 |
 | `unsafe` 代码 | 平台 FFI 允许，CI 通过 clippy / audit / secret scan 约束风险；新增 unsafe 必须 code review |
 | Rust 版本 | 1.93 (Edition 2024) |
-| 许可证 | Proprietary |
+| 许可证 | Public source, proprietary unless separately licensed |
 
 ## 特性
 
@@ -69,7 +87,7 @@
 cargo fmt --all -- --check
 git diff --check
 cargo check --workspace --all-targets
-cargo clippy --workspace -- -D warnings
+cargo clippy --workspace --all-targets -j1 -- -D warnings
 cargo audit --quiet
 cd apps\remote-code-gui
 npm ci

@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
+use std::path::PathBuf;
 
 use codex_config::AbsolutePathBuf;
 use codex_config::ConfigLayerEntry;
@@ -33,6 +34,121 @@ fn cwd() -> AbsolutePathBuf {
     AbsolutePathBuf::current_dir().expect("current dir")
 }
 
+fn quote_for_command(path: &Path) -> String {
+    let path = path.display().to_string();
+    if cfg!(windows) {
+        format!("\"{}\"", path.replace('"', "\\\""))
+    } else {
+        format!("'{}'", path.replace('\'', r#"'\''"#))
+    }
+}
+
+fn quote_for_powershell_literal(path: &Path) -> String {
+    format!("'{}'", path.display().to_string().replace('\'', "''"))
+}
+
+fn hook_script_command(script_path: &Path) -> String {
+    if cfg!(windows) {
+        script_path.display().to_string()
+    } else {
+        format!("python3 {}", quote_for_command(script_path))
+    }
+}
+
+fn hook_test_shell() -> CommandShell {
+    if cfg!(windows) {
+        CommandShell {
+            program: "powershell.exe".to_string(),
+            args: vec![
+                "-NoProfile".to_string(),
+                "-ExecutionPolicy".to_string(),
+                "Bypass".to_string(),
+                "-File".to_string(),
+            ],
+        }
+    } else {
+        CommandShell {
+            program: String::new(),
+            args: Vec::new(),
+        }
+    }
+}
+
+fn write_managed_pre_tool_use_script(managed_dir: &AbsolutePathBuf) -> (PathBuf, AbsolutePathBuf) {
+    let log_path = managed_dir.join("pre_tool_use_log.jsonl");
+    if cfg!(windows) {
+        let script_path = managed_dir.join("pre_tool_use.ps1");
+        fs::write(
+            script_path.as_path(),
+            format!(
+                r#"$payload = [Console]::In.ReadToEnd()
+$parsed = $payload | ConvertFrom-Json
+$line = $parsed | ConvertTo-Json -Compress -Depth 100
+$utf8NoBom = New-Object System.Text.UTF8Encoding $false
+[System.IO.File]::AppendAllText({log_path}, $line + [Environment]::NewLine, $utf8NoBom)
+"#,
+                log_path = quote_for_powershell_literal(log_path.as_path()),
+            ),
+        )
+        .expect("write managed hook script");
+        (script_path.as_path().to_path_buf(), log_path)
+    } else {
+        let script_path = managed_dir.join("pre_tool_use.py");
+        fs::write(
+            script_path.as_path(),
+            format!(
+                r#"import json
+from pathlib import Path
+import sys
+
+payload = json.load(sys.stdin)
+with Path(r"{log_path}").open("a", encoding="utf-8") as handle:
+    handle.write(json.dumps(payload) + "\n")
+"#,
+                log_path = log_path.display(),
+            ),
+        )
+        .expect("write managed hook script");
+        (script_path.as_path().to_path_buf(), log_path)
+    }
+}
+
+fn write_plugin_env_hook_script(plugin_root: &AbsolutePathBuf) -> PathBuf {
+    if cfg!(windows) {
+        let script_path = plugin_root.join("hooks/write_env.ps1");
+        fs::write(
+            script_path.as_path(),
+            r#"$inner = @{
+    plugin = $env:PLUGIN_ROOT
+    claude = $env:CLAUDE_PLUGIN_ROOT
+} | ConvertTo-Json -Compress
+$outer = @{
+    systemMessage = $inner
+} | ConvertTo-Json -Compress
+[Console]::Out.WriteLine($outer)
+"#,
+        )
+        .expect("write hook script");
+        script_path.as_path().to_path_buf()
+    } else {
+        let script_path = plugin_root.join("hooks/write_env.py");
+        fs::write(
+            script_path.as_path(),
+            r#"import json
+import os
+print(json.dumps({
+    "systemMessage": json.dumps({
+        "plugin": os.environ.get("PLUGIN_ROOT"),
+        "claude": os.environ.get("CLAUDE_PLUGIN_ROOT"),
+    })
+}))
+"#,
+        )
+        .expect("write hook script");
+        script_path.as_path().to_path_buf()
+    }
+}
+
 fn managed_hooks_for_current_platform(
     managed_dir: impl AsRef<Path>,
     hooks: HookEventsToml,
@@ -59,23 +175,7 @@ async fn requirements_managed_hooks_execute_from_managed_dir() {
     let managed_dir =
         AbsolutePathBuf::try_from(temp.path().join("managed-hooks")).expect("absolute path");
     fs::create_dir_all(managed_dir.as_path()).expect("create managed hooks dir");
-    let script_path = managed_dir.join("pre_tool_use.py");
-    let log_path = managed_dir.join("pre_tool_use_log.jsonl");
-    fs::write(
-        script_path.as_path(),
-        format!(
-            r#"import json
-from pathlib import Path
-import sys
-
-payload = json.load(sys.stdin)
-with Path(r"{log_path}").open("a", encoding="utf-8") as handle:
-    handle.write(json.dumps(payload) + "\n")
-"#,
-            log_path = log_path.display(),
-        ),
-    )
-    .expect("write managed hook script");
+    let (script_path, log_path) = write_managed_pre_tool_use_script(&managed_dir);
 
     let managed_hooks = managed_hooks_for_current_platform(
         managed_dir.clone(),
@@ -83,7 +183,7 @@ with Path(r"{log_path}").open("a", encoding="utf-8") as handle:
             pre_tool_use: vec![MatcherGroup {
                 matcher: Some("^Bash$".to_string()),
                 hooks: vec![HookHandlerConfig::Command {
-                    command: format!("python3 {}", script_path.display()),
+                    command: hook_script_command(&script_path),
                     timeout_sec: Some(10),
                     r#async: false,
                     status_message: Some("checking".to_string()),
@@ -113,10 +213,7 @@ with Path(r"{log_path}").open("a", encoding="utf-8") as handle:
         Some(&config_layer_stack),
         Vec::new(),
         Vec::new(),
-        CommandShell {
-            program: String::new(),
-            args: Vec::new(),
-        },
+        hook_test_shell(),
     );
 
     assert!(engine.warnings().is_empty());
@@ -163,9 +260,21 @@ with Path(r"{log_path}").open("a", encoding="utf-8") as handle:
         })
         .await;
 
-    assert!(!outcome.should_block);
-    let log_contents = fs::read_to_string(log_path).expect("read managed hook log");
-    assert!(log_contents.contains("\"hook_event_name\": \"PreToolUse\""));
+    assert!(
+        !outcome.should_block,
+        "managed hook events: {:#?}",
+        outcome.hook_events
+    );
+    let log_contents = fs::read_to_string(log_path).unwrap_or_else(|err| {
+        panic!(
+            "read managed hook log: {err}; hook events: {:#?}",
+            outcome.hook_events
+        )
+    });
+    let logged: serde_json::Value =
+        serde_json::from_str(log_contents.lines().next().expect("managed hook log line"))
+            .expect("parse managed hook log");
+    assert_eq!(logged["hook_event_name"], "PreToolUse");
 }
 
 #[test]
@@ -221,10 +330,7 @@ fn user_disablement_filters_non_managed_hooks_but_not_managed_hooks() {
         Some(&config_layer_stack),
         Vec::new(),
         Vec::new(),
-        CommandShell {
-            program: String::new(),
-            args: Vec::new(),
-        },
+        hook_test_shell(),
     );
 
     assert_eq!(engine.handlers.len(), 1);
@@ -533,20 +639,7 @@ async fn plugin_hook_sources_run_with_plugin_env_and_plugin_source() {
         AbsolutePathBuf::try_from(temp.path().join("plugin-data")).expect("plugin data root");
     fs::create_dir_all(plugin_root.join("hooks")).expect("create hooks dir");
     let source_path = plugin_root.join("hooks/hooks.json");
-    let script_path = plugin_root.join("hooks/write_env.py");
-    fs::write(
-        script_path.as_path(),
-        r#"import json
-import os
-print(json.dumps({
-    "systemMessage": json.dumps({
-        "plugin": os.environ.get("PLUGIN_ROOT"),
-        "claude": os.environ.get("CLAUDE_PLUGIN_ROOT"),
-    })
-}))
-"#,
-    )
-    .expect("write hook script");
+    let script_path = write_plugin_env_hook_script(&plugin_root);
     let plugin_id = PluginId::parse("demo-plugin@test-marketplace").expect("plugin id");
     let plugin_hook_sources = vec![PluginHookSource {
         plugin_id,
@@ -558,7 +651,7 @@ print(json.dumps({
             pre_tool_use: vec![MatcherGroup {
                 matcher: Some("Bash".to_string()),
                 hooks: vec![HookHandlerConfig::Command {
-                    command: format!("python3 {}", script_path.display()),
+                    command: hook_script_command(&script_path),
                     timeout_sec: Some(10),
                     r#async: false,
                     status_message: None,
@@ -572,10 +665,7 @@ print(json.dumps({
         /*config_layer_stack*/ None,
         plugin_hook_sources.clone(),
         Vec::new(),
-        CommandShell {
-            program: String::new(),
-            args: Vec::new(),
-        },
+        hook_test_shell(),
     );
 
     let preview = engine.preview_pre_tool_use(&PreToolUseRequest {
@@ -624,7 +714,12 @@ print(json.dumps({
 
     assert_eq!(outcome.hook_events.len(), 1);
     assert_eq!(outcome.hook_events[0].run.source, HookSource::Plugin);
-    assert_eq!(outcome.hook_events[0].run.status, HookRunStatus::Completed);
+    assert_eq!(
+        outcome.hook_events[0].run.status,
+        HookRunStatus::Completed,
+        "plugin hook events: {:#?}",
+        outcome.hook_events
+    );
     assert_eq!(outcome.hook_events[0].run.entries.len(), 1);
     assert_eq!(
         outcome.hook_events[0].run.entries[0].kind,

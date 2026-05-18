@@ -1,6 +1,6 @@
 {
-  "name": "remote-code",
-  "short_name": "remote-code",
+  "name": "Remote Code",
+  "short_name": "Remote Code",
   "start_url": "/?mode=remote",
   "display": "standalone",
   "background_color": "#f4efe4",
@@ -8,10 +8,34 @@
   "description": "Self-hosted remote shell for remote-code sessions, approvals, and artifacts.",
   "icons": [
     {
-      "src": "/pwa-icon.png",
+      "src": "/pwa-icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/pwa-icon-512.png",
       "sizes": "512x512",
       "type": "image/png",
-      "purpose": "any maskable"
+      "purpose": "any"
+    },
+    {
+      "src": "/pwa-maskable-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "/pwa-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "/pwa-monochrome.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "monochrome"
     }
   ]
 }

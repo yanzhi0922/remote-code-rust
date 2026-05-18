@@ -406,78 +406,71 @@ fn filter_experimental_type_fields_ts_contents(
 
 fn filter_experimental_schema(bundle: &mut Value) -> Result<()> {
     let registered_fields = experimental_fields();
-    filter_experimental_fields_in_root(bundle, &registered_fields);
-    filter_experimental_fields_in_definitions(bundle, &registered_fields);
+    filter_experimental_fields_in_schema_tree(bundle, &registered_fields);
     prune_experimental_methods(bundle, EXPERIMENTAL_CLIENT_METHODS);
     remove_experimental_method_type_definitions(bundle);
     Ok(())
 }
 
-fn filter_experimental_fields_in_root(
+fn filter_experimental_fields_in_schema_tree(
     schema: &mut Value,
     experimental_fields: &[&'static crate::experimental_api::ExperimentalField],
 ) {
-    let Some(title) = schema.get("title").and_then(Value::as_str) else {
-        return;
-    };
-    let title = title.to_string();
+    filter_experimental_fields_in_schema_tree_named(schema, None, experimental_fields);
+}
+
+fn filter_experimental_fields_in_schema_tree_named(
+    schema: &mut Value,
+    schema_name: Option<&str>,
+    experimental_fields: &[&'static crate::experimental_api::ExperimentalField],
+) {
+    if schema.is_object() {
+        filter_experimental_fields_in_schema_node(schema, schema_name, experimental_fields);
+    }
+
+    match schema {
+        Value::Object(map) => {
+            for (child_name, child) in map.iter_mut() {
+                filter_experimental_fields_in_schema_tree_named(
+                    child,
+                    Some(child_name),
+                    experimental_fields,
+                );
+            }
+        }
+        Value::Array(items) => {
+            for child in items {
+                filter_experimental_fields_in_schema_tree_named(
+                    child,
+                    schema_name,
+                    experimental_fields,
+                );
+            }
+        }
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {}
+    }
+}
+
+fn filter_experimental_fields_in_schema_node(
+    schema: &mut Value,
+    schema_name: Option<&str>,
+    experimental_fields: &[&'static crate::experimental_api::ExperimentalField],
+) {
+    let title = schema
+        .get("title")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
 
     for field in experimental_fields {
-        if title != field.type_name {
+        let matches_title = title.as_deref() == Some(field.type_name);
+        let matches_name = schema_name
+            .as_ref()
+            .is_some_and(|name| definition_matches_type(name, field.type_name));
+        if !matches_title && !matches_name {
             continue;
         }
         remove_property_from_schema(schema, field.field_name);
     }
-}
-
-fn filter_experimental_fields_in_definitions(
-    bundle: &mut Value,
-    experimental_fields: &[&'static crate::experimental_api::ExperimentalField],
-) {
-    let Some(definitions) = bundle.get_mut("definitions").and_then(Value::as_object_mut) else {
-        return;
-    };
-
-    filter_experimental_fields_in_definitions_map(definitions, experimental_fields);
-}
-
-fn filter_experimental_fields_in_definitions_map(
-    definitions: &mut Map<String, Value>,
-    experimental_fields: &[&'static crate::experimental_api::ExperimentalField],
-) {
-    for (def_name, def_schema) in definitions.iter_mut() {
-        if is_namespace_map(def_schema) {
-            if let Some(namespace_defs) = def_schema.as_object_mut() {
-                filter_experimental_fields_in_definitions_map(namespace_defs, experimental_fields);
-            }
-            continue;
-        }
-
-        for field in experimental_fields {
-            if !definition_matches_type(def_name, field.type_name) {
-                continue;
-            }
-            remove_property_from_schema(def_schema, field.field_name);
-        }
-    }
-}
-
-fn is_namespace_map(value: &Value) -> bool {
-    let Value::Object(map) = value else {
-        return false;
-    };
-
-    if map.keys().any(|key| key.starts_with('$')) {
-        return false;
-    }
-
-    let looks_like_schema = map.contains_key("type")
-        || map.contains_key("properties")
-        || map.contains_key("anyOf")
-        || map.contains_key("oneOf")
-        || map.contains_key("allOf");
-
-    !looks_like_schema && map.values().all(Value::is_object)
 }
 
 fn definition_matches_type(def_name: &str, type_name: &str) -> bool {
@@ -622,39 +615,38 @@ fn remove_generated_type_entries(
 
 fn remove_experimental_method_type_definitions(bundle: &mut Value) {
     let type_names = experimental_method_types();
-    let Some(definitions) = bundle.get_mut("definitions").and_then(Value::as_object_mut) else {
-        return;
-    };
-    remove_experimental_method_type_definitions_map(definitions, &type_names);
+    remove_experimental_method_type_definitions_inner(bundle, &type_names);
 }
 
-fn remove_experimental_method_type_definitions_map(
-    definitions: &mut Map<String, Value>,
+fn remove_experimental_method_type_definitions_inner(
+    value: &mut Value,
     experimental_type_names: &HashSet<String>,
 ) {
-    let keys_to_remove: Vec<String> = definitions
-        .keys()
-        .filter(|def_name| {
-            experimental_type_names
-                .iter()
-                .any(|type_name| definition_matches_type(def_name, type_name))
-        })
-        .cloned()
-        .collect();
-    for key in keys_to_remove {
-        definitions.remove(&key);
-    }
+    match value {
+        Value::Object(map) => {
+            let keys_to_remove: Vec<String> = map
+                .keys()
+                .filter(|def_name| {
+                    experimental_type_names
+                        .iter()
+                        .any(|type_name| definition_matches_type(def_name, type_name))
+                })
+                .cloned()
+                .collect();
+            for key in keys_to_remove {
+                map.remove(&key);
+            }
 
-    for value in definitions.values_mut() {
-        if !is_namespace_map(value) {
-            continue;
+            for child in map.values_mut() {
+                remove_experimental_method_type_definitions_inner(child, experimental_type_names);
+            }
         }
-        if let Some(namespace_defs) = value.as_object_mut() {
-            remove_experimental_method_type_definitions_map(
-                namespace_defs,
-                experimental_type_names,
-            );
+        Value::Array(items) => {
+            for child in items {
+                remove_experimental_method_type_definitions_inner(child, experimental_type_names);
+            }
         }
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {}
     }
 }
 
@@ -2889,10 +2881,17 @@ permissionProfile?: PermissionProfile | null};
             .expect("flat v2 ClientRequest should remain a oneOf")
             .iter()
             .filter_map(|variant| {
-                variant["properties"]["method"]["enum"]
-                    .as_array()
-                    .and_then(|values| values.first())
+                let method = &variant["properties"]["method"];
+                method
+                    .get("const")
                     .and_then(Value::as_str)
+                    .or_else(|| {
+                        method
+                            .get("enum")
+                            .and_then(Value::as_array)
+                            .and_then(|values| values.first())
+                            .and_then(Value::as_str)
+                    })
                     .map(str::to_string)
             })
             .collect();
@@ -2915,10 +2914,17 @@ permissionProfile?: PermissionProfile | null};
                 .expect("flat v2 ServerNotification should remain a oneOf")
                 .iter()
                 .filter_map(|variant| {
-                    variant["properties"]["method"]["enum"]
-                        .as_array()
-                        .and_then(|values| values.first())
+                    let method = &variant["properties"]["method"];
+                    method
+                        .get("const")
                         .and_then(Value::as_str)
+                        .or_else(|| {
+                            method
+                                .get("enum")
+                                .and_then(Value::as_array)
+                                .and_then(|values| values.first())
+                                .and_then(Value::as_str)
+                        })
                         .map(str::to_string)
                 })
                 .collect();

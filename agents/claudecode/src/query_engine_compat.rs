@@ -2788,6 +2788,7 @@ mod tests {
     };
     use serde_json::json;
     use std::collections::BTreeMap;
+    use std::future::Future;
     use std::process::Command as ProcessCommand;
     use std::sync::OnceLock;
     use tempfile::{TempDir, tempdir};
@@ -2904,6 +2905,29 @@ mod tests {
             StaticPermissionBroker::from_mode(config.permission_mode),
             Vec::new(),
         ))
+    }
+
+    fn allow_all_broker() -> Arc<dyn PermissionBroker> {
+        Arc::new(StaticPermissionBroker::new(true))
+    }
+
+    fn run_large_stack_tokio_test<Fut>(test_body: impl FnOnce() -> Fut + Send + 'static)
+    where
+        Fut: Future<Output = ()> + 'static,
+    {
+        std::thread::Builder::new()
+            .name("query-engine-compat-test".to_owned())
+            .stack_size(16 * 1024 * 1024)
+            .spawn(move || {
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("tokio runtime");
+                rt.block_on(test_body());
+            })
+            .expect("spawn query engine compat test")
+            .join()
+            .expect("query engine compat test panicked");
     }
 
     #[tokio::test]
@@ -4972,7 +4996,7 @@ while True:
                 &store,
                 Arc::new(DynamicMcpRoundTripBackend),
                 DiscoveredToolScope::default(),
-                mock_broker(&config),
+                allow_all_broker(),
                 None,
                 &discovery,
                 &mut hook_state,
@@ -4988,8 +5012,18 @@ while True:
         configure_tool_runtime_policy(original_policy).expect("restore runtime policy");
 
         let (outcome, conversation) = run_result.expect("compat run should succeed");
-        assert!(outcome.text.contains("tokio"));
-        assert!(outcome.text.contains("library"));
+        assert!(
+            outcome.text.contains("tokio"),
+            "outcome text: {:?}; conversation: {:?}",
+            outcome.text,
+            conversation
+        );
+        assert!(
+            outcome.text.contains("library"),
+            "outcome text: {:?}; conversation: {:?}",
+            outcome.text,
+            conversation
+        );
         assert!(conversation.iter().any(|entry| {
             entry.role == ConversationRole::Tool
                 && entry.tool_call_id.as_deref() == Some("mcp-dynamic-1")
@@ -5213,34 +5247,36 @@ while True:
         assert_eq!(streaming_usage["usage"]["output_tokens"], 4);
     }
 
-    #[tokio::test]
-    async fn compat_run_permission_denials_include_tool_input() {
-        let (_tempdir, config, store) = mock_config_and_store();
-        let discovery = RuntimeHookDiscovery::default();
-        let mut conversation =
-            initialize_conversation(&store, &config, Some("run command")).expect("conversation");
-        let mut hook_state = HookRunState::load(&store, config.session_id).expect("hook state");
+    #[test]
+    fn compat_run_permission_denials_include_tool_input() {
+        run_large_stack_tokio_test(|| async {
+            let (_tempdir, config, store) = mock_config_and_store();
+            let discovery = RuntimeHookDiscovery::default();
+            let mut conversation = initialize_conversation(&store, &config, Some("run command"))
+                .expect("conversation");
+            let mut hook_state = HookRunState::load(&store, config.session_id).expect("hook state");
 
-        let outcome = run_prompt_with_query_engine_compat(
-            &config,
-            &store,
-            Arc::new(PermissionDeniedCommandBackend),
-            DiscoveredToolScope::default(),
-            Arc::new(DenyCommandBroker),
-            None,
-            &discovery,
-            &mut hook_state,
-            &mut conversation,
-            "run command",
-        )
-        .await
-        .expect("compat run should recover from denied command");
+            let outcome = run_prompt_with_query_engine_compat(
+                &config,
+                &store,
+                Arc::new(PermissionDeniedCommandBackend),
+                DiscoveredToolScope::default(),
+                Arc::new(DenyCommandBroker),
+                None,
+                &discovery,
+                &mut hook_state,
+                &mut conversation,
+                "run command",
+            )
+            .await
+            .expect("compat run should recover from denied command");
 
-        assert_eq!(outcome.permission_denials.len(), 1);
-        assert_eq!(outcome.permission_denials[0]["tool_name"], "bash_command");
-        assert_eq!(
-            outcome.permission_denials[0]["tool_input"]["command"],
-            "echo hi"
-        );
+            assert_eq!(outcome.permission_denials.len(), 1);
+            assert_eq!(outcome.permission_denials[0]["tool_name"], "bash_command");
+            assert_eq!(
+                outcome.permission_denials[0]["tool_input"]["command"],
+                "echo hi"
+            );
+        });
     }
 }

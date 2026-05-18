@@ -90,7 +90,7 @@ import {
 } from './i18n';
 import { appendRemoteTimelineEvent, resolveRemoteSessionTitle } from '../session/normalize/fromRemote';
 import { loadRemoteSessionBundle } from './transport';
-import { resolveRemoteRunnerBaseUrl, resolveRemoteTransportStrategy } from './transportMode';
+import { isDirectRunnerEnabled, resolveRemoteRunnerBaseUrl, resolveRemoteTransportStrategy } from './transportMode';
 import { useConnection } from './useConnection';
 import type { TransportConfig } from './connection-manager';
 import type {
@@ -494,6 +494,7 @@ export default function MobileRemoteApp() {
             strategy: resolveRemoteTransportStrategy(activeSession),
             baseUrl,
             runnerBaseUrl,
+            allowDirectRunner: isDirectRunnerEnabled(),
             sessionId: selectedSessionId,
             authToken: accessToken,
           };

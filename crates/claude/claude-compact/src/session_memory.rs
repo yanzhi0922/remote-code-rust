@@ -474,7 +474,9 @@ fn is_compact_boundary_message(message: &Message) -> bool {
 #[cfg(test)]
 mod tests {
     use parking_lot::Mutex;
-    use std::sync::Arc;
+    use std::ffi::OsString;
+    use std::path::PathBuf;
+    use std::sync::{Arc, OnceLock};
 
     use claude_config::settings_layers::RuntimeOverrides;
     use claude_config::{ProviderOverrides, load_runtime_config};
@@ -492,20 +494,34 @@ mod tests {
     };
     use claude_session::session_memory::{
         DEFAULT_SESSION_MEMORY_TEMPLATE, SessionMemoryState, ensure_session_memory_file,
-        session_memory_path,
+        project_dir, session_memory_path,
     };
 
     struct TestRuntime {
+        _env_guard: parking_lot::MutexGuard<'static, ()>,
         _tempdir: TempDir,
         config: claude_config::RuntimeConfig,
+        cleanup_project_dir: PathBuf,
+        previous_claude_config_dir: Option<OsString>,
+    }
+
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
     }
 
     fn test_runtime() -> TestRuntime {
+        let env_guard = env_lock().lock();
         let tempdir = tempdir().expect("tempdir");
         let cwd = tempdir.path().join("workspace");
         let profile = tempdir.path().join(".remote-code-rust");
         std::fs::create_dir_all(&cwd).expect("cwd");
         std::fs::create_dir_all(&profile).expect("profile");
+        let previous_claude_config_dir = std::env::var_os("CLAUDE_CONFIG_DIR");
+        // These tests exercise claude-session helpers that intentionally read
+        // Claude's global config directory. Keep that global lookup scoped to
+        // the temp profile so parallel workspace tests cannot touch user state.
+        unsafe { std::env::set_var("CLAUDE_CONFIG_DIR", &profile) };
 
         let config = load_runtime_config(
             Some(cwd),
@@ -523,10 +539,24 @@ mod tests {
             RuntimeOverrides::default(),
         )
         .expect("runtime config");
+        let cleanup_project_dir = project_dir(&config.cwd);
 
         TestRuntime {
+            _env_guard: env_guard,
             _tempdir: tempdir,
             config,
+            cleanup_project_dir,
+            previous_claude_config_dir,
+        }
+    }
+
+    impl Drop for TestRuntime {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.cleanup_project_dir);
+            match &self.previous_claude_config_dir {
+                Some(value) => unsafe { std::env::set_var("CLAUDE_CONFIG_DIR", value) },
+                None => unsafe { std::env::remove_var("CLAUDE_CONFIG_DIR") },
+            }
         }
     }
 
@@ -579,7 +609,7 @@ mod tests {
         let memory_path = ensure_session_memory_file(&runtime.config).expect("memory path");
         std::fs::write(&memory_path, DEFAULT_SESSION_MEMORY_TEMPLATE).expect("template write");
         let context = super::SessionMemoryCompactFileContext {
-            runtime_config: runtime.config,
+            runtime_config: runtime.config.clone(),
             state: Arc::new(Mutex::new(SessionMemoryState::default())),
         };
         let result = load_session_memory_for_compact(&context);

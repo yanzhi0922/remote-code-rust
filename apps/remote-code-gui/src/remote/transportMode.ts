@@ -12,11 +12,18 @@ export function resolveRemoteTransportMode(): RemoteTransportMode {
 }
 
 export function resolveRemoteRunnerBaseUrl(session: RemoteSessionRecord | null): string | null {
+  if (!isDirectRunnerEnabled()) {
+    return null;
+  }
   const mode = resolveRemoteTransportMode();
   if (mode === 'relay_only') {
     return null;
   }
   return session?.owner_runner_public_base_url?.trim() || null;
+}
+
+export function isDirectRunnerEnabled(): boolean {
+  return import.meta.env.VITE_REMOTE_CODE_ALLOW_DIRECT_RUNNER?.trim().toLowerCase() === 'true';
 }
 
 export function resolveRemoteTransportStrategy(

@@ -1,5 +1,4 @@
 import {
-  Bot,
   MessageSquare,
   Settings2,
   Moon,
@@ -24,8 +23,8 @@ export function ActivityBar({ activeTab, onTabChange }: ActivityBarProps) {
   return (
     <div className="flex h-full w-[88px] shrink-0 flex-col items-center justify-center px-4 py-5">
       <div className="flex min-h-[520px] w-[64px] flex-col items-center rounded-[32px] border border-white/80 bg-white/90 py-4 shadow-[0_24px_70px_rgba(15,23,42,0.16)] backdrop-blur-xl dark:border-rc-border-primary dark:bg-rc-bg-surface/90">
-        <div className="mb-5 flex h-11 w-11 items-center justify-center rounded-[22px] bg-[linear-gradient(135deg,#2563eb_0%,#0891b2_100%)] text-white shadow-[0_14px_28px_rgba(37,99,235,0.28)]">
-          <Bot size={22} strokeWidth={2.2} />
+        <div className="mb-5 flex h-11 w-11 items-center justify-center rounded-[22px] bg-[#111827] shadow-[0_14px_28px_rgba(37,99,235,0.28)]">
+          <img src="/brand-mark.svg" alt="" className="h-8 w-8" draggable={false} />
         </div>
 
         <div className="flex flex-col items-center gap-2">

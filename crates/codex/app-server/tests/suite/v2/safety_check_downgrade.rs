@@ -462,6 +462,9 @@ model_provider = "mock_provider"
 remote_models = false
 personality = true
 
+[skills.bundled]
+enabled = false
+
 [model_providers.mock_provider]
 name = "Mock provider for test"
 base_url = "{server_uri}/v1"

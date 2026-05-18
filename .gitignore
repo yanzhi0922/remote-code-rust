@@ -43,6 +43,7 @@ output/
 # Claude Code session files
 .claude/scheduled_tasks.lock
 .claude/scheduled_tasks.json
+.runner-profile/
 
 # One-off scripts with credentials
 gh-push-db.js

@@ -633,3 +633,10 @@ unwrap_used = "allow"
 [profile.release]
 lto = "thin"
 codegen-units = 1
+
+[profile.test]
+# The workspace pulls in large native/FFI dependencies such as rusty_v8 and
+# WebView/Tauri. Full Windows test builds with default debug info can exhaust
+# pagefile/PDB/disk space before tests start, so keep test artifacts lean.
+debug = 0
+incremental = false

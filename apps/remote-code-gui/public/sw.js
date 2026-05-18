@@ -1,7 +1,18 @@
 const SERVICE_WORKER_VERSION =
   new URL(self.location.href).searchParams.get('v') ?? 'dev';
 const CACHE_NAME = `remote-code-gui-${SERVICE_WORKER_VERSION}`;
-const APP_SHELL = ['/index.html', '/manifest.webmanifest', '/pwa-icon.png'];
+const APP_SHELL = [
+  '/index.html',
+  '/manifest.webmanifest',
+  '/favicon.svg',
+  '/favicon.ico',
+  '/apple-touch-icon.png',
+  '/pwa-icon-192.png',
+  '/pwa-icon-512.png',
+  '/pwa-maskable-192.png',
+  '/pwa-maskable-512.png',
+  '/brand-mark.svg',
+];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(

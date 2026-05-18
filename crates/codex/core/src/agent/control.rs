@@ -302,6 +302,13 @@ impl AgentControl {
         )
         .await;
 
+        if matches!(
+            notification_source,
+            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn { .. }))
+        ) {
+            new_thread.thread.ensure_rollout_materialized().await;
+        }
+
         self.send_input(new_thread.thread_id, initial_operation)
             .await?;
         if !new_thread.thread.enabled(Feature::MultiAgentV2) {

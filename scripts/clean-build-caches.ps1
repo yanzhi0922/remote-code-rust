@@ -9,6 +9,25 @@ $ErrorActionPreference = "Stop"
 $RepoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 Set-Location $RepoRoot
 
+function Remove-WorkspacePath([string]$RelativePath, [switch]$Recurse) {
+    $fullPath = Join-Path $RepoRoot $RelativePath
+    if (-not (Test-Path -LiteralPath $fullPath)) {
+        return
+    }
+
+    $resolved = (Resolve-Path -LiteralPath $fullPath).Path
+    if (-not $resolved.StartsWith($RepoRoot.Path, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "Refusing to remove path outside repository: $resolved"
+    }
+
+    Write-Host "Removing $RelativePath"
+    if ($Recurse) {
+        Remove-Item -LiteralPath $resolved -Recurse -Force -ErrorAction Stop
+    } else {
+        Remove-Item -LiteralPath $resolved -Force -ErrorAction Stop
+    }
+}
+
 $paths = @(
     "apps\remote-code-gui\dist",
     "target\deploy"
@@ -27,7 +46,13 @@ if ($Aggressive) {
         "target\debug\incremental",
         "target\release\build",
         "target\release\deps",
-        "target\release\incremental"
+        "target\release\incremental",
+        "crates\codex\target\debug\build",
+        "crates\codex\target\debug\deps",
+        "crates\codex\target\debug\incremental",
+        "crates\codex\target\release\build",
+        "crates\codex\target\release\deps",
+        "crates\codex\target\release\incremental"
     )
 }
 
@@ -36,16 +61,13 @@ if ($RemoveReleaseArtifacts) {
         "target\release\remote-code-gui.exe",
         "target\release\remote-code-control-plane.exe",
         "target\release\remote-code-control-plane",
-        "target\release\bundle"
+        "target\release\bundle",
+        "crates\codex\target\release\bundle"
     )
 }
 
 foreach ($path in $paths) {
-    $fullPath = Join-Path $RepoRoot $path
-    if (Test-Path -LiteralPath $fullPath) {
-        Write-Host "Removing $path"
-        Remove-Item -LiteralPath $fullPath -Recurse -Force -ErrorAction Stop
-    }
+    Remove-WorkspacePath $path -Recurse
 }
 
 $staleFilePatterns = @("*.pdb")
@@ -53,7 +75,18 @@ if ($RemoveCargoDepInfo) {
     $staleFilePatterns += "*.d"
 }
 
-Get-ChildItem -Path (Join-Path $RepoRoot "target") -Recurse -Include $staleFilePatterns -File -ErrorAction SilentlyContinue |
+$staleRoots = @("target", "crates\codex\target")
+foreach ($staleRoot in $staleRoots) {
+    $fullStaleRoot = Join-Path $RepoRoot $staleRoot
+    if (-not (Test-Path -LiteralPath $fullStaleRoot)) {
+        continue
+    }
+    $resolvedStaleRoot = (Resolve-Path -LiteralPath $fullStaleRoot).Path
+    if (-not $resolvedStaleRoot.StartsWith($RepoRoot.Path, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "Refusing to scan path outside repository: $resolvedStaleRoot"
+    }
+
+    Get-ChildItem -Path $resolvedStaleRoot -Recurse -Include $staleFilePatterns -File -ErrorAction SilentlyContinue |
     Where-Object {
         -not $_.FullName.Contains("\target\release\bundle\")
     } |
@@ -61,5 +94,6 @@ Get-ChildItem -Path (Join-Path $RepoRoot "target") -Recurse -Include $staleFileP
         Write-Host "Removing $($_.FullName.Substring($RepoRoot.Path.Length + 1))"
         Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue
     }
+}
 
 Write-Host "Cache cleanup complete."
