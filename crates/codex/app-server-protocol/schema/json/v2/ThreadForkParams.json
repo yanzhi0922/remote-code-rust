@@ -1,8 +1,7 @@
 {
-  "$schema": "http://json-schema.org/draft-07/schema#",
-  "definitions": {
+  "$defs": {
     "AbsolutePathBuf": {
-      "description": "A path that is guaranteed to be absolute and normalized (though it is not guaranteed to be canonicalized or exist on the filesystem).\n\nIMPORTANT: When deserializing an `AbsolutePathBuf`, a base path must be set using [AbsolutePathBufGuard::new]. If no base path is set, the deserialization will fail unless the path being deserialized is already absolute.",
+      "description": "A path that is guaranteed to be absolute and normalized (though it is not\nguaranteed to be canonicalized or exist on the filesystem).\n\nIMPORTANT: When deserializing an `AbsolutePathBuf`, a base path must be set\nusing [AbsolutePathBufGuard::new]. If no base path is set, the\ndeserialization will fail unless the path being deserialized is already\nabsolute.",
       "type": "string"
     },
     "ApprovalsReviewer": {
@@ -49,9 +48,9 @@
                 }
               },
               "required": [
-                "mcp_elicitations",
+                "sandbox_approval",
                 "rules",
-                "sandbox_approval"
+                "mcp_elicitations"
               ],
               "type": "object"
             }
@@ -70,19 +69,17 @@
           "description": "Additional concrete directory that should be writable.",
           "properties": {
             "path": {
-              "$ref": "#/definitions/AbsolutePathBuf"
+              "$ref": "#/$defs/AbsolutePathBuf"
             },
             "type": {
-              "enum": [
-                "additionalWritableRoot"
-              ],
+              "const": "additionalWritableRoot",
               "title": "AdditionalWritableRootPermissionProfileModificationParamsType",
               "type": "string"
             }
           },
           "required": [
-            "path",
-            "type"
+            "type",
+            "path"
           ],
           "title": "AdditionalWritableRootPermissionProfileModificationParams",
           "type": "object"
@@ -92,14 +89,14 @@
     "PermissionProfileSelectionParams": {
       "oneOf": [
         {
-          "description": "Select a named built-in or user-defined profile and optionally apply bounded modifications that Codex knows how to validate.",
+          "description": "Select a named built-in or user-defined profile and optionally apply\nbounded modifications that Codex knows how to validate.",
           "properties": {
             "id": {
               "type": "string"
             },
             "modifications": {
               "items": {
-                "$ref": "#/definitions/PermissionProfileModificationParams"
+                "$ref": "#/$defs/PermissionProfileModificationParams"
               },
               "type": [
                 "array",
@@ -107,16 +104,14 @@
               ]
             },
             "type": {
-              "enum": [
-                "profile"
-              ],
+              "const": "profile",
               "title": "ProfilePermissionProfileSelectionParamsType",
               "type": "string"
             }
           },
           "required": [
-            "id",
-            "type"
+            "type",
+            "id"
           ],
           "title": "ProfilePermissionProfileSelectionParams",
           "type": "object"
@@ -139,12 +134,13 @@
       "type": "string"
     }
   },
-  "description": "There are two ways to fork a thread: 1. By thread_id: load the thread from disk by thread_id and fork it into a new thread. 2. By path: load the thread from disk by path and fork it into a new thread.\n\nIf using path, the thread_id param will be ignored.\n\nPrefer using thread_id whenever possible.",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "There are two ways to fork a thread:\n1. By thread_id: load the thread from disk by thread_id and fork it into a new thread.\n2. By path: load the thread from disk by path and fork it into a new thread.\n\nIf using path, the thread_id param will be ignored.\n\nPrefer using thread_id whenever possible.",
   "properties": {
     "approvalPolicy": {
       "anyOf": [
         {
-          "$ref": "#/definitions/AskForApproval"
+          "$ref": "#/$defs/AskForApproval"
         },
         {
           "type": "null"
@@ -154,13 +150,13 @@
     "approvalsReviewer": {
       "anyOf": [
         {
-          "$ref": "#/definitions/ApprovalsReviewer"
+          "$ref": "#/$defs/ApprovalsReviewer"
         },
         {
           "type": "null"
         }
       ],
-      "description": "Override where approval requests are routed for review on this thread and subsequent turns."
+      "description": "Override where approval requests are routed for review on this thread\nand subsequent turns."
     },
     "baseInstructions": {
       "type": [
@@ -206,7 +202,7 @@
     "sandbox": {
       "anyOf": [
         {
-          "$ref": "#/definitions/SandboxMode"
+          "$ref": "#/$defs/SandboxMode"
         },
         {
           "type": "null"
@@ -216,14 +212,7 @@
     "serviceTier": {
       "anyOf": [
         {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/ServiceTier"
-            },
-            {
-              "type": "null"
-            }
-          ]
+          "$ref": "#/$defs/ServiceTier"
         },
         {
           "type": "null"

@@ -1,8 +1,7 @@
 {
-  "$schema": "http://json-schema.org/draft-07/schema#",
-  "definitions": {
+  "$defs": {
     "AbsolutePathBuf": {
-      "description": "A path that is guaranteed to be absolute and normalized (though it is not guaranteed to be canonicalized or exist on the filesystem).\n\nIMPORTANT: When deserializing an `AbsolutePathBuf`, a base path must be set using [AbsolutePathBufGuard::new]. If no base path is set, the deserialization will fail unless the path being deserialized is already absolute.",
+      "description": "A path that is guaranteed to be absolute and normalized (though it is not\nguaranteed to be canonicalized or exist on the filesystem).\n\nIMPORTANT: When deserializing an `AbsolutePathBuf`, a base path must be set\nusing [AbsolutePathBufGuard::new]. If no base path is set, the\ndeserialization will fail unless the path being deserialized is already\nabsolute.",
       "type": "string"
     },
     "CommandExecTerminalSize": {
@@ -11,19 +10,21 @@
         "cols": {
           "description": "Terminal width in character cells.",
           "format": "uint16",
-          "minimum": 0.0,
+          "maximum": 65535,
+          "minimum": 0,
           "type": "integer"
         },
         "rows": {
           "description": "Terminal height in character cells.",
           "format": "uint16",
-          "minimum": 0.0,
+          "maximum": 65535,
+          "minimum": 0,
           "type": "integer"
         }
       },
       "required": [
-        "cols",
-        "rows"
+        "rows",
+        "cols"
       ],
       "type": "object"
     },
@@ -40,19 +41,17 @@
         {
           "properties": {
             "path": {
-              "$ref": "#/definitions/AbsolutePathBuf"
+              "$ref": "#/$defs/AbsolutePathBuf"
             },
             "type": {
-              "enum": [
-                "path"
-              ],
+              "const": "path",
               "title": "PathFileSystemPathType",
               "type": "string"
             }
           },
           "required": [
-            "path",
-            "type"
+            "type",
+            "path"
           ],
           "title": "PathFileSystemPath",
           "type": "object"
@@ -63,16 +62,14 @@
               "type": "string"
             },
             "type": {
-              "enum": [
-                "glob_pattern"
-              ],
+              "const": "glob_pattern",
               "title": "GlobPatternFileSystemPathType",
               "type": "string"
             }
           },
           "required": [
-            "pattern",
-            "type"
+            "type",
+            "pattern"
           ],
           "title": "GlobPatternFileSystemPath",
           "type": "object"
@@ -80,14 +77,12 @@
         {
           "properties": {
             "type": {
-              "enum": [
-                "special"
-              ],
+              "const": "special",
               "title": "SpecialFileSystemPathType",
               "type": "string"
             },
             "value": {
-              "$ref": "#/definitions/FileSystemSpecialPath"
+              "$ref": "#/$defs/FileSystemSpecialPath"
             }
           },
           "required": [
@@ -102,15 +97,15 @@
     "FileSystemSandboxEntry": {
       "properties": {
         "access": {
-          "$ref": "#/definitions/FileSystemAccessMode"
+          "$ref": "#/$defs/FileSystemAccessMode"
         },
         "path": {
-          "$ref": "#/definitions/FileSystemPath"
+          "$ref": "#/$defs/FileSystemPath"
         }
       },
       "required": [
-        "access",
-        "path"
+        "path",
+        "access"
       ],
       "type": "object"
     },
@@ -119,9 +114,7 @@
         {
           "properties": {
             "kind": {
-              "enum": [
-                "root"
-              ],
+              "const": "root",
               "type": "string"
             }
           },
@@ -134,9 +127,7 @@
         {
           "properties": {
             "kind": {
-              "enum": [
-                "minimal"
-              ],
+              "const": "minimal",
               "type": "string"
             }
           },
@@ -149,9 +140,7 @@
         {
           "properties": {
             "kind": {
-              "enum": [
-                "project_roots"
-              ],
+              "const": "project_roots",
               "type": "string"
             },
             "subpath": {
@@ -170,9 +159,7 @@
         {
           "properties": {
             "kind": {
-              "enum": [
-                "tmpdir"
-              ],
+              "const": "tmpdir",
               "type": "string"
             }
           },
@@ -185,9 +172,7 @@
         {
           "properties": {
             "kind": {
-              "enum": [
-                "slash_tmp"
-              ],
+              "const": "slash_tmp",
               "type": "string"
             }
           },
@@ -200,9 +185,7 @@
         {
           "properties": {
             "kind": {
-              "enum": [
-                "unknown"
-              ],
+              "const": "unknown",
               "type": "string"
             },
             "path": {
@@ -236,23 +219,21 @@
           "description": "Codex owns sandbox construction for this profile.",
           "properties": {
             "fileSystem": {
-              "$ref": "#/definitions/PermissionProfileFileSystemPermissions"
+              "$ref": "#/$defs/PermissionProfileFileSystemPermissions"
             },
             "network": {
-              "$ref": "#/definitions/PermissionProfileNetworkPermissions"
+              "$ref": "#/$defs/PermissionProfileNetworkPermissions"
             },
             "type": {
-              "enum": [
-                "managed"
-              ],
+              "const": "managed",
               "title": "ManagedPermissionProfileType",
               "type": "string"
             }
           },
           "required": [
-            "fileSystem",
+            "type",
             "network",
-            "type"
+            "fileSystem"
           ],
           "title": "ManagedPermissionProfile",
           "type": "object"
@@ -261,9 +242,7 @@
           "description": "Do not apply an outer sandbox.",
           "properties": {
             "type": {
-              "enum": [
-                "disabled"
-              ],
+              "const": "disabled",
               "title": "DisabledPermissionProfileType",
               "type": "string"
             }
@@ -278,19 +257,17 @@
           "description": "Filesystem isolation is enforced by an external caller.",
           "properties": {
             "network": {
-              "$ref": "#/definitions/PermissionProfileNetworkPermissions"
+              "$ref": "#/$defs/PermissionProfileNetworkPermissions"
             },
             "type": {
-              "enum": [
-                "external"
-              ],
+              "const": "external",
               "title": "ExternalPermissionProfileType",
               "type": "string"
             }
           },
           "required": [
-            "network",
-            "type"
+            "type",
+            "network"
           ],
           "title": "ExternalPermissionProfile",
           "type": "object"
@@ -303,29 +280,27 @@
           "properties": {
             "entries": {
               "items": {
-                "$ref": "#/definitions/FileSystemSandboxEntry"
+                "$ref": "#/$defs/FileSystemSandboxEntry"
               },
               "type": "array"
             },
             "globScanMaxDepth": {
               "format": "uint",
-              "minimum": 1.0,
+              "minimum": 1,
               "type": [
                 "integer",
                 "null"
               ]
             },
             "type": {
-              "enum": [
-                "restricted"
-              ],
+              "const": "restricted",
               "title": "RestrictedPermissionProfileFileSystemPermissionsType",
               "type": "string"
             }
           },
           "required": [
-            "entries",
-            "type"
+            "type",
+            "entries"
           ],
           "title": "RestrictedPermissionProfileFileSystemPermissions",
           "type": "object"
@@ -333,9 +308,7 @@
         {
           "properties": {
             "type": {
-              "enum": [
-                "unrestricted"
-              ],
+              "const": "unrestricted",
               "title": "UnrestrictedPermissionProfileFileSystemPermissionsType",
               "type": "string"
             }
@@ -364,9 +337,7 @@
         {
           "properties": {
             "type": {
-              "enum": [
-                "dangerFullAccess"
-              ],
+              "const": "dangerFullAccess",
               "title": "DangerFullAccessSandboxPolicyType",
               "type": "string"
             }
@@ -384,9 +355,7 @@
               "type": "boolean"
             },
             "type": {
-              "enum": [
-                "readOnly"
-              ],
+              "const": "readOnly",
               "title": "ReadOnlySandboxPolicyType",
               "type": "string"
             }
@@ -400,17 +369,11 @@
         {
           "properties": {
             "networkAccess": {
-              "allOf": [
-                {
-                  "$ref": "#/definitions/NetworkAccess"
-                }
-              ],
+              "$ref": "#/$defs/NetworkAccess",
               "default": "restricted"
             },
             "type": {
-              "enum": [
-                "externalSandbox"
-              ],
+              "const": "externalSandbox",
               "title": "ExternalSandboxSandboxPolicyType",
               "type": "string"
             }
@@ -436,16 +399,14 @@
               "type": "boolean"
             },
             "type": {
-              "enum": [
-                "workspaceWrite"
-              ],
+              "const": "workspaceWrite",
               "title": "WorkspaceWriteSandboxPolicyType",
               "type": "string"
             },
             "writableRoots": {
               "default": [],
               "items": {
-                "$ref": "#/definitions/AbsolutePathBuf"
+                "$ref": "#/$defs/AbsolutePathBuf"
               },
               "type": "array"
             }
@@ -459,7 +420,8 @@
       ]
     }
   },
-  "description": "Run a standalone command (argv vector) in the server sandbox without creating a thread or turn.\n\nThe final `command/exec` response is deferred until the process exits and is sent only after all `command/exec/outputDelta` notifications for that connection have been emitted.",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Run a standalone command (argv vector) in the server sandbox without\ncreating a thread or turn.\n\nThe final `command/exec` response is deferred until the process exits and is\nsent only after all `command/exec/outputDelta` notifications for that\nconnection have been emitted.",
   "properties": {
     "command": {
       "description": "Command argv vector. Empty arrays are rejected.",
@@ -490,23 +452,23 @@
           "null"
         ]
       },
-      "description": "Optional environment overrides merged into the server-computed environment.\n\nMatching names override inherited values. Set a key to `null` to unset an inherited variable.",
+      "description": "Optional environment overrides merged into the server-computed\nenvironment.\n\nMatching names override inherited values. Set a key to `null` to unset\nan inherited variable.",
       "type": [
         "object",
         "null"
       ]
     },
     "outputBytesCap": {
-      "description": "Optional per-stream stdout/stderr capture cap in bytes.\n\nWhen omitted, the server default applies. Cannot be combined with `disableOutputCap`.",
+      "description": "Optional per-stream stdout/stderr capture cap in bytes.\n\nWhen omitted, the server default applies. Cannot be combined with\n`disableOutputCap`.",
       "format": "uint",
-      "minimum": 0.0,
+      "minimum": 0,
       "type": [
         "integer",
         "null"
       ]
     },
     "processId": {
-      "description": "Optional client-supplied, connection-scoped process id.\n\nRequired for `tty`, `streamStdin`, `streamStdoutStderr`, and follow-up `command/exec/write`, `command/exec/resize`, and `command/exec/terminate` calls. When omitted, buffered execution gets an internal id that is not exposed to the client.",
+      "description": "Optional client-supplied, connection-scoped process id.\n\nRequired for `tty`, `streamStdin`, `streamStdoutStderr`, and follow-up\n`command/exec/write`, `command/exec/resize`, and\n`command/exec/terminate` calls. When omitted, buffered execution gets an\ninternal id that is not exposed to the client.",
       "type": [
         "string",
         "null"
@@ -515,35 +477,35 @@
     "sandboxPolicy": {
       "anyOf": [
         {
-          "$ref": "#/definitions/SandboxPolicy"
+          "$ref": "#/$defs/SandboxPolicy"
         },
         {
           "type": "null"
         }
       ],
-      "description": "Optional sandbox policy for this command.\n\nUses the same shape as thread/turn execution sandbox configuration and defaults to the user's configured policy when omitted. Cannot be combined with `permissionProfile`."
+      "description": "Optional sandbox policy for this command.\n\nUses the same shape as thread/turn execution sandbox configuration and\ndefaults to the user's configured policy when omitted. Cannot be\ncombined with `permissionProfile`."
     },
     "size": {
       "anyOf": [
         {
-          "$ref": "#/definitions/CommandExecTerminalSize"
+          "$ref": "#/$defs/CommandExecTerminalSize"
         },
         {
           "type": "null"
         }
       ],
-      "description": "Optional initial PTY size in character cells. Only valid when `tty` is true."
+      "description": "Optional initial PTY size in character cells. Only valid when `tty` is\ntrue."
     },
     "streamStdin": {
       "description": "Allow follow-up `command/exec/write` requests to write stdin bytes.\n\nRequires a client-supplied `processId`.",
       "type": "boolean"
     },
     "streamStdoutStderr": {
-      "description": "Stream stdout/stderr via `command/exec/outputDelta` notifications.\n\nStreamed bytes are not duplicated into the final response and require a client-supplied `processId`.",
+      "description": "Stream stdout/stderr via `command/exec/outputDelta` notifications.\n\nStreamed bytes are not duplicated into the final response and require a\nclient-supplied `processId`.",
       "type": "boolean"
     },
     "timeoutMs": {
-      "description": "Optional timeout in milliseconds.\n\nWhen omitted, the server default applies. Cannot be combined with `disableTimeout`.",
+      "description": "Optional timeout in milliseconds.\n\nWhen omitted, the server default applies. Cannot be combined with\n`disableTimeout`.",
       "format": "int64",
       "type": [
         "integer",
