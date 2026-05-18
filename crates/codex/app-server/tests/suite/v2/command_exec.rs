@@ -1084,7 +1084,10 @@ fn root_read_only_permission_profile() -> PermissionProfile {
 fn linux_bwrap_sandbox_is_available() -> bool {
     #[cfg(target_os = "linux")]
     {
-        codex_sandboxing::system_bwrap_warning(&root_read_only_permission_profile()).is_none()
+        codex_sandboxing::system_bwrap_warning(
+            &codex_protocol::models::PermissionProfile::read_only(),
+        )
+        .is_none()
     }
 
     #[cfg(not(target_os = "linux"))]
