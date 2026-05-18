@@ -54,7 +54,7 @@ use roo_prompt::build_system_prompt;
 use roo_protect::RooProtectedController;
 use roo_provider::handler::Provider;
 use roo_task::TaskEvent as RooTaskEvent;
-use roo_task::agent_loop::{AgentLoop, AgentLoopConfig};
+use roo_task::agent_loop::{AgentLoop, AgentLoopConfig, MistakeLimitAction};
 use roo_task::engine::TaskEngine;
 use roo_task::message_builder::MessageBuilder;
 use roo_task::tool_dispatcher::ToolDispatcher;
@@ -63,10 +63,13 @@ use roo_terminal::TerminalRegistry;
 use roo_types::api::ApiMessage;
 use roo_types::mcp::McpServerConnection;
 
-/// Type alias for the nested approval channel used by the agent loop.
-type ApprovalSender = Arc<
-    std::sync::Mutex<Option<Arc<std::sync::Mutex<Option<tokio::sync::oneshot::Sender<bool>>>>>>,
->;
+type BoolDecisionHandle = Arc<std::sync::Mutex<Option<tokio::sync::oneshot::Sender<bool>>>>;
+type MistakeLimitDecisionHandle =
+    Arc<std::sync::Mutex<Option<tokio::sync::oneshot::Sender<MistakeLimitAction>>>>;
+
+/// Type aliases for handles passed from the worker thread back to the adapter.
+type BoolDecisionSender = Arc<std::sync::Mutex<Option<BoolDecisionHandle>>>;
+type MistakeLimitDecisionSender = Arc<std::sync::Mutex<Option<MistakeLimitDecisionHandle>>>;
 
 // ---------------------------------------------------------------------------
 // Provider builder — mirrors roo-cli's build_handler()
@@ -109,6 +112,28 @@ fn openai_base_url(base_url: Option<&str>, default: &str) -> String {
     normalize_openai_base_url(base_url.unwrap_or(default))
 }
 
+fn current_shell() -> String {
+    std::env::var("SHELL")
+        .or_else(|_| std::env::var("COMSPEC"))
+        .or_else(|_| std::env::var("ComSpec"))
+        .unwrap_or_else(|_| {
+            if cfg!(windows) {
+                "powershell.exe".to_string()
+            } else {
+                "/bin/bash".to_string()
+            }
+        })
+}
+
+fn looks_anthropic_compatible_url(base_url: Option<&str>) -> bool {
+    base_url
+        .map(|url| {
+            let lowered = url.trim().to_ascii_lowercase();
+            lowered.contains("/anthropic") || lowered.contains("claude-code-proxy")
+        })
+        .unwrap_or(false)
+}
+
 fn build_handler(
     provider_name: &str,
     api_key: Option<&str>,
@@ -116,9 +141,10 @@ fn build_handler(
     model_id: Option<&str>,
 ) -> anyhow::Result<Box<dyn Provider>> {
     match provider_name {
-        "anthropic" => {
-            let api_key =
-                api_key.ok_or_else(|| anyhow::anyhow!("api_key is required for anthropic"))?;
+        "anthropic" | "kuaikat" | "kuai-kat" | "kat" | "kat-coder" | "kat-coder-pro"
+        | "streamlake" => {
+            let api_key = api_key
+                .ok_or_else(|| anyhow::anyhow!("api_key is required for {provider_name}"))?;
             let cfg = roo_provider_anthropic::AnthropicConfig {
                 api_key: api_key.to_string(),
                 base_url: anthropic_base_url(
@@ -193,6 +219,27 @@ fn build_handler(
                 request_timeout: None,
             };
             Ok(Box::new(roo_provider_openrouter::OpenRouterHandler::new(
+                cfg,
+            )?))
+        }
+
+        "deepseek" if looks_anthropic_compatible_url(base_url) => {
+            let api_key =
+                api_key.ok_or_else(|| anyhow::anyhow!("api_key is required for deepseek"))?;
+            let cfg = roo_provider_anthropic::AnthropicConfig {
+                api_key: api_key.to_string(),
+                base_url: anthropic_base_url(
+                    base_url,
+                    roo_provider_anthropic::AnthropicConfig::DEFAULT_BASE_URL,
+                ),
+                model_id: model_id.map(|s| s.to_string()),
+                temperature: None,
+                use_extended_thinking: None,
+                max_thinking_tokens: None,
+                request_timeout: None,
+                enable_1m_context: false,
+            };
+            Ok(Box::new(roo_provider_anthropic::AnthropicHandler::new(
                 cfg,
             )?))
         }
@@ -529,7 +576,7 @@ fn build_handler(
 
         _ => {
             anyhow::bail!(
-                "Unsupported Roo provider: '{}'. Supported: anthropic, openai, openai-native, \
+                "Unsupported Roo provider: '{}'. Supported: anthropic, kuaikat, openai, openai-native, \
                  openrouter, deepseek, gemini, ollama, lmstudio, xai, mistral, fireworks, \
                  litellm, qwen, minimax, fake-ai, moonshot, zai, sambanova, baseten, poe, \
                  requesty, unbound, vercel, roo, bedrock",
@@ -770,6 +817,58 @@ fn map_task_event(event: &RooTaskEvent, session_id: &str) -> Option<UnifiedAgent
             ),
         }),
 
+        RooTaskEvent::ApiRequestFailed { task_id, error } => {
+            Some(UnifiedAgentEvent::PermissionRequest {
+                session_id: session_id.to_string(),
+                request_id: format!("api_retry:{task_id}"),
+                tool_name: "api_request_failed".to_string(),
+                input: serde_json::json!({
+                    "error": error,
+                    "decision": "allow retries the request; deny cancels the task",
+                }),
+            })
+        }
+
+        RooTaskEvent::MistakeLimitReached {
+            task_id,
+            count,
+            limit,
+        } => Some(UnifiedAgentEvent::PermissionRequest {
+            session_id: session_id.to_string(),
+            request_id: format!("mistake_limit:{task_id}"),
+            tool_name: "mistake_limit_reached".to_string(),
+            input: serde_json::json!({
+                "count": count,
+                "limit": limit,
+                "decision": "allow continues without extra feedback; deny cancels the task",
+            }),
+        }),
+
+        RooTaskEvent::AutoApprovalLimitReached {
+            approval_type,
+            approval_count,
+            ..
+        } => Some(UnifiedAgentEvent::Error {
+            session_id: session_id.to_string(),
+            message: format!(
+                "Auto-approval limit reached: {}{}",
+                approval_type,
+                approval_count
+                    .as_deref()
+                    .map(|count| format!(" ({count})"))
+                    .unwrap_or_default()
+            ),
+            recoverable: true,
+        }),
+
+        RooTaskEvent::ApiRateLimitWait { seconds, .. } => {
+            Some(UnifiedAgentEvent::ToolCallProgress {
+                session_id: session_id.to_string(),
+                tool_name: "api_rate_limit_wait".to_string(),
+                progress: format!("{seconds}s remaining before next API request"),
+            })
+        }
+
         // --- Streaming completed ---
         RooTaskEvent::StreamingCompleted { .. } => {
             debug!("Streaming completed");
@@ -843,7 +942,11 @@ pub struct RooInProcessAdapter {
     external_mcp_servers: std::collections::HashMap<String, serde_json::Value>,
     /// Shared handle to the AgentLoop's pending approval channel.
     /// When the GUI approves/denies a tool, we send the response through this.
-    approval_handle: Option<Arc<std::sync::Mutex<Option<tokio::sync::oneshot::Sender<bool>>>>>,
+    approval_handle: Option<BoolDecisionHandle>,
+    /// Shared handle to the AgentLoop's pending API retry prompt.
+    api_retry_handle: Option<BoolDecisionHandle>,
+    /// Shared handle to the AgentLoop's pending mistake-limit prompt.
+    mistake_limit_handle: Option<MistakeLimitDecisionHandle>,
 }
 
 impl RooInProcessAdapter {
@@ -873,6 +976,8 @@ impl RooInProcessAdapter {
             cancel_token: None,
             worker_handle: None,
             approval_handle: None,
+            api_retry_handle: None,
+            mistake_limit_handle: None,
             conversation_history: Arc::new(Mutex::new(Vec::new())),
             auto_approval_enabled: false,
             external_mcp_servers: std::collections::HashMap::new(),
@@ -927,15 +1032,19 @@ impl RooInProcessAdapter {
         custom_modes: Option<&[roo_types::mode::ModeConfig]>,
     ) -> String {
         let cwd_str = self.cwd.to_string_lossy();
-        let shell = if cfg!(windows) {
-            "cmd.exe".to_string()
-        } else {
-            std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string())
-        };
+        let shell = current_shell();
         let home = dirs::home_dir()
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_else(|| "/tmp".to_string());
         let os_info = format!("{} {}", std::env::consts::OS, std::env::consts::ARCH);
+        let mut ignore_controller = RooIgnoreController::new(&cwd_str);
+        let roo_ignore_instructions = std::fs::read_to_string(self.cwd.join(".rooignore"))
+            .ok()
+            .and_then(|content| {
+                ignore_controller.load_patterns(&content);
+                ignore_controller.get_instructions()
+            });
+        let settings = roo_prompt::types::SystemPromptSettings::default();
 
         build_system_prompt(
             &cwd_str,
@@ -945,8 +1054,8 @@ impl RooInProcessAdapter {
             has_mcp,
             None,
             None,
-            None,
-            None,
+            roo_ignore_instructions.as_deref(),
+            Some(&settings),
             &[],
             &os_info,
             &shell,
@@ -998,6 +1107,55 @@ impl RooInProcessAdapter {
         debug!(
             allowed,
             "No pending approval in AgentLoop (auto-approval mode or no handle)"
+        );
+        Ok(())
+    }
+
+    async fn resolve_api_retry(&mut self, allowed: bool) -> anyhow::Result<()> {
+        if let Some(ref handle) = self.api_retry_handle {
+            let mut guard = match handle.lock() {
+                Ok(g) => g,
+                Err(e) => {
+                    warn!("API retry mutex poisoned, recovering: {e}");
+                    e.into_inner()
+                }
+            };
+            if let Some(tx) = guard.take() {
+                let _ = tx.send(allowed);
+                debug!(retry = allowed, "Sent API retry response to AgentLoop");
+                return Ok(());
+            }
+        }
+        debug!(retry = allowed, "No pending API retry in AgentLoop");
+        Ok(())
+    }
+
+    async fn resolve_mistake_limit(&mut self, allowed: bool) -> anyhow::Result<()> {
+        if let Some(ref handle) = self.mistake_limit_handle {
+            let mut guard = match handle.lock() {
+                Ok(g) => g,
+                Err(e) => {
+                    warn!("Mistake-limit mutex poisoned, recovering: {e}");
+                    e.into_inner()
+                }
+            };
+            if let Some(tx) = guard.take() {
+                let action = if allowed {
+                    MistakeLimitAction::Continue { feedback: None }
+                } else {
+                    MistakeLimitAction::Cancel
+                };
+                let _ = tx.send(action);
+                debug!(
+                    continue_task = allowed,
+                    "Sent mistake-limit response to AgentLoop"
+                );
+                return Ok(());
+            }
+        }
+        debug!(
+            continue_task = allowed,
+            "No pending mistake-limit prompt in AgentLoop"
         );
         Ok(())
     }
@@ -1094,7 +1252,9 @@ impl RooInProcessAdapter {
         mcp_servers: Vec<McpServerConnection>,
         custom_modes: Vec<roo_types::mode::ModeConfig>,
         cancel_token: tokio_util::sync::CancellationToken,
-        approval_out: ApprovalSender,
+        approval_out: BoolDecisionSender,
+        api_retry_out: BoolDecisionSender,
+        mistake_limit_out: MistakeLimitDecisionSender,
         storage_path: Option<String>,
         api_config_name: Option<String>,
     ) {
@@ -1182,15 +1342,33 @@ impl RooInProcessAdapter {
         // so that cancel() from the GUI propagates into the running agent loop.
         let agent_loop_token = agent_loop.cancellation_token().clone();
 
-        // Pass the approval handle back to the adapter so the GUI can respond
-        // to ToolApprovalRequired events via resolve_roo_approval().
+        // Pass interactive-response handles back to the adapter so the GUI can
+        // respond to Roo asks emitted by the native loop.
         {
-            let handle = agent_loop.approval_handle();
+            let approval_handle = agent_loop.approval_handle();
             match approval_out.lock() {
-                Ok(mut guard) => *guard = Some(handle),
+                Ok(mut guard) => *guard = Some(approval_handle),
                 Err(e) => {
                     warn!("Approval-out mutex poisoned, recovering: {e}");
-                    *e.into_inner() = Some(handle);
+                    *e.into_inner() = Some(agent_loop.approval_handle());
+                }
+            }
+
+            let api_retry_handle = agent_loop.api_retry_handle();
+            match api_retry_out.lock() {
+                Ok(mut guard) => *guard = Some(api_retry_handle),
+                Err(e) => {
+                    warn!("API-retry-out mutex poisoned, recovering: {e}");
+                    *e.into_inner() = Some(agent_loop.api_retry_handle());
+                }
+            }
+
+            let mistake_limit_handle = agent_loop.mistake_limit_handle();
+            match mistake_limit_out.lock() {
+                Ok(mut guard) => *guard = Some(mistake_limit_handle),
+                Err(e) => {
+                    warn!("Mistake-limit-out mutex poisoned, recovering: {e}");
+                    *e.into_inner() = Some(agent_loop.mistake_limit_handle());
                 }
             }
         }
@@ -1396,8 +1574,12 @@ impl AgentAdapter for RooInProcessAdapter {
 
         // Shared slot for the AgentLoop's approval handle to be passed back
         // from the worker thread to this adapter.
-        let approval_out: ApprovalSender = Arc::new(std::sync::Mutex::new(None));
+        let approval_out: BoolDecisionSender = Arc::new(std::sync::Mutex::new(None));
         let approval_out_clone = Arc::clone(&approval_out);
+        let api_retry_out: BoolDecisionSender = Arc::new(std::sync::Mutex::new(None));
+        let api_retry_out_clone = Arc::clone(&api_retry_out);
+        let mistake_limit_out: MistakeLimitDecisionSender = Arc::new(std::sync::Mutex::new(None));
+        let mistake_limit_out_clone = Arc::clone(&mistake_limit_out);
 
         // Spawn in a dedicated OS thread.
         //
@@ -1429,6 +1611,8 @@ impl AgentAdapter for RooInProcessAdapter {
                     custom_modes_owned,
                     cancel_token,
                     approval_out_clone,
+                    api_retry_out_clone,
+                    mistake_limit_out_clone,
                     storage_path,
                     api_config_name,
                 );
@@ -1474,6 +1658,34 @@ impl AgentAdapter for RooInProcessAdapter {
             }
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
+        for _ in 0..50 {
+            let taken = match api_retry_out.lock() {
+                Ok(mut guard) => guard.take(),
+                Err(e) => {
+                    warn!("API-retry-out mutex poisoned during pickup, recovering: {e}");
+                    e.into_inner().take()
+                }
+            };
+            if let Some(handle) = taken {
+                self.api_retry_handle = Some(handle);
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        for _ in 0..50 {
+            let taken = match mistake_limit_out.lock() {
+                Ok(mut guard) => guard.take(),
+                Err(e) => {
+                    warn!("Mistake-limit-out mutex poisoned during pickup, recovering: {e}");
+                    e.into_inner().take()
+                }
+            };
+            if let Some(handle) = taken {
+                self.mistake_limit_handle = Some(handle);
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
 
         Ok(rx)
     }
@@ -1504,6 +1716,12 @@ impl AgentAdapter for RooInProcessAdapter {
             decision,
             PermissionDecision::Allow | PermissionDecision::AllowAll
         );
+        if request_id.starts_with("api_retry:") {
+            return self.resolve_api_retry(approved).await;
+        }
+        if request_id.starts_with("mistake_limit:") {
+            return self.resolve_mistake_limit(approved).await;
+        }
         self.resolve_roo_approval(request_id, approved).await
     }
 
@@ -1517,6 +1735,8 @@ impl AgentAdapter for RooInProcessAdapter {
         // exit when it observes the cancelled CancellationToken.
         self.worker_handle = None;
         self.approval_handle = None;
+        self.api_retry_handle = None;
+        self.mistake_limit_handle = None;
 
         self.conversation_history.lock().await.clear();
 
@@ -1626,6 +1846,20 @@ mod tests {
     }
 
     #[test]
+    fn adapter_system_prompt_includes_rooignore_instructions() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join(".rooignore"), "secrets/**\n").expect("write .rooignore");
+        let mut adapter = RooInProcessAdapter::new();
+        adapter.cwd = dir.path().to_path_buf();
+        adapter.mode = "code".to_string();
+
+        let prompt = adapter.build_system_prompt(false, None);
+
+        assert!(prompt.contains("# .rooignore"));
+        assert!(prompt.contains("secrets/**"));
+    }
+
+    #[test]
     fn normalizes_gui_endpoint_base_urls_before_provider_builders_append_paths() {
         assert_eq!(
             normalize_anthropic_base_url("https://api.minimaxi.com/anthropic/v1/messages"),
@@ -1683,6 +1917,34 @@ mod tests {
         let (model_id, _) = handler.get_model();
 
         assert_eq!(model_id, "fake-override");
+    }
+
+    #[test]
+    fn build_handler_supports_kuaikat_anthropic_compatible_alias() {
+        let handler = build_handler(
+            "kuaikat",
+            Some("test-key"),
+            Some("https://wanqing.streamlakeapi.com/api/gateway/coding/kat-coder-pro-v2/claude-code-proxy"),
+            Some("kat-coder-pro-v2"),
+        )
+        .expect("kuaikat provider");
+        let (model_id, _) = handler.get_model();
+
+        assert_eq!(model_id, "kat-coder-pro-v2");
+    }
+
+    #[test]
+    fn build_handler_routes_deepseek_anthropic_endpoint_to_anthropic_protocol() {
+        let handler = build_handler(
+            "deepseek",
+            Some("test-key"),
+            Some("https://api.deepseek.com/anthropic"),
+            Some("deepseek-v4-flash"),
+        )
+        .expect("deepseek anthropic-compatible provider");
+        let (model_id, _) = handler.get_model();
+
+        assert_eq!(model_id, "deepseek-v4-flash");
     }
 
     // ── Streaming events ──────────────────────────────────────────
@@ -2151,41 +2413,91 @@ mod tests {
     }
 
     #[test]
-    fn api_request_failed_returns_none() {
+    fn api_request_failed_maps_to_retry_permission_request() {
         let event = RooTaskEvent::ApiRequestFailed {
             task_id: "t1".into(),
             error: "timeout".into(),
         };
-        assert!(map_task_event(&event, SID).is_none());
+        let result = map_task_event(&event, SID).expect("should map");
+        match result {
+            UnifiedAgentEvent::PermissionRequest {
+                request_id,
+                tool_name,
+                input,
+                ..
+            } => {
+                assert_eq!(request_id, "api_retry:t1");
+                assert_eq!(tool_name, "api_request_failed");
+                assert_eq!(input["error"], "timeout");
+            }
+            other => panic!("expected PermissionRequest, got {other:?}"),
+        }
     }
 
     #[test]
-    fn mistake_limit_reached_returns_none() {
+    fn mistake_limit_reached_maps_to_permission_request() {
         let event = RooTaskEvent::MistakeLimitReached {
             task_id: "t1".into(),
             count: 3,
             limit: 3,
         };
-        assert!(map_task_event(&event, SID).is_none());
+        let result = map_task_event(&event, SID).expect("should map");
+        match result {
+            UnifiedAgentEvent::PermissionRequest {
+                request_id,
+                tool_name,
+                input,
+                ..
+            } => {
+                assert_eq!(request_id, "mistake_limit:t1");
+                assert_eq!(tool_name, "mistake_limit_reached");
+                assert_eq!(input["count"], 3);
+                assert_eq!(input["limit"], 3);
+            }
+            other => panic!("expected PermissionRequest, got {other:?}"),
+        }
     }
 
     #[test]
-    fn auto_approval_limit_reached_returns_none() {
+    fn auto_approval_limit_reached_maps_to_recoverable_error() {
         let event = RooTaskEvent::AutoApprovalLimitReached {
             task_id: "t1".into(),
             approval_type: "Requests".into(),
             approval_count: Some("5".into()),
         };
-        assert!(map_task_event(&event, SID).is_none());
+        let result = map_task_event(&event, SID).expect("should map");
+        if let UnifiedAgentEvent::Error {
+            message,
+            recoverable,
+            ..
+        } = &result
+        {
+            assert!(message.contains("Requests"));
+            assert!(message.contains("5"));
+            assert!(recoverable);
+        } else {
+            panic!("expected Error");
+        }
     }
 
     #[test]
-    fn api_rate_limit_wait_returns_none() {
+    fn api_rate_limit_wait_maps_to_progress() {
         let event = RooTaskEvent::ApiRateLimitWait {
             task_id: "t1".into(),
             seconds: 30,
         };
-        assert!(map_task_event(&event, SID).is_none());
+        let result = map_task_event(&event, SID).expect("should map");
+        if let UnifiedAgentEvent::ToolCallProgress {
+            tool_name,
+            progress,
+            ..
+        } = &result
+        {
+            assert_eq!(tool_name, "api_rate_limit_wait");
+            assert!(progress.contains("30s"));
+        } else {
+            panic!("expected ToolCallProgress");
+        }
     }
 
     // ── TC-07: resolve_permission mutex recovery ───────────────────
@@ -2341,6 +2653,38 @@ mod tests {
 
         let approved = rx.await.expect("receiver should get a value");
         assert!(!approved, "Deny decision should resolve as false");
+    }
+
+    #[tokio::test]
+    async fn resolve_permission_api_retry_request_resolves_retry_bool() {
+        let mut adapter = RooInProcessAdapter::new();
+
+        let (tx, rx) = tokio::sync::oneshot::channel::<bool>();
+        adapter.api_retry_handle = Some(Arc::new(std::sync::Mutex::new(Some(tx))));
+
+        let result = adapter
+            .resolve_permission("sid", "api_retry:t1", PermissionDecision::Allow)
+            .await;
+        assert!(result.is_ok());
+
+        let retry = rx.await.expect("receiver should get retry decision");
+        assert!(retry);
+    }
+
+    #[tokio::test]
+    async fn resolve_permission_mistake_limit_deny_cancels_task() {
+        let mut adapter = RooInProcessAdapter::new();
+
+        let (tx, rx) = tokio::sync::oneshot::channel::<MistakeLimitAction>();
+        adapter.mistake_limit_handle = Some(Arc::new(std::sync::Mutex::new(Some(tx))));
+
+        let result = adapter
+            .resolve_permission("sid", "mistake_limit:t1", PermissionDecision::Deny)
+            .await;
+        assert!(result.is_ok());
+
+        let action = rx.await.expect("receiver should get mistake-limit action");
+        assert!(matches!(action, MistakeLimitAction::Cancel));
     }
 
     /// Test that when no approval handle is set (None), resolve_permission

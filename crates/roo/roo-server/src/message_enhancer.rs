@@ -292,6 +292,6 @@ mod tests {
     fn test_create_enhancement_prompt() {
         let prompt = create_enhancement_prompt("fix the bug", None);
         assert!(prompt.contains("fix the bug"));
-        assert!(prompt.contains("Enhanced prompt:"));
+        assert!(prompt.contains("Generate an enhanced version of this prompt"));
     }
 }

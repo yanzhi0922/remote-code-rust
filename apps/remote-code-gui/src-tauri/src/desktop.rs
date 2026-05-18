@@ -1827,9 +1827,31 @@ fn roo_provider_id_from_runtime(provider: &RuntimeProviderConfig) -> String {
         "vercel-ai-gateway",
         "bedrock",
         "aws",
+        "kuaikat",
+        "kuai-kat",
+        "kat",
+        "kat-coder",
+        "kat-coder-pro",
+        "streamlake",
     ];
+    if compact == "deepseek"
+        && provider
+            .base_url
+            .as_deref()
+            .map(|url| url.to_ascii_lowercase().contains("/anthropic"))
+            .unwrap_or(false)
+    {
+        return "anthropic".to_string();
+    }
     if exact.contains(&compact.as_str()) {
         return compact;
+    }
+    if lowered_name.contains("kuaikat")
+        || lowered_name.contains("kuai kat")
+        || lowered_name.contains("kat-coder")
+        || lowered_name.contains("streamlake")
+    {
+        return "kuaikat".to_string();
     }
     if lowered_name.contains("minimax") {
         return "minimax".to_string();
@@ -1845,6 +1867,12 @@ fn roo_provider_id_from_runtime(provider: &RuntimeProviderConfig) -> String {
         let lowered_url = url.to_ascii_lowercase();
         if lowered_url.contains("minimax") || lowered_url.contains("minimaxi") {
             return "minimax".to_string();
+        }
+        if lowered_url.contains("streamlakeapi") || lowered_url.contains("claude-code-proxy") {
+            return "kuaikat".to_string();
+        }
+        if lowered_url.contains("/anthropic") && lowered_url.contains("deepseek") {
+            return "anthropic".to_string();
         }
         if lowered_url.contains("anthropic") {
             return "anthropic".to_string();
@@ -3565,6 +3593,18 @@ mod tests {
         config.provider.base_url =
             Some("https://gateway.example.com/v1/chat/completions".to_string());
         assert_eq!(roo_provider_id_from_runtime(&config.provider), "openai");
+
+        config.provider.name = "KuaiKAT Coding Plan".to_string();
+        config.provider.protocol = ProviderProtocol::Anthropic;
+        config.provider.base_url = Some(
+            "https://wanqing.streamlakeapi.com/api/gateway/coding/kat-coder-pro-v2/claude-code-proxy"
+                .to_string(),
+        );
+        assert_eq!(roo_provider_id_from_runtime(&config.provider), "kuaikat");
+
+        config.provider.name = "DeepSeek".to_string();
+        config.provider.base_url = Some("https://api.deepseek.com/anthropic".to_string());
+        assert_eq!(roo_provider_id_from_runtime(&config.provider), "anthropic");
     }
 
     fn sample_stdio_mcp_server(name: &str, enabled: bool, command: &str) -> McpServerConfig {

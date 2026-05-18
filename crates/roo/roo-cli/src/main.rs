@@ -410,15 +410,25 @@ fn load_config(cli: &Cli) -> Result<ConfigFile> {
 // Provider construction
 // ---------------------------------------------------------------------------
 
+fn looks_anthropic_compatible_url(base_url: Option<&str>) -> bool {
+    base_url
+        .map(|url| {
+            let lowered = url.trim().to_ascii_lowercase();
+            lowered.contains("/anthropic") || lowered.contains("claude-code-proxy")
+        })
+        .unwrap_or(false)
+}
+
 /// Build a boxed Provider based on the provider name.
 fn build_handler(provider_name: &str, config: &ConfigFile) -> Result<Box<dyn Provider>> {
     match provider_name {
         // ── Anthropic ──────────────────────────────────────────────────
-        "anthropic" => {
+        "anthropic" | "kuaikat" | "kuai-kat" | "kat" | "kat-coder" | "kat-coder-pro"
+        | "streamlake" => {
             let api_key = config
                 .api_key
                 .as_deref()
-                .ok_or_else(|| anyhow::anyhow!("--api-key is required for anthropic"))?;
+                .ok_or_else(|| anyhow::anyhow!("--api-key is required for {provider_name}"))?;
             let cfg = AnthropicConfig {
                 api_key: api_key.to_string(),
                 base_url: config
@@ -582,6 +592,29 @@ fn build_handler(provider_name: &str, config: &ConfigFile) -> Result<Box<dyn Pro
         }
 
         // ── DeepSeek ───────────────────────────────────────────────────
+        "deepseek" if looks_anthropic_compatible_url(config.base_url.as_deref()) => {
+            let api_key = config
+                .api_key
+                .as_deref()
+                .ok_or_else(|| anyhow::anyhow!("--api-key is required for deepseek"))?;
+            let cfg = AnthropicConfig {
+                api_key: api_key.to_string(),
+                base_url: config
+                    .base_url
+                    .clone()
+                    .unwrap_or_else(|| AnthropicConfig::DEFAULT_BASE_URL.to_string()),
+                model_id: config.model.clone(),
+                temperature: config.temperature,
+                use_extended_thinking: config.thinking,
+                max_thinking_tokens: config.max_thinking_tokens,
+                request_timeout: config.timeout,
+                enable_1m_context: false,
+            };
+            Ok(Box::new(AnthropicHandler::new(cfg).context(
+                "Failed to create DeepSeek Anthropic-compatible handler",
+            )?))
+        }
+
         "deepseek" => {
             let api_key = config
                 .api_key
@@ -984,7 +1017,7 @@ fn build_handler(provider_name: &str, config: &ConfigFile) -> Result<Box<dyn Pro
         }
 
         other => anyhow::bail!(
-            "Unsupported provider: '{other}'. Supported providers: anthropic, vertex, aws/bedrock, \
+            "Unsupported provider: '{other}'. Supported providers: anthropic, kuaikat, vertex, aws/bedrock, \
              openai, openai-native, openrouter, deepseek, google, xai, mistral, fireworks, \
              ollama, lmstudio, litellm, qwen, minimax, poe, requesty, unbound, vercel, \
              roo, sambanova, baseten, moonshot, zai, fake-ai"

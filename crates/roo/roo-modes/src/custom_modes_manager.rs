@@ -119,6 +119,54 @@ impl CustomModesManager {
         }
     }
 
+    /// Resolve Roo's global rules directory from the configured settings path.
+    ///
+    /// Roo-Code stores global rules under `~/.roo/rules-{slug}`. In tests and
+    /// portable profiles the global settings path can point at a non-home
+    /// `.roo` tree, so prefer that configured tree when it is recognizable.
+    fn global_roo_dir(&self) -> PathBuf {
+        if let Some(parent) = self.global_settings_path.parent() {
+            if parent.file_name().and_then(|name| name.to_str()) == Some("settings")
+                && let Some(grandparent) = parent.parent()
+            {
+                return grandparent.to_path_buf();
+            }
+            if parent.file_name().and_then(|name| name.to_str()) == Some(".roo") {
+                return parent.to_path_buf();
+            }
+        }
+
+        dirs::home_dir().unwrap_or_default().join(".roo")
+    }
+
+    fn rules_folder_for(
+        &self,
+        slug: &str,
+        source: ModeSource,
+        workspace_path: Option<&Path>,
+    ) -> Result<PathBuf, String> {
+        match source {
+            ModeSource::Global => Ok(self.global_roo_dir().join(format!("rules-{slug}"))),
+            ModeSource::Project => workspace_path
+                .map(|wp| wp.join(".roo").join(format!("rules-{slug}")))
+                .ok_or_else(|| "No workspace path".to_string()),
+        }
+    }
+
+    fn delete_rules_folder_for(
+        &self,
+        slug: &str,
+        source: ModeSource,
+        workspace_path: Option<&Path>,
+    ) -> Result<(), String> {
+        let folder = self.rules_folder_for(slug, source, workspace_path)?;
+        if folder.exists() {
+            std::fs::remove_dir_all(&folder)
+                .map_err(|e| format!("Failed to delete rules folder: {}", e))?;
+        }
+        Ok(())
+    }
+
     // -------------------------------------------------------------------
     // Cache management
     // -------------------------------------------------------------------
@@ -415,6 +463,26 @@ impl CustomModesManager {
             })?;
         }
 
+        if let Some(mode) = project_mode {
+            let workspace_path = self
+                .project_roomodes_path
+                .as_ref()
+                .and_then(|path| path.parent());
+            if let Err(e) = self.delete_rules_folder_for(
+                slug,
+                mode.source.unwrap_or(ModeSource::Project),
+                workspace_path,
+            ) {
+                tracing::warn!("Failed to delete project rules folder for {slug}: {e}");
+            }
+        }
+        if let Some(mode) = global_mode
+            && let Err(e) =
+                self.delete_rules_folder_for(slug, mode.source.unwrap_or(ModeSource::Global), None)
+        {
+            tracing::warn!("Failed to delete global rules folder for {slug}: {e}");
+        }
+
         self.clear_cache();
         Ok(())
     }
@@ -508,12 +576,9 @@ impl CustomModesManager {
         let mode = all_modes.iter().find(|m| m.slug == slug);
 
         let rules_dir = match mode.and_then(|m| m.source) {
-            Some(ModeSource::Global) => {
-                let home = dirs::home_dir().unwrap_or_default();
-                home.join(".roo").join(format!("rules-{}", slug))
-            }
+            Some(ModeSource::Global) => self.global_roo_dir().join(format!("rules-{slug}")),
             Some(ModeSource::Project) => match workspace_path {
-                Some(wp) => wp.join(".roo").join(format!("rules-{}", slug)),
+                Some(wp) => wp.join(".roo").join(format!("rules-{slug}")),
                 None => return false,
             },
             None => return false,
@@ -565,12 +630,9 @@ impl CustomModesManager {
 
         // Determine rules directory
         let rules_dir = match mode.source {
-            Some(ModeSource::Global) => {
-                let home = dirs::home_dir().unwrap_or_default();
-                home.join(format!("rules-{}", slug))
-            }
+            Some(ModeSource::Global) => self.global_roo_dir().join(format!("rules-{slug}")),
             Some(ModeSource::Project) => match workspace_path {
-                Some(wp) => wp.join(".roo").join(format!("rules-{}", slug)),
+                Some(wp) => wp.join(".roo").join(format!("rules-{slug}")),
                 None => {
                     return ExportResult {
                         success: false,
@@ -734,8 +796,9 @@ impl CustomModesManager {
             // Update the mode
             let mut config = mode_config;
             config.source = Some(source);
+            let slug = config.slug.clone();
 
-            if let Err(e) = self.update_custom_mode(&config.slug.clone(), config) {
+            if let Err(e) = self.update_custom_mode(&slug, config) {
                 return ImportResult {
                     success: false,
                     slug: None,
@@ -746,12 +809,7 @@ impl CustomModesManager {
             // Import rules files if present
             if let Some(rules_files) = mode_value.get("rulesFiles")
                 && let Ok(files) = serde_yaml::from_value::<Vec<RuleFile>>(rules_files.clone())
-                && let Err(e) = self.import_rules_files(
-                    &first_slug.as_ref().unwrap().clone(),
-                    &files,
-                    source,
-                    workspace_path,
-                )
+                && let Err(e) = self.import_rules_files(&slug, &files, source, workspace_path)
             {
                 tracing::warn!("Failed to import rules files: {}", e);
             }
@@ -774,16 +832,7 @@ impl CustomModesManager {
         source: ModeSource,
         workspace_path: Option<&Path>,
     ) -> Result<(), String> {
-        let rules_folder = match source {
-            ModeSource::Global => {
-                let home = dirs::home_dir().unwrap_or_default();
-                home.join(format!("rules-{}", slug))
-            }
-            ModeSource::Project => match workspace_path {
-                Some(wp) => wp.join(".roo").join(format!("rules-{}", slug)),
-                None => return Err("No workspace path".to_string()),
-            },
-        };
+        let rules_folder = self.rules_folder_for(slug, source, workspace_path)?;
 
         // Remove existing rules folder
         if rules_folder.exists() {
@@ -802,16 +851,35 @@ impl CustomModesManager {
                 tracing::warn!("Invalid file path detected: {}", rule_file.relative_path);
                 continue;
             }
+            let normalized = if let Some((_, rest)) = normalized.split_once('/') {
+                if normalized.starts_with("rules-") {
+                    rest.to_string()
+                } else {
+                    normalized
+                }
+            } else {
+                normalized
+            };
 
             let target_path = rules_folder.join(&normalized);
 
             // Ensure the resolved path stays within the rules folder
-            let _canonical_rules = rules_folder
-                .canonicalize()
-                .unwrap_or_else(|_| rules_folder.clone());
             let parent_dir = target_path.parent().unwrap_or_else(|| Path::new("."));
             std::fs::create_dir_all(parent_dir)
                 .map_err(|e| format!("Failed to create directory: {}", e))?;
+            let canonical_rules = rules_folder
+                .canonicalize()
+                .unwrap_or_else(|_| rules_folder.clone());
+            let canonical_parent = parent_dir
+                .canonicalize()
+                .unwrap_or_else(|_| parent_dir.to_path_buf());
+            if !canonical_parent.starts_with(&canonical_rules) {
+                tracing::warn!(
+                    "Path traversal attempt detected: {}",
+                    rule_file.relative_path
+                );
+                continue;
+            }
 
             std::fs::write(&target_path, &rule_file.content)
                 .map_err(|e| format!("Failed to write file: {}", e))?;
@@ -943,6 +1011,33 @@ customModes:
         assert_eq!(modes.len(), 0);
     }
 
+    #[test]
+    fn delete_custom_mode_removes_global_rules_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir
+            .path()
+            .join(".roo")
+            .join("settings")
+            .join("custom_modes.yaml");
+        std::fs::create_dir_all(file_path.parent().unwrap()).unwrap();
+        let content = r#"
+customModes:
+  - slug: to-delete
+    name: To Delete
+    roleDefinition: "Test"
+    groups: []
+"#;
+        std::fs::write(&file_path, content).unwrap();
+        let rules_dir = dir.path().join(".roo").join("rules-to-delete");
+        std::fs::create_dir_all(&rules_dir).unwrap();
+        std::fs::write(rules_dir.join("rule.md"), "rule").unwrap();
+
+        let mut manager = CustomModesManager::new(file_path, None);
+        manager.delete_custom_mode("to-delete").unwrap();
+
+        assert!(!rules_dir.exists());
+    }
+
     // ---- Test 8: Delete non-existent mode ----
     #[test]
     fn test_delete_nonexistent_mode() {
@@ -1011,6 +1106,81 @@ customModes:
         let result = manager.export_mode_with_rules("export-test", None, None);
         assert!(result.success);
         assert!(result.yaml.is_some());
+    }
+
+    #[test]
+    fn export_global_mode_reads_rules_from_configured_roo_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir
+            .path()
+            .join(".roo")
+            .join("settings")
+            .join("custom_modes.yaml");
+        std::fs::create_dir_all(file_path.parent().unwrap()).unwrap();
+        let content = r#"
+customModes:
+  - slug: export-test
+    name: Export Test
+    roleDefinition: "Test role"
+    groups: []
+"#;
+        std::fs::write(&file_path, content).unwrap();
+        let rules_dir = dir.path().join(".roo").join("rules-export-test");
+        std::fs::create_dir_all(&rules_dir).unwrap();
+        std::fs::write(rules_dir.join("rule.md"), "global rule").unwrap();
+
+        let mut manager = CustomModesManager::new(file_path, None);
+        let result = manager.export_mode_with_rules("export-test", None, None);
+
+        assert!(result.success);
+        let yaml = result.yaml.expect("export yaml");
+        assert!(yaml.contains("rulesFiles:"));
+        assert!(yaml.contains("global rule"));
+    }
+
+    #[test]
+    fn import_multiple_modes_writes_rules_to_each_mode_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let global_path = dir
+            .path()
+            .join(".roo")
+            .join("settings")
+            .join("custom_modes.yaml");
+        std::fs::create_dir_all(global_path.parent().unwrap()).unwrap();
+        std::fs::write(&global_path, "customModes: []\n").unwrap();
+        let project_roomodes = dir.path().join(".roomodes");
+        let yaml = r#"
+customModes:
+  - slug: one
+    name: One
+    roleDefinition: "Role one"
+    groups: []
+    rulesFiles:
+      - relativePath: rule.md
+        content: one-rule
+  - slug: two
+    name: Two
+    roleDefinition: "Role two"
+    groups: []
+    rulesFiles:
+      - relativePath: rules-two/rule.md
+        content: two-rule
+"#;
+
+        let mut manager = CustomModesManager::new(global_path, Some(project_roomodes));
+        let result = manager.import_mode_with_rules(yaml, ModeSource::Project, Some(dir.path()));
+
+        assert!(result.success, "{:?}", result.error);
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join(".roo").join("rules-one").join("rule.md"))
+                .unwrap(),
+            "one-rule"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join(".roo").join("rules-two").join("rule.md"))
+                .unwrap(),
+            "two-rule"
+        );
     }
 
     #[test]

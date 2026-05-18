@@ -265,9 +265,30 @@ fn roo_provider_id_from_parts(
             "vercel-ai-gateway",
             "bedrock",
             "aws",
+            "kuaikat",
+            "kuai-kat",
+            "kat",
+            "kat-coder",
+            "kat-coder-pro",
+            "streamlake",
         ];
+        if compact == "deepseek"
+            && lowered_url
+                .as_deref()
+                .map(|url| url.contains("/anthropic"))
+                .unwrap_or(false)
+        {
+            return Some("anthropic".to_string());
+        }
         if exact.contains(&compact.as_str()) {
             return Some(compact);
+        }
+        if name.contains("kuaikat")
+            || name.contains("kuai kat")
+            || name.contains("kat-coder")
+            || name.contains("streamlake")
+        {
+            return Some("kuaikat".to_string());
         }
         if name.contains("minimax") {
             return Some("minimax".to_string());
@@ -283,6 +304,12 @@ fn roo_provider_id_from_parts(
     if let Some(url) = lowered_url.as_deref() {
         if url.contains("minimax") || url.contains("minimaxi") {
             return Some("minimax".to_string());
+        }
+        if url.contains("streamlakeapi") || url.contains("claude-code-proxy") {
+            return Some("kuaikat".to_string());
+        }
+        if url.contains("/anthropic") && url.contains("deepseek") {
+            return Some("anthropic".to_string());
         }
         if url.contains("anthropic") {
             return Some("anthropic".to_string());
@@ -1814,5 +1841,27 @@ mod tests {
             Some("https://api.openai.com/v1")
         );
         assert_eq!(selected.api_key.as_deref(), Some("local-key"));
+    }
+
+    #[test]
+    fn roo_provider_selection_recognizes_kuaikat_and_anthropic_deepseek_urls() {
+        assert_eq!(
+            roo_provider_id_from_parts(
+                Some("KuaiKAT Coding Plan"),
+                Some("anthropic"),
+                Some("https://wanqing.streamlakeapi.com/api/gateway/coding/kat-coder-pro-v2/claude-code-proxy"),
+            )
+            .as_deref(),
+            Some("kuaikat")
+        );
+        assert_eq!(
+            roo_provider_id_from_parts(
+                Some("DeepSeek"),
+                Some("anthropic"),
+                Some("https://api.deepseek.com/anthropic"),
+            )
+            .as_deref(),
+            Some("anthropic")
+        );
     }
 }

@@ -13,6 +13,31 @@ use crate::config::AppConfig;
 use crate::error::AppResult;
 use crate::state::{AppState, SharedState};
 
+fn custom_modes_settings_path(global_storage_path: &str) -> std::path::PathBuf {
+    if global_storage_path.trim().is_empty() {
+        return std::env::var("HOME")
+            .or_else(|_| std::env::var("USERPROFILE"))
+            .map(std::path::PathBuf::from)
+            .unwrap_or_default()
+            .join(".roo")
+            .join("settings")
+            .join("custom_modes.yaml");
+    }
+
+    let root = std::path::PathBuf::from(global_storage_path);
+    if root.file_name().and_then(|name| name.to_str()) == Some("custom_modes.yaml") {
+        return root;
+    }
+
+    let settings_path = root.join("settings").join("custom_modes.yaml");
+    let legacy_path = root.join("custom_modes.yaml");
+    if settings_path.exists() || !legacy_path.exists() {
+        settings_path
+    } else {
+        legacy_path
+    }
+}
+
 /// The main Roo Code application controller.
 ///
 /// Source: `src/core/ClineProvider.ts` — `ClineProvider` class
@@ -291,11 +316,7 @@ impl App {
         tracing::debug!("Marketplace manager initialized");
 
         // ── Initialize Custom Modes Manager ─────────────────────────────
-        let global_settings = if self.config.global_storage_path.is_empty() {
-            std::path::PathBuf::new()
-        } else {
-            std::path::PathBuf::from(&self.config.global_storage_path)
-        };
+        let global_settings = custom_modes_settings_path(&self.config.global_storage_path);
         let project_roomodes =
             std::path::Path::new(&self.config.cwd).join(roo_modes::ROOMODES_FILENAME);
         let project_roomodes = if project_roomodes.exists() {
@@ -504,6 +525,16 @@ impl App {
             })
             .unwrap_or_default();
         let roo_ignore_instructions = self.roo_ignore.as_ref().and_then(|c| c.get_instructions());
+        let shell = std::env::var("SHELL")
+            .or_else(|_| std::env::var("COMSPEC"))
+            .or_else(|_| std::env::var("ComSpec"))
+            .unwrap_or_else(|_| {
+                if cfg!(windows) {
+                    "powershell.exe".to_string()
+                } else {
+                    "/bin/bash".to_string()
+                }
+            });
 
         roo_prompt::build_system_prompt(
             &self.config.cwd,
@@ -517,7 +548,7 @@ impl App {
             Some(&settings),
             &skills,
             &format!("{} {}", std::env::consts::OS, env!("CARGO_PKG_VERSION")),
-            "bash", // shell
+            &shell,
             &std::env::var("HOME")
                 .or_else(|_| std::env::var("USERPROFILE"))
                 .unwrap_or_else(|_| "~".to_string()),
@@ -579,6 +610,23 @@ mod tests {
             app.cwd(),
             std::env::current_dir().unwrap().to_str().unwrap()
         );
+    }
+
+    #[test]
+    fn test_custom_modes_settings_path_uses_settings_file_under_storage_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = custom_modes_settings_path(&dir.path().to_string_lossy());
+
+        assert_eq!(path, dir.path().join("settings").join("custom_modes.yaml"));
+    }
+
+    #[test]
+    fn test_custom_modes_settings_path_preserves_explicit_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join(".roo").join("custom_modes.yaml");
+        let path = custom_modes_settings_path(&file.to_string_lossy());
+
+        assert_eq!(path, file);
     }
 
     #[tokio::test]

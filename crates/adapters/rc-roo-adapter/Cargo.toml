@@ -57,5 +57,8 @@ tracing = { workspace = true }
 uuid = { workspace = true }
 dirs = { workspace = true }
 
+[dev-dependencies]
+tempfile = { workspace = true }
+
 [lints]
 workspace = true

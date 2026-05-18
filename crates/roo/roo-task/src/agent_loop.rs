@@ -1465,6 +1465,24 @@ impl AgentLoop {
         Arc::clone(&self.pending_approval_tx)
     }
 
+    /// Get a shared handle to the pending API retry sender.
+    ///
+    /// Adapter layers use this to answer `ApiRequestFailed` prompts emitted by
+    /// the native loop without holding a direct `AgentLoop` reference.
+    pub fn api_retry_handle(&self) -> Arc<std::sync::Mutex<Option<oneshot::Sender<bool>>>> {
+        Arc::clone(&self.pending_api_retry_tx)
+    }
+
+    /// Get a shared handle to the pending mistake-limit sender.
+    ///
+    /// Adapter layers use this to answer `MistakeLimitReached` prompts emitted
+    /// by the native loop without holding a direct `AgentLoop` reference.
+    pub fn mistake_limit_handle(
+        &self,
+    ) -> Arc<std::sync::Mutex<Option<oneshot::Sender<MistakeLimitAction>>>> {
+        Arc::clone(&self.pending_mistake_limit_tx)
+    }
+
     /// Get a mutable reference to the present-assistant-message state machine.
     pub fn present_assistant_message_mut(&mut self) -> &mut PresentAssistantMessage {
         &mut self.present_assistant_message

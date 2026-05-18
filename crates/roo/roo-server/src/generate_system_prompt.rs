@@ -19,6 +19,7 @@ use roo_prompt::types::SystemPromptSettings;
 pub struct GenerateSystemPromptParams {
     pub mode: Option<String>,
     pub cwd: String,
+    pub custom_modes: Option<Vec<roo_types::mode::ModeConfig>>,
     pub custom_mode_prompts: Option<serde_json::Value>,
     pub custom_instructions: Option<String>,
     pub mcp_enabled: bool,
@@ -37,6 +38,7 @@ impl Default for GenerateSystemPromptParams {
         Self {
             mode: None,
             cwd: String::new(),
+            custom_modes: None,
             custom_mode_prompts: None,
             custom_instructions: None,
             mcp_enabled: false,
@@ -85,7 +87,16 @@ pub fn generate_system_prompt(params: GenerateSystemPromptParams) -> GenerateSys
         .and_then(|value| serde_json::from_value(value).ok());
 
     let os_info = format!("{} {}", std::env::consts::OS, env!("CARGO_PKG_VERSION"));
-    let shell = if cfg!(windows) { "powershell" } else { "bash" };
+    let shell = std::env::var("SHELL")
+        .or_else(|_| std::env::var("COMSPEC"))
+        .or_else(|_| std::env::var("ComSpec"))
+        .unwrap_or_else(|_| {
+            if cfg!(windows) {
+                "powershell.exe".to_string()
+            } else {
+                "/bin/bash".to_string()
+            }
+        });
     let home_dir = std::env::var("HOME")
         .or_else(|_| std::env::var("USERPROFILE"))
         .unwrap_or_else(|_| "~".to_string());
@@ -93,7 +104,7 @@ pub fn generate_system_prompt(params: GenerateSystemPromptParams) -> GenerateSys
     let system_prompt = roo_prompt::build_system_prompt(
         &params.cwd,
         mode,
-        None, // custom_modes
+        params.custom_modes.as_deref(),
         custom_mode_prompts.as_ref(),
         params.mcp_enabled, // has_mcp
         params.custom_instructions.as_deref(),
@@ -102,7 +113,7 @@ pub fn generate_system_prompt(params: GenerateSystemPromptParams) -> GenerateSys
         Some(&settings),
         &[], // skills
         &os_info,
-        shell,
+        &shell,
         &home_dir,
     );
 
@@ -149,6 +160,30 @@ mod tests {
         assert!(result.success);
         let prompt = result.system_prompt.unwrap();
         assert!(prompt.contains("Always use TypeScript"));
+    }
+
+    #[test]
+    fn test_generate_system_prompt_with_custom_modes() {
+        let params = GenerateSystemPromptParams {
+            mode: Some("custom-review".to_string()),
+            cwd: "/test".to_string(),
+            custom_modes: Some(vec![roo_types::mode::ModeConfig {
+                slug: "custom-review".to_string(),
+                name: "Custom Review".to_string(),
+                role_definition: "You are Roo in custom review mode.".to_string(),
+                when_to_use: Some("Use for custom reviews".to_string()),
+                description: Some("Custom review mode".to_string()),
+                custom_instructions: Some("Focus on parity drift.".to_string()),
+                groups: vec![],
+                source: Some(roo_types::mode::ModeSource::Project),
+            }]),
+            ..Default::default()
+        };
+        let result = generate_system_prompt(params);
+        assert!(result.success);
+        let prompt = result.system_prompt.unwrap();
+        assert!(prompt.contains("You are Roo in custom review mode."));
+        assert!(prompt.contains("Focus on parity drift."));
     }
 
     #[test]
