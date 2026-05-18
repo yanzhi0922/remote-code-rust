@@ -3,8 +3,14 @@
 use anyhow::Context as _;
 use anyhow::ensure;
 use codex_arg0::Arg0PathEntryGuard;
+#[cfg(target_os = "linux")]
+use codex_protocol::models::PermissionProfile;
 use codex_utils_cargo_bin::CargoBinError;
 use ctor::ctor;
+#[cfg(target_os = "linux")]
+use std::os::unix::process::CommandExt;
+#[cfg(target_os = "linux")]
+use std::path::Path;
 use std::sync::OnceLock;
 use tempfile::TempDir;
 
@@ -32,6 +38,8 @@ pub mod tracing;
 pub mod zsh_fork;
 
 static TEST_ARG0_PATH_ENTRY: OnceLock<Option<Arg0PathEntryGuard>> = OnceLock::new();
+#[cfg(target_os = "linux")]
+static USABLE_CODEX_LINUX_SANDBOX_EXE: OnceLock<Option<PathBuf>> = OnceLock::new();
 
 #[ctor]
 fn enable_deterministic_unified_exec_process_ids_for_tests() {
@@ -205,9 +213,7 @@ pub fn managed_network_requirements_loader() -> CloudRequirementsLoader {
 #[cfg(target_os = "linux")]
 fn default_test_overrides() -> ConfigOverrides {
     ConfigOverrides {
-        codex_linux_sandbox_exe: Some(
-            find_codex_linux_sandbox_exe().expect("should find binary for codex-linux-sandbox"),
-        ),
+        codex_linux_sandbox_exe: usable_codex_linux_sandbox_exe(),
         ..ConfigOverrides::default()
     }
 }
@@ -232,6 +238,64 @@ pub fn find_codex_linux_sandbox_exe() -> Result<PathBuf, CargoBinError> {
     }
 
     codex_utils_cargo_bin::cargo_bin("codex-linux-sandbox")
+}
+
+#[cfg(target_os = "linux")]
+pub fn usable_codex_linux_sandbox_exe() -> Option<PathBuf> {
+    USABLE_CODEX_LINUX_SANDBOX_EXE
+        .get_or_init(|| {
+            let path = match find_codex_linux_sandbox_exe() {
+                Ok(path) => path,
+                Err(err) => {
+                    eprintln!("codex-linux-sandbox binary not available for tests: {err}");
+                    return None;
+                }
+            };
+
+            match codex_linux_sandbox_smoke_test(&path) {
+                Ok(()) => Some(path),
+                Err(err) => {
+                    eprintln!(
+                        "codex-linux-sandbox is unavailable in this test environment; \
+                         running default core tests without Linux sandbox: {err}"
+                    );
+                    None
+                }
+            }
+        })
+        .clone()
+}
+
+#[cfg(target_os = "linux")]
+fn codex_linux_sandbox_smoke_test(path: &Path) -> Result<(), String> {
+    let tempdir =
+        TempDir::new().map_err(|err| format!("failed to create smoke-test tempdir: {err}"))?;
+    let args = codex_sandboxing::landlock::create_linux_sandbox_command_args_for_permission_profile(
+        vec!["/bin/true".to_string()],
+        tempdir.path(),
+        &PermissionProfile::read_only(),
+        tempdir.path(),
+        /* use_legacy_landlock */ false,
+        /* allow_network_for_proxy */ false,
+    );
+    let output = std::process::Command::new(path)
+        .arg0(codex_sandboxing::landlock::CODEX_LINUX_SANDBOX_ARG0)
+        .args(args)
+        .output()
+        .map_err(|err| format!("failed to launch sandbox smoke test: {err}"))?;
+
+    if output.status.success() {
+        return Ok(());
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    Err(format!(
+        "smoke test exited with {}; stderr: {}; stdout: {}",
+        output.status,
+        stderr.trim(),
+        stdout.trim()
+    ))
 }
 
 /// Builds an SSE stream body from a JSON fixture.
@@ -600,10 +664,10 @@ macro_rules! codex_linux_sandbox_exe_or_skip {
     () => {{
         #[cfg(target_os = "linux")]
         {
-            match $crate::find_codex_linux_sandbox_exe() {
-                Ok(path) => Some(path),
-                Err(err) => {
-                    eprintln!("codex-linux-sandbox binary not available, skipping test: {err}");
+            match $crate::usable_codex_linux_sandbox_exe() {
+                Some(path) => Some(path),
+                None => {
+                    eprintln!("codex-linux-sandbox not usable, skipping test");
                     return;
                 }
             }
@@ -616,10 +680,10 @@ macro_rules! codex_linux_sandbox_exe_or_skip {
     ($return_value:expr $(,)?) => {{
         #[cfg(target_os = "linux")]
         {
-            match $crate::find_codex_linux_sandbox_exe() {
-                Ok(path) => Some(path),
-                Err(err) => {
-                    eprintln!("codex-linux-sandbox binary not available, skipping test: {err}");
+            match $crate::usable_codex_linux_sandbox_exe() {
+                Some(path) => Some(path),
+                None => {
+                    eprintln!("codex-linux-sandbox not usable, skipping test");
                     return $return_value;
                 }
             }
