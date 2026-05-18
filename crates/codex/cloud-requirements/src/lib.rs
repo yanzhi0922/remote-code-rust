@@ -1238,9 +1238,11 @@ mod tests {
             )
             .expect("write task registration response");
         });
+        let key_material =
+            codex_agent_identity::generate_agent_key_material().expect("generate test agent key");
         let record = AgentIdentityAuthRecord {
             agent_runtime_id: "agent-runtime-123".to_string(),
-            agent_private_key: "test-agent-private-key".to_string(),
+            agent_private_key: key_material.private_key_pkcs8_base64,
             account_id: "account-12345".to_string(),
             chatgpt_user_id: "user-12345".to_string(),
             email: "user@example.com".to_string(),
