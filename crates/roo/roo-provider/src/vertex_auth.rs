@@ -49,7 +49,7 @@ pub enum VertexAuthError {
 /// {
 ///   "type": "service_account",
 ///   "client_email": "...@...iam.gserviceaccount.com",
-///   "private_key": "-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n",
+///   "private_key": "<PEM_PRIVATE_KEY>",
 ///   "project_id": "my-project",
 ///   "token_uri": "https://oauth2.googleapis.com/token"
 /// }
@@ -291,7 +291,7 @@ mod tests {
         let json = r#"{
             "type": "service_account",
             "client_email": "test@project.iam.gserviceaccount.com",
-            "private_key": "-----BEGIN PRIVATE KEY-----\nMIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQC7VJTUt9Us8cKj\n-----END PRIVATE KEY-----\n",
+            "private_key": "test-private-key-data",
             "project_id": "my-project",
             "token_uri": "https://oauth2.googleapis.com/token"
         }"#;
@@ -364,7 +364,7 @@ mod tests {
     #[test]
     fn test_non_json_string_fails_gracefully() {
         // A plain access token string should fail to parse as service account
-        let plain_token = "ya29.a0AfH6SMBx...";
+        let plain_token = "not-json-access-token";
         let provider = VertexTokenProvider::new(plain_token);
         assert!(provider.is_err());
     }

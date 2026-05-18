@@ -1240,8 +1240,7 @@ mod tests {
         });
         let record = AgentIdentityAuthRecord {
             agent_runtime_id: "agent-runtime-123".to_string(),
-            agent_private_key: "MC4CAQAwBQYDK2VwBCIEIDQg14jybCLydjHQwXeBzsDM7oB6BSAenodx6oCovQ/D"
-                .to_string(),
+            agent_private_key: "test-agent-private-key".to_string(),
             account_id: "account-12345".to_string(),
             chatgpt_user_id: "user-12345".to_string(),
             email: "user@example.com".to_string(),
