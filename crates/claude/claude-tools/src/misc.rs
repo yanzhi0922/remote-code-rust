@@ -276,16 +276,6 @@ pub(crate) async fn lsp_tool(input: &Value, context: &ToolExecutionContext) -> R
                 Ok(calls.join("\n"))
             }
         }
-        "completion" => {
-            let suggestions = client.completion(file_path, line as u32, character as u32)?;
-            Ok(super::lsp::format_completions(&suggestions))
-        }
-        "diagnostics" => {
-            let diagnostics = client.diagnostics(file_path).await?;
-            let result = super::lsp::format_diagnostics(&diagnostics);
-            // Limit output size.
-            Ok(result.chars().take(10_000).collect())
-        }
         _ => Err(anyhow!("Unknown LSP operation: {operation}")),
     }
 }

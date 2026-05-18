@@ -14,13 +14,13 @@ pub static MODEL_ALIASES: LazyLock<Vec<(&str, &str)>> = LazyLock::new(|| {
     vec![
         // Family aliases — resolve to the current default for each family.
         ("sonnet", "claude-sonnet-4-6"),
-        ("opus", "claude-opus-4-6"),
+        ("opus", "claude-opus-4-7"),
         ("haiku", "claude-haiku-4-5-20251001"),
         // Convenience aliases
-        ("best", "claude-opus-4-6"),
+        ("best", "claude-opus-4-7"),
         // 1M-tagged aliases (the `[1m]` suffix is preserved by the caller)
         ("sonnet[1m]", "claude-sonnet-4-6"),
-        ("opus[1m]", "claude-opus-4-6"),
+        ("opus[1m]", "claude-opus-4-7"),
         // Composite alias: opus in plan mode, sonnet otherwise
         ("opusplan", "claude-sonnet-4-6"),
     ]
@@ -64,9 +64,9 @@ mod tests {
     #[test]
     fn alias_resolution() {
         assert_eq!(resolve_alias("sonnet"), Some("claude-sonnet-4-6"));
-        assert_eq!(resolve_alias("opus"), Some("claude-opus-4-6"));
+        assert_eq!(resolve_alias("opus"), Some("claude-opus-4-7"));
         assert_eq!(resolve_alias("haiku"), Some("claude-haiku-4-5-20251001"));
-        assert_eq!(resolve_alias("best"), Some("claude-opus-4-6"));
+        assert_eq!(resolve_alias("best"), Some("claude-opus-4-7"));
         assert_eq!(resolve_alias("unknown"), None);
     }
 

@@ -38,7 +38,22 @@ pub struct ModelCapabilities {
 
 static CAPABILITY_TABLE: LazyLock<Vec<(&str, ModelCapabilities)>> = LazyLock::new(|| {
     vec![
-        // ── Opus 4.6 ──────────────────────────────────────────────────
+        // ── Opus 4.7 ──────────────────────────────────────────────────
+        (
+            "claude-opus-4-7",
+            ModelCapabilities {
+                supports_images: true,
+                supports_tool_use: true,
+                supports_extended_thinking: true,
+                supports_1m_context: true,
+                supports_effort_level: true,
+                supports_max_effort: true,
+                max_output_tokens: 32_768,
+                context_window: 200_000,
+                default_effort: EffortLevel::High,
+            },
+        ),
+        // ── Opus 4.6 (legacy snapshot compatibility) ──────────────────
         (
             "claude-opus-4-6",
             ModelCapabilities {
@@ -285,7 +300,7 @@ mod tests {
 
     #[test]
     fn known_model_capabilities() {
-        let caps = get_capabilities("claude-opus-4-6");
+        let caps = get_capabilities("claude-opus-4-7");
         assert!(caps.supports_1m_context);
         assert!(caps.supports_extended_thinking);
         assert!(caps.supports_max_effort);
@@ -310,13 +325,13 @@ mod tests {
 
     #[test]
     fn bedrock_id_lookup() {
-        let caps = get_capabilities("us.anthropic.claude-opus-4-6-v1");
+        let caps = get_capabilities("us.anthropic.claude-opus-4-7-v1");
         assert!(caps.supports_1m_context);
     }
 
     #[test]
     fn model_supports_1m_check() {
-        assert!(model_supports_1m("claude-opus-4-6"));
+        assert!(model_supports_1m("claude-opus-4-7"));
         assert!(!model_supports_1m("claude-haiku-4-5-20251001"));
     }
 }

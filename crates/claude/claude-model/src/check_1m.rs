@@ -119,7 +119,7 @@ mod tests {
             subscription: SubscriptionTier::PayAsYouGo,
             ..Default::default()
         };
-        assert!(has_1m_access("claude-opus-4-6", &ctx));
+        assert!(has_1m_access("claude-opus-4-7", &ctx));
     }
 
     #[test]
@@ -138,7 +138,7 @@ mod tests {
             subscription: SubscriptionTier::PayAsYouGo,
             ..Default::default()
         };
-        assert!(!has_1m_access("claude-opus-4-6", &ctx));
+        assert!(!has_1m_access("claude-opus-4-7", &ctx));
     }
 
     #[test]
@@ -148,14 +148,14 @@ mod tests {
             extra_usage: ExtraUsageState::Enabled,
             ..Default::default()
         };
-        assert!(has_1m_access("claude-opus-4-6", &ctx));
+        assert!(has_1m_access("claude-opus-4-7", &ctx));
 
         let ctx_disabled = OneMContext {
             subscription: SubscriptionTier::Pro,
             extra_usage: ExtraUsageState::Disabled,
             ..Default::default()
         };
-        assert!(!has_1m_access("claude-opus-4-6", &ctx_disabled));
+        assert!(!has_1m_access("claude-opus-4-7", &ctx_disabled));
     }
 
     #[test]
@@ -165,19 +165,19 @@ mod tests {
             extra_usage: ExtraUsageState::OutOfCredits,
             ..Default::default()
         };
-        assert!(has_1m_access("claude-opus-4-6", &ctx));
+        assert!(has_1m_access("claude-opus-4-7", &ctx));
     }
 
     #[test]
     fn tag_detection() {
-        assert!(has_1m_tag("claude-opus-4-6[1m]"));
-        assert!(has_1m_tag("claude-opus-4-6[1M]"));
-        assert!(!has_1m_tag("claude-opus-4-6"));
+        assert!(has_1m_tag("claude-opus-4-7[1m]"));
+        assert!(has_1m_tag("claude-opus-4-7[1M]"));
+        assert!(!has_1m_tag("claude-opus-4-7"));
     }
 
     #[test]
     fn tag_stripping() {
-        assert_eq!(strip_1m_tag("claude-opus-4-6[1m]"), "claude-opus-4-6");
-        assert_eq!(strip_1m_tag("claude-opus-4-6"), "claude-opus-4-6");
+        assert_eq!(strip_1m_tag("claude-opus-4-7[1m]"), "claude-opus-4-7");
+        assert_eq!(strip_1m_tag("claude-opus-4-7"), "claude-opus-4-7");
     }
 }

@@ -38,7 +38,7 @@ pub fn get_available_upgrade(
     let lower = alias.to_lowercase();
     let base = lower.strip_suffix("[1m]").unwrap_or(&lower).trim();
 
-    if base == "opus" && has_1m_access("claude-opus-4-6", ctx) {
+    if base == "opus" && has_1m_access("claude-opus-4-7", ctx) {
         return Some(ContextUpgrade {
             alias: "opus[1m]",
             name: "Opus 1M",

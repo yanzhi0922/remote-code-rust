@@ -55,6 +55,9 @@ pub fn get_public_model_display_name(model_id: &str) -> Option<String> {
     let lower = lower.strip_suffix("[1m]").unwrap_or(&lower).trim();
 
     // Order matters: more specific patterns first.
+    if lower.contains("claude-opus-4-7") {
+        return Some("Opus 4.7".into());
+    }
     if lower.contains("claude-opus-4-6") {
         return Some("Opus 4.6".into());
     }
@@ -97,6 +100,9 @@ pub fn get_canonical_name(model_id: &str) -> String {
     let lower = model_id.to_lowercase();
 
     // Order matters: more specific patterns first.
+    if lower.contains("claude-opus-4-7") {
+        return "claude-opus-4-7".into();
+    }
     if lower.contains("claude-opus-4-6") {
         return "claude-opus-4-6".into();
     }
@@ -195,8 +201,8 @@ mod tests {
     #[test]
     fn display_names() {
         assert_eq!(
-            get_public_model_display_name("claude-opus-4-6"),
-            Some("Opus 4.6".into())
+            get_public_model_display_name("claude-opus-4-7"),
+            Some("Opus 4.7".into())
         );
         assert_eq!(
             get_public_model_display_name("claude-sonnet-4-5-20250929"),
@@ -207,7 +213,7 @@ mod tests {
 
     #[test]
     fn canonical_names() {
-        assert_eq!(get_canonical_name("claude-opus-4-6"), "claude-opus-4-6");
+        assert_eq!(get_canonical_name("claude-opus-4-7"), "claude-opus-4-7");
         assert_eq!(
             get_canonical_name("claude-opus-4-5-20251101"),
             "claude-opus-4-5"

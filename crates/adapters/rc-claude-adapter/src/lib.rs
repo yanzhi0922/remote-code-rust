@@ -667,7 +667,7 @@ impl AgentAdapter for ClaudeInProcessAdapter {
         let sub_agent = backend.sub_agent_completion();
 
         // 4. Initialize session conversation from SessionStore.
-        let mut conversation = ensure_conversation_initialized(
+        let conversation = ensure_conversation_initialized(
             &self.session_store,
             self.session_id,
             &self.runtime_config.cwd,
@@ -675,12 +675,12 @@ impl AgentAdapter for ClaudeInProcessAdapter {
             self.runtime_config.provider.model.as_deref(),
             Some(message),
         )?;
+        let existing_messages: Vec<Message> = conversation.into_iter().map(Message::from).collect();
 
         // Persist user entry.
         let user_entry = ConversationEntry::user(message);
         self.session_store
             .append_conversation_entry(self.session_id, &user_entry)?;
-        conversation.push(user_entry);
 
         // 5. Create permission broker.
         let broker = Arc::new(AdapterPermissionBroker::new(
@@ -728,13 +728,10 @@ impl AgentAdapter for ClaudeInProcessAdapter {
 
         query_config.max_turns = max_turns;
 
-        // 10. Convert existing conversation to Messages for QueryEngine.
-        let existing_messages: Vec<Message> = conversation.into_iter().map(Message::from).collect();
-
-        // 11. Create the query engine.
+        // 10. Create the query engine.
         let mut engine = QueryEngine::new(query_config, existing_messages);
 
-        // 12. Build the process-user-input context with fields from RuntimeConfig.
+        // 11. Build the process-user-input context with fields from RuntimeConfig.
         let mut context = ProcessUserInputContext::new(
             claude_session_id,
             self.runtime_config.permission_mode,
@@ -745,15 +742,15 @@ impl AgentAdapter for ClaudeInProcessAdapter {
         context.system_prompt = self.runtime_config.system_prompt.clone();
         context.requested_effort = self.runtime_config.effort.clone();
 
-        // 13. Create user message.
+        // 12. Create user message.
         let user_message = vec![Message::from(ConversationEntry::user(message))];
 
-        // 14. Send Started event.
+        // 13. Send Started event.
         let _ = event_tx
             .send(UnifiedAgentEvent::Started(self.info.clone()))
             .await;
 
-        // 15. Spawn the query engine task.
+        // 14. Spawn the query engine task.
         let cancel_token = self.cancel_token.clone();
         let event_tx_for_completion = event_tx.clone();
         let session_id_for_completion = session_id.to_owned();

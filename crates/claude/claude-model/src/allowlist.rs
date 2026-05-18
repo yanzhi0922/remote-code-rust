@@ -142,6 +142,7 @@ fn family_has_specific_entries(family: &str, allowlist: &[&str]) -> bool {
 /// The default built-in allowlist — all known model IDs.
 pub fn default_allowlist() -> Vec<String> {
     vec![
+        "claude-opus-4-7".into(),
         "claude-opus-4-6".into(),
         "claude-opus-4-5-20251101".into(),
         "claude-opus-4-1-20250805".into(),

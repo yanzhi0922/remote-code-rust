@@ -22,6 +22,7 @@ use crate::providers::{
 #[serde(rename_all = "snake_case")]
 pub enum Model {
     // ── Opus family ──────────────────────────────────────────────────
+    ClaudeOpus4_7,
     ClaudeOpus4_6,
     ClaudeOpus4_5_20251101,
     ClaudeOpus4_1_20250805,
@@ -43,6 +44,7 @@ impl Model {
     /// Return the canonical first-party model ID for this variant.
     pub fn model_id(&self) -> &str {
         match self {
+            Self::ClaudeOpus4_7 => "claude-opus-4-7",
             Self::ClaudeOpus4_6 => "claude-opus-4-6",
             Self::ClaudeOpus4_5_20251101 => "claude-opus-4-5-20251101",
             Self::ClaudeOpus4_1_20250805 => "claude-opus-4-1-20250805",
@@ -63,6 +65,7 @@ impl Model {
     /// Returns `Model::Custom(id)` for unknown IDs.
     pub fn from_id(id: &str) -> Self {
         match id {
+            "claude-opus-4-7" => Self::ClaudeOpus4_7,
             "claude-opus-4-6" => Self::ClaudeOpus4_6,
             "claude-opus-4-5-20251101" => Self::ClaudeOpus4_5_20251101,
             "claude-opus-4-1-20250805" => Self::ClaudeOpus4_1_20250805,
@@ -83,6 +86,7 @@ impl Model {
         matches!(
             self,
             Self::ClaudeOpus4_6
+                | Self::ClaudeOpus4_7
                 | Self::ClaudeOpus4_5_20251101
                 | Self::ClaudeOpus4_1_20250805
                 | Self::ClaudeOpus4_20250514
@@ -283,6 +287,7 @@ mod tests {
     #[test]
     fn model_from_id_roundtrip() {
         let ids = [
+            "claude-opus-4-7",
             "claude-opus-4-6",
             "claude-sonnet-4-6",
             "claude-haiku-4-5-20251001",
@@ -301,8 +306,8 @@ mod tests {
 
     #[test]
     fn family_checks() {
-        assert!(Model::ClaudeOpus4_6.is_opus());
-        assert!(!Model::ClaudeOpus4_6.is_sonnet());
+        assert!(Model::ClaudeOpus4_7.is_opus());
+        assert!(!Model::ClaudeOpus4_7.is_sonnet());
         assert!(Model::ClaudeSonnet4_6.is_sonnet());
         assert!(Model::ClaudeHaiku4_5_20251001.is_haiku());
     }

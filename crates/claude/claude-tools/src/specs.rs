@@ -416,16 +416,13 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
                         "goToImplementation",
                         "prepareCallHierarchy",
                         "incomingCalls",
-                        "outgoingCalls",
-                        "completion",
-                        "diagnostics"
+                        "outgoingCalls"
                     ]},
-                    "file_path": {"type": "string", "description": "The absolute or relative path to the file"},
+                    "filePath": {"type": "string", "description": "The absolute or relative path to the file"},
                     "line": {"type": "integer", "minimum": 1, "description": "The line number (1-based, as shown in editors)"},
-                    "character": {"type": "integer", "minimum": 1, "description": "The character offset (1-based, as shown in editors)"},
-                    "symbol": {"type": "string"}
+                    "character": {"type": "integer", "minimum": 1, "description": "The character offset (1-based, as shown in editors)"}
                 },
-                "required": ["operation", "file_path"],
+                "required": ["operation", "filePath", "line", "character"],
                 "additionalProperties": false,
             }),
         },
@@ -1516,6 +1513,64 @@ mod tests {
             assert!(properties.contains_key("path"), "{name}");
             assert!(!properties.contains_key("file_path"), "{name}");
         }
+    }
+
+    #[test]
+    fn lsp_schema_matches_research_tool_contract() {
+        let specs = builtin_tool_specs();
+        let spec = specs
+            .iter()
+            .find(|spec| spec.name == "lsp")
+            .expect("missing lsp spec");
+        let properties = spec
+            .input_schema
+            .get("properties")
+            .and_then(|value| value.as_object())
+            .expect("lsp properties");
+        let required = spec
+            .input_schema
+            .get("required")
+            .and_then(|value| value.as_array())
+            .expect("lsp required fields")
+            .iter()
+            .filter_map(|value| value.as_str())
+            .collect::<std::collections::BTreeSet<_>>();
+        let operations = properties
+            .get("operation")
+            .and_then(|value| value.get("enum"))
+            .and_then(|value| value.as_array())
+            .expect("operation enum")
+            .iter()
+            .filter_map(|value| value.as_str())
+            .collect::<std::collections::BTreeSet<_>>();
+
+        assert!(properties.contains_key("filePath"));
+        assert!(properties.contains_key("line"));
+        assert!(properties.contains_key("character"));
+        assert!(!properties.contains_key("file_path"));
+        assert!(!properties.contains_key("symbol"));
+        assert_eq!(
+            required,
+            ["operation", "filePath", "line", "character"]
+                .into_iter()
+                .collect()
+        );
+        assert_eq!(
+            operations,
+            [
+                "goToDefinition",
+                "findReferences",
+                "hover",
+                "documentSymbol",
+                "workspaceSymbol",
+                "goToImplementation",
+                "prepareCallHierarchy",
+                "incomingCalls",
+                "outgoingCalls"
+            ]
+            .into_iter()
+            .collect()
+        );
     }
 
     #[test]

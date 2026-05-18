@@ -15,6 +15,7 @@ use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
+use rc_agent_protocol::PermissionDecision as AgentPermissionDecision;
 use rc_agent_protocol::adapter::AgentAdapter;
 use rc_agent_protocol::events::UnifiedAgentEvent;
 use rc_agent_protocol::types::{AgentConfig, AgentType};
@@ -34,9 +35,9 @@ use crate::state::{KEYRING_SERVICE, PROJECTS_FILE_NAME, PROVIDERS_FILE_NAME, SET
 
 use claude_control_plane::RunnerCommandPullResponse;
 use claude_runner::{
-    RUNNER_EVENT_CHANNEL_CAPACITY, RunnerApi, RunnerApiEvent, RunnerConfig, RunnerConfigOverrides,
-    RunnerSessionCommandRequest, RunnerSessionRecord, load_runner_config,
-    register_with_control_plane, send_heartbeat,
+    ApprovalRequestRecord, ApprovalState, RUNNER_EVENT_CHANNEL_CAPACITY, RunnerApi, RunnerApiEvent,
+    RunnerConfig, RunnerConfigOverrides, RunnerSessionCommandRequest, RunnerSessionRecord,
+    load_runner_config, register_with_control_plane, send_heartbeat,
 };
 
 static REMOTE_SERVICE_STARTED: AtomicBool = AtomicBool::new(false);
@@ -1093,10 +1094,78 @@ impl InProcessSessionManager {
                 command,
             } => self.forward_command(session_id, command).await,
             RunnerApiEvent::ApprovalResolved(approval) => {
-                info!("Remote approval resolved: {:?}", approval.approval_id);
-                Ok(())
+                self.resolve_remote_approval(approval).await
             }
         }
+    }
+
+    async fn resolve_remote_approval(&self, approval: ApprovalRequestRecord) -> Result<()> {
+        let decision = match approval.state {
+            ApprovalState::Approved => AgentPermissionDecision::Allow,
+            ApprovalState::Denied | ApprovalState::Cancelled => AgentPermissionDecision::Deny,
+            ApprovalState::Pending => return Ok(()),
+        };
+
+        let request_id = approval
+            .metadata
+            .get("request_id")
+            .cloned()
+            .unwrap_or_else(|| approval.approval_id.to_string());
+        let sid = approval.session_id.to_string();
+        let agent_type = {
+            let sessions = self.sessions.lock().await;
+            sessions
+                .get(&approval.session_id)
+                .map(|session| session.agent_type)
+                .unwrap_or(AgentType::RemoteClaude)
+        };
+
+        info!(
+            "Remote approval resolved: {} for request {} ({:?})",
+            approval.approval_id, request_id, agent_type
+        );
+
+        let result = match agent_type {
+            AgentType::RemoteClaude => {
+                let mut adapters = self.claude_adapters.lock().await;
+                match adapters.get_mut(&sid) {
+                    Some(adapter) => adapter
+                        .resolve_permission(&sid, &request_id, decision)
+                        .await
+                        .map_err(|error| anyhow!("Claude resolve_permission: {error}")),
+                    None => Err(anyhow!("Claude adapter not started")),
+                }
+            }
+            AgentType::RemoteRoo => {
+                let mut adapters = self.roo_adapters.lock().await;
+                match adapters.get_mut(&sid) {
+                    Some(adapter) => adapter
+                        .resolve_permission(&sid, &request_id, decision)
+                        .await
+                        .map_err(|error| anyhow!("Roo resolve_permission: {error}")),
+                    None => Err(anyhow!("Roo adapter not started")),
+                }
+            }
+            AgentType::RemoteCodex => {
+                let mut adapters = self.codex_adapters.lock().await;
+                match adapters.get_mut(&sid) {
+                    Some(adapter) => adapter
+                        .resolve_permission(&sid, &request_id, decision)
+                        .await
+                        .map_err(|error| anyhow!("Codex resolve_permission: {error}")),
+                    None => Err(anyhow!("Codex adapter not started")),
+                }
+            }
+        };
+
+        if let Err(error) = result {
+            warn!(
+                "Failed to resolve remote approval {} for request {}: {error:#}",
+                approval.approval_id, request_id
+            );
+        }
+
+        Ok(())
     }
 
     async fn create_session(&self, session: RunnerSessionRecord) -> Result<()> {

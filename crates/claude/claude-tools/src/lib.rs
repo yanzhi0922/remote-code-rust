@@ -486,6 +486,8 @@ fn canonical_builtin_tool_name(internal_name: &str) -> Option<&'static str> {
         "repl" => Some("REPL"),
         "monitor" => Some("Monitor"),
         "schedule_cron" => Some("CronCreate"),
+        "cron_delete" => Some("CronDelete"),
+        "cron_list" => Some("CronList"),
         "remote_trigger" => Some("RemoteTrigger"),
         "workflow" => Some("workflow"),
         "suggest_pr" => Some("SuggestPR"),
@@ -526,6 +528,8 @@ fn builtin_tool_aliases(internal_name: &str) -> &'static [&'static str] {
         "verify_plan" => &["VerifyPlan"],
         "terminal_capture" => &["TerminalCapture"],
         "schedule_cron" => &["ScheduleCron", "CronCreate"],
+        "cron_delete" => &["CronDelete"],
+        "cron_list" => &["CronList"],
         "brief" => &["Brief"],
         "list_mcp_resources" => &["ListMcpResources", "ListMcpResourcesTool"],
         "read_mcp_resource" => &["ReadMcpResource", "ReadMcpResourceTool"],
@@ -557,6 +561,8 @@ fn builtin_tool_is_deferred(name: &str) -> bool {
             | "web_search"
             | "remote_trigger"
             | "schedule_cron"
+            | "cron_delete"
+            | "cron_list"
             | "list_mcp_resources"
             | "read_mcp_resource"
     )
@@ -574,6 +580,8 @@ fn builtin_tool_search_hints(name: &str) -> &'static [&'static str] {
         "glob" => &["find files by name pattern or wildcard"],
         "grep" => &["search file contents with regex ripgrep"],
         "lsp" => &["code intelligence definitions references symbols hover"],
+        "cron_delete" => &["cancel scheduled cron job"],
+        "cron_list" => &["list scheduled cron jobs"],
         "notebook_edit" => &["edit jupyter notebook cells ipynb"],
         "read_file" => &["read files images pdfs notebooks"],
         "remote_trigger" => &["manage scheduled remote agent triggers"],
@@ -1815,6 +1823,8 @@ pub async fn execute_tool_call(
             "repl" => command::repl_tool(&effective_call.input, context).await,
             "monitor" => system::monitor_tool(&effective_call.input),
             "schedule_cron" => workflow::schedule_cron_tool(&effective_call.input, context),
+            "cron_delete" => workflow::cron_delete_tool(&effective_call.input, context),
+            "cron_list" => workflow::cron_list_tool(&effective_call.input, context),
             "remote_trigger" => misc::remote_trigger_tool(&effective_call.input).await,
             "workflow" => workflow::workflow_tool(&effective_call.input, context),
             "suggest_pr" => git::suggest_pr_tool(context),
@@ -3791,48 +3801,6 @@ while True:
     }
 
     #[tokio::test]
-    async fn lsp_completion_returns_stub() {
-        let tempdir = match tempdir() {
-            Ok(dir) => dir,
-            Err(error) => panic!("failed to create tempdir: {error}"),
-        };
-        let context = ToolExecutionContext {
-            original_cwd: tempdir.path().to_path_buf().clone(),
-            cwd: tempdir.path().to_path_buf(),
-            active_worktree_session: None,
-            timeout_ms: 5_000,
-            sub_agent: None,
-            progress_cb: None,
-            task_stack: Default::default(),
-            read_file_state: crate::FileStateCache::new(),
-            sub_agent_output_tokens: Arc::new(std::sync::atomic::AtomicU64::new(0)),
-        };
-        let broker = StaticPermissionBroker::new(true);
-
-        let result = execute_tool_call(
-            &ToolCall {
-                id: "1".to_owned(),
-                name: "lsp".to_owned(),
-                input: json!({
-                    "action": "completion",
-                    "file_path": "main.rs",
-                }),
-            },
-            &context,
-            &broker,
-        )
-        .await
-        .expect("lsp completion should work");
-
-        assert!(!result.is_error, "lsp error: {}", result.content);
-        assert!(
-            result.content.contains("No completions available"),
-            "completion should indicate no completions, got: {}",
-            result.content
-        );
-    }
-
-    #[tokio::test]
     async fn task_tools_crud_workflow() {
         let tempdir = match tempdir() {
             Ok(dir) => dir,
@@ -5203,9 +5171,9 @@ while True:
                 id: "1".to_owned(),
                 name: "schedule_cron".to_owned(),
                 input: json!({
-                    "schedule": "*/5 * * * *",
-                    "command": "echo hello",
-                    "description": "test cron"
+                    "cron": "*/5 * * * *",
+                    "prompt": "echo hello",
+                    "recurring": true
                 }),
             },
             &context,
@@ -5215,8 +5183,92 @@ while True:
         .expect("schedule_cron should work");
 
         assert!(!result.is_error, "schedule_cron error: {}", result.content);
+        let parsed: serde_json::Value =
+            serde_json::from_str(&result.content).expect("schedule result should be JSON");
+        assert_eq!(parsed["id"], "cron-1");
+        assert_eq!(parsed["recurring"], true);
         let crons_path = tempdir.path().join(".remote-code-rust").join("crons.json");
         assert!(crons_path.exists(), "crons.json should exist");
+    }
+
+    #[tokio::test]
+    async fn cron_list_and_delete_are_dispatched() {
+        let tempdir = match tempdir() {
+            Ok(dir) => dir,
+            Err(error) => panic!("failed to create tempdir: {error}"),
+        };
+        let context = ToolExecutionContext {
+            original_cwd: tempdir.path().to_path_buf().clone(),
+            cwd: tempdir.path().to_path_buf(),
+            active_worktree_session: None,
+            timeout_ms: 5_000,
+            sub_agent: None,
+            progress_cb: None,
+            task_stack: Default::default(),
+            read_file_state: crate::FileStateCache::new(),
+            sub_agent_output_tokens: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        };
+        let broker = StaticPermissionBroker::new(true);
+
+        let create = execute_tool_call(
+            &ToolCall {
+                id: "1".to_owned(),
+                name: "CronCreate".to_owned(),
+                input: json!({
+                    "cron": "*/10 * * * *",
+                    "prompt": "check status",
+                }),
+            },
+            &context,
+            &broker,
+        )
+        .await
+        .expect("cron create should dispatch");
+        assert!(!create.is_error, "cron create error: {}", create.content);
+
+        let list = execute_tool_call(
+            &ToolCall {
+                id: "2".to_owned(),
+                name: "CronList".to_owned(),
+                input: json!({}),
+            },
+            &context,
+            &broker,
+        )
+        .await
+        .expect("cron list should dispatch");
+        assert!(!list.is_error, "cron list error: {}", list.content);
+        let parsed: serde_json::Value =
+            serde_json::from_str(&list.content).expect("cron list should be JSON");
+        assert_eq!(parsed["jobs"].as_array().expect("jobs array").len(), 1);
+
+        let delete = execute_tool_call(
+            &ToolCall {
+                id: "3".to_owned(),
+                name: "CronDelete".to_owned(),
+                input: json!({"id": "cron-1"}),
+            },
+            &context,
+            &broker,
+        )
+        .await
+        .expect("cron delete should dispatch");
+        assert!(!delete.is_error, "cron delete error: {}", delete.content);
+
+        let list_after = execute_tool_call(
+            &ToolCall {
+                id: "4".to_owned(),
+                name: "CronList".to_owned(),
+                input: json!({}),
+            },
+            &context,
+            &broker,
+        )
+        .await
+        .expect("cron list after delete should dispatch");
+        let parsed: serde_json::Value =
+            serde_json::from_str(&list_after.content).expect("cron list should be JSON");
+        assert_eq!(parsed["jobs"].as_array().expect("jobs array").len(), 0);
     }
 
     #[tokio::test]
@@ -6524,6 +6576,14 @@ while True:
         assert!(
             names.contains(&"schedule_cron"),
             "schedule_cron should be registered"
+        );
+        assert!(
+            names.contains(&"cron_delete"),
+            "cron_delete should be registered"
+        );
+        assert!(
+            names.contains(&"cron_list"),
+            "cron_list should be registered"
         );
         assert!(
             names.contains(&"remote_trigger"),

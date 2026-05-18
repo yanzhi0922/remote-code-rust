@@ -1,39 +1,62 @@
 //! Workflow, cron scheduling, and daemon management tools.
 
-use anyhow::{Result, anyhow};
+use anyhow::{Context, Result, anyhow};
 use serde_json::{Value, json};
 
 use super::ToolExecutionContext;
 
-pub(crate) fn schedule_cron_tool(input: &Value, context: &ToolExecutionContext) -> Result<String> {
-    let action = input["action"].as_str().unwrap_or("create");
-
+fn crons_path(context: &ToolExecutionContext) -> Result<std::path::PathBuf> {
     let crons_dir = context.cwd.join(".remote-code-rust");
     std::fs::create_dir_all(&crons_dir)?;
-    let crons_path = crons_dir.join("crons.json");
+    Ok(crons_dir.join("crons.json"))
+}
 
-    let mut crons: Vec<Value> = if crons_path.exists() {
-        let content = std::fs::read_to_string(&crons_path)?;
+fn load_crons(context: &ToolExecutionContext) -> Result<(std::path::PathBuf, Vec<Value>)> {
+    let path = crons_path(context)?;
+    let crons = if path.exists() {
+        let content = std::fs::read_to_string(&path)?;
         serde_json::from_str(&content).unwrap_or_default()
     } else {
         Vec::new()
     };
+    Ok((path, crons))
+}
+
+fn save_crons(path: &std::path::Path, crons: &[Value]) -> Result<()> {
+    let content = serde_json::to_string_pretty(crons)?;
+    std::fs::write(path, content)?;
+    Ok(())
+}
+
+pub(crate) fn schedule_cron_tool(input: &Value, context: &ToolExecutionContext) -> Result<String> {
+    let action = input["action"].as_str().unwrap_or("create");
+    let (crons_path, mut crons) = load_crons(context)?;
 
     match action {
         "create" | "add" => {
-            let schedule = input["schedule"]
-                .as_str()
-                .ok_or_else(|| anyhow!("schedule is required (cron expression)"))?;
-            let command = input["command"]
-                .as_str()
-                .ok_or_else(|| anyhow!("command is required"))?;
-            let description = input["description"].as_str().unwrap_or("");
+            let cron = input
+                .get("cron")
+                .or_else(|| input.get("schedule"))
+                .and_then(Value::as_str)
+                .ok_or_else(|| anyhow!("cron is required"))?;
+            claude_utils::cron::parse_cron(cron)
+                .with_context(|| format!("invalid cron expression '{cron}'"))?;
+            let prompt = input
+                .get("prompt")
+                .or_else(|| input.get("command"))
+                .and_then(Value::as_str)
+                .ok_or_else(|| anyhow!("prompt is required"))?;
+            let recurring = input["recurring"].as_bool().unwrap_or(true);
+            let durable = input["durable"].as_bool().unwrap_or(false);
+            let id = format!("cron-{}", crons.len() + 1);
 
             let entry = json!({
-                "id": format!("cron-{}", crons.len() + 1),
-                "schedule": schedule,
-                "command": command,
-                "description": description,
+                "id": id,
+                "cron": cron,
+                "humanSchedule": cron,
+                "prompt": prompt,
+                "recurring": recurring,
+                "durable": durable,
                 "created_at": std::time::SystemTime::now()
                     .duration_since(std::time::SystemTime::UNIX_EPOCH)
                     .map(|d| d.as_secs())
@@ -41,35 +64,82 @@ pub(crate) fn schedule_cron_tool(input: &Value, context: &ToolExecutionContext) 
             });
             crons.push(entry);
 
-            let content = serde_json::to_string_pretty(&crons)?;
-            std::fs::write(&crons_path, content)?;
-
-            Ok(format!("Cron job saved: '{}' → {}", schedule, command))
+            save_crons(&crons_path, &crons)?;
+            Ok(json!({
+                "id": id,
+                "humanSchedule": cron,
+                "recurring": recurring,
+                "durable": durable,
+            })
+            .to_string())
         }
-        "list" => Ok(json!({
-            "crons": crons,
-            "count": crons.len(),
-        })
-        .to_string()),
+        "list" => cron_list_tool(input, context),
         "delete" | "remove" => {
             let id = input["id"]
                 .as_str()
+                .or_else(|| input["cron"].as_str())
                 .or_else(|| input["schedule"].as_str())
                 .ok_or_else(|| anyhow!("id or schedule is required for delete"))?;
 
             let before = crons.len();
-            crons.retain(|c| c["id"].as_str() != Some(id) && c["schedule"].as_str() != Some(id));
+            crons.retain(|c| {
+                c["id"].as_str() != Some(id)
+                    && c["cron"].as_str() != Some(id)
+                    && c["schedule"].as_str() != Some(id)
+            });
 
             if crons.len() < before {
-                let content = serde_json::to_string_pretty(&crons)?;
-                std::fs::write(&crons_path, content)?;
-                Ok("Cron job deleted.".to_string())
+                save_crons(&crons_path, &crons)?;
+                Ok(json!({ "id": id }).to_string())
             } else {
                 Ok(format!("Cron job '{id}' not found."))
             }
         }
         _ => Err(anyhow!("action must be 'create', 'list', or 'delete'")),
     }
+}
+
+pub(crate) fn cron_delete_tool(input: &Value, context: &ToolExecutionContext) -> Result<String> {
+    let id = input["id"]
+        .as_str()
+        .ok_or_else(|| anyhow!("id is required"))?;
+    let (crons_path, mut crons) = load_crons(context)?;
+    let before = crons.len();
+    crons.retain(|cron| cron["id"].as_str() != Some(id));
+    if crons.len() == before {
+        return Err(anyhow!("No scheduled job with id '{id}'"));
+    }
+    save_crons(&crons_path, &crons)?;
+    Ok(json!({ "id": id }).to_string())
+}
+
+pub(crate) fn cron_list_tool(_input: &Value, context: &ToolExecutionContext) -> Result<String> {
+    let (_crons_path, crons) = load_crons(context)?;
+    let jobs = crons
+        .into_iter()
+        .map(|cron| {
+            let id = cron["id"].clone();
+            let cron_expr = cron
+                .get("cron")
+                .or_else(|| cron.get("schedule"))
+                .cloned()
+                .unwrap_or(Value::String(String::new()));
+            let prompt = cron
+                .get("prompt")
+                .or_else(|| cron.get("command"))
+                .cloned()
+                .unwrap_or(Value::String(String::new()));
+            json!({
+                "id": id,
+                "cron": cron_expr,
+                "humanSchedule": cron.get("humanSchedule").cloned().unwrap_or_else(|| cron_expr.clone()),
+                "prompt": prompt,
+                "recurring": cron.get("recurring").and_then(Value::as_bool).unwrap_or(true),
+                "durable": cron.get("durable").and_then(Value::as_bool).unwrap_or(false),
+            })
+        })
+        .collect::<Vec<_>>();
+    Ok(json!({ "jobs": jobs }).to_string())
 }
 
 pub(crate) fn workflow_tool(input: &Value, context: &ToolExecutionContext) -> Result<String> {
