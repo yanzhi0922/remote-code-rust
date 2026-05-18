@@ -10,6 +10,7 @@
 | --- | --- | --- |
 | 2026-05-18 | 0.1 | 初版需求基线。 |
 | 2026-05-18 | 0.1.1 | 补充远程混合连接默认策略、发布验收 Provider 矩阵和 MCP 测试资源；明确测试密钥不得写入 PRD 或 Git 追踪文件。 |
+| 2026-05-18 | 0.1.2 | 增加 Tailscale/tailnet 可选网络模式，用于私有直连、降低公网暴露面和增强远控部署弹性。 |
 
 ## 1. 文档目标
 
@@ -30,6 +31,7 @@ Remote Code Rust 是一个本地优先的 AI 编程助手平台。它把 Claude�
 - 用户的代码、工具执行、provider key 和 agent runtime 默认留在本机或可信 Runner。
 - 云端只负责认证、配对、事件中继、审批中继、artifact 下载和 Web/PWA 静态资源，不运行 coding agent。
 - 同一产品要覆盖本地重度开发、桌面 GUI 管理、手机远控审批、云端 relay 发布和多 agent 协作。
+- 可选支持 Tailscale tailnet 部署模式，让桌面、手机/PWA、Relay 在私有网络内直连或半直连，降低公网端口暴露和 NAT/防火墙配置成本。
 
 ## 3. 术语
 
@@ -45,6 +47,8 @@ Remote Code Rust 是一个本地优先的 AI 编程助手平台。它把 Claude�
 | Stream Ticket | 打开 WebSocket 事件流前一次性换取的短期凭证，避免长期 token 暴露在 URL。 |
 | MCP | Model Context Protocol，提供外部工具、资源和服务接入。 |
 | Skill | 以 `SKILL.md` 和 frontmatter 定义的可发现能力说明。 |
+| Tailscale | 基于 WireGuard 的身份感知 mesh VPN/私有网络平台，可把桌面、手机、Relay 放入同一个 tailnet。 |
+| Tailnet | Tailscale 中由同一组织或账号管理的一组受信设备网络；设备可通过 tailnet IP 或 MagicDNS 名称互访。 |
 
 ## 4. 用户与角色
 
@@ -90,6 +94,7 @@ P2 目标:
 - NG-04: Web/PWA 不应依赖 URL 中的长期 access token；只能临时兼容旧查询参数。
 - NG-05: 目前移动端不以应用商店正式发布为既定完成标准，仍需要真机、推送和原生打包验收。
 - NG-06: 需求文档不承诺所有 roadmap 项已完成；已规划和已实现需求必须明确区分。
+- NG-07: Tailscale 是可选网络增强，不是首发硬依赖；不能替代 Remote Code 自身的账号、设备配对、E2EE、审批、审计和 token 管理。
 
 ## 7. 系统总览
 
@@ -327,6 +332,7 @@ flowchart TD
 | FR-REMOTE-09 | 移动端初始化必须支持网络状态、可选生物识别、haptics、secure storage、push token 注册、deep link 解析。 |
 | FR-REMOTE-10 | 浏览器/PWA 不得把远程 access token 和 refresh token 持久保存在 localStorage；当前实现应优先 sessionStorage 与 Tauri secure store，并清理 legacy localStorage token。 |
 | FR-REMOTE-11 | URL 中的 `access_token`、`token`、`pairing_offer`、`pairing_secret` 等敏感参数必须被清除。 |
+| FR-REMOTE-12 | 当桌面端、移动端/PWA 或 Relay 均加入同一 tailnet 时，Tailscale tailnet direct 应作为 `smart` 策略的可选候选路径；用户也必须能手动指定 `tailscale`/`tailnet` 路径或禁用它。 |
 
 ### 9.9 Control Plane
 
@@ -368,8 +374,10 @@ flowchart TD
 | FR-TRANSPORT-03 | Transport 必须暴露 connect、send_command、health_probe、disconnect、state、active_strategy、metrics。 |
 | FR-TRANSPORT-04 | TLS 默认必须 enforce HTTPS，不接受 self-signed，除非高级配置明确允许并提供证书指纹。 |
 | FR-TRANSPORT-05 | Transport metrics 必须覆盖 latency、events received/dropped、reconnect、strategy switches、bytes sent/received、last event time。 |
-| FR-TRANSPORT-06 | 默认 `smart` 策略必须产出可诊断评分结果；用户手动指定 `relay`、`direct`、`outbound`、`quic` 或 `hybrid` 时，UI 必须展示当前策略和最近失败原因。 |
+| FR-TRANSPORT-06 | 默认 `smart` 策略必须产出可诊断评分结果；用户手动指定 `relay`、`direct`、`outbound`、`quic`、`hybrid` 或 `tailscale` 时，UI 必须展示当前策略和最近失败原因。 |
 | FR-TRANSPORT-07 | QUIC 作为正式传输进入发布门禁，必须通过连接、E2EE、事件流、prompt、approval、artifact 的受控环境 E2E；失败不得仅以 Relay fallback 视为通过。 |
+| FR-TRANSPORT-08 | Tailscale 模式不得新增单独业务协议；它应作为 Direct WebSocket/HTTPS/QUIC 的私有网络承载路径，仍复用 Remote Code 的设备 token、stream ticket、E2EE 和审批协议。 |
+| FR-TRANSPORT-09 | Tailscale 路径选择必须可观测，至少展示 tailnet hostname/IP、当前策略、最近探测延迟、失败原因和是否命中用户手动指定策略。 |
 
 ### 9.12 MCP、Skills、Plugins
 
@@ -517,7 +525,10 @@ flowchart TD
 | `REMOTE_CODE_ALLOW_QUERY_ACCESS_TOKEN` | control plane 旧查询 token 兼容开关，仅临时使用 |
 | `REMOTE_CODE_RUNNER_ALLOW_QUERY_ACCESS_TOKEN` | runner 旧查询 token 兼容开关，仅临时使用 |
 | `VITE_REMOTE_CONTROL_PLANE_URL` | Web/PWA 默认 control plane URL |
-| `VITE_REMOTE_CODE_TRANSPORT_MODE` | remote transport mode，默认 `smart`；允许用户或部署配置指定 `relay`、`direct`、`outbound`、`quic`、`hybrid` |
+| `VITE_REMOTE_CODE_TRANSPORT_MODE` | remote transport mode，默认 `smart`；允许用户或部署配置指定 `relay`、`direct`、`outbound`、`quic`、`hybrid`、`tailscale` |
+| `REMOTE_CODE_TAILSCALE_ENABLED` | 可选规划项；启用 Tailscale/tailnet 候选路径探测 |
+| `REMOTE_CODE_TAILSCALE_HOSTNAME` | 可选规划项；指定桌面 Runner 或 Relay 的 MagicDNS/tailnet hostname |
+| `REMOTE_CODE_TAILSCALE_PREFER` | 可选规划项；在 `smart` 评分中提高 tailnet direct 优先级，但不得绕过认证和 E2EE |
 | `CLAUDE_STREAM_IDLE_TIMEOUT_MS` | SSE idle timeout |
 | `CLAUDE_STREAM_WATCHDOG_DISABLED` | 关闭 stream watchdog |
 | `CLAUDE_BASH_MAX_TIMEOUT_MS` | bash 工具最大 timeout |
@@ -570,6 +581,25 @@ MiniMax Token Plan 与 KuaiKAT Coding Plan 是发布验收 Provider 的补充矩
   }
 }
 ```
+
+### 11.4 Tailscale 可选网络模式
+
+Tailscale 可作为 Remote Code 的可选网络增强，适合个人自部署、跨 NAT/防火墙的手机远控、私有 Relay 管理和不希望公开暴露 Runner 端口的场景。
+
+目标能力:
+
+- 桌面 Runner、手机/PWA 所在设备、Relay 可加入同一 tailnet，通过 tailnet IP 或 MagicDNS 名称互访。
+- `smart` 连接评分可把 tailnet direct 作为候选路径；当 tailnet 路径延迟更低、E2EE 可用且用户未禁用时，可优先于公网 Relay。
+- 用户可手动指定 tailnet 路径，也可禁用 Tailscale 探测，避免和企业网络策略冲突。
+- Tailscale ACL 应采用最小权限，只允许移动端/Relay 访问 Remote Code 所需端口，不应给整台开发机开放不必要服务。
+- 即使使用 tailnet，Remote Code 仍必须执行自身设备认证、stream ticket、E2EE、审批和审计。
+
+不进入首发硬依赖:
+
+- 不要求用户必须安装 Tailscale 才能使用远控。
+- 不要求 Remote Code 托管或管理 Tailscale 控制平面。
+- 不把 Tailscale identity 直接等同于 Remote Code 用户身份。
+- 不依赖 Tailscale 网络日志作为 Remote Code 审计来源。
 
 ## 12. 数据需求
 
@@ -671,6 +701,7 @@ Artifact 必须包含:
 | NFR-SEC-09 | file download、artifact file name、path traversal 必须防护。 |
 | NFR-SEC-10 | 新增 `unsafe` 必须 code review；CI 必须跑 clippy 和 audit。 |
 | NFR-SEC-11 | Provider key、MCP key、runner token、refresh token 不得出现在需求文档、发布报告、日志、截图、录屏、导出包或 Git 追踪文件中；需要展示配置时必须使用 `<SECRET>` 或环境变量占位。 |
+| NFR-SEC-12 | Tailscale/tailnet 模式只能降低网络暴露面，不能降低应用层安全要求；所有业务负载仍必须通过 Remote Code 认证、E2EE、权限审批和审计。 |
 
 ### 13.2 隐私
 
@@ -680,6 +711,7 @@ Artifact 必须包含:
 | NFR-PRI-02 | timeline event 中不得包含未经必要性评估的大段敏感文件内容。 |
 | NFR-PRI-03 | GUI 应提供 workspace privacy mode，降低屏幕可见敏感路径或内容。 |
 | NFR-PRI-04 | 日志和错误消息不得打印 API key、refresh token、runner auth token。 |
+| NFR-PRI-05 | 若用户启用 Tailscale 网络日志或第三方 SIEM，Remote Code 文档必须提示其可能记录连接元数据；Remote Code 仍不得把业务明文、provider key、prompt 或 artifact 内容交给 Tailscale。 |
 
 ### 13.3 可靠性
 
@@ -762,6 +794,7 @@ powershell -ExecutionPolicy Bypass -File scripts\verify-release.ps1 -IncludeDesk
 | Runner | outbound mode 能注册、拉取命令、启动本地 `remote-code`、上传事件、处理 approval。 |
 | Mobile/PWA | bootstrap/pairing、session 恢复、prompt、interrupt、approval、artifact、timeline、刷新恢复认证态。 |
 | Remote Transport | `smart` 默认策略能按评分选择传输；用户手动指定策略优先；Relay、Direct WS、Outbound Poll、QUIC 均完成声明范围内 E2E，QUIC 失败阻断发布。 |
+| Tailscale 可选路径 | 至少在一组桌面 + 手机/PWA + Relay 同 tailnet 环境中验证 tailnet direct 探测、手动指定、禁用、失败 fallback、E2EE、approval 和 artifact 下载。 |
 | Provider 补充矩阵 | MiniMax Token Plan 与 KuaiKAT Coding Plan 在 Claude/Codex/Roo 适配路径中的可用性、失败原因、耗时、成本、工具调用和最终 diff 必须写入发布报告。 |
 | MCP 验收 | MiniMax、context7、sequentialthinking、memory、puppeteer MCP 必须覆盖启动、健康检查、工具发现、一次真实调用、失败提示和密钥脱敏日志。 |
 | 安全部署 | 云端 host 仅运行 control plane，无 runner/agent/provider key/workspace。 |
@@ -794,6 +827,8 @@ CI 必须覆盖:
 | RISK-08 | Makefile 存在旧 Roo 路径 | 开发者可能执行到过时目标 | P3 |
 | RISK-09 | 当前工作树存在大量未提交改动 | 发布前必须厘清变更来源和门禁结果 | P1 |
 | RISK-10 | 全 workspace 测试体量大 | Windows 可能需要分包、限并发、降低 debuginfo | P2 |
+| RISK-11 | Tailscale ACL 或设备信任配置错误 | 可能扩大 tailnet 内服务可达范围，需文档化最小权限 ACL 和端口暴露建议 | P2 |
+| RISK-12 | 用户环境未安装或无法登录 Tailscale | Tailscale 只能作为可选增强，必须保留 Relay/Direct/Outbound fallback | P2 |
 
 ## 16. 后续需求 Backlog
 
@@ -842,6 +877,8 @@ CI 必须覆盖:
 - [ ] query access token legacy 开关保持关闭，除非有临时兼容说明。
 - [ ] 默认远程传输策略为 `smart`，用户可在高级设置手动指定传输策略，手动指定优先于智能评分。
 - [ ] Relay、Direct WS、Outbound Poll、QUIC 均完成声明范围内 E2E；QUIC 受控环境 E2E 失败不得发布。
+- [ ] 如启用 Tailscale 可选路径，tailnet direct 的探测、手动指定、禁用、fallback、E2EE、approval 和 artifact 下载均已验证；未启用 Tailscale 时不影响标准远控链路。
+- [ ] Tailscale ACL/设备信任建议已记录，且文档明确 Tailscale 不替代 Remote Code 自身认证、E2EE、审批和审计。
 - [ ] MiniMax Token Plan 与 KuaiKAT Coding Plan 作为补充 Provider 矩阵完成发布验收记录。
 - [ ] MiniMax、context7、sequentialthinking、memory、puppeteer MCP 完成启动、健康检查、工具发现、一次真实调用、失败提示和密钥脱敏日志验收。
 - [ ] 需求文档、发布报告、日志、截图、录屏、导出包和 Git 追踪文件不包含真实 Provider key 或 MCP key。
