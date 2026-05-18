@@ -33,7 +33,7 @@ function Dropdown({
             className="fixed inset-0 z-10 cursor-default"
             onClick={onToggle}
           />
-          <div className="absolute bottom-full left-0 z-20 mb-2 min-w-[240px] overflow-hidden rounded-xl border border-rc-border-primary bg-rc-bg-surface shadow-xl">
+          <div className="absolute bottom-full left-0 z-20 mb-2 min-w-[240px] overflow-hidden rounded-lg border border-rc-border-primary bg-rc-bg-surface shadow-xl">
             <div className="max-h-72 overflow-y-auto p-1.5">{children}</div>
           </div>
         </>
@@ -55,7 +55,7 @@ function DropdownItem({
 }) {
   return (
     <button
-      className={`flex w-full items-start gap-2 rounded-lg px-3 py-2.5 text-left transition-all duration-150 ${
+      className={`flex w-full items-start gap-2 rounded-md px-3 py-2 text-left transition-all duration-150 ${
         active
           ? 'bg-rc-bg-selected text-rc-text-primary'
           : 'text-rc-text-primary hover:bg-rc-bg-hover'
@@ -84,7 +84,7 @@ function Chip({
   return (
     <button
       onClick={onClick}
-      className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm transition-all duration-200 ${
+      className={`inline-flex items-center gap-2 rounded-md border px-3 py-1.5 text-sm transition-all duration-200 ${
         active
           ? 'border-rc-accent-primary bg-rc-bg-selected text-rc-accent-primary'
           : 'border-rc-border-primary bg-rc-bg-surface text-rc-text-secondary hover:border-rc-border-hover hover:bg-rc-bg-hover hover:text-rc-text-primary'
@@ -160,14 +160,12 @@ export function ChatInput() {
   };
 
   return (
-    <div className="border-t border-rc-border-primary bg-rc-bg-surface px-6 pb-5 pt-4">
+    <div className="border-t border-rc-border-primary bg-rc-bg-surface px-5 pb-4 pt-3">
       <div className="mx-auto w-full max-w-input">
-        {/* Main input card */}
-        <div className="rounded-2xl border border-rc-border-primary bg-rc-bg-surface shadow-lg transition-shadow duration-200 focus-within:border-rc-accent-primary focus-within:shadow-glow-primary">
-          {/* Session info bar */}
-          <div className="border-b border-rc-border-secondary px-4 py-3">
+        <div className="rounded-lg border border-rc-border-primary bg-rc-bg-surface shadow-sm transition-shadow duration-200 focus-within:border-rc-accent-primary focus-within:shadow-md">
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-rc-border-secondary px-4 py-2.5">
             {activeSession ? (
-              <div className="inline-flex max-w-full items-center gap-2 rounded-full bg-rc-bg-secondary px-3 py-1 text-sm text-rc-text-secondary">
+              <div className="inline-flex max-w-full items-center gap-2 rounded-md bg-rc-bg-secondary px-3 py-1.5 text-sm text-rc-text-secondary">
                 <MessageSquareText size={14} className="text-rc-text-tertiary" />
                 <span className="truncate font-medium">{currentSessionLabel}</span>
               </div>
@@ -176,60 +174,7 @@ export function ChatInput() {
                 选择 Provider、模型和权限后直接发送即可。
               </div>
             )}
-          </div>
 
-          {/* Input area */}
-          <div className="flex items-end gap-3 px-4 py-3">
-            <textarea
-              ref={textAreaRef}
-              value={input}
-              onChange={(event) => setInput(event.target.value)}
-              onKeyDown={(event) => {
-                void handleKeyDown(event);
-              }}
-              disabled={sending}
-              rows={1}
-              placeholder="输入需求，直接在 GUI 中运行、改代码、调用工具。Shift+Enter 换行。"
-              className="min-h-[56px] flex-1 resize-none bg-transparent px-1 py-1 text-[15px] leading-6 text-rc-text-primary outline-none placeholder:text-rc-text-tertiary disabled:cursor-not-allowed"
-            />
-
-            {/* Voice input */}
-            <div className="relative">
-              <button
-                title="语音输入"
-                onClick={() => {
-                  setVoiceToast(true);
-                  setTimeout(() => setVoiceToast(false), 2500);
-                }}
-                className="flex h-11 w-11 items-center justify-center rounded-xl border border-rc-border-primary bg-rc-bg-secondary text-rc-text-tertiary transition-all duration-200 hover:border-rc-border-hover hover:bg-rc-bg-hover hover:text-rc-text-primary"
-              >
-                <Mic size={17} />
-              </button>
-              {voiceToast && (
-                <div className="absolute bottom-full right-0 mb-2 whitespace-nowrap rounded-lg bg-rc-bg-user-bubble px-3 py-1.5 text-xs text-white shadow-lg">
-                  语音输入即将推出
-                </div>
-              )}
-            </div>
-
-            {/* Send button */}
-            <button
-              onClick={() => {
-                void handleSend();
-              }}
-              disabled={sending || !input.trim()}
-              className="flex h-11 w-11 items-center justify-center rounded-xl bg-gradient-to-br from-rc-accent-primary to-rc-accent-primary-hover text-white shadow-md transition-all duration-200 hover:shadow-lg disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {sending ? (
-                <div className="h-5 w-5 animate-spin rounded-full border-2 border-white/25 border-t-white" />
-              ) : (
-                <Send size={17} />
-              )}
-            </button>
-          </div>
-
-          {/* Controls bar */}
-          <div className="border-t border-rc-border-secondary px-4 py-3">
             <div className="flex flex-wrap items-center gap-2">
               <AgentSelector
                 availableAgents={availableAgents}
@@ -274,8 +219,59 @@ export function ChatInput() {
                   />
                 )}
               </Dropdown>
+            </div>
+          </div>
 
-              <div className="inline-flex min-w-0 items-center gap-2 rounded-full border border-rc-border-primary bg-rc-bg-surface px-3 py-1.5 text-sm text-rc-text-secondary transition-colors hover:border-rc-border-hover">
+          <div className="flex items-end gap-3 px-4 py-3">
+            <textarea
+              ref={textAreaRef}
+              value={input}
+              onChange={(event) => setInput(event.target.value)}
+              onKeyDown={(event) => {
+                void handleKeyDown(event);
+              }}
+              disabled={sending}
+              rows={1}
+              placeholder="输入需求，直接在 GUI 中运行、改代码、调用工具。Shift+Enter 换行。"
+              className="min-h-[48px] flex-1 resize-none bg-transparent px-1 py-1 text-[15px] leading-6 text-rc-text-primary outline-none placeholder:text-rc-text-tertiary disabled:cursor-not-allowed"
+            />
+
+            <div className="relative">
+              <button
+                title="语音输入"
+                onClick={() => {
+                  setVoiceToast(true);
+                  setTimeout(() => setVoiceToast(false), 2500);
+                }}
+                className="flex h-10 w-10 items-center justify-center rounded-md border border-rc-border-primary bg-rc-bg-secondary text-rc-text-tertiary transition-all duration-200 hover:border-rc-border-hover hover:bg-rc-bg-hover hover:text-rc-text-primary"
+              >
+                <Mic size={17} />
+              </button>
+              {voiceToast && (
+                <div className="absolute bottom-full right-0 mb-2 whitespace-nowrap rounded-lg bg-rc-bg-user-bubble px-3 py-1.5 text-xs text-white shadow-lg">
+                  语音输入即将推出
+                </div>
+              )}
+            </div>
+
+            <button
+              onClick={() => {
+                void handleSend();
+              }}
+              disabled={sending || !input.trim()}
+              className="flex h-10 w-10 items-center justify-center rounded-md bg-gradient-to-br from-rc-accent-primary to-rc-accent-primary-hover text-white shadow-md transition-all duration-200 hover:shadow-lg disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {sending ? (
+                <div className="h-5 w-5 animate-spin rounded-full border-2 border-white/25 border-t-white" />
+              ) : (
+                <Send size={17} />
+              )}
+            </button>
+          </div>
+
+          <div className="border-t border-rc-border-secondary px-4 py-2.5">
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="inline-flex min-w-0 items-center gap-2 rounded-md border border-rc-border-primary bg-rc-bg-surface px-3 py-1.5 text-sm text-rc-text-secondary transition-colors hover:border-rc-border-hover">
                 <Sparkles size={14} className="text-rc-text-tertiary" />
                 <input
                   value={modelDraft}

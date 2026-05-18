@@ -58,9 +58,9 @@ function Field({
 }) {
   return (
     <div className="space-y-1.5">
-      <label className="block text-sm font-medium text-slate-700">{label}</label>
+      <label className="block text-sm font-medium text-rc-text-primary">{label}</label>
       {children}
-      {hint && <p className="text-xs leading-5 text-slate-500">{hint}</p>}
+      {hint && <p className="text-xs leading-5 text-rc-text-tertiary">{hint}</p>}
     </div>
   );
 }
@@ -103,34 +103,34 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/25 p-4 backdrop-blur-[2px]">
-      <div className="flex max-h-[90vh] w-full max-w-4xl flex-col overflow-hidden rounded-[32px] border border-[#ddd6c8] bg-[#faf8f3] shadow-[0_28px_80px_rgba(15,23,42,0.24)]">
-        <div className="flex items-center justify-between border-b border-[#e8e1d6] px-6 py-5">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-rc-bg-overlay p-4 backdrop-blur-[3px]">
+      <div className="flex max-h-[90vh] w-full max-w-5xl flex-col overflow-hidden rounded-lg border border-rc-border-primary bg-rc-bg-surface shadow-[0_28px_80px_rgba(15,23,42,0.24)]">
+        <div className="flex items-center justify-between border-b border-rc-border-primary px-6 py-5">
           <div>
-            <h2 className="text-xl font-semibold text-slate-800">设置</h2>
-            <p className="mt-1 text-sm text-slate-500">
+            <h2 className="text-xl font-semibold text-rc-text-primary">设置</h2>
+            <p className="mt-1 text-sm text-rc-text-secondary">
               Provider 管理是真实持久化的；会在 GUI 重启后继续保留。
             </p>
           </div>
           <button
             onClick={onClose}
-            className="rounded-full p-2 text-slate-400 transition-colors hover:bg-white hover:text-slate-700"
+            className="rounded-md p-2 text-rc-text-tertiary transition-colors hover:bg-rc-bg-hover hover:text-rc-text-primary"
           >
             <X size={18} />
           </button>
         </div>
 
-        <div className="grid min-h-0 flex-1 grid-cols-[180px_1fr]">
-          <div className="border-r border-[#e8e1d6] bg-[#f4f0e7] p-4">
+        <div className="grid min-h-0 flex-1 grid-cols-[190px_1fr]">
+          <div className="border-r border-rc-border-primary bg-rc-bg-secondary p-4">
             <div className="space-y-1">
               {TABS.map((tab) => (
                 <button
                   key={tab.key}
                   onClick={() => setActiveTab(tab.key)}
-                  className={`w-full rounded-2xl px-4 py-2.5 text-left text-sm font-medium transition-colors ${
+                  className={`w-full rounded-md px-4 py-2.5 text-left text-sm font-medium transition-colors ${
                     activeTab === tab.key
-                      ? 'bg-white text-slate-900 shadow-[0_8px_20px_rgba(23,24,26,0.06)]'
-                      : 'text-slate-600 hover:bg-white/70 hover:text-slate-900'
+                      ? 'bg-rc-bg-surface text-rc-text-primary shadow-sm'
+                      : 'text-rc-text-secondary hover:bg-rc-bg-hover hover:text-rc-text-primary'
                   }`}
                 >
                   {tab.label}
@@ -141,7 +141,7 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
 
           <div className="min-h-0 overflow-y-auto px-6 py-6">
             {!settings ? (
-              <div className="py-10 text-sm text-slate-500">正在加载设置…</div>
+              <div className="py-10 text-sm text-rc-text-secondary">正在加载设置…</div>
             ) : activeTab === 'provider' ? (
               <ProviderTab />
             ) : activeTab === 'mcp' ? (
@@ -161,10 +161,10 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
           </div>
         </div>
 
-        <div className="flex items-center justify-end gap-3 border-t border-[#e8e1d6] bg-white/60 px-6 py-4">
+        <div className="flex items-center justify-end gap-3 border-t border-rc-border-primary bg-rc-bg-secondary/80 px-6 py-4">
           <button
             onClick={() => setDraft({})}
-            className="rounded-2xl px-4 py-2 text-sm font-medium text-slate-500 transition-colors hover:bg-white hover:text-slate-700"
+            className="rounded-md px-4 py-2 text-sm font-medium text-rc-text-secondary transition-colors hover:bg-rc-bg-hover hover:text-rc-text-primary"
           >
             重置未保存更改
           </button>
@@ -173,7 +173,7 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
               void handleSave();
             }}
             disabled={Object.keys(draft).length === 0 || saving}
-            className="rounded-2xl bg-[#17181a] px-5 py-2 text-sm font-medium text-white transition-colors hover:bg-[#2b2d31] disabled:cursor-not-allowed disabled:bg-[#c9c2b5]"
+            className="rounded-md bg-rc-accent-primary px-5 py-2 text-sm font-medium text-white transition-colors hover:bg-rc-accent-primary-hover disabled:cursor-not-allowed disabled:bg-rc-text-tertiary"
           >
             {saving ? '保存中…' : '保存'}
           </button>
@@ -206,15 +206,15 @@ function ArchiveRow({
   onRestore: () => void;
 }) {
   return (
-    <div className="flex items-center gap-3 rounded-[24px] border border-transparent bg-[#f5f1e9] px-4 py-3">
+    <div className="flex items-center gap-3 rounded-lg border border-rc-border-secondary bg-rc-bg-secondary px-4 py-3">
       <div className="min-w-0 flex-1">
-        <div className="truncate text-sm font-semibold text-slate-800">
+        <div className="truncate text-sm font-semibold text-rc-text-primary">
           {privacyMode ? '会话已隐藏' : session.title}
         </div>
-        <div className="mt-1 truncate text-xs text-slate-500">
+        <div className="mt-1 truncate text-xs text-rc-text-secondary">
           {privacyMode ? '路径已隐藏' : session.cwd}
         </div>
-        <div className="mt-1 text-[11px] text-slate-500">
+        <div className="mt-1 text-[11px] text-rc-text-tertiary">
           {session.provider_name}
           {session.model ? ` · ${session.model}` : ''} · {formatRelativeTime(session.updated_at)}
         </div>
@@ -222,7 +222,7 @@ function ArchiveRow({
 
       <button
         onClick={onRestore}
-        className="inline-flex items-center gap-2 rounded-2xl border border-[#ddd6c8] bg-white px-3 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-[#faf8f3]"
+        className="inline-flex items-center gap-2 rounded-md border border-rc-border-primary bg-rc-bg-surface px-3 py-2 text-sm font-medium text-rc-text-secondary transition-colors hover:bg-rc-bg-hover hover:text-rc-text-primary"
       >
         <ArchiveRestore size={14} />
         恢复
@@ -239,8 +239,8 @@ function ArchiveTab() {
   return (
     <div className="space-y-5">
       <div>
-        <h3 className="text-base font-semibold text-slate-800">归档会话</h3>
-        <p className="mt-1 text-sm text-slate-500">
+        <h3 className="text-base font-semibold text-rc-text-primary">归档会话</h3>
+        <p className="mt-1 text-sm text-rc-text-secondary">
           归档后的会话不会出现在左侧主树中。恢复时，如果原项目节点已经被移除，会自动补回项目文件夹。
         </p>
       </div>
@@ -259,7 +259,7 @@ function ArchiveTab() {
           ))}
         </div>
       ) : (
-        <div className="rounded-[24px] border border-dashed border-[#ddd6c8] px-4 py-6 text-sm text-slate-500">
+        <div className="rounded-lg border border-dashed border-rc-border-primary px-4 py-6 text-sm text-rc-text-secondary">
           当前没有已归档会话。
         </div>
       )}
@@ -359,14 +359,14 @@ function ProviderTab() {
     <div className="space-y-5">
       <div className="flex items-center justify-between">
         <div>
-          <h3 className="text-base font-semibold text-slate-800">已保存的 Provider</h3>
-          <p className="mt-1 text-sm text-slate-500">
+          <h3 className="text-base font-semibold text-rc-text-primary">已保存的 Provider</h3>
+          <p className="mt-1 text-sm text-rc-text-secondary">
             这里是会真实持久化的多 Provider 列表。添加后，发送框下方会立刻可以切换。
           </p>
         </div>
         <button
           onClick={startAdd}
-          className="inline-flex items-center gap-2 rounded-2xl border border-[#ddd6c8] bg-white px-4 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-[#faf8f3]"
+          className="inline-flex items-center gap-2 rounded-md border border-rc-border-primary bg-rc-bg-surface px-4 py-2 text-sm font-medium text-rc-text-secondary transition-colors hover:bg-rc-bg-hover hover:text-rc-text-primary"
         >
           <Plus size={15} />
           添加
@@ -388,15 +388,15 @@ function ProviderTab() {
             return (
               <div
                 key={provider.name}
-                className={`rounded-[24px] border px-4 py-3 ${
-                  active ? 'border-[#d8d1c3] bg-white' : 'border-transparent bg-[#f5f1e9]'
+                className={`rounded-lg border px-4 py-3 ${
+                  active ? 'border-rc-border-focus bg-rc-bg-surface' : 'border-rc-border-secondary bg-rc-bg-secondary'
                 }`}
               >
                 <div className="flex items-center gap-3">
                   <button
                     title={active ? '当前激活' : '设为当前'}
                     className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full border ${
-                      active ? 'border-[#17181a] bg-[#17181a] text-white' : 'border-[#d8d1c3] text-slate-500'
+                      active ? 'border-rc-accent-primary bg-rc-accent-primary text-white' : 'border-rc-border-primary text-rc-text-secondary'
                     }`}
                     onClick={() => {
                       if (!active) {
@@ -408,13 +408,13 @@ function ProviderTab() {
                   </button>
 
                   <div className="min-w-0 flex-1">
-                    <div className="truncate text-sm font-semibold text-slate-800">{provider.name}</div>
-                    <div className="mt-1 truncate text-xs text-slate-500">
+                    <div className="truncate text-sm font-semibold text-rc-text-primary">{provider.name}</div>
+                    <div className="mt-1 truncate text-xs text-rc-text-secondary">
                       {[effectiveModel, provider.protocol, provider.base_url]
                         .filter(Boolean)
                         .join(' · ')}
                       {provider.api_key_stored && (
-                        <span className="ml-1.5 inline-flex items-center gap-0.5 rounded-full bg-emerald-50 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700">
+                        <span className="ml-1.5 inline-flex items-center gap-0.5 rounded-full bg-rc-accent-success-bg px-1.5 py-0.5 text-[10px] font-medium text-rc-accent-success">
                           🔒 钥匙串
                         </span>
                       )}
@@ -423,14 +423,14 @@ function ProviderTab() {
 
                   <button
                     title="编辑"
-                    className="rounded-full p-2 text-slate-400 transition-colors hover:bg-white hover:text-slate-700"
+                    className="rounded-md p-2 text-rc-text-tertiary transition-colors hover:bg-rc-bg-hover hover:text-rc-text-primary"
                     onClick={() => startEdit(provider)}
                   >
                     <Pencil size={15} />
                   </button>
                   <button
                     title="删除"
-                    className="rounded-full p-2 text-slate-400 transition-colors hover:bg-[#fff1f0] hover:text-red-500"
+                    className="rounded-md p-2 text-rc-text-tertiary transition-colors hover:bg-rc-accent-error-bg hover:text-rc-accent-error"
                     onClick={() => {
                       void deleteProviderConfig(provider.name);
                     }}
@@ -447,8 +447,8 @@ function ProviderTab() {
                       onClick={() => handleSwitchProfile(provider.name, null)}
                       className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[11px] font-medium transition-colors ${
                         activeProfile === null
-                          ? 'border-[#17181a] bg-[#17181a] text-white'
-                          : 'border-[#ddd6c8] bg-white text-slate-600 hover:border-slate-400'
+                          ? 'border-rc-accent-primary bg-rc-accent-primary text-white'
+                          : 'border-rc-border-primary bg-rc-bg-surface text-rc-text-secondary hover:border-rc-border-hover'
                       }`}
                     >
                       默认
@@ -459,8 +459,8 @@ function ProviderTab() {
                         onClick={() => handleSwitchProfile(provider.name, profile.name)}
                         className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[11px] font-medium transition-colors ${
                           activeProfile === profile.name
-                            ? 'border-[#17181a] bg-[#17181a] text-white'
-                            : 'border-[#ddd6c8] bg-white text-slate-600 hover:border-slate-400'
+                            ? 'border-rc-accent-primary bg-rc-accent-primary text-white'
+                            : 'border-rc-border-primary bg-rc-bg-surface text-rc-text-secondary hover:border-rc-border-hover'
                         }`}
                         title={profile.model ? `模型: ${profile.model}` : profile.name}
                       >
@@ -473,15 +473,15 @@ function ProviderTab() {
             );
           })
         ) : (
-          <div className="rounded-[24px] border border-dashed border-[#ddd6c8] px-4 py-6 text-sm text-slate-500">
+          <div className="rounded-lg border border-dashed border-rc-border-primary px-4 py-6 text-sm text-rc-text-secondary">
             还没有保存任何 Provider。你可以把 GLM、MiniMax 等端点都保存在这里。
           </div>
         )}
       </div>
 
       {editingName && (
-        <div className="space-y-4 rounded-[28px] border border-[#ddd6c8] bg-white p-5">
-          <div className="text-sm font-semibold text-slate-800">{title}</div>
+        <div className="space-y-4 rounded-lg border border-rc-border-primary bg-rc-bg-surface p-5">
+          <div className="text-sm font-semibold text-rc-text-primary">{title}</div>
 
           <div className="grid gap-4 sm:grid-cols-2">
             <Field label="名称" hint="切换时显示的名字，例如 GLM CODING PLAN。">
@@ -489,7 +489,7 @@ function ProviderTab() {
                 value={form.name}
                 onChange={(event) => setForm((state) => ({ ...state, name: event.target.value }))}
                 disabled={editingName !== 'new'}
-                className="w-full rounded-2xl border border-[#ddd6c8] bg-[#faf8f3] px-3 py-2.5 text-sm outline-none transition-colors focus:border-slate-500"
+                className="w-full rounded-md border border-rc-border-primary bg-rc-bg-secondary px-3 py-2.5 text-sm text-rc-text-primary outline-none transition-colors focus:border-rc-border-focus"
                 placeholder="GLM CODING PLAN"
               />
             </Field>
@@ -499,7 +499,7 @@ function ProviderTab() {
                 title="协议"
                 value={form.protocol}
                 onChange={(event) => setForm((state) => ({ ...state, protocol: event.target.value }))}
-                className="w-full rounded-2xl border border-[#ddd6c8] bg-[#faf8f3] px-3 py-2.5 text-sm outline-none transition-colors focus:border-slate-500"
+                className="w-full rounded-md border border-rc-border-primary bg-rc-bg-secondary px-3 py-2.5 text-sm text-rc-text-primary outline-none transition-colors focus:border-rc-border-focus"
               >
                 {PROTOCOLS.map((protocol) => (
                   <option key={protocol.value} value={protocol.value}>
@@ -515,7 +515,7 @@ function ProviderTab() {
                 onChange={(event) =>
                   setForm((state) => ({ ...state, base_url: event.target.value }))
                 }
-                className="w-full rounded-2xl border border-[#ddd6c8] bg-[#faf8f3] px-3 py-2.5 text-sm outline-none transition-colors focus:border-slate-500"
+                className="w-full rounded-md border border-rc-border-primary bg-rc-bg-secondary px-3 py-2.5 text-sm text-rc-text-primary outline-none transition-colors focus:border-rc-border-focus"
                 placeholder="https://open.bigmodel.cn/api/anthropic"
               />
             </Field>
@@ -524,7 +524,7 @@ function ProviderTab() {
               <input
                 value={form.model ?? ''}
                 onChange={(event) => setForm((state) => ({ ...state, model: event.target.value }))}
-                className="w-full rounded-2xl border border-[#ddd6c8] bg-[#faf8f3] px-3 py-2.5 text-sm outline-none transition-colors focus:border-slate-500"
+                className="w-full rounded-md border border-rc-border-primary bg-rc-bg-secondary px-3 py-2.5 text-sm text-rc-text-primary outline-none transition-colors focus:border-rc-border-focus"
                 placeholder="glm-5.1"
               />
             </Field>
@@ -543,11 +543,11 @@ function ProviderTab() {
                 type={showApiKey ? 'text' : 'password'}
                 value={form.api_key ?? ''}
                 onChange={(event) => setForm((state) => ({ ...state, api_key: event.target.value }))}
-                className="w-full rounded-2xl border border-[#ddd6c8] bg-[#faf8f3] px-3 py-2.5 pr-11 text-sm outline-none transition-colors focus:border-slate-500"
+                className="w-full rounded-md border border-rc-border-primary bg-rc-bg-secondary px-3 py-2.5 pr-11 text-sm text-rc-text-primary outline-none transition-colors focus:border-rc-border-focus"
                 placeholder={form.api_key_stored ? '••••••••（留空保持不变）' : 'sk-...'}
               />
               <button
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 transition-colors hover:text-slate-700"
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-rc-text-tertiary transition-colors hover:text-rc-text-primary"
                 onClick={() => setShowApiKey((state) => !state)}
               >
                 {showApiKey ? <EyeOff size={16} /> : <Eye size={16} />}
@@ -563,18 +563,18 @@ function ProviderTab() {
                   <input
                     value={profile.name}
                     onChange={(event) => updateProfile(index, 'name', event.target.value)}
-                    className="w-32 rounded-xl border border-[#ddd6c8] bg-[#faf8f3] px-3 py-2 text-sm outline-none transition-colors focus:border-slate-500"
+                    className="w-32 rounded-md border border-rc-border-primary bg-rc-bg-secondary px-3 py-2 text-sm text-rc-text-primary outline-none transition-colors focus:border-rc-border-focus"
                     placeholder="配置名"
                   />
                   <input
                     value={profile.model ?? ''}
                     onChange={(event) => updateProfile(index, 'model', event.target.value)}
-                    className="min-w-0 flex-1 rounded-xl border border-[#ddd6c8] bg-[#faf8f3] px-3 py-2 text-sm outline-none transition-colors focus:border-slate-500"
+                    className="min-w-0 flex-1 rounded-md border border-rc-border-primary bg-rc-bg-secondary px-3 py-2 text-sm text-rc-text-primary outline-none transition-colors focus:border-rc-border-focus"
                     placeholder="模型 ID，例如 glm-5.1"
                   />
                   <button
                     title="删除此配置"
-                    className="shrink-0 rounded-full p-1.5 text-slate-400 transition-colors hover:bg-[#fff1f0] hover:text-red-500"
+                    className="shrink-0 rounded-md p-1.5 text-rc-text-tertiary transition-colors hover:bg-rc-accent-error-bg hover:text-rc-accent-error"
                     onClick={() => removeProfile(index)}
                   >
                     <X size={14} />
@@ -583,7 +583,7 @@ function ProviderTab() {
               ))}
               <button
                 onClick={addProfile}
-                className="inline-flex items-center gap-1.5 rounded-xl border border-dashed border-[#ddd6c8] px-3 py-2 text-xs font-medium text-slate-500 transition-colors hover:border-slate-400 hover:text-slate-700"
+                className="inline-flex items-center gap-1.5 rounded-md border border-dashed border-rc-border-primary px-3 py-2 text-xs font-medium text-rc-text-secondary transition-colors hover:border-rc-border-hover hover:text-rc-text-primary"
               >
                 <Plus size={13} />
                 添加配置
@@ -597,7 +597,7 @@ function ProviderTab() {
                 setEditingName(null);
                 setForm(emptyProviderConfig());
               }}
-              className="rounded-2xl px-4 py-2 text-sm font-medium text-slate-500 transition-colors hover:bg-[#f7f4ed] hover:text-slate-700"
+              className="rounded-md px-4 py-2 text-sm font-medium text-rc-text-secondary transition-colors hover:bg-rc-bg-hover hover:text-rc-text-primary"
             >
               取消
             </button>
@@ -605,7 +605,7 @@ function ProviderTab() {
               onClick={() => {
                 void handleSave();
               }}
-              className="rounded-2xl bg-[#17181a] px-5 py-2 text-sm font-medium text-white transition-colors hover:bg-[#2b2d31]"
+              className="rounded-md bg-rc-accent-primary px-5 py-2 text-sm font-medium text-white transition-colors hover:bg-rc-accent-primary-hover"
             >
               保存 Provider
             </button>
@@ -626,8 +626,8 @@ function RuntimeTab({
   return (
     <div className="space-y-6">
       <div>
-        <h3 className="text-base font-semibold text-slate-800">运行参数</h3>
-        <p className="mt-1 text-sm text-slate-500">
+        <h3 className="text-base font-semibold text-rc-text-primary">运行参数</h3>
+        <p className="mt-1 text-sm text-rc-text-secondary">
           这里保留真正影响执行体验的参数。模型本身请直接在发送框下方即时切换。
         </p>
       </div>
@@ -639,8 +639,8 @@ function RuntimeTab({
               key={mode.value}
               className={`flex cursor-pointer items-start gap-3 rounded-2xl border px-4 py-3 text-sm ${
                 current.permission_mode === mode.value
-                  ? 'border-[#d8d1c3] bg-white'
-                  : 'border-transparent bg-[#f5f1e9]'
+                  ? 'border-rc-border-focus bg-rc-bg-surface'
+                  : 'border-rc-border-secondary bg-rc-bg-secondary'
               }`}
             >
               <input
@@ -651,8 +651,8 @@ function RuntimeTab({
                 onChange={(event) => onChange('permission_mode', event.target.value)}
               />
               <div>
-                <div className="font-medium text-slate-700">{mode.label}</div>
-                <div className="mt-1 text-xs text-slate-500">{mode.desc}</div>
+                <div className="font-medium text-rc-text-primary">{mode.label}</div>
+                <div className="mt-1 text-xs text-rc-text-tertiary">{mode.desc}</div>
               </div>
             </label>
           ))}
@@ -666,7 +666,7 @@ function RuntimeTab({
             min={1000}
             value={current.timeout_ms}
             onChange={(event) => onChange('timeout_ms', Number(event.target.value))}
-            className="w-full rounded-2xl border border-[#ddd6c8] bg-white px-3 py-2.5 text-sm outline-none transition-colors focus:border-slate-500"
+            className="w-full rounded-md border border-rc-border-primary bg-rc-bg-surface px-3 py-2.5 text-sm text-rc-text-primary outline-none transition-colors focus:border-rc-border-focus"
           />
         </Field>
 
@@ -676,7 +676,7 @@ function RuntimeTab({
             min={0}
             value={current.max_retries}
             onChange={(event) => onChange('max_retries', Number(event.target.value))}
-            className="w-full rounded-2xl border border-[#ddd6c8] bg-white px-3 py-2.5 text-sm outline-none transition-colors focus:border-slate-500"
+            className="w-full rounded-md border border-rc-border-primary bg-rc-bg-surface px-3 py-2.5 text-sm text-rc-text-primary outline-none transition-colors focus:border-rc-border-focus"
           />
         </Field>
 
@@ -686,7 +686,7 @@ function RuntimeTab({
             min={50}
             value={current.retry_initial_backoff_ms}
             onChange={(event) => onChange('retry_initial_backoff_ms', Number(event.target.value))}
-            className="w-full rounded-2xl border border-[#ddd6c8] bg-white px-3 py-2.5 text-sm outline-none transition-colors focus:border-slate-500"
+            className="w-full rounded-md border border-rc-border-primary bg-rc-bg-surface px-3 py-2.5 text-sm text-rc-text-primary outline-none transition-colors focus:border-rc-border-focus"
           />
         </Field>
 
@@ -696,14 +696,14 @@ function RuntimeTab({
             min={50}
             value={current.retry_max_backoff_ms}
             onChange={(event) => onChange('retry_max_backoff_ms', Number(event.target.value))}
-            className="w-full rounded-2xl border border-[#ddd6c8] bg-white px-3 py-2.5 text-sm outline-none transition-colors focus:border-slate-500"
+            className="w-full rounded-md border border-rc-border-primary bg-rc-bg-surface px-3 py-2.5 text-sm text-rc-text-primary outline-none transition-colors focus:border-rc-border-focus"
           />
         </Field>
       </div>
 
       <Field label="其他">
         <div className="space-y-2">
-          <label className="flex items-center gap-3 rounded-2xl bg-white px-4 py-3 text-sm text-slate-700">
+          <label className="flex items-center gap-3 rounded-md bg-rc-bg-surface px-4 py-3 text-sm text-rc-text-primary">
             <input
               type="checkbox"
               checked={current.respect_retry_after}
@@ -712,7 +712,7 @@ function RuntimeTab({
             <span>启用服务端 Retry-After 支持</span>
           </label>
 
-          <label className="flex items-center gap-3 rounded-2xl bg-white px-4 py-3 text-sm text-slate-700">
+          <label className="flex items-center gap-3 rounded-md bg-rc-bg-surface px-4 py-3 text-sm text-rc-text-primary">
             <input
               type="checkbox"
               checked={current.verbose}
