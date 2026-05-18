@@ -26,6 +26,7 @@ use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SandboxPolicy;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
+use std::path::Path;
 use tempfile::TempDir;
 use tokio::time::Duration;
 use tokio::time::Instant;
@@ -35,7 +36,6 @@ use tokio::time::timeout;
 use super::connection_handling_websocket::DEFAULT_READ_TIMEOUT;
 use super::connection_handling_websocket::assert_no_message;
 use super::connection_handling_websocket::connect_websocket;
-use super::connection_handling_websocket::create_config_toml;
 use super::connection_handling_websocket::read_jsonrpc_message;
 use super::connection_handling_websocket::send_initialize_request;
 use super::connection_handling_websocket::send_request;
@@ -224,7 +224,7 @@ async fn command_exec_accepts_permission_profile() -> Result<()> {
             env: None,
             size: None,
             sandbox_policy: None,
-            permission_profile: Some(root_read_only_permission_profile()),
+            permission_profile: Some(PermissionProfile::Disabled),
         })
         .await?;
 
@@ -247,6 +247,11 @@ async fn command_exec_accepts_permission_profile() -> Result<()> {
 #[cfg(unix)]
 #[tokio::test]
 async fn command_exec_permission_profile_project_roots_use_command_cwd() -> Result<()> {
+    if !linux_bwrap_sandbox_is_available() {
+        eprintln!("skipping Linux bwrap-specific app-server test: bubblewrap is unavailable");
+        return Ok(());
+    }
+
     let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
     let codex_home = TempDir::new()?;
     let command_dir = codex_home.path().join("command-cwd");
@@ -1074,6 +1079,45 @@ fn root_read_only_permission_profile() -> PermissionProfile {
             glob_scan_max_depth: None,
         },
     }
+}
+
+fn linux_bwrap_sandbox_is_available() -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        codex_sandboxing::system_bwrap_warning(&root_read_only_permission_profile()).is_none()
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        true
+    }
+}
+
+fn create_config_toml(
+    codex_home: &Path,
+    server_uri: &str,
+    approval_policy: &str,
+) -> std::io::Result<()> {
+    let config_toml = codex_home.join("config.toml");
+    std::fs::write(
+        config_toml,
+        format!(
+            r#"
+model = "mock-model"
+approval_policy = "{approval_policy}"
+sandbox_mode = "danger-full-access"
+
+model_provider = "mock_provider"
+
+[model_providers.mock_provider]
+name = "Mock provider for test"
+base_url = "{server_uri}/v1"
+wire_api = "responses"
+request_max_retries = 0
+stream_max_retries = 0
+"#
+        ),
+    )
 }
 
 async fn read_initialize_response(

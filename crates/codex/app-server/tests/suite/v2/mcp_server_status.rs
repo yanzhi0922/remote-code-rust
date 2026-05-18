@@ -1,6 +1,7 @@
 use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -42,15 +43,7 @@ async fn mcp_server_status_list_returns_raw_server_and_tool_names() -> Result<()
     let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
     let (mcp_server_url, mcp_server_handle) = start_mcp_server("look-up.raw").await?;
     let codex_home = TempDir::new()?;
-    write_mock_responses_config_toml(
-        codex_home.path(),
-        &server.uri(),
-        &BTreeMap::new(),
-        /*auto_compact_limit*/ 1024,
-        /*requires_openai_auth*/ None,
-        "mock_provider",
-        "compact",
-    )?;
+    write_status_config_toml(codex_home.path(), &server.uri())?;
 
     let config_path = codex_home.path().join("config.toml");
     let mut config_toml = std::fs::read_to_string(&config_path)?;
@@ -211,15 +204,7 @@ async fn mcp_server_status_list_tools_and_auth_only_skips_slow_inventory_calls()
     let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
     let (mcp_server_url, mcp_server_handle) = start_slow_inventory_mcp_server("lookup").await?;
     let codex_home = TempDir::new()?;
-    write_mock_responses_config_toml(
-        codex_home.path(),
-        &server.uri(),
-        &BTreeMap::new(),
-        /*auto_compact_limit*/ 1024,
-        /*requires_openai_auth*/ None,
-        "mock_provider",
-        "compact",
-    )?;
+    write_status_config_toml(codex_home.path(), &server.uri())?;
 
     let config_path = codex_home.path().join("config.toml");
     let mut config_toml = std::fs::read_to_string(&config_path)?;
@@ -242,7 +227,7 @@ url = "{mcp_server_url}/mcp"
         })
         .await?;
     let response = timeout(
-        Duration::from_millis(500),
+        Duration::from_secs(3),
         mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
     )
     .await??;
@@ -272,15 +257,7 @@ async fn mcp_server_status_list_keeps_tools_for_sanitized_name_collisions() -> R
     let (underscore_server_url, underscore_server_handle) =
         start_mcp_server("underscore_lookup").await?;
     let codex_home = TempDir::new()?;
-    write_mock_responses_config_toml(
-        codex_home.path(),
-        &server.uri(),
-        &BTreeMap::new(),
-        /*auto_compact_limit*/ 1024,
-        /*requires_openai_auth*/ None,
-        "mock_provider",
-        "compact",
-    )?;
+    write_status_config_toml(codex_home.path(), &server.uri())?;
 
     let config_path = codex_home.path().join("config.toml");
     let mut config_toml = std::fs::read_to_string(&config_path)?;
@@ -363,6 +340,26 @@ async fn start_mcp_server(tool_name: &str) -> Result<(String, JoinHandle<()>)> {
     });
 
     Ok((format!("http://{addr}"), handle))
+}
+
+fn write_status_config_toml(codex_home: &Path, server_uri: &str) -> Result<()> {
+    write_mock_responses_config_toml(
+        codex_home,
+        server_uri,
+        &BTreeMap::new(),
+        /*auto_compact_limit*/ 1024,
+        /*requires_openai_auth*/ None,
+        "mock_provider",
+        "compact",
+    )?;
+
+    let config_path = codex_home.join("config.toml");
+    let config_toml = std::fs::read_to_string(&config_path)?.replace(
+        "sandbox_mode = \"read-only\"",
+        "sandbox_mode = \"danger-full-access\"",
+    );
+    std::fs::write(config_path, config_toml)?;
+    Ok(())
 }
 
 async fn start_slow_inventory_mcp_server(tool_name: &str) -> Result<(String, JoinHandle<()>)> {

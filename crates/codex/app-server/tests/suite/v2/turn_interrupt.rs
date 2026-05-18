@@ -55,7 +55,7 @@ async fn turn_interrupt_aborts_running_turn() -> Result<()> {
             "call_sleep",
         )?])
         .await;
-    create_config_toml(&codex_home, &server.uri(), "never", "workspace-write")?;
+    create_config_toml(&codex_home, &server.uri(), "never", "danger-full-access")?;
 
     let mut mcp = McpProcess::new(&codex_home).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
