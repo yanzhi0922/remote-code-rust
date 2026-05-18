@@ -39,7 +39,14 @@ pub mod zsh_fork;
 
 static TEST_ARG0_PATH_ENTRY: OnceLock<Option<Arg0PathEntryGuard>> = OnceLock::new();
 #[cfg(target_os = "linux")]
-static USABLE_CODEX_LINUX_SANDBOX_EXE: OnceLock<Option<PathBuf>> = OnceLock::new();
+#[derive(Clone, Debug)]
+struct UsableCodexLinuxSandbox {
+    path: PathBuf,
+    use_legacy_landlock: bool,
+}
+
+#[cfg(target_os = "linux")]
+static USABLE_CODEX_LINUX_SANDBOX: OnceLock<Option<UsableCodexLinuxSandbox>> = OnceLock::new();
 
 #[ctor]
 fn enable_deterministic_unified_exec_process_ids_for_tests() {
@@ -188,13 +195,28 @@ pub async fn load_default_config_for_test_with_cloud_requirements(
     codex_home: &TempDir,
     cloud_requirements: CloudRequirementsLoader,
 ) -> Config {
-    ConfigBuilder::default()
+    let config = ConfigBuilder::default()
         .codex_home(codex_home.path().to_path_buf())
         .harness_overrides(default_test_overrides())
         .cloud_requirements(cloud_requirements)
         .build()
         .await
-        .expect("defaults for test should always succeed")
+        .expect("defaults for test should always succeed");
+    #[cfg(target_os = "linux")]
+    {
+        let mut config = config;
+        if usable_codex_linux_sandbox().is_some_and(|sandbox| sandbox.use_legacy_landlock) {
+            config
+                .features
+                .enable(codex_features::Feature::UseLegacyLandlock)
+                .expect("test config should allow legacy Landlock fallback");
+        }
+        config
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        config
+    }
 }
 
 pub fn managed_network_requirements_loader() -> CloudRequirementsLoader {
@@ -213,7 +235,7 @@ pub fn managed_network_requirements_loader() -> CloudRequirementsLoader {
 #[cfg(target_os = "linux")]
 fn default_test_overrides() -> ConfigOverrides {
     ConfigOverrides {
-        codex_linux_sandbox_exe: usable_codex_linux_sandbox_exe(),
+        codex_linux_sandbox_exe: usable_codex_linux_sandbox().map(|sandbox| sandbox.path),
         ..ConfigOverrides::default()
     }
 }
@@ -242,7 +264,12 @@ pub fn find_codex_linux_sandbox_exe() -> Result<PathBuf, CargoBinError> {
 
 #[cfg(target_os = "linux")]
 pub fn usable_codex_linux_sandbox_exe() -> Option<PathBuf> {
-    USABLE_CODEX_LINUX_SANDBOX_EXE
+    usable_codex_linux_sandbox().map(|sandbox| sandbox.path)
+}
+
+#[cfg(target_os = "linux")]
+fn usable_codex_linux_sandbox() -> Option<UsableCodexLinuxSandbox> {
+    USABLE_CODEX_LINUX_SANDBOX
         .get_or_init(|| {
             let path = match find_codex_linux_sandbox_exe() {
                 Ok(path) => path,
@@ -252,14 +279,32 @@ pub fn usable_codex_linux_sandbox_exe() -> Option<PathBuf> {
                 }
             };
 
-            match codex_linux_sandbox_smoke_test(&path) {
-                Ok(()) => Some(path),
-                Err(err) => {
-                    eprintln!(
-                        "codex-linux-sandbox is unavailable in this test environment; \
-                         running default core tests without Linux sandbox: {err}"
-                    );
-                    None
+            match codex_linux_sandbox_smoke_test(&path, /*use_legacy_landlock*/ false) {
+                Ok(()) => Some(UsableCodexLinuxSandbox {
+                    path,
+                    use_legacy_landlock: false,
+                }),
+                Err(bwrap_err) => {
+                    match codex_linux_sandbox_smoke_test(&path, /*use_legacy_landlock*/ true) {
+                        Ok(()) => {
+                            eprintln!(
+                                "codex-linux-sandbox bubblewrap path is unavailable in this test \
+                             environment; using legacy Landlock for Linux tests: {bwrap_err}"
+                            );
+                            Some(UsableCodexLinuxSandbox {
+                                path,
+                                use_legacy_landlock: true,
+                            })
+                        }
+                        Err(legacy_err) => {
+                            eprintln!(
+                                "codex-linux-sandbox is unavailable in this test environment; \
+                         running default core tests without Linux sandbox. \
+                         bubblewrap error: {bwrap_err}; legacy Landlock error: {legacy_err}"
+                            );
+                            None
+                        }
+                    }
                 }
             }
         })
@@ -267,7 +312,7 @@ pub fn usable_codex_linux_sandbox_exe() -> Option<PathBuf> {
 }
 
 #[cfg(target_os = "linux")]
-fn codex_linux_sandbox_smoke_test(path: &Path) -> Result<(), String> {
+fn codex_linux_sandbox_smoke_test(path: &Path, use_legacy_landlock: bool) -> Result<(), String> {
     let tempdir =
         TempDir::new().map_err(|err| format!("failed to create smoke-test tempdir: {err}"))?;
     let args = codex_sandboxing::landlock::create_linux_sandbox_command_args_for_permission_profile(
@@ -275,7 +320,7 @@ fn codex_linux_sandbox_smoke_test(path: &Path) -> Result<(), String> {
         tempdir.path(),
         &PermissionProfile::read_only(),
         tempdir.path(),
-        /* use_legacy_landlock */ false,
+        use_legacy_landlock,
         /* allow_network_for_proxy */ false,
     );
     let output = std::process::Command::new(path)

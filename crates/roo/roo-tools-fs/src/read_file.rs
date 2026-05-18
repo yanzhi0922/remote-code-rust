@@ -244,15 +244,19 @@ pub fn build_read_result(
     offset: Option<u64>,
     limit: Option<u64>,
 ) -> Result<ReadResult, FsToolError> {
+    use std::borrow::Cow;
+
     let total_lines = content.lines().count();
 
-    let (sliced_content, total) = if let Some(start) = offset {
+    let (sliced_content, total): (Cow<'_, str>, usize) = if let Some(start) = offset {
         let max_lines = limit.unwrap_or(DEFAULT_READ_LIMIT as u64) as usize;
-        slice_lines(&content, start as usize, max_lines)
+        let (sliced, total) = slice_lines(&content, start as usize, max_lines);
+        (Cow::Owned(sliced), total)
     } else if let Some(max) = limit {
-        slice_lines(&content, 1, max as usize)
+        let (sliced, total) = slice_lines(&content, 1, max as usize);
+        (Cow::Owned(sliced), total)
     } else {
-        (content.clone(), total_lines)
+        (Cow::Borrowed(content.as_str()), total_lines)
     };
 
     let truncated = total_lines > 0
@@ -612,18 +616,24 @@ fn find_extraction_start_line(
 ///
 /// Format: `N | content` where N is right-aligned.
 fn add_line_numbers_from(content: &str, start_line: usize) -> String {
-    let total_lines = content.lines().count();
-    let width = total_lines.to_string().len().max(1);
+    use std::fmt::Write as _;
 
-    content
-        .lines()
-        .enumerate()
-        .map(|(i, line)| {
-            let line_num = start_line + i;
-            format!("{:>width$} | {}", line_num, line, width = width)
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
+    let total_lines = content.lines().count();
+    if total_lines == 0 {
+        return String::new();
+    }
+
+    let end_line = start_line + total_lines.saturating_sub(1);
+    let width = end_line.to_string().len().max(1);
+    let mut result = String::with_capacity(content.len() + total_lines * (width + 4));
+    for (i, line) in content.lines().enumerate() {
+        if i > 0 {
+            result.push('\n');
+        }
+        let line_num = start_line + i;
+        write!(result, "{line_num:>width$} | {line}").expect("writing to String cannot fail");
+    }
+    result
 }
 
 /// Resolve a relative path against the current working directory.

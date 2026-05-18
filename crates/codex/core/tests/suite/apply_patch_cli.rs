@@ -23,6 +23,8 @@ use codex_protocol::user_input::UserInput;
 #[cfg(target_os = "linux")]
 use codex_sandboxing::landlock::CODEX_LINUX_SANDBOX_ARG0;
 use core_test_support::assert_regex_match;
+#[cfg(target_os = "linux")]
+use core_test_support::codex_linux_sandbox_exe_or_skip;
 use core_test_support::responses::ev_apply_patch_function_call;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -134,6 +136,7 @@ fn apply_patch_responses(
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn apply_patch_cli_uses_codex_self_exe_with_linux_sandbox_helper_alias() -> Result<()> {
     skip_if_no_network!(Ok(()));
+    let _sandbox_exe = codex_linux_sandbox_exe_or_skip!(Ok(()));
 
     let harness = apply_patch_harness().await?;
     let codex_linux_sandbox_exe = harness

@@ -204,9 +204,9 @@ pub fn add_line_numbers(content: &str) -> String {
 pub fn truncate_long_lines(content: &str, max_length: usize) -> String {
     let mut result = String::with_capacity(content.len());
     for line in content.lines() {
-        if line.len() > max_length {
-            // Truncate to max_length chars and add ellipsis
-            result.push_str(&line[..max_length]);
+        let truncated = truncate_at_char_boundary(line, max_length);
+        if truncated.len() < line.len() {
+            result.push_str(truncated);
             result.push_str("...");
             result.push('\n');
         } else {
@@ -220,20 +220,31 @@ pub fn truncate_long_lines(content: &str, max_length: usize) -> String {
     result
 }
 
+fn truncate_at_char_boundary(line: &str, max_chars: usize) -> &str {
+    match line.char_indices().nth(max_chars) {
+        Some((idx, _)) => &line[..idx],
+        None => line,
+    }
+}
+
 /// Extract a slice of lines from content (1-based offset, inclusive).
 pub fn slice_lines(content: &str, start_line: usize, max_lines: usize) -> (String, usize) {
-    let lines: Vec<&str> = content.lines().collect();
-    let total = lines.len();
+    let total = content.lines().count();
 
     if start_line > total || total == 0 {
         return (String::new(), total);
     }
 
     let start_idx = start_line.saturating_sub(1);
-    let end_idx = std::cmp::min(start_idx + max_lines, total);
-
-    let sliced: Vec<&str> = lines[start_idx..end_idx].to_vec();
-    let result = sliced.join("\n");
+    let mut lines = content.lines().skip(start_idx).take(max_lines);
+    let mut result = String::new();
+    if let Some(first) = lines.next() {
+        result.push_str(first);
+        for line in lines {
+            result.push('\n');
+            result.push_str(line);
+        }
+    }
 
     (result, total)
 }
@@ -497,6 +508,18 @@ mod tests {
         assert!(lines[0].ends_with("..."));
         assert!(lines[0].len() <= 103);
         assert_eq!(lines[1], "short");
+    }
+
+    #[test]
+    fn test_truncate_long_lines_utf8_boundary() {
+        let result = truncate_long_lines("你好世界\nok", 2);
+        assert_eq!(result, "你好...\nok");
+    }
+
+    #[test]
+    fn test_truncate_long_lines_keeps_short_utf8_line() {
+        let result = truncate_long_lines("你\nok", 2);
+        assert_eq!(result, "你\nok");
     }
 
     // ---- slice_lines tests ----

@@ -506,8 +506,7 @@ mod tests {
 
     #[tokio::test]
     async fn sandbox_executes_echo() {
-        let workspace = std::env::temp_dir();
-        let config = SandboxConfig::default_for_workspace(&workspace);
+        let config = SandboxConfig::basic();
 
         let (command, expected) = ("echo hello", "hello");
 
@@ -525,10 +524,9 @@ mod tests {
 
     #[tokio::test]
     async fn sandbox_respects_timeout() {
-        let workspace = std::env::temp_dir();
         let config = SandboxConfig {
             timeout_secs: 1,
-            ..SandboxConfig::default_for_workspace(&workspace)
+            ..SandboxConfig::basic()
         };
 
         let command = if cfg!(windows) {
