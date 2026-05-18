@@ -1347,6 +1347,9 @@ mod tests {
         let resolved = runtime_tool_results_dir(&context).expect("resolved");
 
         configure_tool_runtime_policy(original_policy).expect("restore runtime policy");
-        assert!(resolved.ends_with(".remote-code-rust\\tool-results"));
+        assert_eq!(
+            resolved,
+            temp.path().join(".remote-code-rust").join("tool-results")
+        );
     }
 }
