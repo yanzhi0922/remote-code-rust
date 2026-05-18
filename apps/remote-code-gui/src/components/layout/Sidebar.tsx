@@ -302,6 +302,7 @@ export function Sidebar() {
   const createSession = useAppStore((state) => state.createSession);
   const projects = useAppStore((state) => state.projects);
   const activeProjectPath = useAppStore((state) => state.activeProjectPath);
+  const runningSessionIds = useAppStore((state) => state.runningSessionIds);
   const privacyMode = useAppStore((state) => state.workspacePrivacyMode);
   const setActiveProject = useAppStore((state) => state.setActiveProject);
   const removeProject = useAppStore((state) => state.removeProject);
@@ -420,7 +421,22 @@ export function Sidebar() {
             </div>
           </div>
 
-          <div className="mt-4 grid grid-cols-2 gap-2">
+          <div className="mt-4 grid grid-cols-3 gap-2">
+            <div className="rounded-md border border-rc-border-secondary bg-white/70 px-2.5 py-2 dark:bg-rc-bg-elevated">
+              <div className="text-[11px] text-rc-text-tertiary">项目</div>
+              <div className="mt-0.5 text-sm font-semibold text-rc-text-primary">{projects.length}</div>
+            </div>
+            <div className="rounded-md border border-rc-border-secondary bg-white/70 px-2.5 py-2 dark:bg-rc-bg-elevated">
+              <div className="text-[11px] text-rc-text-tertiary">会话</div>
+              <div className="mt-0.5 text-sm font-semibold text-rc-text-primary">{sessions.length}</div>
+            </div>
+            <div className="rounded-md border border-rc-border-secondary bg-white/70 px-2.5 py-2 dark:bg-rc-bg-elevated">
+              <div className="text-[11px] text-rc-text-tertiary">运行</div>
+              <div className="mt-0.5 text-sm font-semibold text-rc-text-primary">{runningSessionIds.size}</div>
+            </div>
+          </div>
+
+          <div className="mt-3 grid grid-cols-2 gap-2">
             <button
               onClick={() => {
                 if (canCreateSession) {

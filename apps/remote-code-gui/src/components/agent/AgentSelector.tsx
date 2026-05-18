@@ -18,7 +18,6 @@ interface AgentSelectorProps {
 export function AgentSelector({ availableAgents, activeAgentType, onSelect }: AgentSelectorProps) {
   const [open, setOpen] = useState(false);
 
-  // 构建显示列表：优先使用后端返回数据，fallback 到默认值
   const agentEntries: Array<{
     agentType: AgentType;
     displayName: string;
@@ -42,16 +41,26 @@ export function AgentSelector({ availableAgents, activeAgentType, onSelect }: Ag
       ? 'Remote Claude'
       : agentEntries.find((entry) => entry.agentType === activeAgentType)?.displayName ?? 'Remote Claude';
 
+  const renderStatusDot = (installed: boolean, available: boolean) => {
+    const colorClass = !installed
+      ? 'bg-rc-text-tertiary'
+      : available
+        ? 'bg-rc-accent-success'
+        : 'bg-rc-accent-warning';
+
+    return <span className={`mt-1 h-2 w-2 shrink-0 rounded-full ${colorClass}`} />;
+  };
+
   return (
     <div className="relative">
       <button
         title="选择 Agent 类型"
         onClick={() => setOpen((prev) => !prev)}
-        className="inline-flex items-center gap-2 rounded-full border border-[#ddd6c8] bg-[#fcfaf5] px-3 py-1.5 text-sm font-medium text-slate-700 transition-colors hover:bg-[#f6f1e8]"
+        className="inline-flex items-center gap-2 rounded-lg border border-rc-border-primary bg-rc-bg-surface px-3 py-1.5 text-sm font-medium text-rc-text-secondary transition-colors hover:border-rc-border-hover hover:bg-rc-bg-hover hover:text-rc-text-primary"
       >
-        <Bot size={14} className="text-slate-500" />
+        <Bot size={14} className="text-rc-text-tertiary" />
         <span className="max-w-[160px] truncate">{activeLabel}</span>
-        <ChevronDown size={14} className="text-slate-400" />
+        <ChevronDown size={14} className="text-rc-text-tertiary" />
       </button>
 
       {open && (
@@ -61,38 +70,37 @@ export function AgentSelector({ availableAgents, activeAgentType, onSelect }: Ag
             className="fixed inset-0 z-10 cursor-default"
             onClick={() => setOpen(false)}
           />
-          <div className="absolute bottom-full left-0 z-20 mb-2 min-w-[260px] overflow-hidden rounded-2xl border border-[#dedad2] bg-white shadow-[0_18px_42px_rgba(24,29,33,0.16)]">
+          <div className="absolute bottom-full left-0 z-20 mb-2 min-w-[280px] overflow-hidden rounded-lg border border-rc-border-primary bg-rc-bg-surface shadow-xl">
             <div className="max-h-72 overflow-y-auto p-1.5">
-              {/* 默认选项：Remote Claude（null） */}
               <button
-                className={`flex w-full items-start gap-2 rounded-xl px-3 py-2 text-left transition-colors ${
+                className={`flex w-full items-start gap-2 rounded-md px-3 py-2 text-left transition-colors ${
                   activeAgentType === null
-                    ? 'bg-[#ece7dc] text-slate-900'
-                    : 'text-slate-700 hover:bg-[#f3efe7]'
+                    ? 'bg-rc-bg-selected text-rc-text-primary'
+                    : 'text-rc-text-primary hover:bg-rc-bg-hover'
                 }`}
                 onClick={() => {
                   onSelect(null);
                   setOpen(false);
                 }}
               >
+                {renderStatusDot(true, true)}
                 <div className="min-w-0">
                   <div className="truncate text-sm font-medium">Remote Claude（默认）</div>
-                  <div className="mt-0.5 text-xs text-slate-500">内置 Agent，直接调用 provider API</div>
+                  <div className="mt-0.5 text-xs text-rc-text-tertiary">内置 Agent，直接调用 provider API</div>
                 </div>
               </button>
 
-              {/* 其他 Agent 选项 */}
               {agentEntries
                 .filter((entry) => entry.agentType !== 'remote_claude')
                 .map((entry) => (
                   <button
                     key={entry.agentType}
-                    className={`flex w-full items-start gap-2 rounded-xl px-3 py-2 text-left transition-colors ${
+                    className={`flex w-full items-start gap-2 rounded-md px-3 py-2 text-left transition-colors ${
                       activeAgentType === entry.agentType
-                        ? 'bg-[#ece7dc] text-slate-900'
+                        ? 'bg-rc-bg-selected text-rc-text-primary'
                         : entry.installed
-                          ? 'text-slate-700 hover:bg-[#f3efe7]'
-                          : 'cursor-not-allowed text-slate-400'
+                          ? 'text-rc-text-primary hover:bg-rc-bg-hover'
+                          : 'cursor-not-allowed text-rc-text-tertiary'
                     }`}
                     onClick={() => {
                       if (!entry.installed) return;
@@ -100,14 +108,15 @@ export function AgentSelector({ availableAgents, activeAgentType, onSelect }: Ag
                       setOpen(false);
                     }}
                   >
+                    {renderStatusDot(entry.installed, entry.available)}
                     <div className="min-w-0">
                       <div className="truncate text-sm font-medium">
                         {entry.displayName}
                         {!entry.installed && (
-                          <span className="ml-2 text-xs text-slate-400">未安装</span>
+                          <span className="ml-2 text-xs text-rc-text-tertiary">未安装</span>
                         )}
                       </div>
-                      <div className="mt-0.5 text-xs text-slate-500">{entry.description}</div>
+                      <div className="mt-0.5 text-xs text-rc-text-tertiary">{entry.description}</div>
                     </div>
                   </button>
                 ))}

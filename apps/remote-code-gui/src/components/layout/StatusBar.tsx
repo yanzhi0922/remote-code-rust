@@ -1,3 +1,4 @@
+import { Cpu, Network, Wifi, WifiOff } from 'lucide-react';
 import { useMemo } from 'react';
 import { useAppStore } from '../../stores/useAppStore';
 import { useAgentStore } from '../../stores/useAgentStore';
@@ -23,28 +24,33 @@ export function StatusBar() {
     ?? provider?.model
     ?? '未配置';
 
-  const agentLabel = activeAgentType ?? runtimeStatus?.permission_mode ?? 'default';
+  const agentLabel = activeAgentType ?? 'remote_claude';
+  const providerName = runtimeStatus?.provider.name ?? provider?.name ?? '未配置';
+  const mcpSummary = runtimeStatus?.mcp ?? null;
+  const mcpIssueCount = mcpSummary
+    ? mcpSummary.status_counts.failed + mcpSummary.status_counts.needs_auth + mcpSummary.warning_count
+    : 0;
+  const mcpLabel = mcpSummary
+    ? `MCP ${mcpSummary.status_counts.connected}/${mcpSummary.enabled_servers}`
+    : 'MCP -';
 
   const contextPercent = contextUsage ? Math.round(contextUsage.ratio * 100) : null;
 
   return (
     <div className="mt-3 flex h-9 shrink-0 items-center rounded-lg border border-white/80 bg-white/80 px-4 text-xs text-rc-text-tertiary shadow-sm backdrop-blur select-none dark:border-rc-border-primary dark:bg-rc-bg-surface/80">
       <div className="flex items-center gap-4">
-        {/* Agent type */}
         <span className="flex items-center gap-2">
-          <span className="inline-block h-2 w-2 rounded-full bg-rc-accent-success shadow-sm" />
+          <Cpu size={13} />
           <span className="font-medium text-rc-text-secondary">{agentLabel}</span>
         </span>
 
-        {/* Model */}
-        <span className="font-mono text-rc-text-tertiary">{modelName}</span>
+        <span className="truncate font-medium text-rc-text-secondary">{providerName}</span>
+        <span className="max-w-[280px] truncate font-mono text-rc-text-tertiary">{modelName}</span>
       </div>
 
-      {/* Spacer */}
       <div className="flex-1" />
 
       <div className="flex items-center gap-4">
-        {/* Token usage */}
         {lastPromptResult && (
           <span className="font-mono text-rc-text-tertiary">
             ↑ {lastPromptResult.usage.input_tokens.toLocaleString()} &nbsp;
@@ -52,22 +58,21 @@ export function StatusBar() {
           </span>
         )}
 
-        {/* Context usage */}
         {contextPercent !== null && (
           <span className={`font-mono ${contextPercent > 80 ? 'text-rc-accent-warning' : 'text-rc-text-tertiary'}`}>
             Context {contextPercent}%
           </span>
         )}
 
-        {/* Connection status */}
+        <span className={`flex items-center gap-2 ${mcpIssueCount > 0 ? 'text-rc-accent-warning' : 'text-rc-text-tertiary'}`}>
+          <Network size={13} />
+          <span>{mcpLabel}</span>
+        </span>
+
         <span className="flex items-center gap-2">
-          <span
-            className={`inline-block h-2 w-2 rounded-full ${
-              runtimeStatus ? 'bg-rc-accent-success' : 'bg-rc-text-tertiary'
-            }`}
-          />
+          {runtimeStatus ? <Wifi size={13} className="text-rc-accent-success" /> : <WifiOff size={13} />}
           <span className="text-rc-text-tertiary">
-            {runtimeStatus ? 'Connected' : 'Offline'}
+            {runtimeStatus ? 'Online' : 'Offline'}
           </span>
         </span>
       </div>
