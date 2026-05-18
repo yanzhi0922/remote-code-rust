@@ -8,6 +8,8 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+  CARGO_NET_RETRY: "10"
   # Full workspace test binaries are large on Windows. Disabling test-profile
   # debuginfo avoids MSVC PDB LIMIT linker failures without changing behavior.
   CARGO_PROFILE_TEST_DEBUG: 0
