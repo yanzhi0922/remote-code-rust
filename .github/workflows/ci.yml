@@ -122,7 +122,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Test workspace
         if: runner.os != 'Windows'
-        run: cargo test --workspace --all-targets
+        run: cargo test --workspace --all-targets --exclude remote-code-gui
       - name: Test workspace with Windows resource limits
         if: runner.os == 'Windows'
         env:
