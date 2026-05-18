@@ -8,25 +8,17 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::Mutex;
 
 use anyhow::{Context, Result};
-use once_cell::sync::Lazy;
 use serde_json::{Value, json};
 
 use super::ToolExecutionContext;
 use crate::tasks;
 use claude_swarm::constants::{TEAM_FILE_NAME, TEAM_LEAD_NAME};
 
-/// Thread-safe override for the teams base directory (used in tests).
-static BASE_DIR_OVERRIDE: Lazy<Mutex<Option<PathBuf>>> = Lazy::new(|| Mutex::new(None));
-
 /// Set a base-directory override (primarily for testing).
 pub fn set_base_dir_override(dir: Option<PathBuf>) {
-    let mut guard = BASE_DIR_OVERRIDE
-        .lock()
-        .expect("BASE_DIR_OVERRIDE lock poisoned");
-    *guard = dir;
+    claude_swarm::team_helpers::set_base_dir_override(dir);
 }
 
 /// Delete the current session team and clean up associated resources.
@@ -221,11 +213,6 @@ fn remove_dir_if_exists(path: &Path) -> Result<()> {
 
 /// Resolve the base directory for teams data.
 fn resolve_teams_base_dir() -> PathBuf {
-    if let Ok(guard) = BASE_DIR_OVERRIDE.lock()
-        && let Some(ref dir) = *guard
-    {
-        return dir.clone();
-    }
     claude_swarm::team_helpers::teams_base_dir()
 }
 
