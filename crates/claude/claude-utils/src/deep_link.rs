@@ -157,6 +157,7 @@ fn parse_version(version: &str) -> (u32, u32, u32) {
 }
 
 /// Check if a string looks like a semantic version.
+#[cfg(any(target_os = "windows", test))]
 fn looks_like_version(s: &str) -> bool {
     let parts: Vec<&str> = s.split('.').collect();
     if parts.len() < 2 {
