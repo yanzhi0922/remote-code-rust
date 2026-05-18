@@ -2447,6 +2447,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "claude-runner-host"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base64 0.22.1",
+ "claude-control-plane",
+ "claude-runner",
+ "reqwest 0.12.28",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "claude-runtime-prompt"
 version = "0.1.0"
 dependencies = [
@@ -13341,11 +13356,11 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "axum",
- "base64 0.22.1",
  "chrono",
  "clap",
  "claude-control-plane",
  "claude-runner",
+ "claude-runner-host",
  "claude-telemetry",
  "rc-agent-protocol",
  "reqwest 0.12.28",

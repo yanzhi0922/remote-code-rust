@@ -9,7 +9,7 @@ build-codex:
 	cd agents/codex/codex-rs && cargo build --package codex-cli --release
 
 build-roo:
-	cd agents/roo-code && cargo build --package roo-cli --release
+	cargo build --package roo-cli --release
 
 build-agents: build-claude build-codex build-roo
 
@@ -37,4 +37,4 @@ test:
 clean:
 	cargo clean
 	cd agents/codex/codex-rs && cargo clean
-	cd agents/roo-code && cargo clean
+	cargo clean --package roo-cli

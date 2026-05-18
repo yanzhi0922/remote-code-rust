@@ -49,7 +49,5 @@ output/
 gh-push-db.js
 runner-local.env
 
-# Agent source — exclude git internals and research artifacts only
+# Agent source — exclude vendored git internals only
 agents/codex/.git/
-agents/roo-code/.git/
-agents/roo-code/.research/

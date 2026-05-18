@@ -6,17 +6,17 @@ Each subsystem has one owner crate, one state model, and one boundary for integr
 
 ## Top-Level Structure
 
-The workspace is split into agent engines under `agents/`, application binaries under `apps/`, and libraries under `crates/`.
+The workspace is split into the Claude agent under `agents/`, application binaries under `apps/`, and shared agent/runtime libraries under `crates/`.
 
 ### Agent Sources
 
-The `agents/` directory contains the AI agent engines:
+Agent engine sources are split by ownership boundary:
 
 - `agents/claudecode/`: **Claude Code Agent** — the Rust rewrite of Claude Code (formerly `apps/remote-code/`). This is the primary agent engine with CLI, TUI, headless, and interactive modes. It is a full workspace member.
 - `agents/codex/`: OpenAI Codex source (`codex-rs/app-server`) — independent Git repository.
-- `agents/roo-code/`: Roo Code source (`crates/roo-server`) — independent Git repository.
+- `crates/roo/*`: Roo Code Rust engine crates, including `roo-cli`, `roo-app`, `roo-task`, providers, tools, MCP, terminal, and config.
 
-The codex and roo-code directories are excluded from the main repo via `.gitignore`. Build scripts in `scripts/` compile external agent binaries to `target/agent-binaries/`.
+The Codex source directory is excluded from the main repo via `.gitignore`. Roo now builds from the workspace crates directly.
 
 ### Applications
 
@@ -229,7 +229,9 @@ Three independent in-process adapters, each tailored to its agent's native archi
 - **Codex**: `CodexInProcessAdapter` (`rc-codex-adapter`) — wraps `InProcessAppServerClient` with background event pump and `event_mapper` (753 lines, 50+ notification types, 60+ RPC methods)
 - **Roo Code**: `RooInProcessAdapter` (`rc-roo-adapter`) — wraps Roo's native `AgentLoop` with `Provider` + `ToolDispatcher`, supporting 26 provider backends (Anthropic, OpenAI, OpenAI-Native, OpenRouter, DeepSeek, Google/Gemini, Ollama, LMStudio, xAI, Mistral, Fireworks, LiteLLM, Qwen, MiniMax, Moonshot, ZAI, SambaNova, BaseTen, Poe, Requesty, Unbound, Vercel, Roo, AWS/Bedrock)
 - All adapters implement the `AgentAdapter` trait and emit `UnifiedAgentEvent` through `mpsc::Receiver`
-- No external process spawning, no IPC overhead, no bridge binaries
+- Default execution is Rust native in-process: no IPC overhead, shared typed state, and no bridge binaries on the primary path.
+- In-process is not a hard fault-isolation boundary. Adapter turns must be supervised with bounded channels/buffers, panic/`JoinError` mapping, cancellation, restart/cleanup semantics, and lock discipline.
+- A future isolated-process mode is a fallback/debugging boundary for crash containment, third-party instability, and hard-to-reproduce failures, not the default execution path.
 
 ## Provider Architecture
 
@@ -710,5 +712,5 @@ Release builds are expected to be tag-driven; exact target platforms are defined
 | TTS Mock | `claude-voice::tts` returns placeholder responses, not connected to a real TTS service |
 | Roo Permission Partial | `RooInProcessAdapter::resolve_permission()` works but Roo's tool approval flow is not fully wired to the GUI interactive permission dialog |
 | Roo Token Estimation | Roo adapter uses `text.len() / 4` for approximate token counting instead of Roo's native tiktoken |
-| Roo MCP Not Wired | Roo adapter declares `McpSupport` capability but does not integrate `McpServerConnection` in `send_message()` |
+| Roo MCP E2E Hardening | Roo adapter loads MCP hub/server configuration in the native loop, but still needs full E2E coverage for permission, error, and tool-call edge cases |
 | Alpha Dependencies | `rama-*` crates pinned to `0.3.0-alpha.4` — pre-release quality, will need migration when stable releases |

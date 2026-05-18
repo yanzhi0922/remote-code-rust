@@ -27,8 +27,8 @@ curl -fsSL https://raw.githubusercontent.com/yanzhi0922/remote-code-rust/main/de
 | 应用程序 | 5 个（CLI、GUI、Control Plane、Runner、Migrate） |
 | Workspace Packages | 当前 `cargo metadata --no-deps` 实测 231 个 Rust packages（Claude / Codex / Roo / Adapters / Apps） |
 | 内置工具 | 62 |
-| 测试 | 按 crate 和功能维护单元 / 集成测试；完整 workspace 测试耗时较长 |
-| Clippy 状态 | `cargo clippy --workspace -- -D warnings` 是发布门禁 |
+| 测试 | 按 crate、功能和 CI slice 维护单元 / 集成测试；完整 workspace 测试耗时较长 |
+| Clippy 状态 | CI 按 `claude` / `codex` / `roo` / `apps-shared` 分片执行 `cargo clippy -- -D warnings` |
 | `unsafe` 代码 | 平台 FFI 允许，CI 通过 clippy / audit / secret scan 约束风险；新增 unsafe 必须 code review |
 | Rust 版本 | 1.93 (Edition 2024) |
 | 许可证 | Public source, proprietary unless separately licensed |
@@ -86,8 +86,14 @@ curl -fsSL https://raw.githubusercontent.com/yanzhi0922/remote-code-rust/main/de
 ```powershell
 cargo fmt --all -- --check
 git diff --check
-cargo check --workspace --all-targets
-cargo clippy --workspace --all-targets -j1 -- -D warnings
+python scripts/cargo_workspace_slice.py check claude
+python scripts/cargo_workspace_slice.py check codex
+python scripts/cargo_workspace_slice.py check roo
+python scripts/cargo_workspace_slice.py check apps-shared
+python scripts/cargo_workspace_slice.py clippy claude
+python scripts/cargo_workspace_slice.py clippy codex
+python scripts/cargo_workspace_slice.py clippy roo
+python scripts/cargo_workspace_slice.py clippy apps-shared
 cargo audit --quiet
 cd apps\remote-code-gui
 npm ci
@@ -379,14 +385,23 @@ npm run tauri dev
 ### 验证
 
 ```bash
-# 编译检查
-cargo check --workspace
+# 编译检查（CI 同样按 slice 分片）
+python scripts/cargo_workspace_slice.py check claude
+python scripts/cargo_workspace_slice.py check codex
+python scripts/cargo_workspace_slice.py check roo
+python scripts/cargo_workspace_slice.py check apps-shared
 
 # 运行全部测试（耗时较长，依赖当前 workspace 状态）
-cargo test --workspace
+python scripts/cargo_workspace_slice.py test claude
+python scripts/cargo_workspace_slice.py test codex
+python scripts/cargo_workspace_slice.py test roo
+python scripts/cargo_workspace_slice.py test apps-shared
 
 # Clippy 静态分析（CI 门禁）
-cargo clippy --workspace -- -D warnings
+python scripts/cargo_workspace_slice.py clippy claude
+python scripts/cargo_workspace_slice.py clippy codex
+python scripts/cargo_workspace_slice.py clippy roo
+python scripts/cargo_workspace_slice.py clippy apps-shared
 
 # RustSec 审计（已接受风险写入 .cargo/audit.toml）
 cargo audit --quiet
@@ -473,7 +488,7 @@ graph TB
 | TTS 为 Mock 实现 | `claude-voice::tts` 目前返回占位响应，未接入真实 TTS 服务 |
 | Roo 权限系统未完全接线 | `RooInProcessAdapter::resolve_permission()` 可用但未完全接入 GUI 交互式权限弹窗 |
 | Roo Token 估算粗糙 | 使用 `text.len() / 4` 近似而非 tiktoken |
-| Roo MCP 未接入 | 声明了 McpSupport 能力但未在 send_message 中集成 McpServerConnection |
+| Roo MCP 需 E2E 加固 | Roo native loop 已加载 MCP hub/server 配置，但权限、错误和工具调用边界仍需完整验收 |
 | `rama-*` 依赖为预发布 | 锁定 `0.3.0-alpha.4`，待迁移至稳定版 |
 | 原生移动推送未完成 | 当前可注册/展示本地通知，但 APNs/FCM/WebPush token 获取和服务端发送链路仍需真机实现与验收 |
 | Android/iOS 发布需真机验证 | Web/PWA 构建通过不等价于移动端正式发布，需补齐 SDK、签名、R8/ProGuard 和商店目标 SDK 验证 |

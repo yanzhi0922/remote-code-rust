@@ -19,6 +19,7 @@ use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::user_input::UserInput;
+use core_test_support::codex_linux_sandbox_requires_legacy_landlock;
 use core_test_support::managed_network_requirements_loader;
 use core_test_support::responses::ev_apply_patch_function_call;
 use core_test_support::responses::ev_assistant_message;
@@ -1794,6 +1795,18 @@ async fn approval_matrix_covers_group(group: ScenarioGroup) -> Result<()> {
 
 async fn run_scenario_group(group: ScenarioGroup) -> Result<()> {
     skip_if_no_network!(Ok(()));
+    if codex_linux_sandbox_requires_legacy_landlock()
+        && matches!(
+            group,
+            ScenarioGroup::WorkspaceWrite | ScenarioGroup::ApplyPatch | ScenarioGroup::UnifiedExec
+        )
+    {
+        eprintln!(
+            "skipping {group:?} approval scenarios because this Linux test host only supports \
+             legacy Landlock, which cannot enforce direct workspace-write policies"
+        );
+        return Ok(());
+    }
 
     let scenarios = scenarios()
         .into_iter()
@@ -2739,6 +2752,13 @@ async fn approving_fallback_rule_for_compound_command_works() -> Result<()> {
 async fn denying_network_policy_amendment_persists_policy_and_skips_future_network_prompt()
 -> Result<()> {
     skip_if_no_network!(Ok(()));
+    if codex_linux_sandbox_requires_legacy_landlock() {
+        eprintln!(
+            "skipping managed-network approval test because this Linux test host only supports \
+             legacy Landlock"
+        );
+        return Ok(());
+    }
 
     let server = start_mock_server().await;
     let home = Arc::new(TempDir::new()?);
@@ -3019,6 +3039,13 @@ allow_local_binding = true
 #[tokio::test(flavor = "current_thread")]
 async fn network_approval_flow_survives_danger_full_access_session_start() -> Result<()> {
     skip_if_no_network!(Ok(()));
+    if codex_linux_sandbox_requires_legacy_landlock() {
+        eprintln!(
+            "skipping managed-network approval test because this Linux test host only supports \
+             legacy Landlock"
+        );
+        return Ok(());
+    }
 
     let server = start_mock_server().await;
     let home = Arc::new(TempDir::new()?);

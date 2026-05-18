@@ -65,9 +65,14 @@ fn configure_insta_workspace_root_for_snapshot_tests() {
         return;
     }
 
-    let workspace_root = codex_utils_cargo_bin::repo_root()
-        .ok()
-        .map(|root| root.join("codex-rs"));
+    let workspace_root = codex_utils_cargo_bin::repo_root().ok().map(|root| {
+        let nested_codex_root = root.join("codex-rs");
+        if nested_codex_root.is_dir() {
+            nested_codex_root
+        } else {
+            root
+        }
+    });
 
     if let Some(workspace_root) = workspace_root
         && let Ok(workspace_root) = workspace_root.canonicalize()
@@ -265,6 +270,16 @@ pub fn find_codex_linux_sandbox_exe() -> Result<PathBuf, CargoBinError> {
 #[cfg(target_os = "linux")]
 pub fn usable_codex_linux_sandbox_exe() -> Option<PathBuf> {
     usable_codex_linux_sandbox().map(|sandbox| sandbox.path)
+}
+
+#[cfg(target_os = "linux")]
+pub fn codex_linux_sandbox_requires_legacy_landlock() -> bool {
+    usable_codex_linux_sandbox().is_some_and(|sandbox| sandbox.use_legacy_landlock)
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn codex_linux_sandbox_requires_legacy_landlock() -> bool {
+    false
 }
 
 #[cfg(target_os = "linux")]

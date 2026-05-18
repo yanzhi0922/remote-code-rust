@@ -45,6 +45,7 @@ use codex_protocol::protocol::Op;
 use codex_protocol::user_input::UserInput;
 use codex_utils_cargo_bin::cargo_bin;
 use core_test_support::assert_regex_match;
+use core_test_support::codex_linux_sandbox_requires_legacy_landlock;
 use core_test_support::remote_env_env_var;
 use core_test_support::responses;
 use core_test_support::responses::mount_models_once;
@@ -725,6 +726,13 @@ async fn local_stdio_server_uses_runtime_fallback_cwd_when_config_omits_cwd() ->
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn stdio_mcp_tool_call_includes_sandbox_state_meta() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
+    if codex_linux_sandbox_requires_legacy_landlock() {
+        eprintln!(
+            "skipping MCP sandbox metadata test because this Linux test host only supports \
+             legacy Landlock"
+        );
+        return Ok(());
+    }
 
     let server = responses::start_mock_server().await;
 

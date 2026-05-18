@@ -743,7 +743,7 @@ Artifact 必须包含:
 | NFR-MAIN-02 | Control Plane、Runner、Remote Transport、GUI remote API 的 DTO 必须保持显式类型。 |
 | NFR-MAIN-03 | 新增接口必须补充测试或至少补充 smoke 验收。 |
 | NFR-MAIN-04 | README、ARCHITECTURE、COMPATIBILITY、ROADMAP 和本文必须随关键架构变更更新。 |
-| NFR-MAIN-05 | Makefile 中过时路径必须在后续维护中修正，避免指向已合并或删除的 `agents/roo-code`。 |
+| NFR-MAIN-05 | Makefile、README 和 CI 必须保持与当前 `crates/roo/*` workspace 架构一致，旧 `agents/roo-code` 路径不得回归。 |
 
 ### 13.6 可移植性
 
@@ -764,8 +764,14 @@ Artifact 必须包含:
 ```powershell
 cargo fmt --all -- --check
 git diff --check
-cargo check --workspace --all-targets
-cargo clippy --workspace --all-targets -j1 -- -D warnings
+python scripts/cargo_workspace_slice.py check claude
+python scripts/cargo_workspace_slice.py check codex
+python scripts/cargo_workspace_slice.py check roo
+python scripts/cargo_workspace_slice.py check apps-shared
+python scripts/cargo_workspace_slice.py clippy claude
+python scripts/cargo_workspace_slice.py clippy codex
+python scripts/cargo_workspace_slice.py clippy roo
+python scripts/cargo_workspace_slice.py clippy apps-shared
 cargo audit --quiet
 cd apps\remote-code-gui
 npm ci
@@ -804,11 +810,11 @@ powershell -ExecutionPolicy Bypass -File scripts\verify-release.ps1 -IncludeDesk
 
 CI 必须覆盖:
 
-- Ubuntu cargo check。
+- Ubuntu cargo check，按 `claude`、`codex`、`roo`、`apps-shared` workspace slice 分片执行。
 - cargo fmt。
-- clippy `-D warnings`。
+- clippy `-D warnings`，按同一套 workspace slice 分片执行。
 - cargo audit。
-- Linux、Windows、macOS workspace tests。Windows 可排除 GUI 并限并发。
+- Linux、Windows、macOS workspace tests，按同一套 workspace slice 分片执行。Windows 需限并发并降低 debug info。
 - GUI frontend `npm ci`、`npm audit`、`tsc --noEmit`、`vite build`。
 - gitleaks secret scan。
 - Tauri Rust check。
@@ -819,14 +825,14 @@ CI 必须覆盖:
 | --- | --- | --- | --- |
 | RISK-01 | Roo 权限系统未完全接入 GUI 交互弹窗 | Roo 某些工具审批体验不完整 | P1 |
 | RISK-02 | Roo token 使用粗略估算 | 上下文预算不够精准 | P2 |
-| RISK-03 | Roo MCP 未完全接入 `McpServerConnection` | Roo 原生 MCP 能力未完整释放 | P2 |
+| RISK-03 | Roo MCP 已接入 native loop 但缺少完整 E2E、错误路径和权限验收 | Roo 原生 MCP 能力仍可能在边界场景退化 | P2 |
 | RISK-04 | 移动端原生 FCM/APNs token 依赖平台插件 | 推送通知不是正式可用状态 | P1 |
 | RISK-05 | QUIC 从实验能力提升为正式传输门禁 | 需要补齐受控环境 E2E、证书指纹、指标和失败诊断，否则阻断发布 | P1 |
 | RISK-06 | RustSec accepted advisories | 需要按 `.cargo/audit.toml` 到期复核 | P1 |
 | RISK-07 | Linux GUI 依赖存在 Tauri/Wry GTK/WebKit/ATK advisory | Linux GUI 不宜直接 GA | P2 |
-| RISK-08 | Makefile 存在旧 Roo 路径 | 开发者可能执行到过时目标 | P3 |
+| RISK-08 | 旧 Roo 路径回归风险 | 构建脚本和文档必须继续指向 `crates/roo/*`，避免重新引入 `agents/roo-code` | P3 |
 | RISK-09 | 当前工作树存在大量未提交改动 | 发布前必须厘清变更来源和门禁结果 | P1 |
-| RISK-10 | 全 workspace 测试体量大 | Windows 可能需要分包、限并发、降低 debuginfo | P2 |
+| RISK-10 | 全 workspace 测试体量大 | CI 已按 workspace slice 分片；本地完整验证仍需要分包、限并发、降低 debuginfo | P2 |
 | RISK-11 | Tailscale ACL 或设备信任配置错误 | 可能扩大 tailnet 内服务可达范围，需文档化最小权限 ACL 和端口暴露建议 | P2 |
 | RISK-12 | 用户环境未安装或无法登录 Tailscale | Tailscale 只能作为可选增强，必须保留 Relay/Direct/Outbound fallback | P2 |
 
@@ -836,7 +842,7 @@ CI 必须覆盖:
 
 - BR-ROO-01: Roo `resolve_permission()` 完整接入 GUI 权限弹窗。
 - BR-ROO-02: Roo token 计算迁移到 Roo 原生 tiktoken。
-- BR-ROO-03: Roo `send_message()` 接入 `McpServerConnection`。
+- BR-ROO-03: Roo MCP 完整 E2E、权限、错误提示和工具调用边界验收。
 - BR-ROO-04: 增加三 agent 端到端集成测试。
 
 ### 16.2 Enhanced Remote Interaction
@@ -862,8 +868,8 @@ CI 必须覆盖:
 
 - [ ] `cargo fmt --all -- --check` 通过。
 - [ ] `git diff --check` 通过。
-- [ ] `cargo check --workspace --all-targets` 通过。
-- [ ] `cargo clippy --workspace --all-targets -j1 -- -D warnings` 通过。
+- [ ] `scripts/cargo_workspace_slice.py check` 覆盖 `claude`、`codex`、`roo`、`apps-shared` 并全部通过。
+- [ ] `scripts/cargo_workspace_slice.py clippy` 覆盖 `claude`、`codex`、`roo`、`apps-shared` 并全部通过。
 - [ ] `cargo audit --quiet` 通过，accepted advisories 未过复核期。
 - [ ] `gitleaks detect --source . --redact` 通过。
 - [ ] GUI `npm ci`、`npm audit`、`npm test`、`npm run build` 通过。
@@ -917,7 +923,7 @@ CI 必须覆盖:
 - OQ-03: GUI 中 Codex operation panel 的能力是否全部面向普通用户开放，还是需要 advanced/devtools 分层。
 - OQ-04: Remote terminal/file preview/diff 的数据脱敏和权限策略应如何细化。
 - OQ-05: Linux GUI 发布是否作为正式目标，若是需先处理 GTK/WebKit/ATK 依赖风险。
-- OQ-06: 是否需要将 Makefile 与 README 中的 Roo 构建路径统一到当前 `crates/roo/*` 实现。
+- OQ-06: Makefile 与 README 已统一到当前 `crates/roo/*` 实现；后续只需防止旧 `agents/roo-code` 路径回归。
 
 ## 20. 结论
 

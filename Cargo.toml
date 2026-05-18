@@ -112,7 +112,7 @@ members = [
     "crates/codex/external-agent-sessions",
     "crates/codex/memories/read",
     "crates/codex/memories/write",
-    # Codex Stage 19: code-mode stub (V8 stub), rollout-trace, tools, core
+    # Codex Stage 19: code-mode service, rollout-trace, tools, core
     "crates/codex/code-mode",
     "crates/codex/rollout-trace",
     "crates/codex/tools",

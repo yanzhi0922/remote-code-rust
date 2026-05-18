@@ -37,11 +37,13 @@ use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::Weak;
+use std::time::Duration;
 use tokio::sync::watch;
 use tracing::warn;
 
 const AGENT_NAMES: &str = include_str!("agent_names.txt");
 const ROOT_LAST_TASK_MESSAGE: &str = "Main thread";
+const LIVE_AGENT_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum SpawnAgentForkMode {
@@ -714,7 +716,22 @@ impl AgentControl {
             if matches!(thread.agent_status().await, AgentStatus::Shutdown) {
                 Ok(String::new())
             } else {
-                state.send_op(agent_id, Op::Shutdown {}).await
+                let submit_result = state.send_op(agent_id, Op::Shutdown {}).await;
+                if submit_result.is_ok()
+                    && tokio::time::timeout(
+                        LIVE_AGENT_SHUTDOWN_TIMEOUT,
+                        thread.wait_until_terminated(),
+                    )
+                    .await
+                    .is_err()
+                {
+                    warn!(
+                        "timed out waiting for agent thread {agent_id} to shut down; releasing local handle"
+                    );
+                    Err(CodexErr::Timeout)
+                } else {
+                    submit_result
+                }
             }
         } else {
             state.send_op(agent_id, Op::Shutdown {}).await

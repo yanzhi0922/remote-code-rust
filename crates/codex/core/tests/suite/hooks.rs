@@ -16,6 +16,7 @@ use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
 use codex_protocol::user_input::UserInput;
+use core_test_support::codex_linux_sandbox_requires_legacy_landlock;
 use core_test_support::managed_network_requirements_loader;
 use core_test_support::responses::ev_apply_patch_function_call;
 use core_test_support::responses::ev_assistant_message;
@@ -1535,6 +1536,13 @@ async fn permission_request_hook_sees_raw_exec_command_input() -> Result<()> {
 #[tokio::test]
 async fn permission_request_hook_allows_network_approval_without_prompt() -> Result<()> {
     skip_if_no_network!(Ok(()));
+    if codex_linux_sandbox_requires_legacy_landlock() {
+        eprintln!(
+            "skipping managed-network hook approval test because this Linux test host only \
+             supports legacy Landlock"
+        );
+        return Ok(());
+    }
 
     let server = start_mock_server().await;
     let home = Arc::new(TempDir::new()?);

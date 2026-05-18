@@ -22,6 +22,7 @@ use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use core_test_support::assert_regex_match;
+use core_test_support::codex_linux_sandbox_requires_legacy_landlock;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_custom_tool_call;
@@ -543,6 +544,13 @@ async fn sandbox_denied_shell_returns_original_output() -> Result<()> {
 async fn shell_enforces_glob_deny_read_policy() -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
+    if codex_linux_sandbox_requires_legacy_landlock() {
+        eprintln!(
+            "skipping shell glob deny-read test because this Linux test host only supports legacy \
+             Landlock"
+        );
+        return Ok(());
+    }
 
     let server = start_mock_server().await;
     let mut builder = test_codex()

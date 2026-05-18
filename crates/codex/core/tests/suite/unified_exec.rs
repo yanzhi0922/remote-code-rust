@@ -17,6 +17,7 @@ use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::user_input::UserInput;
 use core_test_support::assert_regex_match;
+use core_test_support::codex_linux_sandbox_requires_legacy_landlock;
 use core_test_support::process::process_is_alive;
 use core_test_support::process::wait_for_pid_file;
 use core_test_support::process::wait_for_process_exit;
@@ -787,6 +788,13 @@ async fn unified_exec_network_denial_emits_failed_background_end_event() -> Resu
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
     skip_if_windows!(Ok(()));
+    if codex_linux_sandbox_requires_legacy_landlock() {
+        eprintln!(
+            "skipping unified exec managed-network denial test because this Linux test host only \
+             supports legacy Landlock"
+        );
+        return Ok(());
+    }
 
     let server = start_mock_server().await;
     let (test, sandbox_policy) = unified_exec_network_denial_test(&server).await?;
@@ -830,6 +838,13 @@ async fn unified_exec_short_lived_network_denial_emits_failed_end_event() -> Res
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
     skip_if_windows!(Ok(()));
+    if codex_linux_sandbox_requires_legacy_landlock() {
+        eprintln!(
+            "skipping unified exec managed-network denial test because this Linux test host only \
+             supports legacy Landlock"
+        );
+        return Ok(());
+    }
 
     let server = start_mock_server().await;
     let (test, sandbox_policy) = unified_exec_network_denial_test(&server).await?;
@@ -2762,6 +2777,13 @@ async fn unified_exec_enforces_glob_deny_read_policy() -> Result<()> {
 
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
+    if codex_linux_sandbox_requires_legacy_landlock() {
+        eprintln!(
+            "skipping unified exec glob deny-read test because this Linux test host only supports \
+             legacy Landlock"
+        );
+        return Ok(());
+    }
 
     let server = start_mock_server().await;
     let read_only_policy = SandboxPolicy::new_read_only_policy();
