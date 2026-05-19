@@ -1,5 +1,3 @@
-const DEFAULT_ATTRIBUTION_VALUE: &str = "Codex <noreply@openai.com>";
-
 fn build_commit_message_trailer(config_attribution: Option<&str>) -> Option<String> {
     let value = resolve_attribution_value(config_attribution)?;
     Some(format!("Co-authored-by: {value}"))
@@ -24,7 +22,7 @@ fn resolve_attribution_value(config_attribution: Option<&str>) -> Option<String>
                 Some(trimmed.to_string())
             }
         }
-        None => Some(DEFAULT_ATTRIBUTION_VALUE.to_string()),
+        None => None,
     }
 }
 

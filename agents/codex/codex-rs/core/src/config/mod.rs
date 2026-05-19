@@ -474,7 +474,7 @@ pub struct Config {
 
     /// Optional commit attribution text for commit message co-author trailers.
     ///
-    /// - `None`: use default attribution (`Codex <noreply@openai.com>`)
+    /// - `None`: disable commit attribution
     /// - `Some("")` or whitespace-only: disable commit attribution
     /// - `Some("...")`: use the provided attribution text verbatim
     pub commit_attribution: Option<String>,

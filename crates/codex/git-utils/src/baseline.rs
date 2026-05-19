@@ -14,8 +14,7 @@ use tokio::task;
 
 use crate::operations::run_git_for_status;
 
-const BASELINE_COMMIT_MESSAGE: &str =
-    "Initialize Codex git baseline\n\nCo-authored-by: Codex <noreply@openai.com>";
+const BASELINE_COMMIT_MESSAGE: &str = "Initialize Codex git baseline";
 
 /// File-level change status between a git baseline and the current directory.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
