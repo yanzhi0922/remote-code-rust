@@ -510,7 +510,7 @@ flowchart TD
 | `REMOTE_CODE_CONTROL_PLANE_AUTH_TOKEN` | control plane bearer token |
 | `REMOTE_CODE_CONTROL_PLANE_BOOTSTRAP_SECRET` | 首设备 bootstrap secret |
 | `REMOTE_CODE_CONTROL_PLANE_USER_KEY_HASHES` | 允许用户名/密码派生 user-key 的 SHA-256 hash 列表 |
-| `REMOTE_CODE_CONTROL_PLANE_QUIC_EXPERIMENTAL` | 当前实现中开启 Control Plane QUIC listener 的变量；发布目标中 QUIC 为正式传输门禁，变量命名后续应迁移为非 experimental 名称，默认仍应关闭入站监听 |
+| `REMOTE_CODE_CONTROL_PLANE_QUIC_ENABLE` | 开启 Control Plane QUIC listener；默认关闭，且仍必须同时配置 bind/cert/key。`REMOTE_CODE_CONTROL_PLANE_QUIC_EXPERIMENTAL` 仅作为旧部署兼容别名保留，不应再写入新部署文档 |
 | `REMOTE_CODE_CONTROL_PLANE_QUIC_BIND` | QUIC UDP bind |
 | `REMOTE_CODE_CONTROL_PLANE_QUIC_CERT` | QUIC cert |
 | `REMOTE_CODE_CONTROL_PLANE_QUIC_KEY` | QUIC private key |
@@ -824,11 +824,11 @@ CI 必须覆盖:
 | ID | 限制或风险 | 当前影响 | 优先级 |
 | --- | --- | --- | --- |
 | RISK-01 | Roo 权限系统未完全接入 GUI 交互弹窗 | Roo 某些工具审批体验不完整 | P1 |
-| RISK-02 | Roo token 使用粗略估算 | 上下文预算不够精准 | P2 |
+| RISK-02 | Roo token 已从字符数粗算迁移到 Roo 原生 tiktoken 路径，但仍需和真实 provider usage 做发布验收比对 | 上下文预算边界仍需用真实模型回归确认 | P2 |
 | RISK-03 | Roo MCP 已接入 native loop 但缺少完整 E2E、错误路径和权限验收 | Roo 原生 MCP 能力仍可能在边界场景退化 | P2 |
 | RISK-04 | 移动端原生 FCM/APNs token 依赖平台插件 | 推送通知不是正式可用状态 | P1 |
-| RISK-05 | QUIC 从实验能力提升为正式传输门禁 | 需要补齐受控环境 E2E、证书指纹、指标和失败诊断，否则阻断发布 | P1 |
-| RISK-06 | RustSec accepted advisories | 需要按 `.cargo/audit.toml` 到期复核 | P1 |
+| RISK-05 | QUIC 已使用正式 `REMOTE_CODE_CONTROL_PLANE_QUIC_ENABLE` 门禁，旧 experimental 环境变量仅保留兼容 | 仍需要补齐受控环境 E2E、证书指纹、指标和失败诊断，否则阻断发布 | P1 |
+| RISK-06 | RustSec accepted advisories 已于 2026-05-19 运行 `cargo audit --quiet` 复核通过 | 仍需按 `.cargo/audit.toml` 到期复核，不能新增无说明 ignore | P1 |
 | RISK-07 | Linux GUI 依赖存在 Tauri/Wry GTK/WebKit/ATK advisory | Linux GUI 不宜直接 GA | P2 |
 | RISK-08 | 旧 Roo 路径回归风险 | 构建脚本和文档必须继续指向 `crates/roo/*`，避免重新引入 `agents/roo-code` | P3 |
 | RISK-09 | 当前工作树存在大量未提交改动 | 发布前必须厘清变更来源和门禁结果 | P1 |
@@ -841,7 +841,7 @@ CI 必须覆盖:
 ### 16.1 Roo Agent Deepening
 
 - BR-ROO-01: Roo `resolve_permission()` 完整接入 GUI 权限弹窗。
-- BR-ROO-02: Roo token 计算迁移到 Roo 原生 tiktoken。
+- BR-ROO-02: Roo token 计算已迁移到 Roo 原生 tiktoken；发布前继续用真实 provider usage 做偏差验收。
 - BR-ROO-03: Roo MCP 完整 E2E、权限、错误提示和工具调用边界验收。
 - BR-ROO-04: 增加三 agent 端到端集成测试。
 

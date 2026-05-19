@@ -133,7 +133,7 @@ pub struct McpPeerInfo {
 }
 
 /// A tool descriptor returned by an MCP server via `tools/list`.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct McpToolDescriptor {
     /// Tool name (unique within the server).
@@ -150,6 +150,45 @@ pub struct McpToolDescriptor {
     /// Tool annotations (e.g. `readOnlyHint`).
     #[serde(default)]
     pub annotations: Value,
+}
+
+impl<'de> Deserialize<'de> for McpToolDescriptor {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct RawMcpToolDescriptor {
+            name: String,
+            #[serde(default)]
+            title: Option<String>,
+            #[serde(default)]
+            description: Option<String>,
+            #[serde(default)]
+            input_schema: Value,
+            #[serde(default)]
+            annotations: Value,
+            #[serde(default, rename = "_meta")]
+            meta: Value,
+        }
+
+        let raw = RawMcpToolDescriptor::deserialize(deserializer)?;
+        let annotations = match (raw.annotations, raw.meta) {
+            (Value::Object(mut annotations), Value::Object(meta)) if !meta.is_empty() => {
+                annotations.insert("_meta".to_owned(), Value::Object(meta));
+                Value::Object(annotations)
+            }
+            (annotations, _) => annotations,
+        };
+        Ok(Self {
+            name: raw.name,
+            title: raw.title,
+            description: raw.description,
+            input_schema: raw.input_schema,
+            annotations,
+        })
+    }
 }
 
 /// A prompt argument descriptor returned by an MCP server via `prompts/list`.
@@ -336,6 +375,18 @@ mod tests {
         let tool: McpToolDescriptor = serde_json::from_str(json).expect("deserialize");
         assert_eq!(tool.name, "search");
         assert_eq!(tool.description.as_deref(), Some("Search"));
+    }
+
+    #[test]
+    fn tool_descriptor_preserves_meta_in_annotations() {
+        let json = r#"{"name":"search","inputSchema":{},"annotations":{"readOnlyHint":true},"_meta":{"anthropic/searchHint":"docs lookup","anthropic/alwaysLoad":true}}"#;
+        let tool: McpToolDescriptor = serde_json::from_str(json).expect("deserialize");
+        assert_eq!(tool.annotations["readOnlyHint"], true);
+        assert_eq!(
+            tool.annotations["_meta"]["anthropic/searchHint"],
+            "docs lookup"
+        );
+        assert_eq!(tool.annotations["_meta"]["anthropic/alwaysLoad"], true);
     }
 
     #[test]

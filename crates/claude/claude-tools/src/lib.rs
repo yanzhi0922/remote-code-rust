@@ -86,6 +86,29 @@ const IGNORED_DIRS: &[&str] = &[
 static TOOL_RUNTIME_POLICY: Lazy<Mutex<ToolRuntimePolicy>> =
     Lazy::new(|| Mutex::new(ToolRuntimePolicy::default()));
 
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ToolRuntimeHints {
+    pub always_load: bool,
+    pub search_hints: Vec<String>,
+    pub destructive_hint: Option<bool>,
+    pub open_world_hint: Option<bool>,
+}
+
+static TOOL_RUNTIME_HINTS: Lazy<Mutex<std::collections::BTreeMap<String, ToolRuntimeHints>>> =
+    Lazy::new(|| Mutex::new(std::collections::BTreeMap::new()));
+
+pub(crate) fn register_tool_runtime_hints(name: impl Into<String>, hints: ToolRuntimeHints) {
+    TOOL_RUNTIME_HINTS.lock().insert(name.into(), hints);
+}
+
+pub(crate) fn clear_tool_runtime_hints() {
+    TOOL_RUNTIME_HINTS.lock().clear();
+}
+
+fn runtime_hints_for_tool(name: &str) -> Option<ToolRuntimeHints> {
+    TOOL_RUNTIME_HINTS.lock().get(name).cloned()
+}
+
 tokio::task_local! {
     static TOOL_RUNTIME_POLICY_OVERLAY: ToolRuntimePolicyOverlay;
 }
@@ -873,6 +896,9 @@ impl ToolSpec {
     #[must_use]
     pub fn is_always_loaded(&self) -> bool {
         self.is_tool_search()
+            || runtime_hints_for_tool(&self.name)
+                .map(|hints| hints.always_load)
+                .unwrap_or(false)
     }
 
     #[must_use]
@@ -885,6 +911,16 @@ impl ToolSpec {
             ToolSourceKind::Builtin => builtin_tool_is_deferred(&self.name),
             ToolSourceKind::Mcp | ToolSourceKind::McpResource => true,
         }
+    }
+
+    #[must_use]
+    pub fn destructive_hint(&self) -> Option<bool> {
+        runtime_hints_for_tool(&self.name).and_then(|hints| hints.destructive_hint)
+    }
+
+    #[must_use]
+    pub fn open_world_hint(&self) -> Option<bool> {
+        runtime_hints_for_tool(&self.name).and_then(|hints| hints.open_world_hint)
     }
 
     #[must_use]
@@ -910,6 +946,12 @@ impl ToolSpec {
 
         for hint in builtin_tool_search_hints(&self.name) {
             collect_tool_search_terms(hint, &mut terms);
+        }
+
+        if let Some(hints) = runtime_hints_for_tool(&self.name) {
+            for hint in hints.search_hints {
+                collect_tool_search_terms(&hint, &mut terms);
+            }
         }
 
         terms.into_iter().collect()
@@ -6595,6 +6637,104 @@ while True:
         assert_eq!(
             payload["contents"][0]["text"].as_str(),
             Some("hello from resource")
+        );
+    }
+
+    #[tokio::test]
+    async fn read_mcp_resource_rejects_servers_without_resource_capability() {
+        let _runtime_policy_guard = RUNTIME_POLICY_TEST_MUTEX.lock().await;
+        let tempdir = tempdir().expect("tempdir");
+        let context = ToolExecutionContext {
+            original_cwd: tempdir.path().to_path_buf().clone(),
+            cwd: tempdir.path().to_path_buf(),
+            active_worktree_session: None,
+            timeout_ms: 5_000,
+            sub_agent: None,
+            progress_cb: None,
+            task_stack: Default::default(),
+            read_file_state: crate::FileStateCache::new(),
+            sub_agent_output_tokens: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        };
+        let broker = StaticPermissionBroker::new(true);
+        let original_policy = super::current_tool_runtime_policy();
+        configure_tool_runtime_policy(ToolRuntimePolicy {
+            allowed_tools: Vec::new(),
+            disallowed_tools: Vec::new(),
+            task_output_dir: None,
+            tasks_dir: None,
+            tool_results_dir: None,
+            mcp_servers: vec![
+                RuntimeMcpServerPolicyEntry {
+                    origin_kind: "profile".to_owned(),
+                    origin_name: "profile".to_owned(),
+                    config_path: tempdir.path().join("mcp.toml"),
+                    server: McpServerConfig {
+                        name: "no-resources".to_owned(),
+                        enabled: true,
+                        transport: McpTransportConfig::Stdio {
+                            command: "definitely-missing-mcp-command".to_owned(),
+                            args: Vec::new(),
+                            cwd: None,
+                            env: Default::default(),
+                        },
+                        capabilities: McpCapabilityMatrix::default(),
+                        startup_timeout_secs: Some(1),
+                        request_timeout_secs: Some(1),
+                        metadata: Default::default(),
+                        oauth: None,
+                        tool_policy: McpToolPolicy::default(),
+                    },
+                },
+                RuntimeMcpServerPolicyEntry {
+                    origin_kind: "profile".to_owned(),
+                    origin_name: "profile".to_owned(),
+                    config_path: tempdir.path().join("resourceful.toml"),
+                    server: McpServerConfig {
+                        name: "resourceful".to_owned(),
+                        enabled: true,
+                        transport: McpTransportConfig::Stdio {
+                            command: "definitely-missing-mcp-command".to_owned(),
+                            args: Vec::new(),
+                            cwd: None,
+                            env: Default::default(),
+                        },
+                        capabilities: McpCapabilityMatrix {
+                            supports_resources: true,
+                            ..Default::default()
+                        },
+                        startup_timeout_secs: Some(1),
+                        request_timeout_secs: Some(1),
+                        metadata: Default::default(),
+                        oauth: None,
+                        tool_policy: McpToolPolicy::default(),
+                    },
+                },
+            ],
+            shell_policy: Default::default(),
+        })
+        .expect("set runtime policy");
+
+        let result = execute_tool_call(
+            &ToolCall {
+                id: "unsupported-resource".to_owned(),
+                name: "read_mcp_resource".to_owned(),
+                input: json!({"server": "no-resources", "uri": "file:///README.md"}),
+            },
+            &context,
+            &broker,
+        )
+        .await
+        .expect("read_mcp_resource should return result");
+
+        configure_tool_runtime_policy(original_policy).expect("restore runtime policy");
+
+        assert!(result.is_error);
+        assert!(
+            result
+                .content
+                .contains("does not advertise resources support"),
+            "{}",
+            result.content
         );
     }
 

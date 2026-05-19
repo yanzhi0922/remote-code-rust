@@ -1,6 +1,6 @@
 mod auto_memory;
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -32,6 +32,7 @@ use claude_system_prompt::{
 };
 use claude_tools::{ToolSpec, is_runtime_dynamic_mcp_tool_name};
 use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
+use walkdir::WalkDir;
 
 const MEMORY_INSTRUCTION_PROMPT: &str = "Codebase and user instructions are shown below. Be sure to adhere to these instructions. IMPORTANT: These instructions OVERRIDE any default behavior and you MUST follow them exactly as written.";
 const SCRATCHPAD_FEATURE_KEY: &str = "tengu_scratch";
@@ -671,7 +672,7 @@ pub async fn build_runtime_system_prompt(
         os_version: detect_os_version(),
         enabled_tools,
         language: settings.language.clone(),
-        output_style: runtime_output_style_config(settings.output_style.as_deref()),
+        output_style: runtime_output_style_config(config, settings.output_style.as_deref()),
         mcp_clients: mcp_catalog
             .clients
             .into_iter()
@@ -2271,35 +2272,289 @@ fn discover_user_invocable_skills(config: &RuntimeConfig) -> bool {
         .unwrap_or(false)
 }
 
+#[derive(Debug, Clone)]
+struct RuntimeOutputStyleCandidate {
+    config: PromptOutputStyleConfig,
+    force_for_plugin: bool,
+}
+
 fn explanatory_feature_prompt() -> String {
     "\n## Insights\nIn order to encourage learning, before and after writing code, always provide brief educational explanations about implementation choices using (with backticks):\n\"`★ Insight ─────────────────────────────────────`\n[2-3 key educational points]\n`─────────────────────────────────────────────────`\"\n\nThese insights should be included in the conversation, not in the codebase. You should generally focus on interesting insights that are specific to the codebase or the code you just wrote, rather than general programming concepts.".to_owned()
 }
 
-fn runtime_output_style_config(style_name: Option<&str>) -> Option<PromptOutputStyleConfig> {
-    match style_name?.trim() {
-        "" | "default" => None,
-        "Explanatory" => {
-            let feature_prompt = explanatory_feature_prompt();
-            Some(PromptOutputStyleConfig {
+fn builtin_output_style_candidates() -> BTreeMap<String, RuntimeOutputStyleCandidate> {
+    let mut styles = BTreeMap::new();
+    let feature_prompt = explanatory_feature_prompt();
+    styles.insert(
+        "Explanatory".to_owned(),
+        RuntimeOutputStyleCandidate {
+            config: PromptOutputStyleConfig {
                 name: "Explanatory".to_owned(),
                 prompt: format!(
                     "You are an interactive CLI tool that helps users with software engineering tasks. In addition to software engineering tasks, you should provide educational insights about the codebase along the way.\n\nYou should be clear and educational, providing helpful explanations while remaining focused on the task. Balance educational content with task completion. When providing insights, you may exceed typical length constraints, but remain focused and relevant.\n\n# Explanatory Style Active\n{feature_prompt}"
                 ),
                 keep_coding_instructions: true,
-            })
-        }
-        "Learning" => {
-            let feature_prompt = explanatory_feature_prompt();
-            Some(PromptOutputStyleConfig {
+            },
+            force_for_plugin: false,
+        },
+    );
+
+    let feature_prompt = explanatory_feature_prompt();
+    styles.insert(
+        "Learning".to_owned(),
+        RuntimeOutputStyleCandidate {
+            config: PromptOutputStyleConfig {
                 name: "Learning".to_owned(),
                 prompt: format!(
-                    "You are an interactive CLI tool that helps users with software engineering tasks. In addition to software engineering tasks, you should help users learn more about the codebase through hands-on practice and educational insights.\n\nYou should be collaborative and encouraging. Balance task completion with learning by requesting user input for meaningful design decisions while handling routine implementation yourself.\n\n# Learning Style Active\n{feature_prompt}"
+                    "You are an interactive CLI tool that helps users with software engineering tasks. In addition to software engineering tasks, you should help users learn more about the codebase through hands-on practice and educational insights.\n\nYou should be collaborative and encouraging. Balance task completion with learning by requesting user input for meaningful design decisions while handling routine implementation yourself.   \n\n# Learning Style Active\n## Requesting Human Contributions\nIn order to encourage learning, ask the human to contribute 2-10 line code pieces when generating 20+ lines involving:\n- Design decisions (error handling, data structures)\n- Business logic with multiple valid approaches  \n- Key algorithms or interface definitions\n\n**TodoList Integration**: If using a TodoList for the overall task, include a specific todo item like \"Request human input on [specific decision]\" when planning to request human input. This ensures proper task tracking. Note: TodoList is not required for all tasks.\n\nExample TodoList flow:\n   ✓ \"Set up component structure with placeholder for logic\"\n   ✓ \"Request human collaboration on decision logic implementation\"\n   ✓ \"Integrate contribution and complete feature\"\n\n### Request Format\n```\n• **Learn by Doing**\n**Context:** [what's built and why this decision matters]\n**Your Task:** [specific function/section in file, mention file and TODO(human) but do not include line numbers]\n**Guidance:** [trade-offs and constraints to consider]\n```\n\n### Key Guidelines\n- Frame contributions as valuable design decisions, not busy work\n- You must first add a TODO(human) section into the codebase with your editing tools before making the Learn by Doing request      \n- Make sure there is one and only one TODO(human) section in the code\n- Don't take any action or output anything after the Learn by Doing request. Wait for human implementation before proceeding.\n\n### Example Requests\n\n**Whole Function Example:**\n```\n• **Learn by Doing**\n\n**Context:** I've set up the hint feature UI with a button that triggers the hint system. The infrastructure is ready: when clicked, it calls selectHintCell() to determine which cell to hint, then highlights that cell with a yellow background and shows possible values. The hint system needs to decide which empty cell would be most helpful to reveal to the user.\n\n**Your Task:** In sudoku.js, implement the selectHintCell(board) function. Look for TODO(human). This function should analyze the board and return {{row, col}} for the best cell to hint, or null if the puzzle is complete.\n\n**Guidance:** Consider multiple strategies: prioritize cells with only one possible value (naked singles), or cells that appear in rows/columns/boxes with many filled cells. You could also consider a balanced approach that helps without making it too easy. The board parameter is a 9x9 array where 0 represents empty cells.\n```\n\n**Partial Function Example:**\n```\n• **Learn by Doing**\n\n**Context:** I've built a file upload component that validates files before accepting them. The main validation logic is complete, but it needs specific handling for different file type categories in the switch statement.\n\n**Your Task:** In upload.js, inside the validateFile() function's switch statement, implement the 'case \"document\":' branch. Look for TODO(human). This should validate document files (pdf, doc, docx).\n\n**Guidance:** Consider checking file size limits (maybe 10MB for documents?), validating the file extension matches the MIME type, and returning {{valid: boolean, error?: string}}. The file object has properties: name, size, type.\n```\n\n**Debugging Example:**\n```\n• **Learn by Doing**\n\n**Context:** The user reported that number inputs aren't working correctly in the calculator. I've identified the handleInput() function as the likely source, but need to understand what values are being processed.\n\n**Your Task:** In calculator.js, inside the handleInput() function, add 2-3 console.log statements after the TODO(human) comment to help debug why number inputs fail.\n\n**Guidance:** Consider logging: the raw input value, the parsed result, and any validation state. This will help us understand where the conversion breaks.\n```\n\n### After Contributions\nShare one insight connecting their code to broader patterns or system effects. Avoid praise or repetition.\n\n## Insights\n{feature_prompt}"
                 ),
                 keep_coding_instructions: true,
-            })
+            },
+            force_for_plugin: false,
+        },
+    );
+    styles
+}
+
+#[must_use]
+pub fn available_runtime_output_style_names(config: &RuntimeConfig) -> Vec<String> {
+    let mut names = vec!["default".to_owned()];
+    names.extend(runtime_output_style_registry(config).into_keys());
+    names
+}
+
+fn runtime_output_style_config(
+    config: &RuntimeConfig,
+    style_name: Option<&str>,
+) -> Option<PromptOutputStyleConfig> {
+    let styles = runtime_output_style_registry(config);
+    if let Some(forced) = styles
+        .values()
+        .find(|style| style.force_for_plugin)
+        .map(|style| style.config.clone())
+    {
+        return Some(forced);
+    }
+
+    match style_name.map(str::trim) {
+        None | Some("" | "default") => None,
+        Some(name) => styles.get(name).map(|style| style.config.clone()),
+    }
+}
+
+fn runtime_output_style_registry(
+    config: &RuntimeConfig,
+) -> BTreeMap<String, RuntimeOutputStyleCandidate> {
+    let mut styles = builtin_output_style_candidates();
+
+    for style in runtime_plugin_output_styles(config) {
+        styles.insert(style.config.name.clone(), style);
+    }
+    if config
+        .allowed_setting_sources
+        .contains(&SettingSource::User)
+    {
+        for dir in runtime_user_output_style_dirs(config) {
+            for style in load_runtime_output_styles_dir(&dir, false) {
+                styles.insert(style.config.name.clone(), style);
+            }
         }
+    }
+    if config
+        .allowed_setting_sources
+        .contains(&SettingSource::Project)
+    {
+        for dir in runtime_project_output_style_dirs(config) {
+            for style in load_runtime_output_styles_dir(&dir, false) {
+                styles.insert(style.config.name.clone(), style);
+            }
+        }
+    }
+    styles
+}
+
+fn runtime_plugin_output_styles(config: &RuntimeConfig) -> Vec<RuntimeOutputStyleCandidate> {
+    if !config
+        .allowed_setting_sources
+        .contains(&SettingSource::User)
+        || !config.paths.plugins_dir.exists()
+    {
+        return Vec::new();
+    }
+
+    let Ok(plugins) = claude_plugins::discover_plugins(&config.paths.plugins_dir) else {
+        return Vec::new();
+    };
+
+    plugins
+        .iter()
+        .flat_map(|plugin| {
+            claude_plugins::load_output_styles::load_plugin_bundle_output_styles(plugin).styles
+        })
+        .map(|style| RuntimeOutputStyleCandidate {
+            config: PromptOutputStyleConfig {
+                name: style.name,
+                prompt: style.prompt,
+                keep_coding_instructions: style.keep_coding_instructions.unwrap_or(true),
+            },
+            force_for_plugin: style.force_for_plugin.unwrap_or(false),
+        })
+        .collect()
+}
+
+fn runtime_user_output_style_dirs(config: &RuntimeConfig) -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    dirs.push(runtime_claude_config_home_dir().join("output-styles"));
+    dirs.push(config.paths.profile_dir.join("output-styles"));
+    dedup_paths(dirs)
+}
+
+fn runtime_project_output_style_dirs(config: &RuntimeConfig) -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    let mut ancestors = config.original_cwd.ancestors().collect::<Vec<_>>();
+    ancestors.reverse();
+    for dir in ancestors {
+        dirs.push(dir.join(".claude").join("output-styles"));
+        dirs.push(dir.join(".remote-code-rust").join("output-styles"));
+    }
+    dedup_paths(dirs)
+}
+
+fn dedup_paths(paths: Vec<PathBuf>) -> Vec<PathBuf> {
+    let mut seen = HashSet::new();
+    let mut deduped = Vec::new();
+    for path in paths {
+        let key = normalize_path_for_comparison(&canonical_or_original(&path));
+        if seen.insert(key) {
+            deduped.push(path);
+        }
+    }
+    deduped
+}
+
+fn load_runtime_output_styles_dir(
+    dir: &Path,
+    force_for_plugin: bool,
+) -> Vec<RuntimeOutputStyleCandidate> {
+    if !dir.is_dir() {
+        return Vec::new();
+    }
+
+    let mut styles = Vec::new();
+    let mut paths = WalkDir::new(dir)
+        .follow_links(true)
+        .sort_by(|a, b| a.path().cmp(b.path()))
+        .into_iter()
+        .filter_map(std::result::Result::ok)
+        .filter(|entry| {
+            entry.file_type().is_file()
+                && entry.path().extension().and_then(|ext| ext.to_str()) == Some("md")
+        })
+        .map(|entry| entry.into_path())
+        .collect::<Vec<_>>();
+    paths.sort();
+
+    for path in paths {
+        let Ok(content) = fs::read_to_string(&path) else {
+            continue;
+        };
+        let file_stem = path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .unwrap_or("custom");
+        if let Some(style) = parse_runtime_output_style_file(&content, file_stem, force_for_plugin)
+        {
+            styles.push(style);
+        }
+    }
+    styles
+}
+
+fn parse_runtime_output_style_file(
+    content: &str,
+    file_stem: &str,
+    force_for_plugin: bool,
+) -> Option<RuntimeOutputStyleCandidate> {
+    let (frontmatter, body) = split_markdown_frontmatter(content);
+    let name = frontmatter
+        .as_ref()
+        .and_then(|fm| frontmatter_string(fm, "name"))
+        .unwrap_or_else(|| file_stem.to_owned());
+    let prompt = body.trim();
+    if prompt.is_empty() {
+        return None;
+    }
+    let keep_coding_instructions = frontmatter
+        .as_ref()
+        .and_then(|fm| frontmatter_bool(fm, "keep-coding-instructions"))
+        .unwrap_or(true);
+
+    Some(RuntimeOutputStyleCandidate {
+        config: PromptOutputStyleConfig {
+            name,
+            prompt: prompt.to_owned(),
+            keep_coding_instructions,
+        },
+        force_for_plugin,
+    })
+}
+
+fn split_markdown_frontmatter(content: &str) -> (Option<String>, String) {
+    let trimmed = content.trim_start();
+    if !trimmed.starts_with("---") {
+        return (None, content.to_owned());
+    }
+    let rest = &trimmed[3..];
+    let Some(end) = rest.find("\n---") else {
+        return (None, content.to_owned());
+    };
+    let frontmatter = rest[..end].to_owned();
+    let mut body = rest[end + 4..].to_owned();
+    if let Some(stripped) = body.strip_prefix('\r') {
+        body = stripped.to_owned();
+    }
+    if let Some(stripped) = body.strip_prefix('\n') {
+        body = stripped.to_owned();
+    }
+    (Some(frontmatter), body)
+}
+
+fn frontmatter_string(frontmatter: &str, key: &str) -> Option<String> {
+    let value = frontmatter_value(frontmatter, key)?;
+    let value = unquote_frontmatter_value(value.trim());
+    (!value.is_empty()).then(|| value.to_owned())
+}
+
+fn frontmatter_bool(frontmatter: &str, key: &str) -> Option<bool> {
+    let value = unquote_frontmatter_value(frontmatter_value(frontmatter, key)?.trim());
+    match value.to_ascii_lowercase().as_str() {
+        "true" => Some(true),
+        "false" => Some(false),
         _ => None,
     }
+}
+
+fn frontmatter_value<'a>(frontmatter: &'a str, key: &str) -> Option<&'a str> {
+    frontmatter.lines().find_map(|line| {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            return None;
+        }
+        let (candidate, value) = line.split_once(':')?;
+        (candidate.trim() == key).then_some(value.trim())
+    })
+}
+
+fn unquote_frontmatter_value(value: &str) -> &str {
+    value
+        .strip_prefix('"')
+        .and_then(|inner| inner.strip_suffix('"'))
+        .or_else(|| {
+            value
+                .strip_prefix('\'')
+                .and_then(|inner| inner.strip_suffix('\''))
+        })
+        .unwrap_or(value)
 }
 
 fn should_use_global_prompt_cache_scope(config: &RuntimeConfig) -> bool {
@@ -2319,7 +2574,8 @@ mod tests {
         build_runtime_system_prompt, clear_runtime_system_prompt_state,
         collect_claude_md_context_with_roots, expand_requested_tool_names,
         remote_marks_internal_model_repo, runtime_claude_temp_dir_name,
-        runtime_user_context_entries_with_settings, sanitize_path_component,
+        runtime_output_style_config, runtime_user_context_entries_with_settings,
+        sanitize_path_component,
     };
     use claude_config::settings_layers::RuntimeOverrides;
     use claude_config::{ProviderOverrides, SettingSource, load_runtime_config};
@@ -2471,6 +2727,51 @@ mod tests {
         assert!(expanded.contains("Bash(git:*)"));
         assert!(expanded.contains("Bash"));
         assert!(expanded.contains("bash_command"));
+    }
+
+    #[test]
+    fn runtime_output_style_loads_project_frontmatter_style() {
+        let config = test_config(None);
+        let styles_dir = config.original_cwd.join(".claude").join("output-styles");
+        fs::create_dir_all(&styles_dir).expect("styles dir");
+        fs::write(
+            styles_dir.join("reviewer.md"),
+            "---\nname: Reviewer\ndescription: Review style\nkeep-coding-instructions: false\n---\nFocus on defects first.",
+        )
+        .expect("style file");
+
+        let style = runtime_output_style_config(&config, Some("Reviewer")).expect("style");
+        let names = super::available_runtime_output_style_names(&config);
+
+        assert_eq!(style.name, "Reviewer");
+        assert_eq!(style.prompt, "Focus on defects first.");
+        assert!(!style.keep_coding_instructions);
+        assert!(names.contains(&"Reviewer".to_owned()));
+    }
+
+    #[test]
+    fn runtime_output_style_forced_plugin_style_overrides_settings() {
+        let mut config = test_config(None);
+        config.output_style = Some("Explanatory".to_owned());
+        let plugin_root = config.paths.plugins_dir.join("coach");
+        fs::create_dir_all(plugin_root.join(".codex-plugin")).expect("manifest dir");
+        fs::create_dir_all(plugin_root.join("output-styles")).expect("styles dir");
+        fs::write(
+            plugin_root.join(".codex-plugin").join("plugin.json"),
+            r#"{"name":"coach","version":"1.0.0"}"#,
+        )
+        .expect("manifest");
+        fs::write(
+            plugin_root.join("output-styles").join("pair.md"),
+            "---\nname: Pair\nforce-for-plugin: true\n---\nPair with the user.",
+        )
+        .expect("style file");
+
+        let style = runtime_output_style_config(&config, config.output_style.as_deref())
+            .expect("forced plugin style");
+
+        assert_eq!(style.name, "coach:Pair");
+        assert_eq!(style.prompt, "Pair with the user.");
     }
 
     #[tokio::test]

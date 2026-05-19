@@ -20,7 +20,7 @@ use uuid::Uuid;
 
 use super::{
     ToolExecutionContext, ToolResultSizePolicy, current_runtime_agent_prompt_context,
-    current_tool_runtime_policy,
+    current_runtime_mcp_observation, current_tool_runtime_policy,
 };
 use crate::mcp_output_storage::{
     McpResultFormat, get_binary_blob_saved_message, get_format_description,
@@ -31,6 +31,31 @@ use crate::mcp_runtime::resolve_runtime_policy_mcp_server;
 use crate::tool_result_storage::{persist_tool_result_text, process_tool_result_text};
 
 const MCP_RESOURCE_TOOL_MAX_RESULT_SIZE_CHARS: usize = 100_000;
+
+fn capability_value_enabled(value: Option<&Value>) -> bool {
+    value.is_some_and(|value| !value.is_null() && value != false)
+}
+
+fn mcp_server_supports_resources(
+    server_name: &str,
+    server_config: &claude_mcp::McpServerConfig,
+) -> bool {
+    if server_config.capabilities.supports_resources {
+        return true;
+    }
+
+    let normalized_target = normalize_name_for_mcp(server_name);
+    current_runtime_mcp_observation().is_some_and(|observation| {
+        observation.servers.iter().any(|server| {
+            (server.entry.server.name == server_name
+                || normalize_name_for_mcp(&server.entry.server.name) == normalized_target)
+                && server.inspection.as_ref().is_some_and(|inspection| {
+                    capability_value_enabled(inspection.capabilities.get("resources"))
+                        || !inspection.resources.is_empty()
+                })
+        })
+    })
+}
 
 pub(crate) async fn mcp_auth_tool(input: &Value, context: &ToolExecutionContext) -> Result<String> {
     let server = input["server"]
@@ -367,6 +392,15 @@ pub(crate) async fn list_mcp_resources_tool(
     let client_info = claude_mcp::McpClientInfo::new("remote-code-rust", env!("CARGO_PKG_VERSION"));
     let mut resource_list = Vec::new();
     for (server_name, server) in servers {
+        if !mcp_server_supports_resources(&server_name, &server) {
+            if target_server.is_some() {
+                return Err(anyhow!(
+                    "MCP server \"{}\" is connected but does not advertise resources support.",
+                    server_name
+                ));
+            }
+            continue;
+        }
         if let Ok(resources) = claude_mcp::list_resources(&server, &client_info).await {
             resource_list.extend(resources.iter().map(|resource| {
                 json!({
@@ -396,6 +430,12 @@ pub(crate) async fn read_mcp_resource_tool(
 
     let runtime_policy = current_tool_runtime_policy();
     let server = resolve_runtime_policy_mcp_server(&runtime_policy, server_name)?.server;
+    if !mcp_server_supports_resources(server_name, &server) {
+        return Err(anyhow!(
+            "MCP server \"{}\" is connected but does not advertise resources support.",
+            server_name
+        ));
+    }
 
     let client_info = claude_mcp::McpClientInfo::new("remote-code-rust", env!("CARGO_PKG_VERSION"));
     match claude_mcp::read_resource(&server, &client_info, uri).await {

@@ -65,6 +65,20 @@ use crate::types::{DiffStrategy, StreamEvent, TaskConfig, TaskError, TaskResult,
 // ArcProviderWrapper — adapts Arc<dyn Provider> to Box<dyn Provider>
 // ===========================================================================
 
+async fn estimate_api_message_tokens(history: &[roo_types::api::ApiMessage]) -> (usize, usize) {
+    let all_content = history
+        .iter()
+        .flat_map(|msg| msg.content.iter().cloned())
+        .collect::<Vec<_>>();
+    let total_tokens = roo_context::tiktoken::count_tokens(&all_content).await as usize;
+    let last_message_tokens = if let Some(msg) = history.last() {
+        roo_context::tiktoken::count_tokens(&msg.content).await as usize
+    } else {
+        0
+    };
+    (total_tokens, last_message_tokens)
+}
+
 /// Wrapper to use a shared `Arc<dyn Provider>` where `Box<dyn Provider>` is
 /// expected. Used when spawning a nested agent loop for subtask execution —
 /// the child shares the same provider via Arc.
@@ -5018,30 +5032,10 @@ impl AgentLoop {
         let (_, model_info) = self.provider.get_model();
         let context_window = model_info.context_window as usize;
 
-        // Rough token estimate: ~4 chars per token
-        let total_chars: usize = history
-            .iter()
-            .flat_map(|msg| msg.content.iter())
-            .map(|block| match block {
-                roo_types::api::ContentBlock::Text { text } => text.len(),
-                _ => 0,
-            })
-            .sum();
-        let estimated_tokens = total_chars / 4;
-
-        // Estimate tokens for the last message (for will_manage_context)
-        let last_message_tokens = history
-            .last()
-            .map(|msg| {
-                msg.content
-                    .iter()
-                    .map(|block| match block {
-                        roo_types::api::ContentBlock::Text { text } => text.len() / 4,
-                        _ => 0,
-                    })
-                    .sum()
-            })
-            .unwrap_or(0);
+        // Roo native parity: use the tiktoken-backed content-block counter
+        // instead of the old text-only ~4 chars/token fallback. This keeps
+        // tool_use/tool_result/thinking/image blocks in the budget decision.
+        let (estimated_tokens, last_message_tokens) = estimate_api_message_tokens(history).await;
 
         // Use will_manage_context to check if management is needed
         // Source: TS `willManageContext()` — checks thresholds before calling manageContext
@@ -6290,6 +6284,32 @@ mod tests {
     }
 
     // --- L4.2: Context truncation tests ---
+
+    #[tokio::test]
+    async fn estimate_api_message_tokens_uses_tiktoken_for_non_text_blocks() {
+        let history = vec![roo_types::api::ApiMessage {
+            role: roo_types::api::MessageRole::Assistant,
+            content: vec![roo_types::api::ContentBlock::ToolUse {
+                id: "tool_1".to_owned(),
+                name: "read_file".to_owned(),
+                input: serde_json::json!({"path":"src/main.rs"}),
+            }],
+            reasoning: None,
+            ts: None,
+            truncation_parent: None,
+            is_truncation_marker: None,
+            truncation_id: None,
+            condense_parent: None,
+            is_summary: None,
+            condense_id: None,
+            reasoning_details: None,
+        }];
+
+        let (total, last) = estimate_api_message_tokens(&history).await;
+
+        assert!(total > 0, "tool_use blocks must count toward context");
+        assert_eq!(last, total);
+    }
 
     #[tokio::test]
     async fn test_truncate_context_no_limit() {

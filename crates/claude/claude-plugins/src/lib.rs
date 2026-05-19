@@ -110,6 +110,9 @@ pub struct PluginManifest {
     /// Optional runtime configuration.
     #[serde(default)]
     pub runtime: Option<PluginRuntimeConfig>,
+    /// Additional output style files or directories relative to the plugin root.
+    #[serde(default, rename = "outputStyles", alias = "output_styles")]
+    pub output_styles: Option<Value>,
 }
 
 /// Author information for a plugin.
@@ -716,6 +719,28 @@ impl PluginBundle {
             .mcp
             .as_deref()
             .map(|relative| self.resolve_relative(relative))
+    }
+
+    #[must_use]
+    pub fn default_output_styles_path(&self) -> Option<PathBuf> {
+        let path = self.root.join("output-styles");
+        path.exists().then_some(path)
+    }
+
+    #[must_use]
+    pub fn output_styles_paths(&self) -> Vec<PathBuf> {
+        let Some(raw) = &self.manifest.output_styles else {
+            return Vec::new();
+        };
+        match raw {
+            Value::String(relative) => vec![self.resolve_relative(relative)],
+            Value::Array(values) => values
+                .iter()
+                .filter_map(Value::as_str)
+                .map(|relative| self.resolve_relative(relative))
+                .collect(),
+            _ => Vec::new(),
+        }
     }
 
     #[must_use]

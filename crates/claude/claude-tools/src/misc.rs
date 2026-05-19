@@ -10,6 +10,7 @@ use anyhow::{Context, Result, anyhow};
 use serde_json::{Value, json};
 use tokio::io::AsyncReadExt;
 use tokio::process::Command;
+use uuid::Uuid;
 
 use super::{FileState, ToolExecutionContext};
 
@@ -896,7 +897,9 @@ pub(crate) fn voice_input_tool(input: &Value) -> Result<String> {
 
     // Try to record audio using sox/rec/ffmpeg and transcribe with whisper.
     let temp_dir = std::env::temp_dir();
-    let wav_path = temp_dir.join("remote-code-voice.wav");
+    let voice_stem = format!("remote-code-voice-{}", Uuid::new_v4().simple());
+    let wav_path = temp_dir.join(format!("{voice_stem}.wav"));
+    let txt_path = temp_dir.join(format!("{voice_stem}.txt"));
 
     // Attempt recording with sox (rec command) or ffmpeg.
     let record_result = if cfg!(windows) {
@@ -955,6 +958,7 @@ pub(crate) fn voice_input_tool(input: &Value) -> Result<String> {
     let recorded = matches!(record_result, Ok(out) if out.status.success() && wav_path.exists());
 
     if !recorded {
+        let _ = std::fs::remove_file(&wav_path);
         return Ok(json!({
             "type": "voice_input",
             "duration_secs": duration_secs,
@@ -982,26 +986,52 @@ pub(crate) fn voice_input_tool(input: &Value) -> Result<String> {
 
     let transcription = match whisper_result {
         Ok(out) if out.status.success() => {
-            let txt_path = temp_dir.join("remote-code-voice.txt");
             if txt_path.exists() {
                 std::fs::read_to_string(&txt_path).unwrap_or_default()
             } else {
-                String::from("(transcription file not found)")
+                let _ = std::fs::remove_file(&wav_path);
+                return Ok(json!({
+                    "type": "voice_input",
+                    "duration_secs": duration_secs,
+                    "language": language,
+                    "status": "transcription_failed",
+                    "message": "Voice transcription failed because whisper did not produce a transcript file.",
+                })
+                .to_string());
             }
         }
         Ok(out) => {
             let stderr = String::from_utf8_lossy(&out.stderr).to_string();
-            format!(
-                "(whisper error: {})",
-                stderr.chars().take(200).collect::<String>()
-            )
+            let _ = std::fs::remove_file(&wav_path);
+            let _ = std::fs::remove_file(&txt_path);
+            return Ok(json!({
+                "type": "voice_input",
+                "duration_secs": duration_secs,
+                "language": language,
+                "status": "transcription_failed",
+                "message": "Voice transcription failed.",
+                "error": stderr.chars().take(200).collect::<String>(),
+            })
+            .to_string());
         }
-        Err(e) => format!("(whisper not available: {e})"),
+        Err(error) => {
+            let _ = std::fs::remove_file(&wav_path);
+            let _ = std::fs::remove_file(&txt_path);
+            return Ok(json!({
+                "type": "voice_input",
+                "duration_secs": duration_secs,
+                "language": language,
+                "status": "transcription_unavailable",
+                "message": "Voice transcription is unavailable because the whisper CLI is not installed or not on PATH.",
+                "error": error.to_string(),
+            })
+            .to_string());
+        }
     };
 
     // Clean up temp files.
     let _ = std::fs::remove_file(&wav_path);
-    let _ = std::fs::remove_file(temp_dir.join("remote-code-voice.txt"));
+    let _ = std::fs::remove_file(&txt_path);
 
     Ok(json!({
         "type": "voice_input",

@@ -23,6 +23,7 @@ claude-context = { path = "../claude-context" }
 claude-core = { path = "../claude-core" }
 claude-model = { path = "../claude-model" }
 claude-provider = { path = "../claude-provider" }
+claude-plugins = { path = "../claude-plugins" }
 claude-skills = { path = "../claude-skills" }
 claude-system-prompt = { path = "../claude-system-prompt" }
 claude-tools = { path = "../claude-tools" }

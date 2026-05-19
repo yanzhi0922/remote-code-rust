@@ -12,7 +12,7 @@ use serde_json::Value;
 use tokio::sync::Mutex;
 
 use crate::{
-    RuntimeMcpServerPolicyEntry, ToolSpec, current_runtime_mcp_observation,
+    RuntimeMcpServerPolicyEntry, ToolRuntimeHints, ToolSpec, current_runtime_mcp_observation,
     current_tool_runtime_policy, mcp_runtime::RuntimeMcpServerObservation, tool_allowed_by_policy,
 };
 
@@ -106,11 +106,52 @@ fn snapshot_inspection_for_entry(
     None
 }
 
-fn annotation_hint_is_true(annotations: &Value, key: &str) -> bool {
+fn annotation_value<'a>(annotations: &'a Value, key: &str) -> Option<&'a Value> {
     annotations
         .get(key)
+        .or_else(|| annotations.get("_meta").and_then(|meta| meta.get(key)))
+}
+
+fn annotation_hint_is_true(annotations: &Value, key: &str) -> bool {
+    annotation_value(annotations, key)
         .and_then(Value::as_bool)
         .unwrap_or(false)
+}
+
+fn annotation_hint_string(annotations: &Value, key: &str) -> Option<String> {
+    annotation_value(annotations, key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn annotation_hint_strings(annotations: &Value, key: &str) -> Vec<String> {
+    match annotation_value(annotations, key) {
+        Some(Value::String(value)) => value
+            .split(|ch: char| ch == ',' || ch == ';' || ch.is_whitespace())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+            .collect(),
+        Some(Value::Array(values)) => values
+            .iter()
+            .filter_map(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+fn annotation_hint_bool(annotations: &Value, key: &str) -> Option<bool> {
+    annotations.get(key).and_then(Value::as_bool).or_else(|| {
+        annotations
+            .get("_meta")
+            .and_then(|meta| meta.get(key))
+            .and_then(Value::as_bool)
+    })
 }
 
 fn inspection_supports_resources(
@@ -133,10 +174,36 @@ fn build_mcp_tool_spec(
         )
     });
     let requires_permission = !annotation_hint_is_true(&tool.annotations, "readOnlyHint");
+    let always_load = annotation_hint_is_true(&tool.annotations, "anthropic/alwaysLoad")
+        || annotation_hint_is_true(&tool.annotations, "alwaysLoad");
+    let mut search_hints = annotation_hint_strings(&tool.annotations, "anthropic/searchHint");
+    search_hints.extend(annotation_hint_strings(&tool.annotations, "searchHint"));
+    if let Some(title) = tool
+        .title
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        search_hints.push(title.to_owned());
+    }
+    if let Some(search_hint) = annotation_hint_string(&tool.annotations, "anthropic/toolSearchHint")
+    {
+        search_hints.push(search_hint);
+    }
 
+    let spec_name = qualified_name.clone();
+    crate::register_tool_runtime_hints(
+        spec_name.clone(),
+        ToolRuntimeHints {
+            always_load,
+            search_hints,
+            destructive_hint: annotation_hint_bool(&tool.annotations, "destructiveHint"),
+            open_world_hint: annotation_hint_bool(&tool.annotations, "openWorldHint"),
+        },
+    );
     RuntimeMcpToolDescriptor {
         tool_spec: ToolSpec {
-            name: qualified_name,
+            name: spec_name,
             protocol_name: build_mcp_tool_name(&entry.server.name, &tool.name),
             permission_tool_name: build_mcp_tool_name(&entry.server.name, &tool.name),
             description,
@@ -395,6 +462,7 @@ pub async fn execute_runtime_mcp_tool(
 
 pub async fn clear_runtime_mcp_catalog_cache() {
     RUNTIME_MCP_INSPECTION_CACHE.lock().await.clear();
+    crate::clear_tool_runtime_hints();
 }
 
 pub async fn invalidate_runtime_mcp_catalog_server(server_name: &str) {
@@ -590,6 +658,69 @@ mod tests {
 
         assert_eq!(catalog.tools.len(), 1);
         assert_eq!(catalog.tools[0].tool_name, "search");
+        configure_tool_runtime_policy(original_policy).expect("restore policy");
+        clear_runtime_mcp_catalog_cache().await;
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn runtime_mcp_catalog_preserves_meta_hints_for_tool_search() {
+        let _guard = MCP_CATALOG_TEST_MUTEX.lock().expect("test mutex");
+        let original_policy = current_tool_runtime_policy();
+        let entry = policy_entry("hint-server", "hint-server.toml");
+        {
+            let mut cache = RUNTIME_MCP_INSPECTION_CACHE.lock().await;
+            cache.clear();
+            cache.insert(
+                inspection_cache_key(&entry),
+                CachedInspection {
+                    server_config: entry.server.clone(),
+                    inspection: McpServerInspection {
+                        server_name: entry.server.name.clone(),
+                        protocol_version: "2025-03-26".to_owned(),
+                        server_info: None,
+                        capabilities: json!({"tools": {}}),
+                        instructions: None,
+                        tools: vec![McpToolDescriptor {
+                            name: "lookup".to_owned(),
+                            title: Some("Knowledge Lookup".to_owned()),
+                            description: Some("Search project knowledge".to_owned()),
+                            input_schema: json!({}),
+                            annotations: json!({
+                                "readOnlyHint": true,
+                                "destructiveHint": false,
+                                "openWorldHint": true,
+                                "_meta": {
+                                    "anthropic/alwaysLoad": true,
+                                    "anthropic/searchHint": "docs semantic lookup"
+                                }
+                            }),
+                        }],
+                        prompts: Vec::new(),
+                        resources: Vec::new(),
+                    },
+                },
+            );
+        }
+
+        configure_tool_runtime_policy(ToolRuntimePolicy {
+            mcp_servers: vec![entry],
+            ..ToolRuntimePolicy::default()
+        })
+        .expect("configure policy");
+        let catalog = super::runtime_mcp_catalog().await;
+
+        let spec = &catalog.tools[0].tool_spec;
+        assert!(!spec.requires_permission);
+        assert!(spec.is_always_loaded());
+        assert!(!spec.is_deferred());
+        assert_eq!(spec.destructive_hint(), Some(false));
+        assert_eq!(spec.open_world_hint(), Some(true));
+        let terms = spec.tool_search_terms();
+        assert!(terms.contains(&"docs".to_owned()), "{terms:?}");
+        assert!(terms.contains(&"semantic".to_owned()), "{terms:?}");
+        assert!(terms.contains(&"lookup".to_owned()), "{terms:?}");
+
         configure_tool_runtime_policy(original_policy).expect("restore policy");
         clear_runtime_mcp_catalog_cache().await;
     }

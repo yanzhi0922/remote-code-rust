@@ -18,6 +18,7 @@ use claude_protocol::{
     ResultPayload, UsagePayload, parse_input_line, result_event_value,
 };
 use claude_provider::ProviderCompatBackend;
+use claude_runtime_prompt::available_runtime_output_style_names;
 use claude_session::SessionStore;
 use claude_tools::mcp_catalog::runtime_mcp_prompt_command_names;
 use claude_tools::runtime_plan_mode::{RuntimePlanModeController, install_plan_mode_runtime};
@@ -409,6 +410,7 @@ async fn build_headless_initialize_response(config: &RuntimeConfig) -> serde_jso
         .model
         .clone()
         .unwrap_or_else(|| "default".to_owned());
+    let available_output_styles = available_runtime_output_style_names(config);
     serde_json::json!({
         "commands": slash_commands
             .into_iter()
@@ -420,7 +422,7 @@ async fn build_headless_initialize_response(config: &RuntimeConfig) -> serde_jso
             .collect::<Vec<_>>(),
         "agents": [],
         "output_style": config.output_style.clone().unwrap_or_else(|| "default".to_owned()),
-        "available_output_styles": ["default"],
+        "available_output_styles": available_output_styles,
         "models": [{
             "value": current_model,
             "displayName": config.provider.model.clone().unwrap_or_else(|| "Default".to_owned()),
@@ -892,15 +894,24 @@ impl ChannelPermissionFallbackBroker {
             if let Err(error) = emitter.emit_state(SessionState::RequiresAction) {
                 warn!("failed to emit state change: {error}");
             }
+            let title = request.title.clone();
             if let Err(error) = emitter.emit_permission_request(PermissionRequestPayload {
                 request_id: request_id.clone(),
                 tool_name: request.tool_name.clone(),
                 tool_use_id: request.tool_use_id.unwrap_or_default(),
-                title: request.title.unwrap_or_default(),
+                title: title.clone().unwrap_or_default(),
                 description: request.description.unwrap_or_default(),
                 input: request.tool_input.clone(),
                 blocked_path: request.blocked_path,
                 permission_suggestions: request.permission_suggestions,
+                display_name: title,
+                decision_reason: request.permission_class.map(|class| {
+                    serde_json::json!({
+                        "type": "permissionClass",
+                        "class": format!("{class:?}"),
+                    })
+                }),
+                agent_id: None,
             }) {
                 warn!("failed to emit permission request: {error}");
             }
@@ -1659,6 +1670,13 @@ mod tests {
         assert_eq!(events[0]["response"]["request_id"], "ctl-init");
         assert!(events[0]["response"]["response"]["commands"].is_array());
         assert_eq!(events[0]["response"]["response"]["output_style"], "default");
+        assert!(
+            events[0]["response"]["response"]["available_output_styles"]
+                .as_array()
+                .expect("available styles")
+                .iter()
+                .any(|style| style == "Explanatory")
+        );
     }
 
     #[tokio::test]

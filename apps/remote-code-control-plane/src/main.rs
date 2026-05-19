@@ -87,15 +87,15 @@ async fn main() -> Result<()> {
             let bind = config.bind;
             let service = ControlPlaneService::new(config.clone(), env!("CARGO_PKG_VERSION"));
 
-            // QUIC is still experimental and currently not the production relay
-            // transport. Keep it behind an explicit flag until the client/server
-            // stream protocol is covered by integration tests.
+            // QUIC is an explicit opt-in listener. It stays disabled by
+            // default even when bind/cert/key are configured, because opening
+            // a UDP listener changes the deployment's exposed surface.
             if let (Some(quic_bind), Some(cert_path), Some(key_path)) = (
                 &config.quic_bind,
                 &config.quic_cert_pem,
                 &config.quic_key_pem,
             ) {
-                if quic_experimental_enabled() {
+                if quic_enabled() {
                     let cert_pem = std::fs::read(cert_path).with_context(|| {
                         format!("reading QUIC cert from {}", cert_path.display())
                     })?;
@@ -114,7 +114,7 @@ async fn main() -> Result<()> {
                     });
                 } else {
                     eprintln!(
-                        "QUIC config is present but disabled; set REMOTE_CODE_CONTROL_PLANE_QUIC_EXPERIMENTAL=1 to enable"
+                        "QUIC config is present but disabled; set REMOTE_CODE_CONTROL_PLANE_QUIC_ENABLE=1 to enable"
                     );
                 }
             }
@@ -127,12 +127,37 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-fn quic_experimental_enabled() -> bool {
+fn env_flag_enabled(name: &str) -> bool {
     matches!(
-        std::env::var("REMOTE_CODE_CONTROL_PLANE_QUIC_EXPERIMENTAL")
+        std::env::var(name)
             .unwrap_or_default()
             .to_ascii_lowercase()
             .as_str(),
-        "1" | "true" | "yes"
+        "1" | "true" | "yes" | "on"
     )
+}
+
+fn quic_enabled() -> bool {
+    env_flag_enabled("REMOTE_CODE_CONTROL_PLANE_QUIC_ENABLE")
+        || env_flag_enabled("REMOTE_CODE_CONTROL_PLANE_QUIC_EXPERIMENTAL")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{env_flag_enabled, quic_enabled};
+
+    #[test]
+    fn quic_enable_uses_formal_env_name() {
+        unsafe {
+            std::env::remove_var("REMOTE_CODE_CONTROL_PLANE_QUIC_EXPERIMENTAL");
+            std::env::set_var("REMOTE_CODE_CONTROL_PLANE_QUIC_ENABLE", "true");
+            std::env::set_var("REMOTE_CODE_TEST_FLAG", "on");
+        }
+        assert!(quic_enabled());
+        assert!(env_flag_enabled("REMOTE_CODE_TEST_FLAG"));
+        unsafe {
+            std::env::remove_var("REMOTE_CODE_CONTROL_PLANE_QUIC_ENABLE");
+            std::env::remove_var("REMOTE_CODE_TEST_FLAG");
+        }
+    }
 }

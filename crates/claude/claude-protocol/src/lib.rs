@@ -13,7 +13,7 @@ pub use rc_engine_events::{
     DaemonPresenceState, MessageRole, RuntimeEventCreateRequest, RuntimeEventDetail,
 };
 use serde::Serialize;
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 use uuid::Uuid;
 
 /// An input message parsed from the external consumer.
@@ -388,19 +388,46 @@ impl<W: Write> ProtocolEmitter<W> {
 
     /// Emit a permission request event for the external consumer.
     pub fn emit_permission_request(&mut self, payload: PermissionRequestPayload) -> Result<()> {
+        let mut request = Map::new();
+        request.insert("subtype".to_owned(), json!("can_use_tool"));
+        request.insert("tool_name".to_owned(), json!(payload.tool_name));
+        request.insert("input".to_owned(), payload.input);
+        request.insert("tool_use_id".to_owned(), json!(payload.tool_use_id));
+        if !payload.title.trim().is_empty() {
+            request.insert("title".to_owned(), json!(payload.title));
+        }
+        if !payload.description.trim().is_empty() {
+            request.insert("description".to_owned(), json!(payload.description));
+        }
+        if let Some(display_name) = payload
+            .display_name
+            .filter(|value| !value.trim().is_empty())
+        {
+            request.insert("display_name".to_owned(), json!(display_name));
+        }
+        if let Some(decision_reason) = payload.decision_reason {
+            request.insert("decision_reason".to_owned(), decision_reason);
+        }
+        if let Some(agent_id) = payload.agent_id.filter(|value| !value.trim().is_empty()) {
+            request.insert("agent_id".to_owned(), json!(agent_id));
+        }
+        if let Some(blocked_path) = payload
+            .blocked_path
+            .filter(|value| !value.trim().is_empty())
+        {
+            request.insert("blocked_path".to_owned(), json!(blocked_path));
+        }
+        if !payload.permission_suggestions.is_empty() {
+            request.insert(
+                "permission_suggestions".to_owned(),
+                json!(payload.permission_suggestions),
+            );
+        }
+
         self.emit(json!({
             "type": "control_request",
             "request_id": payload.request_id,
-            "request": {
-                "subtype": "can_use_tool",
-                "tool_name": payload.tool_name,
-                "input": payload.input,
-                "tool_use_id": payload.tool_use_id,
-                "title": payload.title,
-                "description": payload.description,
-                "blocked_path": payload.blocked_path,
-                "permission_suggestions": payload.permission_suggestions,
-            },
+            "request": request,
         }))
     }
 
@@ -613,6 +640,12 @@ pub struct PermissionRequestPayload {
     pub blocked_path: Option<String>,
     /// Suggested permission rules.
     pub permission_suggestions: Vec<Value>,
+    /// Optional display name matching the SDK control permission envelope.
+    pub display_name: Option<String>,
+    /// Optional structured decision reason from permission pre-classification.
+    pub decision_reason: Option<Value>,
+    /// Optional agent identifier for subagent-routed permission prompts.
+    pub agent_id: Option<String>,
 }
 
 /// Payload for normalized tool progress events.
@@ -1469,6 +1502,9 @@ mod tests {
                 input: json!({"command": "ls -la"}),
                 blocked_path: None,
                 permission_suggestions: vec![],
+                display_name: Some("Bash".to_owned()),
+                decision_reason: Some(json!({"type": "mode", "mode": "default"})),
+                agent_id: Some("agent-1".to_owned()),
             })
             .expect("emit_permission_request should succeed");
         let events = collect_lines(&buf.into_inner());
@@ -1476,6 +1512,11 @@ mod tests {
         assert_eq!(events[0]["type"], "control_request");
         assert_eq!(events[0]["request_id"], "req-1");
         assert_eq!(events[0]["request"]["tool_name"], "bash_command");
+        assert_eq!(events[0]["request"]["display_name"], "Bash");
+        assert_eq!(events[0]["request"]["agent_id"], "agent-1");
+        assert_eq!(events[0]["request"]["decision_reason"]["type"], "mode");
+        assert!(events[0]["request"].get("blocked_path").is_none());
+        assert!(events[0]["request"].get("permission_suggestions").is_none());
     }
 
     #[test]
