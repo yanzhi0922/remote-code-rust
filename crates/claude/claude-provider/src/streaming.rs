@@ -220,41 +220,20 @@ impl ProviderClient {
         let tracked_callbacks =
             wrap_streaming_callbacks(callbacks, Arc::clone(&streamed_tool_activity));
 
-        let result = match provider.protocol {
-            ProviderProtocol::OpenAi => {
-                self.complete_streaming_openai(
-                    provider,
-                    conversation,
-                    Some(&tracked_callbacks),
-                    carried_discovered_tools,
-                    request_context,
-                )
-                .await
-            }
-            ProviderProtocol::Anthropic => {
-                self.complete_streaming_anthropic(
-                    provider,
-                    conversation,
-                    Some(&tracked_callbacks),
-                    carried_discovered_tools,
-                    request_context,
-                )
-                .await
-            }
-            // Native Bedrock uses AWS event-stream; Vertex uses SSE.
-            // If a base_url is set (proxy mode), fall back to OpenAI-compatible streaming.
-            ProviderProtocol::Bedrock => {
-                if provider.base_url.is_some() {
+        let result = if super::provider_prefers_anthropic_messages_route(provider) {
+            let routed_provider = super::provider_as_anthropic_compatible(provider);
+            self.complete_streaming_anthropic(
+                &routed_provider,
+                conversation,
+                Some(&tracked_callbacks),
+                carried_discovered_tools,
+                request_context,
+            )
+            .await
+        } else {
+            match provider.protocol {
+                ProviderProtocol::OpenAi => {
                     self.complete_streaming_openai(
-                        provider,
-                        conversation,
-                        Some(&tracked_callbacks),
-                        carried_discovered_tools,
-                        request_context,
-                    )
-                    .await
-                } else {
-                    self.complete_streaming_bedrock(
                         provider,
                         conversation,
                         Some(&tracked_callbacks),
@@ -263,10 +242,8 @@ impl ProviderClient {
                     )
                     .await
                 }
-            }
-            ProviderProtocol::Vertex => {
-                if provider.base_url.is_some() {
-                    self.complete_streaming_openai(
+                ProviderProtocol::Anthropic => {
+                    self.complete_streaming_anthropic(
                         provider,
                         conversation,
                         Some(&tracked_callbacks),
@@ -274,15 +251,50 @@ impl ProviderClient {
                         request_context,
                     )
                     .await
-                } else {
-                    self.complete_streaming_vertex(
-                        provider,
-                        conversation,
-                        Some(&tracked_callbacks),
-                        carried_discovered_tools,
-                        request_context,
-                    )
-                    .await
+                }
+                // Native Bedrock uses AWS event-stream; Vertex uses SSE.
+                // If a base_url is set (proxy mode), fall back to OpenAI-compatible streaming.
+                ProviderProtocol::Bedrock => {
+                    if provider.base_url.is_some() {
+                        self.complete_streaming_openai(
+                            provider,
+                            conversation,
+                            Some(&tracked_callbacks),
+                            carried_discovered_tools,
+                            request_context,
+                        )
+                        .await
+                    } else {
+                        self.complete_streaming_bedrock(
+                            provider,
+                            conversation,
+                            Some(&tracked_callbacks),
+                            carried_discovered_tools,
+                            request_context,
+                        )
+                        .await
+                    }
+                }
+                ProviderProtocol::Vertex => {
+                    if provider.base_url.is_some() {
+                        self.complete_streaming_openai(
+                            provider,
+                            conversation,
+                            Some(&tracked_callbacks),
+                            carried_discovered_tools,
+                            request_context,
+                        )
+                        .await
+                    } else {
+                        self.complete_streaming_vertex(
+                            provider,
+                            conversation,
+                            Some(&tracked_callbacks),
+                            carried_discovered_tools,
+                            request_context,
+                        )
+                        .await
+                    }
                 }
             }
         };

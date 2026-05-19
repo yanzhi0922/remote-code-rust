@@ -279,8 +279,9 @@ impl HostedSessionManager {
     ) -> Result<()> {
         let mut lines = BufReader::new(stdout).lines();
         while let Some(line) = lines.next_line().await? {
-            self.handle_protocol_line(session_id, &line, &handle)
-                .await?;
+            if let Err(error) = self.handle_protocol_line(session_id, &line, &handle).await {
+                warn!("hosted session `{session_id}` ignored protocol line error: {error:#}");
+            }
         }
         Ok(())
     }
@@ -452,7 +453,9 @@ impl HostedSessionManager {
                 );
                 let payload = serde_json::json!({
                     "type": "control_response",
+                    "request_id": request_id,
                     "response": {
+                        "subtype": "success",
                         "request_id": request_id,
                         "response": {
                             "behavior": "deny",
@@ -541,16 +544,7 @@ impl HostedSessionManager {
                 claude_runner::ApprovalState::Cancelled => "Cancelled remotely.".to_owned(),
                 claude_runner::ApprovalState::Pending => String::new(),
             });
-        let payload = serde_json::json!({
-            "type": "control_response",
-            "response": {
-                "request_id": request_id,
-                "response": {
-                    "behavior": behavior,
-                    "message": note,
-                }
-            }
-        });
+        let payload = control_response_payload(&request_id, behavior, &note);
         self.send_json_line(approval.session_id, payload).await
     }
 
@@ -965,7 +959,13 @@ fn is_file_write_tool(tool_name: &str) -> bool {
         .collect();
     matches!(
         normalized.as_str(),
-        "write" | "edit" | "replaceinfile" | "writefile" | "editfile" | "createfile"
+        "write"
+            | "edit"
+            | "replaceinfile"
+            | "writefile"
+            | "editfile"
+            | "createfile"
+            | "notebookedit"
     )
 }
 
@@ -1032,10 +1032,14 @@ fn guess_media_type(path: &Path) -> Option<String> {
 }
 
 /// Extract file path from accumulated tool input JSON.
-/// Handles both `{"file_path": "..."}` and `{"path": "..."}` formats.
+/// Handles Claude file tools (`file_path`), NotebookEdit (`notebook_path`),
+/// and legacy `path` inputs.
 fn extract_file_path_from_tool_input(input: &str) -> Option<PathBuf> {
     let parsed: serde_json::Value = serde_json::from_str(input).ok()?;
-    let path_value = parsed.get("file_path").or_else(|| parsed.get("path"))?;
+    let path_value = parsed
+        .get("file_path")
+        .or_else(|| parsed.get("notebook_path"))
+        .or_else(|| parsed.get("path"))?;
     path_value.as_str().map(PathBuf::from)
 }
 
@@ -1054,6 +1058,21 @@ async fn write_session_input(
             break;
         }
     }
+}
+
+fn control_response_payload(request_id: &str, behavior: &str, message: &str) -> serde_json::Value {
+    serde_json::json!({
+        "type": "control_response",
+        "request_id": request_id,
+        "response": {
+            "subtype": "success",
+            "request_id": request_id,
+            "response": {
+                "behavior": behavior,
+                "message": message,
+            }
+        }
+    })
 }
 
 fn map_runtime_session_state(
@@ -1390,6 +1409,8 @@ mod tests {
             "replace_in_file",
             "replace-in-file",
             "create_file",
+            "NotebookEdit",
+            "notebook_edit",
         ] {
             assert!(
                 is_file_write_tool(name),
@@ -1398,5 +1419,25 @@ mod tests {
         }
         assert!(!is_file_write_tool("Read"));
         assert!(!is_file_write_tool("Bash"));
+    }
+
+    #[test]
+    fn extract_file_path_supports_notebook_edit_input() {
+        assert_eq!(
+            extract_file_path_from_tool_input(r#"{"notebook_path":"notebooks/demo.ipynb"}"#),
+            Some(PathBuf::from("notebooks/demo.ipynb"))
+        );
+    }
+
+    #[test]
+    fn control_response_payload_matches_sdk_success_shape() {
+        let payload = control_response_payload("req-1", "allow", "approved");
+
+        assert_eq!(payload["type"], "control_response");
+        assert_eq!(payload["request_id"], "req-1");
+        assert_eq!(payload["response"]["subtype"], "success");
+        assert_eq!(payload["response"]["request_id"], "req-1");
+        assert_eq!(payload["response"]["response"]["behavior"], "allow");
+        assert_eq!(payload["response"]["response"]["message"], "approved");
     }
 }

@@ -1095,6 +1095,35 @@ fn env_setting_sources() -> Vec<String> {
         ("MINIMAX_API_HOST", "env:MINIMAX_API_HOST"),
         ("MINIMAX_TOKEN_PLAN_MODEL", "env:MINIMAX_TOKEN_PLAN_MODEL"),
         (
+            "KUAIKAT_CODING_PLAN_API_KEY",
+            "env:KUAIKAT_CODING_PLAN_API_KEY",
+        ),
+        ("KUAIKAT_API_KEY", "env:KUAIKAT_API_KEY"),
+        (
+            "KUAIKAT_CODING_PLAN_BASE_URL",
+            "env:KUAIKAT_CODING_PLAN_BASE_URL",
+        ),
+        (
+            "KUAIKAT_ANTHROPIC_BASE_URL",
+            "env:KUAIKAT_ANTHROPIC_BASE_URL",
+        ),
+        ("KUAIKAT_CODING_PLAN_MODEL", "env:KUAIKAT_CODING_PLAN_MODEL"),
+        ("KUAIKAT_MODEL", "env:KUAIKAT_MODEL"),
+        ("DEEPSEEK_API_KEY", "env:DEEPSEEK_API_KEY"),
+        (
+            "DEEPSEEK_CODING_PLAN_API_KEY",
+            "env:DEEPSEEK_CODING_PLAN_API_KEY",
+        ),
+        (
+            "DEEPSEEK_ANTHROPIC_BASE_URL",
+            "env:DEEPSEEK_ANTHROPIC_BASE_URL",
+        ),
+        ("DEEPSEEK_MODEL", "env:DEEPSEEK_MODEL"),
+        (
+            "DEEPSEEK_CODING_PLAN_MODEL",
+            "env:DEEPSEEK_CODING_PLAN_MODEL",
+        ),
+        (
             "MINIMAX_CODING_PLAN_API_KEY",
             "env:MINIMAX_CODING_PLAN_API_KEY",
         ),
@@ -1234,6 +1263,20 @@ fn provider_specific_auth_candidates(
             ),
             (&["MINIMAX_API_KEY"], "env:MINIMAX_API_KEY"),
         ],
+        "kuaikat-coding" => &[
+            (
+                &["KUAIKAT_CODING_PLAN_API_KEY"],
+                "env:KUAIKAT_CODING_PLAN_API_KEY",
+            ),
+            (&["KUAIKAT_API_KEY"], "env:KUAIKAT_API_KEY"),
+        ],
+        "deepseek-anthropic" => &[
+            (&["DEEPSEEK_API_KEY"], "env:DEEPSEEK_API_KEY"),
+            (
+                &["DEEPSEEK_CODING_PLAN_API_KEY"],
+                "env:DEEPSEEK_CODING_PLAN_API_KEY",
+            ),
+        ],
         "minimax-coding" => &[(
             &["MINIMAX_CODING_PLAN_API_KEY"],
             "env:MINIMAX_CODING_PLAN_API_KEY",
@@ -1359,6 +1402,8 @@ fn effort_to_thinking_budget(effort: &str) -> Option<u32> {
 /// | `TENCENT_CODING_PLAN_API_KEY`    | `tencent-coding`     | `anthropic` | `https://api.lkeap.cloud.tencent.com/coding/anthropic`                | `tc-code-latest`   |
 /// | `QIANFAN_CODING_PLAN_API_KEY`    | `qianfan-coding`     | `anthropic` | `https://qianfan.baidubce.com/anthropic/coding`                       | `qianfan-code-latest` |
 /// | `MINIMAX_TOKEN_PLAN_API_KEY` / `MINIMAX_API_KEY` | `minimax-token-plan` | `anthropic` | `https://api.minimaxi.com/anthropic`                                  | `minimax-m2.7`     |
+/// | `KUAIKAT_CODING_PLAN_API_KEY`    | `kuaikat-coding`     | `anthropic` | `https://wanqing.streamlakeapi.com/api/gateway/coding/kat-coder-pro-v2/claude-code-proxy` | `kat-coder-pro-v2` |
+/// | `DEEPSEEK_API_KEY`               | `deepseek-anthropic` | `anthropic` | `https://api.deepseek.com/anthropic`                                  | `deepseek-v4-flash` |
 /// | `MINIMAX_CODING_PLAN_API_KEY`    | `minimax-coding`     | `openai`    | `https://api.minimax.chat/v1`                                         | `MiniMax-M2.7`     |
 /// | `KIMI_CODING_PLAN_API_KEY`       | `kimi-coding`        | `openai`    | `https://api.moonshot.cn/kimi-component/ai_coding`                    | `kimi-k2.5`        |
 /// | `VOLCENGINE_CODING_PLAN_API_KEY` | `volcengine-coding`  | `openai`    | `https://ark.cn-beijing.volces.com/api/v3`                            | `doubao-seed-1-5`  |
@@ -1546,6 +1591,20 @@ pub fn discover_env_providers() -> Vec<ProviderConfig> {
     let mut lookup = |keys: &[&str]| read_env_first(keys);
     if let Some(provider) = discover_minimax_token_plan_provider(&mut lookup) {
         providers.push(provider);
+    }
+
+    {
+        let mut lookup = |keys: &[&str]| read_env_first(keys);
+        if let Some(provider) = discover_kuaikat_coding_provider(&mut lookup) {
+            providers.push(provider);
+        }
+    }
+
+    {
+        let mut lookup = |keys: &[&str]| read_env_first(keys);
+        if let Some(provider) = discover_deepseek_anthropic_provider(&mut lookup) {
+            providers.push(provider);
+        }
     }
 
     // MiniMax Token Plan — OpenAI-compatible endpoint
@@ -1764,6 +1823,75 @@ where
     })
 }
 
+fn discover_kuaikat_coding_provider<F>(lookup: &mut F) -> Option<ProviderConfig>
+where
+    F: FnMut(&[&str]) -> Option<String>,
+{
+    let api_key = lookup(&["KUAIKAT_CODING_PLAN_API_KEY", "KUAIKAT_API_KEY"])?;
+    let base_url = normalize_base_url(
+        lookup(&["KUAIKAT_CODING_PLAN_BASE_URL", "KUAIKAT_ANTHROPIC_BASE_URL"])
+            .or_else(|| {
+                Some(
+                    "https://wanqing.streamlakeapi.com/api/gateway/coding/kat-coder-pro-v2/claude-code-proxy"
+                        .to_owned(),
+                )
+            }),
+        ProviderProtocol::Anthropic,
+    );
+    Some(ProviderConfig {
+        name: "kuaikat-coding".to_owned(),
+        base_url,
+        api_key: Some(api_key),
+        model: lookup(&["KUAIKAT_CODING_PLAN_MODEL", "KUAIKAT_MODEL"])
+            .or(Some("kat-coder-pro-v2".to_owned())),
+        protocol: ProviderProtocol::Anthropic,
+        timeout_ms: 600_000,
+        max_output_tokens: 8_192,
+        max_retries: default_provider_max_retries(),
+        retry_initial_backoff_ms: default_provider_retry_initial_backoff_ms(),
+        retry_max_backoff_ms: default_provider_retry_max_backoff_ms(),
+        respect_retry_after: default_provider_respect_retry_after(),
+        request_header_overrides: BTreeMap::new(),
+        request_metadata: BTreeMap::new(),
+        thinking_budget: None,
+        temperature: None,
+        top_p: None,
+        top_k: None,
+    })
+}
+
+fn discover_deepseek_anthropic_provider<F>(lookup: &mut F) -> Option<ProviderConfig>
+where
+    F: FnMut(&[&str]) -> Option<String>,
+{
+    let api_key = lookup(&["DEEPSEEK_API_KEY", "DEEPSEEK_CODING_PLAN_API_KEY"])?;
+    let base_url = normalize_base_url(
+        lookup(&["DEEPSEEK_ANTHROPIC_BASE_URL"])
+            .or_else(|| Some("https://api.deepseek.com/anthropic".to_owned())),
+        ProviderProtocol::Anthropic,
+    );
+    Some(ProviderConfig {
+        name: "deepseek-anthropic".to_owned(),
+        base_url,
+        api_key: Some(api_key),
+        model: lookup(&["DEEPSEEK_MODEL", "DEEPSEEK_CODING_PLAN_MODEL"])
+            .or(Some("deepseek-v4-flash".to_owned())),
+        protocol: ProviderProtocol::Anthropic,
+        timeout_ms: 600_000,
+        max_output_tokens: 8_192,
+        max_retries: default_provider_max_retries(),
+        retry_initial_backoff_ms: default_provider_retry_initial_backoff_ms(),
+        retry_max_backoff_ms: default_provider_retry_max_backoff_ms(),
+        respect_retry_after: default_provider_respect_retry_after(),
+        request_header_overrides: BTreeMap::new(),
+        request_metadata: BTreeMap::new(),
+        thinking_budget: None,
+        temperature: None,
+        top_p: None,
+        top_k: None,
+    })
+}
+
 fn discover_anthropic_provider<F>(lookup: &mut F) -> Option<ProviderConfig>
 where
     F: FnMut(&[&str]) -> Option<String>,
@@ -1937,7 +2065,8 @@ mod tests {
     use super::{
         ProviderConfig, default_provider_max_retries, default_provider_respect_retry_after,
         default_provider_retry_initial_backoff_ms, default_provider_retry_max_backoff_ms,
-        discover_anthropic_provider, discover_minimax_token_plan_provider,
+        discover_anthropic_provider, discover_deepseek_anthropic_provider,
+        discover_kuaikat_coding_provider, discover_minimax_token_plan_provider,
         hydrate_provider_from_discovered, load_hooks_file, load_runtime_config,
         load_settings_hooks, normalize_base_url, normalize_protocol,
         resolve_auth_source_with_lookup, validate_provider_config,
@@ -2567,6 +2696,42 @@ mod tests {
             provider.base_url.as_deref(),
             Some("https://api.minimaxi.com/anthropic/v1/messages")
         );
+    }
+
+    #[test]
+    fn kuaikat_coding_env_provider_is_discovered_as_anthropic() {
+        let values = HashMap::from([("KUAIKAT_CODING_PLAN_API_KEY", "secret".to_owned())]);
+        let provider = discover_kuaikat_coding_provider(&mut |keys| {
+            keys.iter().find_map(|key| values.get(*key).cloned())
+        })
+        .expect("kuaikat coding provider should be discovered");
+
+        assert_eq!(provider.name, "kuaikat-coding");
+        assert_eq!(provider.protocol, ProviderProtocol::Anthropic);
+        assert_eq!(
+            provider.base_url.as_deref(),
+            Some(
+                "https://wanqing.streamlakeapi.com/api/gateway/coding/kat-coder-pro-v2/claude-code-proxy/v1/messages"
+            )
+        );
+        assert_eq!(provider.model.as_deref(), Some("kat-coder-pro-v2"));
+    }
+
+    #[test]
+    fn deepseek_anthropic_env_provider_is_discovered() {
+        let values = HashMap::from([("DEEPSEEK_API_KEY", "secret".to_owned())]);
+        let provider = discover_deepseek_anthropic_provider(&mut |keys| {
+            keys.iter().find_map(|key| values.get(*key).cloned())
+        })
+        .expect("deepseek anthropic provider should be discovered");
+
+        assert_eq!(provider.name, "deepseek-anthropic");
+        assert_eq!(provider.protocol, ProviderProtocol::Anthropic);
+        assert_eq!(
+            provider.base_url.as_deref(),
+            Some("https://api.deepseek.com/anthropic/v1/messages")
+        );
+        assert_eq!(provider.model.as_deref(), Some("deepseek-v4-flash"));
     }
 
     #[test]

@@ -10,6 +10,10 @@
 //! 7. Return — final decision
 
 use std::collections::BTreeMap;
+use std::env;
+use std::future::Future;
+use std::path::PathBuf;
+use std::pin::Pin;
 use std::process::Stdio;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -19,6 +23,7 @@ use claude_core::{AgentId, Message, SessionId};
 use serde::{Deserialize, Serialize};
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
+use tokio::time::timeout;
 
 use crate::config::QuerySource;
 
@@ -325,6 +330,41 @@ pub trait StopHookPhaseHandler: Send + Sync {
     ) -> anyhow::Result<()>;
 }
 
+/// Input passed to the optional template-job classifier callback.
+#[derive(Debug, Clone)]
+pub struct JobClassificationInput {
+    pub job_dir: PathBuf,
+    pub session_id: SessionId,
+    pub turn: u32,
+    pub assistant_messages: Vec<Message>,
+}
+
+/// Async callback used by the job classification phase.
+pub type JobClassificationCallback = dyn Fn(JobClassificationInput) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send>>
+    + Send
+    + Sync;
+
+/// Input passed to the optional computer-use cleanup callback.
+#[derive(Debug, Clone)]
+pub struct ComputerUseCleanupInput {
+    pub session_id: SessionId,
+    pub turn: u32,
+}
+
+/// Result returned by computer-use cleanup implementations.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ComputerUseCleanupReport {
+    pub unhidden_apps: usize,
+    pub released_lock: bool,
+}
+
+/// Async callback used by the computer-use cleanup phase.
+pub type ComputerUseCleanupCallback = dyn Fn(
+        ComputerUseCleanupInput,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<ComputerUseCleanupReport>> + Send>>
+    + Send
+    + Sync;
+
 /// Orchestrates the 7-phase stop hook pipeline.
 pub struct StopHookPipeline {
     /// Phase handlers indexed by phase.
@@ -436,12 +476,18 @@ impl StopHookPipeline {
             StopHookPhase::SaveCacheSafeParams,
             Box::new(SaveCacheSafeParamsHandler),
         );
-        // Phase 2 (JobClassification) is a placeholder — not yet implemented.
+        pipeline.register_phase(
+            StopHookPhase::JobClassification,
+            Box::new(JobClassificationHandler::default()),
+        );
         pipeline.register_phase(
             StopHookPhase::BackgroundFireAndForget,
             Box::new(BackgroundFireAndForgetHandler),
         );
-        // Phase 4 (ComputerUseCleanup) is a placeholder — not yet implemented.
+        pipeline.register_phase(
+            StopHookPhase::ComputerUseCleanup,
+            Box::new(ComputerUseCleanupHandler::default()),
+        );
         pipeline.register_phase(
             StopHookPhase::UserConfiguredStopHooks,
             Box::new(UserConfiguredStopHooksHandler::new(stop_hooks)),
@@ -520,6 +566,102 @@ impl StopHookPhaseHandler for SaveCacheSafeParamsHandler {
 }
 
 // ---------------------------------------------------------------------------
+// Phase 2: JobClassificationHandler
+// ---------------------------------------------------------------------------
+
+const JOB_CLASSIFICATION_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Phase 2 handler: classifies template job state at the end of a main turn.
+///
+/// Mirrors TS `feature('TEMPLATES') && CLAUDE_JOB_DIR &&
+/// querySource.startsWith('repl_main_thread') && !agentId`. Classification is
+/// non-blocking for conversation flow: classifier failures are logged and
+/// swallowed, matching the reference `.catch(...)` behavior.
+pub struct JobClassificationHandler {
+    classifier: Option<Arc<JobClassificationCallback>>,
+    timeout: Duration,
+}
+
+impl JobClassificationHandler {
+    #[must_use]
+    pub fn new(classifier: Arc<JobClassificationCallback>) -> Self {
+        Self {
+            classifier: Some(classifier),
+            timeout: JOB_CLASSIFICATION_TIMEOUT,
+        }
+    }
+
+    #[must_use]
+    pub fn with_timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = timeout;
+        self
+    }
+}
+
+impl Default for JobClassificationHandler {
+    fn default() -> Self {
+        Self {
+            classifier: None,
+            timeout: JOB_CLASSIFICATION_TIMEOUT,
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl StopHookPhaseHandler for JobClassificationHandler {
+    async fn execute(
+        &self,
+        input: &StopHookBaseInput,
+        _result: &mut StopHookPipelineResult,
+    ) -> anyhow::Result<()> {
+        let Some(job_dir) = env::var_os("CLAUDE_JOB_DIR").map(PathBuf::from) else {
+            return Ok(());
+        };
+        if input.agent_id.is_some() || input.query_source != QuerySource::ReplMainThread {
+            return Ok(());
+        }
+
+        let assistant_messages = input
+            .messages
+            .iter()
+            .filter(|message| matches!(message, Message::Assistant(_)))
+            .cloned()
+            .collect::<Vec<_>>();
+
+        let Some(classifier) = self.classifier.as_ref() else {
+            tracing::debug!(
+                job_dir = %job_dir.display(),
+                assistant_message_count = assistant_messages.len(),
+                "Template job classification skipped because no classifier callback is registered"
+            );
+            return Ok(());
+        };
+
+        let callback_input = JobClassificationInput {
+            job_dir,
+            session_id: input.session_id.clone(),
+            turn: input.turn,
+            assistant_messages,
+        };
+
+        match timeout(self.timeout, classifier(callback_input)).await {
+            Ok(Ok(())) => {}
+            Ok(Err(err)) => {
+                tracing::error!("Template job classifier error: {err:#}");
+            }
+            Err(_) => {
+                tracing::warn!(
+                    timeout_ms = self.timeout.as_millis() as u64,
+                    "Template job classifier timed out"
+                );
+            }
+        }
+
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Phase 3: BackgroundFireAndForgetHandler
 // ---------------------------------------------------------------------------
 
@@ -569,6 +711,93 @@ impl StopHookPhaseHandler for BackgroundFireAndForgetHandler {
                 "Auto-dream: fired (placeholder)"
             );
         });
+
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Phase 4: ComputerUseCleanupHandler
+// ---------------------------------------------------------------------------
+
+const COMPUTER_USE_CLEANUP_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Phase 4 handler: releases computer-use resources at turn end.
+///
+/// The actual resource cleanup is host/app-state dependent, so it is injected
+/// as a callback. The phase itself enforces the Claude Code ordering,
+/// main-thread-only gate, timeout, and non-blocking failure semantics.
+pub struct ComputerUseCleanupHandler {
+    cleanup: Option<Arc<ComputerUseCleanupCallback>>,
+    timeout: Duration,
+}
+
+impl ComputerUseCleanupHandler {
+    #[must_use]
+    pub fn new(cleanup: Arc<ComputerUseCleanupCallback>) -> Self {
+        Self {
+            cleanup: Some(cleanup),
+            timeout: COMPUTER_USE_CLEANUP_TIMEOUT,
+        }
+    }
+
+    #[must_use]
+    pub fn with_timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = timeout;
+        self
+    }
+}
+
+impl Default for ComputerUseCleanupHandler {
+    fn default() -> Self {
+        Self {
+            cleanup: None,
+            timeout: COMPUTER_USE_CLEANUP_TIMEOUT,
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl StopHookPhaseHandler for ComputerUseCleanupHandler {
+    async fn execute(
+        &self,
+        input: &StopHookBaseInput,
+        _result: &mut StopHookPipelineResult,
+    ) -> anyhow::Result<()> {
+        if input.agent_id.is_some() {
+            return Ok(());
+        }
+
+        let Some(cleanup) = self.cleanup.as_ref() else {
+            tracing::trace!(
+                "Computer-use cleanup skipped because no cleanup callback is registered"
+            );
+            return Ok(());
+        };
+
+        let callback_input = ComputerUseCleanupInput {
+            session_id: input.session_id.clone(),
+            turn: input.turn,
+        };
+
+        match timeout(self.timeout, cleanup(callback_input)).await {
+            Ok(Ok(report)) => {
+                tracing::debug!(
+                    unhidden_apps = report.unhidden_apps,
+                    released_lock = report.released_lock,
+                    "Computer-use cleanup completed"
+                );
+            }
+            Ok(Err(err)) => {
+                tracing::warn!("Computer-use cleanup failed: {err:#}");
+            }
+            Err(_) => {
+                tracing::warn!(
+                    timeout_ms = self.timeout.as_millis() as u64,
+                    "Computer-use cleanup timed out"
+                );
+            }
+        }
 
         Ok(())
     }
@@ -983,17 +1212,18 @@ fn parse_hook_output(stdout: &str) -> (Option<String>, bool, Option<String>) {
 mod tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::Duration;
 
     use claude_core::{AgentId, ConversationEntry, Message, PermissionMode, SessionId};
 
     use crate::config::{ProcessUserInputContext, QuerySource};
 
     use super::{
-        BackgroundFireAndForgetHandler, HookDefinition, ReplHookContext,
-        SaveCacheSafeParamsHandler, StopHookBaseInput, StopHookManager, StopHookOutcome,
-        StopHookPhase, StopHookPhaseHandler, StopHookPipeline, StopHookPipelineResult,
-        StopHookRequest, StopHookResult, TeammateHooksHandler, UserConfiguredStopHooksHandler,
-        execute_hook_process,
+        BackgroundFireAndForgetHandler, ComputerUseCleanupHandler, ComputerUseCleanupReport,
+        HookDefinition, JobClassificationHandler, ReplHookContext, SaveCacheSafeParamsHandler,
+        StopHookBaseInput, StopHookManager, StopHookOutcome, StopHookPhase, StopHookPhaseHandler,
+        StopHookPipeline, StopHookPipelineResult, StopHookRequest, StopHookResult,
+        TeammateHooksHandler, UserConfiguredStopHooksHandler, execute_hook_process,
     };
 
     // ----- Existing tests (preserved) -----
@@ -1331,6 +1561,59 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn job_classification_without_job_dir_is_noop() {
+        let handler = JobClassificationHandler::default();
+        let input = test_input(QuerySource::ReplMainThread, None);
+        let mut result = StopHookPipelineResult::default();
+
+        assert!(handler.execute(&input, &mut result).await.is_ok());
+        assert!(result.blocking_errors.is_empty());
+        assert!(!result.prevent_continuation);
+    }
+
+    #[tokio::test]
+    async fn computer_use_cleanup_runs_for_main_thread() {
+        let called = Arc::new(AtomicBool::new(false));
+        let called_for_cleanup = called.clone();
+        let handler = ComputerUseCleanupHandler::new(Arc::new(move |_input| {
+            let called = called_for_cleanup.clone();
+            Box::pin(async move {
+                called.store(true, Ordering::Relaxed);
+                Ok(ComputerUseCleanupReport {
+                    unhidden_apps: 2,
+                    released_lock: true,
+                })
+            })
+        }))
+        .with_timeout(Duration::from_secs(1));
+
+        let input = test_input(QuerySource::ReplMainThread, None);
+        let mut result = StopHookPipelineResult::default();
+
+        assert!(handler.execute(&input, &mut result).await.is_ok());
+        assert!(called.load(Ordering::Relaxed));
+    }
+
+    #[tokio::test]
+    async fn computer_use_cleanup_skips_sub_agents() {
+        let called = Arc::new(AtomicBool::new(false));
+        let called_for_cleanup = called.clone();
+        let handler = ComputerUseCleanupHandler::new(Arc::new(move |_input| {
+            let called = called_for_cleanup.clone();
+            Box::pin(async move {
+                called.store(true, Ordering::Relaxed);
+                Ok(ComputerUseCleanupReport::default())
+            })
+        }));
+
+        let input = test_input(QuerySource::Agent, Some(AgentId::new(Some("sub-agent"))));
+        let mut result = StopHookPipelineResult::default();
+
+        assert!(handler.execute(&input, &mut result).await.is_ok());
+        assert!(!called.load(Ordering::Relaxed));
+    }
+
+    #[tokio::test]
     async fn user_configured_hooks_match_event_type() {
         let hooks = vec![test_echo_hook("Stop", "ok")];
         let handler = UserConfiguredStopHooksHandler::new(hooks);
@@ -1456,25 +1739,20 @@ mod tests {
         let input = test_input(QuerySource::ReplMainThread, None);
         let result = pipeline.execute(&input).await;
 
-        // Should have executed SaveCacheSafeParams, BackgroundFireAndForget,
-        // UserConfiguredStopHooks, and Return phases.
+        // Should execute all reference stop-hook phases in order.
         assert!(!result.phases_executed.is_empty());
-        assert!(
-            result
-                .phases_executed
-                .contains(&StopHookPhase::SaveCacheSafeParams)
+        assert_eq!(
+            result.phases_executed,
+            vec![
+                StopHookPhase::SaveCacheSafeParams,
+                StopHookPhase::JobClassification,
+                StopHookPhase::BackgroundFireAndForget,
+                StopHookPhase::ComputerUseCleanup,
+                StopHookPhase::UserConfiguredStopHooks,
+                StopHookPhase::TeammateHooks,
+                StopHookPhase::Return,
+            ]
         );
-        assert!(
-            result
-                .phases_executed
-                .contains(&StopHookPhase::BackgroundFireAndForget)
-        );
-        assert!(
-            result
-                .phases_executed
-                .contains(&StopHookPhase::UserConfiguredStopHooks)
-        );
-        assert!(result.phases_executed.contains(&StopHookPhase::Return));
         assert_eq!(result.hook_count, 1);
     }
 

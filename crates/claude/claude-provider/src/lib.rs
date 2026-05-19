@@ -241,42 +241,53 @@ impl ProviderClient {
             provider.clone()
         };
 
-        let result = match effective_provider.protocol {
-            ProviderProtocol::OpenAi => {
-                self.complete_openai(
-                    &effective_provider,
-                    conversation,
-                    carried_discovered_tools,
-                    request_context,
-                )
-                .await
-            }
-            ProviderProtocol::Anthropic => {
-                self.complete_anthropic(
-                    &effective_provider,
-                    conversation,
-                    carried_discovered_tools,
-                    request_context,
-                )
-                .await
-            }
-            ProviderProtocol::Bedrock => {
-                self.complete_bedrock(
-                    &effective_provider,
-                    conversation,
-                    carried_discovered_tools,
-                    request_context,
-                )
-                .await
-            }
-            ProviderProtocol::Vertex => {
-                self.complete_vertex(
-                    &effective_provider,
-                    conversation,
-                    carried_discovered_tools,
-                    request_context,
-                )
-                .await
+        let result = if provider_prefers_anthropic_messages_route(&effective_provider) {
+            let routed_provider = provider_as_anthropic_compatible(&effective_provider);
+            self.complete_anthropic(
+                &routed_provider,
+                conversation,
+                carried_discovered_tools,
+                request_context,
+            )
+            .await
+        } else {
+            match effective_provider.protocol {
+                ProviderProtocol::OpenAi => {
+                    self.complete_openai(
+                        &effective_provider,
+                        conversation,
+                        carried_discovered_tools,
+                        request_context,
+                    )
+                    .await
+                }
+                ProviderProtocol::Anthropic => {
+                    self.complete_anthropic(
+                        &effective_provider,
+                        conversation,
+                        carried_discovered_tools,
+                        request_context,
+                    )
+                    .await
+                }
+                ProviderProtocol::Bedrock => {
+                    self.complete_bedrock(
+                        &effective_provider,
+                        conversation,
+                        carried_discovered_tools,
+                        request_context,
+                    )
+                    .await
+                }
+                ProviderProtocol::Vertex => {
+                    self.complete_vertex(
+                        &effective_provider,
+                        conversation,
+                        carried_discovered_tools,
+                        request_context,
+                    )
+                    .await
+                }
             }
         };
 
@@ -809,6 +820,28 @@ fn provider_for_request<'a>(
         effective.max_output_tokens = max_output_tokens;
     }
     Cow::Owned(effective)
+}
+
+fn provider_prefers_anthropic_messages_route(provider: &ProviderConfig) -> bool {
+    provider.protocol != ProviderProtocol::Anthropic
+        && provider
+            .base_url
+            .as_deref()
+            .is_some_and(base_url_looks_anthropic_messages_api)
+}
+
+fn base_url_looks_anthropic_messages_api(base_url: &str) -> bool {
+    let normalized = base_url.trim().to_ascii_lowercase();
+    normalized.ends_with("/messages")
+        || normalized.contains("/anthropic/")
+        || normalized.ends_with("/anthropic")
+        || normalized.contains("compat=anthropic")
+}
+
+fn provider_as_anthropic_compatible(provider: &ProviderConfig) -> ProviderConfig {
+    let mut routed = provider.clone();
+    routed.protocol = ProviderProtocol::Anthropic;
+    routed
 }
 
 async fn build_openai_request_body(
@@ -2858,6 +2891,27 @@ mod tests {
             top_p: None,
             top_k: None,
         }
+    }
+
+    #[test]
+    fn anthropic_messages_endpoint_overrides_openai_protocol_for_routing() {
+        let provider = test_provider_config("https://example.test/v1/messages".to_owned());
+
+        assert!(super::provider_prefers_anthropic_messages_route(&provider));
+
+        let routed = super::provider_as_anthropic_compatible(&provider);
+        assert_eq!(routed.protocol, claude_core::ProviderProtocol::Anthropic);
+        assert_eq!(
+            routed.base_url.as_deref(),
+            Some("https://example.test/v1/messages")
+        );
+    }
+
+    #[test]
+    fn openai_chat_endpoint_keeps_openai_protocol_for_routing() {
+        let provider = test_provider_config("https://example.test/v1/chat/completions".to_owned());
+
+        assert!(!super::provider_prefers_anthropic_messages_route(&provider));
     }
 
     #[test]
