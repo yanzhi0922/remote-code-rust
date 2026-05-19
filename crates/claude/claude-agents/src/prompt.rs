@@ -132,12 +132,6 @@ pub fn build_agent_prompt_with_options(
         ", since it is not aware of the user's intent"
     };
 
-    let worktree_note = "\n\
-        - You can optionally set `isolation: \"worktree\"` to run the agent in a temporary git \
-        worktree, giving it an isolated copy of the repository. The worktree is automatically \
-        cleaned up if the agent makes no changes; if changes are made, the worktree path and \
-        branch are returned in the result.";
-
     format!(
         "{shared}\n{when_not_to_use}\n\n\
         Usage notes:\n\
@@ -157,12 +151,11 @@ pub fn build_agent_prompt_with_options(
         - If the user specifies that they want you to run agents \"in parallel\", you MUST send a \
         single message with multiple {AGENT_TOOL_NAME} tool use content blocks. For example, if \
         you need to launch both a build-validator agent and a test-runner agent in parallel, send \
-        a single message with both tool calls.{worktree_note}\n\
+        a single message with both tool calls.\n\
         {when_to_fork}{writing_the_prompt}\n\n\
         {examples}",
         background_notes = background_notes,
         research_suffix = research_suffix,
-        worktree_note = worktree_note,
         continuation_note = if options.is_fork_enabled {
             "Each fresh Agent invocation with a subagent_type starts without context — provide a complete task description."
         } else {

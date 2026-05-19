@@ -344,6 +344,36 @@ pub type JobClassificationCallback = dyn Fn(JobClassificationInput) -> Pin<Box<d
     + Send
     + Sync;
 
+/// Background task kinds fired after the model stops without blocking the
+/// foreground turn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BackgroundTaskKind {
+    /// Generate speculative next-prompt suggestions.
+    PromptSuggestion,
+    /// Extract durable memories from the completed turn.
+    ExtractMemories,
+    /// Run auto-dream / memory-consolidation work.
+    AutoDream,
+}
+
+/// Input passed to the optional background fire-and-forget callback.
+#[derive(Debug, Clone)]
+pub struct BackgroundFireAndForgetInput {
+    pub task: BackgroundTaskKind,
+    pub session_id: SessionId,
+    pub turn: u32,
+    pub stop_reason: String,
+    pub final_text: Option<String>,
+    pub query_source: QuerySource,
+    pub messages: Vec<Message>,
+}
+
+/// Async callback used by the background fire-and-forget phase.
+pub type BackgroundFireAndForgetCallback = dyn Fn(BackgroundFireAndForgetInput) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send>>
+    + Send
+    + Sync;
+
 /// Input passed to the optional computer-use cleanup callback.
 #[derive(Debug, Clone)]
 pub struct ComputerUseCleanupInput {
@@ -482,7 +512,7 @@ impl StopHookPipeline {
         );
         pipeline.register_phase(
             StopHookPhase::BackgroundFireAndForget,
-            Box::new(BackgroundFireAndForgetHandler),
+            Box::new(BackgroundFireAndForgetHandler::default()),
         );
         pipeline.register_phase(
             StopHookPhase::ComputerUseCleanup,
@@ -670,7 +700,24 @@ impl StopHookPhaseHandler for JobClassificationHandler {
 ///
 /// Mirrors TS logic: only fires on the main agent (no `agent_id`),
 /// and skips entirely in bare mode (scripted `-p` calls).
-pub struct BackgroundFireAndForgetHandler;
+pub struct BackgroundFireAndForgetHandler {
+    callback: Option<Arc<BackgroundFireAndForgetCallback>>,
+}
+
+impl BackgroundFireAndForgetHandler {
+    #[must_use]
+    pub fn new(callback: Arc<BackgroundFireAndForgetCallback>) -> Self {
+        Self {
+            callback: Some(callback),
+        }
+    }
+}
+
+impl Default for BackgroundFireAndForgetHandler {
+    fn default() -> Self {
+        Self { callback: None }
+    }
+}
 
 #[async_trait::async_trait]
 impl StopHookPhaseHandler for BackgroundFireAndForgetHandler {
@@ -692,25 +739,34 @@ impl StopHookPhaseHandler for BackgroundFireAndForgetHandler {
             return Ok(());
         }
 
-        // Fire prompt suggestion (noop placeholder).
-        let _session_id = input.session_id.clone();
-        tokio::spawn(async move {
-            tracing::trace!("Prompt suggestion: noop placeholder");
-        });
-
-        // Fire extract memories (noop placeholder).
-        tokio::spawn(async move {
-            tracing::trace!("Extract memories: noop placeholder");
-        });
-
-        // Fire auto-dream.
-        let session_id = input.session_id.clone();
-        tokio::spawn(async move {
-            tracing::debug!(
-                session_id = %session_id,
-                "Auto-dream: fired (placeholder)"
+        let Some(callback) = self.callback.as_ref() else {
+            tracing::trace!(
+                "Background fire-and-forget phase skipped because no callback is registered"
             );
-        });
+            return Ok(());
+        };
+
+        for task in [
+            BackgroundTaskKind::PromptSuggestion,
+            BackgroundTaskKind::ExtractMemories,
+            BackgroundTaskKind::AutoDream,
+        ] {
+            let callback = Arc::clone(callback);
+            let callback_input = BackgroundFireAndForgetInput {
+                task,
+                session_id: input.session_id.clone(),
+                turn: input.turn,
+                stop_reason: input.stop_reason.clone(),
+                final_text: input.final_text.clone(),
+                query_source: input.query_source,
+                messages: input.messages.clone(),
+            };
+            tokio::spawn(async move {
+                if let Err(err) = callback(callback_input).await {
+                    tracing::warn!(task = ?task, "Background stop task failed: {err:#}");
+                }
+            });
+        }
 
         Ok(())
     }
@@ -1210,20 +1266,24 @@ fn parse_hook_output(stdout: &str) -> (Option<String>, bool, Option<String>) {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::time::Duration;
 
     use claude_core::{AgentId, ConversationEntry, Message, PermissionMode, SessionId};
+    use tokio::sync::mpsc;
+    use tokio::time::timeout as tokio_timeout;
 
     use crate::config::{ProcessUserInputContext, QuerySource};
 
     use super::{
-        BackgroundFireAndForgetHandler, ComputerUseCleanupHandler, ComputerUseCleanupReport,
-        HookDefinition, JobClassificationHandler, ReplHookContext, SaveCacheSafeParamsHandler,
-        StopHookBaseInput, StopHookManager, StopHookOutcome, StopHookPhase, StopHookPhaseHandler,
-        StopHookPipeline, StopHookPipelineResult, StopHookRequest, StopHookResult,
-        TeammateHooksHandler, UserConfiguredStopHooksHandler, execute_hook_process,
+        BackgroundFireAndForgetHandler, BackgroundTaskKind, ComputerUseCleanupHandler,
+        ComputerUseCleanupReport, HookDefinition, JobClassificationHandler, ReplHookContext,
+        SaveCacheSafeParamsHandler, StopHookBaseInput, StopHookManager, StopHookOutcome,
+        StopHookPhase, StopHookPhaseHandler, StopHookPipeline, StopHookPipelineResult,
+        StopHookRequest, StopHookResult, TeammateHooksHandler, UserConfiguredStopHooksHandler,
+        execute_hook_process,
     };
 
     // ----- Existing tests (preserved) -----
@@ -1536,28 +1596,63 @@ mod tests {
 
     #[tokio::test]
     async fn background_fire_and_forget_skips_sub_agents() {
-        let handler = BackgroundFireAndForgetHandler;
+        let called = Arc::new(AtomicBool::new(false));
+        let called_for_callback = called.clone();
+        let handler = BackgroundFireAndForgetHandler::new(Arc::new(move |_input| {
+            let called = called_for_callback.clone();
+            Box::pin(async move {
+                called.store(true, Ordering::Relaxed);
+                Ok(())
+            })
+        }));
 
         // Should skip for sub-agent (has agent_id).
         let agent_id = AgentId::new(Some("test-agent"));
         let input = test_input(QuerySource::ReplMainThread, Some(agent_id));
         let mut result = StopHookPipelineResult::default();
         assert!(handler.execute(&input, &mut result).await.is_ok());
+        assert!(!called.load(Ordering::Relaxed));
 
         // Should skip for User query source (bare mode).
         let input = test_input(QuerySource::User, None);
         let mut result = StopHookPipelineResult::default();
         assert!(handler.execute(&input, &mut result).await.is_ok());
+        assert!(!called.load(Ordering::Relaxed));
     }
 
     #[tokio::test]
-    async fn background_fire_and_forget_runs_for_main() {
-        let handler = BackgroundFireAndForgetHandler;
+    async fn background_fire_and_forget_fires_all_background_tasks_for_main() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let handler = BackgroundFireAndForgetHandler::new(Arc::new(move |input| {
+            let tx = tx.clone();
+            Box::pin(async move {
+                tx.send(input.task).expect("receiver should be open");
+                Ok(())
+            })
+        }));
 
         // Should run for main thread (no agent_id, non-User source).
         let input = test_input(QuerySource::ReplMainThread, None);
         let mut result = StopHookPipelineResult::default();
         assert!(handler.execute(&input, &mut result).await.is_ok());
+
+        let mut observed = BTreeSet::new();
+        for _ in 0..3 {
+            let task = tokio_timeout(Duration::from_secs(1), rx.recv())
+                .await
+                .expect("background task should fire")
+                .expect("background task channel should stay open");
+            observed.insert(task);
+        }
+
+        assert_eq!(
+            observed,
+            BTreeSet::from([
+                BackgroundTaskKind::PromptSuggestion,
+                BackgroundTaskKind::ExtractMemories,
+                BackgroundTaskKind::AutoDream,
+            ])
+        );
     }
 
     #[tokio::test]

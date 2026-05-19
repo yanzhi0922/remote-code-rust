@@ -1832,7 +1832,7 @@ pub async fn execute_tool_call(
             "exit_worktree" => git::exit_worktree_tool(&effective_call.input, context),
             "list_worktrees" => git::list_worktrees_tool(context),
             "brief" => system::brief_tool(&effective_call.input),
-            "ctx_inspect" => system::ctx_inspect_tool(&effective_call.input).await,
+            "ctx_inspect" => system::ctx_inspect_tool(&effective_call.input, context).await,
             "list_peers" => system::list_peers_tool(&effective_call.input).await,
             "tungsten" => misc::tungsten_tool(&effective_call.input, context).await,
             "overflow_test" => misc::overflow_test_tool(&effective_call.input),
@@ -1972,12 +1972,13 @@ mod tests {
         runtime_tool_result_persistence_skip_names, runtime_tool_search_candidate_specs,
         runtime_visible_provider_tool_specs,
         runtime_visible_provider_tool_specs_with_discovered_tools,
-        with_runtime_agent_prompt_context_provider, with_tool_runtime_policy_overlay,
+        with_runtime_agent_prompt_context_provider, with_runtime_fork_snapshot_provider,
+        with_tool_runtime_policy_overlay,
     };
     use crate::specs;
     use claude_core::{
-        HookEvent, PermissionMode, ProviderResponse, SubAgentCompletion, SubAgentExecutionRequest,
-        ToolCall, UsageSummary,
+        ConversationEntry, HookEvent, PermissionMode, ProviderResponse, SubAgentCompletion,
+        SubAgentExecutionRequest, SubAgentForkSnapshot, ToolCall, UsageSummary,
     };
     use claude_mcp::{
         McpCapabilityMatrix, McpPromptArgument, McpPromptDescriptor, McpServerConfig,
@@ -5630,6 +5631,157 @@ while True:
         let parsed: serde_json::Value =
             serde_json::from_str(&result.content).expect("should be valid JSON");
         assert!(parsed["total_tools"].as_u64().unwrap_or(0) > 40);
+    }
+
+    #[tokio::test]
+    async fn ctx_inspect_reports_task_stack_context_metrics() {
+        let tempdir = match tempdir() {
+            Ok(dir) => dir,
+            Err(error) => panic!("failed to create tempdir: {error}"),
+        };
+        let task_stack = Arc::new(Mutex::new(claude_core::task_stack::TaskStack::default()));
+        task_stack.lock().push_root(vec![
+            ConversationEntry::system("system prompt"),
+            ConversationEntry::user("hello from user"),
+            ConversationEntry::assistant("assistant response"),
+            ConversationEntry::tool("tool-1", "read_file", "file contents", false),
+        ]);
+        let context = ToolExecutionContext {
+            original_cwd: tempdir.path().to_path_buf().clone(),
+            cwd: tempdir.path().to_path_buf(),
+            active_worktree_session: None,
+            timeout_ms: 5_000,
+            sub_agent: None,
+            progress_cb: None,
+            task_stack,
+            read_file_state: crate::FileStateCache::new(),
+            sub_agent_output_tokens: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        };
+        let broker = StaticPermissionBroker::new(true);
+
+        let tokens = execute_tool_call(
+            &ToolCall {
+                id: "1".to_owned(),
+                name: "ctx_inspect".to_owned(),
+                input: json!({"action": "tokens"}),
+            },
+            &context,
+            &broker,
+        )
+        .await
+        .expect("ctx_inspect tokens should work");
+        let parsed_tokens: serde_json::Value =
+            serde_json::from_str(&tokens.content).expect("tokens should be valid JSON");
+        assert_eq!(parsed_tokens["status"], "available");
+        assert_eq!(parsed_tokens["source"], "task_stack");
+        assert_eq!(parsed_tokens["message_count"], 4);
+        assert!(parsed_tokens["estimated_tokens"].as_u64().unwrap_or(0) > 0);
+        assert_eq!(parsed_tokens["by_role"]["tool"], 1);
+
+        let messages = execute_tool_call(
+            &ToolCall {
+                id: "2".to_owned(),
+                name: "ctx_inspect".to_owned(),
+                input: json!({"action": "messages"}),
+            },
+            &context,
+            &broker,
+        )
+        .await
+        .expect("ctx_inspect messages should work");
+        let parsed_messages: serde_json::Value =
+            serde_json::from_str(&messages.content).expect("messages should be valid JSON");
+        assert_eq!(parsed_messages["status"], "available");
+        assert_eq!(parsed_messages["last_role"], "tool");
+        assert_eq!(parsed_messages["last_message"]["tool_name"], "read_file");
+    }
+
+    #[tokio::test]
+    async fn ctx_inspect_reports_runtime_fork_snapshot_metrics() {
+        let tempdir = match tempdir() {
+            Ok(dir) => dir,
+            Err(error) => panic!("failed to create tempdir: {error}"),
+        };
+        let context = ToolExecutionContext {
+            original_cwd: tempdir.path().to_path_buf().clone(),
+            cwd: tempdir.path().to_path_buf(),
+            active_worktree_session: None,
+            timeout_ms: 5_000,
+            sub_agent: None,
+            progress_cb: None,
+            task_stack: Default::default(),
+            read_file_state: crate::FileStateCache::new(),
+            sub_agent_output_tokens: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        };
+        let broker = StaticPermissionBroker::new(true);
+        let snapshot = SubAgentForkSnapshot {
+            fork_context_messages: vec![
+                claude_core::Message::from(ConversationEntry::user("hello")),
+                claude_core::Message::from(ConversationEntry::assistant("response")),
+            ],
+            system_prompt: None,
+            user_context: BTreeMap::new(),
+            system_context: BTreeMap::new(),
+        };
+
+        let result = with_runtime_fork_snapshot_provider(
+            Arc::new(move || snapshot.clone()),
+            execute_tool_call(
+                &ToolCall {
+                    id: "1".to_owned(),
+                    name: "ctx_inspect".to_owned(),
+                    input: json!({"action": "messages"}),
+                },
+                &context,
+                &broker,
+            ),
+        )
+        .await
+        .expect("ctx_inspect should work");
+
+        let parsed: serde_json::Value =
+            serde_json::from_str(&result.content).expect("messages should be valid JSON");
+        assert_eq!(parsed["status"], "available");
+        assert_eq!(parsed["source"], "runtime_fork_snapshot");
+        assert_eq!(parsed["message_count"], 2);
+        assert_eq!(parsed["by_role"]["assistant"], 1);
+    }
+
+    #[tokio::test]
+    async fn ctx_inspect_reports_unavailable_without_snapshot() {
+        let tempdir = match tempdir() {
+            Ok(dir) => dir,
+            Err(error) => panic!("failed to create tempdir: {error}"),
+        };
+        let context = ToolExecutionContext {
+            original_cwd: tempdir.path().to_path_buf().clone(),
+            cwd: tempdir.path().to_path_buf(),
+            active_worktree_session: None,
+            timeout_ms: 5_000,
+            sub_agent: None,
+            progress_cb: None,
+            task_stack: Default::default(),
+            read_file_state: crate::FileStateCache::new(),
+            sub_agent_output_tokens: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        };
+        let broker = StaticPermissionBroker::new(true);
+
+        let result = execute_tool_call(
+            &ToolCall {
+                id: "1".to_owned(),
+                name: "ctx_inspect".to_owned(),
+                input: json!({"action": "tokens"}),
+            },
+            &context,
+            &broker,
+        )
+        .await
+        .expect("ctx_inspect should work");
+
+        let parsed: serde_json::Value =
+            serde_json::from_str(&result.content).expect("tokens should be valid JSON");
+        assert_eq!(parsed["status"], "unavailable");
+        assert_eq!(parsed["action"], "tokens");
     }
 
     #[tokio::test(flavor = "current_thread")]

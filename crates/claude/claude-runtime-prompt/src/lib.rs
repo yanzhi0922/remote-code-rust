@@ -207,6 +207,84 @@ pub fn runtime_env_defined_falsy(name: &str) -> bool {
     })
 }
 
+/// Internal repos where Anthropic-internal model names are allowed.
+///
+/// This mirrors the upstream allowlist in `commitAttribution.ts`. It is
+/// intentionally repo-specific rather than org-wide because the Anthropic orgs
+/// also contain public repositories.
+const INTERNAL_MODEL_REPOS: &[&str] = &[
+    "github.com:anthropics/claude-cli-internal",
+    "github.com/anthropics/claude-cli-internal",
+    "github.com:anthropics/anthropic",
+    "github.com/anthropics/anthropic",
+    "github.com:anthropics/apps",
+    "github.com/anthropics/apps",
+    "github.com:anthropics/casino",
+    "github.com/anthropics/casino",
+    "github.com:anthropics/dbt",
+    "github.com/anthropics/dbt",
+    "github.com:anthropics/dotfiles",
+    "github.com/anthropics/dotfiles",
+    "github.com:anthropics/terraform-config",
+    "github.com/anthropics/terraform-config",
+    "github.com:anthropics/hex-export",
+    "github.com/anthropics/hex-export",
+    "github.com:anthropics/feedback-v2",
+    "github.com/anthropics/feedback-v2",
+    "github.com:anthropics/labs",
+    "github.com/anthropics/labs",
+    "github.com:anthropics/argo-rollouts",
+    "github.com/anthropics/argo-rollouts",
+    "github.com:anthropics/starling-configs",
+    "github.com/anthropics/starling-configs",
+    "github.com:anthropics/ts-tools",
+    "github.com/anthropics/ts-tools",
+    "github.com:anthropics/ts-capsules",
+    "github.com/anthropics/ts-capsules",
+    "github.com:anthropics/feldspar-testing",
+    "github.com/anthropics/feldspar-testing",
+    "github.com:anthropics/trellis",
+    "github.com/anthropics/trellis",
+    "github.com:anthropics/claude-for-hiring",
+    "github.com/anthropics/claude-for-hiring",
+    "github.com:anthropics/forge-web",
+    "github.com/anthropics/forge-web",
+    "github.com:anthropics/infra-manifests",
+    "github.com/anthropics/infra-manifests",
+    "github.com:anthropics/mycro_manifests",
+    "github.com/anthropics/mycro_manifests",
+    "github.com:anthropics/mycro_configs",
+    "github.com/anthropics/mycro_configs",
+    "github.com:anthropics/mobile-apps",
+    "github.com/anthropics/mobile-apps",
+];
+
+fn remote_marks_internal_model_repo(remote_url: &str) -> bool {
+    INTERNAL_MODEL_REPOS
+        .iter()
+        .any(|allowed_repo| remote_url.contains(allowed_repo))
+}
+
+fn runtime_repo_remote_url(cwd: &Path) -> Option<String> {
+    run_git_command(cwd, &["remote", "get-url", "origin"])
+        .or_else(|| run_git_command(cwd, &["config", "--get", "remote.origin.url"]))
+}
+
+fn runtime_undercover_active(
+    config: &RuntimeConfig,
+    runtime_identity: &RuntimeIdentityContext,
+) -> bool {
+    if !runtime_identity.is_ant_user() {
+        return false;
+    }
+    if runtime_env_truthy("CLAUDE_CODE_UNDERCOVER") {
+        return true;
+    }
+    runtime_repo_remote_url(&config.cwd)
+        .as_deref()
+        .is_none_or(|remote| !remote_marks_internal_model_repo(remote))
+}
+
 #[must_use]
 pub fn runtime_deferred_tools_delta_enabled() -> bool {
     if runtime_env_truthy("CLAUDE_CODE_DEFERRED_TOOLS_DELTA") {
@@ -634,7 +712,7 @@ pub async fn build_runtime_system_prompt(
             function_result_keep_recent: None,
             include_token_budget_prompt: settings.include_token_budget_prompt,
         },
-        is_undercover: false,
+        is_undercover: runtime_undercover_active(config, &settings.runtime_identity),
     };
 
     let default_prompt_blocks = if use_default_system_prompt {
@@ -2240,12 +2318,12 @@ mod tests {
         augment_conversation_with_runtime_context, build_runtime_scratchpad_state_with,
         build_runtime_system_prompt, clear_runtime_system_prompt_state,
         collect_claude_md_context_with_roots, expand_requested_tool_names,
-        runtime_claude_temp_dir_name, runtime_user_context_entries_with_settings,
-        sanitize_path_component,
+        remote_marks_internal_model_repo, runtime_claude_temp_dir_name,
+        runtime_user_context_entries_with_settings, sanitize_path_component,
     };
     use claude_config::settings_layers::RuntimeOverrides;
     use claude_config::{ProviderOverrides, SettingSource, load_runtime_config};
-    use claude_context::RuntimeIdentityContext;
+    use claude_context::{RuntimeIdentityContext, RuntimeUserType};
     use claude_core::{
         ConversationEntry, ConversationRole, InputFormat, OutputFormat, PermissionMode,
         ProviderProtocol,
@@ -2336,6 +2414,45 @@ mod tests {
 
         assert!(prompt.text.contains("# auto memory"));
         assert!(prompt.text.contains("## How to save memories"));
+    }
+
+    #[tokio::test]
+    async fn ant_runtime_defaults_to_undercover_outside_internal_repo() {
+        let _guard = coordinator_override_lock().await;
+        claude_agents::coordinator::reset_coordinator_override();
+        let config = test_config(None);
+        let mut settings = test_settings(&config);
+        settings.runtime_identity.user_type = RuntimeUserType::Ant;
+
+        let prompt = build_runtime_system_prompt(
+            &config,
+            &[ConversationEntry::user("test")],
+            &PromptRuntimeOverrides::default(),
+            &settings,
+            &DiscoveredToolScope::default(),
+        )
+        .await
+        .expect("prompt");
+
+        assert!(!prompt.text.contains("The exact model ID is"));
+        assert!(!prompt.text.contains("Claude Code is available as a CLI"));
+        assert!(!prompt.text.contains("Fast mode for Claude Code"));
+    }
+
+    #[test]
+    fn internal_repo_remote_allowlist_matches_reference_shapes() {
+        assert!(remote_marks_internal_model_repo(
+            "git@github.com:anthropics/claude-cli-internal.git"
+        ));
+        assert!(remote_marks_internal_model_repo(
+            "https://github.com/anthropics/anthropic.git"
+        ));
+        assert!(!remote_marks_internal_model_repo(
+            "https://github.com/anthropics/claude-code.git"
+        ));
+        assert!(!remote_marks_internal_model_repo(
+            "https://github.com/example/public.git"
+        ));
     }
 
     #[test]

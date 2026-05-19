@@ -4,7 +4,7 @@
 use std::process::Stdio;
 
 use anyhow::{Context, Result, anyhow};
-use claude_core::ToolResult;
+use claude_core::{ConversationEntry, ConversationRole, Message, ToolResult};
 use serde_json::{Value, json};
 use tokio::io::AsyncReadExt;
 use tokio::process::Command;
@@ -500,27 +500,217 @@ pub(crate) fn brief_tool(input: &Value) -> Result<String> {
     ))
 }
 
-pub(crate) async fn ctx_inspect_tool(input: &Value) -> Result<String> {
+#[derive(Debug, Clone)]
+struct ConversationSnapshot {
+    source: &'static str,
+    entries: Vec<ConversationEntry>,
+}
+
+fn active_conversation_snapshot(context: &ToolExecutionContext) -> Option<ConversationSnapshot> {
+    if let Some(snapshot) = super::current_runtime_fork_snapshot() {
+        let entries = snapshot
+            .fork_context_messages
+            .iter()
+            .filter_map(Message::as_conversation_entry)
+            .collect::<Vec<_>>();
+        if !entries.is_empty() {
+            return Some(ConversationSnapshot {
+                source: "runtime_fork_snapshot",
+                entries,
+            });
+        }
+    }
+
+    let stack = context.task_stack.lock();
+    stack
+        .current()
+        .map(|frame| ConversationSnapshot {
+            source: "task_stack",
+            entries: frame.conversation_snapshot.clone(),
+        })
+        .filter(|snapshot| !snapshot.entries.is_empty())
+}
+
+fn role_name(role: &ConversationRole) -> &'static str {
+    match role {
+        ConversationRole::System => "system",
+        ConversationRole::User => "user",
+        ConversationRole::Assistant => "assistant",
+        ConversationRole::Tool => "tool",
+    }
+}
+
+fn estimate_text_tokens(text: &str) -> u64 {
+    if text.is_empty() {
+        return 0;
+    }
+
+    let mut ascii_chars: f64 = 0.0;
+    let mut cjk_chars: f64 = 0.0;
+    for ch in text.chars() {
+        let cp = ch as u32;
+        if (0x4E00..=0x9FFF).contains(&cp)
+            || (0x3400..=0x4DBF).contains(&cp)
+            || (0x20000..=0x2A6DF).contains(&cp)
+            || (0xF900..=0xFAFF).contains(&cp)
+            || (0x3040..=0x309F).contains(&cp)
+            || (0x30A0..=0x30FF).contains(&cp)
+            || (0xAC00..=0xD7AF).contains(&cp)
+            || (0x3000..=0x303F).contains(&cp)
+            || (0xFF00..=0xFFEF).contains(&cp)
+        {
+            cjk_chars += 1.0;
+        } else {
+            ascii_chars += 1.0;
+        }
+    }
+
+    (ascii_chars / 4.0 + cjk_chars / 1.5).ceil() as u64
+}
+
+fn estimate_value_tokens(value: &Value) -> u64 {
+    estimate_text_tokens(&value.to_string())
+}
+
+fn estimate_entry_tokens(entry: &ConversationEntry) -> u64 {
+    let text_tokens = estimate_text_tokens(&entry.text);
+    let history_tokens = entry
+        .history_text
+        .as_deref()
+        .map_or(0, estimate_text_tokens);
+    let content_block_tokens: u64 = entry.content_blocks.iter().map(estimate_value_tokens).sum();
+    let tool_call_tokens: u64 = entry
+        .tool_calls
+        .iter()
+        .map(|tool_call| {
+            estimate_text_tokens(&tool_call.name) + estimate_value_tokens(&tool_call.input)
+        })
+        .sum();
+    let attachment_tokens: u64 = entry
+        .attachments
+        .iter()
+        .map(|attachment| {
+            // Base64 averages roughly 4 chars per 3 bytes. Use a conservative
+            // token estimate from the encoded payload size.
+            estimate_text_tokens(&attachment.data)
+                + attachment
+                    .filename
+                    .as_deref()
+                    .map_or(0, estimate_text_tokens)
+        })
+        .sum();
+
+    4 + text_tokens.max(history_tokens)
+        + content_block_tokens
+        + tool_call_tokens
+        + attachment_tokens
+}
+
+fn conversation_role_counts(entries: &[ConversationEntry]) -> Value {
+    let mut system = 0usize;
+    let mut user = 0usize;
+    let mut assistant = 0usize;
+    let mut tool = 0usize;
+
+    for entry in entries {
+        match entry.role {
+            ConversationRole::System => system += 1,
+            ConversationRole::User => user += 1,
+            ConversationRole::Assistant => assistant += 1,
+            ConversationRole::Tool => tool += 1,
+        }
+    }
+
+    json!({
+        "system": system,
+        "user": user,
+        "assistant": assistant,
+        "tool": tool,
+    })
+}
+
+fn unavailable_context_payload(action: &str) -> String {
+    json!({
+        "status": "unavailable",
+        "action": action,
+        "note": "No active conversation snapshot was provided to this tool call. The query runtime should scope a fork snapshot or seed the task stack before executing ctx_inspect."
+    })
+    .to_string()
+}
+
+fn context_tokens_payload(snapshot: &ConversationSnapshot) -> String {
+    let estimated_tokens: u64 = snapshot.entries.iter().map(estimate_entry_tokens).sum();
+    let tool_call_count: usize = snapshot
+        .entries
+        .iter()
+        .map(|entry| entry.tool_calls.len())
+        .sum();
+    let content_block_count: usize = snapshot
+        .entries
+        .iter()
+        .map(|entry| entry.content_blocks.len())
+        .sum();
+    let attachment_count: usize = snapshot
+        .entries
+        .iter()
+        .map(|entry| entry.attachments.len())
+        .sum();
+
+    json!({
+        "status": "available",
+        "source": snapshot.source,
+        "estimate_method": "dual_ratio_character_estimate",
+        "estimated_tokens": estimated_tokens,
+        "message_count": snapshot.entries.len(),
+        "by_role": conversation_role_counts(&snapshot.entries),
+        "tool_call_count": tool_call_count,
+        "content_block_count": content_block_count,
+        "attachment_count": attachment_count,
+    })
+    .to_string()
+}
+
+fn context_messages_payload(snapshot: &ConversationSnapshot) -> String {
+    let last = snapshot.entries.last().map(|entry| {
+        json!({
+            "role": role_name(&entry.role),
+            "text_chars": entry.text.chars().count(),
+            "content_blocks": entry.content_blocks.len(),
+            "tool_calls": entry.tool_calls.len(),
+            "is_error": entry.is_error,
+            "tool_name": entry.name.as_deref(),
+        })
+    });
+    json!({
+        "status": "available",
+        "source": snapshot.source,
+        "message_count": snapshot.entries.len(),
+        "by_role": conversation_role_counts(&snapshot.entries),
+        "first_role": snapshot.entries.first().map(|entry| role_name(&entry.role)),
+        "last_role": snapshot.entries.last().map(|entry| role_name(&entry.role)),
+        "last_message": last,
+    })
+    .to_string()
+}
+
+pub(crate) async fn ctx_inspect_tool(
+    input: &Value,
+    context: &ToolExecutionContext,
+) -> Result<String> {
     let action = input["action"]
         .as_str()
         .ok_or_else(|| anyhow!("action is required (tokens, messages, or tools)"))?;
 
     let specs = runtime_provider_tool_specs().await;
     match action {
-        // NOTE: Token and message counts are placeholder implementations.
-        // They require access to the conversation context and tokenizer which
-        // are not available at the tool execution layer. The "unavailable"
-        // status makes this explicit rather than returning misleading values.
-        "tokens" => Ok(json!({
-            "estimated_tokens": "unavailable",
-            "note": "Token counting is not available in this context. It requires a model-specific tokenizer and conversation state."
-        })
-        .to_string()),
-        "messages" => Ok(json!({
-            "message_count": "unavailable",
-            "note": "Message count is not available in this context. It requires conversation state from the active session."
-        })
-        .to_string()),
+        "tokens" => Ok(active_conversation_snapshot(context).as_ref().map_or_else(
+            || unavailable_context_payload(action),
+            context_tokens_payload,
+        )),
+        "messages" => Ok(active_conversation_snapshot(context).as_ref().map_or_else(
+            || unavailable_context_payload(action),
+            context_messages_payload,
+        )),
         "tools" => Ok(json!({
             "total_tools": specs.len(),
             "tools": specs.iter().map(|s| &s.name).collect::<Vec<_>>(),

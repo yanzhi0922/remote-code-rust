@@ -365,7 +365,6 @@ fn builtin_tool_specs_core() -> Vec<ToolSpec> {
                     "name": {"type": "string", "description": "Name for the spawned agent. Makes it addressable via SendMessage({to: name}) while running."},
                     "team_name": {"type": "string", "description": "Team name for spawning. Uses the current team context if omitted."},
                     "mode": {"type": "string", "enum": ["default", "plan"], "description": "Permission mode for the spawned teammate."},
-                    "isolation": {"type": "string", "enum": ["worktree"], "description": "Isolation mode. worktree creates a temporary git worktree so the agent works on an isolated copy of the repo."},
                     "cwd": {"type": "string", "description": "Absolute path to run the agent in. Overrides the working directory for all filesystem and shell operations within this agent."}
                 },
                 "required": ["description", "prompt"],
@@ -1639,7 +1638,6 @@ mod tests {
             "name",
             "team_name",
             "mode",
-            "isolation",
             "cwd",
         ] {
             assert!(
@@ -1648,6 +1646,10 @@ mod tests {
             );
         }
 
+        assert!(
+            !properties.contains_key("isolation"),
+            "agent schema should not expose worktree isolation until the runtime implements it"
+        );
         assert!(
             !properties.contains_key("tools"),
             "agent schema should hide legacy tools overrides from the model"
