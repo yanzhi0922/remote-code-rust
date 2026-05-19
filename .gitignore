@@ -1,5 +1,6 @@
 /target
 **/target/
+/.tmp/
 /.cargo/*
 !/.cargo/audit.toml
 /.idea
@@ -21,6 +22,16 @@ __pycache__/
 *.orig
 .env
 .env.*
+.envrc
+.mcp.json
+*.local.json
+*.local.toml
+*.secret
+*.token
+*.key
+*.p12
+*.pfx
+*.pdb
 nul
 .ruff_cache/
 
@@ -44,6 +55,7 @@ output/
 .claude/scheduled_tasks.lock
 .claude/scheduled_tasks.json
 .runner-profile/
+/.kiro/
 
 # One-off scripts with credentials
 gh-push-db.js

@@ -1,71 +1,64 @@
 # Remote Code Rust
 
-Remote Code Rust is a Rust-native AI coding workspace for desktop-first development and secure mobile remote control. The product goal is a one-click Windows desktop app: run Codex, Roo, and Claude-compatible coding agents locally on the user's machine, then control that same desktop session from a phone or PWA through a relay-only cloud control plane.
+[Root README](README.md) | [简体中文](README.zh-CN.md) | [日本語](README.ja.md)
 
-Languages: [English](README.en.md) | [简体中文](README.zh-CN.md) | [Root README](README.md)
+Remote Code Rust is a local-first AI coding workspace for Claude-compatible, Codex, and Roo agents. It combines a Rust runtime, native in-process adapters, a Tauri desktop app, a trusted local runner, a relay-only control plane, and Web/PWA remote control.
 
-## What It Does
+## Current Status
 
-- Runs coding agents on the desktop, not on the cloud relay.
-- Provides a Tauri v2 + React 19 desktop GUI with provider, model, session, approval, artifact, and remote-control surfaces.
-- Integrates three agent engines behind native Rust adapter traits: Codex, Roo, and Claude.
-- Uses a relay-only control plane for pairing, authentication, heartbeats, command polling, and event streaming.
-- Defaults remote clients to relay-only mode; direct runner access is an explicit advanced opt-in.
-- Keeps provider keys, workspace files, tool execution, and agent loops on trusted user machines.
+This repository is public preview. It is useful for development, auditing, and controlled dogfooding, but it is not yet ready for direct production deployment. The release baseline is [docs/requirements.md](docs/requirements.md).
 
-## Quick Install
+Production release requires the full checklist: Rust slices, clippy, audit, GUI npm checks, desktop bundle, runner/control-plane E2E, Mobile/PWA pairing, approvals, artifacts, QUIC, provider matrix, MCP calls, and secret scanning.
 
-Windows desktop app from the latest GitHub Release:
+## Product Boundary
 
-```powershell
-iwr -UseB https://raw.githubusercontent.com/yanzhi0922/remote-code-rust/main/scripts/install-windows.ps1 | iex
-```
+- Coding agents run locally on the desktop or on a trusted runner.
+- Provider credentials stay local or on the trusted runner.
+- Workspace files stay local or on the trusted runner.
+- The cloud relay handles auth, pairing, heartbeats, command relay, event streaming, approvals, artifacts, and Web/PWA assets only.
+- The relay must not run agents, workspace tooling, provider SDK loops, Cargo, or `remote-code-runner`.
+- Direct runner access is an explicit advanced mode with a separate runner token.
 
-Silent install:
+## Main Components
 
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts\install-windows.ps1 -Silent
-```
+| Area | Location |
+| --- | --- |
+| CLI / TUI / headless runtime | `agents/claudecode` |
+| Desktop GUI and Web/PWA | `apps/remote-code-gui` |
+| Control plane / relay | `apps/remote-code-control-plane` |
+| Local runner | `apps/remote-code-runner` |
+| Agent protocol | `crates/shared/rc-agent-protocol` |
+| Claude adapter | `crates/adapters/rc-claude-adapter` |
+| Codex adapter | `crates/adapters/rc-codex-adapter` |
+| Roo adapter | `crates/adapters/rc-roo-adapter` |
+| Claude runtime crates | `crates/claude` |
+| Codex crates | `crates/codex` |
+| Roo crates | `crates/roo` |
 
-Relay server on Ubuntu 22.04:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/yanzhi0922/remote-code-rust/main/deploy/install-relay.sh | sudo REMOTE_CODE_DOMAIN=remote-code.example.com REMOTE_CODE_ACME_EMAIL=admin@example.com bash
-```
-
-The relay installer downloads the release artifact, installs `remote-code-control-plane`, serves the Web/PWA frontend, binds the control plane to `127.0.0.1`, configures nginx when TLS certificates are available, and refuses to run local coding agents on the server.
-
-## Local Development
+## Local Checks
 
 ```powershell
 cargo fmt --all -- --check
-cargo clippy --workspace --all-targets -j1 -- -D warnings
-cargo test -p codex-app-server --test all -j1
+git diff --check
+cargo check --workspace -j 1
 cd apps\remote-code-gui
 npm ci
 npm test
 npm run build
 ```
 
-Use the cache cleaner after large builds:
+For release candidates, use the sliced gates documented in [docs/requirements.md](docs/requirements.md) and `scripts/verify-release.ps1`.
 
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts\clean-build-caches.ps1 -Aggressive
-```
+## Provider And MCP Validation
 
-## Security Model
+Primary release paths must remain separate from supplemental test providers. Supplemental validation currently covers MiniMax Token Plan, KuaiKAT Coding Plan, and DeepSeek where applicable. MCP validation must cover MiniMax, context7, sequentialthinking, memory, and puppeteer.
 
-- The relay server is not a runner and must not host provider keys or workspaces.
-- Runner/control-plane credentials are separate.
-- Long-lived access tokens are not accepted in WebSocket query strings by default.
-- Self-signed QUIC/TLS requires certificate pinning.
-- Direct runner mode is disabled by default in the web client.
-- Secret scanning is part of release gating; rotate any credential that was ever committed or shared in local test files.
+Never commit provider keys, MCP keys, runner tokens, OAuth tokens, local settings, screenshots containing secrets, or logs with raw credentials.
 
-## Release Status
+## Security
 
-This repository is moving toward a production Windows desktop release. Before publishing a release, run the release gates in `scripts/verify-release.ps1`, `cargo audit`, npm audit, gitleaks, and the Windows installer build. Android/iOS native packaging and store hardening are tracked separately from the Web/PWA flow.
+Read [SECURITY.md](SECURITY.md) before deploying or reporting a vulnerability. If any credential has appeared in chat, logs, reports, or Git history, rotate it before public use.
 
 ## License
 
-This repository is public source, but not open-source licensed unless a separate written license says otherwise. See [LICENSE](LICENSE).
+Public source, proprietary by default. See [LICENSE](LICENSE).
