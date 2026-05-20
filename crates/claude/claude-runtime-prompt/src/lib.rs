@@ -2403,9 +2403,10 @@ fn runtime_plugin_output_styles(config: &RuntimeConfig) -> Vec<RuntimeOutputStyl
 }
 
 fn runtime_user_output_style_dirs(config: &RuntimeConfig) -> Vec<PathBuf> {
-    let mut dirs = Vec::new();
-    dirs.push(runtime_claude_config_home_dir().join("output-styles"));
-    dirs.push(config.paths.profile_dir.join("output-styles"));
+    let dirs = vec![
+        runtime_claude_config_home_dir().join("output-styles"),
+        config.paths.profile_dir.join("output-styles"),
+    ];
     dedup_paths(dirs)
 }
 

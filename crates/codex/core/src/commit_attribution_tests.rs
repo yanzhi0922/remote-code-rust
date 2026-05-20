@@ -19,10 +19,7 @@ fn default_attribution_disables_trailer_prompt() {
 
 #[test]
 fn resolve_value_handles_default_custom_and_blank() {
-    assert_eq!(
-        resolve_attribution_value(/*config_attribution*/ None),
-        None
-    );
+    assert_eq!(resolve_attribution_value(/*config_attribution*/ None), None);
     assert_eq!(
         resolve_attribution_value(Some("MyAgent <me@example.com>")),
         Some("MyAgent <me@example.com>".to_string())

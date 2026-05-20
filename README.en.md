@@ -47,7 +47,13 @@ npm test
 npm run build
 ```
 
-For release candidates, use the sliced gates documented in [docs/requirements.md](docs/requirements.md) and `scripts/verify-release.ps1`.
+For release candidates, use the sliced gates documented in [docs/requirements.md](docs/requirements.md), `scripts/verify-release.ps1`, and the redacted evidence template in [docs/release-acceptance-evidence.md](docs/release-acceptance-evidence.md).
+
+## Release Artifacts
+
+Tag-triggered releases (`v*`) build workspace tool archives, a relay-only Linux package, the Windows NSIS installer, Web/PWA assets, and `SHA256SUMS.txt`. The `cloud-relay.yml` workflow on `main` builds a relay package without the frontend; the full `release.yml` workflow includes Web/PWA assets.
+
+Do not publish a release solely because artifacts built successfully. Requirements 14/17 need a completed, redacted evidence report.
 
 ## Provider And MCP Validation
 
@@ -61,4 +67,6 @@ Read [SECURITY.md](SECURITY.md) before deploying or reporting a vulnerability. I
 
 ## License
 
-Public source, proprietary by default. See [LICENSE](LICENSE).
+Public source, proprietary by default. This is not OSI open source and does not grant redistribution, hosted SaaS, or commercial reuse rights without a separate written license. See [LICENSE](LICENSE).
+
+Third-party source mirrors and fixtures under `agents/` and `crates/codex/` retain their upstream notices.

@@ -2313,9 +2313,11 @@ fn parse_openai_response(status: u16, raw_text: String) -> Result<ProviderRespon
         .map(|tool_calls| {
             tool_calls
                 .iter()
-                .filter_map(parse_openai_tool_call)
-                .collect::<Vec<_>>()
+                .map(parse_openai_tool_call)
+                .collect::<Result<Vec<_>>>()
+                .map(|calls| calls.into_iter().flatten().collect::<Vec<_>>())
         })
+        .transpose()?
         .unwrap_or_default();
     let raw_assistant_text = coerce_text_content(choice.get("content")).trim().to_owned();
     let usage = payload.get("usage").cloned().unwrap_or_default();
@@ -2408,7 +2410,10 @@ fn parse_anthropic_response(status: u16, raw_text: String) -> Result<ProviderRes
         .join("\n");
     let tool_calls = blocks
         .iter()
-        .filter_map(parse_anthropic_tool_like_call)
+        .map(parse_anthropic_tool_like_call)
+        .collect::<Result<Vec<_>>>()?
+        .into_iter()
+        .flatten()
         .collect::<Vec<_>>();
     let thinking_text: String = blocks
         .iter()
@@ -2460,29 +2465,52 @@ fn parse_anthropic_response(status: u16, raw_text: String) -> Result<ProviderRes
     })
 }
 
-fn parse_openai_tool_call(value: &Value) -> Option<ToolCall> {
-    let function = value.get("function")?;
-    let id = value.get("id")?.as_str()?.to_owned();
-    let name = function.get("name")?.as_str()?.to_owned();
-    let input = function
-        .get("arguments")
+fn parse_openai_tool_call(value: &Value) -> Result<Option<ToolCall>> {
+    let Some(function) = value.get("function") else {
+        return Ok(None);
+    };
+    let Some(id) = value.get("id").and_then(Value::as_str) else {
+        return Ok(None);
+    };
+    let Some(name) = function.get("name").and_then(Value::as_str) else {
+        return Ok(None);
+    };
+    let input = match function.get("arguments").and_then(Value::as_str) {
+        Some(raw) if !raw.trim().is_empty() => serde_json::from_str(raw).with_context(|| {
+            format!("provider returned invalid JSON arguments for tool call `{name}`")
+        })?,
+        _ => json!({}),
+    };
+    Ok(Some(ToolCall {
+        id: id.to_owned(),
+        name: name.to_owned(),
+        input,
+    }))
+}
+
+fn parse_anthropic_tool_call(value: &Value) -> Result<ToolCall> {
+    let block_type = value
+        .get("type")
         .and_then(Value::as_str)
-        .and_then(|raw| serde_json::from_str(raw).ok())
-        .unwrap_or_else(|| json!({}));
-    Some(ToolCall { id, name, input })
-}
-
-fn parse_anthropic_tool_call(value: &Value) -> Option<ToolCall> {
-    let id = value.get("id")?.as_str()?.to_owned();
-    let name = value.get("name")?.as_str()?.to_owned();
+        .unwrap_or("tool_use");
+    let id = value
+        .get("id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("provider {block_type} block is missing string id"))?
+        .to_owned();
+    let name = value
+        .get("name")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("provider {block_type} block is missing string name"))?
+        .to_owned();
     let input = value.get("input").cloned().unwrap_or_else(|| json!({}));
-    Some(ToolCall { id, name, input })
+    Ok(ToolCall { id, name, input })
 }
 
-fn parse_anthropic_tool_like_call(value: &Value) -> Option<ToolCall> {
+fn parse_anthropic_tool_like_call(value: &Value) -> Result<Option<ToolCall>> {
     match value.get("type").and_then(Value::as_str) {
-        Some("tool_use") | Some("server_tool_use") => parse_anthropic_tool_call(value),
-        _ => None,
+        Some("tool_use") | Some("server_tool_use") => parse_anthropic_tool_call(value).map(Some),
+        _ => Ok(None),
     }
 }
 
@@ -2501,6 +2529,11 @@ fn coerce_text_content(content: Option<&Value>) -> String {
             })
             .collect::<Vec<_>>()
             .join("\n"),
+        Some(Value::Object(object)) => object
+            .get("text")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned)
+            .unwrap_or_default(),
         _ => String::new(),
     }
 }
@@ -3620,6 +3653,19 @@ mod tests {
     }
 
     #[test]
+    fn openai_response_parser_rejects_malformed_tool_arguments() {
+        let raw = r#"{"choices":[{"message":{"tool_calls":[{"id":"call-1","type":"function","function":{"name":"bash","arguments":"not json{"}}]}}]}"#;
+        let error = parse_openai_response(200, raw.to_owned())
+            .expect_err("malformed tool arguments must fail response parsing");
+        assert!(
+            error
+                .to_string()
+                .contains("invalid JSON arguments for tool call `bash`"),
+            "{error:#}"
+        );
+    }
+
+    #[test]
     fn openai_response_parser_captures_request_id() {
         let raw = r#"{"id":"chatcmpl-123","choices":[{"message":{"content":"hello"}}],"usage":{"prompt_tokens":1,"completion_tokens":2}}"#;
         let parsed =
@@ -3726,16 +3772,22 @@ mod tests {
     async fn provider_retries_retryable_status_then_succeeds() {
         async fn handler(
             State(attempts): State<Arc<AtomicUsize>>,
-        ) -> (axum::http::StatusCode, Json<serde_json::Value>) {
+        ) -> (
+            axum::http::StatusCode,
+            [(&'static str, &'static str); 1],
+            Json<serde_json::Value>,
+        ) {
             let attempt = attempts.fetch_add(1, Ordering::SeqCst);
             if attempt == 0 {
                 return (
                     axum::http::StatusCode::TOO_MANY_REQUESTS,
+                    [("connection", "close")],
                     Json(json!({"error": {"message": "slow down"}})),
                 );
             }
             (
                 axum::http::StatusCode::OK,
+                [("connection", "close")],
                 Json(json!({
                     "choices": [{"message": {"content": "retried ok"}}],
                     "usage": {"prompt_tokens": 3, "completion_tokens": 4}
@@ -3780,16 +3832,22 @@ mod tests {
     async fn provider_retries_529_then_succeeds() {
         async fn handler(
             State(attempts): State<Arc<AtomicUsize>>,
-        ) -> (axum::http::StatusCode, Json<serde_json::Value>) {
+        ) -> (
+            axum::http::StatusCode,
+            [(&'static str, &'static str); 1],
+            Json<serde_json::Value>,
+        ) {
             let attempt = attempts.fetch_add(1, Ordering::SeqCst);
             if attempt == 0 {
                 return (
                     axum::http::StatusCode::from_u16(529).expect("529 status"),
+                    [("connection", "close")],
                     Json(json!({"error": {"message": "overloaded"}})),
                 );
             }
             (
                 axum::http::StatusCode::OK,
+                [("connection", "close")],
                 Json(json!({
                     "choices": [{"message": {"content": "retried 529 ok"}}],
                     "usage": {"prompt_tokens": 3, "completion_tokens": 4}
@@ -3871,7 +3929,13 @@ mod tests {
             .expect_err("request should fail");
 
         server.abort();
-        assert!(error.to_string().contains("401"));
+        let provider_error = super::extract_provider_error(&error)
+            .unwrap_or_else(|| panic!("provider error missing from chain: {error:#}"));
+        assert_eq!(provider_error.status_code, Some(401));
+        assert_eq!(
+            provider_error.category,
+            super::ErrorCategory::Authentication
+        );
         assert_eq!(attempts.load(Ordering::SeqCst), 1);
     }
 

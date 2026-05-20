@@ -42,6 +42,7 @@ const mockRuntime = vi.hoisted(() => ({
   clearRemoteActiveSessionId: vi.fn(),
   clearRemoteAccessToken: vi.fn(),
   clearRemotePairingContext: vi.fn(),
+  deriveUserKey: vi.fn(() => Promise.resolve('derived-user-key')),
   hydrateRemoteAuthTokensFromSecureStore: vi.fn(() => Promise.resolve(null)),
   persistRemoteActiveSessionId: vi.fn(),
   persistRemoteAccessToken: vi.fn(),

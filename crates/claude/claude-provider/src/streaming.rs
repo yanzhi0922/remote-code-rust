@@ -556,9 +556,7 @@ impl ProviderClient {
             .filter_map(|(_, acc)| {
                 let id = acc.id?;
                 let name = acc.name?;
-                let input = serde_json::from_str(&acc.arguments)
-                    .ok()
-                    .unwrap_or_else(|| json!({}));
+                let input = parse_streamed_tool_input(&acc.arguments);
                 Some(ToolCall { id, name, input })
             })
             .collect::<Vec<_>>();
@@ -1926,13 +1924,7 @@ fn finalize_anthropic_content_blocks(
                 if acc.id.is_empty() || acc.name.is_empty() {
                     continue;
                 }
-                let input = if acc.partial_json.is_empty() {
-                    json!({})
-                } else {
-                    serde_json::from_str::<Value>(&acc.partial_json)
-                        .ok()
-                        .unwrap_or_else(|| json!({}))
-                };
+                let input = parse_streamed_tool_input(&acc.partial_json);
                 tool_calls.push(ToolCall {
                     id: acc.id.clone(),
                     name: acc.name.clone(),
@@ -1978,13 +1970,7 @@ fn finalize_anthropic_content_blocks(
                 if id.is_empty() || name.is_empty() {
                     continue;
                 }
-                let input = if partial_json.is_empty() {
-                    json!({})
-                } else {
-                    serde_json::from_str::<Value>(&partial_json)
-                        .ok()
-                        .unwrap_or_else(|| json!({}))
-                };
+                let input = parse_streamed_tool_input(&partial_json);
                 tool_calls.push(ToolCall {
                     id: id.clone(),
                     name: name.clone(),
@@ -2022,6 +2008,20 @@ fn finalize_anthropic_content_blocks(
     };
 
     (raw_text, thinking_text, content_blocks, tool_calls)
+}
+
+fn parse_streamed_tool_input(raw: &str) -> Value {
+    if raw.trim().is_empty() {
+        return json!({});
+    }
+
+    serde_json::from_str::<Value>(raw).unwrap_or_else(|error| {
+        json!({
+            "_remote_code_error": "malformed_tool_input_json",
+            "message": error.to_string(),
+            "raw": raw,
+        })
+    })
 }
 
 #[cfg(test)]
@@ -3130,7 +3130,7 @@ mod tests {
     }
 
     #[test]
-    fn finalize_tool_use_block_invalid_json_defaults_to_empty_object() {
+    fn finalize_tool_use_block_invalid_json_is_preserved_as_error_payload() {
         let mut accumulators = BTreeMap::new();
         accumulators.insert(
             0,
@@ -3145,7 +3145,11 @@ mod tests {
         let (_, _, _, tool_calls) = finalize_anthropic_content_blocks(accumulators);
 
         assert_eq!(tool_calls.len(), 1);
-        assert_eq!(tool_calls[0].input, json!({}));
+        assert_eq!(
+            tool_calls[0].input["_remote_code_error"],
+            "malformed_tool_input_json"
+        );
+        assert_eq!(tool_calls[0].input["raw"], "not valid json{");
     }
 
     #[test]

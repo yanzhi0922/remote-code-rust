@@ -246,6 +246,7 @@ Do not publish a release solely because artifacts built successfully. A public r
 
 - [Requirements](docs/requirements.md): release baseline and acceptance criteria.
 - [Release acceptance evidence](docs/release-acceptance-evidence.md): redacted evidence template for requirements 14/17.
+- [Latest validation snapshot](docs/release-validation-2026-05-20.md): most recent local gate and provider/MCP evidence summary.
 - [Architecture](ARCHITECTURE.md): system topology and module boundaries.
 - [Compatibility](COMPATIBILITY.md): compatibility notes.
 - [Roadmap](ROADMAP.md): planned work and phase history.

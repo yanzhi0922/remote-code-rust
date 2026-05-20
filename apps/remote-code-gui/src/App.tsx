@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { lazy, Suspense, useState, useEffect, useCallback } from 'react';
 import { LockKeyhole, TriangleAlert } from 'lucide-react';
 import { Layout } from './components/layout/Layout';
 import { PermissionModal } from './components/layout/PermissionModal';
@@ -19,9 +19,10 @@ import {
   hapticError,
   hapticWarning,
 } from './lib/mobile';
-import RemoteApp from './remote/RemoteApp';
-import MobileRemoteApp from './remote/MobileRemoteApp';
 import { useAppStore } from './stores/useAppStore';
+
+const RemoteApp = lazy(() => import('./remote/RemoteApp'));
+const MobileRemoteApp = lazy(() => import('./remote/MobileRemoteApp'));
 
 type MobileInitPhase = 'loading' | 'biometric' | 'ready' | 'error';
 
@@ -34,6 +35,17 @@ function MobileInitScreen() {
           <div role="status" className="h-5 w-5 rounded-full border-2 border-rc-border-primary border-t-rc-text-primary animate-spin" />
           <span className="text-sm font-medium">正在初始化...</span>
         </div>
+      </div>
+    </div>
+  );
+}
+
+function RemoteLazyFallback() {
+  return (
+    <div className="flex h-screen w-screen items-center justify-center bg-rc-bg-base">
+      <div className="flex items-center gap-3 text-rc-text-secondary">
+        <div role="status" className="h-5 w-5 animate-spin rounded-full border-2 border-rc-border-primary border-t-rc-text-primary" />
+        <span className="text-sm font-medium">正在加载 Remote Code...</span>
       </div>
     </div>
   );
@@ -201,14 +213,18 @@ function App() {
       return (
         <AppErrorBoundary>
           <MobileGate>
-            <MobileRemoteApp />
+            <Suspense fallback={<MobileInitScreen />}>
+              <MobileRemoteApp />
+            </Suspense>
           </MobileGate>
         </AppErrorBoundary>
       );
     }
     return (
       <AppErrorBoundary>
-        <RemoteApp />
+        <Suspense fallback={<RemoteLazyFallback />}>
+          <RemoteApp />
+        </Suspense>
       </AppErrorBoundary>
     );
   }

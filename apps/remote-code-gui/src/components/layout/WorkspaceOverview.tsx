@@ -1,6 +1,5 @@
 import {
   Activity,
-  Bot,
   Cpu,
   Database,
   FolderPlus,
@@ -23,6 +22,7 @@ import type { AgentType } from '../../lib/types';
 import { truncateMiddle } from '../../lib/utils';
 import { useAgentStore } from '../../stores/useAgentStore';
 import { useAppStore } from '../../stores/useAppStore';
+import { BrandMark } from '../brand/BrandMark';
 
 function formatPercent(value: number | null): string {
   if (value === null) return '—';
@@ -174,8 +174,8 @@ export function WorkspaceOverview() {
         <div className="mb-3 flex flex-wrap items-start justify-between gap-4">
           <div className="min-w-0">
             <div className="flex items-center gap-3">
-              <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-[linear-gradient(135deg,#2563eb_0%,#0891b2_100%)] text-white shadow-[0_12px_24px_rgba(37,99,235,0.22)]">
-                <Bot size={20} />
+              <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-[#111827] shadow-[0_12px_24px_rgba(37,99,235,0.22)]">
+                <BrandMark className="h-7 w-7" />
               </div>
               <div className="min-w-0">
                 <div className="flex min-w-0 items-center gap-2">

@@ -171,7 +171,9 @@ pub(crate) fn handle_session_file_access_post_tool(
 
 #[cfg(test)]
 mod tests {
+    use std::ffi::OsString;
     use std::fs;
+    use std::sync::{Mutex, MutexGuard, OnceLock};
 
     use claude_config::{ProviderOverrides, RuntimeOverrides, load_runtime_config};
     use claude_core::ToolCall;
@@ -181,16 +183,41 @@ mod tests {
 
     use super::handle_session_file_access_post_tool;
 
+    struct TestEnv {
+        _env_guard: MutexGuard<'static, ()>,
+        previous_claude_config_dir: Option<OsString>,
+    }
+
+    impl Drop for TestEnv {
+        fn drop(&mut self) {
+            match &self.previous_claude_config_dir {
+                Some(value) => unsafe { std::env::set_var("CLAUDE_CONFIG_DIR", value) },
+                None => unsafe { std::env::remove_var("CLAUDE_CONFIG_DIR") },
+            }
+        }
+    }
+
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
     fn config_and_store() -> (
         tempfile::TempDir,
         claude_config::RuntimeConfig,
         SessionStore,
+        TestEnv,
     ) {
+        let env_guard = env_lock().lock().expect("env lock");
         let temp = tempdir().expect("tempdir");
         let cwd = temp.path().join("cwd");
         let profile = temp.path().join("profile");
         fs::create_dir_all(&cwd).expect("cwd");
         fs::create_dir_all(&profile).expect("profile");
+        let previous_claude_config_dir = std::env::var_os("CLAUDE_CONFIG_DIR");
+        // These tests exercise runtime helpers that intentionally read
+        // Claude's global config dir. Keep the global lookup isolated.
+        unsafe { std::env::set_var("CLAUDE_CONFIG_DIR", &profile) };
         let config = load_runtime_config(
             Some(cwd),
             Some(profile),
@@ -211,12 +238,16 @@ mod tests {
         store
             .ensure_session(config.session_id, &config.cwd, "mock", None, None)
             .expect("ensure session");
-        (temp, config, store)
+        let env = TestEnv {
+            _env_guard: env_guard,
+            previous_claude_config_dir,
+        };
+        (temp, config, store, env)
     }
 
     #[test]
     fn records_session_memory_access_for_read_file() {
-        let (_temp, config, store) = config_and_store();
+        let (_temp, config, store, _env) = config_and_store();
         let session_memory_path = claude_runtime_prompt::claude_config_home()
             .join("projects")
             .join("repo")
@@ -257,7 +288,7 @@ mod tests {
 
     #[test]
     fn records_session_transcript_access_for_projects_jsonl() {
-        let (_temp, config, store) = config_and_store();
+        let (_temp, config, store, _env) = config_and_store();
         let transcript_path = claude_runtime_prompt::claude_config_home()
             .join("projects")
             .join("repo")
@@ -296,7 +327,7 @@ mod tests {
 
     #[test]
     fn records_auto_and_team_memory_access_and_scope() {
-        let (_temp, config, store) = config_and_store();
+        let (_temp, config, store, _env) = config_and_store();
         let features = RuntimePromptSettings::from_config(&config).memory_prompt_features;
         let Some(auto_dir) = claude_runtime_prompt::auto_memory_entrypoint(&config)
             .expect("auto memory")

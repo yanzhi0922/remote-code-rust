@@ -50,6 +50,7 @@ node_modules/
 .playwright-cli/
 .research/
 output/
+.release-evidence/
 
 # Claude Code session files
 .claude/scheduled_tasks.lock

@@ -2,6 +2,8 @@ param(
     [switch]$IncludeDesktopBundle,
     [switch]$IncludeAndroid,
     [switch]$IncludeAudit,
+    [switch]$IncludeGitleaks,
+    [switch]$IncludeWorkspaceTests,
     [switch]$SkipFrontend,
     [switch]$SkipRust,
     [switch]$UseProxy,
@@ -10,7 +12,8 @@ param(
 
 $ErrorActionPreference = "Stop"
 $RepoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
-Set-Location $RepoRoot
+$RepoRootPath = $RepoRoot.Path
+Set-Location $RepoRootPath
 
 if ($UseProxy) {
     $env:HTTP_PROXY = $ProxyUrl
@@ -21,71 +24,106 @@ if ($UseProxy) {
 function Run-Step([string]$Name, [scriptblock]$Command) {
     Write-Host ""
     Write-Host "=== $Name ==="
+    $global:LASTEXITCODE = 0
     & $Command
+    if ($global:LASTEXITCODE -ne 0) {
+        throw "$Name failed with exit code $global:LASTEXITCODE"
+    }
+}
+
+function Set-EnvDefault([string]$Name, [string]$Value) {
+    if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($Name))) {
+        [Environment]::SetEnvironmentVariable($Name, $Value, "Process")
+    }
+}
+
+function Invoke-CargoSlice([string]$Kind, [string]$Slice) {
+    python (Join-Path $RepoRootPath "scripts\cargo_workspace_slice.py") $Kind $Slice
+}
+
+function Invoke-Gitleaks {
+    $gitleaks = Get-Command gitleaks -ErrorAction SilentlyContinue
+    if ($null -ne $gitleaks) {
+        & $gitleaks.Source detect --source $RepoRootPath --redact
+        return
+    }
+
+    $docker = Get-Command docker -ErrorAction SilentlyContinue
+    if ($null -ne $docker) {
+        docker run --rm -v "${RepoRootPath}:/repo" zricethezav/gitleaks:latest detect --source /repo --redact
+        return
+    }
+
+    throw "gitleaks is not installed and Docker is unavailable for the fallback scanner"
 }
 
 Run-Step "Git whitespace" { git diff --check }
 
 if (-not $SkipRust) {
-    $previousRustMinStack = $env:RUST_MIN_STACK
-    $previousRustTestThreads = $env:RUST_TEST_THREADS
-    $env:RUST_MIN_STACK = "16777216"
-    $env:RUST_TEST_THREADS = "1"
+    $savedEnv = @{}
+    foreach ($name in @(
+        "RUST_MIN_STACK",
+        "RUST_TEST_THREADS",
+        "CARGO_BUILD_JOBS",
+        "CARGO_TEST_JOBS",
+        "CARGO_INCREMENTAL",
+        "CARGO_PROFILE_TEST_DEBUG",
+        "CARGO_PROFILE_DEV_DEBUG",
+        "CARGO_PROFILE_RELEASE_DEBUG"
+    )) {
+        $savedEnv[$name] = [Environment]::GetEnvironmentVariable($name)
+    }
+
+    Set-EnvDefault "RUST_MIN_STACK" "16777216"
+    Set-EnvDefault "RUST_TEST_THREADS" "1"
+    Set-EnvDefault "CARGO_BUILD_JOBS" "1"
+    Set-EnvDefault "CARGO_TEST_JOBS" "1"
+    Set-EnvDefault "CARGO_INCREMENTAL" "0"
+    Set-EnvDefault "CARGO_PROFILE_TEST_DEBUG" "0"
+    Set-EnvDefault "CARGO_PROFILE_DEV_DEBUG" "0"
+    Set-EnvDefault "CARGO_PROFILE_RELEASE_DEBUG" "0"
+
     try {
-    Run-Step "Rust format" { cargo fmt --all -- --check }
-    Run-Step "Control plane check" { cargo check -p remote-code-control-plane --all-targets }
-    Run-Step "Runner check" { cargo check -p remote-code-runner --all-targets }
-    Run-Step "GUI Rust check" { cargo check -p remote-code-gui --all-targets }
-    Run-Step "Roo CLI check" { cargo check -p roo-cli --bin roo --tests -j 1 }
-    Run-Step "Roo task/server/adapter check" { cargo check -p roo-task -p roo-server -p rc-roo-adapter --all-targets -j 1 }
-    Run-Step "Roo provider check" { cargo check -p roo-provider-minimax -p roo-provider-openai -p roo-provider-fake-ai --all-targets -j 1 }
-    Run-Step "Roo CLI smoke/stress" { & (Join-Path $RepoRoot "scripts\roo-cli-stress.ps1") -BuildIfMissing }
-    Run-Step "Roo focused tests" {
-        $previousTestDebug = $env:CARGO_PROFILE_TEST_DEBUG
-        try {
-            $env:CARGO_PROFILE_TEST_DEBUG = "0"
-            cargo test -p roo-cli --all-targets -j 1
-            cargo test -p roo-prompt --all-targets -j 1
-            cargo test -p roo-provider-minimax --all-targets -j 1
-            cargo test -p roo-provider-openai --all-targets -j 1
-            cargo test -p roo-provider-fake-ai --all-targets -j 1
-            cargo test -p roo-task --lib -j 1 message_builder
+        Run-Step "Rust format" { cargo fmt --all -- --check }
+        foreach ($slice in @("claude", "codex", "roo", "apps-shared")) {
+            Run-Step "Cargo check slice: $slice" { Invoke-CargoSlice "check" $slice }
         }
-        finally {
-            if ($null -eq $previousTestDebug) {
-                Remove-Item Env:\CARGO_PROFILE_TEST_DEBUG -ErrorAction SilentlyContinue
-            } else {
-                $env:CARGO_PROFILE_TEST_DEBUG = $previousTestDebug
+        foreach ($slice in @("claude", "codex", "roo", "apps-shared")) {
+            Run-Step "Cargo clippy slice: $slice" { Invoke-CargoSlice "clippy" $slice }
+        }
+        if ($IncludeWorkspaceTests) {
+            foreach ($slice in @("claude", "codex", "roo", "apps-shared")) {
+                Run-Step "Cargo test slice: $slice" { Invoke-CargoSlice "test" $slice }
             }
         }
-    }
-    Run-Step "Rust clippy" { cargo clippy --workspace --all-targets --exclude remote-code-gui -j 1 -- -D warnings }
-    if ($IncludeAudit) {
-        Run-Step "Rust audit" { cargo audit --quiet --no-fetch }
-    }
+        if ($IncludeAudit) {
+            Run-Step "Rust audit" { cargo audit --quiet }
+        }
     }
     finally {
-        if ($null -eq $previousRustMinStack) {
-            Remove-Item Env:\RUST_MIN_STACK -ErrorAction SilentlyContinue
-        } else {
-            $env:RUST_MIN_STACK = $previousRustMinStack
-        }
-        if ($null -eq $previousRustTestThreads) {
-            Remove-Item Env:\RUST_TEST_THREADS -ErrorAction SilentlyContinue
-        } else {
-            $env:RUST_TEST_THREADS = $previousRustTestThreads
+        foreach ($entry in $savedEnv.GetEnumerator()) {
+            if ($null -eq $entry.Value) {
+                [Environment]::SetEnvironmentVariable($entry.Key, $null, "Process")
+            } else {
+                [Environment]::SetEnvironmentVariable($entry.Key, $entry.Value, "Process")
+            }
         }
     }
 }
 
+if ($IncludeGitleaks) {
+    Run-Step "Gitleaks secret scan" { Invoke-Gitleaks }
+}
+
 if (-not $SkipFrontend) {
-    Push-Location (Join-Path $RepoRoot "apps\remote-code-gui")
+    Push-Location (Join-Path $RepoRootPath "apps\remote-code-gui")
     try {
-        Run-Step "GUI npm build" { npm run build }
-        Run-Step "GUI npm test" { npm test }
+        Run-Step "GUI npm ci" { npm ci --registry=https://registry.npmjs.org/ }
         if ($IncludeAudit) {
-            Run-Step "GUI npm audit" { npm audit --registry=https://registry.npmjs.org --audit-level=moderate }
+            Run-Step "GUI npm audit" { npm audit --registry=https://registry.npmjs.org/ --audit-level=moderate }
         }
+        Run-Step "GUI npm test" { npm test }
+        Run-Step "GUI npm build" { npm run build }
         if ($IncludeDesktopBundle) {
             Run-Step "Windows desktop bundle" { npm run desktop:build }
         }

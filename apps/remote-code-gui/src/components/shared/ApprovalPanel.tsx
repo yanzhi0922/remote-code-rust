@@ -63,9 +63,9 @@ export function ApprovalPanel({
   privacyMode = false,
 }: ApprovalPanelProps) {
   return (
-    <section className="rounded-[24px] border border-[#e0d6c6] bg-white px-4 py-4 shadow-[0_12px_30px_rgba(34,32,28,0.06)]">
+    <section className="rounded-3xl border border-rc-border-primary bg-rc-bg-surface px-4 py-4 shadow-[0_12px_30px_rgba(34,32,28,0.06)]">
       {!hideTitle && (
-        <div className="flex items-center gap-2 text-sm font-semibold text-slate-900">
+        <div className="flex items-center gap-2 text-sm font-semibold text-rc-text-primary">
           {icon}
           {title}
         </div>
@@ -77,14 +77,14 @@ export function ApprovalPanel({
           items.map((approval) => (
             <div
               key={approval.approval_id}
-              className="rounded-2xl border border-[#ebe2d5] bg-[#faf7f1] px-3 py-3"
+              className="rounded-2xl border border-rc-border-primary bg-rc-bg-hover px-3 py-3"
             >
-              <div className="text-sm font-medium text-slate-900">{approval.title}</div>
-              <div className="mt-1 text-sm leading-6 text-slate-600">
+              <div className="text-sm font-medium text-rc-text-primary">{approval.title}</div>
+              <div className="mt-1 text-sm leading-6 text-rc-text-secondary">
                 {approval.description}
               </div>
               {approval.metadata.blocked_path && (
-                <div className="mt-2 rounded-xl bg-white px-3 py-2 font-mono text-xs text-slate-500">
+                <div className="mt-2 rounded-xl bg-rc-bg-surface px-3 py-2 font-mono text-xs text-rc-text-tertiary">
                   {formatSensitivePath(approval.metadata.blocked_path, privacyMode, 56)}
                 </div>
               )}
@@ -120,5 +120,5 @@ export function ApprovalPanel({
 
 /** 面板内空状态提示 */
 export function PanelHint({ children }: { children: ReactNode }) {
-  return <div className="text-sm text-slate-400">{children}</div>;
+  return <div className="text-sm text-rc-text-tertiary">{children}</div>;
 }

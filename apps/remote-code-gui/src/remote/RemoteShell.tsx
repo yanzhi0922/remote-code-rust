@@ -23,6 +23,7 @@ import {
   X,
 } from 'lucide-react';
 import type { ReactNode } from 'react';
+import { BrandMark } from '../components/brand/BrandMark';
 import { cn, truncateMiddle } from '../lib/utils';
 import {
   formatRemoteRelativeTime,
@@ -103,22 +104,27 @@ export function RemoteShell({
         {/* ── Session sidebar ── */}
         <aside
           className={cn(
-            'fixed inset-y-0 left-0 z-40 w-[320px] transform border-r border-[#e5ddcf] bg-[#f5efe4] transition-transform lg:static lg:z-0 lg:translate-x-0',
+            'fixed inset-y-0 left-0 z-40 w-[320px] transform border-r border-rc-border-primary bg-rc-bg-secondary transition-transform lg:static lg:z-0 lg:translate-x-0',
             sidebarOpen ? 'translate-x-0' : '-translate-x-full',
           )}
         >
-          <div className="border-b border-[#e5ddcf] px-5 py-5">
-            <div className="text-[11px] font-semibold uppercase tracking-[0.28em] text-slate-400">
+          <div className="border-b border-rc-border-primary px-5 py-5">
+            <div className="text-[11px] font-semibold uppercase tracking-[0.28em] text-rc-text-tertiary">
               {copy.remoteShellEyebrow}
             </div>
-            <div className="mt-2 text-2xl font-semibold text-slate-900">remote-code</div>
-            <div className="mt-3 text-sm leading-6 text-slate-500">
+            <div className="mt-3 flex items-center gap-3">
+              <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-[#111827] shadow-[0_10px_22px_rgba(23,24,26,0.18)]">
+                <BrandMark className="h-7 w-7" />
+              </div>
+              <div className="text-2xl font-semibold text-rc-text-primary">Remote Code</div>
+            </div>
+            <div className="mt-3 text-sm leading-6 text-rc-text-tertiary">
               {copy.remoteShellDescription}
             </div>
             <button
               type="button"
               onClick={onRefreshSessions}
-              className="mt-4 inline-flex items-center gap-2 rounded-full border border-[#ddd4c5] bg-white px-3 py-1.5 text-sm text-slate-700 transition-colors hover:bg-[#faf6ef]"
+              className="mt-4 inline-flex items-center gap-2 rounded-full border border-rc-border-primary bg-rc-bg-surface px-3 py-1.5 text-sm text-rc-text-secondary transition-colors hover:bg-rc-bg-hover"
             >
               <RotateCcw size={14} />
               {copy.refreshSessions}
@@ -127,7 +133,7 @@ export function RemoteShell({
 
           <div className="h-[calc(100vh-181px)] overflow-y-auto px-3 py-4">
             {sessionsLoading ? (
-              <div role="status" className="flex items-center gap-2 rounded-2xl bg-white/80 px-4 py-3 text-sm text-slate-500">
+              <div role="status" className="flex items-center gap-2 rounded-2xl bg-rc-bg-surface/80 px-4 py-3 text-sm text-rc-text-tertiary">
                 <LoaderCircle size={16} className="animate-spin" />
                 {copy.loadingRemoteSessions}
               </div>
@@ -146,29 +152,29 @@ export function RemoteShell({
                       type="button"
                       onClick={() => onSelectSession(session.session_id)}
                       className={cn(
-                        'w-full rounded-[22px] border px-4 py-3 text-left transition-colors',
+                        'w-full rounded-2xl border px-4 py-3 text-left transition-colors',
                         selected
-                          ? 'border-[#d7cdbe] bg-white shadow-[0_12px_28px_rgba(34,32,28,0.08)]'
-                          : 'border-transparent bg-white/60 hover:bg-white',
+                          ? 'border-[#d7cdbe] bg-rc-bg-surface shadow-[0_12px_28px_rgba(34,32,28,0.08)]'
+                          : 'border-transparent bg-rc-bg-surface/60 hover:bg-rc-bg-surface',
                       )}
                     >
                       <div className="flex items-start justify-between gap-3">
                         <div className="min-w-0">
-                          <div className="truncate text-sm font-semibold text-slate-900">
+                          <div className="truncate text-sm font-semibold text-rc-text-primary">
                             {resolveRemoteSessionTitle(session)}
                           </div>
-                          <div className="mt-1 text-xs text-slate-500">
+                          <div className="mt-1 text-xs text-rc-text-tertiary">
                             {truncateMiddle(session.workspace_id, 48)}
                           </div>
                         </div>
                         <StatePill copy={copy} state={session.state} />
                       </div>
-                      <div className="mt-3 flex items-center gap-2 text-[11px] text-slate-500">
+                      <div className="mt-3 flex items-center gap-2 text-[11px] text-rc-text-tertiary">
                         <span>{formatRelativeTime(session.updated_at, locale, copy)}</span>
                         {session.metadata.agent_type && (
                           <>
                             <span>•</span>
-                            <span className="rounded bg-slate-200 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wider text-slate-600">
+                            <span className="rounded bg-slate-200 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wider text-rc-text-secondary">
                               {session.metadata.agent_type}
                             </span>
                           </>
@@ -191,22 +197,22 @@ export function RemoteShell({
 
         {/* ── Main content area ── */}
         <div className="flex min-h-screen min-w-0 flex-1 flex-col">
-          <header className="border-b border-[#e5ddcf] bg-white/90 px-4 py-3 backdrop-blur sm:px-6 sm:py-4">
+          <header className="border-b border-rc-border-primary bg-rc-bg-surface/90 px-4 py-3 backdrop-blur sm:px-6 sm:py-4">
             <div className="flex items-center justify-between gap-3">
               <div className="flex min-w-0 items-center gap-3">
                 <button
                   type="button"
                   aria-label={copy.openSessionDrawer}
-                  className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-[#ddd4c5] bg-[#faf6ef] text-slate-700 lg:hidden"
+                  className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-rc-border-primary bg-rc-bg-hover text-rc-text-secondary lg:hidden"
                   onClick={() => onToggleSidebar(true)}
                 >
                   <Menu size={18} />
                 </button>
                 <div className="min-w-0">
-                  <div className="truncate text-base font-semibold text-slate-900 sm:text-lg">
+                  <div className="truncate text-base font-semibold text-rc-text-primary sm:text-lg">
                     {activeSession ? resolveRemoteSessionTitle(activeSession) : copy.selectRemoteSession}
                   </div>
-                  <div className="mt-0.5 hidden items-center gap-2 text-sm text-slate-500 sm:flex">
+                  <div className="mt-0.5 hidden items-center gap-2 text-sm text-rc-text-tertiary sm:flex">
                     <span>{truncateMiddle(baseUrl, 48)}</span>
                     {activeSession && (
                       <>
@@ -220,7 +226,7 @@ export function RemoteShell({
 
               <div className="flex shrink-0 items-center gap-2">
                 {transportStrategy && (
-                  <span className="hidden items-center gap-1.5 rounded-full border border-[#e5ddcf] bg-white/80 px-2.5 py-1 text-[11px] font-medium text-slate-500 sm:inline-flex">
+                  <span className="hidden items-center gap-1.5 rounded-full border border-rc-border-primary bg-rc-bg-surface/80 px-2.5 py-1 text-[11px] font-medium text-rc-text-tertiary sm:inline-flex">
                     <span>{strategyLabel(copy, transportStrategy)}</span>
                     {transportLatencyMs != null && (
                       <>
@@ -234,7 +240,7 @@ export function RemoteShell({
                   type="button"
                   onClick={onSignOut}
                   title={copy.signOutAction}
-                  className="inline-flex h-9 w-9 items-center justify-center rounded-2xl border border-[#ddd4c5] bg-white text-slate-500 transition-colors hover:bg-[#faf6ef] hover:text-slate-700"
+                  className="inline-flex h-9 w-9 items-center justify-center rounded-2xl border border-rc-border-primary bg-rc-bg-surface text-rc-text-tertiary transition-colors hover:bg-rc-bg-hover hover:text-rc-text-secondary"
                 >
                   <LogOut size={16} />
                 </button>
@@ -269,7 +275,7 @@ export function RemoteShell({
 
 function RemoteFrame({ children }: { children: ReactNode }) {
   return (
-    <div className="min-h-screen bg-[radial-gradient(circle_at_top_left,#fbf6ec,transparent_28%),linear-gradient(180deg,#f4efe4_0%,#efe8db_100%)] text-slate-900">
+    <div className="min-h-screen bg-rc-bg-base text-rc-text-primary">
       {children}
     </div>
   );
@@ -294,9 +300,9 @@ export function EmptyCard({
   description: string;
 }) {
   return (
-    <div className="max-w-md rounded-[28px] border border-[#e1d7c8] bg-white px-6 py-6 text-center shadow-[0_16px_38px_rgba(34,32,28,0.08)]">
-      <div className="text-lg font-semibold text-slate-900">{title}</div>
-      <div className="mt-3 text-sm leading-6 text-slate-500">{description}</div>
+    <div className="max-w-md rounded-3xl border border-rc-border-primary bg-rc-bg-surface px-6 py-6 text-center shadow-[0_16px_38px_rgba(34,32,28,0.08)]">
+      <div className="text-lg font-semibold text-rc-text-primary">{title}</div>
+      <div className="mt-3 text-sm leading-6 text-rc-text-tertiary">{description}</div>
     </div>
   );
 }
@@ -359,9 +365,9 @@ function sessionStateClassName(state: RemoteSessionState): string {
     case 'failed':
       return 'border-[#f0d2ce] bg-[#fff3f1] text-[#9b3b32]';
     case 'cancelled':
-      return 'border-[#e5ddd4] bg-[#f6f1eb] text-slate-600';
+      return 'border-rc-border-primary bg-[#f6f1eb] text-rc-text-secondary';
     default:
-      return 'border-[#e5ddd4] bg-[#f6f1eb] text-slate-600';
+      return 'border-rc-border-primary bg-[#f6f1eb] text-rc-text-secondary';
   }
 }
 
@@ -375,7 +381,7 @@ function connectionClassName(state: RemoteConnectionState): string {
     case 'reconnecting':
       return 'border-[#ead9b7] bg-[#fbf3df] text-[#7c5d12]';
     default:
-      return 'border-[#e5ddd4] bg-[#f6f1eb] text-slate-600';
+      return 'border-rc-border-primary bg-[#f6f1eb] text-rc-text-secondary';
   }
 }
 

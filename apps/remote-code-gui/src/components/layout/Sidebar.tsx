@@ -1,6 +1,5 @@
 import {
   Archive,
-  Bot,
   ChevronRight,
   Folder,
   FolderOpen,
@@ -15,6 +14,7 @@ import type { ConversationEntry, SessionSubtask, SessionSummary, ToolCallInfo } 
 import { cn, normalizePathKey, truncateMiddle } from '../../lib/utils';
 import { useAppStore } from '../../stores/useAppStore';
 import { useAgentStore } from '../../stores/useAgentStore';
+import { BrandMark } from '../brand/BrandMark';
 
 type SessionTaskStatus = 'pending' | 'running' | 'completed' | 'failed' | 'stopped';
 
@@ -412,8 +412,8 @@ export function Sidebar() {
         {/* Header */}
         <div className="border-b border-rc-border-primary/80 px-5 py-4">
           <div className="flex items-center gap-2.5">
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-[linear-gradient(135deg,#2563eb_0%,#0891b2_100%)] text-white shadow-sm">
-              <Bot size={17} />
+            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-[#111827] shadow-sm">
+              <BrandMark className="h-6 w-6" />
             </div>
             <div>
               <div className="text-sm font-semibold text-rc-text-primary">Remote Code</div>

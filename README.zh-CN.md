@@ -47,7 +47,13 @@ npm test
 npm run build
 ```
 
-候选发布版本必须执行 [docs/requirements.md](docs/requirements.md) 中的分片门禁和 `scripts/verify-release.ps1`。
+候选发布版本必须执行 [docs/requirements.md](docs/requirements.md) 中的分片门禁、`scripts/verify-release.ps1`，并填写 [docs/release-acceptance-evidence.md](docs/release-acceptance-evidence.md) 的脱敏证据。
+
+## 发布产物
+
+`v*` tag 触发的正式 release 会构建 workspace 工具归档、relay-only Linux 包、Windows NSIS 安装包、Web/PWA 产物和 `SHA256SUMS.txt`。`main` 上的 `cloud-relay.yml` 只构建不带前端的 relay 包；完整 `release.yml` 会包含 Web/PWA 产物。
+
+构建成功不等于可以发布。requirements 14/17 必须有完整、脱敏、可复核的验收报告。
 
 ## Provider 与 MCP 验收
 
@@ -61,4 +67,6 @@ npm run build
 
 ## 许可
 
-本仓库是 public source，默认不是开源授权。见 [LICENSE](LICENSE)。
+本仓库是 public source，默认不是 OSI 开源授权，也不授予再分发、托管 SaaS 或商业复用权利，除非另有书面许可。见 [LICENSE](LICENSE)。
+
+`agents/` 和 `crates/codex/` 下的第三方源码镜像和测试 fixtures 保留其上游 notice，更新时不得删除来源说明。

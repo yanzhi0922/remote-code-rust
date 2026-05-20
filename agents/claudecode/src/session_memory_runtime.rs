@@ -577,14 +577,40 @@ mod tests {
     use claude_provider::context::ContextWindowManager;
     use claude_session::session_memory::ensure_session_memory_file;
     use serde_json::json;
+    use std::ffi::OsString;
+    use std::sync::{Mutex, MutexGuard, OnceLock};
     use tempfile::{TempDir, tempdir};
 
-    fn test_runtime() -> (TempDir, RuntimeConfig) {
+    struct TestEnv {
+        _env_guard: MutexGuard<'static, ()>,
+        previous_claude_config_dir: Option<OsString>,
+    }
+
+    impl Drop for TestEnv {
+        fn drop(&mut self) {
+            match &self.previous_claude_config_dir {
+                Some(value) => unsafe { std::env::set_var("CLAUDE_CONFIG_DIR", value) },
+                None => unsafe { std::env::remove_var("CLAUDE_CONFIG_DIR") },
+            }
+        }
+    }
+
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    fn test_runtime() -> (TempDir, RuntimeConfig, TestEnv) {
+        let env_guard = env_lock().lock().expect("env lock");
         let tempdir = tempdir().expect("tempdir");
         let cwd = tempdir.path().join("workspace");
         let profile = tempdir.path().join(".remote-code-rust");
         std::fs::create_dir_all(&cwd).expect("cwd");
         std::fs::create_dir_all(&profile).expect("profile");
+        let previous_claude_config_dir = std::env::var_os("CLAUDE_CONFIG_DIR");
+        // Session memory intentionally uses Claude's global config dir.
+        // Scope tests to the temp profile so they never touch user state.
+        unsafe { std::env::set_var("CLAUDE_CONFIG_DIR", &profile) };
 
         let config = load_runtime_config(
             Some(cwd),
@@ -608,7 +634,11 @@ mod tests {
             RuntimeOverrides::default(),
         )
         .expect("config");
-        (tempdir, config)
+        let env = TestEnv {
+            _env_guard: env_guard,
+            previous_claude_config_dir,
+        };
+        (tempdir, config, env)
     }
 
     #[tokio::test]
@@ -704,7 +734,7 @@ mod tests {
 
     #[tokio::test]
     async fn try_session_memory_compaction_returns_compacted_conversation_and_clears_boundary() {
-        let (_tempdir, config) = test_runtime();
+        let (_tempdir, config, _env) = test_runtime();
         let summary_path = ensure_session_memory_file(&config).expect("summary file");
         std::fs::write(
             &summary_path,

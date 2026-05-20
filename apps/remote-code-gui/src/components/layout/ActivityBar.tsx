@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import { useTheme } from '../design/ThemeProvider';
 import { useAppStore } from '../../stores/useAppStore';
+import { BrandMark } from '../brand/BrandMark';
 
 export type ActivityTab = 'chat' | 'settings';
 
@@ -27,7 +28,7 @@ export function ActivityBar({ activeTab, onTabChange }: ActivityBarProps) {
     <div className="flex h-full w-[88px] shrink-0 flex-col items-center justify-center px-3 py-4">
       <div className="flex min-h-[500px] w-[64px] flex-col items-center rounded-[28px] border border-white/80 bg-white/90 py-4 shadow-[0_20px_55px_rgba(15,23,42,0.14)] backdrop-blur-xl dark:border-rc-border-primary dark:bg-rc-bg-surface/90">
         <div className="relative mb-5 flex h-11 w-11 items-center justify-center rounded-[18px] bg-[#111827] shadow-[0_12px_24px_rgba(37,99,235,0.24)]">
-          <img src="/brand-mark.svg" alt="" className="h-8 w-8" draggable={false} />
+          <BrandMark className="h-8 w-8" />
           <span
             className={`absolute -right-0.5 -top-0.5 h-3 w-3 rounded-full border-2 border-white dark:border-rc-bg-surface ${
               runtimeStatus ? 'bg-rc-accent-success' : 'bg-rc-text-tertiary'

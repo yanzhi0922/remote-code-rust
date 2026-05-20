@@ -1,7 +1,6 @@
 import * as Dialog from '@radix-ui/react-dialog';
 import {
   AlertTriangle,
-  Bot,
   Database,
   FileOutput,
   Layers,
@@ -82,6 +81,7 @@ import { RemoteShell, EmptyCard } from './RemoteShell';
 import { loadRemoteSessionBundle } from './transport';
 import { isDirectRunnerEnabled, resolveRemoteRunnerBaseUrl, resolveRemoteTransportStrategy } from './transportMode';
 import { useConnection } from './useConnection';
+import { useRemoteSessionController } from './useRemoteSessionController';
 import type { TransportConfig } from './connection-manager';
 import type {
   RemoteApprovalDecision,
@@ -111,7 +111,7 @@ const APPROVAL_DECISIONS: Array<{
   },
   {
     decision: 'cancelled',
-    className: 'bg-[#efe7db] text-slate-700 hover:bg-[#e6dccd]',
+    className: 'bg-rc-bg-active text-rc-text-secondary hover:bg-rc-bg-active',
   },
 ];
 
@@ -120,62 +120,62 @@ const APPROVAL_DECISIONS: Array<{
 // ═══════════════════════════════════════════════════════════════════════════
 
 export default function RemoteApp() {
-  const baseUrl = resolveRemoteBaseUrl();
-  const locale = useMemo(() => resolveRemoteLocale(), []);
-  const copy = useMemo(() => getRemoteCopy(locale), [locale]);
-  const initialPairingContext = resolveRemotePairingContext();
-  const [accessToken, setAccessToken] = useState<string | null>(() => resolveRemoteAccessToken());
-  const [health, setHealth] = useState<RemoteControlPlaneHealth | null>(null);
-  const [authLoading, setAuthLoading] = useState(false);
-  const [authErrorMessage, setAuthErrorMessage] = useState<string | null>(null);
-  const [manualAccessToken, setManualAccessToken] = useState('');
-  const [bootstrapSecret, setBootstrapSecret] = useState('');
-  const [signInUsername, setSignInUsername] = useState('');
-  const [signInPassword, setSignInPassword] = useState('');
-  const [deviceName, setDeviceName] = useState('Mobile Browser');
-  const [pairingOfferId, setPairingOfferId] = useState(initialPairingContext.offerId ?? '');
-  const [pairingSecret, setPairingSecret] = useState(initialPairingContext.pairingSecret ?? '');
-  const [sessions, setSessions] = useState<RemoteSessionRecord[]>([]);
-  const [sessionsLoading, setSessionsLoading] = useState(true);
-  const [activeSessionId, setActiveSessionId] = useState<string | null>(() =>
-    resolveRemoteActiveSessionId(baseUrl),
-  );
-  const [events, setEvents] = useState<RemoteTimelineEvent[]>([]);
-  const deferredEvents = useDeferredValue(events);
-  const [eventsLoading, setEventsLoading] = useState(false);
-  const [approvals, setApprovals] = useState<RemoteApprovalRecord[]>([]);
-  const [artifacts, setArtifacts] = useState<RemoteArtifactRecord[]>([]);
-  const [composer, setComposer] = useState('');
-  const [sending, setSending] = useState(false);
-  const [interrupting, setInterrupting] = useState(false);
-  const [approvingId, setApprovingId] = useState<string | null>(null);
-  const [downloadingArtifactId, setDownloadingArtifactId] = useState<string | null>(null);
+  const {
+    baseUrl,
+    locale,
+    copy,
+    health,
+    authLoading,
+    authErrorMessage,
+    manualAccessToken,
+    signInUsername,
+    signInPassword,
+    deviceName,
+    pairingOfferId,
+    pairingSecret,
+    setBootstrapSecret,
+    setDeviceName,
+    setManualAccessToken,
+    setPairingOfferId,
+    setPairingSecret,
+    setSignInUsername,
+    setSignInPassword,
+    sessions,
+    sessionsLoading,
+    activeSession,
+    setActiveSessionId,
+    selectedSessionId,
+    deferredEvents,
+    eventsLoading,
+    pendingApprovals,
+    artifacts,
+    composer,
+    setComposer,
+    sending,
+    interrupting,
+    approvingId,
+    downloadingArtifactId,
+    errorMessage,
+    statusMessage,
+    showAuthGate,
+    activeSessionControlStatus,
+    connectionState,
+    transportStrategy,
+    transportMetrics,
+    refreshSessions,
+    handleBootstrapClaim,
+    handlePairingAccept,
+    handleManualTokenSave,
+    handleClearSavedToken,
+    handleUserSignIn,
+    handleSendPrompt,
+    handleInterrupt,
+    handleApprovalDecision,
+    handleArtifactDownload,
+    handleArtifactShare,
+  } = useRemoteSessionController({ defaultDeviceName: 'Mobile Browser' });
+
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [statusMessage, setStatusMessage] = useState<string | null>(null);
-
-  const activeSessionIdRef = useRef<string | null>(null);
-  const latestSequenceRef = useRef(0);
-  const connectedSessionRef = useRef<string | null>(null);
-  const sessionRefreshTimerRef = useRef<number | null>(null);
-  const statusTimerRef = useRef<number | null>(null);
-
-  const activeSession = useMemo(
-    () => sessions.find((session) => session.session_id === activeSessionId) ?? null,
-    [activeSessionId, sessions],
-  );
-  const selectedSessionId = activeSession?.session_id ?? null;
-  useEffect(() => {
-    activeSessionIdRef.current = selectedSessionId;
-  });
-  const activeSessionControlStatus = useMemo(
-    () => describeSessionControl(activeSession, locale, copy),
-    [activeSession, copy, locale],
-  );
-  const pendingApprovals = useMemo(
-    () => approvals.filter((approval) => approval.state === 'pending'),
-    [approvals],
-  );
   const approvalActions = useMemo(
     () =>
       APPROVAL_DECISIONS.map((item) => ({
@@ -184,635 +184,11 @@ export default function RemoteApp() {
       })),
     [copy],
   );
-  const authRequired = health?.auth_required ?? false;
-  const showAuthGate = Boolean(baseUrl) && ((authRequired && !accessToken) || authErrorMessage);
-
-  // ── Utility callbacks ──────────────────────────────────────────────────
-
-  const showStatusMessage = useEffectEvent((message: string) => {
-    setStatusMessage(message);
-    if (statusTimerRef.current !== null) {
-      window.clearTimeout(statusTimerRef.current);
-    }
-    statusTimerRef.current = window.setTimeout(() => {
-      setStatusMessage(null);
-      statusTimerRef.current = null;
-    }, 3000);
-  });
-
-  const reportAsyncError = useEffectEvent((error: unknown) => {
-    const message = extractErrorMessage(error);
-    if (message.includes('HTTP 401')) {
-      setAuthErrorMessage(message);
-    } else {
-      setErrorMessage(message);
-    }
-  });
-
-  const scheduleSessionsRefresh = useEffectEvent(() => {
-    if (sessionRefreshTimerRef.current !== null) {
-      return;
-    }
-    sessionRefreshTimerRef.current = window.setTimeout(() => {
-      sessionRefreshTimerRef.current = null;
-      void refreshSessions().catch(reportAsyncError);
-    }, 350);
-  });
-
-  // ── Locale ─────────────────────────────────────────────────────────────
-
-  useEffect(() => {
-    document.documentElement.lang = locale;
-  }, [locale]);
-
-  // ── Active session persistence ─────────────────────────────────────────
-
-  useEffect(() => {
-    if (accessToken || !baseUrl) {
-      return;
-    }
-    let cancelled = false;
-    void hydrateRemoteAuthTokensFromSecureStore().then((token) => {
-      if (!cancelled && token) {
-        setAccessToken(token);
-      }
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [accessToken, baseUrl]);
-
-  useEffect(() => {
-    if (selectedSessionId) {
-      persistRemoteActiveSessionId(baseUrl, selectedSessionId);
-      return;
-    }
-    clearRemoteActiveSessionId(baseUrl);
-  }, [baseUrl, selectedSessionId]);
-
-  // ── Health check ───────────────────────────────────────────────────────
-
-  useEffect(() => {
-    if (!baseUrl) {
-      return;
-    }
-    let cancelled = false;
-    void getControlPlaneHealth(baseUrl)
-      .then((response) => {
-        if (!cancelled) {
-          setHealth(response);
-        }
-      })
-      .catch((error) => {
-        if (!cancelled) {
-          reportAsyncError(error);
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [baseUrl, accessToken]);
-
-  // ── Auth handlers ──
-
-  // ── Mobile: Deep links ────────────────────────────────────────────────
-
-  useEffect(() => {
-    let cancelled = false;
-    void initDeepLinks((url, _path, _params) => {
-      if (cancelled) return;
-      const pairing = parsePairingUrl(url);
-      if (pairing) {
-        setPairingOfferId(pairing.offerId);
-        setPairingSecret(pairing.secret);
-        showStatusMessage(copy.deepLinkPairingReceived);
-      }
-    });
-    return () => { cancelled = true; };
-  }, [copy]);
-
-  // ── Mobile: Push notifications ────────────────────────────────────────
-
-  useEffect(() => {
-    if (!accessToken || !baseUrl) return;
-
-    let cancelled = false;
-    void (async () => {
-      await initPushNotifications({
-        onApproval: (approvalId, sessionId) => {
-          if (cancelled) return;
-          // If this approval belongs to the active session, refresh approvals
-          if (sessionId === activeSessionIdRef.current) {
-            void refreshApprovals(sessionId).catch(reportAsyncError);
-          }
-          void showLocalNotification(
-            copy.pushNotificationApprovalTitle,
-            copy.pushNotificationApprovalBody(approvalId),
-          );
-          scheduleSessionsRefresh();
-        },
-        onSessionUpdate: (sessionId) => {
-          if (cancelled) return;
-          scheduleSessionsRefresh();
-          if (sessionId === activeSessionIdRef.current) {
-            void refreshSessionBundle(sessionId).catch(reportAsyncError);
-          }
-        },
-      });
-
-      // Register the push token with the control plane.
-      if (!cancelled) {
-        const registered = await registerPushTokenWithControlPlane(baseUrl, accessToken);
-        if (!cancelled && !registered) {
-          showStatusMessage(copy.mobileNotificationsUnavailable);
-        }
-      }
-    })();
-
-    return () => { cancelled = true; };
-  }, [accessToken, baseUrl, copy]);
-
-  // ── Mobile: App lifecycle ─────────────────────────────────────────────
-
-  useEffect(() => {
-    void initAppLifecycle({
-      onResume: () => {
-        // Refresh data when coming back to foreground
-        void refreshSessions().catch(reportAsyncError);
-        if (activeSessionIdRef.current) {
-          void refreshSessionBundle(activeSessionIdRef.current).catch(reportAsyncError);
-        }
-      },
-    });
-  }, []);
-
-
-  const completeAuthentication = useEffectEvent((token: string, message: string, refreshToken?: string) => {
-    persistRemoteAccessToken(token);
-    if (refreshToken) {
-      persistRemoteRefreshToken(refreshToken);
-    }
-    void clearRemotePairingContext();
-    stripRemoteSensitiveQueryParams();
-    setBootstrapSecret('');
-    setPairingOfferId('');
-    setPairingSecret('');
-    setManualAccessToken('');
-    setSignInUsername('');
-    setSignInPassword('');
-    setAccessToken(token);
-    setAuthErrorMessage(null);
-    setErrorMessage(null);
-    showStatusMessage(message);
-  });
-
-  const handleBootstrapClaim = useEffectEvent(async () => {
-    if (!baseUrl || authLoading) {
-      return;
-    }
-    setAuthLoading(true);
-    try {
-      const response = await bootstrapControlPlane(baseUrl, bootstrapSecret, deviceName);
-      completeAuthentication(response.access_token, copy.statusBootstrapClaimSucceeded, response.refresh_token);
-      const nextHealth = await getControlPlaneHealth(baseUrl);
-      setHealth(nextHealth);
-    } catch (error) {
-      reportAsyncError(error);
-    } finally {
-      setAuthLoading(false);
-    }
-  });
-
-  const handlePairingAccept = useEffectEvent(async () => {
-    if (!baseUrl || authLoading) {
-      return;
-    }
-    setAuthLoading(true);
-    try {
-      const response = await acceptPairingOffer(
-        baseUrl,
-        pairingOfferId,
-        pairingSecret,
-        deviceName,
-      );
-      completeAuthentication(response.access_token, copy.statusPairingSucceeded, response.refresh_token);
-      const nextHealth = await getControlPlaneHealth(baseUrl);
-      setHealth(nextHealth);
-    } catch (error) {
-      reportAsyncError(error);
-    } finally {
-      setAuthLoading(false);
-    }
-  });
-
-  const handleManualTokenSave = useEffectEvent(() => {
-    if (!manualAccessToken.trim()) {
-      return;
-    }
-    persistRemoteAccessToken(manualAccessToken);
-    void clearRemotePairingContext();
-    stripRemoteSensitiveQueryParams();
-    setBootstrapSecret('');
-    setPairingOfferId('');
-    setPairingSecret('');
-    setManualAccessToken('');
-    setSignInUsername('');
-    setSignInPassword('');
-    setAccessToken(manualAccessToken.trim());
-    setAuthErrorMessage(null);
-    showStatusMessage(copy.statusSavedAccessToken);
-  });
-
-  const handleClearSavedToken = useEffectEvent(() => {
-    clearRemoteAccessToken();
-    clearRemoteActiveSessionId(baseUrl);
-    void clearRemotePairingContext();
-    stripRemoteSensitiveQueryParams();
-    setBootstrapSecret('');
-    setPairingOfferId('');
-    setPairingSecret('');
-    setAccessToken(null);
-    setManualAccessToken('');
-    setSignInUsername('');
-    setSignInPassword('');
-    setAuthErrorMessage(null);
-    showStatusMessage(copy.statusClearedAccessToken);
-  });
-
-  const handleUserSignIn = useEffectEvent(async () => {
-    if (!baseUrl || authLoading || !signInUsername.trim() || !signInPassword.trim()) {
-      return;
-    }
-    setAuthLoading(true);
-    try {
-      const userKey = await deriveUserKey(signInUsername.trim(), signInPassword.trim());
-      completeAuthentication(userKey, copy.statusSignInSucceeded);
-      const nextHealth = await getControlPlaneHealth(baseUrl);
-      setHealth(nextHealth);
-    } catch (error) {
-      reportAsyncError(error);
-    } finally {
-      setAuthLoading(false);
-    }
-  });
-
-  // ── Data fetching ──────────────────────────────────────────────────────
-
-  const refreshSessions = useEffectEvent(async () => {
-    if (!baseUrl || !health || (authRequired && !accessToken)) {
-      return;
-    }
-    setSessionsLoading((current) => (sessions.length === 0 ? true : current));
-    try {
-      const response = await listSessions(baseUrl);
-      const nextSessions = [...response.items].sort(
-        (left, right) =>
-          new Date(right.updated_at).getTime() - new Date(left.updated_at).getTime(),
-      );
-      setSessions(nextSessions);
-      setActiveSessionId((current) => {
-        if (current && nextSessions.some((session) => session.session_id === current)) {
-          return current;
-        }
-        const stored = resolveRemoteActiveSessionId(baseUrl);
-        if (stored && nextSessions.some((session) => session.session_id === stored)) {
-          return stored;
-        }
-        return nextSessions[0]?.session_id ?? null;
-      });
-      setErrorMessage(null);
-    } catch (error) {
-      reportAsyncError(error);
-    } finally {
-      setSessionsLoading(false);
-    }
-  });
-
-  const refreshApprovals = useEffectEvent(async (sessionId: string) => {
-    if (!baseUrl || !health || (authRequired && !accessToken)) {
-      return;
-    }
-    const response = await listSessionApprovals(baseUrl, sessionId);
-    if (activeSessionIdRef.current !== sessionId) {
-      return;
-    }
-    setApprovals(
-      [...response.items].sort(
-        (left, right) =>
-          new Date(right.updated_at).getTime() - new Date(left.updated_at).getTime(),
-      ),
-    );
-  });
-
-  const refreshArtifacts = useEffectEvent(async (sessionId: string) => {
-    if (!baseUrl || !health || (authRequired && !accessToken)) {
-      return;
-    }
-    const response = await listSessionArtifacts(baseUrl, sessionId);
-    if (activeSessionIdRef.current !== sessionId) {
-      return;
-    }
-    setArtifacts(
-      [...response.items].sort(
-        (left, right) =>
-          new Date(right.created_at).getTime() - new Date(left.created_at).getTime(),
-      ),
-    );
-  });
-
-  const refreshSessionBundle = useEffectEvent(async (sessionId: string) => {
-    if (!baseUrl || !health || (authRequired && !accessToken)) {
-      return;
-    }
-
-    const bundle = await loadRemoteSessionBundle(baseUrl, sessionId);
-
-    if (activeSessionIdRef.current !== sessionId) {
-      return;
-    }
-
-    latestSequenceRef.current = bundle.latestSequence;
-
-    startTransition(() => {
-      setEvents(bundle.events);
-    });
-    setApprovals(bundle.approvals);
-    setArtifacts(bundle.artifacts);
-  });
-
-  const handleLiveEvent = useEffectEvent((sessionId: string, event: RemoteTimelineEvent) => {
-    if (activeSessionIdRef.current !== sessionId) {
-      return;
-    }
-
-    latestSequenceRef.current = Math.max(latestSequenceRef.current, event.sequence);
-    startTransition(() => {
-      setEvents((current) => appendRemoteTimelineEvent(current, event));
-    });
-
-    if (event.detail.kind === 'approval_requested' || event.detail.kind === 'approval_resolved') {
-      void refreshApprovals(sessionId).catch(reportAsyncError);
-    }
-    if (event.detail.kind === 'artifact_created' || event.detail.kind === 'artifact_manifest') {
-      void refreshArtifacts(sessionId).catch(reportAsyncError);
-    }
-    if (
-      event.detail.kind === 'approval_requested' ||
-      event.detail.kind === 'approval_resolved' ||
-      event.detail.kind === 'daemon_presence_changed'
-    ) {
-      scheduleSessionsRefresh();
-    }
-    if (
-      event.detail.kind === 'session_state_changed' &&
-      event.detail.previous_state !== event.detail.state
-    ) {
-      scheduleSessionsRefresh();
-    }
-  });
-
-  // ── Unified transport via ConnectionManager ──────────────────────────────
-
-  const handleTransportEvent = useEffectEvent((event: RemoteTimelineEvent) => {
-    const sessionId = connectedSessionRef.current;
-    if (sessionId) {
-      handleLiveEvent(sessionId, event);
-    }
-  });
-
-  const {
-    connectionState: transportConnectionState,
-    strategy: transportStrategy,
-    metrics: transportMetrics,
-    connect: transportConnect,
-    disconnect: transportDisconnect,
-    latestSequence: transportSequence,
-  } = useConnection(handleTransportEvent);
-
-  const connectionState: ConnectionState =
-    transportConnectionState === 'probing' ? 'connecting' : transportConnectionState;
-
-  useEffect(() => {
-    latestSequenceRef.current = Math.max(latestSequenceRef.current, transportSequence);
-  }, [transportSequence]);
-
-  // ── Periodic + visibility refresh ──────────────────────────────────────
-
-  useEffect(() => {
-    void refreshSessions();
-    const intervalId = window.setInterval(() => {
-      void refreshSessions();
-    }, 15_000);
-    return () => {
-      window.clearInterval(intervalId);
-    };
-  }, [accessToken, baseUrl, health]);
-
-  useEffect(() => {
-    const onVisibilityChange = () => {
-      if (document.visibilityState !== 'visible') {
-        return;
-      }
-      void refreshSessions().catch(reportAsyncError);
-      if (activeSessionIdRef.current) {
-        void refreshSessionBundle(activeSessionIdRef.current).catch(reportAsyncError);
-      }
-    };
-
-    document.addEventListener('visibilitychange', onVisibilityChange);
-    return () => {
-      document.removeEventListener('visibilitychange', onVisibilityChange);
-    };
-  }, []);
-
-  useEffect(() => {
-    const onOnline = () => {
-      void refreshSessions().catch(reportAsyncError);
-      if (activeSessionIdRef.current) {
-        void refreshSessionBundle(activeSessionIdRef.current).catch(reportAsyncError);
-      }
-    };
-
-    window.addEventListener('online', onOnline);
-    return () => {
-      window.removeEventListener('online', onOnline);
-    };
-  }, []);
-
-  useEffect(() => {
-    return () => {
-      if (sessionRefreshTimerRef.current !== null) {
-        window.clearTimeout(sessionRefreshTimerRef.current);
-      }
-      if (statusTimerRef.current !== null) {
-        window.clearTimeout(statusTimerRef.current);
-      }
-    };
-  }, []);
-
-  // ── Transport subscription ─────────────────────────────────────────────
-
-  useEffect(() => {
-    if (!baseUrl || !selectedSessionId || !health || (authRequired && !accessToken)) {
-      setEvents([]);
-      setApprovals([]);
-      setArtifacts([]);
-      connectedSessionRef.current = null;
-      transportDisconnect();
-      latestSequenceRef.current = 0;
-      return;
-    }
-
-    connectedSessionRef.current = selectedSessionId;
-
-    let cancelled = false;
-
-    const bootstrap = async () => {
-      setEventsLoading(true);
-      try {
-        await refreshSessionBundle(selectedSessionId);
-        if (!cancelled) {
-          const runnerBaseUrl = resolveRemoteRunnerBaseUrl(activeSession);
-          const config: TransportConfig = {
-            strategy: resolveRemoteTransportStrategy(activeSession),
-            baseUrl,
-            runnerBaseUrl,
-            allowDirectRunner: isDirectRunnerEnabled(),
-            sessionId: selectedSessionId,
-            authToken: accessToken,
-          };
-          await transportConnect(config, latestSequenceRef.current);
-          setErrorMessage(null);
-        }
-      } catch (error) {
-        if (!cancelled) {
-          reportAsyncError(error);
-        }
-      } finally {
-        if (!cancelled) {
-          setEventsLoading(false);
-        }
-      }
-    };
-
-    void bootstrap();
-
-    return () => {
-      cancelled = true;
-      connectedSessionRef.current = null;
-      transportDisconnect();
-    };
-  }, [accessToken, activeSession, authRequired, baseUrl, health, selectedSessionId]);
-
-  // ── Action handlers ────────────────────────────────────────────────────
-
-  const handleSendPrompt = async () => {
-    if (
-      !baseUrl ||
-      !selectedSessionId ||
-      (authRequired && !accessToken) ||
-      !composer.trim() ||
-      sending ||
-      !activeSessionControlStatus.canSendPrompt
-    ) {
-      return;
-    }
-
-    setSending(true);
-    try {
-      await sendPrompt(baseUrl, selectedSessionId, composer.trim(), resolveRemoteRunnerBaseUrl(activeSession) ?? undefined);
-      setComposer('');
-      showStatusMessage(copy.statusPromptForwarded);
-    } catch (error) {
-      reportAsyncError(error);
-    } finally {
-      setSending(false);
-    }
-  };
-
-  const handleInterrupt = async () => {
-    if (
-      !baseUrl ||
-      !selectedSessionId ||
-      (authRequired && !accessToken) ||
-      interrupting ||
-      !activeSessionControlStatus.canInterrupt
-    ) {
-      return;
-    }
-
-    setInterrupting(true);
-    try {
-      await interruptSession(baseUrl, selectedSessionId, resolveRemoteRunnerBaseUrl(activeSession) ?? undefined);
-      showStatusMessage(copy.statusInterruptForwarded);
-    } catch (error) {
-      reportAsyncError(error);
-    } finally {
-      setInterrupting(false);
-    }
-  };
-
-  const handleApprovalDecision = async (
-    approvalId: string,
-    decision: RemoteApprovalDecision,
-  ) => {
-    if (!baseUrl || (authRequired && !accessToken) || approvingId) {
-      return;
-    }
-
-    setApprovingId(approvalId);
-    try {
-      await respondToApproval(baseUrl, approvalId, decision, undefined, resolveRemoteRunnerBaseUrl(activeSession) ?? undefined);
-      showStatusMessage(copy.statusApprovalDecision(copy.approvalDecisionLabels[decision]));
-      if (selectedSessionId) {
-        await refreshApprovals(selectedSessionId);
-      }
-    } catch (error) {
-      reportAsyncError(error);
-    } finally {
-      setApprovingId(null);
-    }
-  };
-
-  const handleArtifactDownload = async (artifact: RemoteArtifactRecord) => {
-    if (!baseUrl || (authRequired && !accessToken) || downloadingArtifactId) {
-      return;
-    }
-
-    setDownloadingArtifactId(artifact.artifact_id);
-    try {
-      const filePath = await downloadRemoteArtifact({
-        url: buildArtifactDownloadUrl(baseUrl, artifact.artifact_id),
-        fileName: artifact.file_name,
-        token: accessToken,
-      });
-      showStatusMessage(copy.statusArtifactDownloaded(artifact.file_name));
-      return filePath;
-    } catch (error) {
-      reportAsyncError(error);
-      return null;
-    } finally {
-      setDownloadingArtifactId(null);
-    }
-  };
-
-  const handleArtifactShare = async (artifact: RemoteArtifactRecord) => {
-    if (!baseUrl || (authRequired && !accessToken)) return;
-    try {
-      const filePath = await handleArtifactDownload(artifact);
-      if (filePath) {
-        await shareFile(filePath, artifact.file_name);
-      }
-    } catch (error) {
-      reportAsyncError(error);
-    }
-  };
-
   // ── Render: early exits ────────────────────────────────────────────────
 
   if (!baseUrl) {
     return (
-      <div className="min-h-screen bg-[radial-gradient(circle_at_top_left,#fbf6ec,transparent_28%),linear-gradient(180deg,#f4efe4_0%,#efe8db_100%)] text-slate-900">
+      <div className="min-h-screen bg-rc-bg-base text-rc-text-primary">
         <div className="flex min-h-screen items-center justify-center px-6">
           <EmptyCard
             title={copy.remoteModeNotConfiguredTitle}
@@ -825,9 +201,9 @@ export default function RemoteApp() {
 
   if (!health) {
     return (
-      <div className="min-h-screen bg-[radial-gradient(circle_at_top_left,#fbf6ec,transparent_28%),linear-gradient(180deg,#f4efe4_0%,#efe8db_100%)] text-slate-900">
+      <div className="min-h-screen bg-rc-bg-base text-rc-text-primary">
         <div className="flex min-h-screen items-center justify-center px-6">
-          <div role="status" className="flex items-center gap-3 rounded-2xl border border-[#e2d8c8] bg-white px-5 py-4 text-sm text-slate-600 shadow-[0_18px_45px_rgba(52,45,34,0.08)]">
+          <div role="status" className="flex items-center gap-3 rounded-2xl border border-rc-border-primary bg-rc-bg-surface px-5 py-4 text-sm text-rc-text-secondary shadow-[0_18px_45px_rgba(52,45,34,0.08)]">
             <LoaderCircle size={16} className="animate-spin" />
             {copy.contactingControlPlane}
           </div>
@@ -838,7 +214,7 @@ export default function RemoteApp() {
 
   if (showAuthGate) {
     return (
-      <div className="min-h-screen bg-[radial-gradient(circle_at_top_left,#fbf6ec,transparent_28%),linear-gradient(180deg,#f4efe4_0%,#efe8db_100%)] text-slate-900">
+      <div className="min-h-screen bg-rc-bg-base text-rc-text-primary">
         <RemoteAuthGate
           authErrorMessage={authErrorMessage}
           authLoading={authLoading}
@@ -905,13 +281,13 @@ export default function RemoteApp() {
     >
       <main className="grid min-h-0 flex-1 gap-0 lg:grid-cols-[minmax(0,1fr)_340px]">
         {/* ── Timeline + Composer ── */}
-        <section className="flex min-h-0 flex-col border-b border-[#e5ddcf] bg-[#f7f2e8] lg:border-b-0 lg:border-r">
+        <section className="flex min-h-0 flex-col border-b border-rc-border-primary bg-rc-bg-secondary lg:border-b-0 lg:border-r">
           {activeSession ? (
             <div className="flex min-h-0 flex-1 flex-col">
               <div className="flex-1 min-h-0">
                 {eventsLoading ? (
                   <div className="flex min-h-[280px] items-center justify-center px-4 py-5 sm:px-6">
-                    <div role="status" className="flex items-center gap-3 rounded-2xl bg-white px-4 py-3 text-sm text-slate-500 shadow-[0_12px_28px_rgba(34,32,28,0.06)]">
+                    <div role="status" className="flex items-center gap-3 rounded-2xl bg-rc-bg-surface px-4 py-3 text-sm text-rc-text-tertiary shadow-[0_12px_28px_rgba(34,32,28,0.06)]">
                       <LoaderCircle size={16} className="animate-spin" />
                       {copy.loadingSessionTimeline}
                     </div>
@@ -939,10 +315,10 @@ export default function RemoteApp() {
                 )}
               </div>
 
-              <div className="border-t border-[#e5ddcf] bg-[#f5efe4] px-4 py-4 sm:px-6">
-                <div className="mx-auto max-w-5xl rounded-[28px] border border-[#ded4c4] bg-white shadow-[0_18px_44px_rgba(34,32,28,0.09)]">
-                  <div className="flex items-center justify-between gap-3 border-b border-[#efe6d9] px-4 py-3">
-                    <div className="inline-flex items-center gap-2 text-sm text-slate-600">
+              <div className="border-t border-rc-border-primary bg-rc-bg-secondary px-4 py-4 sm:px-6">
+                <div className="mx-auto max-w-5xl rounded-3xl border border-rc-border-primary bg-rc-bg-surface shadow-[0_18px_44px_rgba(34,32,28,0.09)]">
+                  <div className="flex items-center justify-between gap-3 border-b border-rc-border-primary px-4 py-3">
+                    <div className="inline-flex items-center gap-2 text-sm text-rc-text-secondary">
                       <MessageSquareText size={15} />
                       {copy.followUpControl}
                     </div>
@@ -952,7 +328,7 @@ export default function RemoteApp() {
                         void handleInterrupt();
                       }}
                       disabled={interrupting || !activeSessionControlStatus.canInterrupt}
-                      className="inline-flex items-center gap-2 rounded-full border border-[#dccfc0] bg-[#faf6ef] px-3 py-1.5 text-sm text-slate-700 transition-colors hover:bg-[#f3ebdf] disabled:cursor-not-allowed disabled:opacity-60"
+                      className="inline-flex items-center gap-2 rounded-full border border-rc-border-primary bg-rc-bg-hover px-3 py-1.5 text-sm text-rc-text-secondary transition-colors hover:bg-[#f3ebdf] disabled:cursor-not-allowed disabled:opacity-60"
                     >
                       {interrupting ? (
                         <LoaderCircle size={14} className="animate-spin" />
@@ -981,7 +357,7 @@ export default function RemoteApp() {
                       rows={1}
                       disabled={!activeSessionControlStatus.canSendPrompt}
                       placeholder={copy.followUpPlaceholder}
-                      className="min-h-[88px] flex-1 resize-none bg-transparent text-[15px] leading-6 text-slate-800 outline-none placeholder:text-slate-400 disabled:cursor-not-allowed disabled:text-slate-400"
+                      className="min-h-[88px] flex-1 resize-none bg-transparent text-[15px] leading-6 text-rc-text-primary outline-none placeholder:text-rc-text-tertiary disabled:cursor-not-allowed disabled:text-rc-text-tertiary"
                     />
                     <button
                       type="button"
@@ -1012,7 +388,7 @@ export default function RemoteApp() {
         </section>
 
         {/* ── Desktop: Approvals + Artifacts side panel (always rendered; mobile also has floating FABs) ── */}
-        <aside className="border-t border-[#e5ddcf] bg-[#f2ebdf] lg:border-t-0">
+        <aside className="border-t border-rc-border-primary bg-rc-bg-secondary lg:border-t-0">
           <div className="grid gap-4 px-4 py-5 sm:px-6 lg:sticky lg:top-0">
             <ApprovalPanel
               title={copy.pendingApprovals}
@@ -1071,10 +447,10 @@ export default function RemoteApp() {
             </Dialog.Trigger>
             <Dialog.Portal>
               <Dialog.Overlay className="fixed inset-0 z-50 bg-slate-950/40 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=closed]:animate-out data-[state=closed]:fade-out-0" />
-              <Dialog.Content className="fixed inset-x-0 bottom-0 z-50 max-h-[80vh] rounded-t-[28px] border-t border-[#e0d6c6] bg-white px-5 py-5 shadow-[0_-12px_40px_rgba(34,32,28,0.12)] focus:outline-none data-[state=open]:animate-in data-[state=open]:slide-in-from-bottom data-[state=closed]:animate-out data-[state=closed]:slide-out-to-bottom">
+              <Dialog.Content className="fixed inset-x-0 bottom-0 z-50 max-h-[80vh] rounded-t-[28px] border-t border-rc-border-primary bg-rc-bg-surface px-5 py-5 shadow-[0_-12px_40px_rgba(34,32,28,0.12)] focus:outline-none data-[state=open]:animate-in data-[state=open]:slide-in-from-bottom data-[state=closed]:animate-out data-[state=closed]:slide-out-to-bottom">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-3">
-                    <Dialog.Title className="text-lg font-semibold text-slate-900">
+                    <Dialog.Title className="text-lg font-semibold text-rc-text-primary">
                       {copy.pendingApprovals}
                     </Dialog.Title>
                     <Dialog.Description className="sr-only">
@@ -1090,7 +466,7 @@ export default function RemoteApp() {
                     <button
                       type="button"
                       aria-label="Close"
-                      className="inline-flex h-9 w-9 items-center justify-center rounded-2xl border border-[#e5ddd4] bg-[#faf6ef] text-slate-700 transition-colors hover:bg-white"
+                      className="inline-flex h-9 w-9 items-center justify-center rounded-2xl border border-rc-border-primary bg-rc-bg-hover text-rc-text-secondary transition-colors hover:bg-rc-bg-surface"
                     >
                       <X size={16} />
                     </button>
@@ -1134,10 +510,10 @@ export default function RemoteApp() {
             </Dialog.Trigger>
             <Dialog.Portal>
               <Dialog.Overlay className="fixed inset-0 z-50 bg-slate-950/40 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=closed]:animate-out data-[state=closed]:fade-out-0" />
-              <Dialog.Content className="fixed inset-x-0 bottom-0 z-50 max-h-[80vh] rounded-t-[28px] border-t border-[#e0d6c6] bg-white px-5 py-5 shadow-[0_-12px_40px_rgba(34,32,28,0.12)] focus:outline-none data-[state=open]:animate-in data-[state=open]:slide-in-from-bottom data-[state=closed]:animate-out data-[state=closed]:slide-out-to-bottom">
+              <Dialog.Content className="fixed inset-x-0 bottom-0 z-50 max-h-[80vh] rounded-t-[28px] border-t border-rc-border-primary bg-rc-bg-surface px-5 py-5 shadow-[0_-12px_40px_rgba(34,32,28,0.12)] focus:outline-none data-[state=open]:animate-in data-[state=open]:slide-in-from-bottom data-[state=closed]:animate-out data-[state=closed]:slide-out-to-bottom">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-3">
-                    <Dialog.Title className="text-lg font-semibold text-slate-900">
+                    <Dialog.Title className="text-lg font-semibold text-rc-text-primary">
                       {copy.artifacts}
                     </Dialog.Title>
                     <Dialog.Description className="sr-only">
@@ -1153,7 +529,7 @@ export default function RemoteApp() {
                     <button
                       type="button"
                       aria-label="Close"
-                      className="inline-flex h-9 w-9 items-center justify-center rounded-2xl border border-[#e5ddd4] bg-[#faf6ef] text-slate-700 transition-colors hover:bg-white"
+                      className="inline-flex h-9 w-9 items-center justify-center rounded-2xl border border-rc-border-primary bg-rc-bg-hover text-rc-text-secondary transition-colors hover:bg-rc-bg-surface"
                     >
                       <X size={16} />
                     </button>
@@ -1217,7 +593,7 @@ function TimelineCard({
             <LazyMarkdownRenderer content={detail.text} />
           </Suspense>
         ) : (
-          <div className="whitespace-pre-wrap break-words text-[15px] leading-7 text-slate-800">
+          <div className="whitespace-pre-wrap break-words text-[15px] leading-7 text-rc-text-primary">
             {detail.text}
           </div>
         )}
@@ -1233,7 +609,7 @@ function TimelineCard({
         icon={<LoaderCircle size={16} className="animate-spin" />}
         timestampLabel={ts}
       >
-        <div className="whitespace-pre-wrap break-words text-sm leading-6 text-slate-700">
+        <div className="whitespace-pre-wrap break-words text-sm leading-6 text-rc-text-secondary">
           {detail.delta}
         </div>
       </TimelineEventCard>
@@ -1249,12 +625,12 @@ function TimelineCard({
       <TimelineEventCard
         eyebrow={copy.eventEyebrows.tool}
         accent={detail.kind === 'tool_finished' && detail.is_error ? 'text-rose-700' : 'text-emerald-700'}
-        icon={<Bot size={16} />}
+        icon={<Layers size={16} />}
         timestampLabel={ts}
       >
-        <div className="space-y-2 text-sm text-slate-700">
-          <div className="font-medium text-slate-900">{toolLabel(detail)}</div>
-          <div className="rounded-2xl bg-[#f7f2e8] px-3 py-2 text-sm leading-6 text-slate-600">
+        <div className="space-y-2 text-sm text-rc-text-secondary">
+          <div className="font-medium text-rc-text-primary">{toolLabel(detail)}</div>
+          <div className="rounded-2xl bg-rc-bg-secondary px-3 py-2 text-sm leading-6 text-rc-text-secondary">
             {toolSummary(detail, copy)}
           </div>
         </div>
@@ -1270,10 +646,10 @@ function TimelineCard({
         icon={<Shield size={16} />}
         timestampLabel={ts}
       >
-        <div className="space-y-2 text-sm leading-6 text-slate-700">
-          <div className="font-medium text-slate-900">{approvalSummary(detail, copy)}</div>
+        <div className="space-y-2 text-sm leading-6 text-rc-text-secondary">
+          <div className="font-medium text-rc-text-primary">{approvalSummary(detail, copy)}</div>
           {'responder' in detail && detail.responder && (
-            <div className="text-xs uppercase tracking-[0.18em] text-slate-400">
+            <div className="text-xs uppercase tracking-[0.18em] text-rc-text-tertiary">
               {copy.responderLabel}: {detail.responder}
             </div>
           )}
@@ -1290,7 +666,7 @@ function TimelineCard({
         icon={<FileOutput size={16} />}
         timestampLabel={ts}
       >
-        <div className="text-sm leading-6 text-slate-700">{artifactSummary(detail, copy)}</div>
+        <div className="text-sm leading-6 text-rc-text-secondary">{artifactSummary(detail, copy)}</div>
       </TimelineEventCard>
     );
   }
@@ -1312,11 +688,11 @@ function TimelineCard({
     return (
       <TimelineEventCard
         eyebrow={copy.eventEyebrows.daemon}
-        accent="text-slate-700"
+        accent="text-rc-text-secondary"
         icon={detail.state === 'online' ? <Wifi size={16} /> : <WifiOff size={16} />}
         timestampLabel={ts}
       >
-        <div className="text-sm text-slate-700">{copy.daemonNow(copy.daemonStates[detail.state])}</div>
+        <div className="text-sm text-rc-text-secondary">{copy.daemonNow(copy.daemonStates[detail.state])}</div>
       </TimelineEventCard>
     );
   }
@@ -1333,9 +709,9 @@ function TimelineCard({
         icon={<GitBranch size={16} />}
         timestampLabel={ts}
       >
-        <div className="space-y-1 text-sm text-slate-700">
-          <div className="font-medium text-slate-900">{desc}</div>
-          <div className="text-xs text-slate-400">
+        <div className="space-y-1 text-sm text-rc-text-secondary">
+          <div className="font-medium text-rc-text-primary">{desc}</div>
+          <div className="text-xs text-rc-text-tertiary">
             {detail.task_id} · {stageLabel}
             {'turns_used' in detail && detail.turns_used != null ? ` · ${detail.turns_used} turns` : ''}
           </div>
@@ -1352,9 +728,9 @@ function TimelineCard({
         icon={<Layers size={16} />}
         timestampLabel={ts}
       >
-        <div className="space-y-1 text-sm text-slate-700">
-          <div className="font-medium text-slate-900">{detail.completed}/{detail.total} completed</div>
-          {detail.running > 0 && <div className="text-xs text-slate-400">{detail.running} running</div>}
+        <div className="space-y-1 text-sm text-rc-text-secondary">
+          <div className="font-medium text-rc-text-primary">{detail.completed}/{detail.total} completed</div>
+          {detail.running > 0 && <div className="text-xs text-rc-text-tertiary">{detail.running} running</div>}
         </div>
       </TimelineEventCard>
     );
@@ -1366,13 +742,13 @@ function TimelineCard({
     return (
       <TimelineEventCard
         eyebrow={copy.eventEyebrows.context}
-        accent={isOverflow ? 'text-amber-700' : 'text-slate-700'}
+        accent={isOverflow ? 'text-amber-700' : 'text-rc-text-secondary'}
         icon={<Database size={16} />}
         timestampLabel={ts}
       >
-        <div className="space-y-1 text-sm text-slate-700">
-          <div className="font-medium text-slate-900">{isOverflow ? 'Context overflow' : 'Context usage'}: {pct}%</div>
-          <div className="text-xs text-slate-400">{detail.estimated_tokens.toLocaleString()} / {detail.max_input_tokens.toLocaleString()} tokens</div>
+        <div className="space-y-1 text-sm text-rc-text-secondary">
+          <div className="font-medium text-rc-text-primary">{isOverflow ? 'Context overflow' : 'Context usage'}: {pct}%</div>
+          <div className="text-xs text-rc-text-tertiary">{detail.estimated_tokens.toLocaleString()} / {detail.max_input_tokens.toLocaleString()} tokens</div>
         </div>
       </TimelineEventCard>
     );
@@ -1382,13 +758,13 @@ function TimelineCard({
     return (
       <TimelineEventCard
         eyebrow={copy.eventEyebrows.context}
-        accent="text-slate-700"
+        accent="text-rc-text-secondary"
         icon={<Database size={16} />}
         timestampLabel={ts}
       >
-        <div className="space-y-1 text-sm text-slate-700">
-          <div className="font-medium text-slate-900">Context compacted</div>
-          <div className="text-xs text-slate-400">{detail.entries_removed} entries removed · ratio {detail.usage_ratio.toFixed(2)}</div>
+        <div className="space-y-1 text-sm text-rc-text-secondary">
+          <div className="font-medium text-rc-text-primary">Context compacted</div>
+          <div className="text-xs text-rc-text-tertiary">{detail.entries_removed} entries removed · ratio {detail.usage_ratio.toFixed(2)}</div>
         </div>
       </TimelineEventCard>
     );
@@ -1398,11 +774,11 @@ function TimelineCard({
     return (
       <TimelineEventCard
         eyebrow={copy.eventEyebrows.session}
-        accent="text-slate-700"
+        accent="text-rc-text-secondary"
         icon={<MessageSquareText size={16} />}
         timestampLabel={ts}
       >
-        <div className="text-sm text-slate-700">{sessionEventSummary(detail, copy)}</div>
+        <div className="text-sm text-rc-text-secondary">{sessionEventSummary(detail, copy)}</div>
       </TimelineEventCard>
     );
   }
@@ -1410,11 +786,11 @@ function TimelineCard({
   return (
     <TimelineEventCard
       eyebrow={copy.eventEyebrows.runner}
-      accent="text-slate-700"
-      icon={<Bot size={16} />}
+      accent="text-rc-text-secondary"
+      icon={<GitBranch size={16} />}
       timestampLabel={ts}
     >
-      <div className="text-sm text-slate-700">{runnerEventSummary(detail, copy)}</div>
+      <div className="text-sm text-rc-text-secondary">{runnerEventSummary(detail, copy)}</div>
     </TimelineEventCard>
   );
 }

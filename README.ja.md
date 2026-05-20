@@ -45,7 +45,13 @@ npm test
 npm run build
 ```
 
-リリース候補では [docs/requirements.md](docs/requirements.md) と `scripts/verify-release.ps1` のゲートを使用してください。
+リリース候補では [docs/requirements.md](docs/requirements.md)、`scripts/verify-release.ps1`、および [docs/release-acceptance-evidence.md](docs/release-acceptance-evidence.md) の redacted evidence template を使用してください。
+
+## Release Artifacts
+
+`v*` タグで起動する正式 release は、workspace tool archives、relay-only Linux package、Windows NSIS installer、Web/PWA assets、`SHA256SUMS.txt` を生成します。`main` の `cloud-relay.yml` は frontend なしの relay package を生成し、完全な `release.yml` は Web/PWA assets を含みます。
+
+Artifact が生成できただけでは公開リリース可能とは見なしません。requirements 14/17 の redacted evidence report が必要です。
 
 ## Secret 取り扱い
 
@@ -53,4 +59,6 @@ Provider key、MCP key、runner token、OAuth token、ローカル settings、se
 
 ## License
 
-Public source, proprietary by default. See [LICENSE](LICENSE).
+Public source, proprietary by default. This is not OSI open source and does not grant redistribution, hosted SaaS, or commercial reuse rights without a separate written license. See [LICENSE](LICENSE).
+
+Third-party source mirrors and fixtures under `agents/` and `crates/codex/` retain their upstream notices.

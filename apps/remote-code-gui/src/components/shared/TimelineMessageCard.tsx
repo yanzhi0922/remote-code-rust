@@ -26,13 +26,13 @@ export function TimelineMessageCard({ role, header, children }: TimelineMessageC
   return (
     <div className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}>
       <div
-        className={`max-w-4xl rounded-[28px] px-5 py-4 shadow-[0_16px_34px_rgba(34,32,28,0.07)] ${
-          isUser ? 'bg-[#17181a] text-white' : 'border border-[#e5ddcf] bg-white'
+        className={`max-w-4xl rounded-3xl px-5 py-4 shadow-[0_16px_34px_rgba(34,32,28,0.07)] ${
+          isUser ? 'bg-[#17181a] text-white' : 'border border-rc-border-primary bg-rc-bg-surface'
         }`}
       >
         <div
           className={`mb-3 text-xs font-semibold uppercase tracking-[0.22em] ${
-            isUser ? 'text-white/60' : 'text-slate-400'
+            isUser ? 'text-white/60' : 'text-rc-text-tertiary'
           }`}
         >
           {header}

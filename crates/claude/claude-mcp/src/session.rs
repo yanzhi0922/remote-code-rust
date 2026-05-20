@@ -908,8 +908,25 @@ async fn wait_for_response<T: DeserializeOwned>(
 }
 
 async fn shutdown_child(child: &mut Child) {
+    kill_child_process_tree(child).await;
+    let _ = timeout(Duration::from_secs(3), child.wait()).await;
+}
+
+async fn kill_child_process_tree(child: &mut Child) {
+    #[cfg(windows)]
+    {
+        if let Some(pid) = child.id() {
+            let _ = Command::new("taskkill")
+                .args(["/PID", &pid.to_string(), "/T", "/F"])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .await;
+            return;
+        }
+    }
+
     let _ = child.start_kill();
-    let _ = child.wait().await;
 }
 
 // ---------------------------------------------------------------------------

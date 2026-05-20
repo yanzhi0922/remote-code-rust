@@ -496,6 +496,7 @@ fn rough_token_count_estimation(text: &str) -> usize {
 #[cfg(test)]
 mod tests {
     use parking_lot::Mutex;
+    use std::ffi::OsString;
     use std::path::PathBuf;
     use std::sync::OnceLock;
 
@@ -517,6 +518,7 @@ mod tests {
         _tempdir: TempDir,
         config: RuntimeConfig,
         cleanup_project_dir: PathBuf,
+        previous_claude_config_dir: Option<OsString>,
     }
 
     fn env_lock() -> &'static Mutex<()> {
@@ -531,6 +533,10 @@ mod tests {
         let profile = tempdir.path().join(".remote-code-rust");
         std::fs::create_dir_all(&cwd).expect("cwd");
         std::fs::create_dir_all(&profile).expect("profile");
+        let previous_claude_config_dir = std::env::var_os("CLAUDE_CONFIG_DIR");
+        // Session memory intentionally follows Claude's global config dir. Keep
+        // tests scoped to their temp profile so they never touch user state.
+        unsafe { std::env::set_var("CLAUDE_CONFIG_DIR", &profile) };
         let config = load_runtime_config(
             Some(cwd),
             Some(profile),
@@ -553,12 +559,17 @@ mod tests {
             _tempdir: tempdir,
             config,
             cleanup_project_dir,
+            previous_claude_config_dir,
         }
     }
 
     impl Drop for TestRuntime {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.cleanup_project_dir);
+            match &self.previous_claude_config_dir {
+                Some(value) => unsafe { std::env::set_var("CLAUDE_CONFIG_DIR", value) },
+                None => unsafe { std::env::remove_var("CLAUDE_CONFIG_DIR") },
+            }
         }
     }
 

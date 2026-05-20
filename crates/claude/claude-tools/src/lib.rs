@@ -5542,7 +5542,35 @@ while True:
             Ok(dir) => dir,
             Err(error) => panic!("failed to create tempdir: {error}"),
         };
-        std::fs::create_dir_all(tempdir.path().join(".git")).expect("git marker");
+        let init = ProcessCommand::new("git")
+            .args(["-c", "init.defaultBranch=main", "init"])
+            .current_dir(tempdir.path())
+            .output()
+            .expect("git init should run");
+        assert!(
+            init.status.success(),
+            "git init failed: {}",
+            String::from_utf8_lossy(&init.stderr)
+        );
+        let commit = ProcessCommand::new("git")
+            .args([
+                "-c",
+                "user.name=Remote Code Test",
+                "-c",
+                "user.email=test@example.invalid",
+                "commit",
+                "--allow-empty",
+                "-m",
+                "init",
+            ])
+            .current_dir(tempdir.path())
+            .output()
+            .expect("git commit should run");
+        assert!(
+            commit.status.success(),
+            "git commit failed: {}",
+            String::from_utf8_lossy(&commit.stderr)
+        );
         let context = ToolExecutionContext {
             cwd: tempdir.path().to_path_buf(),
             original_cwd: tempdir.path().to_path_buf(),

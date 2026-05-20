@@ -785,7 +785,10 @@ Windows 本地发布建议:
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\verify-release.ps1 -IncludeAudit
 powershell -ExecutionPolicy Bypass -File scripts\verify-release.ps1 -IncludeDesktopBundle -IncludeAudit -UseProxy
+powershell -ExecutionPolicy Bypass -File scripts\acceptance-release.ps1 -RunBaseGates -IncludeWorkspaceTests -IncludeProviderMatrix -IncludeMcpMatrix -UseProxy
 ```
+
+发布证据必须使用或等价覆盖 [release acceptance evidence template](release-acceptance-evidence.md)，并保存脱敏日志、截图、安装包 hash、Provider/MCP 结果和人工环境签名。`scripts\acceptance-release.ps1` 只从环境变量读取真实 Provider/MCP key，并将输出写入未跟踪的 `.release-evidence/` 目录。
 
 ### 14.2 端到端验收
 

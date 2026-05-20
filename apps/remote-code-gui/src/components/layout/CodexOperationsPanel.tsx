@@ -1,5 +1,4 @@
 import {
-  Bot,
   Boxes,
   Compass,
   Database,
@@ -65,7 +64,7 @@ function Section({
 }: {
   title: string;
   description: string;
-  icon: typeof Bot;
+  icon: typeof Compass;
   children: ReactNode;
 }) {
   return (
@@ -654,7 +653,7 @@ export function CodexOperationsPanel() {
       <div className="rounded-[32px] border border-[#d8cfbf] bg-[#17181a] px-5 py-5 text-white">
         <div className="flex items-start gap-3">
           <div className="rounded-2xl bg-white/10 p-2">
-            <Bot size={20} />
+            <TerminalSquare size={20} />
           </div>
           <div>
             <h2 className="text-lg font-semibold">Codex Native Control Surface</h2>

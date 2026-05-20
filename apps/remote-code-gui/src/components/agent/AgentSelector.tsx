@@ -1,4 +1,4 @@
-import { Bot, ChevronDown } from 'lucide-react';
+import { ChevronDown, Cpu } from 'lucide-react';
 import { useState } from 'react';
 import type { AgentTypeInfo, AgentType } from '../../lib/types';
 
@@ -58,7 +58,7 @@ export function AgentSelector({ availableAgents, activeAgentType, onSelect }: Ag
         onClick={() => setOpen((prev) => !prev)}
         className="inline-flex items-center gap-2 rounded-lg border border-rc-border-primary bg-rc-bg-surface px-3 py-1.5 text-sm font-medium text-rc-text-secondary transition-colors hover:border-rc-border-hover hover:bg-rc-bg-hover hover:text-rc-text-primary"
       >
-        <Bot size={14} className="text-rc-text-tertiary" />
+        <Cpu size={14} className="text-rc-text-tertiary" />
         <span className="max-w-[160px] truncate">{activeLabel}</span>
         <ChevronDown size={14} className="text-rc-text-tertiary" />
       </button>

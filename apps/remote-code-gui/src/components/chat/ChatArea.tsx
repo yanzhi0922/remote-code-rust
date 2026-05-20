@@ -22,6 +22,7 @@ import {
   estimateEntryHeight,
 } from '../../lib/conversationUtils';
 import { useAppStore } from '../../stores/useAppStore';
+import { BrandMark } from '../brand/BrandMark';
 import CollapsibleBlock from './CollapsibleBlock';
 import { GoalStatusBar } from './GoalStatusBar';
 
@@ -48,8 +49,8 @@ function EmptyState({
   return (
     <div className="flex h-full min-h-[400px] items-center justify-center px-6">
       <div className="max-w-md text-center space-y-4">
-        <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-lg bg-[linear-gradient(135deg,#2563eb_0%,#0891b2_100%)] shadow-lg">
-          <span className="text-2xl font-bold text-white">RC</span>
+        <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-lg bg-[#111827] shadow-lg">
+          <BrandMark className="h-11 w-11" />
         </div>
         <div>
           <h2 className="text-xl font-semibold text-rc-text-primary">{title}</h2>
