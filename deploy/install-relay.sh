@@ -142,7 +142,7 @@ fi
 chown root:remote-code "$env_file"
 chmod 640 "$env_file"
 chown -R remote-code:remote-code "$(dirname "$STATE_DIR")" "$REMOTE_DIR/downloads"
-rm -rf /root/.remote-code-rust "$REMOTE_DIR/src"
+rm -rf /root/.remote-code-rust "$REMOTE_DIR/src" "$REMOTE_DIR/.git" "$REMOTE_DIR/Cargo.toml" "$REMOTE_DIR/Cargo.lock" "$REMOTE_DIR/crates" "$REMOTE_DIR/apps" "$REMOTE_DIR/agents" "$REMOTE_DIR/.research"
 
 install -m 644 "${tmp_dir}/unpack/deploy/tencent-cloud/remote-code-control-plane.service" /etc/systemd/system/remote-code-control-plane.service
 systemctl daemon-reload
@@ -219,6 +219,7 @@ fi
 
 systemctl is-active remote-code-control-plane >/dev/null
 curl -fsS "http://${BIND_ADDR}/healthz" >/dev/null
+bash "$REMOTE_DIR/deploy/tencent-cloud/audit-relay-host.sh"
 
 echo "Remote Code relay installed."
 echo "Public URL: https://${DOMAIN}"

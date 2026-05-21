@@ -14,6 +14,7 @@ pub use codex_state::LogEntry;
 use codex_state::ThreadMetadataBuilder;
 use codex_utils_path::normalize_for_path_comparison;
 use serde_json::Value;
+use std::ffi::OsStr;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -533,6 +534,9 @@ pub async fn apply_rollout_items(
         builder.model_provider = Some(default_provider.to_string());
     }
     builder.rollout_path = rollout_path.to_path_buf();
+    if rollout_path_looks_archived(&builder.rollout_path) && builder.archived_at.is_none() {
+        builder.archived_at = Some(builder.updated_at.unwrap_or(builder.created_at));
+    }
     builder.cwd = normalize_cwd_for_state_db(&builder.cwd);
     if let Err(err) = ctx
         .apply_rollout_items(&builder, items, new_thread_memory_mode, updated_at_override)
@@ -563,6 +567,11 @@ pub async fn touch_thread_updated_at(
             warn!("state db touch_thread_updated_at failed during {stage} for {thread_id}: {err}");
             false
         })
+}
+
+fn rollout_path_looks_archived(path: &Path) -> bool {
+    path.components()
+        .any(|component| component.as_os_str() == OsStr::new(crate::ARCHIVED_SESSIONS_SUBDIR))
 }
 
 #[cfg(test)]

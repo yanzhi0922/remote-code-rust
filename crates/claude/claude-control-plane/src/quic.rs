@@ -15,6 +15,7 @@ use uuid::Uuid;
 use crate::helpers;
 use crate::state::ControlPlaneService;
 use crate::types::{ApiError, TimelineEvent, TimelineEventDetail, TimelineEventDraft};
+use rc_remote_transport::TransportEvent;
 use rc_remote_transport::transport::{CommandAck, TransportApprovalDecision, TransportCommand};
 
 const MAX_QUIC_FRAME_BYTES: usize = 1024 * 1024;
@@ -391,7 +392,11 @@ async fn dispatch_approval_decision(
 
 async fn send_quic_event(conn: &quinn::Connection, event: &TimelineEvent) -> anyhow::Result<()> {
     let mut stream = conn.open_uni().await?;
-    write_len_prefixed_payload(&mut stream, event).await
+    let payload = TransportEvent {
+        sequence: event.sequence,
+        payload: serde_json::to_value(event)?,
+    };
+    write_len_prefixed_payload(&mut stream, &payload).await
 }
 
 fn runner_approval_decision(

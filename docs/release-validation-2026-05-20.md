@@ -4,6 +4,9 @@ This snapshot records the local evidence produced on 2026-05-20 in
 `D:\remote-code-rust`. It is not a production sign-off by itself; the
 requirements in [requirements.md](requirements.md) remain authoritative.
 
+For the latest full `-RequireComplete` release acceptance run, see
+[release-validation-2026-05-21.md](release-validation-2026-05-21.md).
+
 ## Automated Gates Run
 
 | Area | Result | Evidence |
@@ -13,9 +16,13 @@ requirements in [requirements.md](requirements.md) remain authoritative.
 | Claude check slice | PASS | `python scripts\cargo_workspace_slice.py check claude` |
 | Claude clippy slice | PASS | `python scripts\cargo_workspace_slice.py clippy claude` |
 | Claude test slice | PASS | `python scripts\cargo_workspace_slice.py test claude` |
+| Apps-shared check slice | PASS | `python scripts\cargo_workspace_slice.py check apps-shared` |
 | Focused MCP cleanup tests | PASS | `cargo test -p claude-mcp --lib -- --nocapture` |
 | Runner focused tests | PASS | `cargo test -p remote-code-runner --all-targets -j 1 -- --nocapture` |
 | Control-plane focused tests | PASS | `cargo test -p claude-control-plane --all-targets -j 1 -- --nocapture` |
+| QUIC transport E2E | PASS | `cargo test -p claude-control-plane --test quic_transport -- --nocapture`; covers cert fingerprint pinning, timeline event, prompt, approval |
+| Transport unit gates | PASS | `cargo test -p rc-remote-transport --features quic --lib -- --nocapture` |
+| Remote/mobile/transport acceptance subset | PASS | `scripts\acceptance-release.ps1 -IncludeRemoteE2E -IncludeMobilePwaE2E -IncludeTransportE2E -IncludeTailscaleE2E`; evidence `.release-evidence\20260520-205850` |
 | RustSec audit | PASS | `cargo audit --quiet` with proxy, exit code 0 |
 | Secret scan | PASS | `gitleaks detect --source /repo --redact --no-git` against a temporary copy of Git-tracked files plus this change set |
 | GUI dependency audit | PASS | `npm audit --audit-level=moderate --registry=https://registry.npmjs.org/` |
@@ -28,6 +35,7 @@ requirements in [requirements.md](requirements.md) remain authoritative.
 Ran in `C:\Users\Yanzh\Desktop\cli-stress-test` with provider keys supplied
 only through process environment variables. Logs were written under ignored
 `.release-evidence/` and sanitized by `scripts\acceptance-release.ps1`.
+The latest rerun was `.release-evidence\20260520-210153`.
 
 | Provider | Model | Protocol | Result |
 | --- | --- | --- | --- |
@@ -38,6 +46,8 @@ only through process environment variables. Logs were written under ignored
 ## MCP Acceptance
 
 Ran with `scripts\acceptance-release.ps1 -IncludeMcpMatrix -UseProxy`.
+The latest rerun was `.release-evidence\20260520-210153`; MiniMax now uses a
+real `web_search` tool call rather than treating a second discovery as a call.
 
 | MCP server | Discovery | Tool call | Result |
 | --- | --- | --- | --- |
@@ -52,21 +62,27 @@ successful navigation response, but the stdio child process and browser stayed
 alive. `claude-mcp` now terminates stdio MCP process trees on Windows and caps
 shutdown wait time, then the matrix passed.
 
-## Remaining Environment Sign-Off
+## Relay Host Audit
 
-The following requirements still need environment-specific sign-off before a
-production release can be claimed:
+Ran against `remote-code.yz520gzy.top` on 2026-05-20 after installing
+`deploy/tencent-cloud/audit-relay-host.sh` on the host and setting
+`REMOTE_CODE_CONTROL_PLANE_RELAY_ONLY=true`.
 
-- Installed Windows desktop first launch with embedded runner online.
-- Full relay + runner + control-plane remote E2E on the target host.
-- Mobile/PWA pairing, refresh restore, prompt, interrupt, approval, artifact
-  download, and timeline validation on real devices.
-- Relay, Direct WS, Outbound Poll, and QUIC controlled E2E, including QUIC
-  certificate/fingerprint and failure diagnostics.
-- Optional Tailscale tailnet direct path, ACL/device-trust evidence, E2EE,
-  approval, and artifact validation if that path is enabled.
-- Relay host inspection proving it contains no source tree, runner, agent,
-  workspace, provider keys, or MCP keys.
+| Check | Result |
+| --- | --- |
+| Public `/healthz` | PASS: `ok=true`, `auth_required=true`, `bootstrap_secret_configured=true`, `owner_claimed=true` |
+| Systemd boundary | PASS: only `remote-code-control-plane.service` running |
+| Process boundary | PASS: no runner, CLI, cargo/rustc, or agent process detected |
+| Source boundary | PASS: no Rust source tree under `/opt/remote-code` |
+| Secret boundary | PASS: env file contains no provider, cloud, or MCP key variables |
+| Query-token legacy switches | PASS: disabled or unset |
+| Audit summary | PASS: 13 pass, 0 warning, 0 failure |
 
-Any public release notes must either attach a completed redacted evidence report
-for these items or explicitly mark the release as not production-ready.
+## Release Boundary Enforcement
+
+`scripts\acceptance-release.ps1` now supports `-RequireComplete`. In that mode
+any `FAIL`, `SKIP`, or `MANUAL` status is release-blocking; disabled optional
+Tailscale closes as `N/A`. Relay host evidence must be supplied with
+`-RelayHostAuditReport`, and an enabled Tailscale path must supply
+`-TailscaleEvidenceReport`. Public release notes must attach the redacted
+evidence bundle for the exact commit being released.

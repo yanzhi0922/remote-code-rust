@@ -30,10 +30,12 @@ processes on the relay host.
 
 ## Cloud Host Guardrails
 
+- [ ] Run `sudo bash /opt/remote-code/deploy/tencent-cloud/audit-relay-host.sh` and attach the redacted output to the release evidence.
 - [ ] `systemctl list-units '*remote-code*'` shows `remote-code-control-plane` only.
 - [ ] No `remote-code-runner`, `remote-code`, `cargo`, `rustc`, Codex, Roo, or Claude agent process is running on the cloud host.
-- [ ] `/opt/remote-code/src` is absent; deployment uploads release artifacts, not the full source tree.
-- [ ] Provider API keys and workspace paths are configured only on the user's desktop or trusted runner machine.
+- [ ] `/opt/remote-code/src`, `/opt/remote-code/.git`, `/opt/remote-code/Cargo.toml`, `/opt/remote-code/crates`, `/opt/remote-code/apps`, and `/opt/remote-code/agents` are absent; deployment uploads release artifacts, not the full source tree.
+- [ ] Provider API keys, MCP keys, and workspace paths are configured only on the user's desktop or trusted runner machine.
+- [ ] `REMOTE_CODE_CONTROL_PLANE_BOOTSTRAP_SECRET` is a strong non-placeholder value, `REMOTE_CODE_CONTROL_PLANE_RELAY_ONLY=true`, and legacy query-token switches remain disabled.
 - [ ] `/download` and `/downloads/*` are authenticated through the control plane unless intentionally exposed by a separate nginx rule.
 
 ---

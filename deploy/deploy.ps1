@@ -60,6 +60,7 @@ try {
     & scp @SshOptions $ControlPlaneBin "$Server`:/tmp/remote-code-deploy/remote-code-control-plane"
     & scp @SshOptions $frontendArchive "$Server`:/tmp/remote-code-deploy/remote-code-gui-dist.tar.gz"
     & scp @SshOptions "deploy\tencent-cloud\deploy-remote-code-gui.sh" "$Server`:/tmp/remote-code-deploy/deploy-remote-code-gui.sh"
+    & scp @SshOptions "deploy\tencent-cloud\audit-relay-host.sh" "$Server`:/tmp/remote-code-deploy/audit-relay-host.sh"
     & scp @SshOptions "deploy\tencent-cloud\remote-code-control-plane.service" "$Server`:/tmp/remote-code-deploy/remote-code-control-plane.service"
     & scp @SshOptions "deploy\tencent-cloud\remote-code-control-plane.env.example" "$Server`:/tmp/remote-code-deploy/control-plane.env.example"
     & scp @SshOptions "deploy\tencent-cloud\nginx-remote-code.conf.example" "$Server`:/tmp/remote-code-deploy/nginx-remote-code.conf.example"
@@ -85,6 +86,7 @@ pkill -f '/opt/remote-code/bin/remote-code($| )' >/dev/null 2>&1 || true
 
 install -m 755 /tmp/remote-code-deploy/remote-code-control-plane "$REMOTE_DIR/bin/remote-code-control-plane"
 install -m 755 /tmp/remote-code-deploy/deploy-remote-code-gui.sh "$REMOTE_DIR/deploy/tencent-cloud/deploy-remote-code-gui.sh"
+install -m 755 /tmp/remote-code-deploy/audit-relay-host.sh "$REMOTE_DIR/deploy/tencent-cloud/audit-relay-host.sh"
 install -m 644 /tmp/remote-code-deploy/nginx-remote-code.conf.example "$REMOTE_DIR/deploy/tencent-cloud/nginx-remote-code.conf.example"
 
 if [ -f /tmp/remote-code-deploy/Remote-Code-0.1.0-x64-setup.exe ]; then
@@ -114,6 +116,7 @@ ensure_env REMOTE_CODE_CONTROL_PLANE_PUBLIC_BASE_URL "https://${DOMAIN}"
 ensure_env REMOTE_CODE_CORS_ORIGINS "https://${DOMAIN},tauri://localhost,http://tauri.localhost"
 ensure_env REMOTE_CODE_PROFILE_DIR "$STATE_DIR"
 ensure_env REMOTE_CODE_DOWNLOADS_DIR "$REMOTE_DIR/downloads"
+ensure_env REMOTE_CODE_CONTROL_PLANE_RELAY_ONLY true
 
 if ! grep -Eq '^REMOTE_CODE_CONTROL_PLANE_BOOTSTRAP_SECRET=.{16,}$' "$ENV_DIR/control-plane.env" ||
   grep -q '^REMOTE_CODE_CONTROL_PLANE_BOOTSTRAP_SECRET=change-this-before-first-boot$' "$ENV_DIR/control-plane.env"; then
@@ -123,7 +126,7 @@ fi
 chown root:remote-code "$ENV_DIR/control-plane.env"
 chmod 640 "$ENV_DIR/control-plane.env"
 
-rm -rf /root/.remote-code-rust "$REMOTE_DIR/src"
+rm -rf /root/.remote-code-rust "$REMOTE_DIR/src" "$REMOTE_DIR/.git" "$REMOTE_DIR/Cargo.toml" "$REMOTE_DIR/Cargo.lock" "$REMOTE_DIR/crates" "$REMOTE_DIR/apps" "$REMOTE_DIR/agents" "$REMOTE_DIR/.research"
 chown -R remote-code:remote-code "$(dirname "$STATE_DIR")" "$REMOTE_DIR/downloads"
 
 rm -rf /tmp/remote-code-gui-dist
@@ -143,7 +146,7 @@ if command -v nginx >/dev/null 2>&1; then
   systemctl reload nginx
 fi
 
-rm -rf /tmp/remote-code-deploy /tmp/remote-code-gui-dist "$REMOTE_DIR/src"
+rm -rf /tmp/remote-code-deploy /tmp/remote-code-gui-dist "$REMOTE_DIR/src" "$REMOTE_DIR/.git" "$REMOTE_DIR/Cargo.toml" "$REMOTE_DIR/Cargo.lock" "$REMOTE_DIR/crates" "$REMOTE_DIR/apps" "$REMOTE_DIR/agents" "$REMOTE_DIR/.research"
 
 forbidden_processes="$(pgrep -af '/opt/remote-code/bin/remote-code-runner|/opt/remote-code/bin/remote-code($| )' || true)"
 if [ -n "$forbidden_processes" ]; then
@@ -154,6 +157,7 @@ fi
 
 systemctl is-active remote-code-control-plane
 curl -fsS http://127.0.0.1:8787/healthz >/dev/null
+bash "$REMOTE_DIR/deploy/tencent-cloud/audit-relay-host.sh"
 '@
 
     $remoteCommand = "DOMAIN=$(Quote-RemoteShell $Domain) REMOTE_DIR=$(Quote-RemoteShell $RemoteDir) ENV_DIR=$(Quote-RemoteShell $EnvDir) STATE_DIR=$(Quote-RemoteShell $StateDir) bash -s"

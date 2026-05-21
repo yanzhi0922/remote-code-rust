@@ -76,9 +76,11 @@ impl RemoteTransport for QuicTransport {
             cert_fingerprints: cert_fp.map(|fp| vec![fp]).unwrap_or_default(),
             enforce_https: false, // QUIC has its own addressing
         })?;
+        let mut tls = (*tls).clone();
+        tls.alpn_protocols = vec![b"rc-quic/1".to_vec()];
 
         let client_config = quinn::ClientConfig::new(Arc::new(
-            quinn::crypto::rustls::QuicClientConfig::try_from(tls)
+            quinn::crypto::rustls::QuicClientConfig::try_from(Arc::new(tls))
                 .map_err(|e| anyhow::anyhow!("QUIC TLS config error: {e}"))?,
         ));
         let bind_addr: std::net::SocketAddr =
@@ -265,11 +267,7 @@ async fn quic_event_reader(
 
 fn parse_quic_addr(url: &str) -> anyhow::Result<std::net::SocketAddr> {
     // Accept formats: "quic://host:port", "host:port"
-    let stripped = url
-        .strip_prefix("quic://")
-        .unwrap_or(url)
-        .strip_prefix("https://")
-        .unwrap_or(url);
+    let stripped = strip_quic_scheme(url);
 
     stripped
         .parse()
@@ -277,10 +275,12 @@ fn parse_quic_addr(url: &str) -> anyhow::Result<std::net::SocketAddr> {
 }
 
 fn extract_server_name(url: &str) -> String {
-    let stripped = url
-        .strip_prefix("quic://")
-        .unwrap_or(url)
-        .strip_prefix("https://")
-        .unwrap_or(url);
+    let stripped = strip_quic_scheme(url);
     stripped.split(':').next().unwrap_or("localhost").to_owned()
+}
+
+fn strip_quic_scheme(url: &str) -> &str {
+    url.strip_prefix("quic://")
+        .or_else(|| url.strip_prefix("https://"))
+        .unwrap_or(url)
 }

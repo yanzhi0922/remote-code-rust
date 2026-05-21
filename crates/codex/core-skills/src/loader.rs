@@ -107,6 +107,7 @@ const AGENTS_DIR_NAME: &str = ".agents";
 const SKILLS_METADATA_DIR: &str = "agents";
 const SKILLS_METADATA_FILENAME: &str = "openai.yaml";
 const SKILLS_DIR_NAME: &str = "skills";
+const DISABLE_HOME_AGENT_SKILLS_ENV_VAR: &str = "CODEX_TEST_DISABLE_HOME_AGENT_SKILLS";
 const MAX_NAME_LEN: usize = 64;
 const MAX_DESCRIPTION_LEN: usize = 1024;
 const MAX_SHORT_DESCRIPTION_LEN: usize = MAX_DESCRIPTION_LEN;
@@ -224,8 +225,11 @@ pub(crate) async fn skill_roots(
     cwd: &AbsolutePathBuf,
     plugin_skill_roots: Vec<AbsolutePathBuf>,
 ) -> Vec<SkillRoot> {
-    let home_dir =
-        home_dir().and_then(|path| AbsolutePathBuf::from_absolute_path_checked(path).ok());
+    let home_dir = if std::env::var_os(DISABLE_HOME_AGENT_SKILLS_ENV_VAR).is_some() {
+        None
+    } else {
+        home_dir().and_then(|path| AbsolutePathBuf::from_absolute_path_checked(path).ok())
+    };
     skill_roots_with_home_dir(
         fs,
         config_layer_stack,

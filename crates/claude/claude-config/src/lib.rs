@@ -1042,8 +1042,8 @@ fn cli_setting_sources(
     sources
 }
 
-fn env_setting_sources() -> Vec<String> {
-    const ENV_KEYS: &[(&str, &str)] = &[
+fn env_setting_source_keys() -> &'static [(&'static str, &'static str)] {
+    &[
         ("REMOTE_CODE_PROVIDER", "env:REMOTE_CODE_PROVIDER"),
         ("REMOTE_CODE_BASE_URL", "env:REMOTE_CODE_BASE_URL"),
         ("OPENAI_BASE_URL", "env:OPENAI_BASE_URL"),
@@ -1169,8 +1169,11 @@ fn env_setting_sources() -> Vec<String> {
         ("VERTEX_PROJECT", "env:VERTEX_PROJECT"),
         ("VERTEX_REGION", "env:VERTEX_REGION"),
         ("VERTEX_MODEL", "env:VERTEX_MODEL"),
-    ];
-    ENV_KEYS
+    ]
+}
+
+fn env_setting_sources() -> Vec<String> {
+    env_setting_source_keys()
         .iter()
         .filter_map(|(key, label)| env::var(key).ok().map(|_| (*label).to_owned()))
         .collect()
@@ -2313,27 +2316,44 @@ mod tests {
         let profile_dir = temp.path().join("profile");
         fs::create_dir_all(&cwd).expect("workspace dir");
 
-        // Isolate from host environment variables that would add extra setting_sources.
-        let prev_base = std::env::var("ANTHROPIC_BASE_URL").ok();
-        let prev_key = std::env::var("ANTHROPIC_API_KEY").ok();
-        let prev_model = std::env::var("ANTHROPIC_MODEL").ok();
-        let prev_default_model = std::env::var("ANTHROPIC_DEFAULT_MODEL").ok();
-        let prev_default_sonnet = std::env::var("ANTHROPIC_DEFAULT_SONNET_MODEL").ok();
-        unsafe {
-            std::env::remove_var("ANTHROPIC_BASE_URL");
+        struct EnvSnapshot(Vec<(&'static str, Option<String>)>);
+
+        impl EnvSnapshot {
+            fn clear(names: impl IntoIterator<Item = &'static str>) -> Self {
+                let values = names
+                    .into_iter()
+                    .map(|name| {
+                        let value = std::env::var(name).ok();
+                        unsafe {
+                            std::env::remove_var(name);
+                        }
+                        (name, value)
+                    })
+                    .collect();
+                Self(values)
+            }
         }
-        unsafe {
-            std::env::remove_var("ANTHROPIC_API_KEY");
+
+        impl Drop for EnvSnapshot {
+            fn drop(&mut self) {
+                for (name, value) in self.0.drain(..) {
+                    match value {
+                        Some(value) => unsafe {
+                            std::env::set_var(name, value);
+                        },
+                        None => unsafe {
+                            std::env::remove_var(name);
+                        },
+                    }
+                }
+            }
         }
-        unsafe {
-            std::env::remove_var("ANTHROPIC_MODEL");
-        }
-        unsafe {
-            std::env::remove_var("ANTHROPIC_DEFAULT_MODEL");
-        }
-        unsafe {
-            std::env::remove_var("ANTHROPIC_DEFAULT_SONNET_MODEL");
-        }
+
+        let _env_snapshot = EnvSnapshot::clear(
+            super::env_setting_source_keys()
+                .iter()
+                .map(|(name, _)| *name),
+        );
 
         let config = load_runtime_config(
             Some(cwd),
@@ -2359,32 +2379,7 @@ mod tests {
         assert!(config.cli_settings_files.is_empty());
         assert_eq!(config.setting_sources, vec!["cli:provider".to_owned()]);
 
-        // Restore env vars for subsequent tests.
-        if let Some(v) = prev_base {
-            unsafe {
-                std::env::set_var("ANTHROPIC_BASE_URL", v);
-            }
-        }
-        if let Some(v) = prev_key {
-            unsafe {
-                std::env::set_var("ANTHROPIC_API_KEY", v);
-            }
-        }
-        if let Some(v) = prev_model {
-            unsafe {
-                std::env::set_var("ANTHROPIC_MODEL", v);
-            }
-        }
-        if let Some(v) = prev_default_model {
-            unsafe {
-                std::env::set_var("ANTHROPIC_DEFAULT_MODEL", v);
-            }
-        }
-        if let Some(v) = prev_default_sonnet {
-            unsafe {
-                std::env::set_var("ANTHROPIC_DEFAULT_SONNET_MODEL", v);
-            }
-        }
+        drop(_env_snapshot);
     }
 
     #[test]

@@ -19,6 +19,20 @@ if ($UseProxy) {
     $env:HTTP_PROXY = $ProxyUrl
     $env:HTTPS_PROXY = $ProxyUrl
     $env:ALL_PROXY = $ProxyUrl
+    $env:http_proxy = $ProxyUrl
+    $env:https_proxy = $ProxyUrl
+    $env:all_proxy = $ProxyUrl
+    $env:CARGO_HTTP_PROXY = $ProxyUrl
+    $loopbackNoProxy = "localhost,127.0.0.1,::1"
+    $env:NO_PROXY = if ([string]::IsNullOrWhiteSpace($env:NO_PROXY)) { $loopbackNoProxy } else { "$($env:NO_PROXY),$loopbackNoProxy" }
+    $env:no_proxy = if ([string]::IsNullOrWhiteSpace($env:no_proxy)) { $loopbackNoProxy } else { "$($env:no_proxy),$loopbackNoProxy" }
+    if ([string]::IsNullOrWhiteSpace($env:GIT_CONFIG_COUNT)) {
+        $env:GIT_CONFIG_COUNT = "2"
+        $env:GIT_CONFIG_KEY_0 = "http.proxy"
+        $env:GIT_CONFIG_VALUE_0 = $ProxyUrl
+        $env:GIT_CONFIG_KEY_1 = "https.proxy"
+        $env:GIT_CONFIG_VALUE_1 = $ProxyUrl
+    }
 }
 
 function Run-Step([string]$Name, [scriptblock]$Command) {
@@ -39,6 +53,23 @@ function Set-EnvDefault([string]$Name, [string]$Value) {
 
 function Invoke-CargoSlice([string]$Kind, [string]$Slice) {
     python (Join-Path $RepoRootPath "scripts\cargo_workspace_slice.py") $Kind $Slice
+}
+
+function Invoke-WithoutProxyEnv([scriptblock]$Command) {
+    $proxyEnvNames = @("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy")
+    $savedProxyEnv = @{}
+    foreach ($name in $proxyEnvNames) {
+        $savedProxyEnv[$name] = [Environment]::GetEnvironmentVariable($name)
+        [Environment]::SetEnvironmentVariable($name, $null, "Process")
+    }
+    try {
+        & $Command
+    }
+    finally {
+        foreach ($entry in $savedProxyEnv.GetEnumerator()) {
+            [Environment]::SetEnvironmentVariable($entry.Key, $entry.Value, "Process")
+        }
+    }
 }
 
 function Invoke-Gitleaks {
@@ -93,7 +124,9 @@ if (-not $SkipRust) {
         }
         if ($IncludeWorkspaceTests) {
             foreach ($slice in @("claude", "codex", "roo", "apps-shared")) {
-                Run-Step "Cargo test slice: $slice" { Invoke-CargoSlice "test" $slice }
+                Run-Step "Cargo test slice: $slice" {
+                    Invoke-WithoutProxyEnv { Invoke-CargoSlice "test" $slice }
+                }
             }
         }
         if ($IncludeAudit) {

@@ -55,6 +55,15 @@ fn enable_deterministic_unified_exec_process_ids_for_tests() {
 }
 
 #[ctor]
+fn isolate_global_home_agent_skills_for_tests() {
+    // Keep integration tests hermetic on machines that have user-installed
+    // skills under $HOME/.agents/skills.
+    unsafe {
+        std::env::set_var("CODEX_TEST_DISABLE_HOME_AGENT_SKILLS", "1");
+    }
+}
+
+#[ctor]
 fn configure_arg0_dispatch_for_test_binaries() {
     let _ = TEST_ARG0_PATH_ENTRY.get_or_init(codex_arg0::arg0_dispatch);
 }
@@ -66,6 +75,17 @@ fn configure_insta_workspace_root_for_snapshot_tests() {
     }
 
     let workspace_root = codex_utils_cargo_bin::repo_root().ok().map(|root| {
+        if let Some(monorepo_root) = root.ancestors().find(|candidate| {
+            candidate
+                .join("crates")
+                .join("codex")
+                .join("core")
+                .join("tests")
+                .is_dir()
+        }) {
+            return monorepo_root.to_path_buf();
+        }
+
         let nested_codex_root = root.join("codex-rs");
         if nested_codex_root.is_dir() {
             nested_codex_root

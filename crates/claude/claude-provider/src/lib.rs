@@ -3892,10 +3892,15 @@ mod tests {
     async fn provider_does_not_retry_non_retryable_status() {
         async fn handler(
             State(attempts): State<Arc<AtomicUsize>>,
-        ) -> (axum::http::StatusCode, Json<serde_json::Value>) {
+        ) -> (
+            axum::http::StatusCode,
+            [(&'static str, &'static str); 1],
+            Json<serde_json::Value>,
+        ) {
             attempts.fetch_add(1, Ordering::SeqCst);
             (
                 axum::http::StatusCode::UNAUTHORIZED,
+                [("connection", "close")],
                 Json(json!({"error": {"message": "bad api key"}})),
             )
         }

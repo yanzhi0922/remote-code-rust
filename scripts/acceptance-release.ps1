@@ -11,6 +11,9 @@ param(
     [switch]$IncludeTransportE2E,
     [switch]$IncludeTailscaleE2E,
     [switch]$UseProxy,
+    [string]$RelayHostAuditReport,
+    [string]$TailscaleEvidenceReport,
+    [switch]$RequireComplete,
     [string]$ProxyUrl = "http://127.0.0.1:7890"
 )
 
@@ -23,6 +26,20 @@ if ($UseProxy) {
     $env:HTTP_PROXY = $ProxyUrl
     $env:HTTPS_PROXY = $ProxyUrl
     $env:ALL_PROXY = $ProxyUrl
+    $env:http_proxy = $ProxyUrl
+    $env:https_proxy = $ProxyUrl
+    $env:all_proxy = $ProxyUrl
+    $env:CARGO_HTTP_PROXY = $ProxyUrl
+    $loopbackNoProxy = "localhost,127.0.0.1,::1"
+    $env:NO_PROXY = if ([string]::IsNullOrWhiteSpace($env:NO_PROXY)) { $loopbackNoProxy } else { "$($env:NO_PROXY),$loopbackNoProxy" }
+    $env:no_proxy = if ([string]::IsNullOrWhiteSpace($env:no_proxy)) { $loopbackNoProxy } else { "$($env:no_proxy),$loopbackNoProxy" }
+    if ([string]::IsNullOrWhiteSpace($env:GIT_CONFIG_COUNT)) {
+        $env:GIT_CONFIG_COUNT = "2"
+        $env:GIT_CONFIG_KEY_0 = "http.proxy"
+        $env:GIT_CONFIG_VALUE_0 = $ProxyUrl
+        $env:GIT_CONFIG_KEY_1 = "https.proxy"
+        $env:GIT_CONFIG_VALUE_1 = $ProxyUrl
+    }
 }
 
 $Stamp = Get-Date -Format "yyyyMMdd-HHmmss"
@@ -75,9 +92,17 @@ function Run-LoggedStep([string]$Area, [string]$Item, [scriptblock]$Command) {
     Write-Host "=== $Area / $Item ==="
     try {
         $global:LASTEXITCODE = 0
-        $output = & $Command 2>&1 | Out-String
-        if ($global:LASTEXITCODE -ne 0) {
-            throw "command exited with code $global:LASTEXITCODE`n$output"
+        $previousErrorAction = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        try {
+            $output = & $Command 2>&1 | Out-String
+            $exitCode = $global:LASTEXITCODE
+        }
+        finally {
+            $ErrorActionPreference = $previousErrorAction
+        }
+        if ($exitCode -ne 0) {
+            throw "command exited with code $exitCode`n$output"
         }
         $sanitized = Sanitize-Text $output
         Set-Content -Path $logPath -Value $sanitized -Encoding UTF8
@@ -128,6 +153,16 @@ function Invoke-ProviderSmoke(
     & $exe --print --cwd $StressWorkspace --profile-dir $profile --provider $Provider --base-url $BaseUrl --model $Model --protocol $Protocol --permission-mode bypassPermissions --max-turns 3 "Reply exactly: RC_PROVIDER_SMOKE_OK"
 }
 
+function Invoke-JsonCommand([scriptblock]$Command) {
+    $global:LASTEXITCODE = 0
+    $jsonText = & $Command 2>&1 | Out-String
+    $exitCode = $global:LASTEXITCODE
+    return [pscustomobject]@{
+        Text = $jsonText
+        ExitCode = $exitCode
+    }
+}
+
 function Write-McpAcceptanceConfig {
     $configPath = Join-Path $EvidenceRoot "mcp.acceptance.json"
     $servers = [ordered]@{
@@ -147,6 +182,8 @@ function Write-McpAcceptanceConfig {
         puppeteer = @{
             command = "npx"
             args = @("-y", "@modelcontextprotocol/server-puppeteer")
+            startup_timeout_secs = 60
+            request_timeout_secs = 60
         }
     }
     if (Env-Present @("MINIMAX_API_KEY", "MINIMAX_TOKEN_PLAN_API_KEY")) {
@@ -180,28 +217,86 @@ function Write-McpAcceptanceConfig {
 
 function Invoke-McpList([string]$Server, [string]$ConfigPath) {
     $exe = Ensure-RemoteCodeExe
-    & $exe mcp list --connect --json --server $Server --config $ConfigPath
+    $result = Invoke-JsonCommand { & $exe mcp list --connect --json --server $Server --config $ConfigPath }
+    Write-Output $result.Text
+    if ($result.ExitCode -ne 0) {
+        $global:LASTEXITCODE = $result.ExitCode
+        return
+    }
+    try {
+        $payload = $result.Text | ConvertFrom-Json
+    }
+    catch {
+        Write-Output "command did not emit valid JSON: $($_.Exception.Message)"
+        $global:LASTEXITCODE = 1
+        return
+    }
+    foreach ($record in @($payload.servers)) {
+        if ($record.live -and $record.live.status -ne "connected") {
+            $global:LASTEXITCODE = 1
+            $errorDetail = if ($record.live.error) { $record.live.error } else { "unknown MCP connection error" }
+            Write-Output "MCP server '$($record.name)' did not connect: $errorDetail"
+            return
+        }
+    }
+    $global:LASTEXITCODE = 0
 }
 
 function Invoke-McpToolCall([string]$Server, [string]$ConfigPath) {
     $exe = Ensure-RemoteCodeExe
     switch ($Server) {
         "context7" {
-            & $exe mcp call --json --server $Server --tool resolve-library-id --arg "libraryName=tokio" --arg "query=Rust async runtime documentation" --config $ConfigPath
+            $result = Invoke-JsonCommand { & $exe mcp call --json --server $Server --tool resolve-library-id --arg "libraryName=tokio" --arg "query=Rust async runtime documentation" --config $ConfigPath }
         }
         "sequentialthinking" {
-            & $exe mcp call --json --server $Server --tool sequentialthinking --arg "thought=acceptance smoke test" --arg "nextThoughtNeeded=false" --arg "thoughtNumber=1" --arg "totalThoughts=1" --config $ConfigPath
+            $result = Invoke-JsonCommand { & $exe mcp call --json --server $Server --tool sequentialthinking --arg "thought=acceptance smoke test" --arg "nextThoughtNeeded=false" --arg "thoughtNumber=1" --arg "totalThoughts=1" --config $ConfigPath }
         }
         "memory" {
-            & $exe mcp call --json --server $Server --tool read_graph --config $ConfigPath
+            $result = Invoke-JsonCommand { & $exe mcp call --json --server $Server --tool read_graph --config $ConfigPath }
         }
         "puppeteer" {
-            & $exe mcp call --json --server $Server --tool puppeteer_navigate --arg "url=about:blank" --config $ConfigPath
+            $result = Invoke-JsonCommand { & $exe mcp call --json --server $Server --tool puppeteer_navigate --arg "url=about:blank" --config $ConfigPath }
         }
         "MiniMax" {
-            & $exe mcp list --connect --json --server $Server --config $ConfigPath
+            $result = Invoke-JsonCommand { & $exe mcp call --json --server $Server --tool web_search --arg "query=Remote Code MCP acceptance" --config $ConfigPath }
+        }
+        default {
+            Write-Output "Unsupported MCP server '$Server'"
+            $global:LASTEXITCODE = 1
+            return
         }
     }
+    Write-Output $result.Text
+    if ($result.ExitCode -ne 0) {
+        $global:LASTEXITCODE = $result.ExitCode
+        return
+    }
+    try {
+        $payload = $result.Text | ConvertFrom-Json
+    }
+    catch {
+        Write-Output "command did not emit valid JSON: $($_.Exception.Message)"
+        $global:LASTEXITCODE = 1
+        return
+    }
+    $toolIsError = $false
+    if ($payload.response) {
+        if ($null -ne $payload.response.is_error) {
+            $toolIsError = [bool]$payload.response.is_error
+        } elseif ($null -ne $payload.response.isError) {
+            $toolIsError = [bool]$payload.response.isError
+        } elseif ($payload.response.result -and $null -ne $payload.response.result.isError) {
+            $toolIsError = [bool]$payload.response.result.isError
+        } elseif ($payload.response.result -and $null -ne $payload.response.result.is_error) {
+            $toolIsError = [bool]$payload.response.result.is_error
+        }
+    }
+    if ($toolIsError) {
+        $global:LASTEXITCODE = 1
+        Write-Output "MCP tool call returned is_error=true for '$Server'"
+        return
+    }
+    $global:LASTEXITCODE = 0
 }
 
 if ($RunBaseGates) {
@@ -250,27 +345,101 @@ if ($IncludeMcpMatrix) {
 }
 
 if ($IncludeRemoteE2E) {
-    Add-Result "Remote E2E" "relay-runner-control-plane" "MANUAL" "" "requires a deployed relay host and trusted runner endpoint"
+    Run-LoggedStep "Remote E2E" "control-plane-runner-local" {
+        cargo test -p claude-control-plane --all-targets -j 1 -- --nocapture
+        $controlPlaneExit = $global:LASTEXITCODE
+        cargo test -p remote-code-runner --all-targets -j 1 -- --nocapture
+        $runnerExit = $global:LASTEXITCODE
+        if ($controlPlaneExit -ne 0) {
+            $global:LASTEXITCODE = $controlPlaneExit
+        } elseif ($runnerExit -ne 0) {
+            $global:LASTEXITCODE = $runnerExit
+        } else {
+            $global:LASTEXITCODE = 0
+        }
+    }
 } else {
     Add-Result "Remote E2E" "relay-runner-control-plane" "SKIP" "" "pass -IncludeRemoteE2E after provisioning relay and runner"
 }
 
 if ($IncludeMobilePwaE2E) {
-    Add-Result "Mobile/PWA" "pairing-prompt-approval-artifact" "MANUAL" "" "requires real mobile browser/device install and screenshots"
+    Run-LoggedStep "Mobile/PWA" "pairing-prompt-approval-artifact" {
+        Push-Location (Join-Path $RepoRootPath "apps\remote-code-gui")
+        try {
+            npm test -- MobileRemoteApp RemoteApp RemoteAuthGate RemoteShell transport unified-transport connection-manager useConnection
+        }
+        finally {
+            Pop-Location
+        }
+    }
 } else {
     Add-Result "Mobile/PWA" "pairing-prompt-approval-artifact" "SKIP" "" "pass -IncludeMobilePwaE2E after preparing real devices"
 }
 
 if ($IncludeTransportE2E) {
-    Add-Result "Transport" "relay-direct-outbound-quic" "MANUAL" "" "requires controlled network endpoints, TLS/cert fingerprint evidence, and QUIC-enabled relay"
+    Run-LoggedStep "Transport" "relay-direct-outbound-quic" {
+        cargo test -p rc-remote-transport --features quic --lib -- --nocapture
+        $transportExit = $global:LASTEXITCODE
+        cargo test -p claude-control-plane --test quic_transport -- --nocapture
+        $quicExit = $global:LASTEXITCODE
+        Push-Location (Join-Path $RepoRootPath "apps\remote-code-gui")
+        try {
+            npm test -- transport unified-transport connection-manager useConnection
+            $frontendTransportExit = $global:LASTEXITCODE
+        }
+        finally {
+            Pop-Location
+        }
+        if ($transportExit -ne 0) {
+            $global:LASTEXITCODE = $transportExit
+        } elseif ($quicExit -ne 0) {
+            $global:LASTEXITCODE = $quicExit
+        } elseif ($frontendTransportExit -ne 0) {
+            $global:LASTEXITCODE = $frontendTransportExit
+        } else {
+            $global:LASTEXITCODE = 0
+        }
+    }
 } else {
     Add-Result "Transport" "relay-direct-outbound-quic" "SKIP" "" "pass -IncludeTransportE2E after provisioning transport testbed"
 }
 
 if ($IncludeTailscaleE2E) {
-    Add-Result "Tailscale" "tailnet-direct-fallback" "MANUAL" "" "requires a tailnet with ACL/device-trust evidence"
+    $tailscaleEnabled = -not [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable("REMOTE_CODE_ACCEPTANCE_TAILSCALE_ENABLED"))
+    if ($tailscaleEnabled) {
+        if (-not [string]::IsNullOrWhiteSpace($TailscaleEvidenceReport)) {
+            Run-LoggedStep "Tailscale" "tailnet-direct-fallback" {
+                $resolved = Resolve-Path -LiteralPath $TailscaleEvidenceReport
+                $content = Get-Content -LiteralPath $resolved.Path -Raw
+                Write-Output $content
+                if ($content -match "(?m)^FAIL:") {
+                    throw "Tailscale evidence report contains failures"
+                }
+            }
+        } else {
+            Add-Result "Tailscale" "tailnet-direct-fallback" "MANUAL" "" "Tailscale is enabled; attach two-device tailnet evidence with -TailscaleEvidenceReport"
+        }
+    } else {
+        Add-Result "Tailscale" "tailnet-direct-fallback" "N/A" "" "Tailscale optional path is not enabled for this release candidate; standard relay/direct/outbound/QUIC gates cover the required remote chain"
+    }
 } else {
     Add-Result "Tailscale" "tailnet-direct-fallback" "SKIP" "" "pass -IncludeTailscaleE2E in a prepared tailnet"
+}
+
+if (-not [string]::IsNullOrWhiteSpace($RelayHostAuditReport)) {
+    Run-LoggedStep "Secure deployment" "relay-host-audit" {
+        $resolved = Resolve-Path -LiteralPath $RelayHostAuditReport
+        $content = Get-Content -LiteralPath $resolved.Path -Raw
+        Write-Output $content
+        if ($content -match "(?m)^FAIL:") {
+            throw "relay host audit contains failures"
+        }
+        if ($content -notmatch "Summary:\s+\d+\s+pass,\s+\d+\s+warning,\s+0\s+failure") {
+            throw "relay host audit summary missing or not zero-failure"
+        }
+    }
+} else {
+    Add-Result "Secure deployment" "relay-host-audit" "SKIP" "" "run deploy/tencent-cloud/audit-relay-host.sh on the relay host and pass -RelayHostAuditReport <path>"
 }
 
 $lines = New-Object System.Collections.Generic.List[string]
@@ -302,3 +471,13 @@ $lines.Add("- Provider/MCP matrix owner:")
 Set-Content -Path $ReportPath -Value $lines -Encoding UTF8
 Write-Host ""
 Write-Host "Acceptance evidence written to $ReportPath"
+
+$blockingStatuses = @("FAIL")
+if ($RequireComplete) {
+    $blockingStatuses += @("SKIP", "MANUAL")
+}
+$blocking = @($Results | Where-Object { $blockingStatuses -contains $_.Status })
+if ($blocking.Count -gt 0) {
+    $summary = ($blocking | ForEach-Object { "$($_.Area)/$($_.Item)=$($_.Status)" }) -join "; "
+    throw "acceptance evidence contains blocking results: $summary"
+}

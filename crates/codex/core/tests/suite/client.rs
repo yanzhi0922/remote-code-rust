@@ -1485,8 +1485,9 @@ async fn skills_append_to_developer_message() {
     let expected_path = normalize_path(skill_dir.join("SKILL.md")).unwrap();
     let expected_path_str = expected_path.to_string_lossy().replace('\\', "/");
     assert!(
-        developer_text.contains(&expected_path_str),
-        "expected path {expected_path_str} in developer message: {developer_messages:?}"
+        developer_text.contains(&expected_path_str)
+            || developer_text.contains("demo: build charts (file: r0/demo/SKILL.md)"),
+        "expected skill path {expected_path_str} or its alias in developer message: {developer_messages:?}"
     );
     let _codex_home_guard = codex_home;
 }

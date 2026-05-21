@@ -16,6 +16,13 @@ use crate::types::{Command, CommandSource};
 ///
 /// Priority order: `project` > `global` > `built-in` (later sources override earlier ones).
 pub async fn get_commands(cwd: &Path) -> Vec<Command> {
+    let global_dir = get_global_roo_directory().join("commands");
+    let project_dir = get_project_roo_directory_for_cwd(cwd).join("commands");
+
+    get_commands_from_dirs(&global_dir, &project_dir).await
+}
+
+async fn get_commands_from_dirs(global_dir: &Path, project_dir: &Path) -> Vec<Command> {
     let mut commands: HashMap<String, Command> = HashMap::new();
 
     // 1. Built-in commands (lowest priority)
@@ -25,12 +32,10 @@ pub async fn get_commands(cwd: &Path) -> Vec<Command> {
     }
 
     // 2. Global commands (override built-in)
-    let global_dir = get_global_roo_directory().join("commands");
-    scan_command_directory(&global_dir, CommandSource::Global, &mut commands).await;
+    scan_command_directory(global_dir, CommandSource::Global, &mut commands).await;
 
     // 3. Project commands (highest priority — override both global and built-in)
-    let project_dir = get_project_roo_directory_for_cwd(cwd).join("commands");
-    scan_command_directory(&project_dir, CommandSource::Project, &mut commands).await;
+    scan_command_directory(project_dir, CommandSource::Project, &mut commands).await;
 
     commands.into_values().collect()
 }
@@ -43,13 +48,21 @@ pub async fn get_command(cwd: &Path, name: &str) -> Option<Command> {
     let project_dir = get_project_roo_directory_for_cwd(cwd).join("commands");
     let global_dir = get_global_roo_directory().join("commands");
 
+    get_command_from_dirs(&global_dir, &project_dir, name).await
+}
+
+async fn get_command_from_dirs(
+    global_dir: &Path,
+    project_dir: &Path,
+    name: &str,
+) -> Option<Command> {
     // Project (highest priority)
-    if let Some(cmd) = try_load_command(&project_dir, name, CommandSource::Project).await {
+    if let Some(cmd) = try_load_command(project_dir, name, CommandSource::Project).await {
         return Some(cmd);
     }
 
     // Global
-    if let Some(cmd) = try_load_command(&global_dir, name, CommandSource::Global).await {
+    if let Some(cmd) = try_load_command(global_dir, name, CommandSource::Global).await {
         return Some(cmd);
     }
 
@@ -185,36 +198,45 @@ mod tests {
         path
     }
 
+    fn command_dirs(tmp: &TempDir) -> (PathBuf, PathBuf) {
+        let global = tmp.path().join("global").join("commands");
+        let project = tmp.path().join("project").join(".roo").join("commands");
+        fs::create_dir_all(&global).unwrap();
+        fs::create_dir_all(&project).unwrap();
+        (global, project)
+    }
+
+    fn command_by_name<'a>(commands: &'a [Command], name: &str) -> &'a Command {
+        commands
+            .iter()
+            .find(|cmd| cmd.name == name)
+            .unwrap_or_else(|| panic!("missing command {name}"))
+    }
+
     #[tokio::test]
     async fn test_get_commands_empty() {
         let tmp = TempDir::new().unwrap();
-        let cwd = tmp.path();
+        let (global_commands, project_commands) = command_dirs(&tmp);
 
-        // Create .roo/commands directory (empty)
-        let project_commands = cwd.join(".roo").join("commands");
-        fs::create_dir_all(&project_commands).unwrap();
-
-        let commands = get_commands(cwd).await;
-        // Built-in is empty, no global/project commands
-        assert!(commands.is_empty());
+        let commands = get_commands_from_dirs(&global_commands, &project_commands).await;
+        assert_eq!(commands.len(), 1);
+        assert_eq!(commands[0].name, "init");
+        assert_eq!(commands[0].source, CommandSource::BuiltIn);
     }
 
     #[tokio::test]
     async fn test_get_commands_from_project_dir() {
         let tmp = TempDir::new().unwrap();
-        let cwd = tmp.path();
-
-        let project_commands = cwd.join(".roo").join("commands");
-        fs::create_dir_all(&project_commands).unwrap();
+        let (global_commands, project_commands) = command_dirs(&tmp);
         create_md_file(
             &project_commands,
             "test-cmd.md",
             "---\ndescription: Test\n---\nTest body",
         );
 
-        let commands = get_commands(cwd).await;
-        assert_eq!(commands.len(), 1);
-        let cmd = &commands[0];
+        let commands = get_commands_from_dirs(&global_commands, &project_commands).await;
+        assert_eq!(commands.len(), 2);
+        let cmd = command_by_name(&commands, "test-cmd");
         assert_eq!(cmd.name, "test-cmd");
         assert_eq!(cmd.content, "Test body");
         assert_eq!(cmd.description.as_deref(), Some("Test"));
@@ -224,13 +246,10 @@ mod tests {
     #[tokio::test]
     async fn test_get_command_by_name() {
         let tmp = TempDir::new().unwrap();
-        let cwd = tmp.path();
-
-        let project_commands = cwd.join(".roo").join("commands");
-        fs::create_dir_all(&project_commands).unwrap();
+        let (global_commands, project_commands) = command_dirs(&tmp);
         create_md_file(&project_commands, "find.md", "Find command body");
 
-        let cmd = get_command(cwd, "find").await;
+        let cmd = get_command_from_dirs(&global_commands, &project_commands, "find").await;
         assert!(cmd.is_some());
         assert_eq!(cmd.unwrap().content, "Find command body");
     }
@@ -238,28 +257,26 @@ mod tests {
     #[tokio::test]
     async fn test_get_command_not_found() {
         let tmp = TempDir::new().unwrap();
-        let cwd = tmp.path();
+        let (global_commands, project_commands) = command_dirs(&tmp);
 
-        let project_commands = cwd.join(".roo").join("commands");
-        fs::create_dir_all(&project_commands).unwrap();
-
-        let cmd = get_command(cwd, "nonexistent").await;
+        let cmd = get_command_from_dirs(&global_commands, &project_commands, "nonexistent").await;
         assert!(cmd.is_none());
     }
 
     #[tokio::test]
     async fn test_get_command_names() {
         let tmp = TempDir::new().unwrap();
-        let cwd = tmp.path();
-
-        let project_commands = cwd.join(".roo").join("commands");
-        fs::create_dir_all(&project_commands).unwrap();
+        let (global_commands, project_commands) = command_dirs(&tmp);
         create_md_file(&project_commands, "alpha.md", "Alpha");
         create_md_file(&project_commands, "beta.md", "Beta");
 
-        let mut names = get_command_names(cwd).await;
+        let mut names = get_commands_from_dirs(&global_commands, &project_commands)
+            .await
+            .into_iter()
+            .map(|cmd| cmd.name)
+            .collect::<Vec<_>>();
         names.sort();
-        assert_eq!(names, vec!["alpha", "beta"]);
+        assert_eq!(names, vec!["alpha", "beta", "init"]);
     }
 
     #[tokio::test]
@@ -297,25 +314,25 @@ mod tests {
 
     #[tokio::test]
     async fn test_built_in_commands_empty() {
-        assert!(get_built_in_commands().is_empty());
+        let commands = get_built_in_commands();
+        assert_eq!(commands.len(), 1);
+        let init = &commands[0];
+        assert_eq!(init.name, "init");
+        assert_eq!(init.source, CommandSource::BuiltIn);
+        assert_eq!(init.description.as_deref(), Some(BUILTIN_INIT_DESCRIPTION));
+        assert!(init.content.contains("<analysis_workflow>"));
         assert!(get_built_in_command("anything").is_none());
+        assert!(get_built_in_command("init").is_some());
     }
 
     #[tokio::test]
     async fn test_project_overrides_global_in_get_commands() {
         let tmp = TempDir::new().unwrap();
-        let cwd = tmp.path();
-
-        // Set up global commands
-        let _global_dir = roo_config::get_global_roo_directory().join("commands");
-
-        // We don't want to write to the real global directory in tests,
-        // so we just test with project commands overriding the concept.
-        let project_commands = cwd.join(".roo").join("commands");
-        fs::create_dir_all(&project_commands).unwrap();
+        let (global_commands, project_commands) = command_dirs(&tmp);
+        create_md_file(&global_commands, "override.md", "Global version");
         create_md_file(&project_commands, "override.md", "Project version");
 
-        let commands = get_commands(cwd).await;
+        let commands = get_commands_from_dirs(&global_commands, &project_commands).await;
         let override_cmd = commands.iter().find(|c| c.name == "override");
         assert!(override_cmd.is_some());
         assert_eq!(override_cmd.unwrap().content, "Project version");

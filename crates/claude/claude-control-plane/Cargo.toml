@@ -36,6 +36,7 @@ claude-runner = { path = "../claude-runner" }
 rc-remote-transport = { path = "../../shared/rc-remote-transport", features = ["quic"] }
 
 [dev-dependencies]
+rcgen = { version = "0.14.7", default-features = false, features = ["ring", "pem"] }
 tempfile.workspace = true
 tokio-tungstenite.workspace = true
 tower = "0.5.2"

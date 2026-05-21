@@ -1021,7 +1021,50 @@ async fn workspace_write_turns_continue_to_expose_managed_network_proxy() -> any
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn user_shell_commands_do_not_inherit_managed_network_proxy() -> anyhow::Result<()> {
+    struct EnvSnapshot(Vec<(&'static str, Option<std::ffi::OsString>)>);
+
+    impl EnvSnapshot {
+        fn clear(names: impl IntoIterator<Item = &'static str>) -> Self {
+            let values = names
+                .into_iter()
+                .map(|name| {
+                    let value = std::env::var_os(name);
+                    unsafe {
+                        std::env::remove_var(name);
+                    }
+                    (name, value)
+                })
+                .collect();
+            Self(values)
+        }
+    }
+
+    impl Drop for EnvSnapshot {
+        fn drop(&mut self) {
+            for (name, value) in self.0.drain(..) {
+                match value {
+                    Some(value) => unsafe {
+                        std::env::set_var(name, value);
+                    },
+                    None => unsafe {
+                        std::env::remove_var(name);
+                    },
+                }
+            }
+        }
+    }
+
+    let _proxy_env = EnvSnapshot::clear([
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "ALL_PROXY",
+        "http_proxy",
+        "https_proxy",
+        "all_proxy",
+    ]);
+
     let sandbox_policy = SandboxPolicy::new_workspace_write_policy();
     let network_spec = crate::config::NetworkProxySpec::from_config_and_constraints(
         NetworkProxyConfig::default(),

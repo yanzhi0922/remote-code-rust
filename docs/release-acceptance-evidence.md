@@ -53,7 +53,7 @@ or raw provider/MCP configuration files into this document.
 | Mobile/PWA | Pairing, restore, prompt, interrupt, approval, artifact, timeline, refresh auth | | |
 | Remote Transport | Relay, Direct WS, Outbound Poll, QUIC E2E and failure diagnostics | | |
 | Tailscale optional path | Tailnet direct detect/manual/disabled/fallback/E2EE/approval/artifact | | |
-| Provider matrix | MiniMax and KuaiKAT across Claude/Codex/Roo paths, timing/cost/tool/diff notes | | |
+| Provider matrix | MiniMax, KuaiKAT, and DeepSeek across Claude/Codex/Roo paths, timing/cost/tool/diff notes | | |
 | MCP matrix | MiniMax/context7/sequentialthinking/memory/puppeteer startup, health, discovery, call, failure, redaction | | |
 | Secure deployment | Relay host contains only control plane and no source tree/provider keys/workspaces | | |
 | Release packages | Windows installer install/launch; Linux relay and Web/PWA deployable artifacts | | |
@@ -73,7 +73,7 @@ or raw provider/MCP configuration files into this document.
 | Default remote transport is `smart`; manual override wins | | |
 | Relay, Direct WS, Outbound Poll, QUIC completed declared E2E | | |
 | Tailscale ACL/device-trust advice recorded when Tailscale is enabled | | |
-| MiniMax and KuaiKAT provider release records complete | | |
+| MiniMax, KuaiKAT, and DeepSeek provider release records complete | | |
 | MiniMax, context7, sequentialthinking, memory, puppeteer MCP release records complete | | |
 | Docs, reports, logs, screenshots, recordings, exports, Git files contain no real secrets | | |
 
@@ -89,9 +89,15 @@ powershell -ExecutionPolicy Bypass -File scripts\acceptance-release.ps1 `
   -IncludeRemoteE2E `
   -IncludeMobilePwaE2E `
   -IncludeTransportE2E `
+  -IncludeTailscaleE2E `
+  -RelayHostAuditReport .\relay-host-audit.txt `
+  -RequireComplete `
   -UseProxy
 ```
 
-The script writes a sanitized report and logs under `.release-evidence/`. Items
-that require real devices, a deployed relay, QUIC testbed, or a tailnet are
-recorded as manual evidence requirements until that environment is present.
+The script writes a sanitized report and logs under `.release-evidence/`.
+`-RequireComplete` makes `FAIL`, `SKIP`, and `MANUAL` statuses release
+blocking. A disabled optional Tailscale path may close as `N/A`; an enabled
+tailnet path must attach a separate redacted evidence report with
+`-TailscaleEvidenceReport`. Relay host boundary checks must come from
+`deploy/tencent-cloud/audit-relay-host.sh` running on the relay host.

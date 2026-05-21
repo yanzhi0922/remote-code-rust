@@ -149,6 +149,7 @@ jobs:
           cache-dependency-path: apps/remote-code-gui/package-lock.json
       - run: npm ci
       - run: npm audit --audit-level=moderate --registry=https://registry.npmjs.org/
+      - run: npm test
       - run: npx tsc --noEmit
       - run: npx vite build
 

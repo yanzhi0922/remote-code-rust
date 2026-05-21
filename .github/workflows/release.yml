@@ -38,6 +38,10 @@ jobs:
         working-directory: apps/remote-code-gui
       - run: npm audit --audit-level=moderate --registry=https://registry.npmjs.org/
         working-directory: apps/remote-code-gui
+      - run: npm test
+        working-directory: apps/remote-code-gui
+      - run: npx tsc --noEmit
+        working-directory: apps/remote-code-gui
 
   build:
     name: Build workspace tools ${{ matrix.target }}

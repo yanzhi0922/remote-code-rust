@@ -785,10 +785,10 @@ Windows 本地发布建议:
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\verify-release.ps1 -IncludeAudit
 powershell -ExecutionPolicy Bypass -File scripts\verify-release.ps1 -IncludeDesktopBundle -IncludeAudit -UseProxy
-powershell -ExecutionPolicy Bypass -File scripts\acceptance-release.ps1 -RunBaseGates -IncludeWorkspaceTests -IncludeProviderMatrix -IncludeMcpMatrix -UseProxy
+powershell -ExecutionPolicy Bypass -File scripts\acceptance-release.ps1 -RunBaseGates -IncludeWorkspaceTests -IncludeProviderMatrix -IncludeMcpMatrix -IncludeRemoteE2E -IncludeMobilePwaE2E -IncludeTransportE2E -IncludeTailscaleE2E -RelayHostAuditReport .\relay-host-audit.txt -RequireComplete -UseProxy
 ```
 
-发布证据必须使用或等价覆盖 [release acceptance evidence template](release-acceptance-evidence.md)，并保存脱敏日志、截图、安装包 hash、Provider/MCP 结果和人工环境签名。`scripts\acceptance-release.ps1` 只从环境变量读取真实 Provider/MCP key，并将输出写入未跟踪的 `.release-evidence/` 目录。
+发布证据必须使用或等价覆盖 [release acceptance evidence template](release-acceptance-evidence.md)，并保存脱敏日志、截图、安装包 hash、Provider/MCP 结果和环境签名。`scripts\acceptance-release.ps1` 只从环境变量读取真实 Provider/MCP key，并将输出写入未跟踪的 `.release-evidence/` 目录。Relay host 边界必须在云端执行 `deploy/tencent-cloud/audit-relay-host.sh`，再把脱敏输出传给 `-RelayHostAuditReport`。公开发布必须使用 `-RequireComplete`，此时任何 `FAIL`、`SKIP` 或 `MANUAL` 都会让脚本非零退出；未启用的可选 Tailscale 路径只能以 `N/A` 关闭。
 
 ### 14.2 端到端验收
 
@@ -818,7 +818,7 @@ CI 必须覆盖:
 - clippy `-D warnings`，按同一套 workspace slice 分片执行。
 - cargo audit。
 - Linux、Windows、macOS workspace tests，按同一套 workspace slice 分片执行。Windows 需限并发并降低 debug info。
-- GUI frontend `npm ci`、`npm audit`、`tsc --noEmit`、`vite build`。
+- GUI frontend `npm ci`、`npm audit`、`npm test`、`tsc --noEmit`、`vite build`。
 - gitleaks secret scan。
 - Tauri Rust check。
 
@@ -830,8 +830,8 @@ CI 必须覆盖:
 | RISK-02 | Roo token 已从字符数粗算迁移到 Roo 原生 tiktoken 路径，但仍需和真实 provider usage 做发布验收比对 | 上下文预算边界仍需用真实模型回归确认 | P2 |
 | RISK-03 | Roo MCP 已接入 native loop 但缺少完整 E2E、错误路径和权限验收 | Roo 原生 MCP 能力仍可能在边界场景退化 | P2 |
 | RISK-04 | 移动端原生 FCM/APNs token 依赖平台插件 | 推送通知不是正式可用状态 | P1 |
-| RISK-05 | QUIC 已使用正式 `REMOTE_CODE_CONTROL_PLANE_QUIC_ENABLE` 门禁，旧 experimental 环境变量仅保留兼容 | 仍需要补齐受控环境 E2E、证书指纹、指标和失败诊断，否则阻断发布 | P1 |
-| RISK-06 | RustSec accepted advisories 已于 2026-05-19 运行 `cargo audit --quiet` 复核通过 | 仍需按 `.cargo/audit.toml` 到期复核，不能新增无说明 ignore | P1 |
+| RISK-05 | QUIC 已使用正式 `REMOTE_CODE_CONTROL_PLANE_QUIC_ENABLE` 门禁，旧 experimental 环境变量仅保留兼容；受控环境 E2E 覆盖证书指纹、事件、prompt 和 approval | 后续风险转为真实公网/移动网络抖动回归，不能用 Relay fallback 替代 QUIC gate | P2 |
+| RISK-06 | RustSec accepted advisories 已于 2026-05-21 在完整 `-RequireComplete` 发布验收中运行 `cargo audit --quiet` 复核通过 | 仍需按 `.cargo/audit.toml` 到期复核，不能新增无说明 ignore | P1 |
 | RISK-07 | Linux GUI 依赖存在 Tauri/Wry GTK/WebKit/ATK advisory | Linux GUI 不宜直接 GA | P2 |
 | RISK-08 | 旧 Roo 路径回归风险 | 构建脚本和文档必须继续指向 `crates/roo/*`，避免重新引入 `agents/roo-code` | P3 |
 | RISK-09 | 当前工作树存在大量未提交改动 | 发布前必须厘清变更来源和门禁结果 | P1 |
@@ -867,30 +867,32 @@ CI 必须覆盖:
 
 ## 17. 发布边界清单
 
-发布工程师在公开发布前必须确认:
+发布工程师在公开发布前必须按下表逐项关闭。任何 `FAIL`、`SKIP`、`MANUAL` 或缺少证据的条目都阻断公开发布；未启用 Tailscale 时，该可选路径以 `N/A` 关闭且不得影响标准远控链路。2026-05-21 本地完整验收已用 `-RequireComplete` 通过，证据见 `.release-evidence\20260521-122522\release-acceptance.md` 和 [release-validation-2026-05-21.md](release-validation-2026-05-21.md)。
 
-- [ ] `cargo fmt --all -- --check` 通过。
-- [ ] `git diff --check` 通过。
-- [ ] `scripts/cargo_workspace_slice.py check` 覆盖 `claude`、`codex`、`roo`、`apps-shared` 并全部通过。
-- [ ] `scripts/cargo_workspace_slice.py clippy` 覆盖 `claude`、`codex`、`roo`、`apps-shared` 并全部通过。
-- [ ] `cargo audit --quiet` 通过，accepted advisories 未过复核期。
-- [ ] `gitleaks detect --source . --redact` 通过。
-- [ ] GUI `npm ci`、`npm audit`、`npm test`、`npm run build` 通过。
-- [ ] Windows `npm run desktop:build` 在发布机完成。
-- [ ] 桌面首启后内置 runner 能上线。
-- [ ] 手机/PWA 可配对、刷新恢复、发送 prompt、处理 approval、下载 artifact。
-- [ ] relay host 仅运行 control plane。
-- [ ] relay host 不包含源码目录和 provider key。
-- [ ] `REMOTE_CODE_CONTROL_PLANE_BOOTSTRAP_SECRET` 已设置强随机值。
-- [ ] `REMOTE_CODE_CONTROL_PLANE_USER_KEY_HASHES` 如启用，hash 来源和轮换策略已记录。
-- [ ] query access token legacy 开关保持关闭，除非有临时兼容说明。
-- [ ] 默认远程传输策略为 `smart`，用户可在高级设置手动指定传输策略，手动指定优先于智能评分。
-- [ ] Relay、Direct WS、Outbound Poll、QUIC 均完成声明范围内 E2E；QUIC 受控环境 E2E 失败不得发布。
-- [ ] 如启用 Tailscale 可选路径，tailnet direct 的探测、手动指定、禁用、fallback、E2EE、approval 和 artifact 下载均已验证；未启用 Tailscale 时不影响标准远控链路。
-- [ ] Tailscale ACL/设备信任建议已记录，且文档明确 Tailscale 不替代 Remote Code 自身认证、E2EE、审批和审计。
-- [ ] MiniMax Token Plan 与 KuaiKAT Coding Plan 作为补充 Provider 矩阵完成发布验收记录。
-- [ ] MiniMax、context7、sequentialthinking、memory、puppeteer MCP 完成启动、健康检查、工具发现、一次真实调用、失败提示和密钥脱敏日志验收。
-- [ ] 需求文档、发布报告、日志、截图、录屏、导出包和 Git 追踪文件不包含真实 Provider key 或 MCP key。
+| 边界项 | 关闭方式 | 证据 |
+| --- | --- | --- |
+| `cargo fmt --all -- --check` | `scripts/acceptance-release.ps1 -RunBaseGates` 或等价命令必须 PASS | `.release-evidence/**/release-acceptance.md` |
+| `git diff --check` | `scripts/verify-release.ps1` 的 Git whitespace gate 必须 PASS | `.release-evidence/**/logs/14-1-base-gates.log` |
+| workspace `check` 覆盖 `claude`、`codex`、`roo`、`apps-shared` | `scripts/cargo_workspace_slice.py check <slice>` 四个 slice 必须 PASS | CI log 或 release evidence |
+| workspace `clippy` 覆盖 `claude`、`codex`、`roo`、`apps-shared` | `scripts/cargo_workspace_slice.py clippy <slice>` 四个 slice 必须 PASS，`-D warnings` | CI log 或 release evidence |
+| RustSec | `cargo audit --quiet` 必须 PASS；accepted advisory 到期前必须重新复核 | audit log |
+| Secret scan | `gitleaks detect --source . --redact` 必须 PASS | gitleaks log |
+| GUI base gates | `npm ci`、`npm audit`、`npm test`、`npm run build` 必须 PASS | frontend log |
+| Windows desktop bundle | 发布机 `npm run desktop:build` 必须产出 NSIS 安装包和 SHA256 | installer path/hash |
+| 桌面首启 runner | 安装包首启后内置 runner 在线并能创建 session | 截图/录屏/脱敏日志 |
+| 手机/PWA 远控 | `-IncludeMobilePwaE2E` 自动流 PASS；发布时补充目标设备截图或录屏 | release evidence + device evidence |
+| relay host 仅运行 control plane | 云端运行 `sudo bash /opt/remote-code/deploy/tencent-cloud/audit-relay-host.sh` 必须 0 failure | `-RelayHostAuditReport` |
+| relay host 无源码和 provider/MCP key | 同一 relay audit 必须证明无源码树、runner/agent/build 进程、provider/MCP key | `-RelayHostAuditReport` |
+| bootstrap secret | relay audit 必须证明 `REMOTE_CODE_CONTROL_PLANE_BOOTSTRAP_SECRET` 为强随机非占位值 | `-RelayHostAuditReport` |
+| user key hash | 如启用，release evidence 必须记录 hash 来源和轮换策略；未启用则记录 unset | release evidence |
+| query access token legacy | relay audit 和 control-plane tests 必须证明 legacy query token 开关关闭，除非 release note 记录临时例外 | `-RelayHostAuditReport` + tests |
+| 默认远程传输策略 | GUI/transport tests 必须证明默认 `smart`，手动指定策略优先 | `-IncludeTransportE2E` log |
+| Relay、Direct WS、Outbound Poll、QUIC | `-IncludeRemoteE2E` 和 `-IncludeTransportE2E` 必须 PASS；QUIC test 覆盖证书指纹、事件、prompt、approval | release evidence |
+| Tailscale 可选路径 | 未启用时 `-IncludeTailscaleE2E` 记录 `N/A`；启用时必须附 tailnet direct、禁用、fallback、E2EE、approval、artifact 证据 | release evidence |
+| Tailscale ACL/设备信任 | 文档必须保留最小权限建议，启用时附 ACL/device-trust 截图或配置摘要 | docs + release evidence |
+| Provider 矩阵 | `-IncludeProviderMatrix` 必须覆盖 MiniMax Token Plan、KuaiKAT Coding Plan、DeepSeek；缺 key 时不得发布 | release evidence |
+| MCP 矩阵 | `-IncludeMcpMatrix` 必须覆盖 MiniMax、context7、sequentialthinking、memory、puppeteer 的发现、调用、失败提示和脱敏日志 | release evidence |
+| Git/文档/日志无真实密钥 | gitleaks PASS，发布报告只使用环境变量名或 `<SECRET>`，不得提交真实 Provider/MCP key | gitleaks log + review |
 
 ## 18. 需求追踪矩阵
 
