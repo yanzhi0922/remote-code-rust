@@ -22,6 +22,26 @@ $RepoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 $RepoRootPath = $RepoRoot.Path
 Set-Location $RepoRootPath
 
+function Add-ProcessGitConfig([string]$Key, [string]$Value) {
+    $count = 0
+    $countText = [Environment]::GetEnvironmentVariable("GIT_CONFIG_COUNT")
+    if (-not [string]::IsNullOrWhiteSpace($countText)) {
+        [void][int]::TryParse($countText, [ref]$count)
+    }
+
+    for ($i = 0; $i -lt $count; $i++) {
+        $keyName = "GIT_CONFIG_KEY_$i"
+        if ([Environment]::GetEnvironmentVariable($keyName) -eq $Key) {
+            [Environment]::SetEnvironmentVariable("GIT_CONFIG_VALUE_$i", $Value, "Process")
+            return
+        }
+    }
+
+    [Environment]::SetEnvironmentVariable("GIT_CONFIG_KEY_$count", $Key, "Process")
+    [Environment]::SetEnvironmentVariable("GIT_CONFIG_VALUE_$count", $Value, "Process")
+    [Environment]::SetEnvironmentVariable("GIT_CONFIG_COUNT", ($count + 1).ToString(), "Process")
+}
+
 if ($UseProxy) {
     $env:HTTP_PROXY = $ProxyUrl
     $env:HTTPS_PROXY = $ProxyUrl
@@ -30,16 +50,14 @@ if ($UseProxy) {
     $env:https_proxy = $ProxyUrl
     $env:all_proxy = $ProxyUrl
     $env:CARGO_HTTP_PROXY = $ProxyUrl
+    if ([string]::IsNullOrWhiteSpace($env:CARGO_HTTP_TIMEOUT)) { $env:CARGO_HTTP_TIMEOUT = "600" }
+    if ([string]::IsNullOrWhiteSpace($env:CARGO_NET_RETRY)) { $env:CARGO_NET_RETRY = "10" }
+    if ([string]::IsNullOrWhiteSpace($env:CARGO_REGISTRIES_CRATES_IO_PROTOCOL)) { $env:CARGO_REGISTRIES_CRATES_IO_PROTOCOL = "sparse" }
     $loopbackNoProxy = "localhost,127.0.0.1,::1"
     $env:NO_PROXY = if ([string]::IsNullOrWhiteSpace($env:NO_PROXY)) { $loopbackNoProxy } else { "$($env:NO_PROXY),$loopbackNoProxy" }
     $env:no_proxy = if ([string]::IsNullOrWhiteSpace($env:no_proxy)) { $loopbackNoProxy } else { "$($env:no_proxy),$loopbackNoProxy" }
-    if ([string]::IsNullOrWhiteSpace($env:GIT_CONFIG_COUNT)) {
-        $env:GIT_CONFIG_COUNT = "2"
-        $env:GIT_CONFIG_KEY_0 = "http.proxy"
-        $env:GIT_CONFIG_VALUE_0 = $ProxyUrl
-        $env:GIT_CONFIG_KEY_1 = "https.proxy"
-        $env:GIT_CONFIG_VALUE_1 = $ProxyUrl
-    }
+    Add-ProcessGitConfig "http.proxy" $ProxyUrl
+    Add-ProcessGitConfig "https.proxy" $ProxyUrl
 }
 
 $Stamp = Get-Date -Format "yyyyMMdd-HHmmss"
@@ -65,6 +83,16 @@ function Add-Result(
         Evidence = $Evidence
         Notes = $Notes
     }) | Out-Null
+}
+
+function Add-UnrequestedSkip(
+    [string]$Area,
+    [string]$Item,
+    [string]$Notes
+) {
+    if (-not $RequireComplete) {
+        Add-Result $Area $Item "SKIP" "" $Notes
+    }
 }
 
 function Sanitize-Text([string]$Text) {
@@ -122,6 +150,32 @@ function Env-Present([string[]]$Names) {
         }
     }
     return $false
+}
+
+function Assert-TailscaleEvidenceReport([string]$Content) {
+    if ([string]::IsNullOrWhiteSpace($Content)) {
+        throw "Tailscale evidence report is empty"
+    }
+    if ($Content -match "(?im)^\s*(FAIL|SKIP|MANUAL)\s*:") {
+        throw "Tailscale evidence report contains blocking evidence markers"
+    }
+
+    $requiredMarkers = @(
+        "tailnet-direct",
+        "manual-strategy",
+        "disabled-path",
+        "failure-fallback",
+        "e2ee",
+        "approval",
+        "artifact",
+        "acl-device-trust"
+    )
+    foreach ($marker in $requiredMarkers) {
+        $pattern = "(?im)^\s*PASS:\s*" + [regex]::Escape($marker) + "\b"
+        if ($Content -notmatch $pattern) {
+            throw "Tailscale evidence report missing required marker: PASS: $marker"
+        }
+    }
 }
 
 function RemoteCodeExe {
@@ -308,7 +362,7 @@ if ($RunBaseGates) {
         powershell @args
     }
 } else {
-    Add-Result "14.1" "base-gates" "SKIP" "" "pass -RunBaseGates to execute local release gates"
+    Add-UnrequestedSkip "14.1" "base-gates" "pass -RunBaseGates to execute local release gates"
 }
 
 if ($IncludeProviderMatrix) {
@@ -327,7 +381,7 @@ if ($IncludeProviderMatrix) {
         }
     }
 } else {
-    Add-Result "Provider" "matrix" "SKIP" "" "pass -IncludeProviderMatrix with provider keys in environment"
+    Add-UnrequestedSkip "Provider" "matrix" "pass -IncludeProviderMatrix with provider keys in environment"
 }
 
 if ($IncludeMcpMatrix) {
@@ -341,7 +395,7 @@ if ($IncludeMcpMatrix) {
         Run-LoggedStep "MCP" "$server-call" { Invoke-McpToolCall $server $mcpConfig }
     }
 } else {
-    Add-Result "MCP" "matrix" "SKIP" "" "pass -IncludeMcpMatrix to start and call MCP servers"
+    Add-UnrequestedSkip "MCP" "matrix" "pass -IncludeMcpMatrix to start and call MCP servers"
 }
 
 if ($IncludeRemoteE2E) {
@@ -359,7 +413,7 @@ if ($IncludeRemoteE2E) {
         }
     }
 } else {
-    Add-Result "Remote E2E" "relay-runner-control-plane" "SKIP" "" "pass -IncludeRemoteE2E after provisioning relay and runner"
+    Add-UnrequestedSkip "Remote E2E" "relay-runner-control-plane" "pass -IncludeRemoteE2E after provisioning relay and runner"
 }
 
 if ($IncludeMobilePwaE2E) {
@@ -373,7 +427,7 @@ if ($IncludeMobilePwaE2E) {
         }
     }
 } else {
-    Add-Result "Mobile/PWA" "pairing-prompt-approval-artifact" "SKIP" "" "pass -IncludeMobilePwaE2E after preparing real devices"
+    Add-UnrequestedSkip "Mobile/PWA" "pairing-prompt-approval-artifact" "pass -IncludeMobilePwaE2E after preparing real devices"
 }
 
 if ($IncludeTransportE2E) {
@@ -401,7 +455,7 @@ if ($IncludeTransportE2E) {
         }
     }
 } else {
-    Add-Result "Transport" "relay-direct-outbound-quic" "SKIP" "" "pass -IncludeTransportE2E after provisioning transport testbed"
+    Add-UnrequestedSkip "Transport" "relay-direct-outbound-quic" "pass -IncludeTransportE2E after provisioning transport testbed"
 }
 
 if ($IncludeTailscaleE2E) {
@@ -412,9 +466,7 @@ if ($IncludeTailscaleE2E) {
                 $resolved = Resolve-Path -LiteralPath $TailscaleEvidenceReport
                 $content = Get-Content -LiteralPath $resolved.Path -Raw
                 Write-Output $content
-                if ($content -match "(?m)^FAIL:") {
-                    throw "Tailscale evidence report contains failures"
-                }
+                Assert-TailscaleEvidenceReport $content
             }
         } else {
             Add-Result "Tailscale" "tailnet-direct-fallback" "MANUAL" "" "Tailscale is enabled; attach two-device tailnet evidence with -TailscaleEvidenceReport"
@@ -423,7 +475,7 @@ if ($IncludeTailscaleE2E) {
         Add-Result "Tailscale" "tailnet-direct-fallback" "N/A" "" "Tailscale optional path is not enabled for this release candidate; standard relay/direct/outbound/QUIC gates cover the required remote chain"
     }
 } else {
-    Add-Result "Tailscale" "tailnet-direct-fallback" "SKIP" "" "pass -IncludeTailscaleE2E in a prepared tailnet"
+    Add-UnrequestedSkip "Tailscale" "tailnet-direct-fallback" "pass -IncludeTailscaleE2E in a prepared tailnet"
 }
 
 if (-not [string]::IsNullOrWhiteSpace($RelayHostAuditReport)) {
@@ -439,7 +491,7 @@ if (-not [string]::IsNullOrWhiteSpace($RelayHostAuditReport)) {
         }
     }
 } else {
-    Add-Result "Secure deployment" "relay-host-audit" "SKIP" "" "run deploy/tencent-cloud/audit-relay-host.sh on the relay host and pass -RelayHostAuditReport <path>"
+    Add-UnrequestedSkip "Secure deployment" "relay-host-audit" "run deploy/tencent-cloud/audit-relay-host.sh on the relay host and pass -RelayHostAuditReport <path>"
 }
 
 $lines = New-Object System.Collections.Generic.List[string]
@@ -475,6 +527,9 @@ Write-Host "Acceptance evidence written to $ReportPath"
 $blockingStatuses = @("FAIL")
 if ($RequireComplete) {
     $blockingStatuses += @("SKIP", "MANUAL")
+}
+if ($RequireComplete -and $Results.Count -eq 0) {
+    throw "-RequireComplete requires at least one requested acceptance gate"
 }
 $blocking = @($Results | Where-Object { $blockingStatuses -contains $_.Status })
 if ($blocking.Count -gt 0) {

@@ -15,6 +15,26 @@ $RepoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 $RepoRootPath = $RepoRoot.Path
 Set-Location $RepoRootPath
 
+function Add-ProcessGitConfig([string]$Key, [string]$Value) {
+    $count = 0
+    $countText = [Environment]::GetEnvironmentVariable("GIT_CONFIG_COUNT")
+    if (-not [string]::IsNullOrWhiteSpace($countText)) {
+        [void][int]::TryParse($countText, [ref]$count)
+    }
+
+    for ($i = 0; $i -lt $count; $i++) {
+        $keyName = "GIT_CONFIG_KEY_$i"
+        if ([Environment]::GetEnvironmentVariable($keyName) -eq $Key) {
+            [Environment]::SetEnvironmentVariable("GIT_CONFIG_VALUE_$i", $Value, "Process")
+            return
+        }
+    }
+
+    [Environment]::SetEnvironmentVariable("GIT_CONFIG_KEY_$count", $Key, "Process")
+    [Environment]::SetEnvironmentVariable("GIT_CONFIG_VALUE_$count", $Value, "Process")
+    [Environment]::SetEnvironmentVariable("GIT_CONFIG_COUNT", ($count + 1).ToString(), "Process")
+}
+
 if ($UseProxy) {
     $env:HTTP_PROXY = $ProxyUrl
     $env:HTTPS_PROXY = $ProxyUrl
@@ -23,16 +43,14 @@ if ($UseProxy) {
     $env:https_proxy = $ProxyUrl
     $env:all_proxy = $ProxyUrl
     $env:CARGO_HTTP_PROXY = $ProxyUrl
+    if ([string]::IsNullOrWhiteSpace($env:CARGO_HTTP_TIMEOUT)) { $env:CARGO_HTTP_TIMEOUT = "600" }
+    if ([string]::IsNullOrWhiteSpace($env:CARGO_NET_RETRY)) { $env:CARGO_NET_RETRY = "10" }
+    if ([string]::IsNullOrWhiteSpace($env:CARGO_REGISTRIES_CRATES_IO_PROTOCOL)) { $env:CARGO_REGISTRIES_CRATES_IO_PROTOCOL = "sparse" }
     $loopbackNoProxy = "localhost,127.0.0.1,::1"
     $env:NO_PROXY = if ([string]::IsNullOrWhiteSpace($env:NO_PROXY)) { $loopbackNoProxy } else { "$($env:NO_PROXY),$loopbackNoProxy" }
     $env:no_proxy = if ([string]::IsNullOrWhiteSpace($env:no_proxy)) { $loopbackNoProxy } else { "$($env:no_proxy),$loopbackNoProxy" }
-    if ([string]::IsNullOrWhiteSpace($env:GIT_CONFIG_COUNT)) {
-        $env:GIT_CONFIG_COUNT = "2"
-        $env:GIT_CONFIG_KEY_0 = "http.proxy"
-        $env:GIT_CONFIG_VALUE_0 = $ProxyUrl
-        $env:GIT_CONFIG_KEY_1 = "https.proxy"
-        $env:GIT_CONFIG_VALUE_1 = $ProxyUrl
-    }
+    Add-ProcessGitConfig "http.proxy" $ProxyUrl
+    Add-ProcessGitConfig "https.proxy" $ProxyUrl
 }
 
 function Run-Step([string]$Name, [scriptblock]$Command) {
@@ -88,6 +106,59 @@ function Invoke-Gitleaks {
     throw "gitleaks is not installed and Docker is unavailable for the fallback scanner"
 }
 
+function Cargo-Home {
+    $cargoHome = [Environment]::GetEnvironmentVariable("CARGO_HOME")
+    if (-not [string]::IsNullOrWhiteSpace($cargoHome)) {
+        return $cargoHome
+    }
+    return (Join-Path $env:USERPROFILE ".cargo")
+}
+
+function Get-AdvisoryDbFetchHead {
+    $dbPath = Join-Path (Cargo-Home) "advisory-db"
+    $fetchHead = Join-Path $dbPath ".git\FETCH_HEAD"
+    if (Test-Path $fetchHead) {
+        return Get-Item $fetchHead
+    }
+    return $null
+}
+
+function Invoke-CachedCargoAudit {
+    $fetchHead = Get-AdvisoryDbFetchHead
+    if ($null -eq $fetchHead) {
+        Write-Host "cargo audit fetch failed and no cached RustSec advisory DB was found"
+        $global:LASTEXITCODE = 1
+        return
+    }
+
+    $maxAge = [TimeSpan]::FromHours(24)
+    $age = (Get-Date) - $fetchHead.LastWriteTime
+    if ($age -gt $maxAge) {
+        Write-Host "cargo audit fetch failed and cached RustSec advisory DB is older than $($maxAge.TotalHours) hours: $($fetchHead.LastWriteTime.ToString("o"))"
+        $global:LASTEXITCODE = 1
+        return
+    }
+
+    Write-Host "cargo audit fetch failed; using cached RustSec advisory DB last fetched at $($fetchHead.LastWriteTime.ToString("o"))"
+    cargo audit --quiet --no-fetch
+}
+
+function Invoke-CargoAudit {
+    $attempts = 3
+    for ($attempt = 1; $attempt -le $attempts; $attempt++) {
+        $global:LASTEXITCODE = 0
+        cargo audit --quiet
+        if ($global:LASTEXITCODE -eq 0) {
+            return
+        }
+        if ($attempt -lt $attempts) {
+            Write-Host "cargo audit failed with exit code $global:LASTEXITCODE; retrying in $($attempt * 10) seconds"
+            Start-Sleep -Seconds ($attempt * 10)
+        }
+    }
+    Invoke-CachedCargoAudit
+}
+
 Run-Step "Git whitespace" { git diff --check }
 
 if (-not $SkipRust) {
@@ -130,7 +201,7 @@ if (-not $SkipRust) {
             }
         }
         if ($IncludeAudit) {
-            Run-Step "Rust audit" { cargo audit --quiet }
+            Run-Step "Rust audit" { Invoke-CargoAudit }
         }
     }
     finally {

@@ -267,10 +267,7 @@ export function shouldUseRemoteMode(): boolean {
   if (mode === 'remote') {
     return true;
   }
-  if (hasTauriRuntime()) {
-    return false;
-  }
-  return resolveRemoteBaseUrl() !== null;
+  return false;
 }
 
 function normalizeBaseUrl(raw: string): string | null {

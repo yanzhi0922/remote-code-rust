@@ -7,8 +7,9 @@ import { ChatInput } from './components/chat/ChatInput';
 import { WorkspaceOverview } from './components/layout/WorkspaceOverview';
 import { ThemeProvider } from './components/design/ThemeProvider';
 import { AppErrorBoundary } from './components/layout/AppErrorBoundary';
-import { shouldUseRemoteMode } from './lib/runtime';
+import { hasTauriRuntime, shouldUseRemoteMode } from './lib/runtime';
 import { isMobileSync, isTouchDevice } from './lib/mobile';
+import { MarketingSite } from './marketing/MarketingSite';
 import {
   performBiometricCheck,
   initNetworkMonitoring,
@@ -206,10 +207,14 @@ function LocalApp() {
 }
 
 function App() {
-  const mobile = isMobileSync() || isTouchDevice();
+  const nativeRuntime = hasTauriRuntime();
+  const nativeMobile = nativeRuntime && isMobileSync();
+  const mobileExperience = nativeRuntime
+    ? nativeMobile || isTouchDevice()
+    : isMobileSync() || isTouchDevice();
 
   if (shouldUseRemoteMode()) {
-    if (mobile) {
+    if (mobileExperience) {
       return (
         <AppErrorBoundary>
           <MobileGate>
@@ -229,7 +234,15 @@ function App() {
     );
   }
 
-  if (mobile) {
+  if (!nativeRuntime) {
+    return (
+      <AppErrorBoundary>
+        <MarketingSite />
+      </AppErrorBoundary>
+    );
+  }
+
+  if (mobileExperience) {
     return (
       <AppErrorBoundary>
         <MobileGate>
