@@ -127,11 +127,14 @@ impl AgentRouter {
 
     /// Returns all session IDs whose adapter matches the given agent type.
     pub fn session_ids_by_type(&self, agent_type: AgentType) -> Vec<String> {
-        self.adapters
+        let mut session_ids = self
+            .adapters
             .iter()
             .filter(|(_, adapter)| adapter.agent_type() == agent_type)
             .map(|(id, _)| id.clone())
-            .collect()
+            .collect::<Vec<_>>();
+        session_ids.sort_unstable();
+        session_ids
     }
 }
 

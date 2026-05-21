@@ -94,7 +94,7 @@ pub async fn scan_command_directory(
                             .as_ref(),
                     ),
                     content: parsed.body,
-                    source: source.clone(),
+                    source,
                     file_path: info.resolved_path,
                     description: parsed.frontmatter.description,
                     argument_hint: parsed.frontmatter.argument_hint,

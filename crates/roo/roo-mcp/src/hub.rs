@@ -54,6 +54,8 @@ pub type StateChangeCallback = Box<dyn Fn() + Send + Sync>;
 /// Type alias for a weak reference to McpHub, used by file watcher tasks.
 type WeakHub = std::sync::Weak<McpHub>;
 
+const WATCHER_EVENT_BUFFER: usize = 256;
+
 /// Error level for error history entries.
 /// Corresponds to TS: the `level` parameter in `appendErrorMessage`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1794,7 +1796,7 @@ impl McpHub {
         source: McpSource,
         weak_hub: WeakHub,
     ) -> Option<FileWatcherHandle> {
-        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let (tx, mut rx) = tokio::sync::mpsc::channel(WATCHER_EVENT_BUFFER);
         let path_buf = std::path::PathBuf::from(path);
 
         let mut watcher = match RecommendedWatcher::new(
@@ -1805,7 +1807,7 @@ impl McpHub {
                         event.kind,
                         EventKind::Modify(_) | EventKind::Create(_) | EventKind::Remove(_)
                     ) {
-                        let _ = tx.send(());
+                        let _ = tx.try_send(());
                     }
                 }
             },
@@ -1949,14 +1951,14 @@ impl McpHub {
             return;
         }
 
-        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let (tx, mut rx) = tokio::sync::mpsc::channel(WATCHER_EVENT_BUFFER);
 
         let mut watcher = match RecommendedWatcher::new(
             move |res: Result<notify::Event, notify::Error>| {
                 if let Ok(event) = res
                     && matches!(event.kind, EventKind::Modify(_) | EventKind::Create(_))
                 {
-                    let _ = tx.send(());
+                    let _ = tx.try_send(());
                 }
             },
             NotifyConfig::default(),
@@ -2021,7 +2023,7 @@ impl McpHub {
             return;
         }
 
-        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let (tx, mut rx) = tokio::sync::mpsc::channel(WATCHER_EVENT_BUFFER);
 
         let mut watcher = match RecommendedWatcher::new(
             move |res: Result<notify::Event, notify::Error>| {
@@ -2031,7 +2033,7 @@ impl McpHub {
                         EventKind::Modify(_) | EventKind::Create(_) | EventKind::Remove(_)
                     )
                 {
-                    let _ = tx.send(event.kind);
+                    let _ = tx.try_send(event.kind);
                 }
             },
             NotifyConfig::default(),

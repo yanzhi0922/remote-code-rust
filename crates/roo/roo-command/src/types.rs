@@ -8,7 +8,7 @@ use std::path::PathBuf;
 /// Source of a command — determines priority ordering.
 ///
 /// Priority: `Project` > `Global` > `BuiltIn`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum CommandSource {
     BuiltIn,

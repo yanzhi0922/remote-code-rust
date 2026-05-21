@@ -37,7 +37,9 @@ async fn get_commands_from_dirs(global_dir: &Path, project_dir: &Path) -> Vec<Co
     // 3. Project commands (highest priority — override both global and built-in)
     scan_command_directory(project_dir, CommandSource::Project, &mut commands).await;
 
-    commands.into_values().collect()
+    let mut commands = commands.into_values().collect::<Vec<_>>();
+    commands.sort_by(|a, b| a.name.cmp(&b.name));
+    commands
 }
 
 /// Get a specific command by name.
@@ -167,7 +169,11 @@ Please analyze this codebase and create an AGENTS.md file containing:
 ///
 /// Source: `src/services/command/built-in-commands.ts` — `getBuiltInCommands`
 pub fn get_built_in_commands() -> Vec<Command> {
-    vec![Command {
+    vec![built_in_init_command()]
+}
+
+fn built_in_init_command() -> Command {
+    Command {
         name: BUILTIN_INIT_NAME.to_string(),
         content: BUILTIN_INIT_CONTENT.to_string(),
         source: CommandSource::BuiltIn,
@@ -175,14 +181,17 @@ pub fn get_built_in_commands() -> Vec<Command> {
         description: Some(BUILTIN_INIT_DESCRIPTION.to_string()),
         argument_hint: None,
         mode: None,
-    }]
+    }
 }
 
 /// Returns a built-in command by name.
 ///
 /// Source: `src/services/command/built-in-commands.ts` — `getBuiltInCommand`
 pub fn get_built_in_command(name: &str) -> Option<Command> {
-    get_built_in_commands().into_iter().find(|c| c.name == name)
+    match name {
+        BUILTIN_INIT_NAME => Some(built_in_init_command()),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
@@ -270,13 +279,28 @@ mod tests {
         create_md_file(&project_commands, "alpha.md", "Alpha");
         create_md_file(&project_commands, "beta.md", "Beta");
 
-        let mut names = get_commands_from_dirs(&global_commands, &project_commands)
+        let names = get_commands_from_dirs(&global_commands, &project_commands)
             .await
             .into_iter()
             .map(|cmd| cmd.name)
             .collect::<Vec<_>>();
-        names.sort();
         assert_eq!(names, vec!["alpha", "beta", "init"]);
+    }
+
+    #[tokio::test]
+    async fn test_get_commands_returns_stable_name_order() {
+        let tmp = TempDir::new().unwrap();
+        let (global_commands, project_commands) = command_dirs(&tmp);
+        create_md_file(&global_commands, "zeta.md", "Zeta");
+        create_md_file(&project_commands, "alpha.md", "Alpha");
+
+        let names = get_commands_from_dirs(&global_commands, &project_commands)
+            .await
+            .into_iter()
+            .map(|cmd| cmd.name)
+            .collect::<Vec<_>>();
+
+        assert_eq!(names, vec!["alpha", "init", "zeta"]);
     }
 
     #[tokio::test]

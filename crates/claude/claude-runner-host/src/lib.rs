@@ -56,6 +56,7 @@ async fn wait_for_shutdown_or_timeout(
 /// Maximum buffered events per session before dropping oldest to prevent unbounded memory growth.
 const MAX_EVENT_BUFFER_PER_SESSION: usize = 500;
 const MAX_ARTIFACT_UPLOAD_BYTES: u64 = 10 * 1024 * 1024;
+const MAX_SESSION_INPUT_QUEUE: usize = 256;
 
 #[derive(Clone)]
 pub struct HostedSessionManager {
@@ -73,7 +74,7 @@ pub struct HostedSessionManager {
 
 #[derive(Clone)]
 struct HostedSessionHandle {
-    input_tx: mpsc::UnboundedSender<String>,
+    input_tx: mpsc::Sender<String>,
     request_to_approval: Arc<Mutex<HashMap<String, Uuid>>>,
     approval_to_request: Arc<Mutex<HashMap<Uuid, String>>>,
     task_handles: Arc<Mutex<Vec<tokio::task::JoinHandle<()>>>>,
@@ -191,7 +192,7 @@ impl HostedSessionManager {
             .take()
             .ok_or_else(|| anyhow!("hosted remote-code stderr was not piped"))?;
 
-        let (input_tx, input_rx) = mpsc::unbounded_channel();
+        let (input_tx, input_rx) = mpsc::channel(MAX_SESSION_INPUT_QUEUE);
         let handle = HostedSessionHandle {
             input_tx,
             request_to_approval: Arc::new(Mutex::new(HashMap::new())),
@@ -581,6 +582,7 @@ impl HostedSessionManager {
         handle
             .input_tx
             .send(format!("{}\n", serde_json::to_string(&payload)?))
+            .await
             .map_err(|_| anyhow!("hosted session `{session_id}` input channel is closed"))
     }
 
@@ -1046,7 +1048,7 @@ fn extract_file_path_from_tool_input(input: &str) -> Option<PathBuf> {
 async fn write_session_input(
     session_id: Uuid,
     mut child_stdin: ChildStdin,
-    mut input_rx: mpsc::UnboundedReceiver<String>,
+    mut input_rx: mpsc::Receiver<String>,
 ) {
     while let Some(line) = input_rx.recv().await {
         if let Err(error) = child_stdin.write_all(line.as_bytes()).await {
