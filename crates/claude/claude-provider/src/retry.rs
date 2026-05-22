@@ -606,6 +606,10 @@ pub enum ApiErrorKind {
     TokenRevoked,
     /// SSL certificate verification error.
     SslCertError,
+    /// The model refused to respond due to content policy.
+    Refusal,
+    /// Tool use / tool_result mismatch (missing or unexpected IDs).
+    ToolMismatch,
     /// Unclassified error.
     Unknown,
 }
@@ -630,6 +634,8 @@ impl std::fmt::Display for ApiErrorKind {
             Self::InvalidApiKey => write!(f, "invalid_api_key"),
             Self::TokenRevoked => write!(f, "token_revoked"),
             Self::SslCertError => write!(f, "ssl_cert_error"),
+            Self::Refusal => write!(f, "refusal"),
+            Self::ToolMismatch => write!(f, "tool_mismatch"),
             Self::Unknown => write!(f, "unknown"),
         }
     }
@@ -668,6 +674,27 @@ pub fn classify_api_error(status: u16, body: &str) -> ApiErrorKind {
     }
     if lower.contains("ssl") && lower.contains("cert") {
         return ApiErrorKind::SslCertError;
+    }
+    // Node.js TLS error codes that indicate certificate issues.
+    if lower.contains("unable_to_verify_leaf_signature")
+        || lower.contains("cert_has_expired")
+        || lower.contains("cert_revoked")
+        || lower.contains("self_signed_certificate")
+        || lower.contains("unable_to_get_local_issuer_certificate")
+        || lower.contains("unable_to_get_issuer_cert_locally")
+        || lower.contains("certificate_chain_too_long")
+        || lower.contains("hostname/ip does not match certificate")
+        || lower.contains("err_tls_cert_altname_invalid")
+        || lower.contains("depth_zero_self_signed_cert")
+    {
+        return ApiErrorKind::SslCertError;
+    }
+    // Tool use / tool_result mismatch errors.
+    if lower.contains("tool_use") && lower.contains("mismatch") {
+        return ApiErrorKind::ToolMismatch;
+    }
+    if lower.contains("missing tool_result") || lower.contains("unexpected tool_use_id") {
+        return ApiErrorKind::ToolMismatch;
     }
 
     match status {
@@ -1577,6 +1604,28 @@ mod tests {
             classify_api_error(0, "ssl cert verification failed"),
             ApiErrorKind::SslCertError
         );
+    }
+
+    #[test]
+    fn classify_tool_mismatch() {
+        assert_eq!(
+            classify_api_error(400, "tool_use mismatch: missing tool_result"),
+            ApiErrorKind::ToolMismatch
+        );
+        assert_eq!(
+            classify_api_error(400, "unexpected tool_use_id in tool_result"),
+            ApiErrorKind::ToolMismatch
+        );
+    }
+
+    #[test]
+    fn refusal_error_kind_display() {
+        assert_eq!(ApiErrorKind::Refusal.to_string(), "refusal");
+    }
+
+    #[test]
+    fn tool_mismatch_error_kind_display() {
+        assert_eq!(ApiErrorKind::ToolMismatch.to_string(), "tool_mismatch");
     }
 
     // ----- ResponseHints integration -----

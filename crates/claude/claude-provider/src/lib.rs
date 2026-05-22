@@ -31,6 +31,7 @@ pub mod media;
 pub mod model_info;
 pub mod normalize;
 pub mod query_source;
+pub mod rate_limits;
 pub mod retry;
 pub mod server_tool_use;
 pub mod sigv4;
@@ -42,6 +43,10 @@ pub use api_client::{ApiClient, ContentBlock, QueryOptions, QueryResult, UsageSt
 pub use circuit_breaker::{CircuitBreaker, CircuitBreakerConfig, CircuitState};
 pub use context::{TokenEstimator, dual_ratio_estimate};
 pub use conversation_backend::{ConversationBackend, DiscoveredToolScope, ProviderCompatBackend};
+pub use rate_limits::{
+    OverageDisabledReason, QuotaStatus, RateLimitState, RateLimitType,
+    extract_rate_limit_state,
+};
 pub use retry::{
     ApiErrorKind, FastModeState, OAuthRefreshCallback, ResponseHints, RetryConfig, RetryContext,
     RetryOptions, SubscriberTier, classify_api_error, get_subscriber_tier,
@@ -107,6 +112,9 @@ impl ProviderClient {
     /// Returns an error if the underlying HTTP client cannot be constructed.
     pub fn new() -> Result<Self> {
         let http = Client::builder()
+            .pool_idle_timeout(Duration::from_secs(90))
+            .tcp_keepalive(Duration::from_secs(60))
+            .pool_max_idle_per_host(2)
             .build()
             .context("failed to build the provider HTTP client")?;
         Ok(Self {
@@ -2848,6 +2856,85 @@ pub fn is_retryable(error: &ProviderError) -> bool {
 #[must_use]
 pub fn is_prompt_too_long(error: &ProviderError) -> bool {
     error.category == ErrorCategory::PromptTooLong
+}
+
+/// Generate a user-facing message when the model returns a `refusal` stop reason.
+///
+/// Matches TS `getErrorMessageIfRefusal()`. Returns `Some(message)` when the
+/// stop reason indicates a content policy refusal.
+#[must_use]
+pub fn get_refusal_message(stop_reason: Option<&str>) -> Option<String> {
+    match stop_reason {
+        Some("refusal") => Some(
+            "The model declined to respond due to content policy. \
+             Please rephrase your request and try again."
+                .to_owned(),
+        ),
+        _ => None,
+    }
+}
+
+/// Generate a user-facing message for common SSL/TLS certificate errors.
+///
+/// Matches TS `formatAPIError` SSL error handling — maps Node.js TLS error
+/// codes to human-readable messages with remediation hints.
+#[must_use]
+pub fn get_ssl_error_message(error: &str) -> Option<String> {
+    let lower = error.to_ascii_lowercase();
+    if lower.contains("cert_has_expired") {
+        return Some(
+            "The server's SSL certificate has expired. \
+             Please contact the server administrator or check your system clock."
+                .to_owned(),
+        );
+    }
+    if lower.contains("self_signed_certificate") || lower.contains("depth_zero_self_signed_cert") {
+        return Some(
+            "The server uses a self-signed SSL certificate. \
+             If you trust this server, you can set NODE_TLS_REJECT_UNAUTHORIZED=0 \
+             or add the certificate to your trusted CA bundle."
+                .to_owned(),
+        );
+    }
+    if lower.contains("cert_revoked") {
+        return Some(
+            "The server's SSL certificate has been revoked. \
+             Please contact the server administrator."
+                .to_owned(),
+        );
+    }
+    if lower.contains("unable_to_verify_leaf_signature")
+        || lower.contains("unable_to_get_local_issuer_certificate")
+        || lower.contains("unable_to_get_issuer_cert_locally")
+    {
+        return Some(
+            "Unable to verify the server's SSL certificate chain. \
+             The issuing CA certificate may be missing from your system's trusted CA store."
+                .to_owned(),
+        );
+    }
+    if lower.contains("hostname") && lower.contains("does not match") {
+        return Some(
+            "The server's SSL certificate hostname does not match the requested domain. \
+             Please verify the URL is correct."
+                .to_owned(),
+        );
+    }
+    if lower.contains("certificate_chain_too_long") {
+        return Some(
+            "The server's SSL certificate chain is too long. \
+             Please contact the server administrator."
+                .to_owned(),
+        );
+    }
+    if lower.contains("tls") || lower.contains("ssl") || lower.contains("certificate") {
+        return Some(
+            "An SSL/TLS certificate error occurred. \
+             Please verify your network configuration and SSL certificates."
+                .to_owned(),
+        );
+    }
+    None
 }
 
 impl std::fmt::Display for ProviderError {

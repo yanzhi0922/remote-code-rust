@@ -245,6 +245,9 @@ impl ApiClient {
             .unwrap_or(600);
         let http = Client::builder()
             .timeout(Duration::from_secs(timeout_secs))
+            .pool_idle_timeout(Duration::from_secs(90))
+            .tcp_keepalive(Duration::from_secs(60))
+            .pool_max_idle_per_host(2)
             .build()
             .context("failed to build API HTTP client")?;
         Ok(Self { http })

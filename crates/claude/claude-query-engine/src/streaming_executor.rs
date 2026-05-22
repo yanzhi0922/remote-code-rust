@@ -145,7 +145,11 @@ impl StreamingToolExecutor {
 
 impl Default for StreamingToolExecutor {
     fn default() -> Self {
-        Self::new(4)
+        let max_parallel = std::env::var("CLAUDE_CODE_MAX_TOOL_USE_CONCURRENCY")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(10);
+        Self::new(max_parallel)
     }
 }
 
