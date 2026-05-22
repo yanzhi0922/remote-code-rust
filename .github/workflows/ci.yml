@@ -128,10 +128,14 @@ jobs:
             bubblewrap \
             patchelf
       - uses: Swatinem/rust-cache@v2
-      - name: Test workspace slice
+      - name: Test workspace slice (Windows)
+        if: runner.os == 'Windows'
         env:
-          CARGO_TEST_JOBS: ${{ runner.os == 'Windows' && '1' || '' }}
-          RUST_TEST_THREADS: ${{ runner.os == 'Windows' && '1' || '' }}
+          CARGO_TEST_JOBS: "1"
+          RUST_TEST_THREADS: "1"
+        run: python scripts/cargo_workspace_slice.py test ${{ matrix.slice }}
+      - name: Test workspace slice
+        if: runner.os != 'Windows'
         run: python scripts/cargo_workspace_slice.py test ${{ matrix.slice }}
 
   frontend:

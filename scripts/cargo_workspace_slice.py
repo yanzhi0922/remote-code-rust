@@ -20,6 +20,7 @@ from typing import Iterable
 SLICE_NAMES = ("claude", "codex", "roo", "apps-shared")
 CHUNK_SIZE = 24
 GUI_PACKAGE = "remote-code-gui"
+OPTIONAL_CARGO_ENV_KEYS = ("CARGO_TEST_JOBS", "CARGO_BUILD_JOBS", "RUST_TEST_THREADS")
 
 
 def run_json(command: list[str]) -> dict:
@@ -60,9 +61,31 @@ def chunks(values: list[str], size: int) -> Iterable[list[str]]:
         yield values[index : index + size]
 
 
+def optional_env(name: str) -> str | None:
+    value = os.environ.get(name)
+    if value is None:
+        return None
+    value = value.strip()
+    return value or None
+
+
+def cargo_child_env() -> dict[str, str]:
+    env = os.environ.copy()
+    for key in OPTIONAL_CARGO_ENV_KEYS:
+        value = env.get(key)
+        if value is None:
+            continue
+        value = value.strip()
+        if value:
+            env[key] = value
+        else:
+            env.pop(key, None)
+    return env
+
+
 def cargo_command(kind: str, packages: list[str]) -> list[str]:
     command = ["cargo", kind]
-    jobs = os.environ.get("CARGO_TEST_JOBS" if kind == "test" else "CARGO_BUILD_JOBS")
+    jobs = optional_env("CARGO_TEST_JOBS" if kind == "test" else "CARGO_BUILD_JOBS")
     if jobs:
         command.extend(["-j", jobs])
     for package in packages:
@@ -96,7 +119,7 @@ def main() -> int:
         print(f"::group::cargo {args.kind} {args.slice} ({len(group)} packages)")
         command = cargo_command(args.kind, group)
         print(" ".join(command))
-        completed = subprocess.run(command)
+        completed = subprocess.run(command, env=cargo_child_env())
         print("::endgroup::")
         if completed.returncode != 0:
             return completed.returncode
