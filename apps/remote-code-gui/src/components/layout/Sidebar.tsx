@@ -447,7 +447,7 @@ export function Sidebar() {
                   <div key={project.path}>
                     <div
                       className={cn(
-                        'flex items-center gap-1 px-3 py-1.5 text-xs transition-colors',
+                        'group flex items-center gap-1 px-3 py-1.5 text-xs transition-colors',
                         active ? 'bg-rc-bg-active text-rc-text-primary' : 'text-rc-text-secondary hover:bg-rc-bg-hover',
                       )}
                     >
@@ -472,9 +472,20 @@ export function Sidebar() {
                           void createSession(undefined, project.path);
                         }}
                         className="flex h-5 w-5 items-center justify-center rounded opacity-0 transition-opacity hover:bg-rc-bg-hover group-hover:opacity-100"
-                        title="New session"
+                        title="新会话"
+                        aria-label="新会话"
                       >
                         <Plus size={12} />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => { void removeProject(project.path); }}
+                        disabled={project.session_count > 0}
+                        className="flex h-5 w-5 items-center justify-center rounded opacity-0 transition-opacity hover:bg-rc-bg-hover hover:text-rc-accent-error disabled:cursor-not-allowed disabled:opacity-30 group-hover:opacity-100"
+                        title={project.session_count > 0 ? '该项目下仍有会话，无法移除' : '移除此项目'}
+                        aria-label={project.session_count > 0 ? '该项目下仍有会话，无法移除' : '移除此项目'}
+                      >
+                        <Trash2 size={12} />
                       </button>
                     </div>
 
