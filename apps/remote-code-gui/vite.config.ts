@@ -69,16 +69,27 @@ export default defineConfig(async ({ command }) => ({
     chunkSizeWarningLimit: 700,
     rollupOptions: {
       output: {
-        manualChunks: {
-          react: ['react', 'react-dom', 'zustand'],
-          ui: ['lucide-react', 'clsx', 'tailwind-merge'],
-          'markdown-rendering': [
-            'react-markdown',
-            'remark-gfm',
-            'remark-math',
-            'rehype-katex',
-            'rehype-highlight',
-          ],
+        manualChunks(id) {
+          if (!id.includes('node_modules')) {
+            return undefined;
+          }
+
+          if (/[\\/]node_modules[\\/](react|react-dom|zustand)[\\/]/.test(id)) {
+            return 'react';
+          }
+
+          if (/[\\/]node_modules[\\/](lucide-react|clsx|tailwind-merge)[\\/]/.test(id)) {
+            return 'ui';
+          }
+
+          if (
+            /[\\/]node_modules[\\/](react-markdown|remark-gfm|remark-math|rehype-katex|rehype-highlight)[\\/]/
+              .test(id)
+          ) {
+            return 'markdown-rendering';
+          }
+
+          return undefined;
         },
       },
     },
