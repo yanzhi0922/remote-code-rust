@@ -1,12 +1,14 @@
 //! TLS configuration helpers for secure connections.
 
-use std::sync::Arc;
+use std::sync::{Arc, Once};
 
 use crate::TlsConfig;
 use rustls::crypto::WebPkiSupportedAlgorithms;
 
 /// Build a rustls client config from our TlsConfig.
 pub fn build_client_tls_config(config: &TlsConfig) -> anyhow::Result<Arc<rustls::ClientConfig>> {
+    ensure_rustls_crypto_provider();
+
     let mut root_store = rustls::RootCertStore::empty();
     let result = rustls_native_certs::load_native_certs();
     for cert in result.certs {
@@ -35,6 +37,13 @@ pub fn build_client_tls_config(config: &TlsConfig) -> anyhow::Result<Arc<rustls:
         .with_root_certificates(root_store)
         .with_no_client_auth();
     Ok(Arc::new(builder))
+}
+
+fn ensure_rustls_crypto_provider() {
+    static RUSTLS_PROVIDER_INIT: Once = Once::new();
+    RUSTLS_PROVIDER_INIT.call_once(|| {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+    });
 }
 
 /// Certificate verifier for self-signed certs with mandatory fingerprint pinning.

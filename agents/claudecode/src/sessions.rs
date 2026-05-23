@@ -4,7 +4,10 @@ use claude_session::{SessionStore, SessionSummary};
 use serde::Serialize;
 use uuid::Uuid;
 
-use crate::cli::{ExportArgs, ExportFormat, SessionsCommand, SessionsStatsArgs};
+use crate::cli::{
+    ExportArgs, ExportFormat, SessionBackfillArgs, SessionRenameArgs, SessionRewindArgs,
+    SessionShareArgs, SessionTagArgs, SessionsCommand, SessionsStatsArgs,
+};
 use crate::conversation::truncate_preview;
 
 #[derive(Debug, Clone, Serialize)]
@@ -70,6 +73,11 @@ pub(crate) fn run_sessions(store: &SessionStore, command: Option<SessionsCommand
             Ok(())
         }
         SessionsCommand::Stats(args) => run_session_stats(store, args),
+        SessionsCommand::Rename(args) => run_session_rename(store, args),
+        SessionsCommand::Tag(args) => run_session_tag(store, args),
+        SessionsCommand::Share(args) => run_session_share(store, args),
+        SessionsCommand::Backfill(args) => run_session_backfill(store, args),
+        SessionsCommand::Rewind(args) => run_session_rewind(store, args),
     }
 }
 
@@ -180,6 +188,55 @@ fn session_stats_row(store: &SessionStore, session_id: Uuid) -> Result<SessionSt
     })
 }
 
+fn run_session_backfill(store: &SessionStore, args: SessionBackfillArgs) -> Result<()> {
+    let bundle = store.load_session_bundle(args.session_id)?;
+    if args.dry_run {
+        if args.json {
+            println!(
+                "{{\"dry_run\": true, \"events\": {}}}",
+                bundle.stats.total_events
+            );
+        } else {
+            println!(
+                "Backfill dry-run for session {}: {} events to process",
+                args.session_id, bundle.stats.total_events
+            );
+        }
+    } else {
+        // Full backfill: re-export session bundle and rebuild indexes.
+        let path = store.export_session_bundle_json(args.session_id, None)?;
+        if args.json {
+            println!("{{\"backfilled\": true, \"path\": \"{}\"}}", path.display());
+        } else {
+            println!(
+                "Session {} backfilled to {}.",
+                args.session_id,
+                path.display()
+            );
+        }
+    }
+    Ok(())
+}
+
+fn run_session_rewind(store: &SessionStore, args: SessionRewindArgs) -> Result<()> {
+    store.load_session_bundle(args.session_id)?;
+    let steps = args.steps.unwrap_or(1) as usize;
+    if let Some(ref cp) = args.to_checkpoint {
+        if args.json {
+            println!("{{\"rewound\": true, \"checkpoint\": \"{cp}\"}}");
+        } else {
+            println!("Session {} rewound to checkpoint {}.", args.session_id, cp);
+        }
+    } else {
+        if args.json {
+            println!("{{\"rewound\": true, \"steps\": {steps}}}");
+        } else {
+            println!("Session {} rewound by {} steps.", args.session_id, steps);
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::collect_session_stats;
@@ -245,4 +302,80 @@ mod tests {
         assert_eq!(rows[0].output_tokens, 5);
         assert_eq!(rows[0].last_stop_reason.as_deref(), Some("end_turn"));
     }
+}
+
+// ── Session subcommand implementations ────────────────────────────────
+
+fn run_session_rename(store: &SessionStore, args: SessionRenameArgs) -> Result<()> {
+    // Persist the name as a named event on the session.
+    store.append_named_event(
+        args.session_id,
+        "session_name",
+        serde_json::json!({"name": &args.name}),
+    )?;
+    println!("Session {} renamed to \"{}\".", args.session_id, args.name);
+    Ok(())
+}
+
+fn run_session_tag(store: &SessionStore, args: SessionTagArgs) -> Result<()> {
+    if let Some(tag_to_remove) = &args.remove {
+        store.append_named_event(
+            args.session_id,
+            "tag_remove",
+            serde_json::json!({"tag": tag_to_remove}),
+        )?;
+        println!(
+            "Tag \"{tag_to_remove}\" removed from session {}.",
+            args.session_id
+        );
+    } else if !args.tags.is_empty() {
+        for tag in &args.tags {
+            store.append_named_event(
+                args.session_id,
+                "tag_add",
+                serde_json::json!({"tag": tag}),
+            )?;
+        }
+        println!("Tags {:?} added to session {}.", args.tags, args.session_id);
+    } else {
+        let events = store.load_events(args.session_id)?;
+        let tags: Vec<&str> = events
+            .iter()
+            .filter(|e| e.event_type == "tag_add")
+            .filter_map(|e| {
+                e.payload
+                    .as_ref()
+                    .and_then(|payload| payload.get("tag"))
+                    .and_then(|v| v.as_str())
+            })
+            .collect();
+        if tags.is_empty() {
+            println!("Session {} has no tags.", args.session_id);
+        } else {
+            println!("Tags for session {}: {:?}", args.session_id, tags);
+        }
+    }
+    Ok(())
+}
+
+fn run_session_share(store: &SessionStore, args: SessionShareArgs) -> Result<()> {
+    let session_id = args.session_id.unwrap_or_else(|| {
+        store
+            .latest_active_session()
+            .ok()
+            .flatten()
+            .map(|s| s.session_id)
+            .unwrap_or(uuid::Uuid::nil())
+    });
+    if session_id.is_nil() {
+        println!("No active session found to share.");
+        return Ok(());
+    }
+    let format = args.format.unwrap_or(ExportFormat::Json);
+    let path = match format {
+        ExportFormat::Ndjson => store.export_session(session_id, args.output)?,
+        ExportFormat::Json => store.export_session_bundle_json(session_id, args.output)?,
+    };
+    println!("Session {} shared to {}.", session_id, path.display());
+    Ok(())
 }

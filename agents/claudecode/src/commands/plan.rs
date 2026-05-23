@@ -4,7 +4,7 @@
 //! a restricted permission state (Read-only) where the agent reads the
 //! workspace and produces a structured plan before any edits occur.
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use claude_config::RuntimeConfig;
 use claude_core::PermissionMode;
 use claude_session::SessionStore;
@@ -47,9 +47,7 @@ pub async fn run_plan(
         )?;
 
         if args.json {
-            println!(
-                "{{\"status\": \"ok\", \"mode\": \"plan\", \"objective\": \"{objective}\"}}"
-            );
+            println!("{{\"status\": \"ok\", \"mode\": \"plan\", \"objective\": \"{objective}\"}}");
         } else {
             println!("Plan mode entered.");
             println!("  Objective: {objective}");
@@ -62,7 +60,10 @@ pub async fn run_plan(
         if args.json {
             println!("{{\"in_plan_mode\": {in_plan_mode}}}");
         } else {
-            println!("Plan mode: {}", if in_plan_mode { "active" } else { "inactive" });
+            println!(
+                "Plan mode: {}",
+                if in_plan_mode { "active" } else { "inactive" }
+            );
         }
     }
     Ok(())

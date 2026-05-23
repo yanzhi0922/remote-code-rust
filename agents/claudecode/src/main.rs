@@ -233,19 +233,105 @@ fn dispatch_command<'a>(
             Box::pin(async move { claude_tui::run_tui_app(config.clone(), store).await })
         }
         Some(Commands::Ssh(args)) => Box::pin(async move { run_ssh(args).await }),
-        Some(Commands::Plan(args)) => Box::pin(async move { commands::run_plan(config, store, args).await }),
-        Some(Commands::Cost(args)) => Box::pin(async move { commands::run_cost(config, store, args) }),
-        Some(Commands::Memory { command }) => Box::pin(async move { commands::run_memory(config, store, command) }),
-        Some(Commands::Model { command }) => Box::pin(async move { commands::run_model(config, command) }),
-        Some(Commands::Provider { command }) => Box::pin(async move { commands::run_provider(config, command) }),
-        Some(Commands::Compact) => Box::pin(async move { commands::run_compact(config, store).await }),
+        Some(Commands::Plan(args)) => {
+            Box::pin(async move { commands::run_plan(config, store, args).await })
+        }
+        Some(Commands::Cost(args)) => {
+            Box::pin(async move { commands::run_cost(config, store, args) })
+        }
+        Some(Commands::Memory { command }) => {
+            Box::pin(async move { commands::run_memory(config, store, command) })
+        }
+        Some(Commands::Model { command }) => {
+            Box::pin(async move { commands::run_model(config, command) })
+        }
+        Some(Commands::Provider { command }) => {
+            Box::pin(async move { commands::run_provider(config, command) })
+        }
+        Some(Commands::Compact) => {
+            Box::pin(async move { commands::run_compact(config, store).await })
+        }
         Some(Commands::Theme(args)) => Box::pin(async move { commands::run_theme(config, args) }),
-        Some(Commands::Feedback(args)) => Box::pin(async move { commands::run_feedback(config, args).await }),
-        Some(Commands::Summary) => Box::pin(async move { commands::run_summary(config, store).await }),
+        Some(Commands::Feedback(args)) => {
+            Box::pin(async move { commands::run_feedback(config, args).await })
+        }
+        Some(Commands::Summary) => {
+            Box::pin(async move { commands::run_summary(config, store).await })
+        }
         Some(Commands::Files(args)) => Box::pin(async move { commands::run_files(config, args) }),
-        Some(Commands::Copy(args)) => Box::pin(async move { commands::run_copy(config, store, args).await }),
-        Some(Commands::Ctx(args)) => Box::pin(async move { commands::run_ctx(config, store, args) }),
-        Some(Commands::Diff(args)) => Box::pin(async move { commands::run_diff(config, store, args) }),
+        Some(Commands::Copy(args)) => {
+            Box::pin(async move { commands::run_copy(config, store, args).await })
+        }
+        Some(Commands::Ctx(args)) => {
+            Box::pin(async move { commands::run_ctx(config, store, args) })
+        }
+        Some(Commands::Diff(args)) => {
+            Box::pin(async move { commands::run_diff(config, store, args) })
+        }
+        Some(Commands::Help(args)) => Box::pin(async move { commands::run_help(args).await }),
+        Some(Commands::Clear) => Box::pin(async move { commands::run_clear() }),
+        Some(Commands::Exit) => Box::pin(async move { commands::run_exit() }),
+        Some(Commands::Heapdump(args)) => {
+            Box::pin(async move { commands::run_heapdump(config, args) })
+        }
+        Some(Commands::DebugToolCall(args)) => {
+            Box::pin(async move { commands::run_debug_tool_call(config, store, args) })
+        }
+        Some(Commands::Fast(args)) => Box::pin(async move { commands::run_fast(config, args) }),
+        Some(Commands::Mobile(args)) => Box::pin(async move { commands::run_mobile(args).await }),
+        Some(Commands::Desktop(args)) => Box::pin(async move { commands::run_desktop(args).await }),
+        Some(Commands::SandboxToggle) => {
+            Box::pin(async move { commands::run_sandbox_toggle(config) })
+        }
+        Some(Commands::ReloadPlugins) => {
+            Box::pin(async move { commands::run_reload_plugins(config).await })
+        }
+        Some(Commands::AddDir(args)) => {
+            Box::pin(async move { commands::run_add_dir(config, args) })
+        }
+        Some(Commands::MockLimits(args)) => {
+            Box::pin(async move { commands::run_mock_limits(config, args) })
+        }
+        Some(Commands::Stickers(args)) => {
+            Box::pin(async move { commands::run_stickers(config, args).await })
+        }
+        Some(Commands::ReleaseNotes(args)) => {
+            Box::pin(async move { commands::run_release_notes(args) })
+        }
+        Some(Commands::Stats(args)) => {
+            Box::pin(async move { commands::run_stats(config, store, args) })
+        }
+        Some(Commands::GoodClaude) => {
+            Box::pin(async move { commands::run_good_claude(config).await })
+        }
+        Some(Commands::DiffReal(args)) => {
+            Box::pin(async move { commands::run_diff_real(config, store, args) })
+        }
+        Some(Commands::Branch { command }) => {
+            Box::pin(async move { commands::run_branch(config, command) })
+        }
+        Some(Commands::RemoteEnv(args)) => {
+            Box::pin(async move { commands::run_remote_env(args).await })
+        }
+        Some(Commands::Login(args)) => {
+            Box::pin(async move { commands::run_login(config, args).await })
+        }
+        Some(Commands::Logout) => Box::pin(async move { commands::run_logout(config).await }),
+        Some(Commands::OauthRefresh) => {
+            Box::pin(async move { commands::run_oauth_refresh(config).await })
+        }
+        Some(Commands::Bughunter(args)) => {
+            Box::pin(async move { commands::run_bughunter(config, store, args) })
+        }
+        Some(Commands::AntTrace(args)) => {
+            Box::pin(async move { commands::run_ant_trace(config, store, args) })
+        }
+        Some(Commands::Keybindings { command }) => {
+            Box::pin(async move { commands::run_keybindings(command) })
+        }
+        Some(Commands::Passes(args)) => {
+            Box::pin(async move { commands::run_passes(config, store, args) })
+        }
         Some(Commands::Update { command }) => Box::pin(async move {
             use cli::UpdateCommand;
             match command {

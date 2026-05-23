@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand};
-use rc_control_plane::SessionState as RemoteSessionState;
 use claude_core::{InputFormat, OutputFormat, PermissionMode, ProviderProtocol};
+use rc_control_plane::SessionState as RemoteSessionState;
 use rc_runner::{ApprovalDecision, RunnerSessionCommandResponse};
 use uuid::Uuid;
 
@@ -12,7 +12,8 @@ use crate::hooks::HooksCommand;
 #[command(
     name = "remote-code",
     version,
-    about = "Remote Code Rust CLI/runtime shell"
+    about = "Remote Code Rust CLI/runtime shell",
+    disable_help_subcommand = true
 )]
 #[allow(clippy::struct_excessive_bools)]
 pub struct Cli {
@@ -278,6 +279,66 @@ pub enum Commands {
     Ctx(CtxArgs),
     /// Show a diff between sessions or checkpoints.
     Diff(DiffArgs),
+    // ── P1-A1 commands ─────────────────────────────────────────────
+    /// Show help for commands.
+    Help(HelpArgs),
+    /// Clear the terminal screen.
+    Clear,
+    /// Exit the shell.
+    Exit,
+    /// Dump heap memory stats for debugging.
+    Heapdump(HeapdumpArgs),
+    /// Debug a tool call by ID.
+    DebugToolCall(DebugToolCallArgs),
+    /// Toggle fast mode (skip confirmations).
+    Fast(FastArgs),
+    /// Mobile device pairing and management.
+    Mobile(MobileArgs),
+    /// Show or configure mobile pairing.
+    Desktop(DesktopArgs),
+    /// Toggle sandbox execution mode.
+    SandboxToggle,
+    /// Reload all plugins from disk.
+    ReloadPlugins,
+    /// Add a directory to the workspace.
+    AddDir(AddDirArgs),
+    /// Mock rate limit responses for testing.
+    MockLimits(MockLimitsArgs),
+    /// Manage GitHub achievement stickers.
+    Stickers(StickersArgs),
+    /// Show release notes for this version.
+    ReleaseNotes(ReleaseNotesArgs),
+    /// Show session or system statistics.
+    Stats(StatsArgs),
+    /// Send a "good Claude" feedback signal.
+    GoodClaude,
+    // ── P1-A2 commands ─────────────────────────────────────────────
+    /// Show a diff between sessions or checkpoints (real diff engine).
+    DiffReal(DiffRealArgs),
+    /// Manage git branches.
+    Branch {
+        #[command(subcommand)]
+        command: BranchCommand,
+    },
+    /// View or set remote env vars.
+    RemoteEnv(RemoteEnvArgs),
+    /// Log in with a provider.
+    Login(LoginArgs),
+    /// Log out from a provider.
+    Logout,
+    /// Refresh OAuth token.
+    OauthRefresh,
+    /// Run automated bug hunting.
+    Bughunter(BughunterArgs),
+    /// Trace API calls in a session.
+    AntTrace(AntTraceArgs),
+    /// Manage keybindings.
+    Keybindings {
+        #[command(subcommand)]
+        command: KeybindingsCommand,
+    },
+    /// Run batch analysis passes.
+    Passes(PassesArgs),
 }
 
 /// Subcommands for the update command.
@@ -301,6 +362,16 @@ pub enum SessionsCommand {
     List,
     Show(ShowArgs),
     Stats(SessionsStatsArgs),
+    /// Rename a session.
+    Rename(SessionRenameArgs),
+    /// Tag a session with labels.
+    Tag(SessionTagArgs),
+    /// Share or export a session.
+    Share(SessionShareArgs),
+    /// Backfill session data (batch re-process transcript).
+    Backfill(SessionBackfillArgs),
+    /// Rewind a session to a previous checkpoint.
+    Rewind(SessionRewindArgs),
 }
 
 #[derive(Subcommand, Debug)]
@@ -1513,6 +1584,273 @@ pub struct DiffArgs {
     pub session_id: Option<Uuid>,
     #[arg(long)]
     pub path: Option<String>,
+    #[arg(long)]
+    pub json: bool,
+}
+
+// ── Session subcommands ────────────────────────────────────────────────
+
+#[derive(Args, Debug)]
+pub struct SessionRenameArgs {
+    pub session_id: Uuid,
+    pub name: String,
+}
+
+#[derive(Args, Debug)]
+pub struct SessionTagArgs {
+    pub session_id: Uuid,
+    #[arg(long = "tag")]
+    pub tags: Vec<String>,
+    #[arg(long)]
+    pub remove: Option<String>,
+}
+
+#[derive(Args, Debug)]
+pub struct SessionShareArgs {
+    pub session_id: Option<Uuid>,
+    #[arg(long)]
+    pub format: Option<ExportFormat>,
+    #[arg(long)]
+    pub output: Option<PathBuf>,
+}
+
+// ── P1-A2: New subcommands ────────────────────────────────────────────
+
+#[derive(Subcommand, Debug)]
+pub enum BranchCommand {
+    /// List local branches.
+    List {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Create a new branch.
+    Create {
+        name: String,
+        #[arg(long)]
+        start_point: Option<String>,
+    },
+    /// Switch to a branch.
+    Switch { name: String },
+    /// Delete a branch.
+    Delete {
+        name: String,
+        #[arg(long)]
+        force: bool,
+    },
+    /// Show current branch.
+    Current {
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum KeybindingsCommand {
+    /// List current keybindings.
+    List {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Set a keybinding.
+    Set { key: String, action: String },
+    /// Reset keybindings to defaults.
+    Reset,
+}
+
+// ── P1-A1: New CLI Args ───────────────────────────────────────────────
+
+#[derive(Args, Debug)]
+pub struct HelpArgs {
+    pub command: Option<String>,
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct HeapdumpArgs {
+    #[arg(long)]
+    pub json: bool,
+    #[arg(long)]
+    pub output: Option<PathBuf>,
+}
+
+#[derive(Args, Debug)]
+pub struct DebugToolCallArgs {
+    pub tool_call_id: String,
+    #[arg(long)]
+    pub session_id: Option<Uuid>,
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct FastArgs {
+    #[arg(long)]
+    pub enable: bool,
+    #[arg(long)]
+    pub disable: bool,
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct MobileArgs {
+    #[arg(long)]
+    pub pair: bool,
+    #[arg(long)]
+    pub unpair: Option<String>,
+    #[arg(long)]
+    pub list: bool,
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct DesktopArgs {
+    #[arg(long)]
+    pub show: bool,
+    #[arg(long)]
+    pub connect: Option<String>,
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct AddDirArgs {
+    pub path: String,
+    #[arg(long)]
+    pub name: Option<String>,
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct MockLimitsArgs {
+    #[arg(long)]
+    pub rpm: Option<u64>,
+    #[arg(long)]
+    pub tpm: Option<u64>,
+    #[arg(long)]
+    pub reset: bool,
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct StickersArgs {
+    #[arg(long)]
+    pub list: bool,
+    #[arg(long)]
+    pub grant: Option<String>,
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct ReleaseNotesArgs {
+    #[arg(long)]
+    pub json: bool,
+    pub version: Option<String>,
+}
+
+#[derive(Args, Debug)]
+pub struct StatsArgs {
+    #[arg(long)]
+    pub session_id: Option<Uuid>,
+    #[arg(long)]
+    pub system: bool,
+    #[arg(long)]
+    pub json: bool,
+}
+
+// ── P1-A2: New CLI Args ───────────────────────────────────────────────
+
+#[derive(Args, Debug)]
+pub struct SessionBackfillArgs {
+    pub session_id: Uuid,
+    #[arg(long)]
+    pub dry_run: bool,
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct SessionRewindArgs {
+    pub session_id: Uuid,
+    #[arg(long)]
+    pub to_checkpoint: Option<String>,
+    #[arg(long)]
+    pub steps: Option<u32>,
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct DiffRealArgs {
+    pub session_id: Option<Uuid>,
+    /// Optional second session for comparison.
+    #[arg(long)]
+    pub other_session: Option<Uuid>,
+    #[arg(long)]
+    pub path: Option<String>,
+    #[arg(long)]
+    pub json: bool,
+    #[arg(long)]
+    pub unified: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct RemoteEnvArgs {
+    #[arg(long)]
+    pub get: Option<String>,
+    #[arg(long)]
+    pub set: Option<String>,
+    #[arg(long)]
+    pub value: Option<String>,
+    #[arg(long)]
+    pub unset: Option<String>,
+    #[arg(long)]
+    pub list: bool,
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct LoginArgs {
+    pub provider: Option<String>,
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct BughunterArgs {
+    #[arg(long)]
+    pub session_id: Option<Uuid>,
+    #[arg(long)]
+    pub deep: bool,
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct AntTraceArgs {
+    pub session_id: Option<Uuid>,
+    #[arg(long)]
+    pub follow: bool,
+    #[arg(long)]
+    pub output: Option<PathBuf>,
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct PassesArgs {
+    #[arg(long)]
+    pub session_id: Option<Uuid>,
+    #[arg(long)]
+    pub all: bool,
+    #[arg(long)]
+    pub name: Option<String>,
     #[arg(long)]
     pub json: bool,
 }

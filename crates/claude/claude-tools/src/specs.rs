@@ -1337,6 +1337,22 @@ pub fn phase9_tool_specs() -> Vec<ToolSpec> {
                 "additionalProperties": false,
             }),
         },
+        ToolSpec {
+            name: "subscribe_pr".to_owned(),
+            protocol_name: "SubscribePR".to_owned(),
+            permission_tool_name: "Read".to_owned(),
+            description: "Subscribe to pull request status changes. The server notifies you when the PR status changes or new comments are posted.".to_owned(),
+            requires_permission: true,
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "pr_url": {"type": "string", "description": "Full PR URL (e.g. https://github.com/owner/repo/pull/123)"},
+                    "events": {"type": "array", "items": {"type": "string", "enum": ["status", "comment", "review", "merge"]}, "description": "Events to subscribe to (default: all)"}
+                },
+                "required": ["pr_url"],
+                "additionalProperties": false,
+            }),
+        },
     ]
 }
 

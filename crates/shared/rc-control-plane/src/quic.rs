@@ -5,7 +5,7 @@
 //! can flow client→server on separate streams.
 
 use std::net::SocketAddr;
-use std::sync::Arc;
+use std::sync::{Arc, Once};
 
 use tokio::io::AsyncWriteExt;
 use tokio::sync::broadcast;
@@ -399,9 +399,7 @@ async fn send_quic_event(conn: &quinn::Connection, event: &TimelineEvent) -> any
     write_len_prefixed_payload(&mut stream, &payload).await
 }
 
-fn runner_approval_decision(
-    decision: TransportApprovalDecision,
-) -> rc_runner::ApprovalDecision {
+fn runner_approval_decision(decision: TransportApprovalDecision) -> rc_runner::ApprovalDecision {
     match decision {
         TransportApprovalDecision::Approved => rc_runner::ApprovalDecision::Approved,
         TransportApprovalDecision::Denied => rc_runner::ApprovalDecision::Denied,
@@ -458,6 +456,8 @@ fn build_quic_server_tls(
     cert_pem: &[u8],
     key_pem: &[u8],
 ) -> anyhow::Result<quinn::crypto::rustls::QuicServerConfig> {
+    ensure_rustls_crypto_provider();
+
     let cert = rustls_pemfile::certs(&mut std::io::Cursor::new(cert_pem))
         .collect::<Result<Vec<_>, _>>()?;
     let key = rustls_pemfile::private_key(&mut std::io::Cursor::new(key_pem))
@@ -472,6 +472,13 @@ fn build_quic_server_tls(
 
     quinn::crypto::rustls::QuicServerConfig::try_from(Arc::new(tls_config))
         .map_err(|e| anyhow::anyhow!("QUIC server TLS: {e}"))
+}
+
+fn ensure_rustls_crypto_provider() {
+    static RUSTLS_PROVIDER_INIT: Once = Once::new();
+    RUSTLS_PROVIDER_INIT.call_once(|| {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+    });
 }
 
 #[derive(serde::Deserialize)]
