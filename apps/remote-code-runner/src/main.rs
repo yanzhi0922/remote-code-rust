@@ -3,12 +3,13 @@ use std::path::PathBuf;
 
 use anyhow::{Result, anyhow};
 use clap::{Parser, Subcommand};
-use claude_runner::{
+use rc_runner::{
     RUNNER_EVENT_CHANNEL_CAPACITY, RunnerApi, RunnerConfigOverrides, describe_status,
     load_runner_config, validate_runner_config,
 };
-use claude_runner_host::{
-    HostedSessionManager, default_remote_code_bin, run_control_plane_sync, run_outbound_poll_loop,
+use rc_runner_host::{
+    HostedSessionManager, default_remote_code_bin, run_control_plane_command_stream,
+    run_control_plane_sync, run_outbound_poll_loop,
 };
 use claude_telemetry::install_tracing;
 use tokio::sync::{mpsc, watch};
@@ -46,9 +47,11 @@ struct Cli {
     #[arg(long, env = "REMOTE_CODE_RUNNER_REMOTE_CODE_BIN")]
     remote_code_bin: Option<PathBuf>,
 
-    /// Runner connection mode: "outbound" (default, long-polls control plane
-    /// for commands — no inbound port needed) or "inbound" (explicit direct API).
-    #[arg(long, env = "REMOTE_CODE_RUNNER_MODE", default_value = "outbound")]
+    /// Runner connection mode:
+    ///   "auto" (default) — tries WebSocket command stream, falls back to outbound polling
+    ///   "outbound" — long-polls control plane for commands (no inbound port needed)
+    ///   "inbound" — explicit direct API with an inbound TCP listener
+    #[arg(long, env = "REMOTE_CODE_RUNNER_MODE", default_value = "auto")]
     mode: String,
 
     #[command(subcommand)]
@@ -150,18 +153,27 @@ async fn main() -> Result<()> {
             }
 
             match cli.mode.as_str() {
-                "outbound" => {
-                    // Outbound mode: long-poll control plane for commands instead of
-                    // listening for inbound connections. Works behind any firewall/NAT.
+                "auto" | "outbound" => {
                     if config.control_plane_url.is_none() {
-                        anyhow::bail!("outbound mode requires --control-plane-url");
+                        anyhow::bail!("{} mode requires --control-plane-url", cli.mode);
                     }
-                    let outbound_shutdown = shutdown_tx.subscribe();
-                    tokio::spawn(run_outbound_poll_loop(
-                        api.clone(),
-                        config.clone(),
-                        outbound_shutdown,
-                    ));
+                    let cmd_shutdown = shutdown_tx.subscribe();
+                    if cli.mode.as_str() == "auto" {
+                        // "auto" mode: try WebSocket command stream first,
+                        // fall back to HTTP long-polling on failure.
+                        tokio::spawn(run_control_plane_command_stream(
+                            api.clone(),
+                            config.clone(),
+                            cmd_shutdown,
+                        ));
+                    } else {
+                        // Legacy "outbound" mode: direct HTTP long-polling.
+                        tokio::spawn(run_outbound_poll_loop(
+                            api.clone(),
+                            config.clone(),
+                            cmd_shutdown,
+                        ));
+                    }
                     // Block until shutdown.
                     let mut wait_shutdown = shutdown_tx.subscribe();
                     let _ = wait_shutdown.changed().await;
@@ -173,7 +185,7 @@ async fn main() -> Result<()> {
                 }
                 other => {
                     anyhow::bail!(
-                        "unsupported runner mode `{other}`; expected `outbound` or `inbound`"
+                        "unsupported runner mode `{other}`; expected `auto`, `outbound`, or `inbound`"
                     );
                 }
             }
@@ -201,17 +213,17 @@ mod tests {
         routing::post,
     };
     use chrono::Utc;
-    use claude_control_plane::{
+    use rc_control_plane::{
         RunnerCommandPullResponse, RunnerQueuedCommandBody, RuntimeEventCreateRequest,
         RuntimeEventDetail, SessionState as ControlPlaneSessionState, SessionStateUpdateRequest,
     };
-    use claude_runner::{
+    use rc_runner::{
         ApprovalCreateRequest, ApprovalDecision, ApprovalDecisionRequest, ApprovalRequestRecord,
         RunnerApiEvent, RunnerHeartbeat, RunnerRegistrationLease, RunnerRegistrationRequest,
         RunnerSessionCommandRequest, RunnerSessionCreateRequest, RunnerSessionRecord,
         RunnerSnapshot, RunnerState, RunnerWorkspace,
     };
-    use claude_runner_host::{
+    use rc_runner_host::{
         apply_pulled_runner_commands, effective_heartbeat_interval, next_retry_delay,
         run_control_plane_sync,
     };
@@ -311,7 +323,7 @@ mod tests {
             &api,
             RunnerCommandPullResponse {
                 commands: vec![
-                    claude_control_plane::RunnerQueuedCommand {
+                    rc_control_plane::RunnerQueuedCommand {
                         command_id: Uuid::new_v4(),
                         runner_id: "runner-pull".to_owned(),
                         created_at: Utc::now(),
@@ -322,7 +334,7 @@ mod tests {
                             },
                         },
                     },
-                    claude_control_plane::RunnerQueuedCommand {
+                    rc_control_plane::RunnerQueuedCommand {
                         command_id: Uuid::new_v4(),
                         runner_id: "runner-pull".to_owned(),
                         created_at: Utc::now(),
@@ -368,7 +380,7 @@ mod tests {
         {
             RunnerApiEvent::ApprovalResolved(record) => {
                 assert_eq!(record.approval_id, approval.approval_id);
-                assert_eq!(record.state, claude_runner::ApprovalState::Approved);
+                assert_eq!(record.state, rc_runner::ApprovalState::Approved);
                 assert_eq!(record.responder.as_deref(), Some("mobile-web"));
             }
             other => panic!("unexpected approval event after pull command: {other:?}"),
@@ -670,7 +682,7 @@ mod tests {
         assert!(events.iter().any(|(_, event)| matches!(
             event.detail,
             RuntimeEventDetail::DaemonPresenceChanged {
-                state: claude_control_plane::DaemonPresenceState::Online
+                state: rc_control_plane::DaemonPresenceState::Online
             }
         )));
         assert!(
@@ -707,7 +719,7 @@ mod tests {
         assert!(events.iter().any(|(_, event)| matches!(
             event.detail,
             RuntimeEventDetail::DaemonPresenceChanged {
-                state: claude_control_plane::DaemonPresenceState::Offline
+                state: rc_control_plane::DaemonPresenceState::Offline
             }
         )));
 
@@ -797,7 +809,7 @@ mod tests {
         State(state): State<HostedControlPlaneState>,
         AxumPath(session_id): AxumPath<Uuid>,
         Json(request): Json<RuntimeEventCreateRequest>,
-    ) -> (StatusCode, Json<claude_control_plane::TimelineEvent>) {
+    ) -> (StatusCode, Json<rc_control_plane::TimelineEvent>) {
         state
             .events
             .write()
@@ -806,7 +818,7 @@ mod tests {
         let sequence = state.next_sequence.fetch_add(1, Ordering::SeqCst) as u64 + 1;
         (
             StatusCode::CREATED,
-            Json(claude_control_plane::TimelineEvent {
+            Json(rc_control_plane::TimelineEvent {
                 sequence,
                 recorded_at: Utc::now(),
                 runner_id: Some("runner-hosted".to_owned()),

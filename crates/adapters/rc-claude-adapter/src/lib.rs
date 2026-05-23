@@ -872,9 +872,8 @@ impl AgentAdapter for ClaudeInProcessAdapter {
     }
 
     fn is_alive(&self) -> bool {
-        self.worker_handle
-            .as_ref()
-            .is_some_and(|h| !h.is_finished())
+        // Consistent with rc-roo-adapter: alive unless explicitly stopped.
+        !matches!(self.status, AgentStatus::Stopped)
     }
 
     fn info(&self) -> &AgentInfo {

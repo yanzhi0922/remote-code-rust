@@ -214,8 +214,8 @@ export function McpTab() {
       <section className="space-y-4">
         <div className="flex items-start justify-between gap-4">
           <div>
-            <h3 className="text-base font-semibold text-slate-800">MCP 管理</h3>
-            <p className="mt-1 text-sm text-slate-500">
+            <h3 className="text-base font-semibold text-rc-text-primary">MCP 管理</h3>
+            <p className="mt-1 text-sm text-rc-text-tertiary">
               在 GUI 里直接维护 profile / project scope 的 MCP server 清单，支持连通性检查和 enable/disable。
             </p>
           </div>
@@ -224,7 +224,7 @@ export function McpTab() {
               void loadServers();
             }}
             disabled={loading}
-            className="inline-flex items-center gap-2 rounded-2xl border border-[#ddd6c8] bg-white px-4 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-[#faf8f3] disabled:cursor-not-allowed disabled:opacity-60"
+            className="inline-flex items-center gap-2 rounded-md border border-rc-border-primary bg-rc-bg-surface px-4 py-2 text-sm font-medium text-rc-text-primary transition-colors hover:bg-rc-bg-secondary disabled:cursor-not-allowed disabled:opacity-60"
           >
             <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
             刷新
@@ -232,7 +232,7 @@ export function McpTab() {
         </div>
 
         <div className="grid gap-3 md:grid-cols-3">
-          <label className="flex items-center gap-3 rounded-2xl bg-white px-4 py-3 text-sm text-slate-700">
+          <label className="flex items-center gap-3 rounded-md bg-rc-bg-surface px-4 py-3 text-sm text-rc-text-primary">
             <input
               type="radio"
               name="mcp_scope"
@@ -241,7 +241,7 @@ export function McpTab() {
             />
             <span>Profile scope</span>
           </label>
-          <label className="flex items-center gap-3 rounded-2xl bg-white px-4 py-3 text-sm text-slate-700">
+          <label className="flex items-center gap-3 rounded-md bg-rc-bg-surface px-4 py-3 text-sm text-rc-text-primary">
             <input
               type="radio"
               name="mcp_scope"
@@ -250,15 +250,15 @@ export function McpTab() {
             />
             <span>Project scope</span>
           </label>
-          <label className="flex items-center gap-3 rounded-2xl bg-white px-4 py-3 text-sm text-slate-700">
+          <label className="flex items-center gap-3 rounded-md bg-rc-bg-surface px-4 py-3 text-sm text-rc-text-primary">
             <input type="checkbox" checked={connect} onChange={(event) => setConnect(event.target.checked)} />
             <span>连接并检查工具</span>
           </label>
         </div>
 
-        <div className="rounded-[24px] border border-[#ddd6c8] bg-white px-4 py-4 text-sm text-slate-600">
-          <div className="font-semibold text-slate-700">{displayedScopeLabel}</div>
-          <div className="mt-2 break-all text-xs text-slate-500">
+        <div className="rounded-lg border border-rc-border-primary bg-rc-bg-surface px-4 py-4 text-sm text-rc-text-secondary">
+          <div className="font-semibold text-rc-text-primary">{displayedScopeLabel}</div>
+          <div className="mt-2 break-all text-xs text-rc-text-tertiary">
             {configPath
               ? formatSensitivePath(configPath, privacyMode)
               : scope === 'project'
@@ -268,37 +268,37 @@ export function McpTab() {
                 : '加载中…'}
           </div>
           {scope === 'project' && activeProjectPath && (
-            <div className="mt-2 text-xs text-slate-500">
+            <div className="mt-2 text-xs text-rc-text-tertiary">
               project: {formatSensitivePath(activeProjectPath, privacyMode)}
             </div>
           )}
         </div>
 
         {warnings.length > 0 && (
-          <div className="rounded-[24px] border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+          <div className="rounded-lg border border-rc-accent-warning-border bg-rc-accent-warning-bg px-4 py-3 text-sm text-rc-accent-warning">
             {warnings.map((warning) => (
               <div key={warning}>- {warning}</div>
             ))}
           </div>
         )}
         {error && (
-          <div className="rounded-[24px] border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+          <div className="rounded-lg border border-rc-accent-error-border bg-rc-accent-error-bg px-4 py-3 text-sm text-rc-accent-error">
             {error}
           </div>
         )}
       </section>
 
-      <section className="space-y-4 rounded-[28px] border border-[#ddd6c8] bg-white p-5">
+      <section className="space-y-4 rounded-lg border border-rc-border-primary bg-rc-bg-surface p-5">
         <div className="flex items-center justify-between gap-3">
           <div>
-            <div className="text-sm font-semibold text-slate-800">新增 / 更新 MCP Server</div>
-            <div className="mt-1 text-xs text-slate-500">
+            <div className="text-sm font-semibold text-rc-text-primary">新增 / 更新 MCP Server</div>
+            <div className="mt-1 text-xs text-rc-text-tertiary">
               同名保存会直接覆盖现有 server，用来更新 transport、url、args 或 metadata。
             </div>
           </div>
           <button
             onClick={() => setForm(emptyForm())}
-            className="inline-flex items-center gap-1.5 rounded-2xl border border-[#ddd6c8] bg-[#faf8f3] px-3 py-2 text-xs font-medium text-slate-600 transition-colors hover:bg-[#f2ede3]"
+            className="inline-flex items-center gap-1.5 rounded-md border border-rc-border-primary bg-rc-bg-secondary px-3 py-2 text-xs font-medium text-rc-text-secondary transition-colors hover:bg-rc-bg-hover"
           >
             <RotateCcw size={13} />
             清空表单
@@ -307,17 +307,17 @@ export function McpTab() {
 
         <div className="grid gap-4 md:grid-cols-2">
           <label className="space-y-1.5">
-            <span className="block text-sm font-medium text-slate-700">名称</span>
+            <span className="block text-sm font-medium text-rc-text-primary">名称</span>
             <input
               value={form.name}
               onChange={(event) => setForm((state) => ({ ...state, name: event.target.value }))}
-              className="w-full rounded-2xl border border-[#ddd6c8] bg-[#faf8f3] px-3 py-2.5 text-sm outline-none transition-colors focus:border-slate-500"
+              className="w-full rounded-md border border-rc-border-primary bg-rc-bg-secondary px-3 py-2.5 text-sm outline-none transition-colors focus:border-slate-500"
               placeholder="filesystem"
             />
           </label>
 
           <label className="space-y-1.5">
-            <span className="block text-sm font-medium text-slate-700">Transport</span>
+            <span className="block text-sm font-medium text-rc-text-primary">Transport</span>
             <select
               value={form.transport}
               onChange={(event) =>
@@ -326,7 +326,7 @@ export function McpTab() {
                   transport: event.target.value as McpFormState['transport'],
                 }))
               }
-              className="w-full rounded-2xl border border-[#ddd6c8] bg-[#faf8f3] px-3 py-2.5 text-sm outline-none transition-colors focus:border-slate-500"
+              className="w-full rounded-md border border-rc-border-primary bg-rc-bg-secondary px-3 py-2.5 text-sm outline-none transition-colors focus:border-slate-500"
             >
               <option value="stdio">stdio</option>
               <option value="http">http</option>
@@ -337,21 +337,21 @@ export function McpTab() {
           {form.transport === 'stdio' ? (
             <>
               <label className="space-y-1.5">
-                <span className="block text-sm font-medium text-slate-700">Command</span>
+                <span className="block text-sm font-medium text-rc-text-primary">Command</span>
                 <input
                   value={form.command}
                   onChange={(event) => setForm((state) => ({ ...state, command: event.target.value }))}
-                  className="w-full rounded-2xl border border-[#ddd6c8] bg-[#faf8f3] px-3 py-2.5 text-sm outline-none transition-colors focus:border-slate-500"
+                  className="w-full rounded-md border border-rc-border-primary bg-rc-bg-secondary px-3 py-2.5 text-sm outline-none transition-colors focus:border-slate-500"
                   placeholder="python"
                 />
               </label>
 
               <label className="space-y-1.5">
-                <span className="block text-sm font-medium text-slate-700">Working directory</span>
+                <span className="block text-sm font-medium text-rc-text-primary">Working directory</span>
                 <input
                   value={form.cwd}
                   onChange={(event) => setForm((state) => ({ ...state, cwd: event.target.value }))}
-                  className="w-full rounded-2xl border border-[#ddd6c8] bg-[#faf8f3] px-3 py-2.5 text-sm outline-none transition-colors focus:border-slate-500"
+                  className="w-full rounded-md border border-rc-border-primary bg-rc-bg-secondary px-3 py-2.5 text-sm outline-none transition-colors focus:border-slate-500"
                   placeholder="C:\\workspace\\mcp-server"
                 />
               </label>
@@ -359,11 +359,11 @@ export function McpTab() {
           ) : (
             <>
               <label className="space-y-1.5 md:col-span-2">
-                <span className="block text-sm font-medium text-slate-700">URL</span>
+                <span className="block text-sm font-medium text-rc-text-primary">URL</span>
                 <input
                   value={form.url}
                   onChange={(event) => setForm((state) => ({ ...state, url: event.target.value }))}
-                  className="w-full rounded-2xl border border-[#ddd6c8] bg-[#faf8f3] px-3 py-2.5 text-sm outline-none transition-colors focus:border-slate-500"
+                  className="w-full rounded-md border border-rc-border-primary bg-rc-bg-secondary px-3 py-2.5 text-sm outline-none transition-colors focus:border-slate-500"
                   placeholder="https://example.com/mcp"
                 />
               </label>
@@ -371,18 +371,18 @@ export function McpTab() {
           )}
 
           <label className="space-y-1.5 md:col-span-2">
-            <span className="block text-sm font-medium text-slate-700">Args / 每行一个</span>
+            <span className="block text-sm font-medium text-rc-text-primary">Args / 每行一个</span>
             <textarea
               value={form.argsText}
               onChange={(event) => setForm((state) => ({ ...state, argsText: event.target.value }))}
               rows={3}
-              className="w-full rounded-2xl border border-[#ddd6c8] bg-[#faf8f3] px-3 py-2.5 text-sm outline-none transition-colors focus:border-slate-500"
+              className="w-full rounded-md border border-rc-border-primary bg-rc-bg-secondary px-3 py-2.5 text-sm outline-none transition-colors focus:border-slate-500"
               placeholder={form.transport === 'stdio' ? 'server.py\n--port\n3000' : '可留空'}
             />
           </label>
 
           <label className="space-y-1.5">
-            <span className="block text-sm font-medium text-slate-700">
+            <span className="block text-sm font-medium text-rc-text-primary">
               {form.transport === 'stdio' ? 'Env (key=value)' : 'Headers (key=value)'}
             </span>
             <textarea
@@ -395,44 +395,44 @@ export function McpTab() {
                 )
               }
               rows={4}
-              className="w-full rounded-2xl border border-[#ddd6c8] bg-[#faf8f3] px-3 py-2.5 text-sm outline-none transition-colors focus:border-slate-500"
+              className="w-full rounded-md border border-rc-border-primary bg-rc-bg-secondary px-3 py-2.5 text-sm outline-none transition-colors focus:border-slate-500"
               placeholder={form.transport === 'stdio' ? 'TOKEN=secret' : 'Authorization=Bearer token'}
             />
           </label>
 
           <label className="space-y-1.5">
-            <span className="block text-sm font-medium text-slate-700">Metadata (key=value)</span>
+            <span className="block text-sm font-medium text-rc-text-primary">Metadata (key=value)</span>
             <textarea
               value={form.metadataText}
               onChange={(event) => setForm((state) => ({ ...state, metadataText: event.target.value }))}
               rows={4}
-              className="w-full rounded-2xl border border-[#ddd6c8] bg-[#faf8f3] px-3 py-2.5 text-sm outline-none transition-colors focus:border-slate-500"
+              className="w-full rounded-md border border-rc-border-primary bg-rc-bg-secondary px-3 py-2.5 text-sm outline-none transition-colors focus:border-slate-500"
               placeholder="scope=workspace"
             />
           </label>
 
           <label className="space-y-1.5">
-            <span className="block text-sm font-medium text-slate-700">Startup timeout (s)</span>
+            <span className="block text-sm font-medium text-rc-text-primary">Startup timeout (s)</span>
             <input
               value={form.startupTimeout}
               onChange={(event) => setForm((state) => ({ ...state, startupTimeout: event.target.value }))}
-              className="w-full rounded-2xl border border-[#ddd6c8] bg-[#faf8f3] px-3 py-2.5 text-sm outline-none transition-colors focus:border-slate-500"
+              className="w-full rounded-md border border-rc-border-primary bg-rc-bg-secondary px-3 py-2.5 text-sm outline-none transition-colors focus:border-slate-500"
               placeholder="10"
             />
           </label>
 
           <label className="space-y-1.5">
-            <span className="block text-sm font-medium text-slate-700">Request timeout (s)</span>
+            <span className="block text-sm font-medium text-rc-text-primary">Request timeout (s)</span>
             <input
               value={form.requestTimeout}
               onChange={(event) => setForm((state) => ({ ...state, requestTimeout: event.target.value }))}
-              className="w-full rounded-2xl border border-[#ddd6c8] bg-[#faf8f3] px-3 py-2.5 text-sm outline-none transition-colors focus:border-slate-500"
+              className="w-full rounded-md border border-rc-border-primary bg-rc-bg-secondary px-3 py-2.5 text-sm outline-none transition-colors focus:border-slate-500"
               placeholder="15"
             />
           </label>
         </div>
 
-        <label className="flex items-center gap-3 rounded-2xl bg-[#faf8f3] px-4 py-3 text-sm text-slate-700">
+        <label className="flex items-center gap-3 rounded-md bg-rc-bg-secondary px-4 py-3 text-sm text-rc-text-primary">
           <input
             type="checkbox"
             checked={form.disabled}
@@ -447,7 +447,7 @@ export function McpTab() {
               void saveServer();
             }}
             disabled={saving || !canUseProjectScope}
-            className="inline-flex items-center gap-2 rounded-2xl bg-[#17181a] px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-[#2b2d31] disabled:cursor-not-allowed disabled:bg-[#c9c2b5]"
+            className="inline-flex items-center gap-2 rounded-md bg-rc-accent-primary px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-rc-accent-primary-hover disabled:cursor-not-allowed disabled:bg-rc-text-tertiary"
           >
             <PlugZap size={14} />
             {saving ? '保存中…' : '保存 MCP Server'}
@@ -462,7 +462,7 @@ export function McpTab() {
                 });
             }}
             disabled={!canUseProjectScope}
-            className="inline-flex items-center gap-2 rounded-2xl border border-[#ddd6c8] bg-white px-4 py-2.5 text-sm font-medium text-slate-700 transition-colors hover:bg-[#faf8f3] disabled:cursor-not-allowed disabled:opacity-60"
+            className="inline-flex items-center gap-2 rounded-md border border-rc-border-primary bg-rc-bg-surface px-4 py-2.5 text-sm font-medium text-rc-text-primary transition-colors hover:bg-rc-bg-secondary disabled:cursor-not-allowed disabled:opacity-60"
           >
             <RotateCcw size={14} />
             重置当前 scope
@@ -471,27 +471,27 @@ export function McpTab() {
       </section>
 
       <section className="space-y-3">
-        <div className="flex items-center gap-2 text-sm font-semibold text-slate-800">
+        <div className="flex items-center gap-2 text-sm font-semibold text-rc-text-primary">
           <Cable size={15} />
           Runtime-discovered inventory ({runtimeServers.length})
         </div>
 
-        <div className="rounded-[24px] border border-[#ddd6c8] bg-white px-4 py-4 text-sm text-slate-600">
-          <div className="font-semibold text-slate-700">Runtime inventory</div>
-          <div className="mt-2 break-all text-xs text-slate-500">
+        <div className="rounded-lg border border-rc-border-primary bg-rc-bg-surface px-4 py-4 text-sm text-rc-text-secondary">
+          <div className="font-semibold text-rc-text-primary">Runtime inventory</div>
+          <div className="mt-2 break-all text-xs text-rc-text-tertiary">
             cwd{' '}
             {runtimeEffectiveCwd || activeProjectPath
               ? formatSensitivePath(runtimeEffectiveCwd || activeProjectPath, privacyMode)
               : '加载中…'}
           </div>
-          <div className="mt-2 text-xs text-slate-500">
+          <div className="mt-2 text-xs text-rc-text-tertiary">
             enabled {runtimeServers.filter((server) => server.enabled).length} · disabled{' '}
             {runtimeServers.filter((server) => !server.enabled).length}
           </div>
         </div>
 
         {runtimeWarnings.length > 0 && (
-          <div className="rounded-[24px] border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+          <div className="rounded-lg border border-rc-accent-warning-border bg-rc-accent-warning-bg px-4 py-3 text-sm text-rc-accent-warning">
             {runtimeWarnings.map((warning) => (
               <div key={warning}>- {warning}</div>
             ))}
@@ -499,7 +499,7 @@ export function McpTab() {
         )}
 
         {runtimeServers.length === 0 ? (
-          <div className="rounded-[24px] border border-dashed border-[#ddd6c8] px-4 py-6 text-sm text-slate-500">
+          <div className="rounded-lg border border-dashed border-rc-border-primary px-4 py-6 text-sm text-rc-text-tertiary">
             当前 runtime inventory 还没有发现 MCP server。
           </div>
         ) : (
@@ -507,35 +507,35 @@ export function McpTab() {
             {runtimeServers.map((server) => (
               <div
                 key={`${server.origin_kind}-${server.origin_name}-${server.name}-${server.config_path}`}
-                className="rounded-[24px] border border-[#ddd6c8] bg-white px-4 py-4"
+                className="rounded-lg border border-rc-border-primary bg-rc-bg-surface px-4 py-4"
               >
                 <div className="flex items-start justify-between gap-4">
                   <div className="min-w-0">
                     <div className="flex items-center gap-2">
-                      <div className="truncate text-sm font-semibold text-slate-800">{server.name}</div>
+                      <div className="truncate text-sm font-semibold text-rc-text-primary">{server.name}</div>
                       <span
                         className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold ${
-                          server.enabled ? 'bg-amber-100 text-amber-700' : 'bg-slate-200 text-slate-600'
+                          server.enabled ? 'bg-rc-accent-warning-bg text-rc-accent-warning' : 'bg-rc-bg-tertiary text-rc-text-tertiary'
                         }`}
                       >
                         {server.status}
                       </span>
-                      <span className="inline-flex rounded-full bg-[#f4efe6] px-2 py-0.5 text-[10px] font-semibold text-slate-600">
+                      <span className="inline-flex rounded-full bg-rc-bg-secondary px-2 py-0.5 text-[10px] font-semibold text-rc-text-secondary">
                         {server.transport}
                       </span>
-                      <span className="inline-flex rounded-full bg-[#eef3fb] px-2 py-0.5 text-[10px] font-semibold text-slate-600">
+                      <span className="inline-flex rounded-full bg-rc-bg-active px-2 py-0.5 text-[10px] font-semibold text-rc-text-secondary">
                         {server.origin_kind}
                       </span>
                     </div>
-                    <div className="mt-2 break-all text-xs text-slate-500">{serverSummary(server)}</div>
-                    <div className="mt-2 break-all text-xs text-slate-500">
+                    <div className="mt-2 break-all text-xs text-rc-text-tertiary">{serverSummary(server)}</div>
+                    <div className="mt-2 break-all text-xs text-rc-text-tertiary">
                       origin {server.origin_kind}:{server.origin_name}
                     </div>
-                    <div className="mt-1 break-all text-xs text-slate-500">
+                    <div className="mt-1 break-all text-xs text-rc-text-tertiary">
                       {formatSensitivePath(server.config_path, privacyMode)}
                     </div>
                     {server.live && (
-                      <div className="mt-2 text-xs text-slate-500">
+                      <div className="mt-2 text-xs text-rc-text-tertiary">
                         live {server.live.status}
                         {server.live.tool_count > 0 ? ` · tools ${server.live.tool_count}` : ''}
                         {server.live.peer_name ? ` · ${server.live.peer_name}` : ''}
@@ -543,14 +543,14 @@ export function McpTab() {
                       </div>
                     )}
                     {server.live?.error && (
-                      <div className="mt-2 text-xs text-rose-600">{server.live.error}</div>
+                      <div className="mt-2 text-xs text-rc-accent-error">{server.live.error}</div>
                     )}
                     {server.live && server.live.tools.length > 0 && (
                       <div className="mt-3 flex flex-wrap gap-1.5">
                         {server.live.tools.map((tool) => (
                           <span
                             key={`${server.origin_kind}-${server.name}-${tool.name}`}
-                            className="inline-flex rounded-full bg-[#f7f4ed] px-2 py-1 text-[11px] text-slate-600"
+                            className="inline-flex rounded-full bg-rc-bg-tertiary px-2 py-1 text-[11px] text-rc-text-secondary"
                             title={tool.description ?? tool.name}
                           >
                             {tool.name}
@@ -567,37 +567,37 @@ export function McpTab() {
       </section>
 
       <section className="space-y-3">
-        <div className="flex items-center gap-2 text-sm font-semibold text-slate-800">
+        <div className="flex items-center gap-2 text-sm font-semibold text-rc-text-primary">
           <Cable size={15} />
           Managed servers ({servers.length})
         </div>
 
         {servers.length === 0 ? (
-          <div className="rounded-[24px] border border-dashed border-[#ddd6c8] px-4 py-6 text-sm text-slate-500">
+          <div className="rounded-lg border border-dashed border-rc-border-primary px-4 py-6 text-sm text-rc-text-tertiary">
             当前 scope 下还没有 MCP server。保存上面的表单后，这里会立刻刷新。
           </div>
         ) : (
           <div className="space-y-3">
             {servers.map((server) => (
-              <div key={server.name} className="rounded-[24px] border border-[#ddd6c8] bg-white px-4 py-4">
+              <div key={server.name} className="rounded-lg border border-rc-border-primary bg-rc-bg-surface px-4 py-4">
                 <div className="flex items-start justify-between gap-4">
                   <div className="min-w-0">
                     <div className="flex items-center gap-2">
-                      <div className="truncate text-sm font-semibold text-slate-800">{server.name}</div>
+                      <div className="truncate text-sm font-semibold text-rc-text-primary">{server.name}</div>
                       <span
                         className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold ${
-                          server.enabled ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-200 text-slate-600'
+                          server.enabled ? 'bg-rc-accent-success-bg text-rc-accent-success' : 'bg-rc-bg-tertiary text-rc-text-tertiary'
                         }`}
                       >
                         {server.enabled ? 'enabled' : 'disabled'}
                       </span>
-                      <span className="inline-flex rounded-full bg-[#f4efe6] px-2 py-0.5 text-[10px] font-semibold text-slate-600">
+                      <span className="inline-flex rounded-full bg-rc-bg-secondary px-2 py-0.5 text-[10px] font-semibold text-rc-text-secondary">
                         {server.transport}
                       </span>
                     </div>
-                    <div className="mt-2 break-all text-xs text-slate-500">{serverSummary(server)}</div>
+                    <div className="mt-2 break-all text-xs text-rc-text-tertiary">{serverSummary(server)}</div>
                     {server.live && (
-                      <div className="mt-2 text-xs text-slate-500">
+                      <div className="mt-2 text-xs text-rc-text-tertiary">
                         live {server.live.status}
                         {server.live.tool_count > 0 ? ` · tools ${server.live.tool_count}` : ''}
                         {server.live.peer_name ? ` · ${server.live.peer_name}` : ''}
@@ -605,14 +605,14 @@ export function McpTab() {
                       </div>
                     )}
                     {server.live?.error && (
-                      <div className="mt-2 text-xs text-rose-600">{server.live.error}</div>
+                      <div className="mt-2 text-xs text-rc-accent-error">{server.live.error}</div>
                     )}
                     {server.live && server.live.tools.length > 0 && (
                       <div className="mt-3 flex flex-wrap gap-1.5">
                         {server.live.tools.map((tool) => (
                           <span
                             key={`${server.name}-${tool.name}`}
-                            className="inline-flex rounded-full bg-[#f7f4ed] px-2 py-1 text-[11px] text-slate-600"
+                            className="inline-flex rounded-full bg-rc-bg-tertiary px-2 py-1 text-[11px] text-rc-text-secondary"
                             title={tool.description ?? tool.name}
                           >
                             {tool.name}
@@ -632,7 +632,7 @@ export function McpTab() {
                             setError(typeof toggleError === 'string' ? toggleError : String(toggleError));
                           });
                       }}
-                      className="rounded-full p-2 text-slate-400 transition-colors hover:bg-[#f7f4ed] hover:text-slate-700"
+                      className="rounded-full p-2 text-slate-400 transition-colors hover:bg-rc-bg-tertiary hover:text-rc-text-primary"
                       title={server.enabled ? 'Disable server' : 'Enable server'}
                     >
                       <PlugZap size={15} />
@@ -646,7 +646,7 @@ export function McpTab() {
                             setError(typeof removeError === 'string' ? removeError : String(removeError));
                           });
                       }}
-                      className="rounded-full p-2 text-slate-400 transition-colors hover:bg-[#fff1f0] hover:text-rose-600"
+                      className="rounded-full p-2 text-slate-400 transition-colors hover:bg-rc-accent-error-bg hover:text-rc-accent-error"
                       title="Remove server"
                     >
                       <Trash2 size={15} />

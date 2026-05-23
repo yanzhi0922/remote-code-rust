@@ -17,6 +17,7 @@ pub mod adapters;
 pub mod bridge;
 pub mod error;
 pub mod events;
+pub mod from_engine;
 pub mod health;
 pub mod jsonrpc;
 pub mod permission;

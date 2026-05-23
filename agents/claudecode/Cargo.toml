@@ -32,7 +32,7 @@ tempfile.workspace = true
 claude-config = { path = "../../crates/claude/claude-config" }
 claude-compact = { path = "../../crates/claude/claude-compact" }
 claude-context = { path = "../../crates/claude/claude-context" }
-claude-control-plane = { path = "../../crates/claude/claude-control-plane" }
+rc-control-plane = { path = "../../crates/shared/rc-control-plane" }
 claude-core = { path = "../../crates/claude/claude-core" }
 rc-engine-events = { path = "../../crates/shared/rc-engine-events" }
 claude-agents = { path = "../../crates/claude/claude-agents" }
@@ -45,7 +45,7 @@ claude-protocol = { path = "../../crates/claude/claude-protocol" }
 claude-provider = { path = "../../crates/claude/claude-provider" }
 claude-query-engine = { path = "../../crates/claude/claude-query-engine" }
 claude-runtime-prompt = { path = "../../crates/claude/claude-runtime-prompt" }
-claude-runner = { path = "../../crates/claude/claude-runner" }
+rc-runner = { path = "../../crates/shared/rc-runner" }
 claude-session = { path = "../../crates/claude/claude-session" }
 claude-skills = { path = "../../crates/claude/claude-skills" }
 claude-swarm = { path = "../../crates/claude/claude-swarm" }

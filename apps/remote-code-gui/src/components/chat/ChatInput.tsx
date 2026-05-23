@@ -33,7 +33,7 @@ function Dropdown({
             className="fixed inset-0 z-10 cursor-default"
             onClick={onToggle}
           />
-          <div className="absolute bottom-full left-0 z-20 mb-2 min-w-[240px] overflow-hidden rounded-lg border border-rc-border-primary bg-rc-bg-surface shadow-xl">
+          <div className="absolute bottom-full left-0 z-20 mb-2 min-w-[240px] overflow-hidden rounded-md border border-rc-border-primary bg-rc-bg-surface shadow-lg">
             <div className="max-h-72 overflow-y-auto p-1.5">{children}</div>
           </div>
         </>
@@ -160,18 +160,18 @@ export function ChatInput() {
   };
 
   return (
-    <div className="border-t border-rc-border-primary bg-rc-bg-surface px-5 pb-4 pt-3">
+    <div className="border-t border-rc-border-primary bg-rc-bg-surface px-4 pb-3 pt-2.5">
       <div className="mx-auto w-full max-w-input">
-        <div className="rounded-lg border border-rc-border-primary bg-rc-bg-surface shadow-sm transition-shadow duration-200 focus-within:border-rc-accent-primary focus-within:shadow-md">
-          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-rc-border-secondary px-4 py-2.5">
+        <div className="rounded-md border border-rc-border-primary bg-rc-bg-surface focus-within:border-rc-accent-primary">
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-rc-border-secondary px-3 py-2">
             {activeSession ? (
               <div className="inline-flex max-w-full items-center gap-2 rounded-md bg-rc-bg-secondary px-3 py-1.5 text-sm text-rc-text-secondary">
                 <MessageSquareText size={14} className="text-rc-text-tertiary" />
                 <span className="truncate font-medium">{currentSessionLabel}</span>
               </div>
             ) : (
-              <div className="text-sm text-rc-text-tertiary">
-                选择 Provider、模型和权限后直接发送即可。
+              <div className="text-xs text-rc-text-tertiary">
+                选择 Agent、Provider 和模型后开始
               </div>
             )}
 
@@ -222,7 +222,7 @@ export function ChatInput() {
             </div>
           </div>
 
-          <div className="flex items-end gap-3 px-4 py-3">
+          <div className="flex items-end gap-3 px-3 py-2.5">
             <textarea
               ref={textAreaRef}
               value={input}
@@ -269,9 +269,9 @@ export function ChatInput() {
             </button>
           </div>
 
-          <div className="border-t border-rc-border-secondary px-4 py-2.5">
+          <div className="border-t border-rc-border-secondary px-3 py-2">
             <div className="flex flex-wrap items-center gap-2">
-              <div className="inline-flex min-w-0 items-center gap-2 rounded-md border border-rc-border-primary bg-rc-bg-surface px-3 py-1.5 text-sm text-rc-text-secondary transition-colors hover:border-rc-border-hover">
+              <div className="inline-flex min-w-0 items-center gap-2 rounded-md border border-rc-border-primary bg-rc-bg-surface px-2.5 py-1.5 text-sm text-rc-text-secondary transition-colors hover:border-rc-border-hover">
                 <Sparkles size={14} className="text-rc-text-tertiary" />
                 <input
                   value={modelDraft}
@@ -317,11 +317,6 @@ export function ChatInput() {
               </Dropdown>
             </div>
 
-            <div className="mt-2 text-[11px] leading-5 text-rc-text-tertiary">
-              {activeSession
-                ? '继续发送时会保留当前会话的工作目录，但 Provider、模型和权限模式以这里当前选择为准。'
-                : '当前选择会用于下一次发送和新建会话。'}
-            </div>
           </div>
         </div>
       </div>

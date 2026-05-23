@@ -19,11 +19,11 @@ function formatTime(seconds: number): string {
 
 function statusBadge(status: CodexThreadGoalInfo['status']): { label: string; color: string } {
   switch (status) {
-    case 'Active': return { label: 'Active', color: 'bg-emerald-100 text-emerald-800 border-emerald-300' };
-    case 'Paused': return { label: 'Paused', color: 'bg-amber-100 text-amber-800 border-amber-300' };
-    case 'BudgetLimited': return { label: 'Budget Exceeded', color: 'bg-orange-100 text-orange-800 border-orange-300' };
-    case 'Complete': return { label: 'Complete', color: 'bg-blue-100 text-blue-800 border-blue-300' };
-    default: return { label: status, color: 'bg-slate-100 text-slate-800 border-slate-300' };
+    case 'Active': return { label: 'Active', color: 'bg-rc-accent-success-bg text-rc-accent-success border-rc-accent-success-border' };
+    case 'Paused': return { label: 'Paused', color: 'bg-rc-accent-warning-bg text-rc-accent-warning border-rc-accent-warning-border' };
+    case 'BudgetLimited': return { label: 'Budget Exceeded', color: 'bg-rc-accent-warning-bg text-rc-accent-warning border-rc-accent-warning-border' };
+    case 'Complete': return { label: 'Complete', color: 'bg-rc-accent-info-bg text-rc-accent-info border-rc-accent-info-border' };
+    default: return { label: status, color: 'bg-rc-bg-active text-rc-text-secondary border-rc-border-primary' };
   }
 }
 
@@ -44,12 +44,12 @@ export function GoalStatusBar() {
   return (
     <div
       data-testid="goal-status-bar"
-      className="mx-3 mb-2 rounded-lg border border-slate-200 bg-white px-4 py-2.5 shadow-sm"
+      className="mx-3 mb-2 rounded-lg border border-rc-border-secondary bg-rc-bg-surface px-4 py-2.5"
     >
       <div className="flex items-start justify-between gap-2">
         <div className="flex items-center gap-2 min-w-0 flex-1">
-          <Target className="h-4 w-4 flex-shrink-0 text-emerald-600" />
-          <span className="truncate text-sm font-medium text-slate-800">{goal.objective}</span>
+          <Target className="h-4 w-4 flex-shrink-0 text-rc-accent-success" />
+          <span className="truncate text-sm font-medium text-rc-text-primary">{goal.objective}</span>
           <span className={`flex-shrink-0 rounded-full border px-2 py-0.5 text-xs font-semibold ${badge.color}`}>
             {badge.label}
           </span>
@@ -58,18 +58,18 @@ export function GoalStatusBar() {
 
       {/* Token / time usage bar */}
       <div className="mt-2 flex items-center gap-2">
-        <BarChart3 className="h-3.5 w-3.5 flex-shrink-0 text-slate-400" />
+        <BarChart3 className="h-3.5 w-3.5 flex-shrink-0 text-rc-text-tertiary" />
         {goal.tokenBudget ? (
-          <div className="flex-1 h-2 rounded-full bg-slate-100 overflow-hidden">
+          <div className="flex-1 h-2 rounded-full bg-rc-bg-tertiary overflow-hidden">
             <div
               className={`h-full rounded-full transition-all duration-700 ${
-                progressPct > 90 ? 'bg-orange-400' : progressPct > 70 ? 'bg-amber-400' : 'bg-emerald-400'
+                progressPct > 90 ? 'bg-rc-accent-error' : progressPct > 70 ? 'bg-rc-accent-warning' : 'bg-rc-accent-success'
               }`}
               style={{ width: `${Math.max(2, progressPct)}%` }}
             />
           </div>
         ) : null}
-        <span className="flex-shrink-0 text-xs text-slate-500">{usageLabel}</span>
+        <span className="flex-shrink-0 text-xs text-rc-text-tertiary">{usageLabel}</span>
       </div>
     </div>
   );

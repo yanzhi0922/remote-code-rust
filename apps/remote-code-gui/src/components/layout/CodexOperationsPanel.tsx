@@ -46,7 +46,7 @@ function formatTime(seconds?: number): string {
 function JsonBlock({ value }: { value: CodexJsonValue }) {
   if (value == null) return null;
   return (
-    <pre className="max-h-80 overflow-auto rounded-2xl bg-[#151515] px-4 py-3 text-xs leading-relaxed text-[#ece7da]">
+    <pre className="max-h-80 overflow-auto rounded-md bg-rc-bg-code px-4 py-3 text-xs leading-relaxed text-rc-text-primary">
       {prettyJson(value)}
     </pre>
   );
@@ -68,14 +68,14 @@ function Section({
   children: ReactNode;
 }) {
   return (
-    <section className="space-y-4 rounded-[28px] border border-[#ddd6c8] bg-white px-5 py-5">
+    <section className="space-y-4 rounded-lg border border-rc-border-primary bg-rc-bg-surface px-5 py-5">
       <div className="flex items-start gap-3">
-        <div className="rounded-2xl bg-[#f1eadf] p-2 text-slate-700">
+        <div className="rounded-md bg-rc-bg-secondary p-2 text-rc-text-primary">
           <Icon size={18} />
         </div>
         <div>
-          <h3 className="text-base font-semibold text-slate-800">{title}</h3>
-          <p className="mt-1 text-sm text-slate-500">{description}</p>
+          <h3 className="text-base font-semibold text-rc-text-primary">{title}</h3>
+          <p className="mt-1 text-sm text-rc-text-tertiary">{description}</p>
         </div>
       </div>
       {children}
@@ -650,9 +650,9 @@ export function CodexOperationsPanel() {
 
   return (
     <div className="space-y-6" data-testid="codex-operations">
-      <div className="rounded-[32px] border border-[#d8cfbf] bg-[#17181a] px-5 py-5 text-white">
+      <div className="rounded-[32px] border border-[#d8cfbf] bg-rc-accent-primary px-5 py-5 text-white">
         <div className="flex items-start gap-3">
-          <div className="rounded-2xl bg-white/10 p-2">
+          <div className="rounded-md bg-rc-bg-surface/10 p-2">
             <TerminalSquare size={20} />
           </div>
           <div>
@@ -665,7 +665,7 @@ export function CodexOperationsPanel() {
       </div>
 
       {error && (
-        <div className="rounded-[24px] border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+        <div className="rounded-lg border border-rc-accent-error-border bg-rc-accent-error-bg px-4 py-3 text-sm text-rc-accent-error">
           {error}
         </div>
       )}
@@ -680,9 +680,9 @@ export function CodexOperationsPanel() {
             value={searchTerm}
             onChange={(event) => setSearchTerm(event.target.value)}
             placeholder="Search thread preview/title"
-            className="rounded-2xl border border-[#ddd6c8] px-3 py-2 text-sm"
+            className="rounded-md border border-rc-border-primary px-3 py-2 text-sm"
           />
-          <label className="flex items-center gap-2 rounded-2xl border border-[#ddd6c8] px-3 py-2 text-sm text-slate-600">
+          <label className="flex items-center gap-2 rounded-md border border-rc-border-primary px-3 py-2 text-sm text-rc-text-secondary">
             <input
               type="checkbox"
               checked={includeArchived}
@@ -694,7 +694,7 @@ export function CodexOperationsPanel() {
             type="button"
             onClick={() => void refreshThreads()}
             disabled={busy === 'threads'}
-            className="inline-flex items-center justify-center gap-2 rounded-2xl bg-[#17181a] px-4 py-2 text-sm font-medium text-white disabled:opacity-60"
+            className="inline-flex items-center justify-center gap-2 rounded-md bg-rc-accent-primary px-4 py-2 text-sm font-medium text-white disabled:opacity-60"
           >
             <RefreshCw size={14} className={busy === 'threads' ? 'animate-spin' : ''} />
             Refresh threads
@@ -712,16 +712,16 @@ export function CodexOperationsPanel() {
                     setSelectedThreadId(thread.id);
                     setThreadName(thread.name || '');
                   }}
-                  className={`w-full rounded-2xl border px-4 py-3 text-left transition-colors ${
+                  className={`w-full rounded-md border px-4 py-3 text-left transition-colors ${
                     selectedThreadId === thread.id
                       ? 'border-slate-800 bg-[#f4efe5]'
-                      : 'border-[#ddd6c8] bg-white hover:bg-[#faf8f3]'
+                      : 'border-rc-border-primary bg-rc-bg-surface hover:bg-[#faf8f3]'
                   }`}
                 >
-                  <div className="truncate text-sm font-semibold text-slate-800">
+                  <div className="truncate text-sm font-semibold text-rc-text-primary">
                     {thread.name || thread.preview || thread.id}
                   </div>
-                  <div className="mt-1 truncate text-xs text-slate-500">{thread.id}</div>
+                  <div className="mt-1 truncate text-xs text-rc-text-tertiary">{thread.id}</div>
                   <div className="mt-1 text-xs text-slate-400">
                     {thread.modelProvider ?? 'provider'} · {formatTime(thread.updatedAt)}
                   </div>
@@ -729,7 +729,7 @@ export function CodexOperationsPanel() {
               ))}
             </div>
             <div className="space-y-2">
-              <label className="flex items-center gap-2 rounded-2xl border border-[#ddd6c8] px-3 py-2 text-sm text-slate-600">
+              <label className="flex items-center gap-2 rounded-md border border-rc-border-primary px-3 py-2 text-sm text-rc-text-secondary">
                 <input
                   type="checkbox"
                   checked={includeTurns}
@@ -743,7 +743,7 @@ export function CodexOperationsPanel() {
                   type="button"
                   onClick={() => void operateThread(action)}
                   disabled={!selectedThreadId || busy === action}
-                  className="w-full rounded-2xl border border-[#ddd6c8] bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-[#faf8f3] disabled:opacity-60"
+                  className="w-full rounded-md border border-rc-border-primary bg-rc-bg-surface px-3 py-2 text-sm font-medium text-rc-text-primary hover:bg-[#faf8f3] disabled:opacity-60"
                 >
                   {action}
                 </button>
@@ -757,9 +757,9 @@ export function CodexOperationsPanel() {
             value={threadName}
             onChange={(event) => setThreadName(event.target.value)}
             placeholder="New thread name"
-            className="rounded-2xl border border-[#ddd6c8] px-3 py-2 text-sm"
+            className="rounded-md border border-rc-border-primary px-3 py-2 text-sm"
           />
-          <button type="button" onClick={() => void setThreadNameTyped()} className="rounded-2xl bg-[#17181a] px-4 py-2 text-sm font-medium text-white">
+          <button type="button" onClick={() => void setThreadNameTyped()} className="rounded-md bg-rc-accent-primary px-4 py-2 text-sm font-medium text-white">
             Set name
           </button>
         </div>
@@ -769,76 +769,76 @@ export function CodexOperationsPanel() {
             value={goalText}
             onChange={(event) => setGoalText(event.target.value)}
             placeholder="Thread goal text"
-            className="rounded-2xl border border-[#ddd6c8] px-3 py-2 text-sm"
+            className="rounded-md border border-rc-border-primary px-3 py-2 text-sm"
           />
-          <button type="button" onClick={() => void goalAction('set')} className="rounded-2xl border border-[#ddd6c8] px-3 py-2 text-sm font-medium text-slate-700">Set goal</button>
-          <button type="button" onClick={() => void goalAction('get')} className="rounded-2xl border border-[#ddd6c8] px-3 py-2 text-sm font-medium text-slate-700">Get goal</button>
-          <button type="button" onClick={() => void goalAction('clear')} className="rounded-2xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm font-medium text-rose-700">Clear goal</button>
+          <button type="button" onClick={() => void goalAction('set')} className="rounded-md border border-rc-border-primary px-3 py-2 text-sm font-medium text-rc-text-primary">Set goal</button>
+          <button type="button" onClick={() => void goalAction('get')} className="rounded-md border border-rc-border-primary px-3 py-2 text-sm font-medium text-rc-text-primary">Get goal</button>
+          <button type="button" onClick={() => void goalAction('clear')} className="rounded-md border border-rc-accent-error-border bg-rc-accent-error-bg px-3 py-2 text-sm font-medium text-rc-accent-error">Clear goal</button>
         </div>
 
         <div className="grid gap-3 lg:grid-cols-[120px_160px_160px_140px_140px]">
-          <input value={turnsLimit} onChange={(event) => setTurnsLimit(event.target.value)} placeholder="limit" className="rounded-2xl border border-[#ddd6c8] px-3 py-2 text-sm" />
-          <input value={turnId} onChange={(event) => setTurnId(event.target.value)} placeholder="active turn id" className="rounded-2xl border border-[#ddd6c8] px-3 py-2 text-sm" />
-          <input value={rollbackTurns} onChange={(event) => setRollbackTurns(event.target.value)} placeholder="rollback turns" className="rounded-2xl border border-[#ddd6c8] px-3 py-2 text-sm" />
-          <button type="button" onClick={() => void listTurns()} className="rounded-2xl border border-[#ddd6c8] px-3 py-2 text-sm font-medium text-slate-700">List turns</button>
-          <button type="button" onClick={() => void compactThread()} className="rounded-2xl border border-[#ddd6c8] px-3 py-2 text-sm font-medium text-slate-700">Compact</button>
+          <input value={turnsLimit} onChange={(event) => setTurnsLimit(event.target.value)} placeholder="limit" className="rounded-md border border-rc-border-primary px-3 py-2 text-sm" />
+          <input value={turnId} onChange={(event) => setTurnId(event.target.value)} placeholder="active turn id" className="rounded-md border border-rc-border-primary px-3 py-2 text-sm" />
+          <input value={rollbackTurns} onChange={(event) => setRollbackTurns(event.target.value)} placeholder="rollback turns" className="rounded-md border border-rc-border-primary px-3 py-2 text-sm" />
+          <button type="button" onClick={() => void listTurns()} className="rounded-md border border-rc-border-primary px-3 py-2 text-sm font-medium text-rc-text-primary">List turns</button>
+          <button type="button" onClick={() => void compactThread()} className="rounded-md border border-rc-border-primary px-3 py-2 text-sm font-medium text-rc-text-primary">Compact</button>
         </div>
 
         <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_130px_130px_130px]">
-          <input value={steerMessage} onChange={(event) => setSteerMessage(event.target.value)} placeholder="Steer message" className="rounded-2xl border border-[#ddd6c8] px-3 py-2 text-sm" />
-          <button type="button" onClick={() => void steerTurn()} className="inline-flex items-center justify-center gap-2 rounded-2xl border border-[#ddd6c8] px-3 py-2 text-sm font-medium text-slate-700"><Send size={14} />Steer</button>
-          <button type="button" onClick={() => void interruptTurn()} className="inline-flex items-center justify-center gap-2 rounded-2xl border border-[#ddd6c8] px-3 py-2 text-sm font-medium text-slate-700"><Square size={14} />Interrupt</button>
-          <button type="button" onClick={() => void rollbackThread()} className="inline-flex items-center justify-center gap-2 rounded-2xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm font-medium text-rose-700"><RotateCcw size={14} />Rollback</button>
+          <input value={steerMessage} onChange={(event) => setSteerMessage(event.target.value)} placeholder="Steer message" className="rounded-md border border-rc-border-primary px-3 py-2 text-sm" />
+          <button type="button" onClick={() => void steerTurn()} className="inline-flex items-center justify-center gap-2 rounded-md border border-rc-border-primary px-3 py-2 text-sm font-medium text-rc-text-primary"><Send size={14} />Steer</button>
+          <button type="button" onClick={() => void interruptTurn()} className="inline-flex items-center justify-center gap-2 rounded-md border border-rc-border-primary px-3 py-2 text-sm font-medium text-rc-text-primary"><Square size={14} />Interrupt</button>
+          <button type="button" onClick={() => void rollbackThread()} className="inline-flex items-center justify-center gap-2 rounded-md border border-rc-accent-error-border bg-rc-accent-error-bg px-3 py-2 text-sm font-medium text-rc-accent-error"><RotateCcw size={14} />Rollback</button>
         </div>
       </Section>
 
       <Section title="Discovery" description="Read-only discovery for models, account, rate limits, collaboration modes, and experimental flags." icon={Compass}>
         <div className="flex flex-wrap gap-3">
-          <button type="button" onClick={() => void discovery('models')} className="rounded-2xl bg-[#17181a] px-4 py-2 text-sm font-medium text-white">List models</button>
-          <button type="button" onClick={() => void discovery('account')} className="rounded-2xl border border-[#ddd6c8] px-4 py-2 text-sm font-medium text-slate-700">Read account</button>
-          <button type="button" onClick={() => void discovery('rate-limits')} className="rounded-2xl border border-[#ddd6c8] px-4 py-2 text-sm font-medium text-slate-700">Rate limits</button>
-          <button type="button" onClick={() => void discovery('collab')} className="rounded-2xl border border-[#ddd6c8] px-4 py-2 text-sm font-medium text-slate-700">Collab modes</button>
-          <button type="button" onClick={() => void discovery('experimental')} className="rounded-2xl border border-[#ddd6c8] px-4 py-2 text-sm font-medium text-slate-700">Experimental flags</button>
+          <button type="button" onClick={() => void discovery('models')} className="rounded-md bg-rc-accent-primary px-4 py-2 text-sm font-medium text-white">List models</button>
+          <button type="button" onClick={() => void discovery('account')} className="rounded-md border border-rc-border-primary px-4 py-2 text-sm font-medium text-rc-text-primary">Read account</button>
+          <button type="button" onClick={() => void discovery('rate-limits')} className="rounded-md border border-rc-border-primary px-4 py-2 text-sm font-medium text-rc-text-primary">Rate limits</button>
+          <button type="button" onClick={() => void discovery('collab')} className="rounded-md border border-rc-border-primary px-4 py-2 text-sm font-medium text-rc-text-primary">Collab modes</button>
+          <button type="button" onClick={() => void discovery('experimental')} className="rounded-md border border-rc-border-primary px-4 py-2 text-sm font-medium text-rc-text-primary">Experimental flags</button>
         </div>
         <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_180px_140px]">
-          <input value={featureName} onChange={(event) => setFeatureName(event.target.value)} placeholder="experimental feature" className="rounded-2xl border border-[#ddd6c8] px-3 py-2 text-sm" />
-          <label className="flex items-center gap-2 rounded-2xl border border-[#ddd6c8] px-3 py-2 text-sm text-slate-600"><input type="checkbox" checked={featureEnabled} onChange={(event) => setFeatureEnabled(event.target.checked)} />enabled</label>
+          <input value={featureName} onChange={(event) => setFeatureName(event.target.value)} placeholder="experimental feature" className="rounded-md border border-rc-border-primary px-3 py-2 text-sm" />
+          <label className="flex items-center gap-2 rounded-md border border-rc-border-primary px-3 py-2 text-sm text-rc-text-secondary"><input type="checkbox" checked={featureEnabled} onChange={(event) => setFeatureEnabled(event.target.checked)} />enabled</label>
           <button type="button" onClick={() => void guardedEcosystem('noop', 'noop')} className="hidden">noop</button>
-          <button type="button" onClick={() => void discovery('feature-set')} className="rounded-2xl border border-[#ddd6c8] px-3 py-2 text-sm font-medium text-slate-700">Set feature</button>
+          <button type="button" onClick={() => void discovery('feature-set')} className="rounded-md border border-rc-border-primary px-3 py-2 text-sm font-medium text-rc-text-primary">Set feature</button>
         </div>
       </Section>
 
       <Section title="Codex ecosystem" description="Manage apps, skills, plugins, marketplace sources, MCP OAuth login, and review startup." icon={Boxes}>
-        <textarea value={cwdList} onChange={(event) => setCwdList(event.target.value)} placeholder="Optional CWDs, one per line" className="min-h-20 w-full rounded-2xl border border-[#ddd6c8] px-3 py-2 text-sm" />
+        <textarea value={cwdList} onChange={(event) => setCwdList(event.target.value)} placeholder="Optional CWDs, one per line" className="min-h-20 w-full rounded-md border border-rc-border-primary px-3 py-2 text-sm" />
         <div className="flex flex-wrap gap-3">
-          <button type="button" onClick={() => void ecosystem('apps')} className="rounded-2xl bg-[#17181a] px-4 py-2 text-sm font-medium text-white">List apps</button>
-          <button type="button" onClick={() => void ecosystem('skills')} className="rounded-2xl border border-[#ddd6c8] px-4 py-2 text-sm font-medium text-slate-700">List skills</button>
-          <button type="button" onClick={() => void ecosystem('plugins')} className="rounded-2xl border border-[#ddd6c8] px-4 py-2 text-sm font-medium text-slate-700">List plugins</button>
-          <label className="flex items-center gap-2 rounded-2xl border border-[#ddd6c8] px-3 py-2 text-sm text-slate-600"><input type="checkbox" checked={forceReloadSkills} onChange={(event) => setForceReloadSkills(event.target.checked)} />force reload skills</label>
+          <button type="button" onClick={() => void ecosystem('apps')} className="rounded-md bg-rc-accent-primary px-4 py-2 text-sm font-medium text-white">List apps</button>
+          <button type="button" onClick={() => void ecosystem('skills')} className="rounded-md border border-rc-border-primary px-4 py-2 text-sm font-medium text-rc-text-primary">List skills</button>
+          <button type="button" onClick={() => void ecosystem('plugins')} className="rounded-md border border-rc-border-primary px-4 py-2 text-sm font-medium text-rc-text-primary">List plugins</button>
+          <label className="flex items-center gap-2 rounded-md border border-rc-border-primary px-3 py-2 text-sm text-rc-text-secondary"><input type="checkbox" checked={forceReloadSkills} onChange={(event) => setForceReloadSkills(event.target.checked)} />force reload skills</label>
         </div>
         <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_180px_150px]">
-          <input value={skillId} onChange={(event) => setSkillId(event.target.value)} placeholder="skill id" className="rounded-2xl border border-[#ddd6c8] px-3 py-2 text-sm" />
-          <label className="flex items-center gap-2 rounded-2xl border border-[#ddd6c8] px-3 py-2 text-sm text-slate-600"><input type="checkbox" checked={skillEnabled} onChange={(event) => setSkillEnabled(event.target.checked)} />skill enabled</label>
-          <button type="button" onClick={() => void guardedEcosystem('skill-config', `Write skill config for ${skillId.trim()}?`)} className="rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-medium text-amber-800">Write skill config</button>
+          <input value={skillId} onChange={(event) => setSkillId(event.target.value)} placeholder="skill id" className="rounded-md border border-rc-border-primary px-3 py-2 text-sm" />
+          <label className="flex items-center gap-2 rounded-md border border-rc-border-primary px-3 py-2 text-sm text-rc-text-secondary"><input type="checkbox" checked={skillEnabled} onChange={(event) => setSkillEnabled(event.target.checked)} />skill enabled</label>
+          <button type="button" onClick={() => void guardedEcosystem('skill-config', `Write skill config for ${skillId.trim()}?`)} className="rounded-md border border-rc-accent-warning-border bg-rc-accent-warning-bg px-3 py-2 text-sm font-medium text-rc-accent-warning">Write skill config</button>
         </div>
         <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_130px_130px_130px]">
-          <input value={pluginId} onChange={(event) => setPluginId(event.target.value)} placeholder="plugin id" className="rounded-2xl border border-[#ddd6c8] px-3 py-2 text-sm" />
-          <input value={pluginSource} onChange={(event) => setPluginSource(event.target.value)} placeholder="plugin source" className="rounded-2xl border border-[#ddd6c8] px-3 py-2 text-sm" />
-          <button type="button" onClick={() => void ecosystem('plugin-read')} className="rounded-2xl border border-[#ddd6c8] px-3 py-2 text-sm font-medium text-slate-700">Read plugin</button>
-          <button type="button" onClick={() => void guardedEcosystem('plugin-install', `Install plugin from ${pluginSource.trim()}?`)} className="rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-medium text-amber-800">Install plugin</button>
-          <button type="button" onClick={() => void guardedEcosystem('plugin-uninstall', `Uninstall plugin ${pluginId.trim()}?`)} className="rounded-2xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm font-medium text-rose-700">Uninstall plugin</button>
+          <input value={pluginId} onChange={(event) => setPluginId(event.target.value)} placeholder="plugin id" className="rounded-md border border-rc-border-primary px-3 py-2 text-sm" />
+          <input value={pluginSource} onChange={(event) => setPluginSource(event.target.value)} placeholder="plugin source" className="rounded-md border border-rc-border-primary px-3 py-2 text-sm" />
+          <button type="button" onClick={() => void ecosystem('plugin-read')} className="rounded-md border border-rc-border-primary px-3 py-2 text-sm font-medium text-rc-text-primary">Read plugin</button>
+          <button type="button" onClick={() => void guardedEcosystem('plugin-install', `Install plugin from ${pluginSource.trim()}?`)} className="rounded-md border border-rc-accent-warning-border bg-rc-accent-warning-bg px-3 py-2 text-sm font-medium text-rc-accent-warning">Install plugin</button>
+          <button type="button" onClick={() => void guardedEcosystem('plugin-uninstall', `Uninstall plugin ${pluginId.trim()}?`)} className="rounded-md border border-rc-accent-error-border bg-rc-accent-error-bg px-3 py-2 text-sm font-medium text-rc-accent-error">Uninstall plugin</button>
         </div>
         <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_130px_150px_150px]">
-          <input value={marketplaceSource} onChange={(event) => setMarketplaceSource(event.target.value)} placeholder="marketplace source" className="rounded-2xl border border-[#ddd6c8] px-3 py-2 text-sm" />
-          <button type="button" onClick={() => void guardedEcosystem('marketplace-add', `Add marketplace source ${marketplaceSource.trim()}?`)} className="rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-medium text-amber-800">Add marketplace</button>
-          <button type="button" onClick={() => void guardedEcosystem('marketplace-remove', `Remove marketplace source ${marketplaceSource.trim()}?`)} className="rounded-2xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm font-medium text-rose-700">Remove marketplace</button>
-          <button type="button" onClick={() => void guardedEcosystem('marketplace-upgrade', `Upgrade marketplace source ${marketplaceSource.trim()}?`)} className="rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-medium text-amber-800">Upgrade marketplace</button>
+          <input value={marketplaceSource} onChange={(event) => setMarketplaceSource(event.target.value)} placeholder="marketplace source" className="rounded-md border border-rc-border-primary px-3 py-2 text-sm" />
+          <button type="button" onClick={() => void guardedEcosystem('marketplace-add', `Add marketplace source ${marketplaceSource.trim()}?`)} className="rounded-md border border-rc-accent-warning-border bg-rc-accent-warning-bg px-3 py-2 text-sm font-medium text-rc-accent-warning">Add marketplace</button>
+          <button type="button" onClick={() => void guardedEcosystem('marketplace-remove', `Remove marketplace source ${marketplaceSource.trim()}?`)} className="rounded-md border border-rc-accent-error-border bg-rc-accent-error-bg px-3 py-2 text-sm font-medium text-rc-accent-error">Remove marketplace</button>
+          <button type="button" onClick={() => void guardedEcosystem('marketplace-upgrade', `Upgrade marketplace source ${marketplaceSource.trim()}?`)} className="rounded-md border border-rc-accent-warning-border bg-rc-accent-warning-bg px-3 py-2 text-sm font-medium text-rc-accent-warning">Upgrade marketplace</button>
         </div>
         <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_150px_minmax(0,1fr)_140px]">
-          <input value={mcpServer} onChange={(event) => setMcpServer(event.target.value)} placeholder="MCP OAuth server" className="rounded-2xl border border-[#ddd6c8] px-3 py-2 text-sm" />
-          <button type="button" onClick={() => void mcpOAuthLogin()} className="inline-flex items-center justify-center gap-2 rounded-2xl border border-[#ddd6c8] px-3 py-2 text-sm font-medium text-slate-700"><LogIn size={14} />MCP OAuth</button>
-          <input value={reviewPrompt} onChange={(event) => setReviewPrompt(event.target.value)} placeholder="review prompt optional" className="rounded-2xl border border-[#ddd6c8] px-3 py-2 text-sm" />
-          <button type="button" onClick={() => void startReview()} className="inline-flex items-center justify-center gap-2 rounded-2xl bg-[#17181a] px-3 py-2 text-sm font-medium text-white"><Flag size={14} />Start review</button>
+          <input value={mcpServer} onChange={(event) => setMcpServer(event.target.value)} placeholder="MCP OAuth server" className="rounded-md border border-rc-border-primary px-3 py-2 text-sm" />
+          <button type="button" onClick={() => void mcpOAuthLogin()} className="inline-flex items-center justify-center gap-2 rounded-md border border-rc-border-primary px-3 py-2 text-sm font-medium text-rc-text-primary"><LogIn size={14} />MCP OAuth</button>
+          <input value={reviewPrompt} onChange={(event) => setReviewPrompt(event.target.value)} placeholder="review prompt optional" className="rounded-md border border-rc-border-primary px-3 py-2 text-sm" />
+          <button type="button" onClick={() => void startReview()} className="inline-flex items-center justify-center gap-2 rounded-md bg-rc-accent-primary px-3 py-2 text-sm font-medium text-white"><Flag size={14} />Start review</button>
         </div>
       </Section>
 
@@ -848,24 +848,24 @@ export function CodexOperationsPanel() {
         icon={PlugZap}
       >
         <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_180px_120px_140px_140px]">
-          <input value={mcpServer} onChange={(event) => setMcpServer(event.target.value)} placeholder="MCP server" className="rounded-2xl border border-[#ddd6c8] px-3 py-2 text-sm" />
-          <select value={mcpStatusDetail} onChange={(event) => setMcpStatusDetail(event.target.value as 'full' | 'toolsAndAuthOnly')} className="rounded-2xl border border-[#ddd6c8] px-3 py-2 text-sm">
+          <input value={mcpServer} onChange={(event) => setMcpServer(event.target.value)} placeholder="MCP server" className="rounded-md border border-rc-border-primary px-3 py-2 text-sm" />
+          <select value={mcpStatusDetail} onChange={(event) => setMcpStatusDetail(event.target.value as 'full' | 'toolsAndAuthOnly')} className="rounded-md border border-rc-border-primary px-3 py-2 text-sm">
             <option value="full">full status</option>
             <option value="toolsAndAuthOnly">tools/auth only</option>
           </select>
-          <input value={mcpStatusLimit} onChange={(event) => setMcpStatusLimit(event.target.value)} placeholder="status limit" className="rounded-2xl border border-[#ddd6c8] px-3 py-2 text-sm" />
-          <button type="button" onClick={() => void mcpAction('refresh')} className="inline-flex items-center justify-center gap-2 rounded-2xl bg-[#17181a] px-3 py-2 text-sm font-medium text-white"><RefreshCw size={14} />MCP refresh</button>
-          <button type="button" onClick={() => void mcpAction('status')} className="rounded-2xl border border-[#ddd6c8] px-3 py-2 text-sm font-medium text-slate-700">MCP status</button>
+          <input value={mcpStatusLimit} onChange={(event) => setMcpStatusLimit(event.target.value)} placeholder="status limit" className="rounded-md border border-rc-border-primary px-3 py-2 text-sm" />
+          <button type="button" onClick={() => void mcpAction('refresh')} className="inline-flex items-center justify-center gap-2 rounded-md bg-rc-accent-primary px-3 py-2 text-sm font-medium text-white"><RefreshCw size={14} />MCP refresh</button>
+          <button type="button" onClick={() => void mcpAction('status')} className="rounded-md border border-rc-border-primary px-3 py-2 text-sm font-medium text-rc-text-primary">MCP status</button>
         </div>
         <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_160px]">
-          <input value={mcpResourceUri} onChange={(event) => setMcpResourceUri(event.target.value)} placeholder="MCP resource URI" className="rounded-2xl border border-[#ddd6c8] px-3 py-2 text-sm" />
-          <button type="button" onClick={() => void mcpAction('resource')} className="rounded-2xl border border-[#ddd6c8] px-3 py-2 text-sm font-medium text-slate-700">Read resource</button>
+          <input value={mcpResourceUri} onChange={(event) => setMcpResourceUri(event.target.value)} placeholder="MCP resource URI" className="rounded-md border border-rc-border-primary px-3 py-2 text-sm" />
+          <button type="button" onClick={() => void mcpAction('resource')} className="rounded-md border border-rc-border-primary px-3 py-2 text-sm font-medium text-rc-text-primary">Read resource</button>
         </div>
         <div className="grid gap-3 lg:grid-cols-[180px_minmax(0,1fr)_minmax(0,1fr)_140px]">
-          <input value={mcpTool} onChange={(event) => setMcpTool(event.target.value)} placeholder="MCP tool" className="rounded-2xl border border-[#ddd6c8] px-3 py-2 text-sm" />
-          <input value={mcpArgs} onChange={(event) => setMcpArgs(event.target.value)} placeholder='{"key":"value"}' className="rounded-2xl border border-[#ddd6c8] px-3 py-2 font-mono text-xs" />
-          <div className="rounded-2xl border border-[#ddd6c8] px-3 py-2 text-xs text-slate-500">Tool calls use the selected thread id.</div>
-          <button type="button" onClick={() => void mcpAction('tool')} className="rounded-2xl border border-[#ddd6c8] px-3 py-2 text-sm font-medium text-slate-700">Call tool</button>
+          <input value={mcpTool} onChange={(event) => setMcpTool(event.target.value)} placeholder="MCP tool" className="rounded-md border border-rc-border-primary px-3 py-2 text-sm" />
+          <input value={mcpArgs} onChange={(event) => setMcpArgs(event.target.value)} placeholder='{"key":"value"}' className="rounded-md border border-rc-border-primary px-3 py-2 font-mono text-xs" />
+          <div className="rounded-md border border-rc-border-primary px-3 py-2 text-xs text-rc-text-tertiary">Tool calls use the selected thread id.</div>
+          <button type="button" onClick={() => void mcpAction('tool')} className="rounded-md border border-rc-border-primary px-3 py-2 text-sm font-medium text-rc-text-primary">Call tool</button>
         </div>
       </Section>
 
@@ -875,22 +875,22 @@ export function CodexOperationsPanel() {
         icon={Database}
       >
         <div className="flex flex-wrap gap-3">
-          <button type="button" onClick={() => void readConfig()} className="rounded-2xl bg-[#17181a] px-4 py-2 text-sm font-medium text-white">Read config</button>
-          <label className="flex items-center gap-2 rounded-2xl border border-[#ddd6c8] px-3 py-2 text-sm text-slate-600"><input type="checkbox" checked={configIncludeLayers} onChange={(event) => setConfigIncludeLayers(event.target.checked)} />include layers</label>
+          <button type="button" onClick={() => void readConfig()} className="rounded-md bg-rc-accent-primary px-4 py-2 text-sm font-medium text-white">Read config</button>
+          <label className="flex items-center gap-2 rounded-md border border-rc-border-primary px-3 py-2 text-sm text-rc-text-secondary"><input type="checkbox" checked={configIncludeLayers} onChange={(event) => setConfigIncludeLayers(event.target.checked)} />include layers</label>
         </div>
         <div className="grid gap-3 lg:grid-cols-[220px_minmax(0,1fr)_160px_140px]">
-          <input value={configKey} onChange={(event) => setConfigKey(event.target.value)} placeholder="config key path" className="rounded-2xl border border-[#ddd6c8] px-3 py-2 text-sm" />
-          <input value={configValue} onChange={(event) => setConfigValue(event.target.value)} placeholder='"value", true, 123, or JSON' className="rounded-2xl border border-[#ddd6c8] px-3 py-2 font-mono text-xs" />
-          <select value={configMergeStrategy} onChange={(event) => setConfigMergeStrategy(event.target.value as 'replace' | 'upsert')} className="rounded-2xl border border-[#ddd6c8] px-3 py-2 text-sm">
+          <input value={configKey} onChange={(event) => setConfigKey(event.target.value)} placeholder="config key path" className="rounded-md border border-rc-border-primary px-3 py-2 text-sm" />
+          <input value={configValue} onChange={(event) => setConfigValue(event.target.value)} placeholder='"value", true, 123, or JSON' className="rounded-md border border-rc-border-primary px-3 py-2 font-mono text-xs" />
+          <select value={configMergeStrategy} onChange={(event) => setConfigMergeStrategy(event.target.value as 'replace' | 'upsert')} className="rounded-md border border-rc-border-primary px-3 py-2 text-sm">
             <option value="replace">replace</option>
             <option value="upsert">upsert</option>
           </select>
-          <button type="button" onClick={() => void writeConfigValue()} className="rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-medium text-amber-800">Write value</button>
+          <button type="button" onClick={() => void writeConfigValue()} className="rounded-md border border-rc-accent-warning-border bg-rc-accent-warning-bg px-3 py-2 text-sm font-medium text-rc-accent-warning">Write value</button>
         </div>
         <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_180px_150px]">
-          <textarea value={configBatchEdits} onChange={(event) => setConfigBatchEdits(event.target.value)} placeholder='[{"keyPath":"model","value":"gpt-5"}]' className="min-h-28 rounded-2xl border border-[#ddd6c8] px-3 py-2 font-mono text-xs" />
-          <label className="flex items-center gap-2 rounded-2xl border border-[#ddd6c8] px-3 py-2 text-sm text-slate-600"><input type="checkbox" checked={configReloadUserConfig} onChange={(event) => setConfigReloadUserConfig(event.target.checked)} />reload user config</label>
-          <button type="button" onClick={() => void writeConfigBatch()} className="rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-medium text-amber-800">Write batch</button>
+          <textarea value={configBatchEdits} onChange={(event) => setConfigBatchEdits(event.target.value)} placeholder='[{"keyPath":"model","value":"gpt-5"}]' className="min-h-28 rounded-md border border-rc-border-primary px-3 py-2 font-mono text-xs" />
+          <label className="flex items-center gap-2 rounded-md border border-rc-border-primary px-3 py-2 text-sm text-rc-text-secondary"><input type="checkbox" checked={configReloadUserConfig} onChange={(event) => setConfigReloadUserConfig(event.target.checked)} />reload user config</label>
+          <button type="button" onClick={() => void writeConfigBatch()} className="rounded-md border border-rc-accent-warning-border bg-rc-accent-warning-bg px-3 py-2 text-sm font-medium text-rc-accent-warning">Write batch</button>
         </div>
       </Section>
 
@@ -900,18 +900,18 @@ export function CodexOperationsPanel() {
         icon={MemoryStick}
       >
         <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_180px_150px]">
-          <div className="rounded-2xl border border-[#ddd6c8] px-3 py-2 text-xs text-slate-500">
+          <div className="rounded-md border border-rc-border-primary px-3 py-2 text-xs text-rc-text-tertiary">
             Memory mode applies to selected thread: {selectedThreadId || 'none selected'}
           </div>
-          <label className="flex items-center gap-2 rounded-2xl border border-[#ddd6c8] px-3 py-2 text-sm text-slate-600"><input type="checkbox" checked={memoryEnabled} onChange={(event) => setMemoryEnabled(event.target.checked)} />memory enabled</label>
-          <button type="button" onClick={() => void setMemoryMode()} className="rounded-2xl border border-[#ddd6c8] px-3 py-2 text-sm font-medium text-slate-700">Set memory mode</button>
+          <label className="flex items-center gap-2 rounded-md border border-rc-border-primary px-3 py-2 text-sm text-rc-text-secondary"><input type="checkbox" checked={memoryEnabled} onChange={(event) => setMemoryEnabled(event.target.checked)} />memory enabled</label>
+          <button type="button" onClick={() => void setMemoryMode()} className="rounded-md border border-rc-border-primary px-3 py-2 text-sm font-medium text-rc-text-primary">Set memory mode</button>
         </div>
         <div className="grid gap-3 lg:grid-cols-[160px_minmax(0,1fr)_180px_150px_150px]">
-          <input value={feedbackClassification} onChange={(event) => setFeedbackClassification(event.target.value)} placeholder="classification" className="rounded-2xl border border-[#ddd6c8] px-3 py-2 text-sm" />
-          <input value={feedbackReason} onChange={(event) => setFeedbackReason(event.target.value)} placeholder="feedback reason" className="rounded-2xl border border-[#ddd6c8] px-3 py-2 text-sm" />
-          <label className="flex items-center gap-2 rounded-2xl border border-[#ddd6c8] px-3 py-2 text-sm text-slate-600"><input type="checkbox" checked={feedbackIncludeLogs} onChange={(event) => setFeedbackIncludeLogs(event.target.checked)} />include logs</label>
-          <button type="button" onClick={() => void uploadFeedback()} className="rounded-2xl bg-[#17181a] px-3 py-2 text-sm font-medium text-white">Upload feedback</button>
-          <button type="button" onClick={() => void resetMemories()} className="rounded-2xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm font-medium text-rose-700">Reset memories</button>
+          <input value={feedbackClassification} onChange={(event) => setFeedbackClassification(event.target.value)} placeholder="classification" className="rounded-md border border-rc-border-primary px-3 py-2 text-sm" />
+          <input value={feedbackReason} onChange={(event) => setFeedbackReason(event.target.value)} placeholder="feedback reason" className="rounded-md border border-rc-border-primary px-3 py-2 text-sm" />
+          <label className="flex items-center gap-2 rounded-md border border-rc-border-primary px-3 py-2 text-sm text-rc-text-secondary"><input type="checkbox" checked={feedbackIncludeLogs} onChange={(event) => setFeedbackIncludeLogs(event.target.checked)} />include logs</label>
+          <button type="button" onClick={() => void uploadFeedback()} className="rounded-md bg-rc-accent-primary px-3 py-2 text-sm font-medium text-white">Upload feedback</button>
+          <button type="button" onClick={() => void resetMemories()} className="rounded-md border border-rc-accent-error-border bg-rc-accent-error-bg px-3 py-2 text-sm font-medium text-rc-accent-error">Reset memories</button>
         </div>
       </Section>
 
@@ -925,87 +925,87 @@ export function CodexOperationsPanel() {
             value={nativeParams}
             onChange={(event) => setNativeParams(event.target.value)}
             placeholder='Advanced params JSON, for example {"cwd":"C:\\repo"}'
-            className="min-h-24 rounded-2xl border border-[#ddd6c8] px-3 py-2 font-mono text-xs"
+            className="min-h-24 rounded-md border border-rc-border-primary px-3 py-2 font-mono text-xs"
           />
-          <div className="rounded-2xl border border-[#ddd6c8] px-3 py-2 text-xs text-slate-500">
+          <div className="rounded-md border border-rc-border-primary px-3 py-2 text-xs text-rc-text-tertiary">
             Selected thread: {selectedThreadId || 'none'}. Destructive filesystem, shell, logout, import, sandbox, and cleanup actions require confirmation.
           </div>
         </div>
 
         <div className="space-y-3 rounded-3xl border border-[#eee5d6] bg-[#fbf8f0] p-4">
-          <div className="text-sm font-semibold text-slate-700">Threads and turns</div>
+          <div className="text-sm font-semibold text-rc-text-primary">Threads and turns</div>
           <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
             <input
               value={nativeShellCommand}
               onChange={(event) => setNativeShellCommand(event.target.value)}
               placeholder="Thread shell command"
-              className="rounded-2xl border border-[#ddd6c8] px-3 py-2 text-sm"
+              className="rounded-md border border-rc-border-primary px-3 py-2 text-sm"
             />
             <textarea
               value={nativeInjectItems}
               onChange={(event) => setNativeInjectItems(event.target.value)}
               placeholder='Inject items JSON, for example [{"type":"message","text":"hi"}]'
-              className="min-h-10 rounded-2xl border border-[#ddd6c8] px-3 py-2 font-mono text-xs"
+              className="min-h-10 rounded-md border border-rc-border-primary px-3 py-2 font-mono text-xs"
             />
           </div>
           <div className="flex flex-wrap gap-3">
-            <button type="button" onClick={() => void nativeThreadAction('thread-start')} className="rounded-2xl bg-[#17181a] px-4 py-2 text-sm font-medium text-white">Native thread start</button>
-            <button type="button" onClick={() => void nativeThreadAction('loaded-list')} className="rounded-2xl border border-[#ddd6c8] px-4 py-2 text-sm font-medium text-slate-700">Loaded threads</button>
-            <button type="button" onClick={() => void nativeThreadAction('unsubscribe')} className="rounded-2xl border border-[#ddd6c8] px-4 py-2 text-sm font-medium text-slate-700">Unsubscribe</button>
-            <button type="button" onClick={() => void nativeThreadAction('turn-start')} className="rounded-2xl border border-[#ddd6c8] px-4 py-2 text-sm font-medium text-slate-700">Turn start</button>
-            <button type="button" onClick={() => void nativeThreadAction('shell')} className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-2 text-sm font-medium text-rose-700">Thread shell</button>
-            <button type="button" onClick={() => void nativeThreadAction('background-clean')} className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-2 text-sm font-medium text-amber-800">Clean terminals</button>
-            <button type="button" onClick={() => void nativeThreadAction('inject')} className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-2 text-sm font-medium text-amber-800">Inject items</button>
+            <button type="button" onClick={() => void nativeThreadAction('thread-start')} className="rounded-md bg-rc-accent-primary px-4 py-2 text-sm font-medium text-white">Native thread start</button>
+            <button type="button" onClick={() => void nativeThreadAction('loaded-list')} className="rounded-md border border-rc-border-primary px-4 py-2 text-sm font-medium text-rc-text-primary">Loaded threads</button>
+            <button type="button" onClick={() => void nativeThreadAction('unsubscribe')} className="rounded-md border border-rc-border-primary px-4 py-2 text-sm font-medium text-rc-text-primary">Unsubscribe</button>
+            <button type="button" onClick={() => void nativeThreadAction('turn-start')} className="rounded-md border border-rc-border-primary px-4 py-2 text-sm font-medium text-rc-text-primary">Turn start</button>
+            <button type="button" onClick={() => void nativeThreadAction('shell')} className="rounded-md border border-rc-accent-error-border bg-rc-accent-error-bg px-4 py-2 text-sm font-medium text-rc-accent-error">Thread shell</button>
+            <button type="button" onClick={() => void nativeThreadAction('background-clean')} className="rounded-md border border-rc-accent-warning-border bg-rc-accent-warning-bg px-4 py-2 text-sm font-medium text-rc-accent-warning">Clean terminals</button>
+            <button type="button" onClick={() => void nativeThreadAction('inject')} className="rounded-md border border-rc-accent-warning-border bg-rc-accent-warning-bg px-4 py-2 text-sm font-medium text-rc-accent-warning">Inject items</button>
           </div>
         </div>
 
-        <div className="space-y-3 rounded-3xl border border-[#eee5d6] bg-white p-4">
-          <div className="text-sm font-semibold text-slate-700">Account, config, and setup</div>
+        <div className="space-y-3 rounded-3xl border border-[#eee5d6] bg-rc-bg-surface p-4">
+          <div className="text-sm font-semibold text-rc-text-primary">Account, config, and setup</div>
           <div className="flex flex-wrap gap-3">
-            <button type="button" onClick={() => void nativeAccountAction('login')} className="rounded-2xl bg-[#17181a] px-4 py-2 text-sm font-medium text-white">Account login</button>
-            <button type="button" onClick={() => void nativeAccountAction('login-cancel')} className="rounded-2xl border border-[#ddd6c8] px-4 py-2 text-sm font-medium text-slate-700">Cancel login</button>
-            <button type="button" onClick={() => void nativeAccountAction('logout')} className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-2 text-sm font-medium text-rose-700">Account logout</button>
-            <button type="button" onClick={() => void nativeAccountAction('config-requirements')} className="rounded-2xl border border-[#ddd6c8] px-4 py-2 text-sm font-medium text-slate-700">Config requirements</button>
-            <button type="button" onClick={() => void nativeAccountAction('external-detect')} className="rounded-2xl border border-[#ddd6c8] px-4 py-2 text-sm font-medium text-slate-700">External detect</button>
-            <button type="button" onClick={() => void nativeAccountAction('external-import')} className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-2 text-sm font-medium text-amber-800">External import</button>
-            <button type="button" onClick={() => void nativeAccountAction('windows-sandbox')} className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-2 text-sm font-medium text-amber-800">Windows sandbox</button>
+            <button type="button" onClick={() => void nativeAccountAction('login')} className="rounded-md bg-rc-accent-primary px-4 py-2 text-sm font-medium text-white">Account login</button>
+            <button type="button" onClick={() => void nativeAccountAction('login-cancel')} className="rounded-md border border-rc-border-primary px-4 py-2 text-sm font-medium text-rc-text-primary">Cancel login</button>
+            <button type="button" onClick={() => void nativeAccountAction('logout')} className="rounded-md border border-rc-accent-error-border bg-rc-accent-error-bg px-4 py-2 text-sm font-medium text-rc-accent-error">Account logout</button>
+            <button type="button" onClick={() => void nativeAccountAction('config-requirements')} className="rounded-md border border-rc-border-primary px-4 py-2 text-sm font-medium text-rc-text-primary">Config requirements</button>
+            <button type="button" onClick={() => void nativeAccountAction('external-detect')} className="rounded-md border border-rc-border-primary px-4 py-2 text-sm font-medium text-rc-text-primary">External detect</button>
+            <button type="button" onClick={() => void nativeAccountAction('external-import')} className="rounded-md border border-rc-accent-warning-border bg-rc-accent-warning-bg px-4 py-2 text-sm font-medium text-rc-accent-warning">External import</button>
+            <button type="button" onClick={() => void nativeAccountAction('windows-sandbox')} className="rounded-md border border-rc-accent-warning-border bg-rc-accent-warning-bg px-4 py-2 text-sm font-medium text-rc-accent-warning">Windows sandbox</button>
           </div>
         </div>
 
         <div className="space-y-3 rounded-3xl border border-[#eee5d6] bg-[#fbf8f0] p-4">
-          <div className="text-sm font-semibold text-slate-700">Filesystem and fuzzy search</div>
+          <div className="text-sm font-semibold text-rc-text-primary">Filesystem and fuzzy search</div>
           <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-            <input value={nativeFsPath} onChange={(event) => setNativeFsPath(event.target.value)} placeholder="FS path or fuzzy cwd" className="rounded-2xl border border-[#ddd6c8] px-3 py-2 text-sm" />
-            <input value={nativeFsTargetPath} onChange={(event) => setNativeFsTargetPath(event.target.value)} placeholder="Copy target path" className="rounded-2xl border border-[#ddd6c8] px-3 py-2 text-sm" />
-            <input value={nativeFuzzyQuery} onChange={(event) => setNativeFuzzyQuery(event.target.value)} placeholder="Fuzzy file query" className="rounded-2xl border border-[#ddd6c8] px-3 py-2 text-sm" />
-            <textarea value={nativeFsContents} onChange={(event) => setNativeFsContents(event.target.value)} placeholder="Write file contents" className="min-h-10 rounded-2xl border border-[#ddd6c8] px-3 py-2 text-sm" />
+            <input value={nativeFsPath} onChange={(event) => setNativeFsPath(event.target.value)} placeholder="FS path or fuzzy cwd" className="rounded-md border border-rc-border-primary px-3 py-2 text-sm" />
+            <input value={nativeFsTargetPath} onChange={(event) => setNativeFsTargetPath(event.target.value)} placeholder="Copy target path" className="rounded-md border border-rc-border-primary px-3 py-2 text-sm" />
+            <input value={nativeFuzzyQuery} onChange={(event) => setNativeFuzzyQuery(event.target.value)} placeholder="Fuzzy file query" className="rounded-md border border-rc-border-primary px-3 py-2 text-sm" />
+            <textarea value={nativeFsContents} onChange={(event) => setNativeFsContents(event.target.value)} placeholder="Write file contents" className="min-h-10 rounded-md border border-rc-border-primary px-3 py-2 text-sm" />
           </div>
           <div className="flex flex-wrap gap-3">
-            <button type="button" onClick={() => void nativeFsAction('read')} className="rounded-2xl border border-[#ddd6c8] px-4 py-2 text-sm font-medium text-slate-700">FS read</button>
-            <button type="button" onClick={() => void nativeFsAction('dir')} className="rounded-2xl border border-[#ddd6c8] px-4 py-2 text-sm font-medium text-slate-700">FS dir</button>
-            <button type="button" onClick={() => void nativeFsAction('metadata')} className="rounded-2xl border border-[#ddd6c8] px-4 py-2 text-sm font-medium text-slate-700">FS metadata</button>
-            <button type="button" onClick={() => void nativeFsAction('watch')} className="rounded-2xl border border-[#ddd6c8] px-4 py-2 text-sm font-medium text-slate-700">FS watch</button>
-            <button type="button" onClick={() => void nativeFsAction('unwatch')} className="rounded-2xl border border-[#ddd6c8] px-4 py-2 text-sm font-medium text-slate-700">FS unwatch</button>
-            <button type="button" onClick={() => void nativeFsAction('write')} className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-2 text-sm font-medium text-amber-800">FS write</button>
-            <button type="button" onClick={() => void nativeFsAction('mkdir')} className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-2 text-sm font-medium text-amber-800">FS mkdir</button>
-            <button type="button" onClick={() => void nativeFsAction('copy')} className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-2 text-sm font-medium text-amber-800">FS copy</button>
-            <button type="button" onClick={() => void nativeFsAction('remove')} className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-2 text-sm font-medium text-rose-700">FS remove</button>
-            <button type="button" onClick={() => void nativeFuzzyAction('search')} className="rounded-2xl bg-[#17181a] px-4 py-2 text-sm font-medium text-white">Fuzzy search</button>
-            <button type="button" onClick={() => void nativeFuzzyAction('session-start')} className="rounded-2xl border border-[#ddd6c8] px-4 py-2 text-sm font-medium text-slate-700">Fuzzy session start</button>
-            <button type="button" onClick={() => void nativeFuzzyAction('session-update')} className="rounded-2xl border border-[#ddd6c8] px-4 py-2 text-sm font-medium text-slate-700">Fuzzy update</button>
-            <button type="button" onClick={() => void nativeFuzzyAction('session-stop')} className="rounded-2xl border border-[#ddd6c8] px-4 py-2 text-sm font-medium text-slate-700">Fuzzy stop</button>
+            <button type="button" onClick={() => void nativeFsAction('read')} className="rounded-md border border-rc-border-primary px-4 py-2 text-sm font-medium text-rc-text-primary">FS read</button>
+            <button type="button" onClick={() => void nativeFsAction('dir')} className="rounded-md border border-rc-border-primary px-4 py-2 text-sm font-medium text-rc-text-primary">FS dir</button>
+            <button type="button" onClick={() => void nativeFsAction('metadata')} className="rounded-md border border-rc-border-primary px-4 py-2 text-sm font-medium text-rc-text-primary">FS metadata</button>
+            <button type="button" onClick={() => void nativeFsAction('watch')} className="rounded-md border border-rc-border-primary px-4 py-2 text-sm font-medium text-rc-text-primary">FS watch</button>
+            <button type="button" onClick={() => void nativeFsAction('unwatch')} className="rounded-md border border-rc-border-primary px-4 py-2 text-sm font-medium text-rc-text-primary">FS unwatch</button>
+            <button type="button" onClick={() => void nativeFsAction('write')} className="rounded-md border border-rc-accent-warning-border bg-rc-accent-warning-bg px-4 py-2 text-sm font-medium text-rc-accent-warning">FS write</button>
+            <button type="button" onClick={() => void nativeFsAction('mkdir')} className="rounded-md border border-rc-accent-warning-border bg-rc-accent-warning-bg px-4 py-2 text-sm font-medium text-rc-accent-warning">FS mkdir</button>
+            <button type="button" onClick={() => void nativeFsAction('copy')} className="rounded-md border border-rc-accent-warning-border bg-rc-accent-warning-bg px-4 py-2 text-sm font-medium text-rc-accent-warning">FS copy</button>
+            <button type="button" onClick={() => void nativeFsAction('remove')} className="rounded-md border border-rc-accent-error-border bg-rc-accent-error-bg px-4 py-2 text-sm font-medium text-rc-accent-error">FS remove</button>
+            <button type="button" onClick={() => void nativeFuzzyAction('search')} className="rounded-md bg-rc-accent-primary px-4 py-2 text-sm font-medium text-white">Fuzzy search</button>
+            <button type="button" onClick={() => void nativeFuzzyAction('session-start')} className="rounded-md border border-rc-border-primary px-4 py-2 text-sm font-medium text-rc-text-primary">Fuzzy session start</button>
+            <button type="button" onClick={() => void nativeFuzzyAction('session-update')} className="rounded-md border border-rc-border-primary px-4 py-2 text-sm font-medium text-rc-text-primary">Fuzzy update</button>
+            <button type="button" onClick={() => void nativeFuzzyAction('session-stop')} className="rounded-md border border-rc-border-primary px-4 py-2 text-sm font-medium text-rc-text-primary">Fuzzy stop</button>
           </div>
         </div>
 
-        <div className="space-y-3 rounded-3xl border border-[#eee5d6] bg-white p-4">
-          <div className="text-sm font-semibold text-slate-700">Realtime</div>
+        <div className="space-y-3 rounded-3xl border border-[#eee5d6] bg-rc-bg-surface p-4">
+          <div className="text-sm font-semibold text-rc-text-primary">Realtime</div>
           <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_460px]">
-            <input value={nativeRealtimeText} onChange={(event) => setNativeRealtimeText(event.target.value)} placeholder="Realtime text or turn prompt" className="rounded-2xl border border-[#ddd6c8] px-3 py-2 text-sm" />
+            <input value={nativeRealtimeText} onChange={(event) => setNativeRealtimeText(event.target.value)} placeholder="Realtime text or turn prompt" className="rounded-md border border-rc-border-primary px-3 py-2 text-sm" />
             <div className="flex flex-wrap gap-3">
-              <button type="button" onClick={() => void nativeRealtimeAction('voices')} className="rounded-2xl border border-[#ddd6c8] px-4 py-2 text-sm font-medium text-slate-700">Realtime voices</button>
-              <button type="button" onClick={() => void nativeRealtimeAction('start')} className="rounded-2xl bg-[#17181a] px-4 py-2 text-sm font-medium text-white">Realtime start</button>
-              <button type="button" onClick={() => void nativeRealtimeAction('append')} className="rounded-2xl border border-[#ddd6c8] px-4 py-2 text-sm font-medium text-slate-700">Append text</button>
-              <button type="button" onClick={() => void nativeRealtimeAction('stop')} className="rounded-2xl border border-[#ddd6c8] px-4 py-2 text-sm font-medium text-slate-700">Realtime stop</button>
+              <button type="button" onClick={() => void nativeRealtimeAction('voices')} className="rounded-md border border-rc-border-primary px-4 py-2 text-sm font-medium text-rc-text-primary">Realtime voices</button>
+              <button type="button" onClick={() => void nativeRealtimeAction('start')} className="rounded-md bg-rc-accent-primary px-4 py-2 text-sm font-medium text-white">Realtime start</button>
+              <button type="button" onClick={() => void nativeRealtimeAction('append')} className="rounded-md border border-rc-border-primary px-4 py-2 text-sm font-medium text-rc-text-primary">Append text</button>
+              <button type="button" onClick={() => void nativeRealtimeAction('stop')} className="rounded-md border border-rc-border-primary px-4 py-2 text-sm font-medium text-rc-text-primary">Realtime stop</button>
             </div>
           </div>
         </div>
@@ -1017,9 +1017,9 @@ export function CodexOperationsPanel() {
         icon={TerminalSquare}
       >
         <div className="grid gap-3 lg:grid-cols-[260px_minmax(0,1fr)_150px]">
-          <input value={appServerMethod} onChange={(event) => setAppServerMethod(event.target.value)} placeholder="model/list" className="rounded-2xl border border-[#ddd6c8] px-3 py-2 font-mono text-xs" />
-          <input value={appServerParams} onChange={(event) => setAppServerParams(event.target.value)} placeholder='{"threadId":"..."}' className="rounded-2xl border border-[#ddd6c8] px-3 py-2 font-mono text-xs" />
-          <button type="button" onClick={() => void runAppServerRequest()} className="inline-flex items-center justify-center gap-2 rounded-2xl border border-[#ddd6c8] bg-white px-3 py-2 text-sm font-medium text-slate-700"><ShieldAlert size={14} />Raw request</button>
+          <input value={appServerMethod} onChange={(event) => setAppServerMethod(event.target.value)} placeholder="model/list" className="rounded-md border border-rc-border-primary px-3 py-2 font-mono text-xs" />
+          <input value={appServerParams} onChange={(event) => setAppServerParams(event.target.value)} placeholder='{"threadId":"..."}' className="rounded-md border border-rc-border-primary px-3 py-2 font-mono text-xs" />
+          <button type="button" onClick={() => void runAppServerRequest()} className="inline-flex items-center justify-center gap-2 rounded-md border border-rc-border-primary bg-rc-bg-surface px-3 py-2 text-sm font-medium text-rc-text-primary"><ShieldAlert size={14} />Raw request</button>
         </div>
         <JsonBlock value={appServerResponse} />
       </Section>

@@ -4,7 +4,6 @@ import { Layout } from './components/layout/Layout';
 import { PermissionModal } from './components/layout/PermissionModal';
 import { ChatArea } from './components/chat/ChatArea';
 import { ChatInput } from './components/chat/ChatInput';
-import { WorkspaceOverview } from './components/layout/WorkspaceOverview';
 import { ThemeProvider } from './components/design/ThemeProvider';
 import { AppErrorBoundary } from './components/layout/AppErrorBoundary';
 import { hasTauriRuntime, shouldUseRemoteMode } from './lib/runtime';
@@ -196,8 +195,7 @@ function LocalApp() {
     <ThemeProvider>
       <Layout>
         <div className="flex h-full min-h-0 flex-col bg-transparent">
-          <WorkspaceOverview />
-          <ChatArea />
+<ChatArea />
           <ChatInput />
         </div>
       </Layout>

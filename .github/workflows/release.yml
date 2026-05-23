@@ -122,7 +122,10 @@ jobs:
           key: ${{ matrix.target }}
 
       - name: Build release
-        run: cargo build --workspace --release --target ${{ matrix.target }} --exclude remote-code-gui
+        # Build only the binaries needed for each target instead of the full
+        # workspace. The 85+ Codex crates under crates/codex/ are from upstream
+        # and contribute nothing to any release binary listed here.
+        run: cargo build --release --target ${{ matrix.target }} -p remote-code -p remote-code-control-plane -p remote-code-runner -p remote-code-migrate -p roo-cli
         env:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: aarch64-linux-musl-gcc

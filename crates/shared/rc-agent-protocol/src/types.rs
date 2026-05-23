@@ -10,9 +10,11 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
 /// Supported Agent types.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentType {
+    /// In-process Agent — directly calls rc-* crates via callbacks.
+    #[default]
     /// In-process Agent — directly calls rc-* crates via callbacks.
     RemoteClaude,
     /// In-process Agent — callback-based adapter (formerly subprocess JSON-RPC).
@@ -100,7 +102,7 @@ pub struct AgentInfo {
 }
 
 /// Configuration for creating and starting an Agent instance.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AgentConfig {
     /// The type of Agent to create.
     pub agent_type: AgentType,

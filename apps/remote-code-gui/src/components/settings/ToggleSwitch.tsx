@@ -12,9 +12,9 @@ export function ToggleSwitch({ checked, onChange, label, description, disabled =
   return (
     <div className="flex items-center justify-between gap-4">
       <div className="flex-1">
-        <div className="text-sm font-medium text-slate-800">{label}</div>
+        <div className="text-sm font-medium text-rc-text-primary">{label}</div>
         {description && (
-          <p className="mt-0.5 text-xs text-slate-500">{description}</p>
+          <p className="mt-0.5 text-xs text-rc-text-tertiary">{description}</p>
         )}
       </div>
       <button
@@ -26,7 +26,7 @@ export function ToggleSwitch({ checked, onChange, label, description, disabled =
         onClick={() => onChange(!checked)}
         className={clsx(
           'relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2',
-          checked ? 'bg-blue-600' : 'bg-slate-300',
+          checked ? 'bg-rc-accent-primary' : 'bg-rc-bg-tertiary',
           disabled && 'cursor-not-allowed opacity-50',
         )}
       >

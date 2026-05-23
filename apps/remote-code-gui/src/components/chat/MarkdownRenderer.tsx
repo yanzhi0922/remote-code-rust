@@ -62,16 +62,16 @@ const MarkdownRenderer = memo(function MarkdownRenderer({ content }: MarkdownRen
           <CollapsibleBlock
             summary={
               <div className="flex min-w-0 items-center gap-2">
-                <span className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
+                <span className="text-xs font-semibold uppercase tracking-[0.16em] text-rc-text-tertiary">
                   {summary.label}
                 </span>
-                <span className="truncate text-sm text-slate-600">{summary.preview}</span>
+                <span className="truncate text-sm text-rc-text-secondary">{summary.preview}</span>
               </div>
             }
-            iconColor="text-slate-500"
+            iconColor="text-rc-text-tertiary"
             className="my-4"
           >
-            <pre className="overflow-x-auto rounded-xl bg-slate-800 p-4 text-xs leading-relaxed text-slate-100">
+            <pre className="overflow-x-auto rounded-md bg-rc-bg-code p-4 text-xs leading-relaxed text-rc-text-primary">
               {children}
             </pre>
           </CollapsibleBlock>
@@ -87,7 +87,7 @@ const MarkdownRenderer = memo(function MarkdownRenderer({ content }: MarkdownRen
         if (isInline) {
           return (
             <code
-              className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-xs text-slate-800"
+              className="rounded bg-rc-bg-code px-1.5 py-0.5 font-mono text-xs text-rc-text-primary"
               {...safeProps}
             >
               {children}
@@ -101,21 +101,21 @@ const MarkdownRenderer = memo(function MarkdownRenderer({ content }: MarkdownRen
         );
       },
       blockquote: ({ children }) => (
-        <blockquote className="my-4 rounded-r-2xl border-l-4 border-[#d8d1c3] bg-[#faf7f1] px-4 py-3 text-slate-700">
+        <blockquote className="my-4 rounded-r-md border-l-4 border-rc-border-secondary bg-rc-bg-secondary px-4 py-3 text-rc-text-secondary">
           {children}
         </blockquote>
       ),
       table: ({ children }) => (
         <div className="my-4 overflow-x-auto">
-          <table className="min-w-full border-collapse overflow-hidden rounded-2xl border border-[#e7e1d6] bg-white">
+          <table className="min-w-full border-collapse overflow-hidden rounded-lg border border-rc-border-secondary bg-rc-bg-surface">
             {children}
           </table>
         </div>
       ),
       th: ({ children }) => (
-        <th className="bg-[#f7f3eb] px-3 py-2 text-left text-xs font-semibold text-slate-600">{children}</th>
+        <th className="bg-rc-bg-secondary px-3 py-2 text-left text-xs font-semibold text-rc-text-secondary">{children}</th>
       ),
-      td: ({ children }) => <td className="border-t border-[#efe8dc] px-3 py-2 text-sm text-slate-700">{children}</td>,
+      td: ({ children }) => <td className="border-t border-rc-border-secondary px-3 py-2 text-sm text-rc-text-primary">{children}</td>,
     }),
     [],
   );

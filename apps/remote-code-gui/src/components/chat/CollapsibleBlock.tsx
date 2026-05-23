@@ -15,17 +15,17 @@ export default function CollapsibleBlock({
   summary,
   children,
   defaultOpen = false,
-  iconColor = 'text-slate-400',
+  iconColor = 'text-rc-text-tertiary',
   className,
   contentClassName,
 }: CollapsibleBlockProps) {
   const [isOpen, setIsOpen] = useState(defaultOpen);
 
   return (
-    <div className={cn('overflow-hidden rounded-2xl border border-[#e7e1d6] bg-[#fcfbf8]', className)}>
+    <div className={cn('overflow-hidden rounded-lg border border-rc-border-secondary bg-rc-bg-secondary', className)}>
       <button
         type="button"
-        className="flex w-full items-center gap-2 px-3 py-2.5 text-left transition-colors hover:bg-[#f7f3eb]"
+        className="flex w-full items-center gap-2 px-3 py-2.5 text-left transition-colors hover:bg-rc-bg-hover"
         onClick={() => setIsOpen((state) => !state)}
       >
         <ChevronRight
@@ -36,7 +36,7 @@ export default function CollapsibleBlock({
       </button>
 
       {isOpen && (
-        <div className={cn('border-t border-[#ece5d9] px-3 pb-3 pt-2', contentClassName)}>{children}</div>
+        <div className={cn('border-t border-rc-border-secondary px-3 pb-3 pt-2', contentClassName)}>{children}</div>
       )}
     </div>
   );

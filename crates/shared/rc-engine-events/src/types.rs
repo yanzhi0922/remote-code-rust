@@ -133,6 +133,90 @@ impl RuntimeEventDetail {
             Self::ContextCompacted { .. } => "context_compacted",
         }
     }
+
+    /// Convert an [`EngineEvent`] into a [`RuntimeEventDetail`] when the
+    /// two have overlapping semantics.
+    ///
+    /// Returns `None` for engine-internal events (stream lifecycle,
+    /// agent lifecycle, state/cost updates) that have no wire-format
+    /// counterpart.
+    #[must_use]
+    pub fn from_engine_event(event: &EngineEvent) -> Option<Self> {
+        match event {
+            EngineEvent::ToolUseStarted {
+                tool_use_id,
+                tool_name,
+                ..
+            } => Some(Self::ToolStarted {
+                tool_call_id: Arc::clone(tool_use_id),
+                tool_name: Arc::clone(tool_name),
+            }),
+            EngineEvent::ToolUseProgress {
+                tool_use_id,
+                progress,
+                ..
+            } => Some(Self::ToolProgress {
+                tool_call_id: Some(Arc::clone(tool_use_id)),
+                tool_name: None,
+                delta: progress.delta.clone(),
+                elapsed_time_seconds: progress.elapsed_time_seconds,
+            }),
+            EngineEvent::ToolUseCompleted {
+                tool_use_id,
+                result,
+                ..
+            } => Some(Self::ToolFinished {
+                tool_call_id: Arc::clone(tool_use_id),
+                tool_name: Arc::from(""),
+                is_error: result.is_error,
+                summary: Some(result.content.clone()),
+            }),
+            EngineEvent::ToolUseError {
+                tool_use_id,
+                error,
+                ..
+            } => Some(Self::ToolFinished {
+                tool_call_id: Arc::clone(tool_use_id),
+                tool_name: Arc::from(""),
+                is_error: true,
+                summary: Some(error.message.clone()),
+            }),
+            EngineEvent::ToolUseRejected { tool_use_id, .. } => Some(Self::ToolFinished {
+                tool_call_id: Arc::clone(tool_use_id),
+                tool_name: Arc::from(""),
+                is_error: true,
+                summary: Some("Tool use rejected by permission policy".into()),
+            }),
+            EngineEvent::StreamError { error } => Some(Self::RuntimeError {
+                message: error.clone(),
+            }),
+            EngineEvent::CompactCompleted { result } => Some(Self::ContextCompacted {
+                entries_removed: result
+                    .before_messages
+                    .saturating_sub(result.after_messages) as u32,
+                usage_ratio: 0.0,
+            }),
+            // ── No direct RuntimeEventDetail counterpart ──
+            EngineEvent::QueryStarted { .. }
+            | EngineEvent::QueryCompleted { .. }
+            | EngineEvent::QueryAborted { .. }
+            | EngineEvent::StreamStarted { .. }
+            | EngineEvent::StreamMessageStart { .. }
+            | EngineEvent::StreamContentBlockStart { .. }
+            | EngineEvent::StreamContentBlockDelta { .. }
+            | EngineEvent::StreamContentBlockStop { .. }
+            | EngineEvent::StreamMessageDelta { .. }
+            | EngineEvent::StreamMessageStop
+            | EngineEvent::CompactStarted { .. }
+            | EngineEvent::CompactProgress { .. }
+            | EngineEvent::AgentStarted { .. }
+            | EngineEvent::AgentCompleted { .. }
+            | EngineEvent::AgentFailed { .. }
+            | EngineEvent::StateUpdated { .. }
+            | EngineEvent::CostUpdated { .. }
+            | EngineEvent::UsageUpdated { .. } => None,
+        }
+    }
 }
 
 /// API request envelope used when publishing runtime events to the control plane.

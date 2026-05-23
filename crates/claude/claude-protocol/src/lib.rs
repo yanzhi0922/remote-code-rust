@@ -242,18 +242,19 @@ impl<W: Write> ProtocolEmitter<W> {
         description: &str,
         depth: u32,
     ) -> Result<()> {
-        self.emit(json!({
-            "type": "subtask_started",
-            "task_id": task_id,
-            "parent_task_id": parent_task_id,
-            "description": description,
-            "depth": depth,
-            "uuid": Uuid::new_v4(),
-            "session_id": self.session_id,
-        }))
+        self.emit_runtime_event(&RuntimeEventDetail::SubtaskStarted {
+            task_id: task_id.into(),
+            parent_task_id: parent_task_id.map(Into::into),
+            description: description.to_owned(),
+            depth,
+        })
     }
 
     /// Emit a structured subtask-progress event.
+    ///
+    /// Note: uses inline JSON because the wire format fields
+    /// (`turn`, `max_turns`) differ from `RuntimeEventDetail::SubtaskProgress`
+    /// (`status`, `summary`).
     pub fn emit_subtask_progress(
         &mut self,
         task_id: &str,
@@ -298,14 +299,11 @@ impl<W: Write> ProtocolEmitter<W> {
         completed: usize,
         running: usize,
     ) -> Result<()> {
-        self.emit(json!({
-            "type": "batch_progress",
-            "total": total,
-            "completed": completed,
-            "running": running,
-            "uuid": Uuid::new_v4(),
-            "session_id": self.session_id,
-        }))
+        self.emit_runtime_event(&RuntimeEventDetail::BatchProgress {
+            total: total as u32,
+            completed: completed as u32,
+            running: running as u32,
+        })
     }
 
     /// Emit a shared runtime status snapshot for statuslines and GUI consumers.
@@ -326,15 +324,12 @@ impl<W: Write> ProtocolEmitter<W> {
         threshold_tokens: u64,
         ratio: f64,
     ) -> Result<()> {
-        self.emit(json!({
-            "type": "context_usage",
-            "estimated_tokens": estimated_tokens,
-            "max_input_tokens": max_input_tokens,
-            "threshold_tokens": threshold_tokens,
-            "ratio": ratio,
-            "uuid": Uuid::new_v4(),
-            "session_id": self.session_id,
-        }))
+        self.emit_runtime_event(&RuntimeEventDetail::ContextUsage {
+            estimated_tokens,
+            max_input_tokens,
+            threshold_tokens,
+            ratio,
+        })
     }
 
     /// Emit a context-overflow warning before compaction.
@@ -345,15 +340,12 @@ impl<W: Write> ProtocolEmitter<W> {
         threshold_tokens: u64,
         ratio: f64,
     ) -> Result<()> {
-        self.emit(json!({
-            "type": "context_overflow",
-            "estimated_tokens": estimated_tokens,
-            "max_input_tokens": max_input_tokens,
-            "threshold_tokens": threshold_tokens,
-            "ratio": ratio,
-            "uuid": Uuid::new_v4(),
-            "session_id": self.session_id,
-        }))
+        self.emit_runtime_event(&RuntimeEventDetail::ContextOverflow {
+            estimated_tokens,
+            max_input_tokens,
+            threshold_tokens,
+            ratio,
+        })
     }
 
     /// Emit a context-compacted event.
@@ -362,13 +354,10 @@ impl<W: Write> ProtocolEmitter<W> {
         entries_removed: usize,
         usage_ratio: f64,
     ) -> Result<()> {
-        self.emit(json!({
-            "type": "context_compacted",
-            "entries_removed": entries_removed,
-            "usage_ratio": usage_ratio,
-            "uuid": Uuid::new_v4(),
-            "session_id": self.session_id,
-        }))
+        self.emit_runtime_event(&RuntimeEventDetail::ContextCompacted {
+            entries_removed: entries_removed as u32,
+            usage_ratio,
+        })
     }
 
     /// Emit a snapshot of the current task tree for the active session.

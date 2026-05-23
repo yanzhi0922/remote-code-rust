@@ -33,8 +33,8 @@ use uuid::Uuid;
 use crate::dto::{GuiSettingsFile, ProjectListFile, ProviderConfig, ProviderConfigList};
 use crate::state::{KEYRING_SERVICE, PROJECTS_FILE_NAME, PROVIDERS_FILE_NAME, SETTINGS_FILE_NAME};
 
-use claude_control_plane::RunnerCommandPullResponse;
-use claude_runner::{
+use rc_control_plane::RunnerCommandPullResponse;
+use rc_runner::{
     ApprovalRequestRecord, ApprovalState, RUNNER_EVENT_CHANNEL_CAPACITY, RunnerApi, RunnerApiEvent,
     RunnerConfig, RunnerConfigOverrides, RunnerSessionCommandRequest, RunnerSessionRecord,
     load_runner_config, register_with_control_plane, send_heartbeat,
@@ -1005,7 +1005,7 @@ fn allow_direct_runner_public_url() -> bool {
 
 fn load_gui_runner_workspaces(
     profile_override: Option<PathBuf>,
-) -> Result<Vec<claude_runner::RunnerWorkspace>> {
+) -> Result<Vec<rc_runner::RunnerWorkspace>> {
     let paths = claude_config::AppPaths::discover(profile_override)?;
     let projects_path = paths.profile_dir.join(PROJECTS_FILE_NAME);
     if !projects_path.exists() {
@@ -1026,13 +1026,13 @@ fn load_gui_runner_workspaces(
         let workspace_id = gui_workspace_id(&root_dir);
         if workspaces
             .iter()
-            .any(|workspace: &claude_runner::RunnerWorkspace| {
+            .any(|workspace: &rc_runner::RunnerWorkspace| {
                 workspace.workspace_id == workspace_id
             })
         {
             continue;
         }
-        workspaces.push(claude_runner::RunnerWorkspace {
+        workspaces.push(rc_runner::RunnerWorkspace {
             workspace_id,
             root_dir,
             writable: true,
@@ -1706,7 +1706,7 @@ async fn run_outbound_poll_loop(
 }
 
 async fn apply_pulled_commands(api: &RunnerApi, response: RunnerCommandPullResponse) -> Result<()> {
-    use claude_control_plane::RunnerQueuedCommandBody;
+    use rc_control_plane::RunnerQueuedCommandBody;
     for cmd in response.commands {
         match cmd.body {
             RunnerQueuedCommandBody::CreateSession { request } => {

@@ -49,8 +49,8 @@ function EmptyState({
   return (
     <div className="flex h-full min-h-[400px] items-center justify-center px-6">
       <div className="max-w-md text-center space-y-4">
-        <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-lg bg-[#111827] shadow-lg">
-          <BrandMark className="h-11 w-11" />
+        <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-lg bg-rc-bg-surface">
+          <BrandMark className="h-9 w-9" />
         </div>
         <div>
           <h2 className="text-xl font-semibold text-rc-text-primary">{title}</h2>
@@ -80,7 +80,7 @@ function AssistantToolCalls({ toolCalls }: { toolCalls: ToolCallInfo[] }) {
           }
           iconColor="text-rc-accent-success"
         >
-          <pre className="overflow-x-auto whitespace-pre-wrap rounded-xl bg-rc-bg-code p-4 text-xs font-mono leading-relaxed text-slate-300">
+          <pre className="overflow-x-auto whitespace-pre-wrap rounded-md bg-rc-bg-code p-4 text-xs font-mono leading-relaxed text-rc-text-primary">
             {formatToolInput(toolCall.input)}
           </pre>
         </CollapsibleBlock>
@@ -112,10 +112,10 @@ function ToolMessage({ entry }: { entry: ConversationEntry }) {
       iconColor={entry.is_error ? 'text-rc-accent-error' : 'text-rc-text-tertiary'}
     >
       <pre
-        className={`overflow-x-auto whitespace-pre-wrap rounded-xl p-4 text-xs font-mono leading-relaxed ${
+        className={`overflow-x-auto whitespace-pre-wrap rounded-md p-4 text-xs font-mono leading-relaxed ${
           entry.is_error
             ? 'bg-rc-accent-error-bg text-rc-accent-error'
-            : 'bg-rc-bg-code text-slate-300'
+            : 'bg-rc-bg-code text-rc-text-primary'
         }`}
       >
         {entry.text}
@@ -142,7 +142,7 @@ function AssistantThinking({ blocks }: { blocks: string[] }) {
           }
           iconColor="text-rc-accent-warning"
         >
-          <div className="rounded-xl bg-rc-bg-secondary p-4 text-sm leading-7 text-rc-text-secondary">
+          <div className="rounded-md bg-rc-bg-secondary p-4 text-sm leading-7 text-rc-text-secondary">
             {block}
           </div>
         </CollapsibleBlock>
@@ -155,9 +155,9 @@ function AssistantMessage({ entry }: { entry: ConversationEntry }) {
   const thinkingBlocks = extractThinkingBlocks(entry);
 
   return (
-    <div className="rounded-2xl border border-rc-border-primary bg-rc-bg-assistant p-6 shadow-sm">
+    <div className="rounded-lg border border-rc-border-primary bg-rc-bg-assistant p-5">
       <div className="mb-4 flex items-center gap-2">
-        <div className="flex h-7 w-7 items-center justify-center rounded-md bg-[linear-gradient(135deg,#2563eb_0%,#0891b2_100%)]">
+        <div className="flex h-7 w-7 items-center justify-center rounded-md bg-rc-accent-primary">
           <span className="text-white text-xs font-bold">A</span>
         </div>
         <span className="text-xs font-semibold uppercase tracking-wider text-rc-text-tertiary">
@@ -193,7 +193,7 @@ const MessageCard = memo(
     if (entry.role === 'user') {
       return (
         <div className="flex justify-end">
-          <div className="max-w-3xl rounded-2xl bg-gradient-to-br from-rc-accent-primary to-rc-accent-primary-hover px-5 py-4 text-[15px] leading-7 text-white shadow-lg">
+          <div className="max-w-3xl rounded-lg bg-rc-accent-primary px-5 py-4 text-[15px] leading-7 text-rc-text-inverse">
             <div className="whitespace-pre-wrap break-words">{entry.text}</div>
           </div>
         </div>
@@ -221,7 +221,7 @@ function StatusCards({
   return (
     <>
       {sending && (
-        <div role="status" className="rounded-2xl border border-rc-border-primary bg-rc-bg-assistant px-5 py-4 text-sm text-rc-text-secondary shadow-sm">
+        <div role="status" className="rounded-lg border border-rc-border-primary bg-rc-bg-assistant px-5 py-4 text-sm text-rc-text-secondary">
           <div className="flex items-center gap-3">
             <div className="flex h-5 w-5 items-center justify-center">
               <div className="h-5 w-5 animate-spin rounded-full border-2 border-rc-border-primary border-t-rc-accent-primary" />
@@ -266,7 +266,7 @@ function StatusCards({
       )}
 
       {sendError && (
-        <div role="alert" className="rounded-2xl border border-rc-accent-error-border bg-rc-accent-error-bg px-5 py-4 text-sm text-rc-accent-error">
+        <div role="alert" className="rounded-lg border border-rc-accent-error-border bg-rc-accent-error-bg px-5 py-4 text-sm text-rc-accent-error">
           {sendError}
         </div>
       )}

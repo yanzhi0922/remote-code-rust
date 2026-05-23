@@ -1,5 +1,6 @@
 mod agents;
 mod cli;
+mod commands;
 mod conversation;
 mod conversation_backend;
 mod doctor;
@@ -232,6 +233,19 @@ fn dispatch_command<'a>(
             Box::pin(async move { claude_tui::run_tui_app(config.clone(), store).await })
         }
         Some(Commands::Ssh(args)) => Box::pin(async move { run_ssh(args).await }),
+        Some(Commands::Plan(args)) => Box::pin(async move { commands::run_plan(config, store, args).await }),
+        Some(Commands::Cost(args)) => Box::pin(async move { commands::run_cost(config, store, args) }),
+        Some(Commands::Memory { command }) => Box::pin(async move { commands::run_memory(config, store, command) }),
+        Some(Commands::Model { command }) => Box::pin(async move { commands::run_model(config, command) }),
+        Some(Commands::Provider { command }) => Box::pin(async move { commands::run_provider(config, command) }),
+        Some(Commands::Compact) => Box::pin(async move { commands::run_compact(config, store).await }),
+        Some(Commands::Theme(args)) => Box::pin(async move { commands::run_theme(config, args) }),
+        Some(Commands::Feedback(args)) => Box::pin(async move { commands::run_feedback(config, args).await }),
+        Some(Commands::Summary) => Box::pin(async move { commands::run_summary(config, store).await }),
+        Some(Commands::Files(args)) => Box::pin(async move { commands::run_files(config, args) }),
+        Some(Commands::Copy(args)) => Box::pin(async move { commands::run_copy(config, store, args).await }),
+        Some(Commands::Ctx(args)) => Box::pin(async move { commands::run_ctx(config, store, args) }),
+        Some(Commands::Diff(args)) => Box::pin(async move { commands::run_diff(config, store, args) }),
         Some(Commands::Update { command }) => Box::pin(async move {
             use cli::UpdateCommand;
             match command {
@@ -854,17 +868,20 @@ fn normalize_prompt(prompt: String) -> Option<String> {
     }
 }
 
+// ── Phase A commands delegated to `commands/` module ────────────
+// (All Phase A command implementations live in `src/commands/`.)
+
 #[cfg(test)]
 mod tests {
     use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
     use clap::Parser;
-    use claude_control_plane::{
+    use rc_control_plane::{
         ArtifactCreateRequest, ArtifactRecord, ControlPlaneMeta as RemoteControlPlaneMeta,
         SessionRecord as RemoteSessionRecord, SessionState as RemoteSessionState,
         SessionStateUpdateRequest, TimelineEvent as RemoteTimelineEvent,
         TimelineEventDetail as RemoteTimelineEventDetail,
     };
-    use claude_runner::{
+    use rc_runner::{
         ApprovalCreateRequest as SharedApprovalCreateRequest,
         ApprovalRequestRecord as RemoteApprovalRecord, ListResponse as RemoteListResponse,
         RunnerSnapshot as RemoteRunnerSnapshot,
@@ -1655,7 +1672,7 @@ mod tests {
                         detail: RemoteTimelineEventDetail::SessionCreated {
                             workspace_id: "default".to_owned(),
                             owner_runner_id: Some("runner-a".to_owned()),
-                            state: claude_control_plane::SessionState::Running,
+                            state: rc_control_plane::SessionState::Running,
                         },
                     },
                     _ => RemoteTimelineEvent {
@@ -1666,8 +1683,8 @@ mod tests {
                         runner_id: Some("runner-a".to_owned()),
                         session_id: Some(Uuid::nil()),
                         detail: RemoteTimelineEventDetail::SessionStateChanged {
-                            previous_state: claude_control_plane::SessionState::Running,
-                            state: claude_control_plane::SessionState::Completed,
+                            previous_state: rc_control_plane::SessionState::Running,
+                            state: rc_control_plane::SessionState::Completed,
                         },
                     },
                 };

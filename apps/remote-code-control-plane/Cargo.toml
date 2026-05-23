@@ -16,7 +16,7 @@ axum.workspace = true
 clap.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
-claude-control-plane = { path = "../../crates/claude/claude-control-plane" }
+rc-control-plane = { path = "../../crates/shared/rc-control-plane" }
 claude-telemetry = { path = "../../crates/claude/claude-telemetry" }
 
 

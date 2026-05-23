@@ -50,8 +50,8 @@ claude-plugins = { path = "../../../crates/claude/claude-plugins", optional = tr
 claude-skills = { path = "../../../crates/claude/claude-skills", optional = true }
 claude-query-engine = { path = "../../../crates/claude/claude-query-engine", optional = true }
 claude-voice = { path = "../../../crates/claude/claude-voice", optional = true }
-claude-runner = { path = "../../../crates/claude/claude-runner", optional = true }
-claude-control-plane = { path = "../../../crates/claude/claude-control-plane", optional = true }
+rc-runner = { path = "../../../crates/shared/rc-runner", optional = true }
+rc-control-plane = { path = "../../../crates/shared/rc-control-plane", optional = true }
 claude-telemetry = { path = "../../../crates/claude/claude-telemetry", optional = true }
 rc-codex-adapter = { path = "../../../crates/adapters/rc-codex-adapter", optional = true }
 rc-roo-adapter = { path = "../../../crates/adapters/rc-roo-adapter", optional = true }
@@ -91,8 +91,8 @@ desktop = [
     "dep:claude-skills",
     "dep:claude-query-engine",
     "dep:claude-voice",
-    "dep:claude-runner",
-    "dep:claude-control-plane",
+    "dep:rc-runner",
+    "dep:rc-control-plane",
     "dep:claude-telemetry",
     "dep:rc-codex-adapter",
     "dep:rc-roo-adapter",

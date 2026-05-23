@@ -1,9 +1,9 @@
 use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand};
-use claude_control_plane::SessionState as RemoteSessionState;
+use rc_control_plane::SessionState as RemoteSessionState;
 use claude_core::{InputFormat, OutputFormat, PermissionMode, ProviderProtocol};
-use claude_runner::{ApprovalDecision, RunnerSessionCommandResponse};
+use rc_runner::{ApprovalDecision, RunnerSessionCommandResponse};
 use uuid::Uuid;
 
 use crate::hooks::HooksCommand;
@@ -242,6 +242,42 @@ pub enum Commands {
         #[command(subcommand)]
         command: UpdateCommand,
     },
+    // ── Phase A commands ──────────────────────────────────────────
+    /// Enter or exit plan mode.
+    Plan(PlanArgs),
+    /// Show current cost tracking and token usage.
+    Cost(CostArgs),
+    /// View or edit conversation memory.
+    Memory {
+        #[command(subcommand)]
+        command: MemoryCommand,
+    },
+    /// List, inspect, and switch models.
+    Model {
+        #[command(subcommand)]
+        command: ModelCommand,
+    },
+    /// List, inspect, and switch providers.
+    Provider {
+        #[command(subcommand)]
+        command: ProviderCommand,
+    },
+    /// Compact the current session context.
+    Compact,
+    /// Show or set the UI theme.
+    Theme(ThemeArgs),
+    /// Send feedback to the developer.
+    Feedback(FeedbackArgs),
+    /// Summarize the current session.
+    Summary,
+    /// List workspace files.
+    Files(FilesArgs),
+    /// Copy session content to clipboard.
+    Copy(CopyArgs),
+    /// View context usage details.
+    Ctx(CtxArgs),
+    /// Show a diff between sessions or checkpoints.
+    Diff(DiffArgs),
 }
 
 /// Subcommands for the update command.
@@ -1365,6 +1401,120 @@ pub struct SshArgs {
 pub enum ExportFormat {
     Ndjson,
     Json,
+}
+
+// ── Phase A: New CLI Args ─────────────────────────────────────────────
+
+#[derive(Args, Debug)]
+pub struct PlanArgs {
+    /// Plan objective or goal statement.
+    #[arg(long)]
+    pub objective: Option<String>,
+    /// Exit plan mode.
+    #[arg(long)]
+    pub clear: bool,
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct CostArgs {
+    #[arg(long)]
+    pub json: bool,
+    #[arg(long)]
+    pub reset: bool,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum MemoryCommand {
+    Read {
+        key: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    Write {
+        key: String,
+        value: String,
+    },
+    List {
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum ModelCommand {
+    List {
+        #[arg(long)]
+        json: bool,
+    },
+    Get {
+        #[arg(long)]
+        json: bool,
+    },
+    Set {
+        model: String,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum ProviderCommand {
+    List {
+        #[arg(long)]
+        json: bool,
+    },
+    Get {
+        #[arg(long)]
+        json: bool,
+    },
+    Set {
+        provider: String,
+    },
+}
+
+#[derive(Args, Debug)]
+pub struct ThemeArgs {
+    pub name: Option<String>,
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct FeedbackArgs {
+    pub message: Vec<String>,
+    #[arg(long = "type")]
+    pub feedback_type: Option<String>,
+}
+
+#[derive(Args, Debug)]
+pub struct FilesArgs {
+    pub path: Option<String>,
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct CopyArgs {
+    pub text: Option<String>,
+    #[arg(long)]
+    pub session_id: Option<Uuid>,
+}
+
+#[derive(Args, Debug)]
+pub struct CtxArgs {
+    #[arg(long)]
+    pub json: bool,
+    #[arg(long)]
+    pub detailed: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct DiffArgs {
+    pub session_id: Option<Uuid>,
+    #[arg(long)]
+    pub path: Option<String>,
+    #[arg(long)]
+    pub json: bool,
 }
 
 #[cfg(test)]

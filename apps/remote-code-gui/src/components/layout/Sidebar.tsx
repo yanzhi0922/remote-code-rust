@@ -302,7 +302,6 @@ export function Sidebar() {
   const createSession = useAppStore((state) => state.createSession);
   const projects = useAppStore((state) => state.projects);
   const activeProjectPath = useAppStore((state) => state.activeProjectPath);
-  const runningSessionIds = useAppStore((state) => state.runningSessionIds);
   const privacyMode = useAppStore((state) => state.workspacePrivacyMode);
   const setActiveProject = useAppStore((state) => state.setActiveProject);
   const removeProject = useAppStore((state) => state.removeProject);
@@ -310,7 +309,6 @@ export function Sidebar() {
   const pickFolderAndAddProject = useAppStore((state) => state.pickFolderAndAddProject);
   const conversation = useAppStore((state) => state.conversation);
   const sessionTasks = useAgentStore((state) => state.sessionTasks);
-  const canCreateSession = !!activeProjectPath;
 
   const [expandedProjects, setExpandedProjects] = useState<Record<string, boolean>>({});
   const [expandedSessions, setExpandedSessions] = useState<Record<string, boolean>>({});
@@ -318,16 +316,13 @@ export function Sidebar() {
 
   const projectSessionGroups = useMemo(() => {
     const projectMap = new Map<string, SessionSummary[]>();
-
     for (const project of projects) {
       projectMap.set(normalizePathKey(project.path), []);
     }
-
     for (const session of sessions) {
       const key = normalizePathKey(session.cwd);
       projectMap.get(key)?.push(session);
     }
-
     return { projectMap };
   }, [projects, sessions]);
 
@@ -342,9 +337,7 @@ export function Sidebar() {
   const activeSessionTasks = useMemo(() => {
     if (!activeSessionId) return [];
     const liveTasks = liveSessionTasks[activeSessionId] ?? [];
-    if (liveTasks.length > 0) {
-      return liveTasks;
-    }
+    if (liveTasks.length > 0) return liveTasks;
     return deriveAgentTasks(conversation);
   }, [activeSessionId, conversation, liveSessionTasks]);
 
@@ -354,33 +347,15 @@ export function Sidebar() {
       .map((project) => {
         const projectKey = normalizePathKey(project.path);
         const projectSessions = projectSessionGroups.projectMap.get(projectKey) ?? [];
-
-        if (!normalizedSearch) {
-          return { project, sessions: projectSessions };
-        }
-
+        if (!normalizedSearch) return { project, sessions: projectSessions };
         const projectSearchText = privacyMode ? project.name : `${project.name} ${project.path}`;
         const projectMatches = projectSearchText.toLowerCase().includes(normalizedSearch);
         const matchedSessions = projectSessions.filter((session) =>
-          [
-            privacyMode ? '' : session.title,
-            privacyMode ? '' : session.cwd,
-            session.provider_name,
-            session.model ?? '',
-          ]
-            .join(' ')
-            .toLowerCase()
-            .includes(normalizedSearch),
+          [privacyMode ? '' : session.title, privacyMode ? '' : session.cwd, session.provider_name, session.model ?? '']
+            .join(' ').toLowerCase().includes(normalizedSearch),
         );
-
-        if (!projectMatches && matchedSessions.length === 0) {
-          return null;
-        }
-
-        return {
-          project,
-          sessions: projectMatches ? projectSessions : matchedSessions,
-        };
+        if (!projectMatches && matchedSessions.length === 0) return null;
+        return { project, sessions: projectMatches ? projectSessions : matchedSessions };
       })
       .filter((row): row is { project: typeof projects[number]; sessions: SessionSummary[] } => !!row);
   }, [normalizedSearch, privacyMode, projectSessionGroups.projectMap, projects]);
@@ -407,252 +382,133 @@ export function Sidebar() {
   };
 
   return (
-    <>
-      <aside className="my-5 flex h-[calc(100%-40px)] w-[336px] shrink-0 flex-col overflow-hidden rounded-lg border border-white/80 bg-white/80 shadow-[0_20px_60px_rgba(15,23,42,0.12)] backdrop-blur-xl dark:border-rc-border-primary dark:bg-rc-bg-surface/90">
-        {/* Header */}
-        <div className="border-b border-rc-border-primary/80 px-5 py-4">
-          <div className="flex items-center gap-2.5">
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-[#111827] shadow-sm">
-              <BrandMark className="h-6 w-6" />
-            </div>
-            <div>
-              <div className="text-sm font-semibold text-rc-text-primary">Remote Code</div>
-              <div className="text-xs text-rc-text-tertiary">工作台</div>
-            </div>
-          </div>
+    <aside className="flex w-sidebar shrink-0 flex-col border-r border-rc-border-secondary bg-rc-bg-sidebar select-none">
+      {/* Search bar */}
+      <div className="relative border-b border-rc-border-secondary px-3 py-2">
+        <Search size={14} className="pointer-events-none absolute left-5 top-1/2 -translate-y-1/2 text-rc-text-tertiary" />
+        <input
+          value={searchQuery}
+          onChange={(event) => setSearchQuery(event.target.value)}
+          aria-label="搜索项目和会话"
+          placeholder="搜索项目或会话"
+          className="h-7 w-full rounded border border-transparent bg-rc-bg-tertiary pl-7 pr-7 text-xs text-rc-text-primary outline-none transition-colors placeholder:text-rc-text-tertiary focus:border-rc-border-focus"
+        />
+        {searchQuery && (
+          <button
+            type="button"
+            title="清空搜索"
+            onClick={() => setSearchQuery('')}
+            className="absolute right-3 top-1/2 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded text-rc-text-tertiary transition-colors hover:bg-rc-bg-hover hover:text-rc-text-primary"
+          >
+            <X size={12} />
+          </button>
+        )}
+      </div>
 
-          <div className="mt-4 grid grid-cols-3 gap-2">
-            <div className="rounded-md border border-rc-border-secondary bg-white/70 px-2.5 py-2 dark:bg-rc-bg-elevated">
-              <div className="text-[11px] text-rc-text-tertiary">项目</div>
-              <div className="mt-0.5 text-sm font-semibold text-rc-text-primary">{projects.length}</div>
-            </div>
-            <div className="rounded-md border border-rc-border-secondary bg-white/70 px-2.5 py-2 dark:bg-rc-bg-elevated">
-              <div className="text-[11px] text-rc-text-tertiary">会话</div>
-              <div className="mt-0.5 text-sm font-semibold text-rc-text-primary">{sessions.length}</div>
-            </div>
-            <div className="rounded-md border border-rc-border-secondary bg-white/70 px-2.5 py-2 dark:bg-rc-bg-elevated">
-              <div className="text-[11px] text-rc-text-tertiary">运行</div>
-              <div className="mt-0.5 text-sm font-semibold text-rc-text-primary">{runningSessionIds.size}</div>
-            </div>
-          </div>
+      {/* Toolbar */}
+      <div className="flex items-center gap-1 border-b border-rc-border-secondary px-2 py-1.5">
+        <button
+          onClick={() => { void pickFolderAndAddProject(); }}
+          className="inline-flex items-center gap-1 rounded px-2 py-1 text-xs text-rc-text-secondary transition-colors hover:bg-rc-bg-hover hover:text-rc-text-primary"
+        >
+          <FolderPlus size={13} />
+          Add Project
+        </button>
+        <div className="flex-1" />
+        <span className="text-[10px] text-rc-text-tertiary">{projects.length} projects</span>
+      </div>
 
-          <div className="mt-3 grid grid-cols-2 gap-2">
-            <button
-              onClick={() => {
-                if (canCreateSession) {
-                  void createSession(undefined, activeProjectPath ?? undefined);
-                }
-              }}
-              disabled={!canCreateSession}
-              title={canCreateSession ? '在当前选中的项目下新建会话' : '请先选择或添加项目文件夹'}
-              className="inline-flex items-center justify-center gap-2 rounded-lg bg-[linear-gradient(135deg,#2563eb_0%,#0891b2_100%)] px-3 py-2.5 text-sm font-medium text-white shadow-sm transition-all duration-200 hover:shadow-md active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              <Plus size={15} />
-              新会话
-            </button>
-            <button
-              onClick={() => {
-                void pickFolderAndAddProject();
-              }}
-              className="inline-flex items-center justify-center gap-2 rounded-lg border border-rc-border-primary bg-white/80 px-3 py-2.5 text-sm font-medium text-rc-text-primary transition-all duration-200 hover:border-rc-border-hover hover:bg-rc-bg-hover active:scale-[0.98] dark:bg-rc-bg-elevated"
-            >
-              <FolderPlus size={15} />
-              添加项目
-            </button>
+      {/* Content */}
+      <div className="flex-1 overflow-y-auto">
+        {sessionsLoading ? (
+          <div className="flex items-center gap-2 px-4 py-4 text-xs text-rc-text-secondary">
+            <div className="h-3 w-3 animate-spin rounded-full border-2 border-rc-border-primary border-t-rc-accent-primary" />
+            Loading…
           </div>
+        ) : (
+          <div className="py-2">
+            {projects.length === 0 ? (
+              <div className="px-4 py-6 text-center text-xs text-rc-text-tertiary">
+                <div className="mb-2">No projects yet</div>
+              </div>
+            ) : visibleProjectRows.length === 0 ? (
+              <div className="px-4 py-4 text-center text-xs text-rc-text-tertiary">
+                No matching results
+              </div>
+            ) : (
+              visibleProjectRows.map(({ project, sessions: projectSessions }) => {
+                const projectKey = normalizePathKey(project.path);
+                const expanded = normalizedSearch
+                  ? true
+                  : expandedProjects[projectKey] ?? normalizePathKey(activeProjectPath ?? '') === projectKey;
+                const active = normalizePathKey(activeProjectPath ?? '') === projectKey;
 
-          <div className="relative mt-3">
-            <Search
-              size={15}
-              className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-rc-text-tertiary"
-            />
-            <input
-              value={searchQuery}
-              onChange={(event) => setSearchQuery(event.target.value)}
-              aria-label="搜索项目和会话"
-              placeholder="搜索项目或会话"
-              className="h-9 w-full rounded-lg border border-rc-border-primary bg-white/75 px-9 text-sm text-rc-text-primary outline-none transition-colors placeholder:text-rc-text-tertiary focus:border-rc-border-focus focus:bg-white dark:bg-rc-bg-elevated"
-            />
-            {searchQuery && (
-              <button
-                type="button"
-                title="清空搜索"
-                onClick={() => setSearchQuery('')}
-                className="absolute right-2 top-1/2 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-md text-rc-text-tertiary transition-colors hover:bg-rc-bg-hover hover:text-rc-text-primary"
-              >
-                <X size={14} />
-              </button>
+                return (
+                  <div key={project.path}>
+                    <div
+                      className={cn(
+                        'flex items-center gap-1 px-3 py-1.5 text-xs transition-colors',
+                        active ? 'bg-rc-bg-active text-rc-text-primary' : 'text-rc-text-secondary hover:bg-rc-bg-hover',
+                      )}
+                    >
+                      <button
+                        type="button"
+                        onClick={() => toggleProject(project.path)}
+                        className="flex h-5 w-5 items-center justify-center rounded hover:bg-rc-bg-active"
+                      >
+                        <ChevronRight size={12} className={cn('transition-transform', expanded && 'rotate-90')} />
+                      </button>
+                      {expanded ? (
+                        <FolderOpen size={14} className="shrink-0 text-rc-accent-primary" />
+                      ) : (
+                        <Folder size={14} className="shrink-0 text-rc-text-tertiary" />
+                      )}
+                      <span className="flex-1 truncate font-medium">{project.name}</span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setActiveProject(project.path);
+                          setExpandedProjects((state) => ({ ...state, [projectKey]: true }));
+                          void createSession(undefined, project.path);
+                        }}
+                        className="flex h-5 w-5 items-center justify-center rounded opacity-0 transition-opacity hover:bg-rc-bg-hover group-hover:opacity-100"
+                        title="New session"
+                      >
+                        <Plus size={12} />
+                      </button>
+                    </div>
+
+                    {expanded && (
+                      <div>
+                        {projectSessions.length > 0 ? (
+                          projectSessions.map((session) => (
+                            <SessionRow
+                              key={session.id}
+                              session={session}
+                              active={session.id === activeSessionId}
+                              privacyMode={privacyMode}
+                              tasks={session.id === activeSessionId ? activeSessionTasks : liveSessionTasks[session.id] ?? []}
+                              expanded={!!expandedSessions[session.id]}
+                              onToggleExpanded={() => toggleSessionTasks(session.id)}
+                              onSelect={() => {
+                                setActiveProject(project.path);
+                                void selectSession(session.id);
+                              }}
+                              onArchive={() => { void archiveSession(session.id); }}
+                            />
+                          ))
+                        ) : (
+                          <div className="px-8 py-2 text-xs text-rc-text-tertiary">No sessions</div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })
             )}
           </div>
-        </div>
-
-        {/* Content */}
-        <div className="flex-1 overflow-y-auto px-3 py-4">
-          {sessionsLoading ? (
-            <div className="flex items-center gap-3 px-3 py-4 text-sm text-rc-text-secondary">
-              <div className="h-4 w-4 animate-spin rounded-full border-2 border-rc-border-primary border-t-rc-accent-primary" />
-              正在加载会话…
-            </div>
-          ) : (
-            <div className="space-y-4">
-              <section>
-                <div className="mb-3 flex items-center justify-between px-2">
-                  <div className="text-[11px] font-semibold uppercase tracking-wider text-rc-text-tertiary">
-                    项目
-                  </div>
-                  <button
-                    onClick={() => {
-                      void pickFolderAndAddProject();
-                    }}
-                    className="rounded-lg p-1 text-rc-text-tertiary transition-colors hover:bg-rc-bg-hover hover:text-rc-text-primary"
-                    title="添加项目文件夹"
-                  >
-                    <FolderPlus size={13} />
-                  </button>
-                </div>
-
-                {projects.length === 0 ? (
-                  <div className="rounded-lg border border-dashed border-rc-border-primary px-4 py-6 text-center text-sm leading-6 text-rc-text-secondary">
-                    还没有项目目录
-                    <br />
-                    <span className="text-xs text-rc-text-tertiary">添加项目后，会话将按项目管理</span>
-                  </div>
-                ) : visibleProjectRows.length === 0 ? (
-                  <div className="rounded-lg border border-dashed border-rc-border-primary px-4 py-6 text-center text-sm leading-6 text-rc-text-secondary">
-                    没有匹配结果
-                    <br />
-                    <span className="text-xs text-rc-text-tertiary">换个项目名、路径或会话标题试试</span>
-                  </div>
-                ) : (
-                  <div className="space-y-3">
-                    {visibleProjectRows.map(({ project, sessions: projectSessions }) => {
-                      const projectKey = normalizePathKey(project.path);
-                      const expanded = normalizedSearch
-                        ? true
-                        : expandedProjects[projectKey] ?? normalizePathKey(activeProjectPath ?? '') === projectKey;
-                      const active = normalizePathKey(activeProjectPath ?? '') === projectKey;
-
-                      return (
-                        <section
-                          key={project.path}
-                          className={cn(
-                            'rounded-lg px-3 py-3 transition-colors duration-200',
-                            active
-                              ? 'bg-white/90 border border-rc-border-primary shadow-sm dark:bg-rc-bg-elevated'
-                              : 'bg-transparent border border-transparent hover:bg-rc-bg-hover',
-                          )}
-                        >
-                          <div className="flex items-start gap-2">
-                            <button
-                              type="button"
-                              onClick={() => toggleProject(project.path)}
-                              title="展开/收起项目"
-                              className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-rc-text-tertiary transition-colors hover:bg-rc-bg-hover hover:text-rc-text-primary"
-                            >
-                              <ChevronRight
-                                size={15}
-                                className={cn('transition-transform duration-200', expanded && 'rotate-90')}
-                              />
-                            </button>
-
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setActiveProject(project.path);
-                                setExpandedProjects((state) => ({ ...state, [projectKey]: true }));
-                              }}
-                              className="min-w-0 flex-1 text-left"
-                            >
-                              <div className="flex items-center gap-2">
-                                {expanded ? (
-                                  <FolderOpen size={16} className="text-rc-accent-primary" />
-                                ) : (
-                                  <Folder size={16} className="text-rc-text-secondary" />
-                                )}
-                                <span className="truncate text-sm font-semibold text-rc-text-primary">
-                                  {project.name}
-                                </span>
-                              </div>
-                              <div className="mt-1 truncate text-xs text-rc-text-tertiary">
-                                {projectSessions.length} 个会话 ·{' '}
-                                {privacyMode ? '路径已隐藏' : truncateMiddle(project.path, 36)}
-                              </div>
-                            </button>
-
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setActiveProject(project.path);
-                                setExpandedProjects((state) => ({ ...state, [projectKey]: true }));
-                                void createSession(undefined, project.path);
-                              }}
-                              className="rounded-md p-1.5 text-rc-text-tertiary transition-colors hover:bg-rc-accent-primary-light hover:text-rc-accent-primary"
-                              title="在此项目下新建会话"
-                            >
-                              <Plus size={14} />
-                            </button>
-
-                            <button
-                              type="button"
-                              onClick={() => {
-                                if (projectSessions.length === 0) {
-                                  void removeProject(project.path);
-                                }
-                              }}
-                              disabled={projectSessions.length > 0}
-                              className="rounded-md p-1.5 text-rc-text-tertiary transition-colors hover:bg-rc-accent-error-bg hover:text-rc-accent-error disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:bg-transparent"
-                              title={
-                                projectSessions.length > 0
-                                  ? '该项目下仍有会话，无法移除'
-                                  : '移除此项目'
-                              }
-                            >
-                              <Trash2 size={14} />
-                            </button>
-                          </div>
-
-                          {expanded && (
-                            <div className="mt-3 space-y-1">
-                              {projectSessions.length > 0 ? (
-                                projectSessions.map((session) => (
-                                  <SessionRow
-                                    key={session.id}
-                                    session={session}
-                                    active={session.id === activeSessionId}
-                                    privacyMode={privacyMode}
-                                    tasks={
-                                      session.id === activeSessionId
-                                        ? activeSessionTasks
-                                        : liveSessionTasks[session.id] ?? []
-                                    }
-                                    expanded={!!expandedSessions[session.id]}
-                                    onToggleExpanded={() => toggleSessionTasks(session.id)}
-                                    onSelect={() => {
-                                      setActiveProject(project.path);
-                                      void selectSession(session.id);
-                                    }}
-                                    onArchive={() => {
-                                      void archiveSession(session.id);
-                                    }}
-                                  />
-                                ))
-                              ) : (
-                                <div className="rounded-lg bg-rc-bg-hover px-3 py-3 text-xs text-rc-text-tertiary">
-                                  这个项目下还没有会话
-                                </div>
-                              )}
-                            </div>
-                          )}
-                        </section>
-                      );
-                    })}
-                  </div>
-                )}
-              </section>
-            </div>
-          )}
-        </div>
-      </aside>
-    </>
+        )}
+      </div>
+    </aside>
   );
 }

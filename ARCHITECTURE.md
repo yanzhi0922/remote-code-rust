@@ -85,6 +85,7 @@ Agent-agnostic crates shared across all three adapters (Claude, Roo, Codex):
 - `claude-managed-settings`: remote managed settings with sync cache, MDM support
 - `claude-teleport`: session teleportation between environments
 - `claude-skill-search`: BM25 skill search, remote loading, prefetching
+- `claude-services`: service layer — 3 services (rate limiter, prompt suggestions, context monitor)
 - `claude-utils`: utilities — git filesystem ops, memory types, cron, image, markdown, diff
 - `claude-integration-tests`: cross-crate integration tests
 

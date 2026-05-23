@@ -4,10 +4,11 @@
 @layer components {
   /* ---- Input Fields ---- */
   .input-field {
-    @apply w-full px-3 py-1.5 text-sm border rounded-lg bg-rc-bg-input text-rc-text-primary
+    @apply w-full px-3 py-1.5 text-sm border rounded
+           bg-rc-bg-surface text-rc-text-primary
            border-rc-border-primary
            focus:outline-none focus:ring-1 focus:ring-rc-border-focus focus:border-rc-border-focus
-           placeholder:text-rc-text-tertiary transition-colors duration-200;
+           placeholder:text-rc-text-tertiary transition-colors;
   }
 
   /* ---- Markdown Body ---- */
@@ -23,9 +24,9 @@
   .markdown-body h1, .markdown-body h2, .markdown-body h3 {
     @apply font-bold mb-2 mt-4;
   }
-  .markdown-body h1 { @apply text-xl; }
-  .markdown-body h2 { @apply text-lg; }
-  .markdown-body h3 { @apply text-base; }
+  .markdown-body h1 { @apply text-lg; }
+  .markdown-body h2 { @apply text-base; }
+  .markdown-body h3 { @apply text-sm; }
   .markdown-body ul, .markdown-body ol {
     @apply ml-4 mb-3;
   }
@@ -33,10 +34,10 @@
   .markdown-body ol { @apply list-decimal; }
   .markdown-body li { @apply mb-1; }
   .markdown-body code {
-    @apply bg-rc-bg-code text-slate-300 px-1.5 py-0.5 rounded text-xs font-mono;
+    @apply bg-rc-bg-code text-rc-text-primary px-1.5 py-0.5 rounded text-xs font-mono;
   }
   .markdown-body pre {
-    @apply bg-rc-bg-code text-slate-300 rounded-xl p-4 mb-3 overflow-x-auto;
+    @apply bg-rc-bg-code text-rc-text-primary rounded p-4 mb-3 overflow-x-auto;
   }
   .markdown-body pre code {
     @apply bg-transparent p-0 text-inherit;
@@ -45,8 +46,7 @@
     @apply border-l-4 border-rc-accent-primary pl-4 italic text-rc-text-secondary mb-3;
   }
   .markdown-body a {
-    @apply text-rc-text-link underline transition-colors;
-    text-decoration-color: var(--color-accent-primary);
+    @apply text-rc-text-link underline decoration-transparent transition-colors;
     text-decoration-color: color-mix(in srgb, var(--color-accent-primary) 50%, transparent);
   }
   .markdown-body a:hover {
@@ -62,7 +62,7 @@
     @apply bg-rc-bg-tertiary font-semibold;
   }
   .markdown-body img {
-    @apply max-w-full rounded-lg;
+    @apply max-w-full rounded;
   }
   .markdown-body .katex-display {
     @apply mb-3 overflow-x-auto;
@@ -70,7 +70,7 @@
 }
 
 /* ═══════════════════════════════════════════════════════════════
-   Scrollbar — refined
+   Scrollbar
    ═══════════════════════════════════════════════════════════════ */
 
 ::-webkit-scrollbar {
@@ -84,8 +84,8 @@
 
 ::-webkit-scrollbar-thumb {
   background: var(--color-border-primary);
-  border-radius: var(--radius-full);
-  transition: background var(--transition-normal);
+  border-radius: 3px;
+  transition: background 150ms ease;
 }
 
 ::-webkit-scrollbar-thumb:hover {
@@ -93,7 +93,7 @@
 }
 
 /* ═══════════════════════════════════════════════════════════════
-   Selection — branded
+   Selection
    ═══════════════════════════════════════════════════════════════ */
 
 ::selection {
@@ -102,7 +102,7 @@
 }
 
 /* ═══════════════════════════════════════════════════════════════
-   Focus Ring — accessible & branded
+   Focus Ring
    ═══════════════════════════════════════════════════════════════ */
 
 :focus-visible {
@@ -111,70 +111,9 @@
 }
 
 /* ═══════════════════════════════════════════════════════════════
-   Animations
+   Animate utility classes
    ═══════════════════════════════════════════════════════════════ */
 
-/* Fade in */
-@keyframes fadeIn {
-  from { opacity: 0; }
-  to { opacity: 1; }
-}
-
-/* Fade in with upward slide */
-@keyframes fadeInUp {
-  from {
-    opacity: 0;
-    transform: translateY(8px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-/* Slide in from right */
-@keyframes slideInRight {
-  from {
-    opacity: 0;
-    transform: translateX(-12px);
-  }
-  to {
-    opacity: 1;
-    transform: translateX(0);
-  }
-}
-
-/* Scale in */
-@keyframes scaleIn {
-  from {
-    opacity: 0;
-    transform: scale(0.96);
-  }
-  to {
-    opacity: 1;
-    transform: scale(1);
-  }
-}
-
-/* Subtle pulse for loading states */
-@keyframes pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.5; }
-}
-
-/* Shimmer for loading skeletons */
-@keyframes shimmer {
-  0% { background-position: -200% 0; }
-  100% { background-position: 200% 0; }
-}
-
-/* Float animation for decorative elements */
-@keyframes float {
-  0%, 100% { transform: translateY(0); }
-  50% { transform: translateY(-4px); }
-}
-
-/* Animate classes */
 .animate-fade-in {
   animation: fadeIn var(--transition-normal) ease-out;
 }
@@ -192,15 +131,6 @@
 }
 
 /* ═══════════════════════════════════════════════════════════════
-   Glass effect — for overlays and modals
-   ═══════════════════════════════════════════════════════════════ */
-
-.glass {
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-}
-
-/* ═══════════════════════════════════════════════════════════════
    Skeleton loading
    ═══════════════════════════════════════════════════════════════ */
 
@@ -214,35 +144,4 @@
   background-size: 200% 100%;
   animation: shimmer 1.5s infinite;
   border-radius: var(--radius-md);
-}
-
-/* ═══════════════════════════════════════════════════════════════
-   Tooltip base
-   ═══════════════════════════════════════════════════════════════ */
-
-[data-tooltip] {
-  position: relative;
-}
-
-[data-tooltip]::after {
-  content: attr(data-tooltip);
-  position: absolute;
-  bottom: 100%;
-  left: 50%;
-  transform: translateX(-50%) translateY(-4px);
-  padding: 4px 8px;
-  font-size: 11px;
-  font-weight: 500;
-  color: var(--color-text-inverse);
-  background: var(--color-bg-user-bubble);
-  border-radius: var(--radius-sm);
-  white-space: nowrap;
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity var(--transition-fast);
-  z-index: var(--z-tooltip);
-}
-
-[data-tooltip]:hover::after {
-  opacity: 1;
 }

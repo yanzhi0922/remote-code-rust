@@ -250,16 +250,16 @@ export function PermissionModal() {
   }
 
   return (
-    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/35 p-4 backdrop-blur-[2px]">
-      <div className="w-full max-w-2xl rounded-[28px] border border-[#e1d8ca] bg-white shadow-[0_28px_80px_rgba(15,23,42,0.22)]">
-        <div className="border-b border-[#efe8dd] px-6 py-5">
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-rc-bg-overlay p-4">
+      <div className="w-full max-w-2xl rounded-lg border border-rc-border-primary bg-rc-bg-surface shadow-lg">
+        <div className="border-b border-rc-border-secondary px-6 py-5">
           <div className="flex items-center gap-3">
-            <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-[#fff3f2] text-[#b23a2f]">
+            <div className="flex h-11 w-11 items-center justify-center rounded-lg bg-rc-accent-error-bg text-rc-accent-error">
               <ShieldAlert size={20} />
             </div>
             <div>
-              <div className="text-lg font-semibold text-slate-800">权限确认</div>
-              <div className="mt-1 text-sm text-slate-500">
+              <div className="text-lg font-semibold text-rc-text-primary">权限确认</div>
+              <div className="mt-1 text-sm text-rc-text-secondary">
                 GUI 已收到一个需要人工确认的工具调用。
               </div>
             </div>
@@ -268,23 +268,23 @@ export function PermissionModal() {
 
         <div className="space-y-4 px-6 py-5">
           <div>
-            <div className="text-sm font-medium text-slate-700">工具</div>
-            <div className="mt-1 text-sm text-slate-600">{pendingPermission.tool_name}</div>
+            <div className="text-sm font-medium text-rc-text-primary">工具</div>
+            <div className="mt-1 text-sm text-rc-text-secondary">{pendingPermission.tool_name}</div>
           </div>
           <div>
-            <div className="text-sm font-medium text-slate-700">说明</div>
-            <div className="mt-1 whitespace-pre-wrap text-sm leading-6 text-slate-600">
+            <div className="text-sm font-medium text-rc-text-primary">说明</div>
+            <div className="mt-1 whitespace-pre-wrap text-sm leading-6 text-rc-text-secondary">
               {pendingPermission.description}
             </div>
           </div>
           {isExitPlanMode && planText && (
             <div>
-              <div className="text-sm font-medium text-slate-700">计划内容</div>
-              <pre className="mt-1 max-h-64 overflow-auto rounded-2xl bg-[#f7f5ef] p-4 text-xs leading-6 text-slate-700">
+              <div className="text-sm font-medium text-rc-text-primary">计划内容</div>
+              <pre className="mt-1 max-h-64 overflow-auto rounded-md bg-rc-bg-secondary p-4 text-xs leading-6 text-rc-text-primary">
                 {planText}
               </pre>
               {planFilePath && (
-                <div className="mt-2 break-all text-xs text-slate-500">
+                <div className="mt-2 break-all text-xs text-rc-text-tertiary">
                   {formatSensitivePath(planFilePath, privacyMode)}
                 </div>
               )}
@@ -292,8 +292,8 @@ export function PermissionModal() {
           )}
           {isExitPlanMode && allowedPrompts.length > 0 && (
             <div>
-              <div className="text-sm font-medium text-slate-700">请求的语义权限</div>
-              <div className="mt-2 space-y-2 rounded-2xl bg-[#f7f5ef] p-4 text-sm text-slate-700">
+              <div className="text-sm font-medium text-rc-text-primary">请求的语义权限</div>
+              <div className="mt-2 space-y-2 rounded-md bg-rc-bg-secondary p-4 text-sm text-rc-text-primary">
                 {allowedPrompts.map((prompt, index) => (
                   <div key={`${prompt.tool}-${prompt.prompt}-${index}`}>
                     {prompt.tool}({PROMPT_PREFIX} {prompt.prompt})
@@ -303,14 +303,14 @@ export function PermissionModal() {
             </div>
           )}
           {isCodexToolUserInput && (
-            <div className="space-y-3 rounded-2xl border border-[#e3dbcf] bg-[#fbfaf7] p-4">
-              <div className="text-sm font-medium text-slate-700">Codex 用户输入请求</div>
+            <div className="space-y-3 rounded-md border border-rc-border-secondary bg-rc-bg-surface p-4">
+              <div className="text-sm font-medium text-rc-text-primary">Codex 用户输入请求</div>
               {codexQuestions.map((question) => (
-                <div key={question.id} className="rounded-xl bg-white p-3 text-sm text-slate-700">
+                <div key={question.id} className="rounded-md bg-rc-bg-surface p-3 text-sm text-rc-text-primary">
                   <div className="font-medium">{question.header || question.id}</div>
-                  {question.question && <div className="mt-1 text-slate-600">{question.question}</div>}
+                  {question.question && <div className="mt-1 text-rc-text-secondary">{question.question}</div>}
                   {question.options && question.options.length > 0 && (
-                    <div className="mt-2 space-y-1 text-xs text-slate-500">
+                    <div className="mt-2 space-y-1 text-xs text-rc-text-tertiary">
                       {question.options.map((option) => (
                         <div key={option.label}>
                           {option.label}
@@ -321,34 +321,34 @@ export function PermissionModal() {
                   )}
                 </div>
               ))}
-              <label htmlFor="codex-user-input-response" className="text-sm font-medium text-slate-700">
+              <label htmlFor="codex-user-input-response" className="text-sm font-medium text-rc-text-primary">
                 官方 ToolRequestUserInputResponse JSON
               </label>
               <textarea
                 id="codex-user-input-response"
                 value={codexJsonResponse}
                 onChange={(event) => setCodexJsonResponse(event.target.value)}
-                className="min-h-40 w-full rounded-2xl border border-[#e3dbcf] bg-white px-4 py-3 font-mono text-xs leading-5 text-slate-700 outline-none transition focus:border-slate-400"
+                className="min-h-40 w-full rounded-md border border-rc-border-secondary bg-rc-bg-surface px-4 py-3 font-mono text-xs leading-5 text-rc-text-primary outline-none transition focus:border-rc-border-focus"
               />
             </div>
           )}
           {isCodexMcpElicitation && (
-            <div className="space-y-3 rounded-2xl border border-[#e3dbcf] bg-[#fbfaf7] p-4">
-              <div className="text-sm font-medium text-slate-700">Codex MCP elicitation</div>
-              <div className="text-sm text-slate-600">
+            <div className="space-y-3 rounded-md border border-rc-border-secondary bg-rc-bg-surface p-4">
+              <div className="text-sm font-medium text-rc-text-primary">Codex MCP elicitation</div>
+              <div className="text-sm text-rc-text-secondary">
                 填写官方 `McpServerElicitationRequestResponse`。拒绝按钮会返回 decline。
               </div>
               <textarea
                 aria-label="MCP elicitation response"
                 value={codexJsonResponse}
                 onChange={(event) => setCodexJsonResponse(event.target.value)}
-                className="min-h-40 w-full rounded-2xl border border-[#e3dbcf] bg-white px-4 py-3 font-mono text-xs leading-5 text-slate-700 outline-none transition focus:border-slate-400"
+                className="min-h-40 w-full rounded-md border border-rc-border-secondary bg-rc-bg-surface px-4 py-3 font-mono text-xs leading-5 text-rc-text-primary outline-none transition focus:border-rc-border-focus"
               />
             </div>
           )}
           {isCodexDynamicTool && (
-            <div className="space-y-3 rounded-2xl border border-[#e3dbcf] bg-[#fbfaf7] p-4">
-              <label htmlFor="codex-dynamic-tool-output" className="text-sm font-medium text-slate-700">
+            <div className="space-y-3 rounded-md border border-rc-border-secondary bg-rc-bg-surface p-4">
+              <label htmlFor="codex-dynamic-tool-output" className="text-sm font-medium text-rc-text-primary">
                 Codex dynamic tool 输出
               </label>
               <textarea
@@ -356,23 +356,23 @@ export function PermissionModal() {
                 value={codexTextResponse}
                 onChange={(event) => setCodexTextResponse(event.target.value)}
                 placeholder="返回给官方 DynamicToolCallResponse 的文本。"
-                className="min-h-28 w-full rounded-2xl border border-[#e3dbcf] bg-white px-4 py-3 text-sm leading-6 text-slate-700 outline-none transition focus:border-slate-400"
+                className="min-h-28 w-full rounded-md border border-rc-border-secondary bg-rc-bg-surface px-4 py-3 text-sm leading-6 text-rc-text-primary outline-none transition focus:border-rc-border-focus"
               />
             </div>
           )}
           {isRooFollowup && rooQuestionText && (
-            <div className="rounded-2xl border border-[#e3dbcf] bg-[#fbfaf7] p-4 text-sm leading-6 text-slate-700">
+            <div className="rounded-md border border-rc-border-secondary bg-rc-bg-surface p-4 text-sm leading-6 text-rc-text-primary">
               {rooQuestionText}
             </div>
           )}
           {isRooCompletion && rooCompletionText && (
-            <pre className="max-h-64 overflow-auto rounded-2xl bg-[#f7f5ef] p-4 text-sm leading-6 text-slate-700">
+            <pre className="max-h-64 overflow-auto rounded-md bg-rc-bg-secondary p-4 text-sm leading-6 text-rc-text-primary">
               {rooCompletionText}
             </pre>
           )}
           {isRooTextInteraction && (
             <div>
-              <label htmlFor="roo-permission-feedback" className="text-sm font-medium text-slate-700">
+              <label htmlFor="roo-permission-feedback" className="text-sm font-medium text-rc-text-primary">
                 {rooResponseLabel}
               </label>
               <textarea
@@ -384,26 +384,26 @@ export function PermissionModal() {
                     ? '留空表示接受结果；填写内容会作为反馈继续执行。'
                     : '填写要返回给 Roo 的补充信息。'
                 }
-                className="mt-2 min-h-28 w-full rounded-2xl border border-[#e3dbcf] bg-white px-4 py-3 text-sm leading-6 text-slate-700 outline-none transition focus:border-slate-400"
+                className="mt-2 min-h-28 w-full rounded-md border border-rc-border-secondary bg-rc-bg-surface px-4 py-3 text-sm leading-6 text-rc-text-primary outline-none transition focus:border-rc-border-focus"
               />
             </div>
           )}
           {pendingPermission.blocked_path && (
             <div>
-              <div className="text-sm font-medium text-slate-700">目标路径</div>
-              <div className="mt-1 break-all rounded-2xl bg-[#f7f5ef] px-3 py-2 text-sm text-slate-600">
+              <div className="text-sm font-medium text-rc-text-primary">目标路径</div>
+              <div className="mt-1 break-all rounded-md bg-rc-bg-secondary px-3 py-2 text-sm text-rc-text-secondary">
                 {formatSensitivePath(pendingPermission.blocked_path, privacyMode)}
               </div>
             </div>
           )}
           {pendingPermission.permission_suggestions.length > 0 && (
             <div>
-              <div className="text-sm font-medium text-slate-700">权限建议</div>
+              <div className="text-sm font-medium text-rc-text-primary">权限建议</div>
               <div className="mt-1 space-y-2">
                 {pendingPermission.permission_suggestions.map((suggestion, index) => (
                   <pre
                     key={index}
-                    className="max-h-40 overflow-auto rounded-2xl bg-[#f7f5ef] p-4 text-xs leading-6 text-slate-700"
+                    className="max-h-40 overflow-auto rounded-md bg-rc-bg-secondary p-4 text-xs leading-6 text-rc-text-primary"
                   >
                     {formatInput(redactSensitivePathsForDisplay(suggestion, privacyMode))}
                   </pre>
@@ -412,14 +412,14 @@ export function PermissionModal() {
             </div>
           )}
           <div>
-            <div className="text-sm font-medium text-slate-700">输入参数</div>
-            <pre className="mt-1 max-h-64 overflow-auto rounded-2xl bg-[#f7f5ef] p-4 text-xs leading-6 text-slate-700">
+            <div className="text-sm font-medium text-rc-text-primary">输入参数</div>
+            <pre className="mt-1 max-h-64 overflow-auto rounded-md bg-rc-bg-secondary p-4 text-xs leading-6 text-rc-text-primary">
               {formatInput(displayedInput)}
             </pre>
           </div>
           {isExitPlanMode && (
             <div>
-              <label htmlFor="permission-feedback" className="text-sm font-medium text-slate-700">
+              <label htmlFor="permission-feedback" className="text-sm font-medium text-rc-text-primary">
                 审批反馈
               </label>
               <textarea
@@ -427,22 +427,22 @@ export function PermissionModal() {
                 value={feedback}
                 onChange={(event) => setFeedback(event.target.value)}
                 placeholder="可选：补充执行要求或拒绝原因。"
-                className="mt-2 min-h-28 w-full rounded-2xl border border-[#e3dbcf] bg-white px-4 py-3 text-sm leading-6 text-slate-700 outline-none transition focus:border-slate-400"
+                className="mt-2 min-h-28 w-full rounded-md border border-rc-border-secondary bg-rc-bg-surface px-4 py-3 text-sm leading-6 text-rc-text-primary outline-none transition focus:border-rc-border-focus"
               />
             </div>
           )}
         </div>
 
-        <div className="flex justify-end gap-3 border-t border-[#efe8dd] bg-[#fbfaf7] px-6 py-4">
+        <div className="flex justify-end gap-3 border-t border-rc-border-secondary bg-rc-bg-secondary px-6 py-4">
           <button
             onClick={denyPermission}
-            className="rounded-2xl border border-[#e3dbcf] px-4 py-2 text-sm font-medium text-slate-600 transition-colors hover:bg-white"
+            className="rounded-md border border-rc-border-primary px-4 py-2 text-sm font-medium text-rc-text-secondary transition-colors hover:bg-rc-bg-hover"
           >
             拒绝
           </button>
           <button
             onClick={allowPermission}
-            className="rounded-2xl bg-[#17181a] px-5 py-2 text-sm font-medium text-white transition-colors hover:bg-[#2b2d31]"
+            className="rounded-md bg-rc-accent-primary px-5 py-2 text-sm font-medium text-rc-text-inverse transition-colors hover:bg-rc-accent-primary-hover"
           >
             允许执行
           </button>

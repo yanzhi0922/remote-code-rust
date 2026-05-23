@@ -21,9 +21,9 @@ tokio.workspace = true
 tracing.workspace = true
 uuid.workspace = true
 rc-agent-protocol = { path = "../../crates/shared/rc-agent-protocol" }
-claude-control-plane = { path = "../../crates/claude/claude-control-plane" }
-claude-runner = { path = "../../crates/claude/claude-runner" }
-claude-runner-host = { path = "../../crates/claude/claude-runner-host" }
+rc-control-plane = { path = "../../crates/shared/rc-control-plane" }
+rc-runner = { path = "../../crates/shared/rc-runner" }
+rc-runner-host = { path = "../../crates/shared/rc-runner-host" }
 claude-telemetry = { path = "../../crates/claude/claude-telemetry" }
 
 [dev-dependencies]

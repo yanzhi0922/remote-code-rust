@@ -22,58 +22,55 @@ export function StatusBar() {
   const modelName = activeSession?.model
     ?? runtimeStatus?.provider.model
     ?? provider?.model
-    ?? '未配置';
+    ?? '—';
 
   const agentLabel = activeAgentType ?? 'remote_claude';
-  const providerName = runtimeStatus?.provider.name ?? provider?.name ?? '未配置';
+  const providerName = runtimeStatus?.provider.name ?? provider?.name ?? '—';
   const mcpSummary = runtimeStatus?.mcp ?? null;
   const mcpIssueCount = mcpSummary
     ? mcpSummary.status_counts.failed + mcpSummary.status_counts.needs_auth + mcpSummary.warning_count
     : 0;
   const mcpLabel = mcpSummary
     ? `MCP ${mcpSummary.status_counts.connected}/${mcpSummary.enabled_servers}`
-    : 'MCP -';
+    : 'MCP —';
 
   const contextPercent = contextUsage ? Math.round(contextUsage.ratio * 100) : null;
 
   return (
-    <div className="mt-3 flex h-9 shrink-0 items-center rounded-lg border border-white/80 bg-white/80 px-4 text-xs text-rc-text-tertiary shadow-sm backdrop-blur select-none dark:border-rc-border-primary dark:bg-rc-bg-surface/80">
-      <div className="flex items-center gap-4">
-        <span className="flex items-center gap-2">
-          <Cpu size={13} />
-          <span className="font-medium text-rc-text-secondary">{agentLabel}</span>
+    <div className="flex h-status-bar shrink-0 items-center border-t border-rc-border-secondary bg-rc-bg-sidebar px-3 text-[11px] text-rc-text-tertiary select-none">
+      <div className="flex items-center gap-3">
+        <span className="flex items-center gap-1.5">
+          <Cpu size={12} />
+          <span className="text-rc-text-secondary">{agentLabel}</span>
         </span>
-
-        <span className="truncate font-medium text-rc-text-secondary">{providerName}</span>
-        <span className="max-w-[280px] truncate font-mono text-rc-text-tertiary">{modelName}</span>
+        <span className="text-rc-text-secondary">{providerName}</span>
+        <span className="max-w-[200px] truncate font-mono text-rc-text-tertiary">{modelName}</span>
       </div>
 
       <div className="flex-1" />
 
-      <div className="flex items-center gap-4">
+      <div className="flex items-center gap-3">
         {lastPromptResult && (
-          <span className="font-mono text-rc-text-tertiary">
-            ↑ {lastPromptResult.usage.input_tokens.toLocaleString()} &nbsp;
-            ↓ {lastPromptResult.usage.output_tokens.toLocaleString()}
+          <span className="font-mono">
+            ↑{lastPromptResult.usage.input_tokens.toLocaleString()}
+            {' '}↓{lastPromptResult.usage.output_tokens.toLocaleString()}
           </span>
         )}
 
         {contextPercent !== null && (
-          <span className={`font-mono ${contextPercent > 80 ? 'text-rc-accent-warning' : 'text-rc-text-tertiary'}`}>
-            Context {contextPercent}%
+          <span className={contextPercent > 80 ? 'text-rc-accent-warning' : ''}>
+            ctx {contextPercent}%
           </span>
         )}
 
-        <span className={`flex items-center gap-2 ${mcpIssueCount > 0 ? 'text-rc-accent-warning' : 'text-rc-text-tertiary'}`}>
-          <Network size={13} />
+        <span className={`flex items-center gap-1.5 ${mcpIssueCount > 0 ? 'text-rc-accent-warning' : ''}`}>
+          <Network size={12} />
           <span>{mcpLabel}</span>
         </span>
 
-        <span className="flex items-center gap-2">
-          {runtimeStatus ? <Wifi size={13} className="text-rc-accent-success" /> : <WifiOff size={13} />}
-          <span className="text-rc-text-tertiary">
-            {runtimeStatus ? 'Online' : 'Offline'}
-          </span>
+        <span className="flex items-center gap-1.5">
+          {runtimeStatus ? <Wifi size={12} className="text-rc-accent-success" /> : <WifiOff size={12} />}
+          <span>{runtimeStatus ? 'Online' : 'Offline'}</span>
         </span>
       </div>
     </div>

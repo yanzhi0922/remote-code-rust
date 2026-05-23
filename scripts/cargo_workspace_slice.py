@@ -51,7 +51,17 @@ def package_slice(package: dict) -> str | None:
         return "codex"
     if "/crates/roo/" in path:
         return "roo"
-    if "/apps/" in path or "/crates/shared/" in path or "/crates/adapters/" in path:
+    # Adapter crates: assign to their agent family slice so each agent's
+    # family builds independently and apps-shared does not pull in all
+    # three agent families just for one adapter.
+    if "/crates/adapters/rc-claude-adapter" in path:
+        return "claude"
+    if "/crates/adapters/rc-codex-adapter" in path:
+        return "codex"
+    if "/crates/adapters/rc-roo-adapter" in path:
+        return "roo"
+    # Remaining apps and shared crates (no agent-family adapters here).
+    if "/apps/" in path or "/crates/shared/" in path:
         return "apps-shared"
     return None
 
