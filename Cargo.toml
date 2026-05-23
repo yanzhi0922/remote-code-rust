@@ -282,7 +282,7 @@ walkdir = "2.5.0"
 winres = "0.1"
 constant_time_eq = "0.4.2"
 gethostname = "1.1.0"
-jsonwebtoken = "9.3.1"
+jsonwebtoken = "10.4.0"
 owo-colors = { version = "4.3.0", features = ["supports-colors"] }
 serial_test = "3"
 test-case = "3.3.1"
