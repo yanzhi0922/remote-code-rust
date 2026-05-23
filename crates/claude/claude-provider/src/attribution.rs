@@ -171,18 +171,26 @@ mod tests {
     #[test]
     fn commit_attribution_respects_disable_env() {
         // SAFETY: test-only, single-threaded.
-        unsafe { std::env::set_var("CLAUDE_CODE_INCLUDE_CO_AUTHORED_BY", "false"); }
+        unsafe {
+            std::env::set_var("CLAUDE_CODE_INCLUDE_CO_AUTHORED_BY", "false");
+        }
         let text = get_commit_attribution("claude-sonnet-4-6");
         assert!(text.is_empty());
-        unsafe { std::env::remove_var("CLAUDE_CODE_INCLUDE_CO_AUTHORED_BY"); }
+        unsafe {
+            std::env::remove_var("CLAUDE_CODE_INCLUDE_CO_AUTHORED_BY");
+        }
     }
 
     #[test]
     fn pr_attribution_respects_disable_env() {
         // SAFETY: test-only, single-threaded.
-        unsafe { std::env::set_var("CLAUDE_CODE_INCLUDE_CO_AUTHORED_BY", "false"); }
+        unsafe {
+            std::env::set_var("CLAUDE_CODE_INCLUDE_CO_AUTHORED_BY", "false");
+        }
         let text = get_pr_attribution("claude-sonnet-4-6");
         assert!(text.is_empty());
-        unsafe { std::env::remove_var("CLAUDE_CODE_INCLUDE_CO_AUTHORED_BY"); }
+        unsafe {
+            std::env::remove_var("CLAUDE_CODE_INCLUDE_CO_AUTHORED_BY");
+        }
     }
 }

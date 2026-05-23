@@ -361,13 +361,13 @@ mod tests {
 
     #[test]
     fn parses_rate_limit_type() {
-        let headers = make_headers(&[(
-            "anthropic-ratelimit-unified-representative-claim",
-            "5h",
-        )]);
+        let headers = make_headers(&[("anthropic-ratelimit-unified-representative-claim", "5h")]);
         let state = extract_rate_limit_state(&headers);
         assert_eq!(state.rate_limit_type, Some(RateLimitType::FiveHour));
-        assert_eq!(state.rate_limit_type.unwrap().display_name(), "session limit");
+        assert_eq!(
+            state.rate_limit_type.unwrap().display_name(),
+            "session limit"
+        );
     }
 
     #[test]

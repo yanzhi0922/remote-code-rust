@@ -44,8 +44,7 @@ pub use circuit_breaker::{CircuitBreaker, CircuitBreakerConfig, CircuitState};
 pub use context::{TokenEstimator, dual_ratio_estimate};
 pub use conversation_backend::{ConversationBackend, DiscoveredToolScope, ProviderCompatBackend};
 pub use rate_limits::{
-    OverageDisabledReason, QuotaStatus, RateLimitState, RateLimitType,
-    extract_rate_limit_state,
+    OverageDisabledReason, QuotaStatus, RateLimitState, RateLimitType, extract_rate_limit_state,
 };
 pub use retry::{
     ApiErrorKind, FastModeState, OAuthRefreshCallback, ResponseHints, RetryConfig, RetryContext,
