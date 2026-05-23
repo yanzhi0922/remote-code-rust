@@ -17,4 +17,5 @@ ratatui = { workspace = true, features = [
     "unstable-rendered-line-info",
     "unstable-widget-ref",
 ] }
+ratatui-core = { workspace = true }
 tracing = { workspace = true, features = ["log"] }

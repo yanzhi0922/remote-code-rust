@@ -393,7 +393,7 @@ impl ShadowCheckpointService {
         let mut paths: Vec<PathBuf> = statuses
             .iter()
             .filter(|entry| entry.status().contains(git2::Status::WT_NEW))
-            .filter_map(|entry| entry.path().map(|path| self.workspace_dir.join(path)))
+            .filter_map(|entry| entry.path().ok().map(|path| self.workspace_dir.join(path)))
             .collect();
 
         paths.sort_by_key(|path| std::cmp::Reverse(path.components().count()));

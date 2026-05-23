@@ -1,7 +1,15 @@
 use ansi_to_tui::Error;
 use ansi_to_tui::IntoText;
+use ratatui::layout::Alignment;
+use ratatui::style::Color;
+use ratatui::style::Modifier;
+use ratatui::style::Style;
 use ratatui::text::Line;
+use ratatui::text::Span;
 use ratatui::text::Text;
+use ratatui_core::layout as core_layout;
+use ratatui_core::style as core_style;
+use ratatui_core::text as core_text;
 
 // Expand tabs in a best-effort way for transcript rendering.
 // Tabs can interact poorly with left-gutter prefixes in our TUI and CLI
@@ -41,7 +49,7 @@ pub fn ansi_escape(s: &str) -> Text<'static> {
     // to_text() claims to be faster, but introduces complex lifetime issues
     // such that it's not worth it.
     match s.into_text() {
-        Ok(text) => text,
+        Ok(text) => convert_text(text),
         Err(err) => match err {
             Error::NomError(message) => {
                 tracing::error!(
@@ -55,4 +63,108 @@ pub fn ansi_escape(s: &str) -> Text<'static> {
             }
         },
     }
+}
+
+fn convert_text(text: core_text::Text<'static>) -> Text<'static> {
+    Text {
+        alignment: text.alignment.map(convert_alignment),
+        style: convert_style(text.style),
+        lines: text.lines.into_iter().map(convert_line).collect(),
+    }
+}
+
+fn convert_line(line: core_text::Line<'static>) -> Line<'static> {
+    Line {
+        style: convert_style(line.style),
+        alignment: line.alignment.map(convert_alignment),
+        spans: line.spans.into_iter().map(convert_span).collect(),
+    }
+}
+
+fn convert_span(span: core_text::Span<'static>) -> Span<'static> {
+    Span {
+        style: convert_style(span.style),
+        content: span.content,
+    }
+}
+
+fn convert_style(style: core_style::Style) -> Style {
+    let mut result = Style::default();
+
+    if let Some(fg) = style.fg {
+        result = result.fg(convert_color(fg));
+    }
+
+    if let Some(bg) = style.bg {
+        result = result.bg(convert_color(bg));
+    }
+
+    result = result.add_modifier(convert_modifier(style.add_modifier));
+    result.remove_modifier(convert_modifier(style.sub_modifier))
+}
+
+fn convert_color(color: core_style::Color) -> Color {
+    match color {
+        core_style::Color::Reset => Color::Reset,
+        core_style::Color::Black => Color::Black,
+        core_style::Color::Red => Color::Red,
+        core_style::Color::Green => Color::Green,
+        core_style::Color::Yellow => Color::Yellow,
+        core_style::Color::Blue => Color::Blue,
+        core_style::Color::Magenta => Color::Magenta,
+        core_style::Color::Cyan => Color::Cyan,
+        core_style::Color::Gray => Color::Gray,
+        core_style::Color::DarkGray => Color::DarkGray,
+        core_style::Color::LightRed => Color::LightRed,
+        core_style::Color::LightGreen => Color::LightGreen,
+        core_style::Color::LightYellow => Color::LightYellow,
+        core_style::Color::LightBlue => Color::LightBlue,
+        core_style::Color::LightMagenta => Color::LightMagenta,
+        core_style::Color::LightCyan => Color::LightCyan,
+        core_style::Color::White => Color::White,
+        core_style::Color::Rgb(r, g, b) => Color::Rgb(r, g, b),
+        core_style::Color::Indexed(index) => Color::Indexed(index),
+    }
+}
+
+fn convert_alignment(alignment: core_layout::Alignment) -> Alignment {
+    match alignment {
+        core_layout::Alignment::Left => Alignment::Left,
+        core_layout::Alignment::Center => Alignment::Center,
+        core_layout::Alignment::Right => Alignment::Right,
+    }
+}
+
+fn convert_modifier(modifier: core_style::Modifier) -> Modifier {
+    let mut result = Modifier::empty();
+
+    if modifier.contains(core_style::Modifier::BOLD) {
+        result |= Modifier::BOLD;
+    }
+    if modifier.contains(core_style::Modifier::DIM) {
+        result |= Modifier::DIM;
+    }
+    if modifier.contains(core_style::Modifier::ITALIC) {
+        result |= Modifier::ITALIC;
+    }
+    if modifier.contains(core_style::Modifier::UNDERLINED) {
+        result |= Modifier::UNDERLINED;
+    }
+    if modifier.contains(core_style::Modifier::SLOW_BLINK) {
+        result |= Modifier::SLOW_BLINK;
+    }
+    if modifier.contains(core_style::Modifier::RAPID_BLINK) {
+        result |= Modifier::RAPID_BLINK;
+    }
+    if modifier.contains(core_style::Modifier::REVERSED) {
+        result |= Modifier::REVERSED;
+    }
+    if modifier.contains(core_style::Modifier::HIDDEN) {
+        result |= Modifier::HIDDEN;
+    }
+    if modifier.contains(core_style::Modifier::CROSSED_OUT) {
+        result |= Modifier::CROSSED_OUT;
+    }
+
+    result
 }
