@@ -1,4 +1,4 @@
-import { Activity, Cpu, FolderGit2, Network, Shield, TerminalSquare } from 'lucide-react';
+import { Activity, Cpu, FolderGit2, Network, Settings2, Shield, TerminalSquare } from 'lucide-react';
 import type { ElementType, ReactNode } from 'react';
 import { useMemo } from 'react';
 import { useAppStore } from '../../stores/useAppStore';
@@ -22,7 +22,7 @@ function InspectorRow({
         : 'text-rc-text-primary';
 
   return (
-    <div className="flex items-start justify-between gap-3 border-b border-rc-border-secondary py-2 last:border-b-0">
+    <div className="flex items-start justify-between gap-3 border-b border-rc-border-secondary py-2.5 last:border-b-0">
       <span className="shrink-0 text-xs text-rc-text-tertiary">{label}</span>
       <span className={`min-w-0 truncate text-right text-xs font-medium ${toneClass}`}>{value}</span>
     </div>
@@ -39,7 +39,7 @@ function InspectorSection({
   children: ReactNode;
 }) {
   return (
-    <section className="border-b border-rc-border-secondary px-3 py-3">
+    <section className="border-b border-rc-border-secondary px-4 py-3.5 last:border-b-0">
       <div className="mb-2 flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.08em] text-rc-text-tertiary">
         <Icon size={13} />
         {title}
@@ -76,70 +76,73 @@ export function SessionInspector() {
 
   return (
     <aside
-      aria-label="Session inspector"
-      className="hidden w-[272px] shrink-0 border-l border-rc-border-secondary bg-rc-bg-sidebar xl:flex xl:flex-col"
+      aria-label="Environment information"
+      className="hidden w-[324px] shrink-0 border-l border-rc-border-secondary bg-rc-bg-chat px-4 py-4 xl:flex xl:flex-col"
     >
-      <div className="flex h-9 items-center border-b border-rc-border-secondary px-3 text-xs font-semibold uppercase tracking-[0.08em] text-rc-text-tertiary">
-        Inspector
-      </div>
+      <div className="min-h-0 overflow-hidden rounded-lg border border-rc-border-secondary bg-rc-bg-surface shadow-md">
+        <div className="flex h-11 items-center justify-between border-b border-rc-border-secondary px-4">
+          <div className="text-sm font-semibold text-rc-text-primary">环境信息</div>
+          <Settings2 size={16} className="text-rc-text-tertiary" />
+        </div>
 
-      <div className="min-h-0 flex-1 overflow-auto">
-        <InspectorSection icon={TerminalSquare} title="Session">
-          <InspectorRow label="Title" value={activeSession ? (privacyMode ? 'Hidden session' : activeSession.title) : '—'} />
-          <InspectorRow label="ID" value={activeSessionId ? activeSessionId.slice(0, 8) : '—'} />
-          <InspectorRow label="Project" value={activeProjectPath ? formatSensitivePath(activeProjectPath, privacyMode) : '—'} />
-        </InspectorSection>
+        <div className="max-h-[calc(100dvh-112px)] overflow-auto">
+          <InspectorSection icon={TerminalSquare} title="Session">
+            <InspectorRow label="Title" value={activeSession ? (privacyMode ? 'Hidden session' : activeSession.title) : '—'} />
+            <InspectorRow label="ID" value={activeSessionId ? activeSessionId.slice(0, 8) : '—'} />
+            <InspectorRow label="Project" value={activeProjectPath ? formatSensitivePath(activeProjectPath, privacyMode) : '—'} />
+          </InspectorSection>
 
-        <InspectorSection icon={Cpu} title="Agent">
-          <InspectorRow label="Type" value={agentType} />
-          <InspectorRow
-            label="Status"
-            value={agentStatus}
-            tone={agentStatus === 'ready' ? 'success' : runtimeStatus ? 'default' : 'warning'}
-          />
-          <InspectorRow label="Provider" value={runtimeStatus?.provider.name ?? provider?.name ?? '—'} />
-          <InspectorRow label="Model" value={activeSession?.model ?? runtimeStatus?.provider.model ?? provider?.model ?? '—'} />
-        </InspectorSection>
+          <InspectorSection icon={Cpu} title="Agent">
+            <InspectorRow label="Type" value={agentType} />
+            <InspectorRow
+              label="Status"
+              value={agentStatus}
+              tone={agentStatus === 'ready' ? 'success' : runtimeStatus ? 'default' : 'warning'}
+            />
+            <InspectorRow label="Provider" value={runtimeStatus?.provider.name ?? provider?.name ?? '—'} />
+            <InspectorRow label="Model" value={activeSession?.model ?? runtimeStatus?.provider.model ?? provider?.model ?? '—'} />
+          </InspectorSection>
 
-        <InspectorSection icon={Shield} title="Policy">
-          <InspectorRow label="Permission" value={settings?.permission_mode ?? '—'} />
-          <InspectorRow
-            label="Pending"
-            value={pendingPermission ? pendingPermission.tool_name : 'none'}
-            tone={pendingPermission ? 'warning' : 'default'}
-          />
-          <InspectorRow
-            label="Context"
-            value={contextUsage ? `${Math.round(contextUsage.ratio * 100)}%` : '—'}
-            tone={contextUsage && contextUsage.ratio > 0.8 ? 'warning' : 'default'}
-          />
-        </InspectorSection>
+          <InspectorSection icon={Shield} title="Policy">
+            <InspectorRow label="Permission" value={settings?.permission_mode ?? '—'} />
+            <InspectorRow
+              label="Pending"
+              value={pendingPermission ? pendingPermission.tool_name : 'none'}
+              tone={pendingPermission ? 'warning' : 'default'}
+            />
+            <InspectorRow
+              label="Context"
+              value={contextUsage ? `${Math.round(contextUsage.ratio * 100)}%` : '—'}
+              tone={contextUsage && contextUsage.ratio > 0.8 ? 'warning' : 'default'}
+            />
+          </InspectorSection>
 
-        <InspectorSection icon={Network} title="MCP">
-          <InspectorRow
-            label="Connected"
-            value={mcpSummary ? `${mcpSummary.status_counts.connected}/${mcpSummary.enabled_servers}` : '—'}
-            tone={mcpSummary && mcpSummary.status_counts.connected > 0 ? 'success' : 'default'}
-          />
-          <InspectorRow label="Warnings" value={mcpSummary ? String(mcpSummary.warning_count) : '—'} />
-          <InspectorRow
-            label="Needs Auth"
-            value={mcpSummary ? String(mcpSummary.status_counts.needs_auth) : '—'}
-            tone={mcpSummary && mcpSummary.status_counts.needs_auth > 0 ? 'warning' : 'default'}
-          />
-        </InspectorSection>
+          <InspectorSection icon={Network} title="MCP">
+            <InspectorRow
+              label="Connected"
+              value={mcpSummary ? `${mcpSummary.status_counts.connected}/${mcpSummary.enabled_servers}` : '—'}
+              tone={mcpSummary && mcpSummary.status_counts.connected > 0 ? 'success' : 'default'}
+            />
+            <InspectorRow label="Warnings" value={mcpSummary ? String(mcpSummary.warning_count) : '—'} />
+            <InspectorRow
+              label="Needs Auth"
+              value={mcpSummary ? String(mcpSummary.status_counts.needs_auth) : '—'}
+              tone={mcpSummary && mcpSummary.status_counts.needs_auth > 0 ? 'warning' : 'default'}
+            />
+          </InspectorSection>
 
-        <InspectorSection icon={Activity} title="Runtime Events">
-          <InspectorRow label="Active tools" value={String(liveToolProgress.length)} />
-          <InspectorRow label="Tool results" value={String(liveToolResults.length)} />
-          <InspectorRow label="Runtime" value={runtimeStatus ? 'online' : 'offline'} tone={runtimeStatus ? 'success' : 'warning'} />
-        </InspectorSection>
+          <InspectorSection icon={Activity} title="Runtime Events">
+            <InspectorRow label="Active tools" value={String(liveToolProgress.length)} />
+            <InspectorRow label="Tool results" value={String(liveToolResults.length)} />
+            <InspectorRow label="Runtime" value={runtimeStatus ? 'online' : 'offline'} tone={runtimeStatus ? 'success' : 'warning'} />
+          </InspectorSection>
 
-        <InspectorSection icon={FolderGit2} title="Workspace">
-          <div className="break-all font-mono text-[11px] leading-5 text-rc-text-tertiary">
-            {activeProjectPath ? formatSensitivePath(activeProjectPath, privacyMode) : 'No active project'}
-          </div>
-        </InspectorSection>
+          <InspectorSection icon={FolderGit2} title="Workspace">
+            <div className="break-all font-mono text-[11px] leading-5 text-rc-text-tertiary">
+              {activeProjectPath ? formatSensitivePath(activeProjectPath, privacyMode) : 'No active project'}
+            </div>
+          </InspectorSection>
+        </div>
       </div>
     </aside>
   );

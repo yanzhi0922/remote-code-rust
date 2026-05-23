@@ -8,6 +8,7 @@ import {
   type MutableRefObject,
 } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
+import { GitBranch, MoreHorizontal } from 'lucide-react';
 import type {
   ConversationEntry,
   ToolCallInfo,
@@ -147,7 +148,7 @@ function AssistantMessage({ entry }: { entry: ConversationEntry }) {
   const thinkingBlocks = extractThinkingBlocks(entry);
 
   return (
-    <div className="border-l border-rc-border-primary bg-rc-bg-assistant px-4 py-3">
+    <div className="rounded-lg border border-rc-border-secondary bg-rc-bg-assistant px-4 py-3 shadow-xs">
       <div className="mb-3 flex items-center gap-2">
         <span className="h-2 w-2 rounded-full bg-rc-accent-info" />
         <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-rc-text-tertiary">
@@ -183,7 +184,7 @@ const MessageCard = memo(
     if (entry.role === 'user') {
       return (
         <div className="flex justify-end">
-          <div className="max-w-3xl rounded-md border border-rc-border-focus bg-rc-bg-selected px-4 py-3 text-sm leading-6 text-rc-text-primary">
+          <div className="max-w-[720px] rounded-lg border border-rc-border-secondary bg-rc-bg-selected px-4 py-3 text-sm leading-6 text-rc-text-primary">
             <div className="whitespace-pre-wrap break-words">{entry.text}</div>
           </div>
         </div>
@@ -211,7 +212,7 @@ function StatusCards({
   return (
     <>
       {sending && (
-        <div role="status" className="rounded-md border border-rc-border-primary bg-rc-bg-assistant px-4 py-3 text-sm text-rc-text-secondary">
+        <div role="status" className="rounded-lg border border-rc-border-primary bg-rc-bg-assistant px-4 py-3 text-sm text-rc-text-secondary shadow-xs">
           <div className="flex items-center gap-3">
             <div className="flex h-5 w-5 items-center justify-center">
               <div className="h-5 w-5 animate-spin rounded-full border-2 border-rc-border-primary border-t-rc-accent-primary" />
@@ -256,7 +257,7 @@ function StatusCards({
       )}
 
       {sendError && (
-        <div role="alert" className="rounded-md border border-rc-accent-error-border bg-rc-accent-error-bg px-4 py-3 text-sm text-rc-accent-error">
+        <div role="alert" className="rounded-lg border border-rc-accent-error-border bg-rc-accent-error-bg px-4 py-3 text-sm text-rc-accent-error">
           {sendError}
         </div>
       )}
@@ -281,7 +282,7 @@ function ConversationTimeline({
   sendError: string | null;
   bottomRef: MutableRefObject<HTMLDivElement | null>;
 }) {
-  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const scrollContainerRef = useRef<HTMLElement>(null);
   const shouldVirtualize = conversation.length >= VIRTUALIZATION_THRESHOLD;
   const rowVirtualizer = useVirtualizer({
     count: conversation.length,
@@ -292,11 +293,12 @@ function ConversationTimeline({
   });
 
   return (
-    <div
+    <section
       ref={scrollContainerRef}
-      className="flex-1 min-h-0 overflow-y-auto bg-rc-bg-chat px-4 py-4"
+      aria-label="Conversation transcript"
+      className="flex-1 min-h-0 overflow-y-auto bg-rc-bg-chat px-5 py-5"
     >
-      <div className="mx-auto flex w-full max-w-[1100px] flex-col gap-3">
+      <div className="mx-auto flex w-full max-w-[920px] flex-col gap-3">
         {shouldVirtualize ? (
           <div className="relative w-full" style={{ height: `${rowVirtualizer.getTotalSize()}px` }}>
             {rowVirtualizer.getVirtualItems().map((virtualRow) => {
@@ -332,6 +334,43 @@ function ConversationTimeline({
           bottomRef={bottomRef}
         />
       </div>
+    </section>
+  );
+}
+
+function ConversationHeader({
+  title,
+  model,
+  provider,
+}: {
+  title: string;
+  model?: string | null;
+  provider?: string | null;
+}) {
+  return (
+    <div className="flex h-12 shrink-0 items-center justify-between border-b border-rc-border-secondary bg-rc-bg-surface px-5">
+      <div className="flex min-w-0 items-center gap-2">
+        <div className="min-w-0 truncate text-sm font-semibold text-rc-text-primary">{title}</div>
+        <button
+          type="button"
+          aria-label="Session actions"
+          title="Session actions"
+          className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-rc-text-tertiary transition-colors hover:bg-rc-bg-hover hover:text-rc-text-primary"
+        >
+          <MoreHorizontal size={16} />
+        </button>
+      </div>
+
+      <div className="hidden min-w-0 items-center gap-2 text-xs text-rc-text-tertiary md:flex">
+        <GitBranch size={14} />
+        <span className="truncate">{provider ?? 'provider'}</span>
+        {model && (
+          <>
+            <span>·</span>
+            <span className="truncate font-mono">{model}</span>
+          </>
+        )}
+      </div>
     </div>
   );
 }
@@ -344,10 +383,15 @@ export function ChatArea() {
   const sendError = useAppStore((state) => state.sendError);
   const liveToolProgress = useAppStore((state) => state.liveToolProgress);
   const liveToolResults = useAppStore((state) => state.liveToolResults);
+  const sessions = useAppStore((state) => state.sessions);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   const compactProgress = useMemo(() => liveToolProgress.slice(-6), [liveToolProgress]);
   const compactResults = useMemo(() => liveToolResults.slice(-4), [liveToolResults]);
+  const activeSession = useMemo(
+    () => sessions.find((session) => session.id === activeSessionId) ?? null,
+    [activeSessionId, sessions],
+  );
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
@@ -359,24 +403,41 @@ export function ChatArea() {
 
   if (conversationLoading) {
     return (
-      <div className="flex-1 overflow-y-auto bg-rc-bg-chat">
-        <EmptyState title="Loading session" />
+      <div className="flex h-full min-h-0 flex-1 flex-col bg-rc-bg-chat">
+        <ConversationHeader
+          title={activeSession?.title ?? 'Session'}
+          provider={activeSession?.provider_name}
+          model={activeSession?.model}
+        />
+        <div className="flex-1 overflow-y-auto">
+          <EmptyState title="Loading session" />
+        </div>
       </div>
     );
   }
 
   if (conversation.length === 0) {
     return (
-      <div className="flex-1 overflow-y-auto bg-rc-bg-chat">
-        <EmptyState
-          title="No messages"
+      <div className="flex h-full min-h-0 flex-1 flex-col bg-rc-bg-chat">
+        <ConversationHeader
+          title={activeSession?.title ?? 'Session'}
+          provider={activeSession?.provider_name}
+          model={activeSession?.model}
         />
+        <div className="flex-1 overflow-y-auto">
+          <EmptyState title="No messages" />
+        </div>
       </div>
     );
   }
 
   return (
     <div className="flex h-full min-h-0 flex-1 flex-col bg-rc-bg-chat">
+      <ConversationHeader
+        title={activeSession?.title ?? 'Session'}
+        provider={activeSession?.provider_name}
+        model={activeSession?.model}
+      />
       <GoalStatusBar />
       <ConversationTimeline
         conversation={conversation}

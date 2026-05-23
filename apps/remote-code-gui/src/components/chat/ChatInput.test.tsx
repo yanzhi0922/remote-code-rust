@@ -82,6 +82,8 @@ describe('ChatInput', () => {
 
     render(<ChatInput />);
 
+    expect(screen.getByRole('form', { name: 'Prompt composer' })).toBeInTheDocument();
+
     const textarea = screen.getByPlaceholderText('向 agent 发送指令或代码片段');
 
     fireEvent.change(textarea, { target: { value: '请检查当前会话状态' } });

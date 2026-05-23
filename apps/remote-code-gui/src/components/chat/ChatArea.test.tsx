@@ -91,6 +91,7 @@ describe('ChatArea', () => {
     render(<ChatArea />);
 
     expect(screen.getByText('检查最新日志')).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'Conversation transcript' })).toBeInTheDocument();
     expect(await screen.findByText('已经完成排查。')).toBeInTheDocument();
     expect(screen.getByText('Thinking')).toBeInTheDocument();
     expect(screen.getAllByText('shell_command').length).toBeGreaterThan(0);

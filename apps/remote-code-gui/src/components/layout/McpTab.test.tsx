@@ -56,6 +56,7 @@ describe('McpTab', () => {
       expect(screen.getByText('Managed servers (1)')).toBeInTheDocument();
     });
 
+    expect(screen.getByRole('region', { name: 'Runtime MCP inventory' })).toBeInTheDocument();
     expect(screen.getByText('filesystem')).toBeInTheDocument();
     expect(
       await screen.findByText(/无法加载 runtime inventory：runtime discovery failed/),

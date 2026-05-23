@@ -165,9 +165,9 @@ export function ChatInput() {
   };
 
   return (
-    <div className="border-t border-rc-border-primary bg-rc-bg-surface px-3 pb-3 pt-2">
-      <div className="mx-auto w-full max-w-[1100px]">
-        <div className="rounded-md border border-rc-border-primary bg-rc-bg-base focus-within:border-rc-border-focus">
+    <div role="form" aria-label="Prompt composer" className="bg-rc-bg-chat px-5 pb-5 pt-2">
+      <div className="mx-auto w-full max-w-[900px]">
+        <div className="rounded-lg border border-rc-border-primary bg-rc-bg-surface shadow-lg focus-within:border-rc-border-focus">
           <div className="flex flex-wrap items-center justify-between gap-2 border-b border-rc-border-secondary px-2.5 py-1.5">
             {activeSession ? (
               <div className="inline-flex max-w-full items-center gap-2 rounded px-2 py-1 text-xs text-rc-text-secondary">
@@ -225,7 +225,7 @@ export function ChatInput() {
             </div>
           </div>
 
-          <div className="flex items-end gap-2 px-2.5 py-2">
+          <div className="flex items-end gap-2 px-3 py-2.5">
             <textarea
               ref={textAreaRef}
               value={input}
@@ -236,7 +236,7 @@ export function ChatInput() {
               disabled={sending}
               rows={1}
               placeholder="向 agent 发送指令或代码片段"
-              className="min-h-[44px] flex-1 resize-none bg-transparent px-1 py-1 text-sm leading-6 text-rc-text-primary outline-none placeholder:text-rc-text-tertiary disabled:cursor-not-allowed"
+              className="min-h-[52px] flex-1 resize-none bg-transparent px-1 py-1 text-sm leading-6 text-rc-text-primary outline-none placeholder:text-rc-text-tertiary disabled:cursor-not-allowed"
             />
 
             {sending && activeSessionId && (
@@ -247,7 +247,7 @@ export function ChatInput() {
                 onClick={() => {
                   void handleCancel();
                 }}
-                className="flex h-9 w-9 items-center justify-center rounded-md border border-rc-accent-warning-border bg-rc-accent-warning-bg text-rc-accent-warning transition-colors hover:bg-rc-bg-hover"
+                className="flex h-9 w-9 items-center justify-center rounded-full border border-rc-accent-warning-border bg-rc-accent-warning-bg text-rc-accent-warning transition-colors hover:bg-rc-bg-hover"
               >
                 <Square size={15} />
               </button>
@@ -260,7 +260,7 @@ export function ChatInput() {
                 void handleSend();
               }}
               disabled={sending || !input.trim()}
-              className="flex h-9 w-9 items-center justify-center rounded-md bg-rc-accent-primary text-white transition-colors hover:bg-rc-accent-primary-hover disabled:cursor-not-allowed disabled:opacity-45"
+              className="flex h-9 w-9 items-center justify-center rounded-full bg-rc-text-primary text-rc-bg-base transition-colors hover:bg-rc-accent-primary hover:text-white disabled:cursor-not-allowed disabled:opacity-45"
             >
               {sending ? (
                 <div className="h-5 w-5 animate-spin rounded-full border-2 border-white/25 border-t-white" />

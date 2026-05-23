@@ -41,6 +41,8 @@ describe('layout SettingsPanel', () => {
     resetAppStore({ settings: mockSettings });
 
     render(<SettingsPanel open onClose={vi.fn()} />);
+    expect(screen.getByRole('dialog', { name: 'Settings' })).toBeInTheDocument();
+
     fireEvent.click(screen.getByRole('button', { name: 'Codex' }));
 
     expect(screen.getByTestId('codex-settings')).toBeInTheDocument();

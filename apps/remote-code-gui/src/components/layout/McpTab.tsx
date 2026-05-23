@@ -571,7 +571,7 @@ export function McpTab() {
         </div>
       </section>
 
-      <section className="space-y-3">
+      <section className="space-y-3" aria-label="Runtime MCP inventory">
         <div className="flex items-center gap-2 text-sm font-semibold text-rc-text-primary">
           <Cable size={15} />
           Runtime-discovered inventory ({runtimeServers.length})

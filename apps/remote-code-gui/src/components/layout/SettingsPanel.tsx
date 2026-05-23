@@ -1,4 +1,20 @@
-import { ArchiveRestore, Check, Eye, EyeOff, Pencil, Plus, Power, Trash2, X } from 'lucide-react';
+import {
+  Archive,
+  ArchiveRestore,
+  Blocks,
+  Bot,
+  Check,
+  Eye,
+  EyeOff,
+  Gauge,
+  Pencil,
+  Plus,
+  Power,
+  SlidersHorizontal,
+  TerminalSquare,
+  Trash2,
+  X,
+} from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { FullSettings, ModelProfile, ProviderConfig, SessionSummary } from '../../lib/types';
 import { useAppStore } from '../../stores/useAppStore';
@@ -14,13 +30,13 @@ interface SettingsPanelProps {
 
 export type SettingsTab = 'provider' | 'runtime' | 'codex' | 'mcp' | 'operations' | 'archive';
 
-const TABS: Array<{ key: SettingsTab; label: string }> = [
-  { key: 'provider', label: 'Provider' },
-  { key: 'runtime', label: '运行参数' },
-  { key: 'codex', label: 'Codex' },
-  { key: 'mcp', label: 'MCP' },
-  { key: 'operations', label: '操作面' },
-  { key: 'archive', label: '归档' },
+const TABS: Array<{ key: SettingsTab; label: string; icon: React.ElementType }> = [
+  { key: 'provider', label: 'Provider', icon: SlidersHorizontal },
+  { key: 'runtime', label: '运行参数', icon: Gauge },
+  { key: 'codex', label: 'Codex', icon: Bot },
+  { key: 'mcp', label: 'MCP', icon: Blocks },
+  { key: 'operations', label: '操作面', icon: TerminalSquare },
+  { key: 'archive', label: '归档', icon: Archive },
 ];
 
 const PROTOCOLS = [
@@ -105,7 +121,12 @@ export function SettingsPanel({ open, onClose, initialTab = 'provider' }: Settin
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-rc-bg-overlay p-4 backdrop-blur-[3px]">
-      <div className="flex max-h-[90vh] w-full max-w-6xl flex-col overflow-hidden rounded-md border border-rc-border-primary bg-rc-bg-surface shadow-[0_18px_48px_rgba(0,0,0,0.34)]">
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label="Settings"
+        className="flex max-h-[90vh] w-full max-w-6xl flex-col overflow-hidden rounded-lg border border-rc-border-primary bg-rc-bg-surface shadow-2xl"
+      >
         <div className="flex items-center justify-between border-b border-rc-border-primary px-5 py-3">
           <div>
             <h2 className="text-sm font-semibold uppercase tracking-[0.08em] text-rc-text-secondary">Settings</h2>
@@ -122,19 +143,23 @@ export function SettingsPanel({ open, onClose, initialTab = 'provider' }: Settin
         <div className="grid min-h-0 flex-1 grid-cols-[190px_1fr]">
           <div className="border-r border-rc-border-primary bg-rc-bg-secondary p-3">
             <div className="space-y-1">
-              {TABS.map((tab) => (
-                <button
-                  key={tab.key}
-                  onClick={() => setActiveTab(tab.key)}
-                  className={`w-full rounded-md px-3 py-2 text-left text-xs font-medium transition-colors ${
-                    activeTab === tab.key
-                      ? 'bg-rc-bg-active text-rc-text-primary'
-                      : 'text-rc-text-secondary hover:bg-rc-bg-hover hover:text-rc-text-primary'
-                  }`}
-                >
-                  {tab.label}
-                </button>
-              ))}
+              {TABS.map((tab) => {
+                const Icon = tab.icon;
+                return (
+                  <button
+                    key={tab.key}
+                    onClick={() => setActiveTab(tab.key)}
+                    className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-xs font-medium transition-colors ${
+                      activeTab === tab.key
+                        ? 'bg-rc-bg-active text-rc-text-primary'
+                        : 'text-rc-text-secondary hover:bg-rc-bg-hover hover:text-rc-text-primary'
+                    }`}
+                  >
+                    <Icon size={15} className="shrink-0" />
+                    {tab.label}
+                  </button>
+                );
+              })}
             </div>
           </div>
 

@@ -40,6 +40,6 @@ describe('Layout', () => {
 
     expect(screen.getByRole('navigation', { name: 'Workbench activity bar' })).toBeInTheDocument();
     expect(screen.getByRole('main', { name: 'Agent conversation workbench' })).toBeInTheDocument();
-    expect(screen.getByRole('complementary', { name: 'Session inspector' })).toBeInTheDocument();
+    expect(screen.getByRole('complementary', { name: 'Environment information' })).toBeInTheDocument();
   });
 });
