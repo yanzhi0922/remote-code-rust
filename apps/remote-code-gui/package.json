@@ -22,7 +22,7 @@
   },
   "dependencies": {
     "@radix-ui/react-dialog": "^1.1.15",
-    "@tanstack/react-virtual": "^3.13.24",
+    "@tanstack/react-virtual": "^3.13.25",
     "@tauri-apps/api": "^2",
     "clsx": "^2.1.1",
     "highlight.js": "^11.11.1",
