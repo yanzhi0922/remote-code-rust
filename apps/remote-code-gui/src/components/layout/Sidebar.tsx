@@ -14,7 +14,6 @@ import type { ConversationEntry, SessionSubtask, SessionSummary, ToolCallInfo } 
 import { cn, normalizePathKey, truncateMiddle } from '../../lib/utils';
 import { useAppStore } from '../../stores/useAppStore';
 import { useAgentStore } from '../../stores/useAgentStore';
-import { BrandMark } from '../brand/BrandMark';
 
 type SessionTaskStatus = 'pending' | 'running' | 'completed' | 'failed' | 'stopped';
 
@@ -234,9 +233,9 @@ function SessionRow({
     <div className="space-y-1">
       <div
         className={cn(
-          'group flex items-start gap-2 rounded-lg px-3 py-2.5 transition-all duration-200',
+          'group flex items-start gap-2 rounded-md px-2.5 py-2 transition-colors duration-150',
           active
-            ? 'border border-[#9cc4ff] bg-[#eef6ff] shadow-sm dark:border-rc-border-focus dark:bg-rc-bg-selected'
+            ? 'border border-rc-border-focus bg-rc-bg-selected'
             : 'border border-transparent hover:bg-rc-bg-hover',
         )}
       >
@@ -415,7 +414,7 @@ export function Sidebar() {
           Add Project
         </button>
         <div className="flex-1" />
-        <span className="text-[10px] text-rc-text-tertiary">{projects.length} projects</span>
+        <span className="text-[10px] uppercase tracking-[0.08em] text-rc-text-tertiary">{projects.length} projects</span>
       </div>
 
       {/* Content */}

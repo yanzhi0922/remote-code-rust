@@ -116,9 +116,9 @@
   --radius-sm: 4px;
   --radius-md: 6px;
   --radius-lg: 8px;
-  --radius-xl: 12px;
-  --radius-2xl: 14px;
-  --radius-3xl: 16px;
+  --radius-xl: 8px;
+  --radius-2xl: 8px;
+  --radius-3xl: 8px;
   --radius-full: 9999px;
 
   /* ═══ Shadows — subtle, no glow ═══ */
@@ -138,8 +138,8 @@
   --sidebar-max-width: 400px;
   --status-bar-height: 24px;
   --header-height: 40px;
-  --chat-max-width: 960px;
-  --input-max-width: 960px;
+  --chat-max-width: 1100px;
+  --input-max-width: 1100px;
 
   /* ═══ Transitions ═══ */
   --transition-fast: 100ms ease;

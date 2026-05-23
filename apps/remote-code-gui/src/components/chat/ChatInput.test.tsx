@@ -82,9 +82,7 @@ describe('ChatInput', () => {
 
     render(<ChatInput />);
 
-    const textarea = screen.getByPlaceholderText(
-      '输入需求，直接在 GUI 中运行、改代码、调用工具。Shift+Enter 换行。',
-    );
+    const textarea = screen.getByPlaceholderText('向 agent 发送指令或代码片段');
 
     fireEvent.change(textarea, { target: { value: '请检查当前会话状态' } });
     fireEvent.keyDown(textarea, { key: 'Enter', code: 'Enter' });
@@ -150,6 +148,43 @@ describe('ChatInput', () => {
 
     await waitFor(() => {
       expect(updateSettings).toHaveBeenCalledWith({ provider_model: 'glm-5v-turbo' });
+    });
+  });
+
+  it('cancels the active running prompt from the composer', async () => {
+    const cancelPrompt = vi.fn().mockResolvedValue(undefined);
+
+    resetAppStore({
+      activeSessionId: 'session-1',
+      sessions: [
+        {
+          id: 'session-1',
+          title: 'Running refactor',
+          cwd: 'C:\\repo',
+          provider_name: 'glm-coding',
+          model: 'glm-5.1',
+          created_at: '2026-04-13T00:00:00Z',
+          updated_at: '2026-04-13T00:05:00Z',
+          archived: false,
+        },
+      ],
+      sending: true,
+      settings: DEFAULT_SETTINGS,
+      provider: {
+        name: 'glm-coding',
+        model: 'glm-5.1',
+        protocol: 'anthropic',
+        base_url: 'https://open.bigmodel.cn/api/anthropic',
+      },
+      cancelPrompt,
+    });
+
+    render(<ChatInput />);
+
+    fireEvent.click(screen.getByRole('button', { name: '停止当前运行' }));
+
+    await waitFor(() => {
+      expect(cancelPrompt).toHaveBeenCalledWith('session-1');
     });
   });
 });

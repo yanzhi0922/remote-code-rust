@@ -22,7 +22,7 @@ import {
   estimateEntryHeight,
 } from '../../lib/conversationUtils';
 import { useAppStore } from '../../stores/useAppStore';
-import { BrandMark } from '../brand/BrandMark';
+import { WorkspaceOverview } from '../layout/WorkspaceOverview';
 import CollapsibleBlock from './CollapsibleBlock';
 import { GoalStatusBar } from './GoalStatusBar';
 
@@ -41,21 +41,13 @@ function conversationRowKey(entry: ConversationEntry, index: number): string {
 
 function EmptyState({
   title,
-  description,
 }: {
   title: string;
-  description: string;
 }) {
   return (
-    <div className="flex h-full min-h-[400px] items-center justify-center px-6">
-      <div className="max-w-md text-center space-y-4">
-        <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-lg bg-rc-bg-surface">
-          <BrandMark className="h-9 w-9" />
-        </div>
-        <div>
-          <h2 className="text-xl font-semibold text-rc-text-primary">{title}</h2>
-          <p className="mt-2 text-sm leading-6 text-rc-text-secondary">{description}</p>
-        </div>
+    <div className="flex h-full min-h-[320px] items-center justify-center px-6">
+      <div className="rounded-md border border-dashed border-rc-border-primary bg-rc-bg-surface px-5 py-4 text-sm text-rc-text-tertiary">
+        {title}
       </div>
     </div>
   );
@@ -65,22 +57,22 @@ function AssistantToolCalls({ toolCalls }: { toolCalls: ToolCallInfo[] }) {
   if (toolCalls.length === 0) return null;
 
   return (
-    <div className="mt-5 space-y-3">
+    <div className="mt-3 space-y-2">
       {toolCalls.map((toolCall) => (
         <CollapsibleBlock
           key={toolCall.id}
           summary={
             <div className="flex min-w-0 items-center gap-2.5">
-              <span className="rounded-md bg-rc-accent-success-bg px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-rc-accent-success">
+              <span className="rounded bg-rc-accent-success-bg px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-rc-accent-success">
                 Tool
               </span>
-              <span className="font-mono text-sm font-medium text-rc-text-primary">{toolCall.name}</span>
-              <span className="truncate text-sm text-rc-text-tertiary">{summarizeToolInput(toolCall)}</span>
+              <span className="font-mono text-xs font-medium text-rc-text-primary">{toolCall.name}</span>
+              <span className="truncate text-xs text-rc-text-tertiary">{summarizeToolInput(toolCall)}</span>
             </div>
           }
           iconColor="text-rc-accent-success"
         >
-          <pre className="overflow-x-auto whitespace-pre-wrap rounded-md bg-rc-bg-code p-4 text-xs font-mono leading-relaxed text-rc-text-primary">
+          <pre className="overflow-x-auto whitespace-pre-wrap rounded bg-rc-bg-code p-3 text-xs font-mono leading-relaxed text-rc-text-primary">
             {formatToolInput(toolCall.input)}
           </pre>
         </CollapsibleBlock>
@@ -97,7 +89,7 @@ function ToolMessage({ entry }: { entry: ConversationEntry }) {
       summary={
         <div className="flex min-w-0 items-center gap-2.5">
           <span
-            className={`rounded-md px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide ${
+            className={`rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.08em] ${
               entry.is_error
                 ? 'bg-rc-accent-error-bg text-rc-accent-error'
                 : 'bg-rc-bg-active text-rc-text-tertiary'
@@ -105,14 +97,14 @@ function ToolMessage({ entry }: { entry: ConversationEntry }) {
           >
             {entry.is_error ? 'Error' : 'Result'}
           </span>
-          <span className="font-mono text-sm font-medium text-rc-text-primary">{label}</span>
-          <span className="truncate text-sm text-rc-text-tertiary">{summarizeToolOutput(entry.text)}</span>
+          <span className="font-mono text-xs font-medium text-rc-text-primary">{label}</span>
+          <span className="truncate text-xs text-rc-text-tertiary">{summarizeToolOutput(entry.text)}</span>
         </div>
       }
       iconColor={entry.is_error ? 'text-rc-accent-error' : 'text-rc-text-tertiary'}
     >
       <pre
-        className={`overflow-x-auto whitespace-pre-wrap rounded-md p-4 text-xs font-mono leading-relaxed ${
+        className={`overflow-x-auto whitespace-pre-wrap rounded p-3 text-xs font-mono leading-relaxed ${
           entry.is_error
             ? 'bg-rc-accent-error-bg text-rc-accent-error'
             : 'bg-rc-bg-code text-rc-text-primary'
@@ -128,21 +120,21 @@ function AssistantThinking({ blocks }: { blocks: string[] }) {
   if (blocks.length === 0) return null;
 
   return (
-    <div className="mb-4 space-y-2">
+    <div className="mb-3 space-y-2">
       {blocks.map((block, index) => (
         <CollapsibleBlock
           key={`${index}-${block.slice(0, 20)}`}
           summary={
             <div className="flex min-w-0 items-center gap-2.5">
-              <span className="rounded-md bg-rc-accent-warning-bg px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-rc-accent-warning">
+              <span className="rounded bg-rc-accent-warning-bg px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-rc-accent-warning">
                 Thinking
               </span>
-              <span className="truncate text-sm text-rc-text-tertiary">{summarizeToolOutput(block)}</span>
+              <span className="truncate text-xs text-rc-text-tertiary">{summarizeToolOutput(block)}</span>
             </div>
           }
           iconColor="text-rc-accent-warning"
         >
-          <div className="rounded-md bg-rc-bg-secondary p-4 text-sm leading-7 text-rc-text-secondary">
+          <div className="rounded bg-rc-bg-secondary p-3 text-xs leading-6 text-rc-text-secondary">
             {block}
           </div>
         </CollapsibleBlock>
@@ -155,12 +147,10 @@ function AssistantMessage({ entry }: { entry: ConversationEntry }) {
   const thinkingBlocks = extractThinkingBlocks(entry);
 
   return (
-    <div className="rounded-lg border border-rc-border-primary bg-rc-bg-assistant p-5">
-      <div className="mb-4 flex items-center gap-2">
-        <div className="flex h-7 w-7 items-center justify-center rounded-md bg-rc-accent-primary">
-          <span className="text-white text-xs font-bold">A</span>
-        </div>
-        <span className="text-xs font-semibold uppercase tracking-wider text-rc-text-tertiary">
+    <div className="border-l border-rc-border-primary bg-rc-bg-assistant px-4 py-3">
+      <div className="mb-3 flex items-center gap-2">
+        <span className="h-2 w-2 rounded-full bg-rc-accent-info" />
+        <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-rc-text-tertiary">
           Assistant
         </span>
       </div>
@@ -168,13 +158,13 @@ function AssistantMessage({ entry }: { entry: ConversationEntry }) {
       <AssistantThinking blocks={thinkingBlocks} />
 
       {entry.text ? (
-        <div className="prose prose-slate max-w-none prose-p:leading-relaxed prose-code:rounded prose-code:bg-rc-bg-code prose-code:px-1.5 prose-code:py-0.5 prose-code:text-sm">
+        <div className="markdown-body max-w-none text-rc-text-primary">
           <Suspense fallback={<div className="space-y-2"><div className="h-4 w-3/4 animate-pulse rounded bg-rc-bg-code" /><div className="h-4 w-1/2 animate-pulse rounded bg-rc-bg-code" /></div>}>
             <LazyMarkdownRenderer content={entry.text} />
           </Suspense>
         </div>
       ) : (
-        <div className="text-sm text-rc-text-tertiary">模型请求了工具调用。</div>
+        <div className="text-sm text-rc-text-tertiary">Tool request</div>
       )}
 
       <AssistantToolCalls toolCalls={entry.tool_calls} />
@@ -193,7 +183,7 @@ const MessageCard = memo(
     if (entry.role === 'user') {
       return (
         <div className="flex justify-end">
-          <div className="max-w-3xl rounded-lg bg-rc-accent-primary px-5 py-4 text-[15px] leading-7 text-rc-text-inverse">
+          <div className="max-w-3xl rounded-md border border-rc-border-focus bg-rc-bg-selected px-4 py-3 text-sm leading-6 text-rc-text-primary">
             <div className="whitespace-pre-wrap break-words">{entry.text}</div>
           </div>
         </div>
@@ -221,7 +211,7 @@ function StatusCards({
   return (
     <>
       {sending && (
-        <div role="status" className="rounded-lg border border-rc-border-primary bg-rc-bg-assistant px-5 py-4 text-sm text-rc-text-secondary">
+        <div role="status" className="rounded-md border border-rc-border-primary bg-rc-bg-assistant px-4 py-3 text-sm text-rc-text-secondary">
           <div className="flex items-center gap-3">
             <div className="flex h-5 w-5 items-center justify-center">
               <div className="h-5 w-5 animate-spin rounded-full border-2 border-rc-border-primary border-t-rc-accent-primary" />
@@ -234,7 +224,7 @@ function StatusCards({
               {compactProgress.map((progress, index) => (
                 <div
                   key={`${progress.tool_name}-${progress.tool_call_id}-${index}`}
-                  className="flex items-center gap-2 rounded-lg bg-rc-bg-secondary px-3 py-2 text-xs"
+                  className="flex items-center gap-2 rounded bg-rc-bg-secondary px-2.5 py-1.5 text-xs"
                 >
                   <span className="font-mono font-medium text-rc-text-primary">{progress.tool_name || 'tool'}</span>
                   <span className="text-rc-text-tertiary">·</span>
@@ -266,7 +256,7 @@ function StatusCards({
       )}
 
       {sendError && (
-        <div role="alert" className="rounded-lg border border-rc-accent-error-border bg-rc-accent-error-bg px-5 py-4 text-sm text-rc-accent-error">
+        <div role="alert" className="rounded-md border border-rc-accent-error-border bg-rc-accent-error-bg px-4 py-3 text-sm text-rc-accent-error">
           {sendError}
         </div>
       )}
@@ -304,9 +294,9 @@ function ConversationTimeline({
   return (
     <div
       ref={scrollContainerRef}
-      className="flex-1 min-h-0 overflow-y-auto bg-rc-bg-chat px-6 py-6"
+      className="flex-1 min-h-0 overflow-y-auto bg-rc-bg-chat px-4 py-4"
     >
-      <div className="mx-auto flex w-full max-w-chat flex-col gap-5">
+      <div className="mx-auto flex w-full max-w-[1100px] flex-col gap-3">
         {shouldVirtualize ? (
           <div className="relative w-full" style={{ height: `${rowVirtualizer.getTotalSize()}px` }}>
             {rowVirtualizer.getVirtualItems().map((virtualRow) => {
@@ -319,7 +309,7 @@ function ConversationTimeline({
                   className="absolute left-0 top-0 w-full"
                   style={{ transform: `translateY(${virtualRow.start}px)` }}
                 >
-                  <div className="pb-5">
+                  <div className="pb-3">
                     <MessageCard entry={entry} />
                   </div>
                 </div>
@@ -328,7 +318,7 @@ function ConversationTimeline({
           </div>
         ) : (
           conversation.map((entry, index) => (
-            <div key={conversationRowKey(entry, index)} className="pb-5">
+            <div key={conversationRowKey(entry, index)} className="pb-3">
               <MessageCard entry={entry} />
             </div>
           ))
@@ -364,20 +354,13 @@ export function ChatArea() {
   }, [conversation, sending, liveToolProgress, liveToolResults]);
 
   if (!activeSessionId) {
-    return (
-      <div className="flex-1 overflow-y-auto bg-rc-bg-chat">
-        <EmptyState
-          title="选择一个项目或会话"
-          description="左侧按项目、会话、子任务三层组织。选中后，右侧会渲染完整对话、公式、工具调用和折叠详情。"
-        />
-      </div>
-    );
+    return <WorkspaceOverview />;
   }
 
   if (conversationLoading) {
     return (
       <div className="flex-1 overflow-y-auto bg-rc-bg-chat">
-        <EmptyState title="正在加载会话" description="正在读取本地会话历史与工具调用记录。" />
+        <EmptyState title="Loading session" />
       </div>
     );
   }
@@ -386,8 +369,7 @@ export function ChatArea() {
     return (
       <div className="flex-1 overflow-y-auto bg-rc-bg-chat">
         <EmptyState
-          title="会话已创建"
-          description="直接在下方输入框中发送需求。公式会渲染，工具调用、代码块和工具输出会默认折叠。"
+          title="No messages"
         />
       </div>
     );

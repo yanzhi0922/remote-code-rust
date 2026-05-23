@@ -7,6 +7,37 @@
 @tailwind components;
 @tailwind utilities;
 
+html, body, #root {
+  height: 100%;
+  overflow: hidden;
+}
+
+body {
+  margin: 0;
+  background: var(--color-bg-base);
+  color: var(--color-text-primary);
+}
+
+button,
+input,
+textarea,
+select {
+  color: inherit;
+  font: inherit;
+}
+
+button {
+  background-color: transparent;
+  background-image: none;
+  border: 0 solid transparent;
+}
+
+input,
+textarea,
+select {
+  background-color: transparent;
+}
+
 /* ── Mobile viewport & touch optimizations ─────────────────────── */
 
 @layer utilities {

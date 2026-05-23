@@ -25,12 +25,10 @@ describe('ChatArea', () => {
   it('shows the empty state before a session is selected', () => {
     render(<ChatArea />);
 
-    expect(screen.getByText('选择一个项目或会话')).toBeInTheDocument();
-    expect(
-      screen.getByText(
-        '左侧按项目、会话、子任务三层组织。选中后，右侧会渲染完整对话、公式、工具调用和折叠详情。',
-      ),
-    ).toBeInTheDocument();
+    expect(screen.getByText('Workbench')).toBeInTheDocument();
+    expect(screen.getByText('Projects')).toBeInTheDocument();
+    expect(screen.getByText('Recent Sessions')).toBeInTheDocument();
+    expect(screen.getByText('Active Project')).toBeInTheDocument();
   });
 
   it('renders conversation cards, tool details, live progress, and send errors', async () => {

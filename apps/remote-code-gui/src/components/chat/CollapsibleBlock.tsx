@@ -22,10 +22,10 @@ export default function CollapsibleBlock({
   const [isOpen, setIsOpen] = useState(defaultOpen);
 
   return (
-    <div className={cn('overflow-hidden rounded-lg border border-rc-border-secondary bg-rc-bg-secondary', className)}>
+    <div className={cn('overflow-hidden rounded-md border border-rc-border-secondary bg-rc-bg-secondary', className)}>
       <button
         type="button"
-        className="flex w-full items-center gap-2 px-3 py-2.5 text-left transition-colors hover:bg-rc-bg-hover"
+        className="flex w-full items-center gap-2 px-3 py-2 text-left transition-colors hover:bg-rc-bg-hover"
         onClick={() => setIsOpen((state) => !state)}
       >
         <ChevronRight

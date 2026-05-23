@@ -1,4 +1,4 @@
-import { ChevronDown, Cpu, MessageSquareText, Mic, Send, Shield, Sparkles } from 'lucide-react';
+import { ChevronDown, Cpu, MessageSquareText, Send, Shield, Sparkles, Square } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import { AgentSelector } from '../agent/AgentSelector';
 import { useAppStore } from '../../stores/useAppStore';
@@ -84,14 +84,14 @@ function Chip({
   return (
     <button
       onClick={onClick}
-      className={`inline-flex items-center gap-2 rounded-md border px-3 py-1.5 text-sm transition-all duration-200 ${
+      className={`inline-flex items-center gap-1.5 rounded border px-2 py-1 text-xs transition-colors ${
         active
           ? 'border-rc-accent-primary bg-rc-bg-selected text-rc-accent-primary'
           : 'border-rc-border-primary bg-rc-bg-surface text-rc-text-secondary hover:border-rc-border-hover hover:bg-rc-bg-hover hover:text-rc-text-primary'
       }`}
     >
       <Icon size={14} className={active ? 'text-rc-accent-primary' : 'text-rc-text-tertiary'} />
-      <span className="max-w-[200px] truncate font-medium">{label}</span>
+      <span className="max-w-[180px] truncate font-medium">{label}</span>
       <ChevronDown size={12} className="text-rc-text-tertiary" />
     </button>
   );
@@ -101,7 +101,6 @@ export function ChatInput() {
   const [input, setInput] = useState('');
   const [modelDraft, setModelDraft] = useState('');
   const [openMenu, setOpenMenu] = useState<'provider' | 'permission' | null>(null);
-  const [voiceToast, setVoiceToast] = useState(false);
   const textAreaRef = useRef<HTMLTextAreaElement>(null);
 
   const sending = useAppStore((state) => state.sending);
@@ -113,6 +112,7 @@ export function ChatInput() {
   const availableAgents = useAgentStore((state) => state.availableAgents);
   const activeAgentType = useAgentStore((state) => state.activeAgentType);
   const sendMessage = useAppStore((state) => state.sendMessage);
+  const cancelPrompt = useAppStore((state) => state.cancelPrompt);
   const updateSettings = useAppStore((state) => state.updateSettings);
   const setActiveProvider = useAppStore((state) => state.setActiveProvider);
   const selectAgent = useAgentStore((state) => state.selectAgent);
@@ -148,6 +148,11 @@ export function ChatInput() {
     await sendMessage(current);
   };
 
+  const handleCancel = async () => {
+    if (!activeSessionId) return;
+    await cancelPrompt(activeSessionId);
+  };
+
   const handleKeyDown = async (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault();
@@ -160,19 +165,17 @@ export function ChatInput() {
   };
 
   return (
-    <div className="border-t border-rc-border-primary bg-rc-bg-surface px-4 pb-3 pt-2.5">
-      <div className="mx-auto w-full max-w-input">
-        <div className="rounded-md border border-rc-border-primary bg-rc-bg-surface focus-within:border-rc-accent-primary">
-          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-rc-border-secondary px-3 py-2">
+    <div className="border-t border-rc-border-primary bg-rc-bg-surface px-3 pb-3 pt-2">
+      <div className="mx-auto w-full max-w-[1100px]">
+        <div className="rounded-md border border-rc-border-primary bg-rc-bg-base focus-within:border-rc-border-focus">
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-rc-border-secondary px-2.5 py-1.5">
             {activeSession ? (
-              <div className="inline-flex max-w-full items-center gap-2 rounded-md bg-rc-bg-secondary px-3 py-1.5 text-sm text-rc-text-secondary">
+              <div className="inline-flex max-w-full items-center gap-2 rounded px-2 py-1 text-xs text-rc-text-secondary">
                 <MessageSquareText size={14} className="text-rc-text-tertiary" />
                 <span className="truncate font-medium">{currentSessionLabel}</span>
               </div>
             ) : (
-              <div className="text-xs text-rc-text-tertiary">
-                选择 Agent、Provider 和模型后开始
-              </div>
+              <div className="text-xs text-rc-text-tertiary">No active session</div>
             )}
 
             <div className="flex flex-wrap items-center gap-2">
@@ -222,7 +225,7 @@ export function ChatInput() {
             </div>
           </div>
 
-          <div className="flex items-end gap-3 px-3 py-2.5">
+          <div className="flex items-end gap-2 px-2.5 py-2">
             <textarea
               ref={textAreaRef}
               value={input}
@@ -232,34 +235,32 @@ export function ChatInput() {
               }}
               disabled={sending}
               rows={1}
-              placeholder="输入需求，直接在 GUI 中运行、改代码、调用工具。Shift+Enter 换行。"
-              className="min-h-[48px] flex-1 resize-none bg-transparent px-1 py-1 text-[15px] leading-6 text-rc-text-primary outline-none placeholder:text-rc-text-tertiary disabled:cursor-not-allowed"
+              placeholder="向 agent 发送指令或代码片段"
+              className="min-h-[44px] flex-1 resize-none bg-transparent px-1 py-1 text-sm leading-6 text-rc-text-primary outline-none placeholder:text-rc-text-tertiary disabled:cursor-not-allowed"
             />
 
-            <div className="relative">
+            {sending && activeSessionId && (
               <button
-                title="语音输入"
+                type="button"
+                aria-label="停止当前运行"
+                title="停止当前运行"
                 onClick={() => {
-                  setVoiceToast(true);
-                  setTimeout(() => setVoiceToast(false), 2500);
+                  void handleCancel();
                 }}
-                className="flex h-10 w-10 items-center justify-center rounded-md border border-rc-border-primary bg-rc-bg-secondary text-rc-text-tertiary transition-all duration-200 hover:border-rc-border-hover hover:bg-rc-bg-hover hover:text-rc-text-primary"
+                className="flex h-9 w-9 items-center justify-center rounded-md border border-rc-accent-warning-border bg-rc-accent-warning-bg text-rc-accent-warning transition-colors hover:bg-rc-bg-hover"
               >
-                <Mic size={17} />
+                <Square size={15} />
               </button>
-              {voiceToast && (
-                <div className="absolute bottom-full right-0 mb-2 whitespace-nowrap rounded-lg bg-rc-bg-user-bubble px-3 py-1.5 text-xs text-white shadow-lg">
-                  语音输入即将推出
-                </div>
-              )}
-            </div>
+            )}
 
             <button
+              type="button"
+              aria-label="发送"
               onClick={() => {
                 void handleSend();
               }}
               disabled={sending || !input.trim()}
-              className="flex h-10 w-10 items-center justify-center rounded-md bg-gradient-to-br from-rc-accent-primary to-rc-accent-primary-hover text-white shadow-md transition-all duration-200 hover:shadow-lg disabled:cursor-not-allowed disabled:opacity-50"
+              className="flex h-9 w-9 items-center justify-center rounded-md bg-rc-accent-primary text-white transition-colors hover:bg-rc-accent-primary-hover disabled:cursor-not-allowed disabled:opacity-45"
             >
               {sending ? (
                 <div className="h-5 w-5 animate-spin rounded-full border-2 border-white/25 border-t-white" />
@@ -269,9 +270,9 @@ export function ChatInput() {
             </button>
           </div>
 
-          <div className="border-t border-rc-border-secondary px-3 py-2">
+          <div className="border-t border-rc-border-secondary px-2.5 py-1.5">
             <div className="flex flex-wrap items-center gap-2">
-              <div className="inline-flex min-w-0 items-center gap-2 rounded-md border border-rc-border-primary bg-rc-bg-surface px-2.5 py-1.5 text-sm text-rc-text-secondary transition-colors hover:border-rc-border-hover">
+              <div className="inline-flex min-w-0 items-center gap-2 rounded border border-rc-border-primary bg-rc-bg-surface px-2 py-1 text-xs text-rc-text-secondary transition-colors hover:border-rc-border-hover">
                 <Sparkles size={14} className="text-rc-text-tertiary" />
                 <input
                   value={modelDraft}
@@ -285,7 +286,7 @@ export function ChatInput() {
                       void commitModelDraft();
                     }
                   }}
-                  className="w-[200px] min-w-0 bg-transparent text-sm text-rc-text-primary outline-none placeholder:text-rc-text-tertiary"
+                  className="w-[200px] min-w-0 bg-transparent text-xs text-rc-text-primary outline-none placeholder:text-rc-text-tertiary"
                   placeholder="设置模型"
                   title="为下一次发送设置模型"
                 />

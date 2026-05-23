@@ -56,10 +56,10 @@ export function AgentSelector({ availableAgents, activeAgentType, onSelect }: Ag
       <button
         title="选择 Agent 类型"
         onClick={() => setOpen((prev) => !prev)}
-        className="inline-flex items-center gap-2 rounded-lg border border-rc-border-primary bg-rc-bg-surface px-3 py-1.5 text-sm font-medium text-rc-text-secondary transition-colors hover:border-rc-border-hover hover:bg-rc-bg-hover hover:text-rc-text-primary"
+        className="inline-flex items-center gap-1.5 rounded border border-rc-border-primary bg-rc-bg-surface px-2 py-1 text-xs font-medium text-rc-text-secondary transition-colors hover:border-rc-border-hover hover:bg-rc-bg-hover hover:text-rc-text-primary"
       >
         <Cpu size={14} className="text-rc-text-tertiary" />
-        <span className="max-w-[160px] truncate">{activeLabel}</span>
+        <span className="max-w-[150px] truncate">{activeLabel}</span>
         <ChevronDown size={14} className="text-rc-text-tertiary" />
       </button>
 
@@ -70,7 +70,7 @@ export function AgentSelector({ availableAgents, activeAgentType, onSelect }: Ag
             className="fixed inset-0 z-10 cursor-default"
             onClick={() => setOpen(false)}
           />
-          <div className="absolute bottom-full left-0 z-20 mb-2 min-w-[280px] overflow-hidden rounded-lg border border-rc-border-primary bg-rc-bg-surface shadow-xl">
+          <div className="absolute bottom-full left-0 z-20 mb-2 min-w-[280px] overflow-hidden rounded-md border border-rc-border-primary bg-rc-bg-surface shadow-xl">
             <div className="max-h-72 overflow-y-auto p-1.5">
               <button
                 className={`flex w-full items-start gap-2 rounded-md px-3 py-2 text-left transition-colors ${

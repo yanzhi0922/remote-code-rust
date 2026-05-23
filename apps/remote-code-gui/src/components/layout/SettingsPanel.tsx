@@ -9,9 +9,10 @@ import { OperationsTab } from './OperationsTab';
 interface SettingsPanelProps {
   open: boolean;
   onClose: () => void;
+  initialTab?: SettingsTab;
 }
 
-type SettingsTab = 'provider' | 'runtime' | 'codex' | 'mcp' | 'operations' | 'archive';
+export type SettingsTab = 'provider' | 'runtime' | 'codex' | 'mcp' | 'operations' | 'archive';
 
 const TABS: Array<{ key: SettingsTab; label: string }> = [
   { key: 'provider', label: 'Provider' },
@@ -65,14 +66,14 @@ function Field({
   );
 }
 
-export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
+export function SettingsPanel({ open, onClose, initialTab = 'provider' }: SettingsPanelProps) {
   const settings = useAppStore((state) => state.settings);
   const loadSettings = useAppStore((state) => state.loadSettings);
   const loadProviderConfigs = useAppStore((state) => state.loadProviderConfigs);
   const loadArchivedSessions = useAppStore((state) => state.loadArchivedSessions);
   const updateSettings = useAppStore((state) => state.updateSettings);
 
-  const [activeTab, setActiveTab] = useState<SettingsTab>('provider');
+  const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab);
   const [draft, setDraft] = useState<Partial<FullSettings>>({});
   const [saving, setSaving] = useState(false);
 
@@ -80,8 +81,8 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
     if (!open) return;
     void Promise.all([loadSettings(), loadProviderConfigs(), loadArchivedSessions()]);
     setDraft({});
-    setActiveTab('provider');
-  }, [loadArchivedSessions, loadProviderConfigs, loadSettings, open]);
+    setActiveTab(initialTab);
+  }, [initialTab, loadArchivedSessions, loadProviderConfigs, loadSettings, open]);
 
   if (!open) return null;
 
@@ -104,16 +105,14 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-rc-bg-overlay p-4 backdrop-blur-[3px]">
-      <div className="flex max-h-[90vh] w-full max-w-5xl flex-col overflow-hidden rounded-lg border border-rc-border-primary bg-rc-bg-surface shadow-[0_28px_80px_rgba(15,23,42,0.24)]">
-        <div className="flex items-center justify-between border-b border-rc-border-primary px-6 py-5">
+      <div className="flex max-h-[90vh] w-full max-w-6xl flex-col overflow-hidden rounded-md border border-rc-border-primary bg-rc-bg-surface shadow-[0_18px_48px_rgba(0,0,0,0.34)]">
+        <div className="flex items-center justify-between border-b border-rc-border-primary px-5 py-3">
           <div>
-            <h2 className="text-xl font-semibold text-rc-text-primary">设置</h2>
-            <p className="mt-1 text-sm text-rc-text-secondary">
-              Provider 管理是真实持久化的；会在 GUI 重启后继续保留。
-            </p>
+            <h2 className="text-sm font-semibold uppercase tracking-[0.08em] text-rc-text-secondary">Settings</h2>
           </div>
           <button
             onClick={onClose}
+            aria-label="关闭设置"
             className="rounded-md p-2 text-rc-text-tertiary transition-colors hover:bg-rc-bg-hover hover:text-rc-text-primary"
           >
             <X size={18} />
@@ -121,15 +120,15 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
         </div>
 
         <div className="grid min-h-0 flex-1 grid-cols-[190px_1fr]">
-          <div className="border-r border-rc-border-primary bg-rc-bg-secondary p-4">
+          <div className="border-r border-rc-border-primary bg-rc-bg-secondary p-3">
             <div className="space-y-1">
               {TABS.map((tab) => (
                 <button
                   key={tab.key}
                   onClick={() => setActiveTab(tab.key)}
-                  className={`w-full rounded-md px-4 py-2.5 text-left text-sm font-medium transition-colors ${
+                  className={`w-full rounded-md px-3 py-2 text-left text-xs font-medium transition-colors ${
                     activeTab === tab.key
-                      ? 'bg-rc-bg-surface text-rc-text-primary shadow-sm'
+                      ? 'bg-rc-bg-active text-rc-text-primary'
                       : 'text-rc-text-secondary hover:bg-rc-bg-hover hover:text-rc-text-primary'
                   }`}
                 >
@@ -139,7 +138,7 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
             </div>
           </div>
 
-          <div className="min-h-0 overflow-y-auto px-6 py-6">
+          <div className="min-h-0 overflow-y-auto px-5 py-5">
             {!settings ? (
               <div className="py-10 text-sm text-rc-text-secondary">正在加载设置…</div>
             ) : activeTab === 'provider' ? (
@@ -161,7 +160,7 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
           </div>
         </div>
 
-        <div className="flex items-center justify-end gap-3 border-t border-rc-border-primary bg-rc-bg-secondary/80 px-6 py-4">
+        <div className="flex items-center justify-end gap-3 border-t border-rc-border-primary bg-rc-bg-secondary/80 px-5 py-3">
           <button
             onClick={() => setDraft({})}
             className="rounded-md px-4 py-2 text-sm font-medium text-rc-text-secondary transition-colors hover:bg-rc-bg-hover hover:text-rc-text-primary"
@@ -206,7 +205,7 @@ function ArchiveRow({
   onRestore: () => void;
 }) {
   return (
-    <div className="flex items-center gap-3 rounded-lg border border-rc-border-secondary bg-rc-bg-secondary px-4 py-3">
+    <div className="flex items-center gap-3 rounded-md border border-rc-border-secondary bg-rc-bg-secondary px-3 py-2.5">
       <div className="min-w-0 flex-1">
         <div className="truncate text-sm font-semibold text-rc-text-primary">
           {privacyMode ? '会话已隐藏' : session.title}
@@ -239,10 +238,7 @@ function ArchiveTab() {
   return (
     <div className="space-y-5">
       <div>
-        <h3 className="text-base font-semibold text-rc-text-primary">归档会话</h3>
-        <p className="mt-1 text-sm text-rc-text-secondary">
-          归档后的会话不会出现在左侧主树中。恢复时，如果原项目节点已经被移除，会自动补回项目文件夹。
-        </p>
+        <h3 className="text-sm font-semibold text-rc-text-primary">归档会话</h3>
       </div>
 
       {archivedSessions.length > 0 ? (
@@ -259,7 +255,7 @@ function ArchiveTab() {
           ))}
         </div>
       ) : (
-        <div className="rounded-lg border border-dashed border-rc-border-primary px-4 py-6 text-sm text-rc-text-secondary">
+        <div className="rounded-md border border-dashed border-rc-border-primary px-3 py-5 text-sm text-rc-text-secondary">
           当前没有已归档会话。
         </div>
       )}
@@ -359,10 +355,7 @@ function ProviderTab() {
     <div className="space-y-5">
       <div className="flex items-center justify-between">
         <div>
-          <h3 className="text-base font-semibold text-rc-text-primary">已保存的 Provider</h3>
-          <p className="mt-1 text-sm text-rc-text-secondary">
-            这里是会真实持久化的多 Provider 列表。添加后，发送框下方会立刻可以切换。
-          </p>
+          <h3 className="text-sm font-semibold text-rc-text-primary">已保存的 Provider</h3>
         </div>
         <button
           onClick={startAdd}
@@ -388,14 +381,14 @@ function ProviderTab() {
             return (
               <div
                 key={provider.name}
-                className={`rounded-lg border px-4 py-3 ${
+                className={`rounded-md border px-3 py-2.5 ${
                   active ? 'border-rc-border-focus bg-rc-bg-surface' : 'border-rc-border-secondary bg-rc-bg-secondary'
                 }`}
               >
                 <div className="flex items-center gap-3">
                   <button
                     title={active ? '当前激活' : '设为当前'}
-                    className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full border ${
+                    className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-md border ${
                       active ? 'border-rc-accent-primary bg-rc-accent-primary text-white' : 'border-rc-border-primary text-rc-text-secondary'
                     }`}
                     onClick={() => {
@@ -414,8 +407,8 @@ function ProviderTab() {
                         .filter(Boolean)
                         .join(' · ')}
                       {provider.api_key_stored && (
-                        <span className="ml-1.5 inline-flex items-center gap-0.5 rounded-full bg-rc-accent-success-bg px-1.5 py-0.5 text-[10px] font-medium text-rc-accent-success">
-                          🔒 钥匙串
+                        <span className="ml-1.5 inline-flex items-center gap-0.5 rounded bg-rc-accent-success-bg px-1.5 py-0.5 text-[10px] font-medium text-rc-accent-success">
+                          钥匙串
                         </span>
                       )}
                     </div>
@@ -445,7 +438,7 @@ function ProviderTab() {
                     {/* Default (no profile) pill */}
                     <button
                       onClick={() => handleSwitchProfile(provider.name, null)}
-                      className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[11px] font-medium transition-colors ${
+                      className={`inline-flex items-center gap-1 rounded border px-2.5 py-1 text-[11px] font-medium transition-colors ${
                         activeProfile === null
                           ? 'border-rc-accent-primary bg-rc-accent-primary text-white'
                           : 'border-rc-border-primary bg-rc-bg-surface text-rc-text-secondary hover:border-rc-border-hover'
@@ -457,7 +450,7 @@ function ProviderTab() {
                       <button
                         key={profile.name}
                         onClick={() => handleSwitchProfile(provider.name, profile.name)}
-                        className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[11px] font-medium transition-colors ${
+                        className={`inline-flex items-center gap-1 rounded border px-2.5 py-1 text-[11px] font-medium transition-colors ${
                           activeProfile === profile.name
                             ? 'border-rc-accent-primary bg-rc-accent-primary text-white'
                             : 'border-rc-border-primary bg-rc-bg-surface text-rc-text-secondary hover:border-rc-border-hover'
@@ -473,14 +466,14 @@ function ProviderTab() {
             );
           })
         ) : (
-          <div className="rounded-lg border border-dashed border-rc-border-primary px-4 py-6 text-sm text-rc-text-secondary">
-            还没有保存任何 Provider。你可以把 GLM、MiniMax 等端点都保存在这里。
+          <div className="rounded-md border border-dashed border-rc-border-primary px-3 py-5 text-sm text-rc-text-secondary">
+            还没有保存任何 Provider。
           </div>
         )}
       </div>
 
       {editingName && (
-        <div className="space-y-4 rounded-lg border border-rc-border-primary bg-rc-bg-surface p-5">
+        <div className="space-y-4 rounded-md border border-rc-border-primary bg-rc-bg-surface p-4">
           <div className="text-sm font-semibold text-rc-text-primary">{title}</div>
 
           <div className="grid gap-4 sm:grid-cols-2">
@@ -626,10 +619,7 @@ function RuntimeTab({
   return (
     <div className="space-y-6">
       <div>
-        <h3 className="text-base font-semibold text-rc-text-primary">运行参数</h3>
-        <p className="mt-1 text-sm text-rc-text-secondary">
-          这里保留真正影响执行体验的参数。模型本身请直接在发送框下方即时切换。
-        </p>
+        <h3 className="text-sm font-semibold text-rc-text-primary">运行参数</h3>
       </div>
 
       <Field label="权限模式">
@@ -637,7 +627,7 @@ function RuntimeTab({
           {PERMISSION_MODES.map((mode) => (
             <label
               key={mode.value}
-              className={`flex cursor-pointer items-start gap-3 rounded-2xl border px-4 py-3 text-sm ${
+              className={`flex cursor-pointer items-start gap-3 rounded-md border px-3 py-2.5 text-sm ${
                 current.permission_mode === mode.value
                   ? 'border-rc-border-focus bg-rc-bg-surface'
                   : 'border-rc-border-secondary bg-rc-bg-secondary'

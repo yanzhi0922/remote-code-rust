@@ -1,5 +1,6 @@
 import { Cpu, Network, Wifi, WifiOff } from 'lucide-react';
 import { useMemo } from 'react';
+import { formatSensitivePath } from '../../lib/utils';
 import { useAppStore } from '../../stores/useAppStore';
 import { useAgentStore } from '../../stores/useAgentStore';
 
@@ -7,8 +8,10 @@ export function StatusBar() {
   const provider = useAppStore((state) => state.provider);
   const runtimeStatus = useAppStore((state) => state.runtimeStatus);
   const activeSessionId = useAppStore((state) => state.activeSessionId);
+  const activeProjectPath = useAppStore((state) => state.activeProjectPath);
   const sessions = useAppStore((state) => state.sessions);
   const contextUsageBySession = useAppStore((state) => state.contextUsageBySession);
+  const privacyMode = useAppStore((state) => state.workspacePrivacyMode);
   const activeAgentType = useAgentStore((state) => state.activeAgentType);
   const lastPromptResult = useAppStore((state) => state.lastPromptResult);
 
@@ -35,16 +38,20 @@ export function StatusBar() {
     : 'MCP —';
 
   const contextPercent = contextUsage ? Math.round(contextUsage.ratio * 100) : null;
+  const projectLabel = activeProjectPath ? formatSensitivePath(activeProjectPath, privacyMode) : 'No project';
+  const sessionLabel = activeSession ? (privacyMode ? 'Hidden session' : activeSession.title) : 'No session';
 
   return (
     <div className="flex h-status-bar shrink-0 items-center border-t border-rc-border-secondary bg-rc-bg-sidebar px-3 text-[11px] text-rc-text-tertiary select-none">
-      <div className="flex items-center gap-3">
+      <div className="flex min-w-0 items-center gap-3">
         <span className="flex items-center gap-1.5">
           <Cpu size={12} />
           <span className="text-rc-text-secondary">{agentLabel}</span>
         </span>
         <span className="text-rc-text-secondary">{providerName}</span>
         <span className="max-w-[200px] truncate font-mono text-rc-text-tertiary">{modelName}</span>
+        <span className="hidden max-w-[260px] truncate text-rc-text-secondary lg:inline">{projectLabel}</span>
+        <span className="hidden max-w-[220px] truncate xl:inline">{sessionLabel}</span>
       </div>
 
       <div className="flex-1" />
