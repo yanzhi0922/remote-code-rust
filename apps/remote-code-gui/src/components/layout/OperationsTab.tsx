@@ -151,7 +151,7 @@ export function OperationsTab() {
               void runDoctor();
             }}
             disabled={doctorLoading}
-            className="inline-flex items-center gap-2 rounded-md border border-rc-border-primary bg-rc-bg-surface px-4 py-2 text-sm font-medium text-rc-text-primary transition-colors hover:bg-[#faf8f3] disabled:cursor-not-allowed disabled:opacity-60"
+            className="inline-flex items-center gap-2 rounded-md border border-rc-border-primary bg-rc-bg-surface px-4 py-2 text-sm font-medium text-rc-text-primary transition-colors hover:bg-rc-bg-hover disabled:cursor-not-allowed disabled:opacity-60"
           >
             <RefreshCw size={14} className={doctorLoading ? 'animate-spin' : ''} />
             {doctorLoading ? '诊断中…' : '重新诊断'}
@@ -357,7 +357,7 @@ export function OperationsTab() {
             <select
               value={selectedSessionId}
               onChange={(event) => setSelectedSessionId(event.target.value)}
-              className="w-full rounded-md border border-rc-border-primary bg-rc-bg-surface px-3 py-2.5 text-sm outline-none transition-colors focus:border-slate-500"
+              className="w-full rounded-md border border-rc-border-primary bg-rc-bg-surface px-3 py-2.5 text-sm text-rc-text-primary outline-none transition-colors focus:border-rc-border-focus"
             >
               {allSessions.length === 0 ? (
                 <option value="">没有可导出的会话</option>
@@ -376,7 +376,7 @@ export function OperationsTab() {
             <select
               value={exportFormat}
               onChange={(event) => setExportFormat(event.target.value as SessionExportFormat)}
-              className="w-full rounded-md border border-rc-border-primary bg-rc-bg-surface px-3 py-2.5 text-sm outline-none transition-colors focus:border-slate-500"
+              className="w-full rounded-md border border-rc-border-primary bg-rc-bg-surface px-3 py-2.5 text-sm text-rc-text-primary outline-none transition-colors focus:border-rc-border-focus"
             >
               {EXPORT_FORMATS.map((format) => (
                 <option key={format.value} value={format.value}>

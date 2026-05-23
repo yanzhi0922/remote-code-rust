@@ -83,6 +83,7 @@ describe('ChatInput', () => {
     render(<ChatInput />);
 
     expect(screen.getByRole('form', { name: 'Prompt composer' })).toBeInTheDocument();
+    expect(screen.getByRole('group', { name: 'Composer controls' })).toBeInTheDocument();
 
     const textarea = screen.getByPlaceholderText('向 agent 发送指令或代码片段');
 
@@ -144,7 +145,7 @@ describe('ChatInput', () => {
       expect(updateSettings).toHaveBeenCalledWith({ permission_mode: 'bypassPermissions' });
     });
 
-    const modelInput = screen.getByPlaceholderText('设置模型');
+    const modelInput = screen.getByLabelText('Model for next send');
     fireEvent.change(modelInput, { target: { value: 'glm-5v-turbo' } });
     fireEvent.blur(modelInput);
 

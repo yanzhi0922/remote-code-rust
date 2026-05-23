@@ -392,7 +392,11 @@ export function McpTab() {
         )}
       </section>
 
-      <section className="space-y-4 rounded-md border border-rc-border-primary bg-rc-bg-surface p-4">
+      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_340px]">
+        <section
+          aria-label="MCP server editor"
+          className="space-y-3 rounded-md border border-rc-border-primary bg-rc-bg-surface p-3.5"
+        >
         <div className="flex items-center justify-between gap-3">
           <div>
             <div className="text-sm font-semibold text-rc-text-primary">新增 / 更新 MCP Server</div>
@@ -406,13 +410,13 @@ export function McpTab() {
           </button>
         </div>
 
-        <div className="grid gap-4 md:grid-cols-2">
+        <div className="grid gap-3 md:grid-cols-2">
           <label className="space-y-1.5">
             <span className="block text-sm font-medium text-rc-text-primary">名称</span>
             <input
               value={form.name}
               onChange={(event) => setForm((state) => ({ ...state, name: event.target.value }))}
-              className="w-full rounded-md border border-rc-border-primary bg-rc-bg-secondary px-3 py-2.5 text-sm outline-none transition-colors focus:border-slate-500"
+              className="w-full rounded-md border border-rc-border-primary bg-rc-bg-secondary px-3 py-2.5 text-sm text-rc-text-primary outline-none transition-colors focus:border-rc-border-focus"
               placeholder="filesystem"
             />
           </label>
@@ -427,7 +431,7 @@ export function McpTab() {
                   transport: event.target.value as McpFormState['transport'],
                 }))
               }
-              className="w-full rounded-md border border-rc-border-primary bg-rc-bg-secondary px-3 py-2.5 text-sm outline-none transition-colors focus:border-slate-500"
+              className="w-full rounded-md border border-rc-border-primary bg-rc-bg-secondary px-3 py-2.5 text-sm text-rc-text-primary outline-none transition-colors focus:border-rc-border-focus"
             >
               <option value="stdio">stdio</option>
               <option value="http">http</option>
@@ -442,7 +446,7 @@ export function McpTab() {
                 <input
                   value={form.command}
                   onChange={(event) => setForm((state) => ({ ...state, command: event.target.value }))}
-                  className="w-full rounded-md border border-rc-border-primary bg-rc-bg-secondary px-3 py-2.5 text-sm outline-none transition-colors focus:border-slate-500"
+                  className="w-full rounded-md border border-rc-border-primary bg-rc-bg-secondary px-3 py-2.5 text-sm text-rc-text-primary outline-none transition-colors focus:border-rc-border-focus"
                   placeholder="python"
                 />
               </label>
@@ -452,7 +456,7 @@ export function McpTab() {
                 <input
                   value={form.cwd}
                   onChange={(event) => setForm((state) => ({ ...state, cwd: event.target.value }))}
-                  className="w-full rounded-md border border-rc-border-primary bg-rc-bg-secondary px-3 py-2.5 text-sm outline-none transition-colors focus:border-slate-500"
+                  className="w-full rounded-md border border-rc-border-primary bg-rc-bg-secondary px-3 py-2.5 text-sm text-rc-text-primary outline-none transition-colors focus:border-rc-border-focus"
                   placeholder="C:\\workspace\\mcp-server"
                 />
               </label>
@@ -464,7 +468,7 @@ export function McpTab() {
                 <input
                   value={form.url}
                   onChange={(event) => setForm((state) => ({ ...state, url: event.target.value }))}
-                  className="w-full rounded-md border border-rc-border-primary bg-rc-bg-secondary px-3 py-2.5 text-sm outline-none transition-colors focus:border-slate-500"
+                  className="w-full rounded-md border border-rc-border-primary bg-rc-bg-secondary px-3 py-2.5 text-sm text-rc-text-primary outline-none transition-colors focus:border-rc-border-focus"
                   placeholder="https://example.com/mcp"
                 />
               </label>
@@ -476,8 +480,8 @@ export function McpTab() {
             <textarea
               value={form.argsText}
               onChange={(event) => setForm((state) => ({ ...state, argsText: event.target.value }))}
-              rows={3}
-              className="w-full rounded-md border border-rc-border-primary bg-rc-bg-secondary px-3 py-2.5 text-sm outline-none transition-colors focus:border-slate-500"
+              rows={2}
+              className="w-full rounded-md border border-rc-border-primary bg-rc-bg-secondary px-3 py-2.5 text-sm text-rc-text-primary outline-none transition-colors focus:border-rc-border-focus"
               placeholder={form.transport === 'stdio' ? 'server.py\n--port\n3000' : '可留空'}
             />
           </label>
@@ -495,8 +499,8 @@ export function McpTab() {
                     : { ...state, headersText: event.target.value },
                 )
               }
-              rows={4}
-              className="w-full rounded-md border border-rc-border-primary bg-rc-bg-secondary px-3 py-2.5 text-sm outline-none transition-colors focus:border-slate-500"
+              rows={3}
+              className="w-full rounded-md border border-rc-border-primary bg-rc-bg-secondary px-3 py-2.5 text-sm text-rc-text-primary outline-none transition-colors focus:border-rc-border-focus"
               placeholder={form.transport === 'stdio' ? 'TOKEN=secret' : 'Authorization=Bearer token'}
             />
           </label>
@@ -506,8 +510,8 @@ export function McpTab() {
             <textarea
               value={form.metadataText}
               onChange={(event) => setForm((state) => ({ ...state, metadataText: event.target.value }))}
-              rows={4}
-              className="w-full rounded-md border border-rc-border-primary bg-rc-bg-secondary px-3 py-2.5 text-sm outline-none transition-colors focus:border-slate-500"
+              rows={3}
+              className="w-full rounded-md border border-rc-border-primary bg-rc-bg-secondary px-3 py-2.5 text-sm text-rc-text-primary outline-none transition-colors focus:border-rc-border-focus"
               placeholder="scope=workspace"
             />
           </label>
@@ -517,7 +521,7 @@ export function McpTab() {
             <input
               value={form.startupTimeout}
               onChange={(event) => setForm((state) => ({ ...state, startupTimeout: event.target.value }))}
-              className="w-full rounded-md border border-rc-border-primary bg-rc-bg-secondary px-3 py-2.5 text-sm outline-none transition-colors focus:border-slate-500"
+              className="w-full rounded-md border border-rc-border-primary bg-rc-bg-secondary px-3 py-2.5 text-sm text-rc-text-primary outline-none transition-colors focus:border-rc-border-focus"
               placeholder="10"
             />
           </label>
@@ -527,7 +531,7 @@ export function McpTab() {
             <input
               value={form.requestTimeout}
               onChange={(event) => setForm((state) => ({ ...state, requestTimeout: event.target.value }))}
-              className="w-full rounded-md border border-rc-border-primary bg-rc-bg-secondary px-3 py-2.5 text-sm outline-none transition-colors focus:border-slate-500"
+              className="w-full rounded-md border border-rc-border-primary bg-rc-bg-secondary px-3 py-2.5 text-sm text-rc-text-primary outline-none transition-colors focus:border-rc-border-focus"
               placeholder="15"
             />
           </label>
@@ -542,7 +546,7 @@ export function McpTab() {
           <span>保存后默认禁用</span>
         </label>
 
-        <div className="flex flex-wrap items-center gap-3">
+        <div className="flex flex-wrap items-center gap-2">
           <button
             onClick={() => {
               void saveServer();
@@ -571,7 +575,8 @@ export function McpTab() {
         </div>
       </section>
 
-      <section className="space-y-3" aria-label="Runtime MCP inventory">
+        <div className="space-y-4">
+          <section className="space-y-3" aria-label="Runtime MCP inventory">
         <div className="flex items-center gap-2 text-sm font-semibold text-rc-text-primary">
           <Cable size={15} />
           Runtime-discovered inventory ({runtimeServers.length})
@@ -759,6 +764,8 @@ export function McpTab() {
           </div>
         )}
       </section>
+      </div>
+      </div>
     </div>
   );
 }

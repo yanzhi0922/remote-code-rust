@@ -56,6 +56,7 @@ describe('McpTab', () => {
       expect(screen.getByText('Managed servers (1)')).toBeInTheDocument();
     });
 
+    expect(screen.getByRole('region', { name: 'MCP server editor' })).toBeInTheDocument();
     expect(screen.getByRole('region', { name: 'Runtime MCP inventory' })).toBeInTheDocument();
     expect(screen.getByText('filesystem')).toBeInTheDocument();
     expect(

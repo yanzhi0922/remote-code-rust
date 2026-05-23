@@ -15,7 +15,7 @@ function Metric({
 }) {
   return (
     <div className="border-r border-rc-border-secondary px-4 py-3 last:border-r-0">
-      <div className="text-[10px] font-semibold uppercase tracking-[0.08em] text-rc-text-tertiary">
+      <div className="text-[10px] font-semibold uppercase text-rc-text-tertiary">
         {label}
       </div>
       <div className="mt-1 text-sm font-semibold text-rc-text-primary">{value}</div>
@@ -76,7 +76,7 @@ export function WorkspaceOverview() {
 
           <div className="mt-5 grid gap-5 lg:grid-cols-[1.2fr_0.8fr]">
             <section className="rounded-md border border-rc-border-secondary bg-rc-bg-surface">
-              <div className="flex items-center gap-2 border-b border-rc-border-secondary px-3 py-2 text-xs font-semibold uppercase tracking-[0.08em] text-rc-text-tertiary">
+              <div className="flex items-center gap-2 border-b border-rc-border-secondary px-3 py-2 text-xs font-semibold uppercase text-rc-text-tertiary">
                 <MessageSquareText size={13} />
                 Recent Sessions
               </div>
@@ -100,7 +100,7 @@ export function WorkspaceOverview() {
             </section>
 
             <section className="rounded-md border border-rc-border-secondary bg-rc-bg-surface">
-              <div className="flex items-center gap-2 border-b border-rc-border-secondary px-3 py-2 text-xs font-semibold uppercase tracking-[0.08em] text-rc-text-tertiary">
+              <div className="flex items-center gap-2 border-b border-rc-border-secondary px-3 py-2 text-xs font-semibold uppercase text-rc-text-tertiary">
                 <FolderGit2 size={13} />
                 Active Project
               </div>

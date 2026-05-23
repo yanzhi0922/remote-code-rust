@@ -42,9 +42,11 @@ describe('layout SettingsPanel', () => {
 
     render(<SettingsPanel open onClose={vi.fn()} />);
     expect(screen.getByRole('dialog', { name: 'Settings' })).toBeInTheDocument();
+    expect(screen.getByRole('tablist', { name: 'Settings sections' })).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Codex' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Codex' }));
 
+    expect(screen.getByRole('tab', { name: 'Codex' })).toHaveAttribute('aria-selected', 'true');
     expect(screen.getByTestId('codex-settings')).toBeInTheDocument();
     expect(screen.getByText('Codex 原生设置')).toBeInTheDocument();
   });
@@ -54,7 +56,7 @@ describe('layout SettingsPanel', () => {
     resetAppStore({ settings: mockSettings, updateSettings });
 
     render(<SettingsPanel open onClose={vi.fn()} />);
-    fireEvent.click(screen.getByRole('button', { name: 'Codex' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Codex' }));
     fireEvent.change(screen.getByTestId('codex-approval-policy'), {
       target: { value: 'on-request' },
     });

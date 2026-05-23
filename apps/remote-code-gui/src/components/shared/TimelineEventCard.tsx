@@ -35,9 +35,9 @@ export function TimelineEventCard({
   children,
 }: TimelineEventCardProps) {
   return (
-    <div className="rounded-3xl border border-rc-border-primary bg-rc-bg-surface px-5 py-4 shadow-[0_14px_32px_rgba(34,32,28,0.06)]">
+    <div className="rounded-md border border-rc-border-primary bg-rc-bg-surface px-4 py-3 shadow-sm">
       <div className="mb-3 flex items-center justify-between gap-3">
-        <div className={`inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.22em] ${accent}`}>
+        <div className={`inline-flex items-center gap-2 text-xs font-semibold uppercase ${accent}`}>
           {icon}
           {eyebrow}
         </div>

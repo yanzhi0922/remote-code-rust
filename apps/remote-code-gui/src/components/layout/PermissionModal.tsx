@@ -251,22 +251,22 @@ export function PermissionModal() {
 
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center bg-rc-bg-overlay p-4">
-      <div className="w-full max-w-2xl rounded-lg border border-rc-border-primary bg-rc-bg-surface shadow-lg">
-        <div className="border-b border-rc-border-secondary px-6 py-5">
+      <div className="w-full max-w-2xl overflow-hidden rounded-md border border-rc-border-primary bg-rc-bg-surface shadow-md">
+        <div className="border-b border-rc-border-secondary px-5 py-4">
           <div className="flex items-center gap-3">
-            <div className="flex h-11 w-11 items-center justify-center rounded-lg bg-rc-accent-error-bg text-rc-accent-error">
-              <ShieldAlert size={20} />
+            <div className="flex h-9 w-9 items-center justify-center rounded-md bg-rc-accent-error-bg text-rc-accent-error">
+              <ShieldAlert size={18} />
             </div>
             <div>
-              <div className="text-lg font-semibold text-rc-text-primary">权限确认</div>
-              <div className="mt-1 text-sm text-rc-text-secondary">
+              <div className="text-sm font-semibold text-rc-text-primary">权限确认</div>
+              <div className="mt-1 text-xs text-rc-text-secondary">
                 GUI 已收到一个需要人工确认的工具调用。
               </div>
             </div>
           </div>
         </div>
 
-        <div className="space-y-4 px-6 py-5">
+        <div className="space-y-4 px-5 py-4">
           <div>
             <div className="text-sm font-medium text-rc-text-primary">工具</div>
             <div className="mt-1 text-sm text-rc-text-secondary">{pendingPermission.tool_name}</div>

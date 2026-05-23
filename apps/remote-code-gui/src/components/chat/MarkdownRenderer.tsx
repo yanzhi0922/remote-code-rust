@@ -62,7 +62,7 @@ const MarkdownRenderer = memo(function MarkdownRenderer({ content }: MarkdownRen
           <CollapsibleBlock
             summary={
               <div className="flex min-w-0 items-center gap-2">
-                <span className="text-xs font-semibold uppercase tracking-[0.16em] text-rc-text-tertiary">
+                <span className="text-xs font-semibold uppercase text-rc-text-tertiary">
                   {summary.label}
                 </span>
                 <span className="truncate text-sm text-rc-text-secondary">{summary.preview}</span>

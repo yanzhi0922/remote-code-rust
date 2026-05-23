@@ -83,8 +83,9 @@ function Chip({
 }) {
   return (
     <button
+      type="button"
       onClick={onClick}
-      className={`inline-flex items-center gap-1.5 rounded border px-2 py-1 text-xs transition-colors ${
+      className={`inline-flex h-7 items-center gap-1.5 rounded-md border px-2 text-xs transition-colors ${
         active
           ? 'border-rc-accent-primary bg-rc-bg-selected text-rc-accent-primary'
           : 'border-rc-border-primary bg-rc-bg-surface text-rc-text-secondary hover:border-rc-border-hover hover:bg-rc-bg-hover hover:text-rc-text-primary'
@@ -165,10 +166,10 @@ export function ChatInput() {
   };
 
   return (
-    <div role="form" aria-label="Prompt composer" className="bg-rc-bg-chat px-5 pb-5 pt-2">
-      <div className="mx-auto w-full max-w-[900px]">
-        <div className="rounded-lg border border-rc-border-primary bg-rc-bg-surface shadow-lg focus-within:border-rc-border-focus">
-          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-rc-border-secondary px-2.5 py-1.5">
+    <div role="form" aria-label="Prompt composer" className="bg-rc-bg-chat px-5 pb-4 pt-2">
+      <div className="mx-auto w-full max-w-[880px]">
+        <div className="rounded-md border border-rc-border-primary bg-rc-bg-surface shadow-sm focus-within:border-rc-border-focus">
+          <div className="flex min-h-9 flex-wrap items-center justify-between gap-2 border-b border-rc-border-secondary px-2.5 py-1.5">
             {activeSession ? (
               <div className="inline-flex max-w-full items-center gap-2 rounded px-2 py-1 text-xs text-rc-text-secondary">
                 <MessageSquareText size={14} className="text-rc-text-tertiary" />
@@ -225,7 +226,7 @@ export function ChatInput() {
             </div>
           </div>
 
-          <div className="flex items-end gap-2 px-3 py-2.5">
+          <div className="flex items-end gap-2 px-3 py-2">
             <textarea
               ref={textAreaRef}
               value={input}
@@ -235,8 +236,9 @@ export function ChatInput() {
               }}
               disabled={sending}
               rows={1}
+              aria-label="Prompt input"
               placeholder="向 agent 发送指令或代码片段"
-              className="min-h-[52px] flex-1 resize-none bg-transparent px-1 py-1 text-sm leading-6 text-rc-text-primary outline-none placeholder:text-rc-text-tertiary disabled:cursor-not-allowed"
+              className="min-h-[48px] flex-1 resize-none bg-transparent px-1 py-1 text-sm leading-6 text-rc-text-primary outline-none placeholder:text-rc-text-tertiary disabled:cursor-not-allowed"
             />
 
             {sending && activeSessionId && (
@@ -271,8 +273,8 @@ export function ChatInput() {
           </div>
 
           <div className="border-t border-rc-border-secondary px-2.5 py-1.5">
-            <div className="flex flex-wrap items-center gap-2">
-              <div className="inline-flex min-w-0 items-center gap-2 rounded border border-rc-border-primary bg-rc-bg-surface px-2 py-1 text-xs text-rc-text-secondary transition-colors hover:border-rc-border-hover">
+            <div role="group" aria-label="Composer controls" className="flex flex-wrap items-center gap-2">
+              <div className="inline-flex h-7 min-w-0 items-center gap-2 rounded-md border border-rc-border-primary bg-rc-bg-secondary px-2 text-xs text-rc-text-secondary transition-colors hover:border-rc-border-hover">
                 <Sparkles size={14} className="text-rc-text-tertiary" />
                 <input
                   value={modelDraft}
@@ -286,7 +288,8 @@ export function ChatInput() {
                       void commitModelDraft();
                     }
                   }}
-                  className="w-[200px] min-w-0 bg-transparent text-xs text-rc-text-primary outline-none placeholder:text-rc-text-tertiary"
+                  aria-label="Model for next send"
+                  className="w-[180px] min-w-0 bg-transparent text-xs text-rc-text-primary outline-none placeholder:text-rc-text-tertiary"
                   placeholder="设置模型"
                   title="为下一次发送设置模型"
                 />

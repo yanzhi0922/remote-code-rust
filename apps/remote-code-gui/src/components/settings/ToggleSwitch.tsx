@@ -25,15 +25,15 @@ export function ToggleSwitch({ checked, onChange, label, description, disabled =
         disabled={disabled}
         onClick={() => onChange(!checked)}
         className={clsx(
-          'relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2',
+          'relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border border-transparent transition-colors duration-150 ease-in-out focus:outline-none focus:ring-1 focus:ring-rc-border-focus',
           checked ? 'bg-rc-accent-primary' : 'bg-rc-bg-tertiary',
           disabled && 'cursor-not-allowed opacity-50',
         )}
       >
         <span
           className={clsx(
-            'pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out',
-            checked ? 'translate-x-5' : 'translate-x-0',
+            'pointer-events-none inline-block h-[18px] w-[18px] transform rounded-full bg-rc-bg-surface shadow-xs ring-0 transition duration-150 ease-in-out',
+            checked ? 'translate-x-4' : 'translate-x-0',
           )}
         />
       </button>

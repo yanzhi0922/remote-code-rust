@@ -63,7 +63,7 @@ export function ApprovalPanel({
   privacyMode = false,
 }: ApprovalPanelProps) {
   return (
-    <section className="rounded-3xl border border-rc-border-primary bg-rc-bg-surface px-4 py-4 shadow-[0_12px_30px_rgba(34,32,28,0.06)]">
+    <section className="rounded-md border border-rc-border-primary bg-rc-bg-surface px-4 py-4 shadow-sm">
       {!hideTitle && (
         <div className="flex items-center gap-2 text-sm font-semibold text-rc-text-primary">
           {icon}
@@ -77,14 +77,14 @@ export function ApprovalPanel({
           items.map((approval) => (
             <div
               key={approval.approval_id}
-              className="rounded-2xl border border-rc-border-primary bg-rc-bg-hover px-3 py-3"
+              className="rounded-md border border-rc-border-primary bg-rc-bg-hover px-3 py-3"
             >
               <div className="text-sm font-medium text-rc-text-primary">{approval.title}</div>
               <div className="mt-1 text-sm leading-6 text-rc-text-secondary">
                 {approval.description}
               </div>
               {approval.metadata.blocked_path && (
-                <div className="mt-2 rounded-xl bg-rc-bg-surface px-3 py-2 font-mono text-xs text-rc-text-tertiary">
+                <div className="mt-2 rounded-md bg-rc-bg-surface px-3 py-2 font-mono text-xs text-rc-text-tertiary">
                   {formatSensitivePath(approval.metadata.blocked_path, privacyMode, 56)}
                 </div>
               )}
@@ -97,7 +97,7 @@ export function ApprovalPanel({
                       onDecision(approval.approval_id, item.decision);
                     }}
                     disabled={approvingId === approval.approval_id}
-                    className={`rounded-full px-3 py-1.5 text-sm transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${item.className}`}
+                    className={`rounded-md px-3 py-1.5 text-sm transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${item.className}`}
                   >
                     {approvingId === approval.approval_id ? (
                       <span className="inline-flex items-center gap-2">

@@ -233,7 +233,7 @@ function SessionRow({
     <div className="space-y-1">
       <div
         className={cn(
-          'group mx-2 flex items-start gap-2 rounded-lg px-2.5 py-2 transition-colors duration-150',
+          'group mx-2 flex items-start gap-2 rounded-md px-2.5 py-2 transition-colors duration-150',
           active
             ? 'bg-rc-bg-active'
             : 'border border-transparent hover:bg-rc-bg-hover',
@@ -390,7 +390,7 @@ export function Sidebar() {
           onChange={(event) => setSearchQuery(event.target.value)}
           aria-label="搜索项目和会话"
           placeholder="搜索项目或会话"
-        className="h-8 w-full rounded-lg border border-transparent bg-rc-bg-tertiary pl-7 pr-7 text-xs text-rc-text-primary outline-none transition-colors placeholder:text-rc-text-tertiary focus:border-rc-border-focus"
+          className="h-8 w-full rounded-md border border-transparent bg-rc-bg-tertiary pl-7 pr-7 text-xs text-rc-text-primary outline-none transition-colors placeholder:text-rc-text-tertiary focus:border-rc-border-focus"
         />
         {searchQuery && (
           <button
@@ -408,13 +408,14 @@ export function Sidebar() {
       <div className="flex items-center gap-1 border-b border-rc-border-secondary px-2 py-1.5">
         <button
           onClick={() => { void pickFolderAndAddProject(); }}
+          aria-label="Add Project"
           className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs text-rc-text-secondary transition-colors hover:bg-rc-bg-hover hover:text-rc-text-primary"
         >
           <FolderPlus size={13} />
           Add Project
         </button>
         <div className="flex-1" />
-        <span className="text-[10px] uppercase tracking-[0.08em] text-rc-text-tertiary">{projects.length} projects</span>
+        <span className="text-[10px] uppercase text-rc-text-tertiary">{projects.length} projects</span>
       </div>
 
       {/* Content */}
@@ -446,7 +447,7 @@ export function Sidebar() {
                   <div key={project.path}>
                     <div
                       className={cn(
-                        'group mx-2 flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs transition-colors',
+                        'group mx-2 flex items-center gap-1 rounded-md px-2 py-1.5 text-xs transition-colors',
                         active ? 'bg-rc-bg-active text-rc-text-primary' : 'text-rc-text-secondary hover:bg-rc-bg-hover',
                       )}
                     >

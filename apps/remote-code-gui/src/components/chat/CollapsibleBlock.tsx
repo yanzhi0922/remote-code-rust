@@ -6,6 +6,7 @@ interface CollapsibleBlockProps {
   summary: React.ReactNode;
   children: React.ReactNode;
   defaultOpen?: boolean;
+  buttonLabel?: string;
   iconColor?: string;
   className?: string;
   contentClassName?: string;
@@ -15,6 +16,7 @@ export default function CollapsibleBlock({
   summary,
   children,
   defaultOpen = false,
+  buttonLabel,
   iconColor = 'text-rc-text-tertiary',
   className,
   contentClassName,
@@ -25,6 +27,8 @@ export default function CollapsibleBlock({
     <div className={cn('overflow-hidden rounded-md border border-rc-border-secondary bg-rc-bg-secondary', className)}>
       <button
         type="button"
+        aria-expanded={isOpen}
+        aria-label={buttonLabel}
         className="flex w-full items-center gap-2 px-3 py-2 text-left transition-colors hover:bg-rc-bg-hover"
         onClick={() => setIsOpen((state) => !state)}
       >

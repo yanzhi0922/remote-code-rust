@@ -25,21 +25,21 @@ export function SettingInput({
 
   return (
     <div className="space-y-1.5">
-      <label className="block text-sm font-medium text-slate-700">{label}</label>
+      <label className="block text-sm font-medium text-rc-text-primary">{label}</label>
       <div className="relative">
         <input
           type={inputType}
           value={value}
           onChange={(e) => onChange(e.target.value)}
           placeholder={placeholder}
-          className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800 placeholder:text-slate-400 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+          className="w-full rounded-md border border-rc-border-primary bg-rc-bg-secondary px-3 py-2 text-sm text-rc-text-primary placeholder:text-rc-text-tertiary focus:border-rc-border-focus focus:outline-none"
           data-testid="setting-input"
         />
         {isPassword && (
           <button
             type="button"
             onClick={() => setShowPassword((prev) => !prev)}
-            className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+            className="absolute right-2 top-1/2 -translate-y-1/2 text-rc-text-tertiary hover:text-rc-text-primary"
             aria-label={showPassword ? '隐藏密码' : '显示密码'}
             data-testid="toggle-password"
           >
@@ -47,7 +47,7 @@ export function SettingInput({
           </button>
         )}
       </div>
-      {description && <p className="text-xs text-slate-500">{description}</p>}
+      {description && <p className="text-xs leading-5 text-rc-text-tertiary">{description}</p>}
     </div>
   );
 }

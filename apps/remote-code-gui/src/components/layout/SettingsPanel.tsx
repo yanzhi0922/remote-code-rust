@@ -120,16 +120,16 @@ export function SettingsPanel({ open, onClose, initialTab = 'provider' }: Settin
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-rc-bg-overlay p-4 backdrop-blur-[3px]">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-rc-bg-overlay p-4">
       <div
         role="dialog"
         aria-modal="true"
         aria-label="Settings"
-        className="flex max-h-[90vh] w-full max-w-6xl flex-col overflow-hidden rounded-lg border border-rc-border-primary bg-rc-bg-surface shadow-2xl"
+        className="flex max-h-[90vh] w-full max-w-[1160px] flex-col overflow-hidden rounded-md border border-rc-border-primary bg-rc-bg-surface shadow-xl"
       >
-        <div className="flex items-center justify-between border-b border-rc-border-primary px-5 py-3">
+        <div className="flex items-center justify-between border-b border-rc-border-primary px-4 py-2.5">
           <div>
-            <h2 className="text-sm font-semibold uppercase tracking-[0.08em] text-rc-text-secondary">Settings</h2>
+            <h2 className="text-sm font-semibold uppercase text-rc-text-secondary">Settings</h2>
           </div>
           <button
             onClick={onClose}
@@ -140,17 +140,22 @@ export function SettingsPanel({ open, onClose, initialTab = 'provider' }: Settin
           </button>
         </div>
 
-        <div className="grid min-h-0 flex-1 grid-cols-[190px_1fr]">
-          <div className="border-r border-rc-border-primary bg-rc-bg-secondary p-3">
-            <div className="space-y-1">
+        <div className="grid min-h-0 flex-1 grid-cols-[176px_minmax(0,1fr)]">
+          <div className="border-r border-rc-border-primary bg-rc-bg-secondary p-2.5">
+            <div role="tablist" aria-label="Settings sections" className="space-y-1">
               {TABS.map((tab) => {
                 const Icon = tab.icon;
+                const selected = activeTab === tab.key;
                 return (
                   <button
                     key={tab.key}
+                    id={`settings-tab-${tab.key}`}
+                    role="tab"
+                    aria-selected={selected}
+                    aria-controls={`settings-panel-${tab.key}`}
                     onClick={() => setActiveTab(tab.key)}
-                    className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-xs font-medium transition-colors ${
-                      activeTab === tab.key
+                    className={`flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs font-medium transition-colors ${
+                      selected
                         ? 'bg-rc-bg-active text-rc-text-primary'
                         : 'text-rc-text-secondary hover:bg-rc-bg-hover hover:text-rc-text-primary'
                     }`}
@@ -163,7 +168,12 @@ export function SettingsPanel({ open, onClose, initialTab = 'provider' }: Settin
             </div>
           </div>
 
-          <div className="min-h-0 overflow-y-auto px-5 py-5">
+          <div
+            id={`settings-panel-${activeTab}`}
+            role="tabpanel"
+            aria-labelledby={`settings-tab-${activeTab}`}
+            className="min-h-0 overflow-y-auto px-5 py-5"
+          >
             {!settings ? (
               <div className="py-10 text-sm text-rc-text-secondary">正在加载设置…</div>
             ) : activeTab === 'provider' ? (

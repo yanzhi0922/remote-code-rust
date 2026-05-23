@@ -650,13 +650,13 @@ export function CodexOperationsPanel() {
 
   return (
     <div className="space-y-6" data-testid="codex-operations">
-      <div className="rounded-[32px] border border-[#d8cfbf] bg-rc-accent-primary px-5 py-5 text-white">
+      <div className="rounded-md border border-rc-border-focus bg-rc-accent-primary px-4 py-4 text-white shadow-sm">
         <div className="flex items-start gap-3">
           <div className="rounded-md bg-rc-bg-surface/10 p-2">
             <TerminalSquare size={20} />
           </div>
           <div>
-            <h2 className="text-lg font-semibold">Codex Native Control Surface</h2>
+            <h2 className="text-base font-semibold">Codex Native Control Surface</h2>
             <p className="mt-1 text-sm text-white/70">
               Typed front-end entries for official Codex app-server operations, with a guarded raw escape hatch for new or experimental methods.
             </p>
@@ -714,15 +714,15 @@ export function CodexOperationsPanel() {
                   }}
                   className={`w-full rounded-md border px-4 py-3 text-left transition-colors ${
                     selectedThreadId === thread.id
-                      ? 'border-slate-800 bg-[#f4efe5]'
-                      : 'border-rc-border-primary bg-rc-bg-surface hover:bg-[#faf8f3]'
+                      ? 'border-rc-border-focus bg-rc-bg-active'
+                      : 'border-rc-border-primary bg-rc-bg-surface hover:bg-rc-bg-hover'
                   }`}
                 >
                   <div className="truncate text-sm font-semibold text-rc-text-primary">
                     {thread.name || thread.preview || thread.id}
                   </div>
                   <div className="mt-1 truncate text-xs text-rc-text-tertiary">{thread.id}</div>
-                  <div className="mt-1 text-xs text-slate-400">
+                  <div className="mt-1 text-xs text-rc-text-tertiary">
                     {thread.modelProvider ?? 'provider'} · {formatTime(thread.updatedAt)}
                   </div>
                 </button>
@@ -743,7 +743,7 @@ export function CodexOperationsPanel() {
                   type="button"
                   onClick={() => void operateThread(action)}
                   disabled={!selectedThreadId || busy === action}
-                  className="w-full rounded-md border border-rc-border-primary bg-rc-bg-surface px-3 py-2 text-sm font-medium text-rc-text-primary hover:bg-[#faf8f3] disabled:opacity-60"
+                  className="w-full rounded-md border border-rc-border-primary bg-rc-bg-surface px-3 py-2 text-sm font-medium text-rc-text-primary hover:bg-rc-bg-hover disabled:opacity-60"
                 >
                   {action}
                 </button>
@@ -932,7 +932,7 @@ export function CodexOperationsPanel() {
           </div>
         </div>
 
-        <div className="space-y-3 rounded-3xl border border-[#eee5d6] bg-[#fbf8f0] p-4">
+        <div className="space-y-3 rounded-md border border-rc-border-primary bg-rc-bg-secondary p-4">
           <div className="text-sm font-semibold text-rc-text-primary">Threads and turns</div>
           <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
             <input
@@ -959,7 +959,7 @@ export function CodexOperationsPanel() {
           </div>
         </div>
 
-        <div className="space-y-3 rounded-3xl border border-[#eee5d6] bg-rc-bg-surface p-4">
+        <div className="space-y-3 rounded-md border border-rc-border-primary bg-rc-bg-surface p-4">
           <div className="text-sm font-semibold text-rc-text-primary">Account, config, and setup</div>
           <div className="flex flex-wrap gap-3">
             <button type="button" onClick={() => void nativeAccountAction('login')} className="rounded-md bg-rc-accent-primary px-4 py-2 text-sm font-medium text-white">Account login</button>
@@ -972,7 +972,7 @@ export function CodexOperationsPanel() {
           </div>
         </div>
 
-        <div className="space-y-3 rounded-3xl border border-[#eee5d6] bg-[#fbf8f0] p-4">
+        <div className="space-y-3 rounded-md border border-rc-border-primary bg-rc-bg-secondary p-4">
           <div className="text-sm font-semibold text-rc-text-primary">Filesystem and fuzzy search</div>
           <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
             <input value={nativeFsPath} onChange={(event) => setNativeFsPath(event.target.value)} placeholder="FS path or fuzzy cwd" className="rounded-md border border-rc-border-primary px-3 py-2 text-sm" />
@@ -997,7 +997,7 @@ export function CodexOperationsPanel() {
           </div>
         </div>
 
-        <div className="space-y-3 rounded-3xl border border-[#eee5d6] bg-rc-bg-surface p-4">
+        <div className="space-y-3 rounded-md border border-rc-border-primary bg-rc-bg-surface p-4">
           <div className="text-sm font-semibold text-rc-text-primary">Realtime</div>
           <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_460px]">
             <input value={nativeRealtimeText} onChange={(event) => setNativeRealtimeText(event.target.value)} placeholder="Realtime text or turn prompt" className="rounded-md border border-rc-border-primary px-3 py-2 text-sm" />

@@ -40,7 +40,7 @@ function InspectorSection({
 }) {
   return (
     <section className="border-b border-rc-border-secondary px-4 py-3.5 last:border-b-0">
-      <div className="mb-2 flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.08em] text-rc-text-tertiary">
+      <div className="mb-2 flex items-center gap-2 text-[10px] font-semibold uppercase text-rc-text-tertiary">
         <Icon size={13} />
         {title}
       </div>

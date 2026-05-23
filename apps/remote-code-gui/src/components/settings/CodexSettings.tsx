@@ -56,10 +56,10 @@ export function CodexSettings({ settings, onUpdate }: CodexSettingsProps) {
   );
 
   return (
-    <div className="space-y-6" data-testid="codex-settings">
+    <div className="space-y-5" data-testid="codex-settings">
       <div>
-        <h3 className="text-lg font-semibold text-slate-800">Codex 原生设置</h3>
-        <p className="mt-1 text-sm text-slate-500">
+        <h3 className="text-sm font-semibold text-rc-text-primary">Codex 原生设置</h3>
+        <p className="mt-1 text-xs leading-5 text-rc-text-tertiary">
           这些设置会透传到官方 Codex Config/App Server。留空表示使用 GUI 的通用 Provider/权限映射。
         </p>
       </div>
@@ -74,13 +74,13 @@ export function CodexSettings({ settings, onUpdate }: CodexSettingsProps) {
 
       <div className="grid gap-4 md:grid-cols-2">
         <div className="space-y-1.5">
-          <label className="block text-sm font-medium text-slate-700">Approval policy</label>
+          <label className="block text-sm font-medium text-rc-text-primary">Approval policy</label>
           <select
             value={settings.codex_approval_policy ?? ''}
             onChange={(event) =>
               onUpdate({ codex_approval_policy: event.target.value || null })
             }
-            className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+            className="w-full rounded-md border border-rc-border-primary bg-rc-bg-secondary px-3 py-2 text-sm text-rc-text-primary focus:border-rc-border-focus focus:outline-none"
             data-testid="codex-approval-policy"
           >
             {APPROVAL_POLICIES.map((policy) => (
@@ -92,11 +92,11 @@ export function CodexSettings({ settings, onUpdate }: CodexSettingsProps) {
         </div>
 
         <div className="space-y-1.5">
-          <label className="block text-sm font-medium text-slate-700">Sandbox mode</label>
+          <label className="block text-sm font-medium text-rc-text-primary">Sandbox mode</label>
           <select
             value={settings.codex_sandbox_mode ?? ''}
             onChange={(event) => onUpdate({ codex_sandbox_mode: event.target.value || null })}
-            className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+            className="w-full rounded-md border border-rc-border-primary bg-rc-bg-secondary px-3 py-2 text-sm text-rc-text-primary focus:border-rc-border-focus focus:outline-none"
             data-testid="codex-sandbox-mode"
           >
             {SANDBOX_MODES.map((mode) => (
@@ -132,10 +132,10 @@ export function CodexSettings({ settings, onUpdate }: CodexSettingsProps) {
 
       <div className="space-y-1.5">
         <div className="flex items-center justify-between gap-3">
-          <label className="block text-sm font-medium text-slate-700">
+          <label className="block text-sm font-medium text-rc-text-primary">
             Config overrides
           </label>
-          <span className="text-xs text-slate-400">{overridesCount} 条</span>
+          <span className="text-xs text-rc-text-tertiary">{overridesCount} 条</span>
         </div>
         <textarea
           value={overridesText}
@@ -145,10 +145,10 @@ export function CodexSettings({ settings, onUpdate }: CodexSettingsProps) {
             onUpdate({ codex_config_overrides: parseOverrides(value) });
           }}
           placeholder={'model_reasoning_effort = "medium"\nfeatures.experimental_api = true'}
-          className="min-h-44 w-full rounded-xl border border-slate-300 bg-white px-3 py-2 font-mono text-xs text-slate-800 placeholder:text-slate-400 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+          className="min-h-40 w-full rounded-md border border-rc-border-primary bg-rc-bg-secondary px-3 py-2 font-mono text-xs text-rc-text-primary placeholder:text-rc-text-tertiary focus:border-rc-border-focus focus:outline-none"
           data-testid="codex-config-overrides"
         />
-        <p className="text-xs text-slate-500">
+        <p className="text-xs leading-5 text-rc-text-tertiary">
           每行一个 `key = value`。value 会按 TOML scalar 解析；无法解析时按字符串传递。
         </p>
       </div>

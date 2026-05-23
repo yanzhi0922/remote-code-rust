@@ -49,7 +49,7 @@ export function ArtifactPanel({
   hideTitle,
 }: ArtifactPanelProps) {
   return (
-    <section className="rounded-3xl border border-rc-border-primary bg-rc-bg-surface px-4 py-4 shadow-[0_12px_30px_rgba(34,32,28,0.06)]">
+    <section className="rounded-md border border-rc-border-primary bg-rc-bg-surface px-4 py-4 shadow-sm">
       {!hideTitle && (
         <div className="flex items-center gap-2 text-sm font-semibold text-rc-text-primary">
           {icon}
@@ -91,7 +91,7 @@ export function ArtifactPanel({
                       void onDownload(artifact);
                     }}
                     disabled={downloadingId === artifact.artifact_id}
-                    className="flex flex-1 items-start justify-between gap-3 rounded-2xl border border-rc-border-primary bg-rc-bg-hover px-3 py-3 transition-colors hover:bg-rc-bg-surface disabled:cursor-not-allowed disabled:opacity-70"
+                    className="flex flex-1 items-start justify-between gap-3 rounded-md border border-rc-border-primary bg-rc-bg-hover px-3 py-3 transition-colors hover:bg-rc-bg-surface disabled:cursor-not-allowed disabled:opacity-70"
                   >
                     {content}
                   </button>
@@ -102,7 +102,7 @@ export function ArtifactPanel({
                         void onShare(artifact);
                       }}
                       disabled={downloadingId === artifact.artifact_id}
-                      className="mt-1 inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-rc-border-primary bg-rc-bg-hover text-rc-text-tertiary transition-colors hover:bg-rc-bg-surface hover:text-rc-text-secondary disabled:cursor-not-allowed disabled:opacity-70"
+                      className="mt-1 inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-rc-border-primary bg-rc-bg-hover text-rc-text-tertiary transition-colors hover:bg-rc-bg-surface hover:text-rc-text-secondary disabled:cursor-not-allowed disabled:opacity-70"
                       aria-label="Share"
                     >
                       <Share2 size={14} />
@@ -116,7 +116,7 @@ export function ArtifactPanel({
               <a
                 key={artifact.artifact_id}
                 href={buildDownloadUrl?.(artifact.artifact_id) ?? '#'}
-                className="flex items-start justify-between gap-3 rounded-2xl border border-rc-border-primary bg-rc-bg-hover px-3 py-3 transition-colors hover:bg-rc-bg-surface"
+                className="flex items-start justify-between gap-3 rounded-md border border-rc-border-primary bg-rc-bg-hover px-3 py-3 transition-colors hover:bg-rc-bg-surface"
               >
                 {content}
               </a>

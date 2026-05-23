@@ -64,13 +64,14 @@ function AssistantToolCalls({ toolCalls }: { toolCalls: ToolCallInfo[] }) {
           key={toolCall.id}
           summary={
             <div className="flex min-w-0 items-center gap-2.5">
-              <span className="rounded bg-rc-accent-success-bg px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-rc-accent-success">
+              <span className="rounded bg-rc-accent-success-bg px-1.5 py-0.5 text-[10px] font-semibold uppercase text-rc-accent-success">
                 Tool
               </span>
               <span className="font-mono text-xs font-medium text-rc-text-primary">{toolCall.name}</span>
               <span className="truncate text-xs text-rc-text-tertiary">{summarizeToolInput(toolCall)}</span>
             </div>
           }
+          buttonLabel={`Toggle tool call ${toolCall.name}`}
           iconColor="text-rc-accent-success"
         >
           <pre className="overflow-x-auto whitespace-pre-wrap rounded bg-rc-bg-code p-3 text-xs font-mono leading-relaxed text-rc-text-primary">
@@ -90,7 +91,7 @@ function ToolMessage({ entry }: { entry: ConversationEntry }) {
       summary={
         <div className="flex min-w-0 items-center gap-2.5">
           <span
-            className={`rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.08em] ${
+            className={`rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase ${
               entry.is_error
                 ? 'bg-rc-accent-error-bg text-rc-accent-error'
                 : 'bg-rc-bg-active text-rc-text-tertiary'
@@ -102,6 +103,7 @@ function ToolMessage({ entry }: { entry: ConversationEntry }) {
           <span className="truncate text-xs text-rc-text-tertiary">{summarizeToolOutput(entry.text)}</span>
         </div>
       }
+      buttonLabel={`Toggle tool result ${label}`}
       iconColor={entry.is_error ? 'text-rc-accent-error' : 'text-rc-text-tertiary'}
     >
       <pre
@@ -127,12 +129,13 @@ function AssistantThinking({ blocks }: { blocks: string[] }) {
           key={`${index}-${block.slice(0, 20)}`}
           summary={
             <div className="flex min-w-0 items-center gap-2.5">
-              <span className="rounded bg-rc-accent-warning-bg px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-rc-accent-warning">
+              <span className="rounded bg-rc-accent-warning-bg px-1.5 py-0.5 text-[10px] font-semibold uppercase text-rc-accent-warning">
                 Thinking
               </span>
               <span className="truncate text-xs text-rc-text-tertiary">{summarizeToolOutput(block)}</span>
             </div>
           }
+          buttonLabel="Toggle reasoning details"
           iconColor="text-rc-accent-warning"
         >
           <div className="rounded bg-rc-bg-secondary p-3 text-xs leading-6 text-rc-text-secondary">
@@ -151,7 +154,7 @@ function AssistantMessage({ entry }: { entry: ConversationEntry }) {
     <div className="rounded-lg border border-rc-border-secondary bg-rc-bg-assistant px-4 py-3 shadow-xs">
       <div className="mb-3 flex items-center gap-2">
         <span className="h-2 w-2 rounded-full bg-rc-accent-info" />
-        <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-rc-text-tertiary">
+        <span className="text-[10px] font-semibold uppercase text-rc-text-tertiary">
           Assistant
         </span>
       </div>
