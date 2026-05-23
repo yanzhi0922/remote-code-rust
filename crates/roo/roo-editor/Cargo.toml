@@ -14,7 +14,7 @@ similar = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 chrono = { workspace = true }
-calamine = { version = "0.26", features = ["dates"] }
+calamine = { version = "0.35", features = ["dates"] }
 base64 = "0.22"
 regex-lite = "0.1"
 
