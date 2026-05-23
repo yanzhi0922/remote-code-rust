@@ -2,6 +2,7 @@ use std::ffi::OsString;
 use std::io;
 use std::path::Path;
 use std::path::PathBuf;
+use std::process::Command;
 
 pub use runfiles;
 
@@ -20,8 +21,31 @@ pub enum CargoBinError {
         #[source]
         source: std::io::Error,
     },
+    #[error("failed to locate target directory from current test executable")]
+    TargetDir,
     #[error("CARGO_BIN_EXE env var {key} resolved to {path:?}, but it does not exist")]
     ResolvedPathDoesNotExist { key: String, path: PathBuf },
+    #[error("failed to build helper binary {name:?} from package {package:?}")]
+    HelperBuild {
+        name: String,
+        package: String,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("failed to build helper binary {name:?} from package {package:?}: {status}")]
+    HelperBuildFailed {
+        name: String,
+        package: String,
+        status: std::process::ExitStatus,
+    },
+    #[error(
+        "built helper binary {name:?} from package {package:?}, but expected output {path:?} was not found"
+    )]
+    HelperOutputMissing {
+        name: String,
+        package: String,
+        path: PathBuf,
+    },
     #[error("could not locate binary {name:?}; tried env vars {env_keys:?}; {fallback}")]
     NotFound {
         name: String,
@@ -42,6 +66,12 @@ pub fn cargo_bin(name: &str) -> Result<PathBuf, CargoBinError> {
         if let Some(value) = std::env::var_os(key) {
             return resolve_bin_from_env(key, value);
         }
+    }
+    if let Some(path) = legacy_target_bin(name)? {
+        return Ok(path);
+    }
+    if let Some(path) = build_helper_bin(name)? {
+        return Ok(path);
     }
     match assert_cmd::Command::cargo_bin(name) {
         Ok(cmd) => {
@@ -65,6 +95,68 @@ pub fn cargo_bin(name: &str) -> Result<PathBuf, CargoBinError> {
             env_keys,
             fallback: format!("assert_cmd fallback failed: {err}"),
         }),
+    }
+}
+
+fn legacy_target_bin(name: &str) -> Result<Option<PathBuf>, CargoBinError> {
+    let target_dir = target_profile_dir()?;
+    let path = target_dir.join(format!("{name}{}", std::env::consts::EXE_SUFFIX));
+    Ok(path.exists().then_some(path))
+}
+
+fn target_profile_dir() -> Result<PathBuf, CargoBinError> {
+    let mut target_dir = std::env::current_exe()
+        .map_err(|source| CargoBinError::CurrentExe { source })?
+        .parent()
+        .ok_or(CargoBinError::TargetDir)?
+        .to_path_buf();
+    if target_dir.ends_with("deps") {
+        target_dir.pop();
+    }
+    Ok(target_dir)
+}
+
+fn build_helper_bin(name: &str) -> Result<Option<PathBuf>, CargoBinError> {
+    let Some(package) = helper_bin_package(name) else {
+        return Ok(None);
+    };
+    let target_dir = target_profile_dir()?
+        .parent()
+        .ok_or(CargoBinError::TargetDir)?
+        .to_path_buf();
+
+    let status = Command::new("cargo")
+        .args(["build", "-p", package, "--bin", name])
+        .env("CARGO_TARGET_DIR", target_dir)
+        .status()
+        .map_err(|source| CargoBinError::HelperBuild {
+            name: name.to_owned(),
+            package: package.to_owned(),
+            source,
+        })?;
+    if !status.success() {
+        return Err(CargoBinError::HelperBuildFailed {
+            name: name.to_owned(),
+            package: package.to_owned(),
+            status,
+        });
+    }
+
+    if let Some(path) = legacy_target_bin(name)? {
+        return Ok(Some(path));
+    }
+
+    Err(CargoBinError::HelperOutputMissing {
+        name: name.to_owned(),
+        package: package.to_owned(),
+        path: target_profile_dir()?.join(format!("{name}{}", std::env::consts::EXE_SUFFIX)),
+    })
+}
+
+fn helper_bin_package(name: &str) -> Option<&'static str> {
+    match name {
+        "test_stdio_server" | "test_streamable_http_server" => Some("codex-rmcp-client"),
+        _ => None,
     }
 }
 
