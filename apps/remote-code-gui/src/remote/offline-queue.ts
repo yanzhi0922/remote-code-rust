@@ -96,6 +96,7 @@ export async function enqueueCommand(
     const addReq = store.add(entry);
     addReq.onsuccess = () => resolve(entry);
     addReq.onerror = () => reject(addReq.error);
+    tx.onabort = () => reject(tx.error || new Error('Transaction aborted'));
   });
 }
 
@@ -139,5 +140,6 @@ export async function drainCommands(sessionId: string): Promise<QueuedCommand[]>
     };
 
     getAllReq.onerror = () => reject(getAllReq.error);
+    tx.onabort = () => reject(tx.error || new Error('Transaction aborted'));
   });
 }

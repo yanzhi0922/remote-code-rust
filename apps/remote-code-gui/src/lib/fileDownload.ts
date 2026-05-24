@@ -49,7 +49,7 @@ export async function downloadRemoteArtifact(
   } finally {
     window.setTimeout(() => {
       window.URL.revokeObjectURL(objectUrl);
-    }, 60_000);
+    }, 1_000);
   }
 
   return null;

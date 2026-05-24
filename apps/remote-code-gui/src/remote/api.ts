@@ -189,7 +189,7 @@ let _refreshPromise: Promise<boolean> | null = null;
 async function tryRefreshAccessToken(baseUrl: string): Promise<boolean> {
   if (_refreshPromise) return _refreshPromise;
 
-  _refreshPromise = (async () => {
+  const p = (async () => {
     const refreshToken = resolveRemoteRefreshToken();
     if (!refreshToken) return false;
 
@@ -214,12 +214,12 @@ async function tryRefreshAccessToken(baseUrl: string): Promise<boolean> {
       return true;
     } catch {
       return false;
-    } finally {
-      _refreshPromise = null;
     }
   })();
+  _refreshPromise = p;
+  p.finally(() => { if (_refreshPromise === p) _refreshPromise = null; });
 
-  return _refreshPromise;
+  return p;
 }
 
 export async function requestJson<T>(

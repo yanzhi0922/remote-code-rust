@@ -386,10 +386,15 @@ export class UnifiedTransport implements TransportHandle {
     }, 30_000);
   }
 
+  private _switchGeneration = 0;
+
   private async autoSwitchIfNeeded(): Promise<void> {
     if (this._cancelled) return;
+    const gen = ++this._switchGeneration;
 
     const report = await this.probeHealth();
+    if (gen !== this._switchGeneration) return; // stale, another switch happened
+
     const currentIsDirect = this._strategy === 'direct_websocket';
     const shouldDirect = report.recommendedStrategy === 'direct_websocket';
 
@@ -397,6 +402,7 @@ export class UnifiedTransport implements TransportHandle {
       this._metrics.strategySwitches++;
       this.notifyMetrics();
       this._handle?.close();
+      if (gen !== this._switchGeneration) return;
 
       if (shouldDirect && this.canUseDirectRunner()) {
         this._strategy = 'direct_websocket';

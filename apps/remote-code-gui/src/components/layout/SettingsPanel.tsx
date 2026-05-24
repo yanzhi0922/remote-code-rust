@@ -358,9 +358,10 @@ function ProviderTab() {
     if (!form.name.trim()) return;
     // Check for duplicate provider name (excluding the provider being edited)
     const trimmedName = form.name.trim();
-    const isDuplicate = providers.some(
-      (p) => p.name === trimmedName && p.name !== editingName,
+    const existingNames = new Set(
+      providers.filter((p) => p.name !== editingName).map((p) => p.name),
     );
+    const isDuplicate = existingNames.has(trimmedName);
     if (isDuplicate) {
       // eslint-disable-next-line no-alert
       const proceed = window.confirm(

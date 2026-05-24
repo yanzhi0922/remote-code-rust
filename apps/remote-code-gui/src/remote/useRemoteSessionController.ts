@@ -179,7 +179,7 @@ export function useRemoteSessionController({
 
   useEffect(() => {
     activeSessionIdRef.current = selectedSessionId;
-  });
+  }, [selectedSessionId]);
 
   useEffect(() => {
     document.documentElement.lang = locale;

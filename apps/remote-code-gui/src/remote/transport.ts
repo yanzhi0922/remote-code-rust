@@ -169,6 +169,8 @@ export function subscribeToRemoteSessionEvents(input: {
     }, delayMs);
   };
 
+  let onlineReconnectTimer: ReturnType<typeof setTimeout> | null = null;
+
   const handleOnline = () => {
     if (cancelled || socket) {
       return;
@@ -177,8 +179,17 @@ export function subscribeToRemoteSessionEvents(input: {
       window.clearTimeout(reconnectTimer);
       reconnectTimer = null;
     }
-    reconnectAttempt = 0;
-    openSocket(input.getAfterSequence());
+    if (onlineReconnectTimer !== null) {
+      window.clearTimeout(onlineReconnectTimer);
+    }
+    // Debounce to coalesce rapid connectivity flaps
+    onlineReconnectTimer = window.setTimeout(() => {
+      onlineReconnectTimer = null;
+      if (!cancelled && !socket) {
+        reconnectAttempt = 0;
+        openSocket(input.getAfterSequence());
+      }
+    }, 1000);
   };
 
   const handleOffline = () => {
@@ -203,6 +214,9 @@ export function subscribeToRemoteSessionEvents(input: {
       window.removeEventListener('offline', handleOffline);
       if (reconnectTimer !== null) {
         window.clearTimeout(reconnectTimer);
+      }
+      if (onlineReconnectTimer !== null) {
+        window.clearTimeout(onlineReconnectTimer);
       }
       socket?.close();
     },

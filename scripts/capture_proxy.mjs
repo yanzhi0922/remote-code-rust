@@ -4,6 +4,7 @@ import https from 'https';
 import { URL } from 'url';
 
 const LISTEN_PORT = 9999;
+const MAX_BODY_SIZE = 10 * 1024 * 1024; // 10 MB
 
 const SENSITIVE_HEADERS = new Set([
     'authorization', 'x-api-key', 'cookie', 'set-cookie', 'proxy-authorization',
@@ -23,7 +24,16 @@ function redactHeaders(headers) {
 
 const server = http.createServer(async (req, res) => {
     let body = '';
-    for await (const chunk of req) body += chunk;
+    let totalSize = 0;
+    for await (const chunk of req) {
+        totalSize += chunk.length;
+        if (totalSize > MAX_BODY_SIZE) {
+            res.writeHead(413, { 'Content-Type': 'text/plain' });
+            res.end('Payload Too Large');
+            return;
+        }
+        body += chunk;
+    }
 
     const target = new URL(req.headers['x-target-url'] || `https://api.anthropic.com${req.url}`);
 
