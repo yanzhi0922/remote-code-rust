@@ -33,10 +33,19 @@ function openDb(): Promise<IDBDatabase> {
       }
     };
     request.onsuccess = () => {
-      dbInstance = request.result;
-      resolve(dbInstance);
+      const db = request.result;
+      // Invalidate the cached instance if the connection encounters an error
+      // later (e.g. database was deleted), allowing reconnection on next call.
+      db.onerror = () => {
+        dbInstance = null;
+      };
+      dbInstance = db;
+      resolve(db);
     };
-    request.onerror = () => reject(request.error);
+    request.onerror = () => {
+      dbInstance = null;
+      reject(request.error);
+    };
   });
 }
 

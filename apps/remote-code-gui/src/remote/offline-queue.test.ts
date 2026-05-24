@@ -82,15 +82,20 @@ const mockIDBFactory: IDBFactory = {
   deleteDatabase: vi.fn(),
 };
 
+type MockIDBRequest = IDBRequest & {
+  onsuccess: ((this: IDBRequest, ev: Event) => void) | null;
+  onerror: ((this: IDBRequest, ev: Event) => void) | null;
+};
+
 function mockRequest(opts: { result: unknown }): IDBRequest {
   const req = {
     result: opts.result,
     onsuccess: null as (() => void) | null,
     onerror: null as (() => void) | null,
-  } as unknown as IDBRequest;
+  } as unknown as MockIDBRequest;
   // Resolve on next microtask
   queueMicrotask(() => {
-    (req as any).onsuccess?.();
+    req.onsuccess?.call(req, new Event('success'));
   });
   return req;
 }

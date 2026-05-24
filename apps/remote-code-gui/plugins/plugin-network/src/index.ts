@@ -6,6 +6,7 @@
  */
 
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 
 export interface NetworkStatus {
   connected: boolean;
@@ -41,7 +42,7 @@ export async function onNetworkStatusChange(
   listener: NetworkStatusChangeListener
 ): Promise<() => void> {
   try {
-    const unlisten = await (window as any).__TAURI__.event.listen<NetworkStatus>(
+    const unlisten = await listen<NetworkStatus>(
       'network-status-changed',
       (event) => listener(event.payload)
     );

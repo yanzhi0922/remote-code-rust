@@ -7,6 +7,12 @@ export interface NetworkStatus {
 
 type NetworkChangeListener = (connected: boolean, connectionType: string) => void;
 
+interface NetworkPluginModule {
+  onNetworkStatusChange: (
+    cb: (status: { connected: boolean; connectionType?: string }) => void,
+  ) => Promise<() => void>;
+}
+
 const listeners = new Set<NetworkChangeListener>();
 let currentStatus: NetworkStatus = { connected: true, connectionType: 'unknown' };
 let cleanup: (() => void) | null = null;
@@ -37,14 +43,14 @@ export function initNetworkMonitoring(): void {
   }
   // Use variable to avoid Vite static analysis of the import path
   const modName = '@tauri-apps/plugin-network';
-  import(/* @vite-ignore */ modName).then((mod: any) => {
-    mod.onNetworkStatusChange((status: any) => {
+  import(/* @vite-ignore */ modName).then((mod: NetworkPluginModule) => {
+    mod.onNetworkStatusChange((status) => {
       currentStatus = { connected: status.connected, connectionType: status.connectionType ?? 'unknown' };
       listeners.forEach((fn) => fn(currentStatus.connected, currentStatus.connectionType));
     }).then((unlisten: () => void) => {
       cleanup = unlisten;
-    }).catch(() => {});
-  }).catch(() => {});
+    }).catch((err) => { console.warn('[network] onNetworkStatusChange listener setup failed:', err); });
+  }).catch((err) => { console.warn('[network] plugin-network import failed:', err); });
 }
 
 export function getNetworkStatus(): NetworkStatus {

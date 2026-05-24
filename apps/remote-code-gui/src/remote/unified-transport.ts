@@ -223,8 +223,9 @@ export class UnifiedTransport implements TransportHandle {
     }
 
     try {
-      const target = this._strategy === 'direct_websocket' && this._config.runnerBaseUrl
-        ? this._config.runnerBaseUrl!
+      const runnerBaseUrl = this._config.runnerBaseUrl;
+      const target = this._strategy === 'direct_websocket' && runnerBaseUrl
+        ? runnerBaseUrl
         : this._config.baseUrl;
 
       await this.executeCommand(target, command);
@@ -312,6 +313,7 @@ export class UnifiedTransport implements TransportHandle {
 
   private connectWebSocket(baseUrl: string, after: number): Promise<void> {
     return new Promise((resolve) => {
+      let resolved = false;
       this._handle = subscribeToRemoteSessionEvents({
         baseUrl,
         sessionId: this._config.sessionId,
@@ -325,6 +327,11 @@ export class UnifiedTransport implements TransportHandle {
             this._metrics.reconnectCount++;
             this.notifyMetrics();
           }
+          // Resolve the connect() promise only when the WebSocket actually opens.
+          if (mapped === 'open' && !resolved) {
+            resolved = true;
+            resolve();
+          }
         },
         onEvent: (event) => {
           if (this._cancelled) return;
@@ -335,9 +342,9 @@ export class UnifiedTransport implements TransportHandle {
         },
       });
 
-      // Resolve immediately — WebSocket is async, state changes come via callbacks.
-      this.setState('open');
-      resolve();
+      // Set initial state to 'connecting'; the actual 'open' state is set via
+      // onConnectionStateChange when the WebSocket handshake completes.
+      this.setState('connecting');
     });
   }
 
@@ -447,7 +454,7 @@ export class UnifiedTransport implements TransportHandle {
       this._handle = {
         close: () => {
           unlisten();
-          invoke('quic_disconnect').catch(() => {});
+          invoke('quic_disconnect').catch((err) => { console.warn('[unified-transport] quic_disconnect failed:', err); });
         },
       };
     } catch (error) {

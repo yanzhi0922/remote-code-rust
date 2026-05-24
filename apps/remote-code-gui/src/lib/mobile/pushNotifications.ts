@@ -10,6 +10,25 @@ export interface PushNotificationOptions {
   onSessionUpdate: SessionUpdateHandler;
 }
 
+interface PushPayload {
+  type: string;
+  approvalId?: string;
+  sessionId?: string;
+}
+
+/**
+ * Type guard that validates a push notification payload at runtime.
+ * Ensures required fields are present and have the expected types before use.
+ */
+function isValidPushPayload(payload: unknown): payload is PushPayload {
+  if (typeof payload !== 'object' || payload === null) return false;
+  const p = payload as Record<string, unknown>;
+  if (typeof p.type !== 'string') return false;
+  if (p.approvalId !== undefined && typeof p.approvalId !== 'string') return false;
+  if (p.sessionId !== undefined && typeof p.sessionId !== 'string') return false;
+  return true;
+}
+
 let _pushToken: string | null = null;
 let _permissionGranted = false;
 
@@ -25,7 +44,8 @@ export async function initPushNotifications(options: PushNotificationOptions): P
 
   // Listen for push notification events
   await listen('mobile://push-notification', (event) => {
-    const payload = event.payload as { type: string; approvalId?: string; sessionId?: string };
+    if (!isValidPushPayload(event.payload)) return;
+    const payload = event.payload;
     if (payload.type === 'approval' && payload.approvalId && payload.sessionId) {
       options.onApproval(payload.approvalId, payload.sessionId);
     } else if (payload.type === 'session-update' && payload.sessionId) {
@@ -34,7 +54,8 @@ export async function initPushNotifications(options: PushNotificationOptions): P
   });
 
   await listen('mobile://push-notification-clicked', (event) => {
-    const payload = event.payload as { type: string; approvalId?: string; sessionId?: string };
+    if (!isValidPushPayload(event.payload)) return;
+    const payload = event.payload;
     if (payload.type === 'approval' && payload.approvalId && payload.sessionId) {
       options.onApproval(payload.approvalId, payload.sessionId);
     } else if (payload.type === 'session-update' && payload.sessionId) {

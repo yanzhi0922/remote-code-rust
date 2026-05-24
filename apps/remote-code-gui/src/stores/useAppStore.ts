@@ -225,8 +225,8 @@ async function registerEventListeners(): Promise<(() => void)[]> {
           useAppStore.setState({ conversation });
         }
       })
-      .catch(() => {
-        // Ignore non-fatal conversation refresh failures.
+      .catch((err) => {
+        console.warn('[useAppStore] conversation refresh failed:', err);
       });
   };
 
@@ -313,8 +313,8 @@ async function registerEventListeners(): Promise<(() => void)[]> {
           if (useAppStore.getState().activeSessionId === session_id) {
             useAppStore.setState({ conversation });
           }
-        }).catch(() => {
-          // Non-fatal: conversation refresh after prompt completion.
+        }).catch((err) => {
+          console.warn('[useAppStore] conversation refresh after prompt failed:', err);
         });
       }
 
@@ -330,8 +330,8 @@ async function registerEventListeners(): Promise<(() => void)[]> {
             },
           }));
         })
-        .catch(() => {
-          // Ignore task refresh failures after prompt completion.
+        .catch((err) => {
+          console.warn('[useAppStore] task refresh after prompt failed:', err);
         });
 
       // Refresh session lists.
@@ -609,7 +609,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     try {
       const [conversation, tasks] = await Promise.all([
         tauri.getSessionConversation(sessionId),
-        tauri.getSessionTasks(sessionId).catch(() => [] as SessionSubtask[]),
+        tauri.getSessionTasks(sessionId).catch((err) => { console.warn('[useAppStore] getSessionTasks failed, using empty array:', err); return [] as SessionSubtask[]; }),
       ]);
       set({ conversation, conversationLoading: false });
       useAgentStore.setState((state) => ({

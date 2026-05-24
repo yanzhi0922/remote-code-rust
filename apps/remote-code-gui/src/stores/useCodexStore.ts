@@ -1,12 +1,13 @@
 import { create } from 'zustand';
 
+export interface CodexNotification {
+  session_id: string;
+  method: string;
+  params?: unknown;
+}
+
 export interface CodexState {
-  codexNotifications: Array<{
-    session_id: string;
-    method: string;
-    params?: unknown;
-    [key: string]: unknown;
-  }>;
+  codexNotifications: Array<CodexNotification>;
   codexGuardianEvents: Array<{
     session_id: string;
     method: string;
