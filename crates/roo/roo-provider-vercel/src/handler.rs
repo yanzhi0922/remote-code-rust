@@ -35,6 +35,8 @@ pub struct VercelHandler {
     base_url: String,
     /// Cache for dynamically fetched models.
     dynamic_models: RwLock<Option<ModelRecord>>,
+    /// Shared HTTP client for model fetch requests.
+    http_client: reqwest::Client,
 }
 
 impl VercelHandler {
@@ -85,6 +87,7 @@ impl VercelHandler {
             api_key: config.api_key,
             base_url,
             dynamic_models: RwLock::new(None),
+            http_client: reqwest::Client::new(),
         })
     }
 
@@ -120,8 +123,7 @@ impl VercelHandler {
 
         let url = format!("{}/models", self.base_url.trim_end_matches('/'));
 
-        let client = reqwest::Client::new();
-        let response = client.get(&url).bearer_auth(&self.api_key).send().await?;
+        let response = self.http_client.get(&url).bearer_auth(&self.api_key).send().await?;
 
         if !response.status().is_success() {
             let status = response.status().as_u16();

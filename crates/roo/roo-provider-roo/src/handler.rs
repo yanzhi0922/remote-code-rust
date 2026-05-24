@@ -122,8 +122,7 @@ impl RooHandler {
 
         let url = format!("{}/models", self.base_url.trim_end_matches('/'));
 
-        let client = reqwest::Client::new();
-        let mut request = client.get(&url);
+        let mut request = self.http_client.get(&url);
         if !self.api_key.is_empty() {
             request = request.bearer_auth(&self.api_key);
         }

@@ -50,42 +50,95 @@ pub trait Provider: Send + Sync {
     /// Get the model ID and info.
     fn get_model(&self) -> (String, ModelInfo);
 
-    /// Count tokens for content blocks.
+    /// Count tokens for content blocks using real BPE tokenization.
     ///
-    /// Default implementation uses a simple heuristic of ~4 characters per token.
-    /// Individual providers should override this with accurate counting when available.
+    /// Uses tiktoken o200k_base encoding with 1.5x fudge factor, matching the
+    /// TypeScript reference's `tiktoken` utility exactly.
+    ///
+    /// Source: `src/utils/tiktoken.ts` — `tiktoken`
     async fn count_tokens(&self, content: &[roo_types::api::ContentBlock]) -> Result<u64> {
-        let total_chars: usize = content
-            .iter()
-            .map(|block| match block {
-                roo_types::api::ContentBlock::Text { text } => text.len(),
-                roo_types::api::ContentBlock::ToolUse { input, .. } => {
-                    // Estimate JSON input size
-                    serde_json::to_string(input).map(|s| s.len()).unwrap_or(0)
+        use std::sync::LazyLock;
+        use roo_types::api::{ContentBlock, ImageSource, ToolResultContent};
+
+        const TOKEN_FUDGE_FACTOR: f64 = 1.5;
+        const DEFAULT_IMAGE_TOKENS: u64 = 300;
+
+        static BPE: LazyLock<Option<tiktoken_rs::CoreBPE>> = LazyLock::new(|| {
+            tiktoken_rs::o200k_base()
+                .ok()
+                .or_else(|| tiktoken_rs::cl100k_base().ok())
+        });
+
+        fn count_text(text: &str) -> u64 {
+            if let Some(bpe) = BPE.as_ref() {
+                bpe.encode_with_special_tokens(text).len() as u64
+            } else {
+                (text.len() as u64).div_ceil(4)
+            }
+        }
+
+        fn serialize_tool_use(name: &str, input: &serde_json::Value) -> String {
+            let mut parts = vec![format!("Tool: {name}")];
+            if !input.is_null() {
+                if let Ok(s) = serde_json::to_string(input) {
+                    parts.push(format!("Arguments: {s}"));
                 }
-                roo_types::api::ContentBlock::ToolResult { content, .. } => content
-                    .iter()
-                    .map(|c| match c {
-                        roo_types::api::ToolResultContent::Text { text } => text.len(),
-                        roo_types::api::ToolResultContent::Image { .. } => 256, // rough estimate for image tokens
-                    })
-                    .sum(),
-                roo_types::api::ContentBlock::Image { source } => {
-                    // Rough estimate: images typically use 85-170 tokens depending on detail
-                    match source {
-                        roo_types::api::ImageSource::Base64 { data, .. } => {
-                            // Estimate based on base64 data length
-                            (data.len() / 100).clamp(85, 1000)
-                        }
-                        roo_types::api::ImageSource::Url { .. } => 256,
+            }
+            parts.join("\n")
+        }
+
+        fn serialize_tool_result(
+            tool_use_id: &str,
+            content: &[ToolResultContent],
+            is_error: Option<bool>,
+        ) -> String {
+            let mut parts = vec![format!("Tool Result ({tool_use_id})")];
+            if is_error.unwrap_or(false) {
+                parts.push("[Error]".to_string());
+            }
+            for item in content {
+                match item {
+                    ToolResultContent::Text { text } => parts.push(text.clone()),
+                    ToolResultContent::Image { .. } => parts.push("[Image content]".to_string()),
+                }
+            }
+            parts.join("\n")
+        }
+
+        if content.is_empty() {
+            return Ok(0);
+        }
+
+        let mut total_tokens: u64 = 0;
+        for block in content {
+            let block_tokens = match block {
+                ContentBlock::Text { text } if text.is_empty() => 0,
+                ContentBlock::Text { text } => count_text(text),
+                ContentBlock::ToolUse { name, input, .. } => {
+                    count_text(&serialize_tool_use(name, input))
+                }
+                ContentBlock::ToolResult {
+                    tool_use_id,
+                    content,
+                    is_error,
+                    ..
+                } => count_text(&serialize_tool_result(tool_use_id, content, *is_error)),
+                ContentBlock::Image { source } => match source {
+                    ImageSource::Base64 { data, .. } => {
+                        (data.len() as f64).sqrt().ceil() as u64
                     }
+                    ImageSource::Url { .. } => DEFAULT_IMAGE_TOKENS,
+                },
+                ContentBlock::Thinking { thinking, .. } if thinking.is_empty() => 0,
+                ContentBlock::Thinking { thinking, .. } => count_text(thinking),
+                ContentBlock::RedactedThinking { data } => {
+                    (data.len() as f64 / 4.0).ceil() as u64
                 }
-                roo_types::api::ContentBlock::Thinking { thinking, .. } => thinking.len(),
-                roo_types::api::ContentBlock::RedactedThinking { data } => data.len() / 4,
-            })
-            .sum();
-        // ~4 characters per token is a reasonable default for most tokenizers
-        Ok((total_chars as u64).div_ceil(4))
+            };
+            total_tokens += block_tokens;
+        }
+
+        Ok((total_tokens as f64 * TOKEN_FUDGE_FACTOR).ceil() as u64)
     }
 
     /// Complete a simple prompt (non-streaming).

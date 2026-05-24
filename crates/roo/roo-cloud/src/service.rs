@@ -1,4 +1,18 @@
 use crate::types::{AuthState, CloudError, CloudUserInfo, OrganizationSettings, UserSettings};
+use std::sync::OnceLock;
+use std::time::Duration;
+
+/// Shared HTTP client for cloud service requests.
+static SHARED_HTTP_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+
+fn shared_http_client() -> &'static reqwest::Client {
+    SHARED_HTTP_CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .timeout(Duration::from_secs(30))
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new())
+    })
+}
 
 /// Cloud service for managing authentication, user info, and organization settings.
 ///
@@ -47,7 +61,7 @@ impl CloudService {
 
         let endpoint = api_endpoint.unwrap_or("https://api.roocode.com/v1/auth/session");
 
-        let client = reqwest::Client::new();
+        let client = shared_http_client();
         let mut request = client.get(endpoint);
 
         if let Some(t) = token {
@@ -78,10 +92,22 @@ impl CloudService {
         })?;
 
         // Parse user info from response
+        let user_id = user_data["id"].as_str().unwrap_or_default().to_string();
+        let user_email = user_data["email"].as_str().unwrap_or_default().to_string();
+        let user_name = user_data["name"].as_str().unwrap_or_default().to_string();
+
+        // Validate that we received a non-empty session (M3: silent empty-session fix)
+        if user_id.is_empty() && user_email.is_empty() {
+            self.auth_state = AuthState::LoggedOut;
+            return Err(CloudError::AuthenticationFailed(
+                "Authentication endpoint returned an empty session (no user id or email)".to_string(),
+            ));
+        }
+
         let user_info = CloudUserInfo {
-            id: user_data["id"].as_str().unwrap_or_default().to_string(),
-            email: user_data["email"].as_str().unwrap_or_default().to_string(),
-            name: user_data["name"].as_str().unwrap_or_default().to_string(),
+            id: user_id,
+            email: user_email,
+            name: user_name,
             avatar_url: user_data["avatarUrl"].as_str().map(|s| s.to_string()),
         };
 

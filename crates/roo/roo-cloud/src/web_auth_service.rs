@@ -3,7 +3,21 @@
 use crate::config::{PRODUCTION_CLERK_BASE_URL, get_clerk_base_url};
 use crate::types::{AuthCredentials, AuthState, CloudError, CloudUserInfo};
 use std::sync::Arc;
+use std::sync::OnceLock;
+use std::time::Duration;
 use tokio::sync::RwLock;
+
+/// Shared HTTP client reused across web auth requests.
+static SHARED_HTTP_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+
+fn shared_http_client() -> &'static reqwest::Client {
+    SHARED_HTTP_CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .timeout(Duration::from_secs(30))
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new())
+    })
+}
 
 /// Web-based authentication service.
 pub struct WebAuthService {
@@ -87,7 +101,7 @@ impl WebAuthService {
             clerk_url, session_id
         );
 
-        let client = reqwest::Client::new();
+        let client = shared_http_client();
         let response = client
             .post(&url)
             .header("Authorization", format!("Bearer {}", client_token))
@@ -166,7 +180,7 @@ impl WebAuthService {
         let clerk_url = &self.clerk_base_url;
         let url = format!("{}/me", clerk_url);
 
-        let client = reqwest::Client::new();
+        let client = shared_http_client();
         let response = client
             .get(&url)
             .header("Authorization", format!("Bearer {}", token_val))
@@ -234,7 +248,7 @@ impl WebAuthService {
             clerk_url, creds.session_id
         );
 
-        let client = reqwest::Client::new();
+        let client = shared_http_client();
         let response = client
             .post(&url)
             .header("Authorization", format!("Bearer {}", creds.client_token))

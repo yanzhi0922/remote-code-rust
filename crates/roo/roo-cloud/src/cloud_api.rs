@@ -5,6 +5,22 @@ use crate::types::CloudError;
 use crate::utils::get_user_agent;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::sync::OnceLock;
+use std::time::Duration;
+
+/// Shared HTTP client reused across all CloudApi calls.
+/// A `reqwest::Client` maintains an internal connection pool; creating one per
+/// request wastes sockets and can exhaust file descriptors under load.
+static SHARED_HTTP_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+
+fn shared_http_client() -> &'static reqwest::Client {
+    SHARED_HTTP_CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .timeout(Duration::from_secs(30))
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new())
+    })
+}
 
 /// Share visibility levels.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -113,7 +129,7 @@ impl CloudApi {
     ) -> Result<Value, CloudError> {
         let url = format!("{}{}", self.base_url, endpoint);
 
-        let client = reqwest::Client::new();
+        let client = shared_http_client();
         let mut request = match method {
             "POST" => client.post(&url),
             "PUT" => client.put(&url),

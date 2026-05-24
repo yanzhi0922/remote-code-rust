@@ -6,7 +6,21 @@ use crate::types::{
 };
 use serde_json::Value;
 use std::sync::Arc;
+use std::sync::OnceLock;
+use std::time::Duration;
 use tokio::sync::RwLock;
+
+/// Shared HTTP client reused across cloud settings requests.
+static SHARED_HTTP_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+
+fn shared_http_client() -> &'static reqwest::Client {
+    SHARED_HTTP_CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .timeout(Duration::from_secs(30))
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new())
+    })
+}
 
 /// Callback type for settings change notifications.
 pub type SettingsChangeCallback = Box<dyn Fn(&str) + Send + Sync>;
@@ -46,7 +60,7 @@ impl CloudSettingsService {
 
         let url = format!("{}/api/extension-settings", get_roo_code_api_url());
 
-        let client = reqwest::Client::new();
+        let client = shared_http_client();
         let token_guard = self.session_token.read().await;
         let token_val = match token_guard.as_ref() {
             Some(t) => t.as_str(),

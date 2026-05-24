@@ -16,15 +16,14 @@ use roo_condense::{
 use roo_provider::handler::{CreateMessageMetadata, Provider};
 use roo_types::api::{ApiMessage, ContentBlock};
 
-/// Fallback context window size when no provider-specific max tokens are available.
+/// Default max output tokens to reserve when no provider-specific value is set.
 ///
-/// The previous value (8192) was Anthropic's completion/output limit, not a context window size.
-/// When no provider info is available, use a reasonable default context window of 200K tokens.
-/// This is used as the fallback for `reserved_tokens` in context management calculations.
+/// Matches the TypeScript reference which uses `ANTHROPIC_DEFAULT_MAX_TOKENS` (8192)
+/// as the fallback for `maxTokens`. This reserves tokens for the model's response,
+/// not the context window. A too-large fallback would cause over-aggressive truncation.
 ///
-/// Source: `src/core/context-management/index.ts` — uses `ANTHROPIC_DEFAULT_MAX_TOKENS` which
-/// is actually Anthropic's max output tokens (8192), not the context window.
-const CONTEXT_WINDOW_FALLBACK: u64 = 200_000;
+/// Source: `src/core/context-management/index.ts` — uses `ANTHROPIC_DEFAULT_MAX_TOKENS`
+const MAX_TOKENS_FALLBACK: u64 = 8192;
 
 use crate::TOKEN_BUFFER_PERCENTAGE;
 use crate::token::estimate_token_count;
@@ -111,7 +110,7 @@ pub fn will_manage_context(options: &WillManageContextOptions) -> bool {
         last_message_tokens,
     } = options;
 
-    let reserved_tokens = max_tokens.unwrap_or(CONTEXT_WINDOW_FALLBACK as usize);
+    let reserved_tokens = max_tokens.unwrap_or(MAX_TOKENS_FALLBACK as usize);
     let prev_context_tokens = total_tokens + last_message_tokens;
     let allowed_tokens =
         (*context_window as f64 * (1.0 - TOKEN_BUFFER_PERCENTAGE)) as usize - reserved_tokens;
@@ -171,12 +170,12 @@ pub async fn manage_context(
     let mut cost = 0.0f64;
 
     // Calculate the maximum tokens reserved for response
-    let reserved_tokens = max_tokens.unwrap_or(CONTEXT_WINDOW_FALLBACK as usize);
+    let reserved_tokens = max_tokens.unwrap_or(MAX_TOKENS_FALLBACK as usize);
 
     // Estimate tokens for the last message (which is always a user message)
     let last_message = messages.last().expect("messages should not be empty");
     let last_message_tokens =
-        estimate_token_count(&last_message.content, api_handler.as_ref()).await? as usize;
+        estimate_token_count(&last_message.content).await as usize;
 
     // Calculate total effective tokens (totalTokens never includes the last message)
     let prev_context_tokens = total_tokens + last_message_tokens;
@@ -265,11 +264,11 @@ pub async fn manage_context(
             text: system_prompt.clone(),
         }];
         let mut new_context_tokens =
-            estimate_token_count(&system_prompt_blocks, api_handler.as_ref()).await? as usize;
+            estimate_token_count(&system_prompt_blocks).await as usize;
 
         for msg in &effective_messages {
             let msg_tokens =
-                estimate_token_count(&msg.content, api_handler.as_ref()).await? as usize;
+                estimate_token_count(&msg.content).await as usize;
             new_context_tokens += msg_tokens;
         }
 

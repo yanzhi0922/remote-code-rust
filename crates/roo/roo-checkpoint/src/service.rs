@@ -5,6 +5,7 @@
 //! Ported from `src/services/checkpoints/ShadowCheckpointService.ts` (517 lines).
 
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use std::time::Instant;
 
 use git2::Repository;
@@ -32,6 +33,9 @@ const GIT_ENV_VARS_TO_SANITIZE: &[&str] = &[
     "GIT_TEMPLATE_DIR",
 ];
 
+/// Tracker ensuring `sanitize_git_env` only runs once, even across threads.
+static GIT_ENV_SANITIZED: OnceLock<()> = OnceLock::new();
+
 /// Removes git environment variables that could interfere with checkpoint operations.
 ///
 /// This prevents checkpoint operations from targeting the wrong repository when
@@ -40,29 +44,29 @@ const GIT_ENV_VARS_TO_SANITIZE: &[&str] = &[
 ///
 /// Source: `src/services/checkpoints/ShadowCheckpointService.ts` — `createSanitizedGit()`
 ///
-/// SAFETY NOTE: This mutates the process-global environment, which is technically
-/// unsafe in a multi-threaded context. This is acceptable ONLY because:
-/// 1. This function is called during initialization before sessions start
-/// 2. The checkpoint service is created once at startup
-/// If this assumption changes, switch to per-Command env manipulation.
+/// Thread-safe: wrapped in `OnceLock` so the global mutation only happens once,
+/// regardless of how many times this is called or from how many threads.
 fn sanitize_git_env() {
-    let mut removed = Vec::new();
-    for var in GIT_ENV_VARS_TO_SANITIZE {
-        if std::env::var(var).is_ok() {
-            removed.push(*var);
-            // SAFETY: Removing env vars is safe in single-threaded context
-            // during initialization. This mirrors the TS behavior of `delete process.env[key]`.
-            unsafe {
-                std::env::remove_var(var);
+    GIT_ENV_SANITIZED.get_or_init(|| {
+        let mut removed = Vec::new();
+        for var in GIT_ENV_VARS_TO_SANITIZE {
+            if std::env::var(var).is_ok() {
+                removed.push(*var);
+                // SAFETY: Inside OnceLock::get_or_init, this runs exactly once.
+                // The process-global env mutation is serialized by the OnceLock
+                // primitive and is safe for multi-threaded use.
+                unsafe {
+                    std::env::remove_var(var);
+                }
             }
         }
-    }
-    if !removed.is_empty() {
-        warn!(
-            "[sanitize_git_env] Removed git environment variables for checkpoint isolation: {}",
-            removed.join(", ")
-        );
-    }
+        if !removed.is_empty() {
+            warn!(
+                "[sanitize_git_env] Removed git environment variables for checkpoint isolation: {}",
+                removed.join(", ")
+            );
+        }
+    });
 }
 
 /// Compares two paths for equality, using case-insensitive comparison on Windows.

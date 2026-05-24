@@ -5,12 +5,27 @@
 //! an in-memory cache with TTL-based expiration.
 
 use std::collections::HashMap;
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use roo_types::model::{ModelInfo, ModelRecord};
 use serde::Deserialize;
 
 use crate::error::{ProviderError, Result};
+
+/// Shared HTTP client reused across all model-fetching calls.
+/// Creating a `reqwest::Client` per request wastes connections and file descriptors;
+/// a single static client reuses the underlying connection pool.
+static SHARED_HTTP_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+
+fn shared_http_client() -> &'static reqwest::Client {
+    SHARED_HTTP_CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .timeout(Duration::from_secs(30))
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new())
+    })
+}
 
 // ---------------------------------------------------------------------------
 // OpenAI-compatible API response types
@@ -81,7 +96,7 @@ pub async fn fetch_openai_compatible_models(
 
 /// Internal helper: fetches and parses an OpenAI-compatible model list.
 async fn fetch_openai_model_list(url: &str, api_key: Option<&str>) -> Result<ModelRecord> {
-    let client = reqwest::Client::new();
+    let client = shared_http_client();
     let mut request = client.get(url);
 
     if let Some(key) = api_key
@@ -134,7 +149,7 @@ pub async fn fetch_models_raw<T: serde::de::DeserializeOwned>(
     url: &str,
     api_key: Option<&str>,
 ) -> Result<T> {
-    let client = reqwest::Client::new();
+    let client = shared_http_client();
     let mut request = client.get(url);
 
     if let Some(key) = api_key

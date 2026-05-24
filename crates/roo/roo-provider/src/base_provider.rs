@@ -147,48 +147,87 @@ impl BaseProvider {
         (self.model_id.clone(), self.model_info.clone())
     }
 
-    /// Count tokens for content blocks using a BPE-style heuristic.
+    /// Count tokens for content blocks using real BPE tokenization.
     ///
-    /// For text blocks, uses ~4 chars/token as a reasonable approximation
-    /// of the tiktoken o200k_base encoding. For images, estimates based on
-    /// base64 data length or a conservative default.
+    /// Uses tiktoken o200k_base encoding with 1.5x fudge factor, matching the
+    /// TypeScript reference exactly.
+    ///
+    /// Source: `src/utils/tiktoken.ts` — `tiktoken`
     pub async fn count_tokens(&self, content: &[ContentBlock]) -> u64 {
+        use std::sync::LazyLock;
+        use roo_types::api::{ImageSource, ToolResultContent};
+
+        const TOKEN_FUDGE_FACTOR: f64 = 1.5;
+        const DEFAULT_IMAGE_TOKENS: u64 = 300;
+
+        static BPE: LazyLock<Option<tiktoken_rs::CoreBPE>> = LazyLock::new(|| {
+            tiktoken_rs::o200k_base()
+                .ok()
+                .or_else(|| tiktoken_rs::cl100k_base().ok())
+        });
+
+        fn count_text(text: &str) -> u64 {
+            if let Some(bpe) = BPE.as_ref() {
+                bpe.encode_with_special_tokens(text).len() as u64
+            } else {
+                (text.len() as u64).div_ceil(4)
+            }
+        }
+
         if content.is_empty() {
             return 0;
         }
 
-        let mut total: u64 = 0;
+        let mut total_tokens: u64 = 0;
         for block in content {
-            total += match block {
-                ContentBlock::Text { text } => (text.len() as u64).div_ceil(4),
+            let block_tokens = match block {
+                ContentBlock::Text { text } if text.is_empty() => 0,
+                ContentBlock::Text { text } => count_text(text),
                 ContentBlock::ToolUse { name, input, .. } => {
-                    let name_tokens = (name.len() as u64).div_ceil(4);
-                    let input_str = serde_json::to_string(input).unwrap_or_default();
-                    let input_tokens = (input_str.len() as u64).div_ceil(4);
-                    name_tokens + input_tokens
-                }
-                ContentBlock::ToolResult { content: inner, .. } => inner
-                    .iter()
-                    .map(|c| match c {
-                        roo_types::api::ToolResultContent::Text { text } => {
-                            (text.len() as u64).div_ceil(4)
+                    let mut parts = vec![format!("Tool: {name}")];
+                    if !input.is_null() {
+                        if let Ok(s) = serde_json::to_string(input) {
+                            parts.push(format!("Arguments: {s}"));
                         }
-                        roo_types::api::ToolResultContent::Image { .. } => 256,
-                    })
-                    .sum(),
-                ContentBlock::Image { source } => match source {
-                    roo_types::api::ImageSource::Base64 { data, .. } => {
-                        let len = data.len() as f64;
-                        (len.sqrt().ceil() as u64).max(1)
                     }
-                    roo_types::api::ImageSource::Url { .. } => 300,
+                    count_text(&parts.join("\n"))
+                }
+                ContentBlock::ToolResult {
+                    content: inner,
+                    tool_use_id,
+                    is_error,
+                    ..
+                } => {
+                    let mut parts = vec![format!("Tool Result ({tool_use_id})")];
+                    if is_error.unwrap_or(false) {
+                        parts.push("[Error]".to_string());
+                    }
+                    for item in inner {
+                        match item {
+                            ToolResultContent::Text { text } => parts.push(text.clone()),
+                            ToolResultContent::Image { .. } => {
+                                parts.push("[Image content]".to_string())
+                            }
+                        }
+                    }
+                    count_text(&parts.join("\n"))
+                }
+                ContentBlock::Image { source } => match source {
+                    ImageSource::Base64 { data, .. } => {
+                        (data.len() as f64).sqrt().ceil() as u64
+                    }
+                    ImageSource::Url { .. } => DEFAULT_IMAGE_TOKENS,
                 },
-                ContentBlock::Thinking { thinking, .. } => (thinking.len() as u64).div_ceil(4),
-                ContentBlock::RedactedThinking { data } => (data.len() as f64 / 4.0).ceil() as u64,
+                ContentBlock::Thinking { thinking, .. } if thinking.is_empty() => 0,
+                ContentBlock::Thinking { thinking, .. } => count_text(thinking),
+                ContentBlock::RedactedThinking { data } => {
+                    (data.len() as f64 / 4.0).ceil() as u64
+                }
             };
+            total_tokens += block_tokens;
         }
 
-        total
+        (total_tokens as f64 * TOKEN_FUDGE_FACTOR).ceil() as u64
     }
 }
 

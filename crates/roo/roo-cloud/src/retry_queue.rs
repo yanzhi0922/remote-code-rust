@@ -3,6 +3,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use uuid::Uuid;
 
 /// Type of queued request.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -124,18 +125,7 @@ impl RetryQueue {
             }
         }
 
-        let id = format!(
-            "{}-{:x}-{:x}",
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis(),
-            self.queue.len() as u32,
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .subsec_nanos()
-        );
+        let id = format!("rq-{}", Uuid::new_v4());
 
         let request = QueuedRequest {
             id: id.clone(),
@@ -286,10 +276,15 @@ impl RetryQueue {
     }
 
     /// Deserialize and load a persisted queue.
+    /// Duplicate IDs in the persisted data are skipped to prevent key collisions.
     pub fn deserialize_and_load(&mut self, data: &str) -> Result<(), serde_json::Error> {
         let requests: Vec<QueuedRequest> = serde_json::from_str(data)?;
         for request in requests {
             let id = request.id.clone();
+            if self.queue.contains_key(&id) {
+                tracing::warn!("skipping duplicate retry queue entry on load: {id}");
+                continue;
+            }
             self.order.push(id.clone());
             self.queue.insert(id, request);
         }

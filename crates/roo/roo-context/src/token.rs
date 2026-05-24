@@ -1,32 +1,22 @@
-//! Token estimation utilities.
+//! Token counting utilities.
+//!
+//! Uses real BPE tokenization (tiktoken o200k_base) matching the TypeScript
+//! reference's `tiktoken` utility. Falls back to chars/4 heuristic only when
+//! the BPE encoder fails to initialize.
 //!
 //! Source: `src/core/context-management/index.ts` — `estimateTokenCount`
+//! Source: `src/utils/tiktoken.ts` — `tiktoken`
 
-use roo_provider::handler::Provider;
 use roo_types::api::ContentBlock;
 
-/// Counts tokens for content blocks using the provider's token counting
-/// implementation.
-///
-/// Source: `src/core/context-management/index.ts` — `estimateTokenCount`
-pub async fn estimate_token_count(
-    content: &[ContentBlock],
-    provider: &dyn Provider,
-) -> anyhow::Result<u64> {
-    if content.is_empty() {
-        return Ok(0);
-    }
-    Ok(provider.count_tokens(content).await?)
-}
+use crate::tiktoken;
 
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn test_estimate_token_count_empty() {
-        // Empty content should return 0 without calling the provider.
-        // We can't easily test the async version without a mock provider,
-        // but the logic is trivial: empty -> 0
-        let content: Vec<roo_types::api::ContentBlock> = vec![];
-        assert!(content.is_empty());
-    }
+/// Counts tokens for content blocks using real BPE tokenization.
+///
+/// Uses the o200k_base encoding (GPT-4o family) with a 1.5x fudge factor,
+/// matching the TypeScript `tiktoken` utility exactly.
+///
+/// Source: `src/utils/tiktoken.ts` — `tiktoken`
+pub async fn estimate_token_count(content: &[ContentBlock]) -> u64 {
+    tiktoken::count_tokens(content).await
 }

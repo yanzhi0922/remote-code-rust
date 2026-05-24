@@ -218,9 +218,17 @@ fn try_whitespace_tolerant_replace(
 ///
 /// Extracts identifiers (alphanumeric + _) and joins them with `.*?`
 /// to allow arbitrary content between tokens.
+/// Build a token-based regex from the pattern.
+///
+/// Splits on whitespace (like the TS `oldLF.split(/\s+/)`) and joins tokens
+/// with `\s+` so that only whitespace-separated token sequences match.
+/// This matches the TypeScript reference exactly.
+///
+/// Source: `src/core/tools/EditFileTool.ts` — `buildTokenRegex`
 fn build_token_regex(pattern: &str) -> Result<Regex, regex::Error> {
+    // TS: `oldLF.split(/\s+/).filter(Boolean)` — splits on whitespace only
     let tokens: Vec<&str> = pattern
-        .split(|c: char| !c.is_alphanumeric() && c != '_')
+        .split(|c: char| c.is_whitespace())
         .filter(|t| !t.is_empty())
         .collect();
 
@@ -231,10 +239,10 @@ fn build_token_regex(pattern: &str) -> Result<Regex, regex::Error> {
     }
 
     let regex_parts: Vec<String> = tokens.iter().map(|t| regex::escape(t)).collect();
-    let regex_str = regex_parts.join(r".*?");
+    // TS: `tokens.map(escapeRegExp).join("\\s+")` — join with \s+
+    let regex_str = regex_parts.join(r"\s+");
 
-    // Use (?s) for dotall mode so . matches newlines
-    Regex::new(&format!("(?s){}", regex_str))
+    Regex::new(&regex_str)
 }
 
 /// Try token-based match and replacement.

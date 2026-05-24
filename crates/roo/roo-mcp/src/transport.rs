@@ -763,12 +763,29 @@ impl SseTransport {
                     }
 
                     // SSE events with "message" event type (or default) contain JSON-RPC messages
-                    if (sse_event.event == "message" || sse_event.event.is_empty())
-                        && let Ok(msg) = serde_json::from_str::<JsonRpcMessage>(&sse_event.data)
-                        && tx.send(msg).await.is_err()
-                    {
-                        // Receiver dropped
-                        return Ok(());
+                    if sse_event.event == "message" || sse_event.event.is_empty() {
+                        match serde_json::from_str::<JsonRpcMessage>(&sse_event.data) {
+                            Ok(msg) => {
+                                if tx.send(msg).await.is_err() {
+                                    // Receiver dropped
+                                    return Ok(());
+                                }
+                            }
+                            Err(e) => {
+                                // Log unparseable messages instead of silently discarding them
+                                tracing::warn!(
+                                    "MCP SSE transport discarding unparseable message ({} bytes): {}",
+                                    sse_event.data.len(),
+                                    e
+                                );
+                            }
+                        }
+                    } else {
+                        // Unknown SSE event type -- log for visibility rather than silently ignoring
+                        tracing::debug!(
+                            "MCP SSE transport ignoring event with type '{}'",
+                            sse_event.event
+                        );
                     }
                 }
                 Err(e) => {

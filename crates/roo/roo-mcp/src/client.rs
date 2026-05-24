@@ -427,7 +427,10 @@ impl McpClient {
                         return Ok(msg);
                     }
                     // Not our response, skip it (could be a notification)
-                    tracing::trace!("Skipping message with unexpected ID");
+                    tracing::warn!(
+                        "MCP client skipping message with unexpected ID {:?} (expected {})",
+                        msg.id, expected_id
+                    );
                 }
                 Ok(Ok(None)) => {
                     return Err(McpError::ConnectionFailed(
