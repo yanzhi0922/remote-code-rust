@@ -42,6 +42,12 @@ impl E2eSession {
 
         // Derive a 256-bit AES key from the raw DH shared secret via HKDF-SHA256.
         // Security: raw DH output must not be used directly as a symmetric key.
+        //
+        // TODO(security): The HKDF info field (HKDF_INFO) is currently a static
+        // constant, meaning the derived key is not bound to a specific session.
+        // If two sessions share the same DH secret (e.g., due to ephemeral key
+        // reuse), they would derive the same AES key. Bind the session ID into
+        // the HKDF info parameter to ensure key isolation per session.
         let hkdf = Hkdf::<Sha256>::new(None, shared.as_bytes());
         let mut aes_key_bytes = [0u8; 32];
         hkdf.expand(HKDF_INFO, &mut aes_key_bytes)

@@ -1707,14 +1707,13 @@ pub(crate) async fn apply_approval_decision(
     Json(request): Json<ApprovalDecisionRequest>,
 ) -> Result<Json<rc_runner::ApprovalRequestRecord>, ApiError> {
     let user_id = user_id_from_principal(&principal);
-    // Verify the approval belongs to a session owned by this user.
-    {
+    // Verify the approval belongs to a session owned by this user, then plan
+    // the decision — both under a single lock scope to avoid TOCTOU between the
+    // ownership check and the plan mutation.
+    let planned = {
         let registry = service.registry.read().await;
         let approval = registry.get_approval(approval_id)?;
         registry.get_session_for_user(approval.session_id, user_id)?;
-    }
-    let planned = {
-        let registry = service.registry.read().await;
         registry.plan_approval_decision(approval_id, request)?
     };
     let queue_for_runner = planned

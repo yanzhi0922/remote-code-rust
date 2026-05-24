@@ -188,6 +188,12 @@ async fn authenticate_quic_token(service: &ControlPlaneService, provided: &str) 
 }
 
 /// Deserialize a QUIC command and enqueue it for the appropriate runner.
+///
+/// TODO(security): The QUIC dispatch path currently does not enforce tenant
+/// ownership checks. Before dispatching any command, the handler should verify
+/// that the authenticated session belongs to the tenant that owns the target
+/// runner/session. This requires API design changes to propagate tenant context
+/// through the QUIC authentication handshake and into each command variant.
 async fn dispatch_quic_command(
     service: &ControlPlaneService,
     authenticated_session_id: Option<Uuid>,

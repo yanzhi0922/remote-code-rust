@@ -338,6 +338,11 @@ fn request_allows_tenant_user_auth(request: &Request) -> bool {
         return true;
     }
     if path.starts_with("/v1/runners") {
+        // TODO(defense-in-depth): This blanket allow on /v1/runners/* is
+        // intentionally broad for now. Individual runner endpoints should be
+        // audited and scoped to the minimum set of sub-paths and methods
+        // actually needed, so that new runner sub-resources are not
+        // automatically reachable by tenant users.
         return true;
     }
     if path.starts_with("/v1/sessions") {

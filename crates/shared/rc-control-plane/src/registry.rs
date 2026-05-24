@@ -351,6 +351,11 @@ impl Registry {
 
     /// Refresh an access token using a valid refresh token.
     /// Returns `(device_record, new_access_token)` or an error.
+    ///
+    /// TODO(security): The refresh token itself is not rotated on each use.
+    /// An attacker who steals a refresh token can mint unlimited access tokens
+    /// until the device is revoked. Consider issuing a new refresh token on
+    /// every refresh call and invalidating the old one (refresh token rotation).
     pub(crate) fn refresh_access_token(
         &mut self,
         refresh_token: &str,

@@ -191,7 +191,26 @@ async fn poll_events_loop(
         match client.get(&sse_url).bearer_auth(&auth_token).send().await {
             Ok(response) => {
                 if response.status().is_success() {
-                    let body = response.text().await.unwrap_or_default();
+                    // Limit response body to 64 MiB to prevent unbounded memory
+                    // allocation from a malicious or misbehaving SSE endpoint.
+                    const MAX_SSE_BODY_BYTES: u64 = 64 * 1024 * 1024;
+                    let body = match response.content_length() {
+                        Some(len) if len > MAX_SSE_BODY_BYTES => {
+                            tracing::warn!("SSE response body too large ({len} bytes), skipping");
+                            continue;
+                        }
+                        _ => {
+                            let bytes = response.bytes().await.unwrap_or_default();
+                            if bytes.len() as u64 > MAX_SSE_BODY_BYTES {
+                                tracing::warn!(
+                                    "SSE response body exceeded {} bytes after read, skipping",
+                                    MAX_SSE_BODY_BYTES
+                                );
+                                continue;
+                            }
+                            String::from_utf8_lossy(&bytes).into_owned()
+                        }
+                    };
                     let mut max_seq: u64 = 0;
                     for line in body.lines() {
                         let event = if let Some(data) = line.strip_prefix("data: ") {
