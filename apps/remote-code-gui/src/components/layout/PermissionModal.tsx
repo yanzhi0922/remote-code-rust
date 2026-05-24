@@ -251,22 +251,20 @@ export function PermissionModal() {
 
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center bg-rc-bg-overlay p-4">
-      <div className="w-full max-w-2xl overflow-hidden rounded-md border border-rc-border-primary bg-rc-bg-surface shadow-md">
-        <div className="border-b border-rc-border-secondary px-5 py-4">
+      <div className="flex max-h-[88vh] w-full max-w-2xl flex-col overflow-hidden rounded-md border border-rc-border-primary bg-rc-bg-surface shadow-xl">
+        <div className="shrink-0 border-b border-rc-border-secondary px-5 py-4">
           <div className="flex items-center gap-3">
             <div className="flex h-9 w-9 items-center justify-center rounded-md bg-rc-accent-error-bg text-rc-accent-error">
               <ShieldAlert size={18} />
             </div>
             <div>
               <div className="text-sm font-semibold text-rc-text-primary">权限确认</div>
-              <div className="mt-1 text-xs text-rc-text-secondary">
-                GUI 已收到一个需要人工确认的工具调用。
-              </div>
+              <div className="mt-1 text-xs text-rc-text-secondary">{pendingPermission.title}</div>
             </div>
           </div>
         </div>
 
-        <div className="space-y-4 px-5 py-4">
+        <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-5 py-4">
           <div>
             <div className="text-sm font-medium text-rc-text-primary">工具</div>
             <div className="mt-1 text-sm text-rc-text-secondary">{pendingPermission.tool_name}</div>
@@ -402,7 +400,7 @@ export function PermissionModal() {
               <div className="mt-1 space-y-2">
                 {pendingPermission.permission_suggestions.map((suggestion, index) => (
                   <pre
-                    key={index}
+                    key={`suggestion-${index}-${String(suggestion).slice(0, 32)}`}
                     className="max-h-40 overflow-auto rounded-md bg-rc-bg-secondary p-4 text-xs leading-6 text-rc-text-primary"
                   >
                     {formatInput(redactSensitivePathsForDisplay(suggestion, privacyMode))}
@@ -433,7 +431,7 @@ export function PermissionModal() {
           )}
         </div>
 
-        <div className="flex justify-end gap-3 border-t border-rc-border-secondary bg-rc-bg-secondary px-6 py-4">
+        <div className="shrink-0 flex justify-end gap-3 border-t border-rc-border-secondary bg-rc-bg-secondary px-6 py-4">
           <button
             onClick={denyPermission}
             className="rounded-md border border-rc-border-primary px-4 py-2 text-sm font-medium text-rc-text-secondary transition-colors hover:bg-rc-bg-hover"

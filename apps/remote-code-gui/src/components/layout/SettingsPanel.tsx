@@ -120,29 +120,27 @@ export function SettingsPanel({ open, onClose, initialTab = 'provider' }: Settin
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-rc-bg-overlay p-4">
+    <div className="fixed inset-0 z-50 bg-rc-bg-base">
       <div
         role="dialog"
         aria-modal="true"
         aria-label="Settings"
-        className="flex max-h-[90vh] w-full max-w-[1160px] flex-col overflow-hidden rounded-md border border-rc-border-primary bg-rc-bg-surface shadow-xl"
+        className="grid h-full w-full grid-cols-[240px_minmax(0,1fr)] overflow-hidden bg-rc-bg-chat text-rc-text-primary"
       >
-        <div className="flex items-center justify-between border-b border-rc-border-primary px-4 py-2.5">
-          <div>
-            <h2 className="text-sm font-semibold uppercase text-rc-text-secondary">Settings</h2>
+        <aside className="flex min-h-0 flex-col border-r border-rc-border-secondary bg-rc-bg-sidebar">
+          <div className="border-b border-rc-border-secondary px-3 py-3">
+            <button
+              onClick={onClose}
+              aria-label="返回应用"
+              className="inline-flex h-8 items-center gap-2 rounded-md px-2 text-xs font-medium text-rc-text-secondary transition-colors hover:bg-rc-bg-hover hover:text-rc-text-primary"
+            >
+              <X size={15} />
+              返回应用
+            </button>
           </div>
-          <button
-            onClick={onClose}
-            aria-label="关闭设置"
-            className="rounded-md p-2 text-rc-text-tertiary transition-colors hover:bg-rc-bg-hover hover:text-rc-text-primary"
-          >
-            <X size={18} />
-          </button>
-        </div>
 
-        <div className="grid min-h-0 flex-1 grid-cols-[176px_minmax(0,1fr)]">
-          <div className="border-r border-rc-border-primary bg-rc-bg-secondary p-2.5">
-            <div role="tablist" aria-label="Settings sections" className="space-y-1">
+          <div className="min-h-0 flex-1 overflow-y-auto p-2">
+            <div role="tablist" aria-label="Settings sections" className="space-y-0.5">
               {TABS.map((tab) => {
                 const Icon = tab.icon;
                 const selected = activeTab === tab.key;
@@ -154,9 +152,9 @@ export function SettingsPanel({ open, onClose, initialTab = 'provider' }: Settin
                     aria-selected={selected}
                     aria-controls={`settings-panel-${tab.key}`}
                     onClick={() => setActiveTab(tab.key)}
-                    className={`flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs font-medium transition-colors ${
+                    className={`flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-sm font-medium transition-colors ${
                       selected
-                        ? 'bg-rc-bg-active text-rc-text-primary'
+                        ? 'bg-rc-bg-active text-rc-text-primary shadow-xs'
                         : 'text-rc-text-secondary hover:bg-rc-bg-hover hover:text-rc-text-primary'
                     }`}
                   >
@@ -167,50 +165,69 @@ export function SettingsPanel({ open, onClose, initialTab = 'provider' }: Settin
               })}
             </div>
           </div>
+        </aside>
+
+        <div className="flex min-h-0 flex-col bg-rc-bg-chat">
+          <header className="flex h-12 shrink-0 items-center justify-between border-b border-rc-border-secondary bg-rc-bg-surface px-5">
+            <div className="min-w-0">
+              <h2 className="truncate text-sm font-semibold text-rc-text-primary">
+                {TABS.find((tab) => tab.key === activeTab)?.label ?? 'Settings'}
+              </h2>
+            </div>
+            <button
+              onClick={onClose}
+              aria-label="关闭设置"
+              className="rounded-md p-2 text-rc-text-tertiary transition-colors hover:bg-rc-bg-hover hover:text-rc-text-primary"
+            >
+              <X size={18} />
+            </button>
+          </header>
 
           <div
             id={`settings-panel-${activeTab}`}
             role="tabpanel"
             aria-labelledby={`settings-tab-${activeTab}`}
-            className="min-h-0 overflow-y-auto px-5 py-5"
+            className="min-h-0 flex-1 overflow-y-auto px-5 py-7"
           >
-            {!settings ? (
-              <div className="py-10 text-sm text-rc-text-secondary">正在加载设置…</div>
-            ) : activeTab === 'provider' ? (
-              <ProviderTab />
-            ) : activeTab === 'mcp' ? (
-              <McpTab />
-            ) : activeTab === 'codex' ? (
-              <CodexSettings
-                settings={current}
-                onUpdate={(updates) => setDraft((state) => ({ ...state, ...updates }))}
-              />
-            ) : activeTab === 'operations' ? (
-              <OperationsTab />
-            ) : activeTab === 'archive' ? (
-              <ArchiveTab />
-            ) : (
-              <RuntimeTab current={current} onChange={applyDraft} />
-            )}
+            <div className="mx-auto w-full max-w-[940px]">
+              {!settings ? (
+                <div className="py-10 text-sm text-rc-text-secondary">正在加载设置…</div>
+              ) : activeTab === 'provider' ? (
+                <ProviderTab />
+              ) : activeTab === 'mcp' ? (
+                <McpTab />
+              ) : activeTab === 'codex' ? (
+                <CodexSettings
+                  settings={current}
+                  onUpdate={(updates) => setDraft((state) => ({ ...state, ...updates }))}
+                />
+              ) : activeTab === 'operations' ? (
+                <OperationsTab />
+              ) : activeTab === 'archive' ? (
+                <ArchiveTab />
+              ) : (
+                <RuntimeTab current={current} onChange={applyDraft} />
+              )}
+            </div>
           </div>
-        </div>
 
-        <div className="flex items-center justify-end gap-3 border-t border-rc-border-primary bg-rc-bg-secondary/80 px-5 py-3">
-          <button
-            onClick={() => setDraft({})}
-            className="rounded-md px-4 py-2 text-sm font-medium text-rc-text-secondary transition-colors hover:bg-rc-bg-hover hover:text-rc-text-primary"
-          >
-            重置未保存更改
-          </button>
-          <button
-            onClick={() => {
-              void handleSave();
-            }}
-            disabled={Object.keys(draft).length === 0 || saving}
-            className="rounded-md bg-rc-accent-primary px-5 py-2 text-sm font-medium text-white transition-colors hover:bg-rc-accent-primary-hover disabled:cursor-not-allowed disabled:bg-rc-text-tertiary"
-          >
-            {saving ? '保存中…' : '保存'}
-          </button>
+          <footer className="flex shrink-0 items-center justify-end gap-3 border-t border-rc-border-secondary bg-rc-bg-surface px-5 py-3">
+            <button
+              onClick={() => setDraft({})}
+              className="rounded-md px-4 py-2 text-sm font-medium text-rc-text-secondary transition-colors hover:bg-rc-bg-hover hover:text-rc-text-primary"
+            >
+              重置未保存更改
+            </button>
+            <button
+              onClick={() => {
+                void handleSave();
+              }}
+              disabled={Object.keys(draft).length === 0 || saving}
+              className="rounded-md bg-rc-accent-primary px-5 py-2 text-sm font-medium text-white transition-colors hover:bg-rc-accent-primary-hover disabled:cursor-not-allowed disabled:bg-rc-text-tertiary"
+            >
+              {saving ? '保存中…' : '保存'}
+            </button>
+          </footer>
         </div>
       </div>
     </div>
@@ -587,7 +604,7 @@ function ProviderTab() {
           <Field label="模型配置（Profile）" hint="为同一 Provider 创建多套模型映射，一键切换。">
             <div className="space-y-2">
               {(form.profiles ?? []).map((profile, index) => (
-                <div key={index} className="flex items-center gap-2">
+                <div key={profile.name || `profile-${index}`} className="flex items-center gap-2">
                   <input
                     value={profile.name}
                     onChange={(event) => updateProfile(index, 'name', event.target.value)}
