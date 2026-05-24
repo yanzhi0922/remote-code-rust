@@ -864,6 +864,12 @@ struct HookAwarePermissionBroker {
 
 #[async_trait]
 impl PermissionBroker for HookAwarePermissionBroker {
+    // TODO(concurrency): The `state` mutex is held across the entire
+    // `apply_permission_request_hooks` call, which may spawn subprocesses for
+    // hook execution.  Consider cloning the necessary state and releasing the
+    // lock before the subprocess call, then re-acquiring it to write back any
+    // updates.  This would allow concurrent permission decisions to proceed
+    // without waiting for hook subprocess completion.
     async fn decide(&self, request: PermissionRequest) -> PermissionDecision {
         let hook_result = {
             let mut state = self.state.lock().await;

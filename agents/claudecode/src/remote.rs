@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::env;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use anyhow::{Result, anyhow};
@@ -53,6 +54,9 @@ use crate::cli::{
     RemoteSessionPromptArgs, RemoteSessionShowArgs, RemoteSessionStateArgs, RemoteSessionsCommand,
     RemoteSessionsListArgs, RemoteTargetArgs,
 };
+
+/// Shared HTTP client reused across all remote API calls.
+static SHARED_CLIENT: OnceLock<Client> = OnceLock::new();
 
 #[derive(Debug, Clone, serde::Deserialize)]
 pub(crate) struct RemoteErrorEnvelope {
@@ -211,7 +215,7 @@ pub(crate) async fn remote_get_json<T>(base_url: &str, path: &str) -> Result<T>
 where
     T: serde::de::DeserializeOwned,
 {
-    let client = Client::new();
+    let client = SHARED_CLIENT.get_or_init(Client::new);
     let response = authorize_remote_request(client.get(build_remote_http_url(base_url, path)?))
         .send()
         .await?;
@@ -219,7 +223,7 @@ where
 }
 
 pub(crate) async fn remote_get_bytes(base_url: &str, path: &str) -> Result<Vec<u8>> {
-    let client = Client::new();
+    let client = SHARED_CLIENT.get_or_init(Client::new);
     let response = authorize_remote_request(client.get(build_remote_http_url(base_url, path)?))
         .send()
         .await?;
@@ -249,7 +253,7 @@ where
     I: serde::Serialize,
     O: serde::de::DeserializeOwned,
 {
-    let client = Client::new();
+    let client = SHARED_CLIENT.get_or_init(Client::new);
     let response = authorize_remote_request(client.post(build_remote_http_url(base_url, path)?))
         .json(input)
         .send()
