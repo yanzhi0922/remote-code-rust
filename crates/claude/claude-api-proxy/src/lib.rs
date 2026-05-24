@@ -45,7 +45,7 @@ pub async fn serve(
         anyhow::bail!("unauthenticated claude-api-proxy may only bind to a loopback address");
     }
 
-    let state = state::ProxyState::new(settings, model_index);
+    let state = state::ProxyState::new(settings, model_index)?;
     let app = router::build_router(state);
 
     let listener = tokio::net::TcpListener::bind(bind_addr).await?;

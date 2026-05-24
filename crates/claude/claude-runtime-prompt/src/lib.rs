@@ -2443,7 +2443,8 @@ fn load_runtime_output_styles_dir(
 
     let mut styles = Vec::new();
     let mut paths = WalkDir::new(dir)
-        .follow_links(true)
+        .follow_links(false)
+        .max_depth(10)
         .sort_by(|a, b| a.path().cmp(b.path()))
         .into_iter()
         .filter_map(std::result::Result::ok)
