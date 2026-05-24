@@ -312,8 +312,15 @@ export class UnifiedTransport implements TransportHandle {
   }
 
   private connectWebSocket(baseUrl: string, after: number): Promise<void> {
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
       let resolved = false;
+      let timeoutId = window.setTimeout(() => {
+        if (!resolved) {
+          resolved = true;
+          reject(new Error('WebSocket connection timed out after 30 seconds'));
+        }
+      }, 30_000);
+
       this._handle = subscribeToRemoteSessionEvents({
         baseUrl,
         sessionId: this._config.sessionId,
@@ -330,7 +337,14 @@ export class UnifiedTransport implements TransportHandle {
           // Resolve the connect() promise only when the WebSocket actually opens.
           if (mapped === 'open' && !resolved) {
             resolved = true;
+            window.clearTimeout(timeoutId);
             resolve();
+          }
+          // Reject if the connection enters an error or reconnecting state before opening.
+          if ((mapped === 'error') && !resolved) {
+            resolved = true;
+            window.clearTimeout(timeoutId);
+            reject(new Error('WebSocket connection entered error state'));
           }
         },
         onEvent: (event) => {
@@ -360,11 +374,15 @@ export class UnifiedTransport implements TransportHandle {
     }
 
     // Periodic health probe for auto-switching.
-    if (this._healthTimer !== null) {
-      window.clearInterval(this._healthTimer);
-    }
+    try {
+      if (this._healthTimer !== null) {
+        window.clearInterval(this._healthTimer);
+      }
+    } catch { /* ignore exception between clear and set */ }
     this._healthTimer = window.setInterval(() => {
-      void this.autoSwitchIfNeeded();
+      void this.autoSwitchIfNeeded().catch((err) => {
+        console.warn('[unified-transport] autoSwitchIfNeeded failed:', err);
+      });
     }, 30_000);
   }
 

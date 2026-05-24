@@ -222,6 +222,7 @@ export function useRemoteSessionController({
 
   useEffect(() => {
     let cancelled = false;
+    let unlistenDeepLinks: (() => void) | undefined;
     void initDeepLinks((url) => {
       if (cancelled) return;
       const pairing = parsePairingUrl(url);
@@ -230,9 +231,12 @@ export function useRemoteSessionController({
         setPairingSecret(pairing.secret);
         showStatusMessage(copy.deepLinkPairingReceived);
       }
+    }).then((unlisten) => {
+      unlistenDeepLinks = unlisten;
     });
     return () => {
       cancelled = true;
+      unlistenDeepLinks?.();
     };
   }, [copy]);
 
@@ -515,9 +519,9 @@ export function useRemoteSessionController({
   }, [transportSequence]);
 
   useEffect(() => {
-    void refreshSessions();
+    void refreshSessions().catch(reportAsyncError);
     const intervalId = window.setInterval(() => {
-      void refreshSessions();
+      void refreshSessions().catch(reportAsyncError);
     }, 15_000);
     return () => {
       window.clearInterval(intervalId);

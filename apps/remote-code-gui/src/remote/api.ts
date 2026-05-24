@@ -251,6 +251,9 @@ export async function requestJson<T>(
       }
 
       if (!responseText) {
+        if (method !== 'GET') {
+          console.warn(`[api] requestJson: empty response body for ${method} ${path}, returning empty object`);
+        }
         return {} as T;
       }
 

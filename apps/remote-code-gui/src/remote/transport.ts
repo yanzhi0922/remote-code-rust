@@ -13,6 +13,15 @@ import type {
 } from './types';
 import { hydrateRemoteTimeline } from '../session/normalize/fromRemote';
 
+function isRemoteTimelineEvent(data: unknown): data is RemoteTimelineEvent {
+  if (typeof data !== 'object' || data === null) return false;
+  const obj = data as Record<string, unknown>;
+  return typeof obj.sequence === 'number'
+    && typeof obj.detail === 'object'
+    && obj.detail !== null
+    && typeof (obj.detail as Record<string, unknown>).kind === 'string';
+}
+
 interface RemoteSessionBundleData {
   events: RemoteTimelineEvent[];
   approvals: RemoteApprovalRecord[];
@@ -111,7 +120,12 @@ export function subscribeToRemoteSessionEvents(input: {
       }
 
       try {
-        input.onEvent(JSON.parse(message.data) as RemoteTimelineEvent);
+        const parsed: unknown = JSON.parse(message.data);
+        if (!isRemoteTimelineEvent(parsed)) {
+          console.warn('[transport] discarding invalid RemoteTimelineEvent:', parsed);
+          return;
+        }
+        input.onEvent(parsed);
       } catch {
         input.onConnectionStateChange('error');
       }
