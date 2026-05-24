@@ -50,3 +50,7 @@ echo "deployed ${SOURCE_DIR} -> ${TARGET_DIR}"
 if [[ -d "${backup_dir}" ]]; then
   echo "backup saved at ${backup_dir}"
 fi
+
+# Clean up backups older than 7 days
+find "${target_parent}" -maxdepth 1 -name "${target_name}.backup-*" -type d -mtime +7 -exec rm -rf {} +
+echo "cleaned up backups older than 7 days in ${target_parent}"

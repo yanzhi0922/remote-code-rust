@@ -66,11 +66,11 @@ build_agent() {
         if [ -f "$source_path" ]; then
             cp -f "$source_path" "$OUTPUT_DIR/"
             echo -e "  ${GREEN}Copied: $OUTPUT_DIR/$binary_name${NC}"
+            RESULTS+=("$name | OK | ${duration}s")
         else
             echo -e "  ${RED}Warning: Binary not found at $source_path${NC}"
+            RESULTS+=("$name | FAILED | ${duration}s")
         fi
-
-        RESULTS+=("$name | OK | ${duration}s")
     else
         local end_time
         end_time=$(date +%s)

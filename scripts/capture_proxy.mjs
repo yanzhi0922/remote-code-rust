@@ -61,7 +61,8 @@ const server = http.createServer(async (req, res) => {
         console.log('\n=== RESPONSE ===');
         console.log(`Status: ${proxyRes.statusCode}`);
         console.log('--- Response Headers ---');
-        for (const [key, value] of Object.entries(proxyRes.headers)) {
+        const safeResponseHeaders = redactHeaders(proxyRes.headers);
+        for (const [key, value] of Object.entries(safeResponseHeaders)) {
             console.log(`  ${key}: ${value}`);
         }
         res.writeHead(proxyRes.statusCode, proxyRes.headers);
