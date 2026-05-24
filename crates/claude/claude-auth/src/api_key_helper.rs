@@ -350,6 +350,7 @@ fn shell_command(command: &str) -> tokio::process::Command {
     {
         let mut process = tokio::process::Command::new("cmd");
         process.args(["/C", command]);
+        process.stdin(std::process::Stdio::null());
         process
     }
 
@@ -357,6 +358,7 @@ fn shell_command(command: &str) -> tokio::process::Command {
     {
         let mut process = tokio::process::Command::new("/bin/sh");
         process.args(["-c", command]);
+        process.stdin(std::process::Stdio::null());
         process
     }
 }

@@ -277,14 +277,44 @@ async fn execute_aws_credential_export(command: &str) -> Result<AwsCredentials, 
     tracing::warn!(
         "Executing aws_credential_export command from config — ensure this is trusted: {command}"
     );
-    let output = if cfg!(windows) {
+
+    // SECURITY: Parse the command string into individual arguments to avoid
+    // shell metacharacter injection from passing the whole string to `sh -c`.
+    // Fall back to the shell-based path only if whitespace splitting is
+    // insufficient (i.e. the command contains quotes or escapes).
+    let output = if let Some(parts) = shell_words(command) {
+        let mut parts_iter = parts.iter();
+        match parts_iter.next() {
+            Some(program) => {
+                let args: Vec<&str> = parts_iter.as_slice().iter().map(|s| s.as_str()).collect();
+                tokio::process::Command::new(program)
+                    .args(&args)
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::piped())
+                    .stderr(std::process::Stdio::piped())
+                    .output()
+                    .await
+            }
+            None => {
+                return Err(ProviderAuthError::AwsCredentialExportFailed(
+                    "empty command".to_owned(),
+                ));
+            }
+        }
+    } else if cfg!(windows) {
         tokio::process::Command::new("cmd")
             .args(["/C", command])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
             .output()
             .await
     } else {
         tokio::process::Command::new("sh")
             .args(["-c", command])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
             .output()
             .await
     }
@@ -339,6 +369,61 @@ async fn execute_gcloud_auth() -> Result<String, ProviderAuthError> {
     }
 
     Ok(token)
+}
+
+/// Split a command string into words, respecting single/double quotes and
+/// backslash escapes. Returns `None` if the string contains unterminated
+/// quotes (in which case the caller should fall back to shell execution).
+fn shell_words(s: &str) -> Option<Vec<String>> {
+    let mut words = Vec::new();
+    let mut current = String::new();
+    let mut chars = s.chars().peekable();
+
+    while let Some(&ch) = chars.peek() {
+        match ch {
+            ' ' | '\t' => {
+                if !current.is_empty() {
+                    words.push(std::mem::take(&mut current));
+                }
+                chars.next();
+            }
+            '"' => {
+                chars.next(); // consume opening quote
+                loop {
+                    match chars.next() {
+                        Some('"') => break,
+                        Some('\\') => {
+                            if let Some(escaped) = chars.next() {
+                                current.push(escaped);
+                            }
+                        }
+                        Some(c) => current.push(c),
+                        None => return None, // unterminated quote
+                    }
+                }
+            }
+            '\'' => {
+                chars.next(); // consume opening quote
+                loop {
+                    match chars.next() {
+                        Some('\'') => break,
+                        Some(c) => current.push(c),
+                        None => return None, // unterminated quote
+                    }
+                }
+            }
+            _ => {
+                current.push(ch);
+                chars.next();
+            }
+        }
+    }
+
+    if !current.is_empty() {
+        words.push(current);
+    }
+
+    Some(words)
 }
 
 #[cfg(test)]

@@ -135,10 +135,17 @@ async fn delete_secret(service: &str, account: &str) -> Result<(), SecureStorage
 
 #[cfg(target_os = "windows")]
 async fn save_secret(service: &str, account: &str, secret: &str) -> Result<(), SecureStorageError> {
-    // Use Windows Credential Manager via cmdkey CLI.
+    // SECURITY NOTE: The Windows `cmdkey` CLI does not support reading the
+    // password from stdin — it only accepts `/pass <value>` as a CLI argument.
+    // This means the secret is briefly visible in the process command line and
+    // may appear in system process-list snapshots.  Unfortunately there is no
+    // standard programmatic alternative (Credential Manager WinAPI requires
+    // native FFI).  The file-based fallback below is always written regardless,
+    // so if cmdkey is unavailable the encrypted file store is used instead.
     let target = format!("{service}:{account}");
     let output = tokio::process::Command::new("cmdkey")
         .args(["/generic", &target, "/user", account, "/pass", secret])
+        .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .output()

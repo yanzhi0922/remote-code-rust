@@ -158,7 +158,7 @@ impl TokenRefreshScheduler {
             0
         };
 
-        if delay_ms <= 0 {
+        if delay_ms == 0 {
             debug!(
                 label = %self.label, session_id,
                 "Token expiring or expired; refresh is due now"
