@@ -81,7 +81,7 @@ impl PromptSuggestionService {
         }
 
         // If many tool calls have been made, suggest summarizing progress.
-        if tool_calls_used > 10 && tool_calls_used % 5 == 0 {
+        if tool_calls_used > 10 && tool_calls_used.is_multiple_of(5) {
             suggestions.push(PromptSuggestion {
                 display: "Summarize changes".into(),
                 prompt: "Summarize all changes made so far in this session.".into(),

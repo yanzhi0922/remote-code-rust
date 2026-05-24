@@ -6,7 +6,6 @@
 
 use std::sync::Mutex;
 
-use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
 /// Steps in the onboarding flow.

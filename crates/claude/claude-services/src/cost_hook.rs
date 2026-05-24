@@ -5,7 +5,6 @@
 
 use std::sync::Mutex;
 
-use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use tracing::warn;
 
@@ -55,7 +54,7 @@ pub enum CostAlertType {
 
 /// Running cost state for a session.
 #[derive(Debug, Clone, Default)]
-struct SessionCostState {
+pub struct SessionCostState {
     total_cost_usd: f64,
     total_input_tokens: u64,
     total_output_tokens: u64,
@@ -90,7 +89,7 @@ impl CostHook {
         output_tokens: u64,
         estimated_cost: f64,
     ) -> Vec<CostAlert> {
-        let mut state = self.sessions.lock().unwrap();
+        let mut state = self.sessions.lock().unwrap_or_else(|e| e.into_inner());
         let session = state.entry(session_id.to_owned()).or_default();
 
         session.total_cost_usd += estimated_cost;
@@ -190,13 +189,13 @@ impl CostHook {
 
     /// Get current usage summary for a session.
     pub fn summary(&self, session_id: &str) -> Option<SessionCostState> {
-        let state = self.sessions.lock().unwrap();
+        let state = self.sessions.lock().unwrap_or_else(|e| e.into_inner());
         state.get(session_id).cloned()
     }
 
     /// Reset tracking for a session.
     pub fn reset(&self, session_id: &str) {
-        let mut state = self.sessions.lock().unwrap();
+        let mut state = self.sessions.lock().unwrap_or_else(|e| e.into_inner());
         state.remove(session_id);
     }
 }

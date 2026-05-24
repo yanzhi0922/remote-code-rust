@@ -7,12 +7,12 @@
 //! - Temporary file and artifact cleanup
 //! - Provider connection health check
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::{Duration, SystemTime};
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use tracing::{info, warn};
+use tracing::info;
 
 /// Result of a recovery operation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -202,6 +202,7 @@ fn is_process_running(pid: u32) -> bool {
 mod tests {
     use super::*;
     use std::fs;
+    use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn unique_dir() -> PathBuf {
@@ -235,7 +236,7 @@ mod tests {
         std::fs::create_dir_all(&artifacts).unwrap();
         let report = LocalRecoveryCli::run_recovery(&tmp, &artifacts).unwrap();
         // Recovery should complete without panicking.
-        assert!(report.issues_found.len() + report.issues_resolved.len() >= 0);
+        assert!(report.issues_found.is_empty());
         let _ = fs::remove_dir_all(&tmp);
     }
 

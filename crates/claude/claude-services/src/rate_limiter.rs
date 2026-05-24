@@ -78,7 +78,7 @@ impl RateLimiter {
     /// Returns `Ok(())` if allowed, or `Err(retry_after_secs)` with the
     /// suggested backoff duration when rate-limited.
     pub fn check(&self, provider: &str, estimated_tokens: u64) -> std::result::Result<(), u64> {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         let (used_req, used_tok, window_start) = state
             .entry(provider.to_owned())
             .or_insert_with(|| (0, 0, Instant::now()));
@@ -112,7 +112,7 @@ impl RateLimiter {
 
     /// Record a successful API call, consuming tokens.
     pub fn record_success(&self, provider: &str, tokens_consumed: u64) {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         let (used_req, used_tok, _) = state
             .entry(provider.to_owned())
             .or_insert_with(|| (0, 0, Instant::now()));
@@ -124,7 +124,7 @@ impl RateLimiter {
     ///
     /// Resets the current window and advances it by `retry_after_secs`.
     pub fn record_retry_after(&self, provider: &str, retry_after_secs: u64) {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         state.insert(
             provider.to_owned(),
             (
@@ -138,7 +138,7 @@ impl RateLimiter {
 
     /// Return current rate limit state for a provider.
     pub fn state(&self, provider: &str) -> Option<RateLimitState> {
-        let state = self.state.lock().unwrap();
+        let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         state
             .get(provider)
             .map(|(used_req, used_tok, window_start)| {
@@ -154,7 +154,7 @@ impl RateLimiter {
 
     /// Reset all rate limit tracking.
     pub fn reset(&self) {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         state.clear();
     }
 }

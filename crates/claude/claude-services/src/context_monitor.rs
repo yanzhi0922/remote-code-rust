@@ -144,7 +144,6 @@ impl Default for ContextMonitor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use uuid::Uuid;
 
     #[test]
     fn healthy_at_low_usage() {
@@ -153,6 +152,7 @@ mod tests {
             compact_ratio: 0.3,
             critical_ratio: 0.5,
         });
+        assert_eq!(monitor.thresholds.warning_ratio, 0.1);
         // With a small number of tokens vs 200k limit, should be healthy.
         let ratio = 5000.0 / 200_000.0;
         assert!(ratio < 0.1);
