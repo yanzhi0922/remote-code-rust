@@ -243,7 +243,9 @@ pub(crate) fn runner_is_available(snapshot: &RunnerSnapshot, lease_ttl_secs: u64
     !matches!(
         snapshot.state,
         RunnerState::Draining | RunnerState::Offline | RunnerState::Unhealthy
-    ) && snapshot.last_seen_at >= Utc::now() - Duration::seconds(lease_ttl_secs as i64)
+    ) && snapshot.last_seen_at
+        >= Utc::now()
+            - Duration::seconds(lease_ttl_secs.try_into().unwrap_or(i64::MAX))
 }
 
 pub(crate) fn runner_rank(state: RunnerState) -> u8 {

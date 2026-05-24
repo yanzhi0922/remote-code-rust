@@ -45,6 +45,12 @@ pub async fn start_quic_listener(
     let local_addr = endpoint.local_addr()?;
     tracing::info!("QUIC server listening on {local_addr}");
 
+    // TODO(resource): The JoinSet accumulates task handles but only reaps completed
+    // ones opportunistically via `try_join_next()` inside the accept loop.  If no
+    // new connections arrive for a long time, finished tasks pile up.  Consider
+    // using `tokio::select!` to concurrently accept new connections AND reap
+    // finished tasks, so that task resources are released promptly regardless of
+    // incoming connection rate.
     let mut tasks: JoinSet<()> = JoinSet::new();
 
     loop {
@@ -260,6 +266,12 @@ async fn dispatch_runner_session_command(
     session_id: Uuid,
     request: rc_runner::RunnerSessionCommandRequest,
 ) -> anyhow::Result<()> {
+    // TODO(perf): The registry is read-locked twice here — once to resolve the
+    // session → runner mapping and again to look up the runner struct.  Consider
+    // consolidating into a single read-lock scope (or returning a small owned
+    // struct from the first lock) to reduce lock hold time and avoid the overhead
+    // of acquiring the RwLock twice.
+
     // Look up session → runner → enqueue.
     let runner_id = {
         let registry = service.registry.read().await;

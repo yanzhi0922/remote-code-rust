@@ -173,6 +173,11 @@ impl ControlPlaneService {
             .any(|expected| constant_time_value_eq(&provided_hash, expected))
     }
 
+    // TODO(resource): Stream tickets are only pruned when mint_stream_ticket or
+    // consume_stream_ticket is called.  If neither is invoked for a long period,
+    // expired tickets accumulate indefinitely.  Consider adding a periodic
+    // background task (e.g. a tokio::spawn interval) to prune expired tickets
+    // proactively, or switch to a TTL-aware cache such as `moka`.
     pub(crate) async fn mint_stream_ticket(
         &self,
         principal: AuthPrincipal,
@@ -508,6 +513,10 @@ pub(crate) fn persist_control_plane_state(
     Ok(())
 }
 
+// TODO(perf): Consider introducing connection pooling (e.g. r2d2 or a single
+// long-lived Connection behind an Arc<Mutex>) instead of opening a new SQLite
+// connection for every query. This would amortise PRAGMA checks, WAL setup, and
+// statement preparation across calls.
 fn open_state_connection(state_db_path: &std::path::Path) -> Result<Connection> {
     let connection = Connection::open(state_db_path)
         .with_context(|| format!("failed to open {}", state_db_path.display()))?;
@@ -555,7 +564,7 @@ fn persist_timeline_event(
             payload
         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
         params![
-            i64::try_from(event.sequence)?,
+            i64::try_from(event.sequence).unwrap_or(i64::MAX),
             event.recorded_at.to_rfc3339(),
             event.runner_id.as_deref(),
             event.session_id.map(|value| value.to_string()),

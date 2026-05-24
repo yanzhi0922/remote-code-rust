@@ -1,8 +1,11 @@
 //! Token rotation manager — short-lived access tokens with automatic refresh.
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use tokio::sync::RwLock;
+
+/// Shared HTTP client reused across token refresh calls.
+static SHARED_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
 
 /// Token pair returned by the auth server.
 #[derive(Debug, Clone)]
@@ -53,6 +56,12 @@ impl TokenManager {
 
     /// Get the current access token, attempting refresh if needed.
     /// Returns None if the token is expired and no refresh token is available.
+    ///
+    /// TODO(concurrency): The current implementation drops the write lock before
+    /// making the HTTP refresh call, which means concurrent callers can observe a
+    /// stale token and each trigger their own refresh request. Consider using a
+    /// `tokio::sync::Semaphore` or a dedicated refresh future behind an `Arc<Mutex>`
+    /// to coalesce concurrent refresh attempts into a single HTTP call.
     pub async fn access_token(&self) -> Option<String> {
         // Acquire a write lock up front so that the check-and-refresh is atomic.
         // This prevents multiple concurrent callers from triggering redundant refreshes.
@@ -94,7 +103,7 @@ impl TokenManager {
         let refresh_token = refresh_token?;
         let cp_url = cp_url?;
 
-        let client = reqwest::Client::new();
+        let client = SHARED_CLIENT.get_or_init(reqwest::Client::new);
         let url = format!("{cp_url}/v1/auth/refresh");
 
         let result = client

@@ -1,8 +1,12 @@
 //! Health probe engine for endpoint reachability checking.
 
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use crate::EndpointHealth;
+
+/// Shared HTTP client reused across all health probes.
+static SHARED_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
 
 /// Probe a single HTTP endpoint for reachability and latency.
 pub async fn probe_endpoint(
@@ -11,31 +15,23 @@ pub async fn probe_endpoint(
     timeout: Duration,
 ) -> EndpointHealth {
     let start = Instant::now();
-    let client = reqwest::Client::builder()
-        .timeout(timeout)
-        .no_proxy()
-        .build();
-
-    let client = match client {
-        Ok(c) => c,
-        Err(e) => {
-            return EndpointHealth {
-                url: url.to_owned(),
-                reachable: false,
-                latency_ms: None,
-                auth_valid: false,
-                error: Some(e.to_string()),
-            };
-        }
-    };
+    let client = SHARED_CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .unwrap_or_else(|e| {
+                tracing::warn!("failed to build shared health-probe client: {e}");
+                reqwest::Client::new()
+            })
+    });
 
     let mut request = client.get(url);
     if let Some(token) = auth_token {
         request = request.bearer_auth(token);
     }
 
-    match request.send().await {
-        Ok(response) => {
+    match tokio::time::timeout(timeout, request.send()).await {
+        Ok(Ok(response)) => {
             let latency = start.elapsed().as_millis() as u32;
             let status = response.status();
             EndpointHealth {
@@ -50,12 +46,19 @@ pub async fn probe_endpoint(
                 },
             }
         }
-        Err(e) => EndpointHealth {
+        Ok(Err(e)) => EndpointHealth {
             url: url.to_owned(),
             reachable: false,
             latency_ms: None,
             auth_valid: false,
             error: Some(e.to_string()),
+        },
+        Err(_) => EndpointHealth {
+            url: url.to_owned(),
+            reachable: false,
+            latency_ms: Some(timeout.as_millis() as u32),
+            auth_valid: false,
+            error: Some(format!("timed out after {}ms", timeout.as_millis())),
         },
     }
 }

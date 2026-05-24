@@ -277,10 +277,23 @@ async fn handle_responses(
 ) -> impl IntoResponse {
     // Validate bearer token to prevent unauthorised local processes from using
     // the upstream API key through this proxy.
+    // Constant-time bearer token comparison to prevent timing side-channels.
+    let expected = format!("Bearer {}", state.bearer_token);
     let auth_ok = headers
         .get("authorization")
         .and_then(|v| v.to_str().ok())
-        .map(|v| v == format!("Bearer {}", state.bearer_token))
+        .map(|v| {
+            // Check lengths first (constant time for equal-length strings),
+            // then compare bytes using a constant-time-friendly approach.
+            if v.len() != expected.len() {
+                return false;
+            }
+            let mut result: u8 = 0;
+            for (a, b) in v.bytes().zip(expected.bytes()) {
+                result |= a ^ b;
+            }
+            result == 0
+        })
         .unwrap_or(false);
     if !auth_ok {
         return (StatusCode::UNAUTHORIZED, "invalid or missing bearer token").into_response();
