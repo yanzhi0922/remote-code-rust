@@ -9,6 +9,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use futures::{SinkExt, StreamExt};
@@ -46,6 +47,13 @@ pub const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 15;
 pub const DEFAULT_MCP_CONFIG_FILE: &str = "mcp.toml";
 /// Default Claude-compatible project MCP config file name.
 pub const DEFAULT_PROJECT_MCP_CONFIG_FILE: &str = ".mcp.json";
+
+/// Shared HTTP client for remote MCP sessions.
+static REMOTE_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+
+fn remote_client() -> &'static reqwest::Client {
+    REMOTE_CLIENT.get_or_init(reqwest::Client::new)
+}
 
 /// An active stdio MCP session managing a child process.
 pub(crate) struct StdioMcpSession {
@@ -1289,7 +1297,7 @@ impl RemoteMcpSession {
         headers: &BTreeMap<String, String>,
         client_info: &McpClientInfo,
     ) -> Result<Self, McpRuntimeError> {
-        let http = reqwest::Client::new();
+        let http = remote_client().clone();
         let request_timeout_secs = server
             .request_timeout_secs
             .unwrap_or(DEFAULT_REQUEST_TIMEOUT_SECS);
@@ -1362,7 +1370,7 @@ impl RemoteMcpSession {
         headers: &BTreeMap<String, String>,
         client_info: &McpClientInfo,
     ) -> Result<Self, McpRuntimeError> {
-        let http = reqwest::Client::new();
+        let http = remote_client().clone();
         let request_timeout_secs = server
             .request_timeout_secs
             .unwrap_or(DEFAULT_REQUEST_TIMEOUT_SECS);

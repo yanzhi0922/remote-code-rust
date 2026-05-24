@@ -6,6 +6,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use rand::Rng;
@@ -16,6 +17,13 @@ use sha2::{Digest, Sha256};
 use crate::McpServerConfig;
 use crate::error::McpRuntimeError;
 use crate::transport::{McpOAuthConfig, McpTransportConfig};
+
+/// Shared HTTP client for OAuth token operations.
+static OAUTH_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+
+fn oauth_client() -> &'static reqwest::Client {
+    OAUTH_CLIENT.get_or_init(reqwest::Client::new)
+}
 
 // ── PKCE parameters ─────────────────────────────────────────────────────────
 
@@ -361,7 +369,7 @@ impl McpOAuthFlow {
             ("code_verifier", pkce.code_verifier.clone()),
         ];
 
-        let client = reqwest::Client::new();
+        let client = oauth_client();
         let response = client
             .post(&metadata.token_endpoint)
             .form(&params)
@@ -412,7 +420,7 @@ impl McpOAuthFlow {
             ("client_id", client_id.to_owned()),
         ];
 
-        let client = reqwest::Client::new();
+        let client = oauth_client();
         let response = client
             .post(&metadata.token_endpoint)
             .form(&params)
@@ -528,12 +536,24 @@ impl OAuthTokenStore {
         let json = serde_json::to_string_pretty(&self.tokens)
             .map_err(|e| McpRuntimeError::TokenStoreSerialize { source: e })?;
 
-        tokio::fs::write(&self.store_path, json)
+        tokio::fs::write(&self.store_path, &json)
             .await
             .map_err(|e| McpRuntimeError::TokenStoreIo {
                 path: self.store_path.clone(),
                 source: e,
             })?;
+
+        // Set restrictive file permissions (owner-only read/write) on Unix.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let perms = std::fs::Permissions::from_mode(0o600);
+            std::fs::set_permissions(&self.store_path, perms)
+                .map_err(|e| McpRuntimeError::TokenStoreIo {
+                    path: self.store_path.clone(),
+                    source: e,
+                })?;
+        }
 
         Ok(())
     }

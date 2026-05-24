@@ -4,6 +4,7 @@
 
 use std::process::Stdio;
 
+use std::sync::OnceLock;
 use std::time::UNIX_EPOCH;
 
 use anyhow::{Context, Result, anyhow};
@@ -13,6 +14,13 @@ use tokio::process::Command;
 use uuid::Uuid;
 
 use super::{FileState, ToolExecutionContext};
+
+/// Shared HTTP client for remote trigger tool.
+static TRIGGER_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+
+fn trigger_client() -> &'static reqwest::Client {
+    TRIGGER_CLIENT.get_or_init(reqwest::Client::new)
+}
 
 pub(crate) fn ask_user(input: &Value, _context: &ToolExecutionContext) -> Result<String> {
     let questions = normalize_ask_user_questions(input)?;
@@ -623,7 +631,7 @@ pub(crate) async fn remote_trigger_tool(input: &Value) -> Result<String> {
         "payload": payload,
     });
 
-    let client = reqwest::Client::new();
+    let client = trigger_client();
     let response = client
         .post(url)
         .json(&body)

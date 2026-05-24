@@ -6,8 +6,16 @@
 use anyhow::Result;
 use std::io::Write;
 use std::path::Path;
+use std::sync::OnceLock;
 
 use crate::metadata::AnalyticsEvent;
+
+/// Shared HTTP client for analytics exporters.
+static EXPORT_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+
+fn export_client() -> &'static reqwest::Client {
+    EXPORT_CLIENT.get_or_init(reqwest::Client::new)
+}
 
 // ---------------------------------------------------------------------------
 // EventExporter trait
@@ -72,7 +80,7 @@ impl EventExporter for DatadogExporter {
             payload.push('\n');
         }
         let do_export = || async {
-            let client = reqwest::Client::new();
+            let client = export_client();
             let resp = client
                 .post(&self.endpoint)
                 .header("DD-API-KEY", &self.api_key)
@@ -135,7 +143,7 @@ impl EventExporter for FirstPartyExporter {
         }
         let body = serde_json::to_string(events)?;
         let do_export = || async {
-            let client = reqwest::Client::new();
+            let client = export_client();
             let resp = client
                 .post(&self.endpoint)
                 .header("Content-Type", "application/json")

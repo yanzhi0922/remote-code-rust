@@ -5,10 +5,18 @@
 //! communication, forwarding requests with proper authentication headers.
 
 use std::collections::HashMap;
+use std::sync::OnceLock;
 
 use serde::{Deserialize, Serialize};
 
 use crate::error::McpRuntimeError;
+
+/// Shared HTTP client for proxy token operations.
+static PROXY_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+
+fn proxy_client() -> &'static reqwest::Client {
+    PROXY_CLIENT.get_or_init(reqwest::Client::new)
+}
 
 // ── Proxy configuration ─────────────────────────────────────────────────────
 
@@ -168,7 +176,7 @@ impl ClaudeAiProxyFetch {
             params.push(("client_secret", secret));
         }
 
-        let client = reqwest::Client::new();
+        let client = proxy_client();
         let resp = client
             .post(token_endpoint)
             .form(&params)

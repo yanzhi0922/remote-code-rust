@@ -4,13 +4,20 @@
 //! [`MockStt`] implementation for testing, and a [`WhisperStt`]
 //! implementation that calls the OpenAI Whisper API.
 
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use tracing;
 
 use crate::types::{TranscriptResult, VoiceConfig, VoiceState};
+
+/// Shared HTTP client for STT API requests.
+static STT_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+
+fn stt_client() -> &'static reqwest::Client {
+    STT_CLIENT.get_or_init(reqwest::Client::new)
+}
 
 // ---------------------------------------------------------------------------
 // VoiceStreamConfig
@@ -207,7 +214,7 @@ impl WhisperStt {
     /// `format` — file extension / container format (e.g. `"webm"`, `"wav"`,
     ///   `"mp4"`, `"ogg"`).
     pub async fn transcribe(&self, audio_data: &[u8], format: &str) -> Result<TranscriptResult> {
-        let client = reqwest::Client::new();
+        let client = stt_client();
 
         // Build the file part with an appropriate MIME type.
         let mime = match format {

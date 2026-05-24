@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use parking_lot::RwLock;
 use tokio::sync::mpsc;
@@ -7,6 +7,13 @@ use uuid::Uuid;
 
 use crate::ws_client::WsClient;
 use crate::{ImResponse, ImSender};
+
+/// Shared HTTP client for IM bridge session creation.
+static BRIDGE_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+
+fn bridge_client() -> &'static reqwest::Client {
+    BRIDGE_CLIENT.get_or_init(reqwest::Client::new)
+}
 
 struct SessionEntry {
     #[allow(dead_code)]
@@ -124,7 +131,7 @@ impl ImBridge {
     }
 
     async fn create_session(&self) -> anyhow::Result<Uuid> {
-        let client = reqwest::Client::new();
+        let client = bridge_client();
         let mut req = client.post(format!("{}/v1/sessions", self.server_url));
 
         if let Some(token) = &self.auth_token {

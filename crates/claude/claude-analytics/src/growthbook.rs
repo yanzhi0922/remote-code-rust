@@ -5,7 +5,19 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
+
+/// Shared HTTP client for GrowthBook API requests.
+static GROWTHBOOK_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+
+fn growthbook_client() -> &'static reqwest::Client {
+    GROWTHBOOK_CLIENT.get_or_init(reqwest::Client::new)
+}
+
+/// Recover from a poisoned Mutex by extracting the inner guard.
+fn recover_lock<'a, T>(lock: &'a Mutex<T>) -> std::sync::MutexGuard<'a, T> {
+    lock.lock().unwrap_or_else(|e| e.into_inner())
+}
 
 // ---------------------------------------------------------------------------
 // FeatureFlag
@@ -108,37 +120,28 @@ impl FeatureFlags {
 
     /// Set a feature flag.
     pub fn set_flag(&self, flag: FeatureFlag) {
-        if let Ok(mut flags) = self.flags.lock() {
-            flags.insert(flag.key.clone(), flag);
-        }
+        let mut flags = recover_lock(&self.flags);
+        flags.insert(flag.key.clone(), flag);
     }
 
     /// Check if a feature flag is enabled.
     ///
     /// Returns `false` if the flag does not exist or is disabled.
     pub fn is_enabled(&self, flag_key: &str) -> bool {
-        self.flags
-            .lock()
-            .ok()
-            .and_then(|flags| flags.get(flag_key).map(|f| f.enabled))
-            .unwrap_or(false)
+        let flags = recover_lock(&self.flags);
+        flags.get(flag_key).map(|f| f.enabled).unwrap_or(false)
     }
 
     /// Get the variation value for a feature flag.
     pub fn get_variation(&self, flag_key: &str) -> Option<String> {
-        self.flags
-            .lock()
-            .ok()
-            .and_then(|flags| flags.get(flag_key).and_then(|f| f.variation.clone()))
+        let flags = recover_lock(&self.flags);
+        flags.get(flag_key).and_then(|f| f.variation.clone())
     }
 
     /// Get all flags as a vector.
     pub fn all_flags(&self) -> Vec<FeatureFlag> {
-        self.flags
-            .lock()
-            .ok()
-            .map(|flags| flags.values().cloned().collect())
-            .unwrap_or_default()
+        let flags = recover_lock(&self.flags);
+        flags.values().cloned().collect()
     }
 
     /// Refresh flags from a remote source.
@@ -151,7 +154,7 @@ impl FeatureFlags {
         if config.api_endpoint.is_empty() {
             return Ok(());
         }
-        let client = reqwest::Client::new();
+        let client = growthbook_client();
         let resp = client
             .get(&config.api_endpoint)
             .timeout(std::time::Duration::from_secs(10))
@@ -160,9 +163,8 @@ impl FeatureFlags {
         match resp {
             Ok(r) if r.status().is_success() => match r.json::<serde_json::Value>().await {
                 Ok(body) => {
-                    if let Some(flags_map) = body.get("features").and_then(|f| f.as_object())
-                        && let Ok(mut flags) = self.flags.lock()
-                    {
+                    if let Some(flags_map) = body.get("features").and_then(|f| f.as_object()) {
+                        let mut flags = recover_lock(&self.flags);
                         flags.clear();
                         for (key, value) in flags_map {
                             if let Ok(flag) = serde_json::from_value::<FeatureFlag>(value.clone()) {
@@ -190,7 +192,8 @@ impl FeatureFlags {
 
     /// Number of flags currently loaded.
     pub fn len(&self) -> usize {
-        self.flags.lock().map(|f| f.len()).unwrap_or(0)
+        let flags = recover_lock(&self.flags);
+        flags.len()
     }
 
     /// Whether there are no flags loaded.
