@@ -5,6 +5,22 @@ import { URL } from 'url';
 
 const LISTEN_PORT = 9999;
 
+const SENSITIVE_HEADERS = new Set([
+    'authorization', 'x-api-key', 'cookie', 'set-cookie', 'proxy-authorization',
+]);
+
+function redactHeaders(headers) {
+    const result = {};
+    for (const [key, value] of Object.entries(headers)) {
+        if (SENSITIVE_HEADERS.has(key.toLowerCase())) {
+            result[key] = '[REDACTED]';
+        } else {
+            result[key] = value;
+        }
+    }
+    return result;
+}
+
 const server = http.createServer(async (req, res) => {
     let body = '';
     for await (const chunk of req) body += chunk;
@@ -14,7 +30,8 @@ const server = http.createServer(async (req, res) => {
     console.log('\n=== REQUEST ===');
     console.log(`${req.method} ${target.href}`);
     console.log('--- Headers ---');
-    for (const [key, value] of Object.entries(req.headers)) {
+    const safeHeaders = redactHeaders(req.headers);
+    for (const [key, value] of Object.entries(safeHeaders)) {
         if (key === 'x-target-url') continue;
         console.log(`  ${key}: ${value}`);
     }

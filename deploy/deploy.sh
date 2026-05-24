@@ -1,7 +1,10 @@
 #!/bin/bash
 set -euo pipefail
 
-SERVER="${SERVER:-root@49.235.163.138}"
+if [[ -z "${SERVER:-}" ]]; then
+  echo "error: SERVER environment variable must be set (e.g. SERVER=root@your-host.com)" >&2
+  exit 1
+fi
 SSH_KEY="${SSH_KEY:-$HOME/.ssh/id_ed25519}"
 DOMAIN="${REMOTE_CODE_DOMAIN:-remote-code.yz520gzy.top}"
 REMOTE_DIR="${REMOTE_DIR:-/opt/remote-code}"
