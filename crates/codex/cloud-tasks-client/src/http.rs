@@ -763,6 +763,10 @@ mod api {
 
     fn parse_updated_at(ts: Option<&f64>) -> DateTime<Utc> {
         if let Some(v) = ts {
+            // Validate the timestamp is a finite, non-negative number before conversion.
+            if !v.is_finite() || *v < 0.0 {
+                return Utc::now();
+            }
             let secs = *v as i64;
             let nanos = ((*v - secs as f64) * 1_000_000_000.0) as u32;
             return DateTime::<Utc>::from(

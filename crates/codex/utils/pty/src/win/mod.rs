@@ -35,6 +35,8 @@ use std::io::Error as IoError;
 use std::io::Result as IoResult;
 use std::os::windows::io::AsRawHandle;
 use std::pin::Pin;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use std::sync::Mutex;
 use std::task::Context;
 use std::task::Poll;
@@ -54,6 +56,8 @@ pub use psuedocon::conpty_supported;
 #[derive(Debug)]
 pub struct WinChild {
     proc: Mutex<OwnedHandle>,
+    /// Guard to prevent spawning more than one wait thread per process.
+    wait_thread_spawned: AtomicBool,
 }
 
 impl WinChild {
@@ -159,14 +163,17 @@ impl std::future::Future for WinChild {
             Ok(Some(status)) => Poll::Ready(Ok(status)),
             Err(err) => Poll::Ready(Err(err).context("Failed to retrieve process exit status")),
             Ok(None) => {
-                let proc = self.proc.lock().unwrap().try_clone()?;
-                let waker = cx.waker().clone();
-                std::thread::spawn(move || {
-                    unsafe {
-                        WaitForSingleObject(proc.as_raw_handle() as _, INFINITE);
-                    }
-                    waker.wake();
-                });
+                // Only spawn one wait thread; subsequent polls reuse the same waker.
+                if !self.wait_thread_spawned.swap(true, Ordering::AcqRel) {
+                    let proc = self.proc.lock().unwrap().try_clone()?;
+                    let waker = cx.waker().clone();
+                    std::thread::spawn(move || {
+                        unsafe {
+                            WaitForSingleObject(proc.as_raw_handle() as _, INFINITE);
+                        }
+                        waker.wake();
+                    });
+                }
                 Poll::Pending
             }
         }

@@ -882,27 +882,19 @@ fn request_id_from_client_request(request: &ClientRequest) -> RequestId {
 }
 
 fn jsonrpc_request_from_client_request(request: ClientRequest) -> JSONRPCRequest {
-    let value = match serde_json::to_value(request) {
-        Ok(value) => value,
-        Err(err) => panic!("client request should serialize: {err}"),
-    };
-    match serde_json::from_value(value) {
-        Ok(request) => request,
-        Err(err) => panic!("client request should encode as JSON-RPC request: {err}"),
-    }
+    let value = serde_json::to_value(request)
+        .expect("client request should always serialize to serde_json::Value");
+    serde_json::from_value(value)
+        .expect("client request should always encode as a valid JSON-RPC request")
 }
 
 fn jsonrpc_notification_from_client_notification(
     notification: ClientNotification,
 ) -> JSONRPCNotification {
-    let value = match serde_json::to_value(notification) {
-        Ok(value) => value,
-        Err(err) => panic!("client notification should serialize: {err}"),
-    };
-    match serde_json::from_value(value) {
-        Ok(notification) => notification,
-        Err(err) => panic!("client notification should encode as JSON-RPC notification: {err}"),
-    }
+    let value = serde_json::to_value(notification)
+        .expect("client notification should always serialize to serde_json::Value");
+    serde_json::from_value(value)
+        .expect("client notification should always encode as a valid JSON-RPC notification")
 }
 
 async fn write_jsonrpc_message(

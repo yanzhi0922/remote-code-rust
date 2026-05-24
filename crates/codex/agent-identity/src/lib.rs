@@ -302,6 +302,16 @@ pub fn agent_registration_url(chatgpt_base_url: &str) -> String {
 }
 
 pub fn agent_task_registration_url(chatgpt_base_url: &str, agent_runtime_id: &str) -> String {
+    // Validate that agent_runtime_id contains only URL-safe characters to prevent
+    // path injection (e.g., "../../" or query string tricks).
+    let is_safe = agent_runtime_id
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_');
+    if !is_safe {
+        panic!(
+            "agent_runtime_id contains unsafe URL characters: {agent_runtime_id}"
+        );
+    }
     let trimmed = chatgpt_base_url.trim_end_matches('/');
     format!("{trimmed}/v1/agent/{agent_runtime_id}/task/register")
 }

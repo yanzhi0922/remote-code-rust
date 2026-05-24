@@ -1368,6 +1368,10 @@ fn copy_dir_recursive(source: &Path, target: &Path) -> io::Result<()> {
             } else {
                 fs::copy(source_path, target_path)?;
             }
+        } else if file_type.is_symlink() {
+            // Preserve symlinks by copying the link target rather than dereferencing.
+            // This avoids dropping symlink structure during recursive copies.
+            std::fs::copy(&source_path, &target_path)?;
         }
     }
 

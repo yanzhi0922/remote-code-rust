@@ -223,6 +223,7 @@ impl PsuedoCon {
 
         Ok(WinChild {
             proc: Mutex::new(proc),
+            wait_thread_spawned: std::sync::atomic::AtomicBool::new(false),
         })
     }
 }

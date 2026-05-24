@@ -42,7 +42,8 @@ fn assume_init_vec<T>(mut buf: Vec<MaybeUninit<T>>) -> Vec<T> {
 }
 
 fn control_space_for_fds(count: usize) -> usize {
-    unsafe { libc::CMSG_SPACE((count * size_of::<RawFd>()) as _) as usize }
+    let fd_size = count.checked_mul(size_of::<RawFd>()).expect("fd count overflow in control_space_for_fds");
+    unsafe { libc::CMSG_SPACE(fd_size.try_into().expect("fd size overflow in CMSG_SPACE")) as usize }
 }
 
 /// Extracts the FDs from a SCM_RIGHTS control message.
@@ -144,6 +145,10 @@ async fn read_frame_header(
     unreachable!("header loop always returns")
 }
 
+/// Maximum allowable frame payload size (16 MiB).
+/// Frames exceeding this limit are rejected to prevent unbounded allocation.
+const MAX_FRAME_SIZE: usize = 16 * 1024 * 1024;
+
 /// Read `message_len` bytes from a SOCK_STREAM socket.
 async fn read_frame_payload(
     async_socket: &AsyncFd<Socket>,
@@ -151,6 +156,14 @@ async fn read_frame_payload(
 ) -> std::io::Result<Vec<u8>> {
     if message_len == 0 {
         return Ok(Vec::new());
+    }
+    if message_len > MAX_FRAME_SIZE {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!(
+                "frame payload size {message_len} exceeds maximum allowed ({MAX_FRAME_SIZE} bytes)"
+            ),
+        ));
     }
     let mut payload = vec![MaybeUninit::<u8>::uninit(); message_len];
     let mut filled = 0;

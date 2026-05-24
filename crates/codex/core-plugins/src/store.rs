@@ -342,6 +342,10 @@ fn copy_dir_recursive(source: &Path, target: &Path) -> Result<(), PluginStoreErr
         } else if file_type.is_file() {
             fs::copy(&source_path, &target_path)
                 .map_err(|err| PluginStoreError::io("failed to copy plugin file", err))?;
+        } else if file_type.is_symlink() {
+            // Preserve symlinks by copying the link target rather than dereferencing.
+            std::fs::copy(&source_path, &target_path)
+                .map_err(|err| PluginStoreError::io("failed to copy plugin symlink", err))?;
         }
     }
 

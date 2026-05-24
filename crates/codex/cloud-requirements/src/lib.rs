@@ -60,6 +60,10 @@ const CLOUD_REQUIREMENTS_AUTH_RECOVERY_FAILED_MESSAGE: &str = concat!(
     "Your authentication session could not be refreshed automatically. ",
     "Please log out and sign in again."
 );
+// TODO(security): This HMAC key is hardcoded, meaning all installations share
+// the same key. An attacker who discovers this key could forge cache entries on
+// any machine. Derive the key per-installation (e.g., from a machine-specific
+// secret or a random key stored in the user's config directory).
 const CLOUD_REQUIREMENTS_CACHE_WRITE_HMAC_KEY: &[u8] =
     b"codex-cloud-requirements-cache-v3-064f8542-75b4-494c-a294-97d3ce597271";
 const CLOUD_REQUIREMENTS_CACHE_READ_HMAC_KEYS: &[&[u8]] =
