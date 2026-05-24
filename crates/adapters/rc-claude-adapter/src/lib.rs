@@ -82,7 +82,10 @@ use rc_agent_protocol::types::{AgentConfig, AgentInfo, AgentStatus, AgentType};
 use rc_engine_events::EventStream;
 
 /// Maximum time (in seconds) to wait for a permission decision before denying.
-const PERMISSION_TIMEOUT_SECS: u64 = 60 * 30; // 30 minutes
+// Kept short (30 s) because the Drop impl cannot call the async drain; pending
+// permissions that are never resolved will block their oneshot sender forever.
+// A shorter timeout ensures stale permissions are denied promptly on cleanup.
+const PERMISSION_TIMEOUT_SECS: u64 = 30;
 
 // ─── PendingPermission ─────────────────────────────────────────────────────
 
@@ -601,6 +604,11 @@ impl ClaudeInProcessAdapter {
     /// Abort the current worker (if any) and reset the cancel token.
     fn abort_worker(&mut self) {
         if let Some(handle) = self.worker_handle.take() {
+            // We cannot call the async drain_pending_permissions here, so
+            // any pending permission requests will be auto-denied when their
+            // timeout expires (PERMISSION_TIMEOUT_SECS). This is intentional
+            // to avoid blocking the synchronous code path.
+            warn!("Aborting previous worker; pending permissions will be auto-denied after timeout");
             handle.abort();
         }
         // Recreate the cancel token so future calls get a fresh token.
@@ -894,7 +902,8 @@ impl Drop for ClaudeInProcessAdapter {
         if let Some(handle) = self.worker_handle.take() {
             handle.abort();
         }
-        // Note: drain_pending_permissions requires async, so pending permissions
-        // will time out on their own (30 min). This is a best-effort cleanup.
+        // Note: drain_pending_permissions requires async so we cannot call it in
+        // Drop. Pending permissions will time out on their own after
+        // PERMISSION_TIMEOUT_SECS (30 s) and be auto-denied.
     }
 }
