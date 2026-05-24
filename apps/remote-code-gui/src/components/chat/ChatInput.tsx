@@ -283,14 +283,15 @@ export function ChatInput() {
     }));
     setAttachments((prev) => [...prev, ...newFiles]);
 
-    Array.from(files).forEach((file) => {
+    Array.from(files).forEach((file, i) => {
       if (file.type.startsWith('image/')) {
+        const targetId = newFiles[i].id;
         const reader = new FileReader();
         reader.onload = (e) => {
           const preview = e.target?.result as string;
           setAttachments((prev) =>
             prev.map((a) =>
-              a.name === file.name && !a.preview ? { ...a, preview } : a,
+              a.id === targetId && !a.preview ? { ...a, preview } : a,
             ),
           );
         };
@@ -422,8 +423,12 @@ export function ChatInput() {
     }
   };
 
+  const lastCommittedModel = useRef(modelDraft.trim());
   const commitModelDraft = async () => {
-    await updateSettings({ provider_model: modelDraft.trim() });
+    const trimmed = modelDraft.trim();
+    if (trimmed === lastCommittedModel.current) return;
+    lastCommittedModel.current = trimmed;
+    await updateSettings({ provider_model: trimmed });
   };
 
   const hasAttachments = attachments.length > 0;

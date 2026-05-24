@@ -88,7 +88,7 @@ function ToolIcon({ name }: { name: string }) {
 function EmptyState({ title }: { title: string }) {
   return (
     <div className="flex h-full min-h-[320px] items-center justify-center px-6">
-      <div className="rounded-md border border-dashed border-rc-border-primary bg-rc-bg-elevated px-5 py-4 text-sm text-rc-text-tertiary shadow-xs">
+      <div className="rounded-xl border border-dashed border-rc-border-primary bg-rc-bg-elevated px-5 py-4 text-sm text-rc-text-tertiary shadow-xs">
         {title}
       </div>
     </div>
@@ -245,7 +245,7 @@ function AssistantMessage({ entry }: { entry: ConversationEntry }) {
   const thinkingBlocks = extractThinkingBlocks(entry);
 
   return (
-    <article className="group border-b border-rc-border-secondary py-5 last:border-b-0">
+    <article className="group border-b border-rc-border-secondary py-6 last:border-b-0">
       <div className="mb-3 flex items-center gap-2">
         <span className="h-2 w-2 rounded-full bg-rc-accent-info" />
         <span className="text-[10px] font-semibold uppercase text-rc-text-tertiary">
@@ -280,8 +280,8 @@ const MessageCard = memo(
 
     if (entry.role === 'user') {
       return (
-        <div className="flex justify-end border-b border-rc-border-secondary py-5 last:border-b-0">
-          <div className="max-w-[720px] rounded-md border border-rc-border-primary bg-rc-bg-elevated px-4 py-3 text-sm leading-6 text-rc-text-primary shadow-xs">
+        <div className="flex justify-end border-b border-rc-border-secondary py-6 last:border-b-0">
+          <div className="max-w-[720px] rounded-xl border border-rc-border-primary bg-rc-bg-elevated px-4 py-3 text-sm leading-6 text-rc-text-primary shadow-xs">
             <div className="mb-2 flex items-center justify-between">
               <span className="text-[10px] font-semibold uppercase text-rc-text-tertiary">User</span>
               <CopyButton text={entry.text} />
@@ -425,7 +425,12 @@ function ConversationTimeline({
   const rowVirtualizer = useVirtualizer({
     count: conversation.length,
     getScrollElement: () => scrollContainerRef.current,
-    estimateSize: (index) => estimateEntryHeight(conversation[index] ?? conversation[0]),
+    estimateSize: (index) => {
+      const entry = conversation[index];
+      if (entry) return estimateEntryHeight(entry);
+      if (conversation.length > 0) return estimateEntryHeight(conversation[0]);
+      return 80;
+    },
     overscan: VIRTUALIZATION_OVERSCAN,
     getItemKey: (index) => conversationRowKey(conversation[index] ?? conversation[0], index),
   });
@@ -434,9 +439,9 @@ function ConversationTimeline({
     <section
       ref={scrollContainerRef}
       aria-label="Conversation transcript"
-      className="flex-1 min-h-0 overflow-y-auto bg-rc-bg-chat px-5 py-4"
+      className="flex-1 min-h-0 overflow-y-auto bg-rc-bg-chat px-5 py-5"
     >
-      <div className="mx-auto flex w-full max-w-[860px] flex-col">
+      <div className="mx-auto flex w-full max-w-chat flex-col">
         {shouldVirtualize ? (
           <div className="relative w-full" style={{ height: `${rowVirtualizer.getTotalSize()}px` }}>
             {rowVirtualizer.getVirtualItems().map((virtualRow) => {
@@ -488,7 +493,7 @@ function ConversationHeader({
   provider?: string | null;
 }) {
   return (
-    <div className="flex h-11 shrink-0 items-center justify-between border-b border-rc-border-secondary glass-heavy px-4">
+    <div className="flex h-12 shrink-0 items-center justify-between border-b border-rc-border-secondary bg-rc-bg-surface px-4">
       <div className="flex min-w-0 items-center gap-2">
         <div className="min-w-0 truncate text-sm font-semibold text-rc-text-primary">{title}</div>
         <button
@@ -501,7 +506,7 @@ function ConversationHeader({
         </button>
       </div>
 
-      <div className="hidden min-w-0 items-center gap-2 rounded-md border border-rc-border-secondary bg-rc-bg-secondary px-2 py-1 text-xs text-rc-text-tertiary md:flex">
+      <div className="hidden min-w-0 items-center gap-2 rounded-lg border border-rc-border-secondary bg-rc-bg-elevated px-2.5 py-1.5 text-xs text-rc-text-tertiary md:flex">
         <GitBranch size={14} />
         <span className="truncate">{provider ?? 'provider'}</span>
         {model && (
@@ -525,6 +530,7 @@ export function ChatArea() {
   const liveToolResults = useAppStore((state) => state.liveToolResults);
   const sessions = useAppStore((state) => state.sessions);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const lastScrollRef = useRef(0);
 
   const compactProgress = useMemo(() => liveToolProgress.slice(-6), [liveToolProgress]);
   const compactResults = useMemo(() => liveToolResults.slice(-4), [liveToolResults]);
@@ -534,6 +540,9 @@ export function ChatArea() {
   );
 
   useEffect(() => {
+    const now = Date.now();
+    if (now - lastScrollRef.current < 100) return;
+    lastScrollRef.current = now;
     bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
   }, [conversation, sending, liveToolProgress, liveToolResults]);
 
