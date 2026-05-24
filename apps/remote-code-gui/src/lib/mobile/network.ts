@@ -49,8 +49,14 @@ export function initNetworkMonitoring(): void {
       listeners.forEach((fn) => fn(currentStatus.connected, currentStatus.connectionType));
     }).then((unlisten: () => void) => {
       cleanup = unlisten;
-    }).catch((err) => { console.warn('[network] onNetworkStatusChange listener setup failed:', err); });
-  }).catch((err) => { console.warn('[network] plugin-network import failed:', err); });
+    }).catch((err) => {
+      console.warn('[network] onNetworkStatusChange listener setup failed:', err);
+      cleanup = () => {};
+    });
+  }).catch((err) => {
+    console.warn('[network] plugin-network import failed:', err);
+    cleanup = () => {};
+  });
 }
 
 export function getNetworkStatus(): NetworkStatus {
@@ -58,8 +64,9 @@ export function getNetworkStatus(): NetworkStatus {
 }
 
 export async function isOnline(): Promise<boolean> {
+  if (currentStatus.connected) return true;
   if (typeof navigator !== 'undefined') return navigator.onLine;
-  return currentStatus.connected;
+  return false;
 }
 
 export function onNetworkChange(listener: NetworkChangeListener): () => void {

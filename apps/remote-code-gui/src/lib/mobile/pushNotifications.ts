@@ -31,9 +31,17 @@ function isValidPushPayload(payload: unknown): payload is PushPayload {
 
 let _pushToken: string | null = null;
 let _permissionGranted = false;
+let _unlistenNotification: (() => void) | null = null;
+let _unlistenNotificationClicked: (() => void) | null = null;
 
 export async function initPushNotifications(options: PushNotificationOptions): Promise<void> {
   if (!hasTauriRuntime()) return;
+
+  // Remove previous listeners before registering new ones to avoid duplicates.
+  _unlistenNotification?.();
+  _unlistenNotification = null;
+  _unlistenNotificationClicked?.();
+  _unlistenNotificationClicked = null;
 
   // Request permission
   _permissionGranted = await invoke<boolean>('mobile_push_request_permission');
@@ -43,7 +51,7 @@ export async function initPushNotifications(options: PushNotificationOptions): P
   _pushToken = await invoke<string | null>('mobile_push_get_token');
 
   // Listen for push notification events
-  await listen('mobile://push-notification', (event) => {
+  _unlistenNotification = await listen('mobile://push-notification', (event) => {
     if (!isValidPushPayload(event.payload)) return;
     const payload = event.payload;
     if (payload.type === 'approval' && payload.approvalId && payload.sessionId) {
@@ -53,7 +61,7 @@ export async function initPushNotifications(options: PushNotificationOptions): P
     }
   });
 
-  await listen('mobile://push-notification-clicked', (event) => {
+  _unlistenNotificationClicked = await listen('mobile://push-notification-clicked', (event) => {
     if (!isValidPushPayload(event.payload)) return;
     const payload = event.payload;
     if (payload.type === 'approval' && payload.approvalId && payload.sessionId) {

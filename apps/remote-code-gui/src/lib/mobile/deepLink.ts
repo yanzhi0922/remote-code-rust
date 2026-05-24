@@ -8,16 +8,17 @@ export interface DeepLinkPairing {
 
 type DeepLinkHandler = (url: string, path: string, params: Record<string, string>) => void;
 
-export async function initDeepLinks(handler: DeepLinkHandler): Promise<void> {
-  if (!hasTauriRuntime()) return;
+export async function initDeepLinks(handler: DeepLinkHandler): Promise<() => void> {
+  if (!hasTauriRuntime()) return () => {};
 
-  await listen<string>('mobile://deep-link', (event) => {
+  const unlisten = await listen<string>('mobile://deep-link', (event) => {
     const url = event.payload;
     const parsed = parseDeepLink(url);
     if (parsed) {
       handler(url, parsed.path, parsed.params);
     }
   });
+  return unlisten;
 }
 
 function parseDeepLink(url: string): { path: string; params: Record<string, string> } | null {

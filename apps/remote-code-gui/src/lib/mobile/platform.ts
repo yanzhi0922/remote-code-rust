@@ -8,6 +8,13 @@ export async function isMobile(): Promise<boolean> {
 
 let _cachedIsMobile: boolean | null = null;
 
+/**
+ * Synchronous mobile detection using UA sniffing as a fast initial guess.
+ * The async isMobile() call refines the result using the Tauri native runtime,
+ * but many callers need a synchronous answer at module-eval / render time.
+ * This tradeoff means the first render may use the UA-based heuristic and
+ * correct itself on the next tick when the native result arrives.
+ */
 export function isMobileSync(): boolean {
   if (_cachedIsMobile !== null) return _cachedIsMobile;
   if (typeof window === 'undefined') return false;
@@ -19,5 +26,5 @@ export function isMobileSync(): boolean {
 
 export function isTouchDevice(): boolean {
   if (typeof window === 'undefined') return false;
-  return 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+  return ('ontouchstart' in window || navigator.maxTouchPoints > 0) && window.innerWidth < 768;
 }

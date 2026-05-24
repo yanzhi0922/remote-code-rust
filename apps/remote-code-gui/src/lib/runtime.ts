@@ -264,8 +264,8 @@ async function secureStoreSet(key: string, value: string): Promise<void> {
   }
   try {
     await invoke('mobile_secure_store_set', { key, value });
-  } catch {
-    // Ignore native secure-store failures; session storage remains the web fallback.
+  } catch (error) {
+    console.error('[runtime] secureStoreSet failed for key', key, error);
   }
 }
 

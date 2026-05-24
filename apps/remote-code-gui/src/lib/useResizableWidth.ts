@@ -20,6 +20,8 @@ export function useResizableWidth() {
   const isDragging = useRef(false);
   const startX = useRef(0);
   const startWidth = useRef(0);
+  const latestWidthRef = useRef(width);
+  latestWidthRef.current = width;
 
   useEffect(() => {
     document.documentElement.style.setProperty('--sidebar-width', `${width}px`);
@@ -37,6 +39,7 @@ export function useResizableWidth() {
       const next = Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, startWidth.current + delta));
       document.documentElement.style.setProperty('--sidebar-width', `${next}px`);
       setWidth(next);
+      latestWidthRef.current = next;
     };
 
     const handleMouseUp = () => {
@@ -45,7 +48,7 @@ export function useResizableWidth() {
       document.removeEventListener('mouseup', handleMouseUp);
       document.body.style.cursor = '';
       document.body.style.userSelect = '';
-      try { localStorage.setItem(STORAGE_KEY, String(width)); } catch { /* ignore */ }
+      try { localStorage.setItem(STORAGE_KEY, String(latestWidthRef.current)); } catch { /* ignore */ }
     };
 
     document.body.style.cursor = 'col-resize';
