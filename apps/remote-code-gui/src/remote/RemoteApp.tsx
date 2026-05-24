@@ -43,13 +43,6 @@ import {
 } from '../lib/runtime';
 import { downloadRemoteArtifact } from '../lib/fileDownload';
 import { shareFile } from '../lib/mobile/fileDownload';
-import {
-  initPushNotifications,
-  registerPushTokenWithControlPlane,
-  showLocalNotification,
-} from '../lib/mobile/pushNotifications';
-import { initDeepLinks, parsePairingUrl } from '../lib/mobile/deepLink';
-import { initAppLifecycle } from '../lib/mobile/appLifecycle';
 import { ApprovalPanel } from '../components/shared/ApprovalPanel';
 import { ArtifactPanel } from '../components/shared/ArtifactPanel';
 import { formatBytes } from '../components/shared/formatBytes';
@@ -73,14 +66,9 @@ import {
   resolveRemoteLocale,
   type RemoteConnectionState,
 } from './i18n';
-import {
-  appendRemoteTimelineEvent,
-} from '../session/normalize/fromRemote';
 import { RemoteAuthGate } from './RemoteAuthGate';
 import { RemoteShell, EmptyCard } from './RemoteShell';
-import { loadRemoteSessionBundle } from './transport';
 import { isDirectRunnerEnabled, resolveRemoteRunnerBaseUrl, resolveRemoteTransportStrategy } from './transportMode';
-import { useConnection } from './useConnection';
 import { useRemoteSessionController } from './useRemoteSessionController';
 import { extractErrorMessage } from './utils';
 import type { TransportConfig } from './connection-manager';
@@ -118,6 +106,10 @@ const APPROVAL_DECISIONS: Array<{
 
 // ═══════════════════════════════════════════════════════════════════════════
 // RemoteApp — thin orchestrator
+// TODO: TimelineCard component and helper functions (toolLabel, toolSummary,
+// approvalSummary, artifactSummary, sessionEventSummary, runnerEventSummary,
+// describeSessionControl) are duplicated from MobileRemoteApp.tsx. Extract
+// into a shared module to eliminate the duplication.
 // ═══════════════════════════════════════════════════════════════════════════
 
 export default function RemoteApp() {

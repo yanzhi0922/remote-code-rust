@@ -44,8 +44,8 @@ function shouldUseWorkbenchDemo(): boolean {
   return new URLSearchParams(window.location.search).has('workbench-demo');
 }
 
-function shouldUseLocalWorkbenchPreview(nativeRuntime: boolean): boolean {
-  if (nativeRuntime || typeof window === 'undefined') return false;
+function shouldUseLocalWorkbenchPreview(): boolean {
+  if (typeof window === 'undefined') return false;
   const params = new URLSearchParams(window.location.search);
   if (params.get('mode') === 'local' || params.has('workbench')) return true;
   return import.meta.env.DEV;
@@ -393,7 +393,7 @@ function DemoLocalApp() {
 
   useEffect(() => {
     try {
-      localStorage.setItem('rc-theme-mode', theme);
+      localStorage.setItem('rc-theme-mode-v2', theme);
     } catch {}
   }, [theme]);
 
@@ -627,7 +627,7 @@ function App() {
   }
 
   if (!nativeRuntime) {
-    if (shouldUseLocalWorkbenchPreview(nativeRuntime)) {
+    if (shouldUseLocalWorkbenchPreview()) {
       return (
         <AppErrorBoundary>
           <DemoLocalApp />

@@ -224,7 +224,10 @@ export function clearRemotePairingContext(): void {
   }
 }
 
+let _sensitiveParamsStripped = false;
+
 export function stripRemoteSensitiveQueryParams(): void {
+  if (_sensitiveParamsStripped) return;
   const url = new URL(window.location.href);
   let changed = false;
   for (const key of ['access_token', 'token', 'pairing_offer', 'pairing_secret', 'offerId', 'secret']) {
@@ -234,6 +237,7 @@ export function stripRemoteSensitiveQueryParams(): void {
     }
   }
   if (changed) {
+    _sensitiveParamsStripped = true;
     window.history.replaceState({}, document.title, url.toString());
   }
 }
