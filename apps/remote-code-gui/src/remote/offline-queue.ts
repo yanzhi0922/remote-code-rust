@@ -90,6 +90,15 @@ export async function enqueueCommand(
   });
 }
 
+/**
+ * Drain queued commands for the given session.
+ *
+ * Side effects:
+ * - Removes all drained (non-stale) commands for the target session from IndexedDB.
+ * - **Cross-session pruning:** Also deletes stale commands (older than
+ *   {@link STALE_THRESHOLD_MS}) belonging to *any* session, not just the target.
+ *   This prevents unbounded growth of the queue when other sessions never reconnect.
+ */
 export async function drainCommands(sessionId: string): Promise<QueuedCommand[]> {
   const db = await openDb();
   const now = Date.now();

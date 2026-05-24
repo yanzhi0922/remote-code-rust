@@ -400,10 +400,14 @@ export class UnifiedTransport implements TransportHandle {
 
       if (shouldDirect && this.canUseDirectRunner()) {
         this._strategy = 'direct_websocket';
-        this.connectWebSocket(this.directRunnerBaseUrl()!, this._latestSequence);
+        this.connectWebSocket(this.directRunnerBaseUrl()!, this._latestSequence).catch((err) => {
+          console.warn('[unified-transport] auto-switch WS failed:', err);
+        });
       } else {
         this._strategy = 'server_relay';
-        this.connectWebSocket(this._config.baseUrl, this._latestSequence);
+        this.connectWebSocket(this._config.baseUrl, this._latestSequence).catch((err) => {
+          console.warn('[unified-transport] auto-switch WS failed:', err);
+        });
       }
     }
   }
