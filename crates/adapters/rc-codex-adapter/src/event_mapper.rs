@@ -248,6 +248,11 @@ pub fn map_app_server_event(event: AppServerEvent, session_id: &str) -> Vec<Unif
         AppServerEvent::ServerNotification(notification) => {
             let method = notification.to_string();
             tracing::debug!(session_id, %method, "Codex server notification");
+            // Intentional dual emission: the raw event preserves the full
+            // Codex-specific payload for debugging/audit, while the derived
+            // event provides the normalized unified-protocol representation
+            // that the GUI consumes. Both are useful and consumed by different
+            // layers of the stack.
             let mut events = vec![raw_server_notification(session_id, &notification)];
             events.extend(map_server_notification(notification, session_id));
             events

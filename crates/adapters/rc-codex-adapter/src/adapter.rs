@@ -281,6 +281,10 @@ impl CodexInProcessAdapter {
 
             // Rewrite base_url to point at the local proxy.
             options.base_url = Some(proxy.proxy_base_url());
+            // Replace the API key with the proxy's local bearer token so codex-core
+            // authenticates to our localhost proxy rather than sending the real key
+            // directly over the local network.
+            options.api_key = Some(proxy.bearer_token.clone());
             anthropic_proxy = Some(proxy);
         }
 
@@ -542,10 +546,13 @@ impl CodexInProcessAdapter {
                 };
                 match event {
                     Some(event) => {
+                        // Consolidate state mutations into a single lock scope to
+                        // reduce lock churn when multiple state fields need updating.
+                        let mut state = event_state.lock().await;
+
                         if let AppServerEvent::ServerRequest(request) = &event {
                             let id = request_id_to_string(request.id());
                             let kind = PendingServerRequestKind::from_request(request);
-                            let mut state = event_state.lock().await;
                             state.pending_server_requests.insert(id, kind);
                         }
 
@@ -569,17 +576,18 @@ impl CodexInProcessAdapter {
                                     .max(0) as u64,
                                 cache_write: 0,
                             };
-                            let mut state = event_state.lock().await;
                             state.last_usage = Some(usage);
                         }
+
+                        // Snapshot the fields we need, then release the lock before
+                        // doing event mapping and channel sends (which may block).
+                        let last_usage = state.last_usage.clone();
+                        let tx = state.current_tx.clone();
+                        drop(state);
 
                         let mut mapped = event_mapper::map_app_server_event(event, &session_id);
 
                         // Inject last known token usage into Completed events.
-                        let last_usage = {
-                            let state = event_state.lock().await;
-                            state.last_usage.clone()
-                        };
                         if let Some(usage) = last_usage {
                             for evt in &mut mapped {
                                 if let UnifiedAgentEvent::Completed { result, .. } = evt {
@@ -588,10 +596,6 @@ impl CodexInProcessAdapter {
                             }
                         }
 
-                        let tx = {
-                            let state = event_state.lock().await;
-                            state.current_tx.clone()
-                        };
                         if let Some(tx) = tx {
                             for evt in mapped {
                                 if tx.send(evt).await.is_err() {

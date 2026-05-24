@@ -185,6 +185,20 @@ pub(super) fn build_cli_overrides(
     }
 
     for (key, raw) in &options.config_overrides {
+        // Security: validate config override keys to prevent TOML path injection.
+        // Keys must consist of alphanumeric segments separated by dots.
+        let valid = key.split('.').all(|segment| {
+            !segment.is_empty()
+                && segment
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+        });
+        if !valid {
+            anyhow::bail!(
+                "invalid config override key `{key}`: \
+                 must be dot-separated alphanumeric segments"
+            );
+        }
         overrides.push((key.clone(), parse_toml_scalar(raw)));
     }
 
@@ -257,7 +271,19 @@ pub(super) fn trim_opt(value: Option<String>) -> Option<String> {
 }
 
 fn parse_toml_scalar(raw: &str) -> TomlValue {
-    let wrapped = format!("_x_ = {raw}");
+    // Security: wrap the raw value as a quoted TOML string to prevent TOML
+    // injection. The previous approach of `format!("_x_ = {raw}")` allowed a
+    // crafted value like `x = 1\n_y_ = 2` to inject extra TOML keys/values.
+    let quoted = toml::to_string(&raw).unwrap_or_else(|_| {
+        // Fallback: escape any embedded quotes and newlines.
+        let escaped = raw
+            .replace('\\', "\\\\")
+            .replace('"', "\\\"")
+            .replace('\n', "\\n")
+            .replace('\r', "\\r");
+        format!("\"{escaped}\"")
+    });
+    let wrapped = format!("_x_ = {quoted}");
     toml::from_str::<toml::Table>(&wrapped)
         .ok()
         .and_then(|table| table.get("_x_").cloned())

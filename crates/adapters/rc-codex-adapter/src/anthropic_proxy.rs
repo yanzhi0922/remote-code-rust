@@ -33,6 +33,22 @@ use serde::{Deserialize, Serialize};
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 
+// ── Constants ───────────────────────────────────────────────────────────────
+
+/// Default `max_tokens` value sent to the upstream Anthropic Messages API.
+///
+/// This controls the maximum number of output tokens the model will generate.
+/// The value 16384 matches the Anthropic Claude Sonnet/Opus default budget and
+/// is a reasonable ceiling for single-turn code generation responses.  If a
+/// caller needs a different limit it should be plumbed through the request
+/// rather than changing this constant.
+const DEFAULT_MAX_TOKENS: u32 = 16384;
+
+/// Maximum total bytes that may be buffered from an SSE response before the
+/// proxy aborts the stream.  Prevents unbounded memory growth if the upstream
+/// sends an unexpectedly large or never-terminating response.
+const MAX_SSE_RESPONSE_BYTES: usize = 64 * 1024 * 1024; // 64 MiB
+
 // ── Public API ──────────────────────────────────────────────────────────────
 
 /// Configuration for the protocol translator proxy.
@@ -50,6 +66,8 @@ pub struct AnthropicProxyConfig {
 pub struct AnthropicProxy {
     /// The address the proxy is listening on.
     pub listen_addr: SocketAddr,
+    /// Random bearer token that clients must present in the Authorization header.
+    pub bearer_token: String,
     /// Shutdown signal sender.
     shutdown_tx: Option<oneshot::Sender<()>>,
 }
@@ -60,10 +78,14 @@ impl AnthropicProxy {
         let listener = TcpListener::bind("127.0.0.1:0").await?;
         let listen_addr = listener.local_addr()?;
 
+        // Generate a random bearer token for localhost authentication.
+        let bearer_token = format!("rc-proxy-{}", uuid::Uuid::new_v4());
+
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
         let state = Arc::new(ProxyState {
             http: Client::new(),
             config,
+            bearer_token: bearer_token.clone(),
         });
 
         let app = Router::new()
@@ -84,6 +106,7 @@ impl AnthropicProxy {
 
         Ok(Self {
             listen_addr,
+            bearer_token,
             shutdown_tx: Some(shutdown_tx),
         })
     }
@@ -115,6 +138,7 @@ impl Drop for AnthropicProxy {
 struct ProxyState {
     http: Client,
     config: AnthropicProxyConfig,
+    bearer_token: String,
 }
 
 // ── Request / Response types ────────────────────────────────────────────────
@@ -251,6 +275,17 @@ async fn handle_responses(
     headers: HeaderMap,
     body: axum::body::Bytes,
 ) -> impl IntoResponse {
+    // Validate bearer token to prevent unauthorised local processes from using
+    // the upstream API key through this proxy.
+    let auth_ok = headers
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v == format!("Bearer {}", state.bearer_token))
+        .unwrap_or(false);
+    if !auth_ok {
+        return (StatusCode::UNAUTHORIZED, "invalid or missing bearer token").into_response();
+    }
+
     let req: ResponsesApiRequest = match serde_json::from_slice(&body) {
         Ok(r) => r,
         Err(e) => {
@@ -376,7 +411,7 @@ fn translate_request(
         tools,
         tool_choice,
         stream: req.stream,
-        max_tokens: 16384,
+        max_tokens: DEFAULT_MAX_TOKENS,
         temperature: None,
     }
 }
@@ -627,6 +662,7 @@ fn translate_sse_response(
     tokio::spawn(async move {
         let mut stream = response.bytes_stream();
         let mut buffer = String::new();
+        let mut total_bytes_read: usize = 0;
         let mut msg_id = String::from("msg_proxy");
         let mut model_name = String::from("unknown");
         let mut text_acc = String::new();
@@ -643,6 +679,16 @@ fn translate_sse_response(
         use futures::TryStreamExt;
 
         while let Some(chunk) = stream.try_next().await.unwrap_or(None) {
+            // Enforce total response size limit to prevent OOM.
+            total_bytes_read += chunk.len();
+            if total_bytes_read > MAX_SSE_RESPONSE_BYTES {
+                tracing::error!(
+                    total_bytes = total_bytes_read,
+                    limit = MAX_SSE_RESPONSE_BYTES,
+                    "SSE response exceeded size limit, aborting stream"
+                );
+                break;
+            }
             let text = match std::str::from_utf8(&chunk) {
                 Ok(t) => t,
                 Err(_) => continue,
