@@ -6,7 +6,7 @@
 //! Source: `src/api/providers/roo.ts`
 
 use std::collections::HashMap;
-use std::sync::RwLock;
+use std::sync::{OnceLock, RwLock};
 
 use async_trait::async_trait;
 use roo_provider::{
@@ -18,6 +18,9 @@ use roo_types::model::{ModelInfo, ModelRecord};
 
 use crate::models;
 use crate::types::RooConfig;
+
+/// Shared HTTP client reused across all RooHandler instances.
+static SHARED_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
 
 /// Roo Code Cloud API provider handler.
 ///
@@ -31,8 +34,6 @@ pub struct RooHandler {
     base_url: String,
     /// API key for authentication.
     api_key: String,
-    /// HTTP client for direct API calls (image generation, etc.)
-    http_client: reqwest::Client,
     /// Cache for dynamically fetched models.
     dynamic_models: RwLock<Option<ModelRecord>>,
 }
@@ -84,7 +85,6 @@ impl RooHandler {
             model_id,
             base_url,
             api_key: config.api_key.unwrap_or_default(),
-            http_client: reqwest::Client::new(),
             dynamic_models: RwLock::new(None),
         })
     }
@@ -122,7 +122,7 @@ impl RooHandler {
 
         let url = format!("{}/models", self.base_url.trim_end_matches('/'));
 
-        let mut request = self.http_client.get(&url);
+        let mut request = SHARED_CLIENT.get_or_init(reqwest::Client::new).get(&url);
         if !self.api_key.is_empty() {
             request = request.bearer_auth(&self.api_key);
         }
@@ -236,7 +236,7 @@ impl Provider for RooHandler {
     ) -> Result<ImageGenerationResult, roo_provider::ProviderError> {
         // Default: use chat completions approach
         Ok(generate_image_with_provider(
-            &self.http_client,
+            SHARED_CLIENT.get_or_init(reqwest::Client::new),
             &ImageGenerationOptions {
                 base_url: self.base_url.clone(),
                 auth_token: self.api_key.clone(),

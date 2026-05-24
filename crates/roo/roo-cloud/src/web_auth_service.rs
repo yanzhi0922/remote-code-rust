@@ -142,7 +142,15 @@ impl WebAuthService {
             }
         };
 
-        let jwt = data["jwt"].as_str().unwrap_or_default().to_string();
+        let jwt = data["jwt"]
+            .as_str()
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| {
+                CloudError::SerializationError(
+                    "Sign-in response missing non-empty jwt field".to_string(),
+                )
+            })?
+            .to_string();
 
         // Store credentials
         let creds = AuthCredentials {
@@ -265,7 +273,11 @@ impl WebAuthService {
                 }
 
                 let data: serde_json::Value = resp.json().await.unwrap_or_default();
-                let jwt = data["jwt"].as_str().unwrap_or_default().to_string();
+                let jwt = data["jwt"]
+                    .as_str()
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or_default()
+                    .to_string();
 
                 {
                     let mut guard = self.session_token.write().await;

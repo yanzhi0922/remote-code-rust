@@ -29,6 +29,17 @@ pub fn validate_edit_file_params(params: &EditFileParams) -> Result<(), FsToolEr
         ));
     }
 
+    // Reject absolute paths to prevent editing outside the workspace root.
+    if params.file_path.starts_with('/')
+        || (cfg!(windows)
+            && params.file_path.len() >= 2
+            && params.file_path.as_bytes()[1] == b':')
+    {
+        return Err(FsToolError::InvalidPath(
+            "file_path must be relative (absolute paths are not allowed)".to_string(),
+        ));
+    }
+
     // new_string must be provided (but can be empty to delete text)
     // old_string can be empty only for new file creation
     Ok(())
@@ -386,12 +397,8 @@ pub fn process_edit_file(
     // Check .rooignore before any file I/O
     check_roo_ignore(&params.file_path, ignore_controller)?;
 
-    // Resolve file path (can be absolute or relative)
-    let file_path = if std::path::Path::new(&params.file_path).is_absolute() {
-        std::path::PathBuf::from(&params.file_path)
-    } else {
-        cwd.join(&params.file_path)
-    };
+    // Resolve relative file path against cwd (absolute paths rejected in validation above)
+    let file_path = cwd.join(&params.file_path);
 
     let file_exists = file_path.exists();
     let old_string = &params.old_string;

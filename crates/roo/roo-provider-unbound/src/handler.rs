@@ -5,7 +5,7 @@
 //! Supports dynamic model loading from the Unbound API.
 
 use std::collections::HashMap;
-use std::sync::RwLock;
+use std::sync::{OnceLock, RwLock};
 
 use async_trait::async_trait;
 use roo_provider::{
@@ -16,6 +16,9 @@ use roo_types::model::{ModelInfo, ModelRecord};
 
 use crate::models;
 use crate::types::UnboundConfig;
+
+/// Shared HTTP client reused across all fetch_models calls.
+static SHARED_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
 
 /// Unbound API provider handler.
 ///
@@ -103,7 +106,7 @@ impl UnboundHandler {
             UnboundConfig::DEFAULT_BASE_URL.trim_end_matches('/')
         );
 
-        let client = reqwest::Client::new();
+        let client = SHARED_CLIENT.get_or_init(reqwest::Client::new);
         let response = client.get(&url).bearer_auth(&self.api_key).send().await?;
 
         if !response.status().is_success() {

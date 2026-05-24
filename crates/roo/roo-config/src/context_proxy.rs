@@ -282,7 +282,11 @@ impl ContextProxy {
                     }
                 }
                 Err(e) => {
-                    tracing::error!("Error loading secret {}: {}", key, e);
+                    tracing::error!(
+                        "Error loading secret (key length {}): {}",
+                        key.len(),
+                        e
+                    );
                 }
             }
         }

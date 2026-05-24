@@ -9,6 +9,7 @@
 //! Reference: <https://developers.google.com/identity/protocols/oauth2/service-account>
 
 use std::sync::Arc;
+use std::sync::OnceLock;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
@@ -118,6 +119,13 @@ struct CachedToken {
 // VertexTokenProvider
 // ---------------------------------------------------------------------------
 
+/// Shared HTTP client reused across all VertexTokenProvider instances.
+static SHARED_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+
+fn shared_http_client() -> &'static reqwest::Client {
+    SHARED_CLIENT.get_or_init(reqwest::Client::new)
+}
+
 /// Provider for Google Cloud OAuth2 access tokens using service account credentials.
 ///
 /// Usage:
@@ -130,7 +138,6 @@ struct CachedToken {
 pub struct VertexTokenProvider {
     credentials: ServiceAccountCredentials,
     cached_token: Arc<Mutex<Option<CachedToken>>>,
-    http_client: reqwest::Client,
 }
 
 impl VertexTokenProvider {
@@ -170,7 +177,6 @@ impl VertexTokenProvider {
         Ok(Self {
             credentials,
             cached_token: Arc::new(Mutex::new(None)),
-            http_client: reqwest::Client::new(),
         })
     }
 
@@ -211,8 +217,7 @@ impl VertexTokenProvider {
             .unwrap_or(Self::DEFAULT_TOKEN_URL);
 
         // Exchange JWT for access token
-        let response = self
-            .http_client
+        let response = shared_http_client()
             .post(token_url)
             .form(&[
                 ("grant_type", "urn:ietf:params:oauth:grant-type:jwt-bearer"),

@@ -165,23 +165,34 @@ fn dirs_home() -> Option<String> {
 }
 
 /// Replace `${env:VAR_NAME}` patterns in the given string with environment values.
+///
+/// Uses a single-pass builder to avoid quadratic reallocation from repeated
+/// `String::replace` calls.
 fn inject_env_variables(s: &mut String) {
-    let mut result = s.clone();
-    let mut start = 0;
-    while let Some(idx) = result[start..].find("${env:") {
-        let abs_idx = start + idx;
+    let input = std::mem::take(s);
+    let mut result = String::with_capacity(input.len());
+    let mut pos = 0;
+
+    while let Some(idx) = input[pos..].find("${env:") {
+        let abs_idx = pos + idx;
+        // Append everything before this placeholder.
+        result.push_str(&input[pos..abs_idx]);
+
         let after_prefix = abs_idx + 5; // length of "${env:"
-        if let Some(end_idx) = result[after_prefix..].find('}') {
-            let var_name = &result[after_prefix..after_prefix + end_idx];
+        if let Some(end_idx) = input[after_prefix..].find('}') {
+            let var_name = &input[after_prefix..after_prefix + end_idx];
             let replacement = std::env::var(var_name).unwrap_or_default();
-            let pattern = format!("${{{{env:{}}}}}", var_name);
-            result = result.replace(&pattern, &replacement);
-            // Restart search from beginning since positions may have shifted
-            start = 0;
+            result.push_str(&replacement);
+            pos = after_prefix + end_idx + 1; // skip past the closing '}'
         } else {
-            break;
+            // No closing brace — keep the literal text and move on.
+            result.push_str("${env:");
+            pos = after_prefix;
         }
     }
+
+    // Append the remaining tail after the last placeholder.
+    result.push_str(&input[pos..]);
     *s = result;
 }
 

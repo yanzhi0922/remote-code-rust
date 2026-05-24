@@ -6,7 +6,7 @@
 //! Source: `src/api/providers/vercel-ai-gateway.ts`
 
 use std::collections::HashMap;
-use std::sync::RwLock;
+use std::sync::{OnceLock, RwLock};
 
 use async_trait::async_trait;
 use roo_provider::{
@@ -17,6 +17,9 @@ use roo_types::model::{ModelInfo, ModelRecord};
 
 use crate::models;
 use crate::types::VercelConfig;
+
+/// Shared HTTP client reused across all VercelHandler instances.
+static SHARED_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
 
 /// Default temperature for Vercel AI Gateway.
 const DEFAULT_TEMPERATURE: f64 = 0.5;
@@ -35,8 +38,6 @@ pub struct VercelHandler {
     base_url: String,
     /// Cache for dynamically fetched models.
     dynamic_models: RwLock<Option<ModelRecord>>,
-    /// Shared HTTP client for model fetch requests.
-    http_client: reqwest::Client,
 }
 
 impl VercelHandler {
@@ -87,7 +88,6 @@ impl VercelHandler {
             api_key: config.api_key,
             base_url,
             dynamic_models: RwLock::new(None),
-            http_client: reqwest::Client::new(),
         })
     }
 
@@ -123,7 +123,7 @@ impl VercelHandler {
 
         let url = format!("{}/models", self.base_url.trim_end_matches('/'));
 
-        let response = self.http_client.get(&url).bearer_auth(&self.api_key).send().await?;
+        let response = SHARED_CLIENT.get_or_init(reqwest::Client::new).get(&url).bearer_auth(&self.api_key).send().await?;
 
         if !response.status().is_success() {
             let status = response.status().as_u16();

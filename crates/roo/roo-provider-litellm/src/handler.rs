@@ -5,7 +5,7 @@
 //! Supports dynamic model loading from the LiteLLM proxy API.
 
 use std::collections::HashMap;
-use std::sync::RwLock;
+use std::sync::{OnceLock, RwLock};
 
 use async_trait::async_trait;
 use roo_provider::{
@@ -16,6 +16,9 @@ use roo_types::model::{ModelInfo, ModelRecord};
 
 use crate::models;
 use crate::types::LiteLlmConfig;
+
+/// Shared HTTP client reused across all fetch_models calls.
+static SHARED_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
 
 /// LiteLLM API provider handler.
 ///
@@ -133,7 +136,7 @@ impl LiteLlmHandler {
 
         let url = format!("{}/v1/models", self.base_url.trim_end_matches('/'));
 
-        let client = reqwest::Client::new();
+        let client = SHARED_CLIENT.get_or_init(reqwest::Client::new);
         let mut request = client.get(&url);
         if !self.api_key.is_empty() && self.api_key != "dummy-key" {
             request = request.bearer_auth(&self.api_key);
