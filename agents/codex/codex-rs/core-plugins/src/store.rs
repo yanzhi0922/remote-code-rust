@@ -323,6 +323,17 @@ fn replace_plugin_root_atomically(
 }
 
 fn copy_dir_recursive(source: &Path, target: &Path) -> Result<(), PluginStoreError> {
+    let canonical_source = source
+        .canonicalize()
+        .map_err(|err| PluginStoreError::io("failed to canonicalize plugin source", err))?;
+    copy_dir_recursive_inner(source, target, &canonical_source)
+}
+
+fn copy_dir_recursive_inner(
+    source: &Path,
+    target: &Path,
+    canonical_source: &Path,
+) -> Result<(), PluginStoreError> {
     fs::create_dir_all(target)
         .map_err(|err| PluginStoreError::io("failed to create plugin target directory", err))?;
 
@@ -337,8 +348,41 @@ fn copy_dir_recursive(source: &Path, target: &Path) -> Result<(), PluginStoreErr
             .file_type()
             .map_err(|err| PluginStoreError::io("failed to inspect plugin source entry", err))?;
 
-        if file_type.is_dir() {
-            copy_dir_recursive(&source_path, &target_path)?;
+        if file_type.is_symlink() {
+            // Validate that symlink target does not escape the source tree
+            let link_target = std::fs::read_link(&source_path)
+                .map_err(|err| PluginStoreError::io("failed to read symlink target", err))?;
+            let resolved = if link_target.is_absolute() {
+                link_target
+            } else {
+                source_path
+                    .parent()
+                    .map(|p| p.join(&link_target))
+                    .unwrap_or_else(|| link_target.clone())
+            };
+            let canonical_target = resolved.canonicalize().map_err(|err| {
+                PluginStoreError::io(
+                    "symlink target in plugin source cannot be resolved",
+                    err,
+                )
+            })?;
+            if !canonical_target.starts_with(canonical_source) {
+                return Err(PluginStoreError::Invalid(format!(
+                    "symlink at {} escapes source directory",
+                    source_path.display()
+                )));
+            }
+            // Dereference: copy the actual content
+            let meta = std::fs::metadata(&source_path)
+                .map_err(|err| PluginStoreError::io("failed to stat symlink target", err))?;
+            if meta.is_dir() {
+                copy_dir_recursive_inner(&source_path, &target_path, canonical_source)?;
+            } else if meta.is_file() {
+                fs::copy(&source_path, &target_path)
+                    .map_err(|err| PluginStoreError::io("failed to copy plugin file", err))?;
+            }
+        } else if file_type.is_dir() {
+            copy_dir_recursive_inner(&source_path, &target_path, canonical_source)?;
         } else if file_type.is_file() {
             fs::copy(&source_path, &target_path)
                 .map_err(|err| PluginStoreError::io("failed to copy plugin file", err))?;

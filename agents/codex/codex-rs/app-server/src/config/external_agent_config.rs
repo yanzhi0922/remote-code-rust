@@ -1349,6 +1349,15 @@ fn find_repo_agents_md_source(repo_root: &Path) -> io::Result<Option<PathBuf>> {
 }
 
 fn copy_dir_recursive(source: &Path, target: &Path) -> io::Result<()> {
+    let canonical_source = std::fs::canonicalize(source)?;
+    copy_dir_recursive_inner(source, target, &canonical_source)
+}
+
+fn copy_dir_recursive_inner(
+    source: &Path,
+    target: &Path,
+    canonical_source: &Path,
+) -> io::Result<()> {
     fs::create_dir_all(target)?;
 
     for entry in fs::read_dir(source)? {
@@ -1357,8 +1366,56 @@ fn copy_dir_recursive(source: &Path, target: &Path) -> io::Result<()> {
         let target_path = target.join(entry.file_name());
         let file_type = entry.file_type()?;
 
+        if file_type.is_symlink() {
+            // Validate that symlink target does not escape the source tree
+            let link_target = std::fs::read_link(&source_path)?;
+            let resolved = if link_target.is_absolute() {
+                link_target
+            } else {
+                source_path
+                    .parent()
+                    .map(|p| p.join(&link_target))
+                    .unwrap_or_else(|| link_target.clone())
+            };
+            match resolved.canonicalize() {
+                Ok(canonical_target) => {
+                    if !canonical_target.starts_with(canonical_source) {
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidInput,
+                            format!(
+                                "symlink at {} points outside source directory (to {})",
+                                source_path.display(),
+                                canonical_target.display()
+                            ),
+                        ));
+                    }
+                }
+                Err(e) => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        format!(
+                            "symlink at {} has unresolvable target: {e}",
+                            source_path.display()
+                        ),
+                    ));
+                }
+            }
+            // Dereference and copy actual content
+            let meta = std::fs::metadata(&source_path)?;
+            if meta.is_dir() {
+                copy_dir_recursive_inner(&source_path, &target_path, canonical_source)?;
+            } else if meta.is_file() {
+                if is_skill_md(&source_path) {
+                    rewrite_and_copy_text_file(&source_path, &target_path)?;
+                } else {
+                    fs::copy(&source_path, &target_path)?;
+                }
+            }
+            continue;
+        }
+
         if file_type.is_dir() {
-            copy_dir_recursive(&source_path, &target_path)?;
+            copy_dir_recursive_inner(&source_path, &target_path, canonical_source)?;
             continue;
         }
 
