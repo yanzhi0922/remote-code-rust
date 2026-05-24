@@ -282,10 +282,10 @@ function SessionRow({
     <div className="space-y-0.5">
       <div
         className={cn(
-          'group mx-2 flex items-start gap-2 rounded-md border px-2.5 py-2 transition-colors duration-150',
+          'group mx-2 flex items-start gap-2 rounded-lg border px-2.5 py-2.5 transition-colors duration-150',
           active
-            ? 'border-rc-border-primary bg-rc-bg-active shadow-xs'
-            : 'border border-transparent hover:bg-rc-bg-hover',
+            ? 'border-transparent bg-rc-bg-selected shadow-xs'
+            : 'border-transparent hover:bg-rc-bg-hover',
         )}
       >
         <button
@@ -520,14 +520,14 @@ export function Sidebar() {
   return (
     <aside className="flex w-sidebar shrink-0 flex-col border-r border-rc-border-secondary bg-rc-bg-sidebar select-none">
       {/* Search bar */}
-      <div className="relative border-b border-rc-border-secondary px-3 py-2">
+      <div className="relative px-3 pb-2 pt-2">
         <Search size={14} className="pointer-events-none absolute left-5 top-1/2 -translate-y-1/2 text-rc-text-tertiary" />
         <input
           value={searchQuery}
           onChange={(event) => setSearchQuery(event.target.value)}
           aria-label="搜索项目和会话"
           placeholder="搜索项目、会话"
-          className="h-8 w-full rounded-md border border-transparent bg-rc-bg-tertiary pl-7 pr-7 text-xs text-rc-text-primary outline-none transition-colors placeholder:text-rc-text-tertiary focus:border-rc-border-focus focus-visible:outline-none"
+          className="h-9 w-full rounded-lg border border-transparent bg-rc-bg-tertiary pl-8 pr-7 text-xs text-rc-text-primary outline-none transition-colors placeholder:text-rc-text-tertiary focus:border-rc-border-focus focus-visible:outline-none"
         />
         {searchQuery && (
           <button
@@ -542,11 +542,11 @@ export function Sidebar() {
       </div>
 
       {/* Toolbar */}
-      <div className="grid gap-1.5 border-b border-rc-border-secondary px-2 py-2">
+      <div className="grid gap-1.5 border-b border-rc-border-secondary px-2 pb-3">
         <button
           onClick={() => { void createSession(undefined, activeProjectPath ?? undefined); }}
           aria-label="创建新会话"
-          className="inline-flex h-8 w-full items-center justify-center gap-2 rounded-md border border-rc-border-primary bg-rc-bg-surface px-2 text-xs font-semibold text-rc-text-primary transition-colors hover:border-rc-border-hover hover:bg-rc-bg-hover"
+          className="inline-flex h-8 w-full items-center justify-center gap-2 rounded-lg border border-rc-border-primary bg-rc-bg-surface px-2 text-xs font-semibold text-rc-text-primary shadow-xs transition-colors hover:border-rc-border-hover hover:bg-rc-bg-hover"
         >
           <Plus size={14} />
           新会话
@@ -594,9 +594,9 @@ export function Sidebar() {
                   <div key={project.path} className="mb-1.5">
                     <div
                       className={cn(
-                        'group mx-2 flex items-center gap-1 rounded-md border px-2 py-1.5 text-xs transition-colors',
+                        'group mx-2 flex items-center gap-1 rounded-lg border px-2 py-2 text-xs transition-colors',
                         active
-                          ? 'border-rc-border-primary bg-rc-bg-active text-rc-text-primary'
+                          ? 'border-transparent bg-rc-bg-selected text-rc-text-primary'
                           : 'border-transparent text-rc-text-secondary hover:bg-rc-bg-hover',
                       )}
                     >

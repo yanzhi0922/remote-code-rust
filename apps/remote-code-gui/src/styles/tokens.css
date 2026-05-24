@@ -1,13 +1,13 @@
-/* ── Remote Code Pro — Design Tokens v4 (Codex Workbench) ───── */
-/*    Aesthetic: coding-agent desktop workbench, dark-first       */
-/*    Dark-first: :root is dark; [data-theme='light'] overrides */
+/* ── Remote Code Pro — Design Tokens v5 (Codex-style Workbench) */
+/*    Aesthetic: compact desktop coding agent, light/system first */
+/*    :root remains dark-capable; [data-theme='light'] overrides */
 /*──────────────────────────────────────────────────────────────────*/
 
 :root {
   /* ═══ Neutral Gray Palette ── Dark (default) ═══ */
-  --color-bg-base: #080b10;
-  --color-bg-surface: #11161d;
-  --color-bg-elevated: #171d26;
+  --color-bg-base: #090c10;
+  --color-bg-surface: #121820;
+  --color-bg-elevated: #18202a;
   --color-bg-overlay: rgba(0, 0, 0, 0.7);
 
   /* Legacy aliases */
@@ -16,12 +16,12 @@
   --color-bg-tertiary: #202834;
 
   /* Sidebar / Activity Bar */
-  --color-bg-sidebar: #0d1218;
-  --color-bg-activity-bar: #080b10;
+  --color-bg-sidebar: #0f151c;
+  --color-bg-activity-bar: #0d131a;
 
   /* Chat area */
-  --color-bg-chat: #0a0d12;
-  --color-bg-chat-hover: #10151c;
+  --color-bg-chat: #0b0f14;
+  --color-bg-chat-hover: #121820;
 
   /* Message bubbles */
   --color-bg-user: #1f6feb;
@@ -47,8 +47,8 @@
   --color-text-on-accent: #ffffff;
 
   /* ═══ Border Colors ═══ */
-  --color-border-primary: #27313d;
-  --color-border-secondary: #18212b;
+  --color-border-primary: #2a3542;
+  --color-border-secondary: #1b2530;
   --color-border-focus: #1f6feb;
   --color-border-hover: #484f58;
 
@@ -122,24 +122,24 @@
   --radius-full: 9999px;
 
   /* ═══ Shadows — subtle, no glow ═══ */
-  --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.22);
-  --shadow-sm: 0 2px 5px rgba(0, 0, 0, 0.24);
-  --shadow-md: 0 6px 14px rgba(0, 0, 0, 0.26);
-  --shadow-lg: 0 10px 24px rgba(0, 0, 0, 0.3);
-  --shadow-xl: 0 16px 36px rgba(0, 0, 0, 0.34);
-  --shadow-2xl: 0 24px 56px rgba(0, 0, 0, 0.38);
+  --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.18);
+  --shadow-sm: 0 2px 7px rgba(0, 0, 0, 0.2);
+  --shadow-md: 0 8px 22px rgba(0, 0, 0, 0.24);
+  --shadow-lg: 0 18px 44px rgba(0, 0, 0, 0.3);
+  --shadow-xl: 0 24px 60px rgba(0, 0, 0, 0.34);
+  --shadow-2xl: 0 32px 76px rgba(0, 0, 0, 0.38);
 
   --shadow-inner: inset 0 1px 2px rgba(0, 0, 0, 0.3);
 
   /* ═══ Layout — compact ═══ */
-  --activity-bar-width: 48px;
-  --sidebar-width: 308px;
+  --activity-bar-width: 52px;
+  --sidebar-width: 304px;
   --sidebar-min-width: 220px;
-  --sidebar-max-width: 400px;
+  --sidebar-max-width: 380px;
   --status-bar-height: 24px;
   --header-height: 40px;
-  --chat-max-width: 860px;
-  --input-max-width: 860px;
+  --chat-max-width: 880px;
+  --input-max-width: 884px;
 
   /* ═══ Transitions ═══ */
   --transition-fast: 100ms ease;
@@ -175,32 +175,32 @@
    ═══════════════════════════════════════════════════════════════ */
 
 [data-theme='light'] {
-  --color-bg-base: #edf2f8;
+  --color-bg-base: #edf3fa;
   --color-bg-surface: #ffffff;
-  --color-bg-elevated: #f8fafc;
+  --color-bg-elevated: #f7f9fc;
   --color-bg-overlay: rgba(0, 0, 0, 0.25);
 
   --color-bg-primary: var(--color-bg-surface);
   --color-bg-secondary: var(--color-bg-base);
-  --color-bg-tertiary: #e6ebf1;
+  --color-bg-tertiary: #e9eef5;
 
-  --color-bg-sidebar: #e8eef6;
-  --color-bg-activity-bar: #eef3f9;
+  --color-bg-sidebar: #eaf0f7;
+  --color-bg-activity-bar: #edf3fa;
 
-  --color-bg-chat: #fbfcfe;
-  --color-bg-chat-hover: #f4f7fb;
+  --color-bg-chat: #ffffff;
+  --color-bg-chat-hover: #f7f9fc;
 
   --color-bg-user: #1f6feb;
   --color-bg-user-bubble: #1f6feb;
   --color-bg-user-solid: #1f6feb;
   --color-bg-assistant: transparent;
 
-  --color-bg-code: #f5f6f8;
-  --color-bg-code-header: #eceff3;
+  --color-bg-code: #f4f6f9;
+  --color-bg-code-header: #eceff4;
 
-  --color-bg-hover: color-mix(in srgb, var(--color-text-primary) 6%, transparent);
-  --color-bg-active: color-mix(in srgb, var(--color-text-primary) 9%, transparent);
-  --color-bg-selected: color-mix(in srgb, var(--color-accent-primary) 10%, transparent);
+  --color-bg-hover: rgba(31, 35, 40, 0.055);
+  --color-bg-active: rgba(31, 35, 40, 0.075);
+  --color-bg-selected: rgba(31, 35, 40, 0.09);
 
   /* Text */
   --color-text-primary: #1f2328;
@@ -210,8 +210,8 @@
   --color-text-link: #0969da;
 
   /* Borders */
-  --color-border-primary: #d8dee7;
-  --color-border-secondary: #e8edf3;
+  --color-border-primary: #d8dee8;
+  --color-border-secondary: #e9edf2;
   --color-border-focus: #0969da;
   --color-border-hover: #b0b8c1;
 
@@ -238,12 +238,12 @@
   --color-accent-info-border: color-mix(in srgb, var(--color-accent-info) 20%, transparent);
 
   /* Shadows */
-  --shadow-xs: 0 1px 2px rgba(15, 23, 42, 0.04);
-  --shadow-sm: 0 2px 5px rgba(15, 23, 42, 0.05);
-  --shadow-md: 0 6px 16px rgba(15, 23, 42, 0.06);
-  --shadow-lg: 0 10px 28px rgba(15, 23, 42, 0.08);
-  --shadow-xl: 0 16px 38px rgba(15, 23, 42, 0.1);
-  --shadow-2xl: 0 22px 56px rgba(15, 23, 42, 0.12);
+  --shadow-xs: 0 1px 2px rgba(15, 23, 42, 0.035);
+  --shadow-sm: 0 2px 8px rgba(15, 23, 42, 0.055);
+  --shadow-md: 0 10px 26px rgba(15, 23, 42, 0.075);
+  --shadow-lg: 0 18px 44px rgba(15, 23, 42, 0.095);
+  --shadow-xl: 0 28px 70px rgba(15, 23, 42, 0.12);
+  --shadow-2xl: 0 36px 90px rgba(15, 23, 42, 0.14);
 
   --shadow-inner: inset 0 1px 2px rgba(0, 0, 0, 0.04);
 }

@@ -26,8 +26,8 @@ const ThemeContext = createContext<ThemeContextValue>({
 const STORAGE_KEY = 'rc-theme-mode';
 
 function getSystemTheme(): 'light' | 'dark' {
-  if (typeof window === 'undefined') return 'dark';
-  if (typeof window.matchMedia !== 'function') return 'dark';
+  if (typeof window === 'undefined') return 'light';
+  if (typeof window.matchMedia !== 'function') return 'light';
   return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
 }
 
@@ -40,7 +40,7 @@ export function useTheme(): ThemeContextValue {
   return useContext(ThemeContext);
 }
 
-export function ThemeProvider({ defaultTheme = 'dark', children }: ThemeProviderProps) {
+export function ThemeProvider({ defaultTheme = 'system', children }: ThemeProviderProps) {
   const [mode, setModeState] = useState<ThemeMode>(() => {
     try {
       const stored = localStorage.getItem(STORAGE_KEY);

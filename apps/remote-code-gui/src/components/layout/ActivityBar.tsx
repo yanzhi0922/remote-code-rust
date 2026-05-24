@@ -21,17 +21,17 @@ export function ActivityBar({ activeTab, onTabChange }: ActivityBarProps) {
   const btnClass = (active: boolean) =>
     `relative flex h-9 w-9 items-center justify-center rounded-md transition-colors focus-visible:outline-none ${
       active
-        ? 'bg-rc-bg-active text-rc-text-primary before:absolute before:left-0 before:top-1.5 before:h-6 before:w-0.5 before:rounded-full before:bg-rc-accent-primary'
+        ? 'bg-rc-bg-surface text-rc-text-primary shadow-xs before:absolute before:left-[-7px] before:top-1.5 before:h-6 before:w-0.5 before:rounded-full before:bg-rc-accent-primary'
         : 'text-rc-text-tertiary hover:bg-rc-bg-hover hover:text-rc-text-primary'
     }`;
 
   return (
     <nav
       aria-label="Workbench activity bar"
-      className="flex w-activity-bar shrink-0 flex-col items-center gap-1 border-r border-rc-border-secondary glass py-2 select-none"
+      className="flex w-activity-bar shrink-0 flex-col items-center gap-1 border-r border-rc-border-secondary bg-rc-bg-activity-bar py-2 select-none"
     >
-      <div className="flex h-8 w-8 items-center justify-center" title="Remote Code">
-        <svg viewBox="0 0 24 24" className="h-5 w-5 text-rc-accent-info" fill="none" aria-hidden="true">
+      <div className="flex h-8 w-8 items-center justify-center rounded-md text-rc-text-secondary" title="Remote Code">
+        <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" aria-hidden="true">
           <path d="M12 3 4 7.5 12 12l8-4.5L12 3Z" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
           <path d="M4 12.5 12 17l8-4.5M4 17.5 12 22l8-4.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
         </svg>

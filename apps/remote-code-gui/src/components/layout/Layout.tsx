@@ -116,7 +116,7 @@ export function Layout({
 
         <main
           aria-label="Agent conversation workbench"
-          className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-rc-bg-chat"
+          className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-tl-xl border-l border-t border-rc-border-secondary bg-rc-bg-chat shadow-xs"
         >
           {children}
         </main>
