@@ -32,6 +32,7 @@ sha2.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
+urlencoding.workspace = true
 whoami.workspace = true
 
 [dev-dependencies]

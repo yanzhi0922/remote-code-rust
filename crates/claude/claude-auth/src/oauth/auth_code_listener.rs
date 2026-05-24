@@ -227,7 +227,13 @@ fn parse_callback_query(path: &str) -> Option<(Option<String>, Option<String>)> 
     for pair in query.split('&') {
         let mut kv = pair.splitn(2, '=');
         let key = kv.next().unwrap_or("");
-        let value = kv.next().map(str::to_owned);
+        let value = kv.next().map(|v| {
+            // URL-decode the value — OAuth providers may encode special
+            // characters in the authorization code or state parameter.
+            urlencoding::decode(v)
+                .map(|cow| cow.into_owned())
+                .unwrap_or_else(|_| v.to_owned())
+        });
         match key {
             "code" => code = value,
             "state" => state = value,
@@ -258,5 +264,13 @@ mod tests {
     #[test]
     fn parse_callback_query_no_query_string() {
         assert!(parse_callback_query("/callback").is_none());
+    }
+
+    #[test]
+    fn parse_callback_query_url_decoded() {
+        let (code, state) =
+            parse_callback_query("/callback?code=ABC%2F123&state=XYZ%3D%3D789").unwrap();
+        assert_eq!(code.as_deref(), Some("ABC/123"));
+        assert_eq!(state.as_deref(), Some("XYZ==789"));
     }
 }
