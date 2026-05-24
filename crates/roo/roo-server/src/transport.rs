@@ -70,6 +70,9 @@ impl Default for StdioTransport {
 }
 
 impl StdioTransport {
+    /// Maximum allowed message size (10 MiB) to prevent unbounded allocation.
+    const MAX_MESSAGE_SIZE: usize = 10 * 1024 * 1024;
+
     /// Read a Content-Length framed message from stdin.
     fn read_framed_message(&mut self) -> ServerResult<Option<String>> {
         let mut content_length: usize = 0;
@@ -101,6 +104,14 @@ impl StdioTransport {
             return Err(ServerError::Internal(
                 "Missing Content-Length header".into(),
             ));
+        }
+
+        if content_length > Self::MAX_MESSAGE_SIZE {
+            return Err(ServerError::Internal(format!(
+                "Message size {} exceeds maximum allowed size of {} bytes",
+                content_length,
+                Self::MAX_MESSAGE_SIZE
+            )));
         }
 
         // Read the body

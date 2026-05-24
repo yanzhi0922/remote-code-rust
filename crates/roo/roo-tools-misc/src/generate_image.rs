@@ -10,6 +10,16 @@
 //! - A trait for provider-specific image generation API calls
 //! - Concrete provider implementations (OpenRouter, Roo)
 
+use std::sync::OnceLock;
+
+/// Shared HTTP client for image generation requests.
+/// Avoids creating a new connection pool per API call.
+static SHARED_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+
+fn shared_client() -> &'static reqwest::Client {
+    SHARED_CLIENT.get_or_init(reqwest::Client::new)
+}
+
 // ---------------------------------------------------------------------------
 // GenerateImageParams
 // ---------------------------------------------------------------------------
@@ -243,7 +253,7 @@ impl ImageGenerationProvider for OpenRouterImageProvider {
 
         let url = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
 
-        let client = reqwest::Client::new();
+        let client = shared_client().clone();
         let response = client
             .post(&url)
             .header("Authorization", format!("Bearer {}", key))
@@ -406,7 +416,7 @@ impl ImageGenerationProvider for RooImageProvider {
 
         let url = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
 
-        let client = reqwest::Client::new();
+        let client = shared_client().clone();
         let response = client
             .post(&url)
             .header("Authorization", format!("Bearer {}", key))

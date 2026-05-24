@@ -18,6 +18,64 @@ use roo_index::CodeIndexManager;
 use roo_tools::ToolRepetitionDetector;
 use roo_tools_misc::generate_image::ImageGenerationProvider;
 
+use std::net::IpAddr;
+
+// ---------------------------------------------------------------------------
+// SSRF URL validation for custom tool HTTP handlers
+// ---------------------------------------------------------------------------
+
+/// Validate that a custom tool URL is safe to request.
+///
+/// Rejects non-HTTP schemes, localhost, and private/reserved IP addresses
+/// to prevent server-side request forgery (SSRF) attacks.
+fn validate_custom_tool_url(url: &str) -> Result<(), String> {
+    let parsed = url::Url::parse(url).map_err(|e| format!("invalid URL '{}': {}", url, e))?;
+
+    match parsed.scheme() {
+        "http" | "https" => {}
+        _ => return Err(format!("URL scheme must be http or https, got '{}'", parsed.scheme())),
+    }
+
+    let host = parsed
+        .host_str()
+        .ok_or_else(|| format!("URL has no host: '{}'", url))?
+        .to_owned();
+
+    // Block localhost
+    if host.eq_ignore_ascii_case("localhost") {
+        return Err("URL resolves to localhost, which is blocked for security".to_string());
+    }
+
+    // Block IP addresses in private/reserved ranges
+    if let Ok(ip) = host.parse::<IpAddr>() {
+        match ip {
+            IpAddr::V4(v4) => {
+                if v4.is_loopback()
+                    || v4.is_private()
+                    || v4.is_link_local()
+                    || v4.is_broadcast()
+                    || v4.is_documentation()
+                {
+                    return Err(format!(
+                        "URL resolves to a private/reserved IP address ({}), which is blocked for security",
+                        ip
+                    ));
+                }
+            }
+            IpAddr::V6(v6) => {
+                if v6.is_loopback() || v6.is_unique_local() {
+                    return Err(format!(
+                        "URL resolves to a private/reserved IP address ({}), which is blocked for security",
+                        ip
+                    ));
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // FileContextTrackerOps — erased trait for file-context tracking
 // ---------------------------------------------------------------------------
@@ -2879,6 +2937,14 @@ impl ToolHandler for CustomToolHandler {
                             }
                         };
 
+                        // SSRF protection: validate URL scheme and reject private IPs
+                        if let Err(e) = validate_custom_tool_url(&url) {
+                            return ToolExecutionResult::error(format!(
+                                "Custom tool '{}' URL rejected: {}",
+                                definition.name, e
+                            ));
+                        }
+
                         // Build the HTTP client and make a POST with tool params as JSON body
                         let client = reqwest::Client::new();
 
@@ -2888,6 +2954,9 @@ impl ToolHandler for CustomToolHandler {
                             obj.remove("_custom_tool_name");
                         }
 
+                        // TODO: This block_in_place/block_on pattern should be replaced with
+                        // native async once the caller is fully async. It works correctly in
+                        // the current multi-threaded runtime but is not idiomatic.
                         let response = tokio::task::block_in_place(|| {
                             tokio::runtime::Handle::current().block_on(async {
                                 client

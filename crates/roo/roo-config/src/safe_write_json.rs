@@ -54,7 +54,7 @@ pub async fn safe_write_json(
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis();
-    let random_suffix: String = (0..8).map(|_| rand_char()).collect();
+    let random_suffix = random_suffix();
 
     let file_name = absolute_file_path
         .file_name()
@@ -113,15 +113,9 @@ pub async fn safe_write_json(
     }
 }
 
-/// Generate a random alphanumeric character.
-fn rand_char() -> char {
-    const CHARSET: &[u8] = b"abcdefghijklmnopqrstuvwxyz0123456789";
-    let idx = (std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .subsec_nanos()
-        % CHARSET.len() as u32) as usize;
-    CHARSET[idx] as char
+/// Generate a random alphanumeric suffix using UUID v4 for cryptographic randomness.
+fn random_suffix() -> String {
+    uuid::Uuid::new_v4().to_string().replace('-', "")
 }
 
 // ---------------------------------------------------------------------------
@@ -191,8 +185,9 @@ mod tests {
     }
 
     #[test]
-    fn test_rand_char() {
-        let c = rand_char();
-        assert!(c.is_ascii_alphanumeric());
+    fn test_random_suffix() {
+        let suffix = random_suffix();
+        assert_eq!(suffix.len(), 32); // UUID v4 without hyphens = 32 hex chars
+        assert!(suffix.chars().all(|c| c.is_ascii_hexdigit()));
     }
 }

@@ -19,6 +19,7 @@ regex = { workspace = true }
 url = "2"
 async-trait = { workspace = true }
 tracing = { workspace = true }
+uuid = { workspace = true, features = ["v4"] }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["fs", "rt", "macros"] }

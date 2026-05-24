@@ -1,7 +1,7 @@
 /// Retry queue for cloud requests that failed due to network issues.
 /// Mirrors packages/cloud/src/retry-queue/RetryQueue.ts and types.ts
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
@@ -82,7 +82,7 @@ impl Default for RetryQueueConfig {
 pub struct RetryQueue {
     queue: HashMap<String, QueuedRequest>,
     /// Ordered keys for FIFO eviction.
-    order: Vec<String>,
+    order: VecDeque<String>,
     config: RetryQueueConfig,
     is_processing: bool,
     is_paused: bool,
@@ -97,7 +97,7 @@ impl RetryQueue {
         let config = config.unwrap_or_default();
         Self {
             queue: HashMap::new(),
-            order: Vec::new(),
+            order: VecDeque::new(),
             config,
             is_processing: false,
             is_paused: false,
@@ -119,9 +119,9 @@ impl RetryQueue {
     ) -> String {
         // FIFO eviction if at capacity
         if self.queue.len() >= self.config.max_queue_size {
-            if let Some(oldest_id) = self.order.first().cloned() {
+            if let Some(oldest_id) = self.order.front().cloned() {
                 self.queue.remove(&oldest_id);
-                self.order.remove(0);
+                self.order.pop_front();
             }
         }
 
@@ -143,7 +143,7 @@ impl RetryQueue {
             last_error: None,
         };
 
-        self.order.push(id.clone());
+        self.order.push_back(id.clone());
         self.queue.insert(id.clone(), request);
         id
     }
@@ -285,7 +285,7 @@ impl RetryQueue {
                 tracing::warn!("skipping duplicate retry queue entry on load: {id}");
                 continue;
             }
-            self.order.push(id.clone());
+            self.order.push_back(id.clone());
             self.queue.insert(id, request);
         }
         Ok(())

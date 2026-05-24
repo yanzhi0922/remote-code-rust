@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::types::QueuedMessage;
@@ -8,14 +9,14 @@ use crate::types::QueuedMessage;
 /// and dequeued in first-in-first-out order.
 #[derive(Debug, Clone)]
 pub struct MessageQueueService {
-    messages: Vec<QueuedMessage>,
+    messages: VecDeque<QueuedMessage>,
 }
 
 impl MessageQueueService {
     /// Create a new empty message queue.
     pub fn new() -> Self {
         Self {
-            messages: Vec::new(),
+            messages: VecDeque::new(),
         }
     }
 
@@ -44,7 +45,7 @@ impl MessageQueueService {
             images,
         };
 
-        self.messages.push(message.clone());
+        self.messages.push_back(message.clone());
         Some(message)
     }
 
@@ -88,7 +89,7 @@ impl MessageQueueService {
     }
 
     /// Get a reference to the messages in the queue.
-    pub fn messages(&self) -> &[QueuedMessage] {
+    pub fn messages(&self) -> &VecDeque<QueuedMessage> {
         &self.messages
     }
 
@@ -105,21 +106,6 @@ impl MessageQueueService {
     /// Clear all messages from the queue.
     pub fn clear(&mut self) {
         self.messages.clear();
-    }
-}
-
-/// Helper trait to pop from the front of a Vec (FIFO behavior).
-trait PopFront<T> {
-    fn pop_front(&mut self) -> Option<T>;
-}
-
-impl<T> PopFront<T> for Vec<T> {
-    fn pop_front(&mut self) -> Option<T> {
-        if self.is_empty() {
-            None
-        } else {
-            Some(self.remove(0))
-        }
     }
 }
 

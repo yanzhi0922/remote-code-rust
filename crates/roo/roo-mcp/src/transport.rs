@@ -5,13 +5,22 @@
 use async_trait::async_trait;
 use futures::Stream;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::pin::Pin;
+use std::sync::OnceLock;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::mpsc;
 
 use crate::error::{McpError, McpResult};
+
+/// Shared HTTP client for MCP transports (SSE and StreamableHTTP).
+/// Avoids creating a new connection pool per transport instance.
+static SHARED_HTTP_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+
+fn shared_http_client() -> &'static reqwest::Client {
+    SHARED_HTTP_CLIENT.get_or_init(reqwest::Client::new)
+}
 
 /// A JSON-RPC 2.0 message used in MCP communication.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -325,35 +334,37 @@ impl McpTransport for StdioTransport {
             .as_mut()
             .ok_or_else(|| McpError::TransportError("Not connected (no stdout)".to_string()))?;
 
-        let mut line = String::new();
-        match reader.read_line(&mut line).await {
-            Ok(0) => {
-                // EOF
-                tracing::debug!("Stdio transport reached EOF");
-                self.connected = false;
-                return Ok(None);
-            }
-            Ok(_) => {
-                let trimmed = line.trim();
-                if trimmed.is_empty() {
-                    // Skip empty lines
-                    return self.receive().await;
+        loop {
+            let mut line = String::new();
+            match reader.read_line(&mut line).await {
+                Ok(0) => {
+                    // EOF
+                    tracing::debug!("Stdio transport reached EOF");
+                    self.connected = false;
+                    return Ok(None);
                 }
+                Ok(_) => {
+                    let trimmed = line.trim();
+                    if trimmed.is_empty() {
+                        // Skip empty lines — loop instead of recursing to avoid stack overflow
+                        continue;
+                    }
 
-                let message: JsonRpcMessage = serde_json::from_str(trimmed).map_err(|e| {
-                    McpError::TransportError(format!(
-                        "Failed to parse JSON-RPC message: {} (input: {})",
-                        e,
-                        &trimmed[..trimmed.len().min(200)]
-                    ))
-                })?;
+                    let message: JsonRpcMessage = serde_json::from_str(trimmed).map_err(|e| {
+                        McpError::TransportError(format!(
+                            "Failed to parse JSON-RPC message: {} (input: {})",
+                            e,
+                            &trimmed[..trimmed.len().min(200)]
+                        ))
+                    })?;
 
-                tracing::trace!("Received message: {:?}", message);
-                return Ok(Some(message));
-            }
-            Err(e) => {
-                self.connected = false;
-                return Err(McpError::TransportError(format!("Read error: {}", e)));
+                    tracing::trace!("Received message: {:?}", message);
+                    return Ok(Some(message));
+                }
+                Err(e) => {
+                    self.connected = false;
+                    return Err(McpError::TransportError(format!("Read error: {}", e)));
+                }
             }
         }
     }
@@ -433,7 +444,7 @@ impl SseTransport {
         Self {
             url,
             headers,
-            http_client: reqwest::Client::new(),
+            http_client: shared_http_client().clone(),
             connected: false,
             message_rx: None,
             post_endpoint: None,
@@ -453,7 +464,7 @@ impl SseTransport {
         Self {
             url,
             headers,
-            http_client: reqwest::Client::new(),
+            http_client: shared_http_client().clone(),
             connected: false,
             message_rx: None,
             post_endpoint: None,
@@ -682,7 +693,7 @@ impl SseTransport {
                 Ok(()) => {
                     // Stream ended normally (EOF) — retry indefinitely with capped backoff.
                     // Matches TS: ReconnectingEventSource retries indefinitely.
-                    attempt += 1;
+                    attempt = attempt.saturating_add(1).min(64);
 
                     let delay_ms =
                         (initial_delay_ms * 2u64.pow(attempt - 1)).min(max_reconnect_delay_ms);
@@ -694,7 +705,7 @@ impl SseTransport {
                     tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
                 }
                 Err(e) => {
-                    attempt += 1;
+                    attempt = attempt.saturating_add(1).min(64);
 
                     let delay_ms =
                         (initial_delay_ms * 2u64.pow(attempt - 1)).min(max_reconnect_delay_ms);
@@ -822,7 +833,7 @@ pub struct StreamableHttpTransport {
     /// The MCP session ID received from the server (sent back on each request).
     session_id: Option<String>,
     // For streaming responses, we buffer incoming messages
-    pending_messages: Vec<JsonRpcMessage>,
+    pending_messages: VecDeque<JsonRpcMessage>,
 }
 
 impl StreamableHttpTransport {
@@ -831,10 +842,10 @@ impl StreamableHttpTransport {
         Self {
             url,
             headers,
-            http_client: reqwest::Client::new(),
+            http_client: shared_http_client().clone(),
             connected: false,
             session_id: None,
-            pending_messages: Vec::new(),
+            pending_messages: VecDeque::new(),
         }
     }
 }
@@ -954,7 +965,7 @@ impl McpTransport for StreamableHttpTransport {
                 match event {
                     Ok(sse_event) => {
                         if let Ok(msg) = serde_json::from_str::<JsonRpcMessage>(&sse_event.data) {
-                            self.pending_messages.push(msg);
+                            self.pending_messages.push_back(msg);
                         }
                     }
                     Err(e) => {
@@ -976,7 +987,7 @@ impl McpTransport for StreamableHttpTransport {
                         self.pending_messages.extend(messages);
                     }
                 } else if let Ok(msg) = serde_json::from_str::<JsonRpcMessage>(&body) {
-                    self.pending_messages.push(msg);
+                    self.pending_messages.push_back(msg);
                 }
             }
         }
@@ -990,7 +1001,7 @@ impl McpTransport for StreamableHttpTransport {
 
     async fn receive(&mut self) -> McpResult<Option<JsonRpcMessage>> {
         if !self.pending_messages.is_empty() {
-            return Ok(Some(self.pending_messages.remove(0)));
+            return Ok(Some(self.pending_messages.pop_front().unwrap()));
         }
 
         if !self.connected {

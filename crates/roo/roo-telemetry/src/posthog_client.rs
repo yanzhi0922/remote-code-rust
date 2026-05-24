@@ -4,7 +4,7 @@
 //! Mirrors `PostHogTelemetryClient.ts`.
 
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 
 use serde_json::Value;
 
@@ -12,6 +12,10 @@ use crate::client::{BaseTelemetryClient, TelemetryClient};
 use crate::types::{
     SubscriptionType, TelemetryEvent, TelemetryEventName, TelemetryEventSubscription,
 };
+
+/// Shared HTTP client for PostHog telemetry.
+/// Avoids creating a new connection pool per PostHogTelemetryClient instance.
+static SHARED_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
 
 // ---------------------------------------------------------------------------
 // PostHog batch request types
@@ -72,7 +76,7 @@ impl PostHogTelemetryClient {
             api_key,
             host: "https://ph.roocode.com".to_string(),
             distinct_id,
-            http_client: reqwest::Client::new(),
+            http_client: SHARED_CLIENT.get_or_init(reqwest::Client::new).clone(),
             git_property_names: vec!["repositoryUrl", "repositoryName", "defaultBranch"],
             opted_in: Mutex::new(false),
         }
