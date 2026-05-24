@@ -433,7 +433,19 @@ pub async fn run_copy(config: &RuntimeConfig, store: &SessionStore, args: CopyAr
         "remote-code-copy-{session_id}-{}.txt",
         uuid::Uuid::new_v4().as_simple()
     ));
-    std::fs::write(&tmp, &text)?;
+    {
+        let mut file = std::fs::File::create(&tmp)?;
+        // Restrict temp file permissions to owner-only to prevent other users
+        // from reading session content.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = file.metadata()?.permissions();
+            perms.set_mode(0o600);
+            std::fs::set_permissions(&tmp, perms)?;
+        }
+        std::io::Write::write_all(&mut file, text.as_bytes())?;
+    }
     println!("Copied {} characters to {}.", text.len(), tmp.display());
     Ok(())
 }
@@ -486,6 +498,10 @@ pub fn run_clear() -> Result<()> {
 }
 
 /// Exit the shell.
+///
+/// Note: `process::exit` terminates immediately without running destructors
+/// or cleanup. If any graceful shutdown is needed (e.g., flushing buffers,
+/// saving state), it must be done before calling this function.
 pub fn run_exit() -> Result<()> {
     std::process::exit(0);
 }
@@ -811,12 +827,48 @@ pub async fn run_remote_env(args: RemoteEnvArgs) -> Result<()> {
         }
     } else if let Some(key) = &args.get {
         let val = std::env::var(key).unwrap_or_else(|_| "(not set)".to_owned());
-        if args.json {
-            println!("{}", serde_json::json!({key: val}));
+        // Redact values for sensitive variable names to prevent credential
+        // leakage in terminal output and logs.
+        let key_lower = key.to_lowercase();
+        let is_sensitive = key_lower.contains("token")
+            || key_lower.contains("secret")
+            || key_lower.contains("key")
+            || key_lower.contains("password")
+            || key_lower.contains("credential")
+            || key_lower.contains("auth");
+        let display_val = if is_sensitive && val != "(not set)" {
+            "***REDACTED***".to_owned()
         } else {
-            println!("{key}={val}");
+            val
+        };
+        if args.json {
+            println!("{}", serde_json::json!({key: display_val}));
+        } else {
+            println!("{key}={display_val}");
         }
     } else if let Some(key) = &args.set {
+        // Blocklist of sensitive environment variables that should not be
+        // modified via --set to prevent accidental system misconfiguration.
+        const BLOCKED_ENV_VARS: &[&str] = &[
+            "PATH",
+            "HOME",
+            "LD_LIBRARY_PATH",
+            "DYLD_LIBRARY_PATH",
+            "LD_PRELOAD",
+            "SHELL",
+            "USER",
+            "LOGNAME",
+            "TMPDIR",
+            "TERM",
+            "HOSTNAME",
+            "LANG",
+        ];
+        let key_upper = key.to_uppercase();
+        if BLOCKED_ENV_VARS.contains(&key_upper.as_str()) {
+            return Err(anyhow!(
+                "Refusing to modify protected environment variable: {key}"
+            ));
+        }
         if args.get.is_some() || args.unset.is_some() {
             return Err(anyhow!("cannot use --set with --get or --unset"));
         }

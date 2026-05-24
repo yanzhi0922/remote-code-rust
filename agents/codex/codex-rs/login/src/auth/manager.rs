@@ -399,8 +399,7 @@ impl CodexAuth {
             Self::ChatgptAuthTokens(auth) => &auth.state,
             Self::ApiKey(_) | Self::AgentIdentity(_) => return None,
         };
-        #[expect(clippy::unwrap_used)]
-        state.auth_dot_json.lock().unwrap().clone()
+        state.auth_dot_json.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
     /// Returns `None` if token-backed ChatGPT auth is unavailable.
@@ -1384,17 +1383,16 @@ impl AuthManager {
 
     /// Current cached auth (clone) without attempting a refresh.
     pub fn auth_cached(&self) -> Option<CodexAuth> {
-        self.inner.read().ok().and_then(|c| c.auth.clone())
+        self.inner.read().unwrap_or_else(|e| e.into_inner()).auth.clone()
     }
 
     pub fn refresh_failure_for_auth(&self, auth: &CodexAuth) -> Option<RefreshTokenFailedError> {
-        self.inner.read().ok().and_then(|cached| {
-            cached
-                .permanent_refresh_failure
-                .as_ref()
-                .filter(|failure| Self::auths_equal_for_refresh(Some(auth), Some(&failure.auth)))
-                .map(|failure| failure.error.clone())
-        })
+        let cached = self.inner.read().unwrap_or_else(|e| e.into_inner());
+        cached
+            .permanent_refresh_failure
+            .as_ref()
+            .filter(|failure| Self::auths_equal_for_refresh(Some(auth), Some(&failure.auth)))
+            .map(|failure| failure.error.clone())
     }
 
     /// Current cached auth (clone). May be `None` if not logged in or load failed.

@@ -217,6 +217,13 @@ mod tests {
         let previous_claude_config_dir = std::env::var_os("CLAUDE_CONFIG_DIR");
         // These tests exercise runtime helpers that intentionally read
         // Claude's global config dir. Keep the global lookup isolated.
+        //
+        // SAFETY: The global `env_lock()` mutex serializes all concurrent
+        // env mutations across these tests. If tests are ever run without
+        // that lock (e.g., via `cargo test` without --test-threads=1), the
+        // `set_var` calls would be undefined behavior under Rust's safety
+        // contract. Consider using the `serial_test` crate to enforce
+        // serial execution of tests that mutate global env state.
         unsafe { std::env::set_var("CLAUDE_CONFIG_DIR", &profile) };
         let config = load_runtime_config(
             Some(cwd),

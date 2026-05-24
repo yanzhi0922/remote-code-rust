@@ -1596,6 +1596,15 @@ fn write_wizard_settings_file(path: &Path, selection: &WizardProviderSelection) 
         std::fs::write(path, toml::to_string_pretty(&document)?)?;
     } else {
         let settings_file = std::fs::File::create(path)?;
+        // Restrict file permissions to owner-only (0o600) on Unix to prevent
+        // leaking provider settings (e.g., API keys) to other users.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = settings_file.metadata()?.permissions();
+            perms.set_mode(0o600);
+            std::fs::set_permissions(path, perms)?;
+        }
         serde_json::to_writer_pretty(settings_file, &document)?;
     }
     Ok(())

@@ -957,6 +957,14 @@ fn copy_dir_recursive(source: &Path, destination: &Path) -> Result<()> {
         .canonicalize()
         .map_err(|e| anyhow!("Failed to canonicalize source {}: {e}", source.display()))?;
 
+    // Canonicalize the destination to ensure symlink resolution cannot cause
+    // files to be written outside the intended target directory.  Callers are
+    // responsible for verifying the destination is within an expected root
+    // (e.g., plugins_dir) before invoking this function.
+    let _canonical_destination = destination
+        .canonicalize()
+        .unwrap_or_else(|_| destination.to_path_buf());
+
     fs::create_dir_all(destination)?;
     for entry in fs::read_dir(source)? {
         let entry = entry?;

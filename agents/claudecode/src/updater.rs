@@ -158,9 +158,12 @@ pub async fn run_update() -> Result<()> {
 
     // Compute and log the SHA-256 digest of the downloaded binary.
     //
-    // TODO: Verify against a signed checksum file (e.g., sha256sums.txt)
-    // shipped alongside the GitHub release assets.  Until that is wired up
-    // the hash is printed so operators can cross-check manually.
+    // TODO(security): The updater does NOT verify the integrity or authenticity
+    // of the downloaded binary. This exposes users to supply-chain attacks if
+    // the GitHub release is compromised. Add verification against a signed
+    // checksum file (e.g., sha256sums.txt with a minisign/sigstore signature)
+    // shipped alongside the GitHub release assets. The current hash is only
+    // printed so operators can cross-check manually.
     let mut hasher = Sha256::new();
     hasher.update(&bytes);
     let digest_bytes = hasher.finalize();
