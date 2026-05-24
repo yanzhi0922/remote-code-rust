@@ -477,13 +477,20 @@ fn check_env_var_manipulation(command: &str) -> PowerShellSecurityResult {
         return PowerShellSecurityResult::Passthrough;
     }
 
+    // Pre-compiled regexes for each env-write cmdlet, built once via Lazy.
+    static ENV_WRITE_REGEXES: Lazy<Vec<Regex>> = Lazy::new(|| {
+        ENV_WRITE_CMDLETS
+            .iter()
+            .map(|cmdlet| {
+                Regex::new(&format!(r"(?i)\b{cmdlet}\b")).expect("valid cmdlet regex")
+            })
+            .collect()
+    });
+
     // Use word boundary matching to avoid false positives
     // (e.g., "write" contains "ri" which is an alias for Remove-Item)
     let lower = command.to_lowercase();
-    for cmdlet in ENV_WRITE_CMDLETS {
-        // Check for cmdlet as a word boundary match
-        let pattern = format!(r"(?i)\b{cmdlet}\b");
-        let re = Regex::new(&pattern).expect("valid regex");
+    for re in ENV_WRITE_REGEXES.iter() {
         if re.is_match(&lower) {
             return PowerShellSecurityResult::Ask(
                 "Command modifies environment variables".to_owned(),

@@ -43,7 +43,7 @@ fn max_bash_timeout_ms() -> u64 {
         .ok()
         .and_then(|s| s.parse::<u64>().ok())
         .unwrap_or(BUILTIN_MAX)
-        .max(1_000)
+        .max(5_000)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -81,6 +81,12 @@ pub struct ShellExecutionRequest {
     pub cwd: std::path::PathBuf,
     pub timeout_ms: u64,
     pub background: bool,
+    /// SECURITY: The `dangerouslyDisableSandbox` flag originates from LLM tool
+    /// responses and must **not** be trusted.  It is intentionally parsed here
+    /// only to satisfy the schema advertised in specs.rs, but must always be
+    /// validated against an explicit user approval before any sandbox bypass.
+    /// Callers MUST NOT use this field to silently disable sandboxing.
+    #[allow(dead_code)]
     pub dangerously_disable_sandbox: bool,
 }
 
