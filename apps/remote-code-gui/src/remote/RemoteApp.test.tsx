@@ -35,7 +35,7 @@ const mockDeepLink = vi.hoisted(() => ({
 }));
 
 const mockLifecycle = vi.hoisted(() => ({
-  initAppLifecycle: vi.fn(() => Promise.resolve()),
+  initAppLifecycle: vi.fn(() => () => {}),
 }));
 
 const mockRuntime = vi.hoisted(() => ({

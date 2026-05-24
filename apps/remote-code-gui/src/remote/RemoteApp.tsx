@@ -82,6 +82,7 @@ import { loadRemoteSessionBundle } from './transport';
 import { isDirectRunnerEnabled, resolveRemoteRunnerBaseUrl, resolveRemoteTransportStrategy } from './transportMode';
 import { useConnection } from './useConnection';
 import { useRemoteSessionController } from './useRemoteSessionController';
+import { extractErrorMessage } from './utils';
 import type { TransportConfig } from './connection-manager';
 import type {
   RemoteApprovalDecision,
@@ -935,11 +936,4 @@ function runnerEventSummary(
     return copy.runnerRegistered(detail.workspace_ids.length, detail.lease_ttl_secs);
   }
   return copy.runnerHeartbeat(detail.active_sessions, detail.queued_sessions);
-}
-
-function extractErrorMessage(error: unknown): string {
-  if (error instanceof Error && error.message.trim()) {
-    return error.message;
-  }
-  return String(error);
 }
