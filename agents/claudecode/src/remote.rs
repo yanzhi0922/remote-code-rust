@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use anyhow::{Result, anyhow};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
+use futures::StreamExt;
 use rc_control_plane::{
     ArtifactCreateRequest as RemoteArtifactCreateRequest, ArtifactRecord as RemoteArtifactRecord,
     BootstrapClaimRequest as RemoteBootstrapClaimRequest,
@@ -26,7 +27,6 @@ use rc_runner::{
     ListResponse as RemoteListResponse, RunnerSnapshot as RemoteRunnerSnapshot,
     RunnerState as RemoteRunnerState,
 };
-use futures::StreamExt;
 use reqwest::Client;
 use tokio::io::AsyncWriteExt;
 use tokio_tungstenite::{

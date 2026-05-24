@@ -332,6 +332,65 @@ fn dispatch_command<'a>(
         Some(Commands::Passes(args)) => {
             Box::pin(async move { commands::run_passes(config, store, args) })
         }
+        Some(Commands::Teleport(args)) => {
+            Box::pin(async move { commands::run_teleport(config, store, args).await })
+        }
+        Some(Commands::InstallGithubApp(args)) => {
+            Box::pin(async move { commands::run_install_github_app(args).await })
+        }
+        Some(Commands::InstallSlackApp(args)) => {
+            Box::pin(async move { commands::run_install_slack_app(args).await })
+        }
+        Some(Commands::Buddy(args)) => {
+            Box::pin(async move { commands::run_buddy(config, args).await })
+        }
+        Some(Commands::AgentsPlatform(args)) => {
+            Box::pin(async move { commands::run_agents_platform(config, args).await })
+        }
+        Some(Commands::Thinkback(args)) => {
+            Box::pin(async move { commands::run_thinkback(config, store, args) })
+        }
+        Some(Commands::CtxViz(args)) => {
+            Box::pin(async move { commands::run_ctx_viz(config, store, args) })
+        }
+        Some(Commands::AutoFixPr(args)) => {
+            Box::pin(async move { commands::run_autofix_pr(config, args).await })
+        }
+        Some(Commands::BreakCache(args)) => {
+            Box::pin(async move { commands::run_break_cache(config, args) })
+        }
+        Some(Commands::Bridge(args)) => Box::pin(async move { commands::run_bridge(args).await }),
+        Some(Commands::Btw(args)) => Box::pin(async move { commands::run_btw(config, args).await }),
+        Some(Commands::Chrome(args)) => Box::pin(async move { commands::run_chrome(args).await }),
+        Some(Commands::Color(args)) => Box::pin(async move { commands::run_color(args) }),
+        Some(Commands::ContextManage(args)) => {
+            Box::pin(async move { commands::run_context_manage(config, store, args) })
+        }
+        Some(Commands::Ide(args)) => Box::pin(async move { commands::run_ide(args).await }),
+        Some(Commands::Issue(args)) => {
+            Box::pin(async move { commands::run_issue(config, args).await })
+        }
+        Some(Commands::Onboarding(args)) => {
+            Box::pin(async move { commands::run_onboarding(config, store, args).await })
+        }
+        Some(Commands::PerfIssue(args)) => {
+            Box::pin(async move { commands::run_perf_issue(config, store, args) })
+        }
+        Some(Commands::Permissions(args)) => {
+            Box::pin(async move { commands::run_permissions(config, args) })
+        }
+        Some(Commands::PrComments(args)) => {
+            Box::pin(async move { commands::run_pr_comments(args).await })
+        }
+        Some(Commands::PrivacySettings(args)) => {
+            Box::pin(async move { commands::run_privacy_settings(args) })
+        }
+        Some(Commands::RateLimitOptions(args)) => {
+            Box::pin(async move { commands::run_rate_limit_options(config, args) })
+        }
+        Some(Commands::RemoteSetup(args)) => {
+            Box::pin(async move { commands::run_remote_setup(config, args).await })
+        }
         Some(Commands::Update { command }) => Box::pin(async move {
             use cli::UpdateCommand;
             match command {

@@ -15,11 +15,15 @@ use claude_session::SessionStore;
 use serde_json::Value;
 
 use crate::cli::{
-    AddDirArgs, AntTraceArgs, BranchCommand, BughunterArgs, CopyArgs, CostArgs, CtxArgs,
-    DebugToolCallArgs, DesktopArgs, DiffArgs, DiffRealArgs, FastArgs, FeedbackArgs, FilesArgs,
-    HeapdumpArgs, HelpArgs, KeybindingsCommand, LoginArgs, MemoryCommand, MobileArgs,
-    MockLimitsArgs, ModelCommand, PassesArgs, ProviderCommand, ReleaseNotesArgs, RemoteEnvArgs,
-    StatsArgs, StickersArgs, ThemeArgs,
+    AddDirArgs, AgentsPlatformArgs, AntTraceArgs, AutoFixPrArgs, BranchCommand, BreakCacheArgs,
+    BridgeArgs, BtwArgs, BuddyArgs, BughunterArgs, ChromeArgs, ColorArgs, ContextManageArgs,
+    CopyArgs, CostArgs, CtxArgs, CtxVizArgs, DebugToolCallArgs, DesktopArgs, DiffArgs,
+    DiffRealArgs, FastArgs, FeedbackArgs, FilesArgs, HeapdumpArgs, HelpArgs, IdeArgs,
+    InstallGithubAppArgs, InstallSlackAppArgs, IssueArgs, KeybindingsCommand, LoginArgs,
+    MemoryCommand, MobileArgs, MockLimitsArgs, ModelCommand, OnboardingArgs, PassesArgs,
+    PerfIssueArgs, PermissionsArgs, PrCommentsArgs, PrivacySettingsArgs, ProviderCommand,
+    RateLimitOptionsArgs, ReleaseNotesArgs, RemoteEnvArgs, RemoteSetupArgs, StatsArgs,
+    StickersArgs, TeleportArgs, ThemeArgs, ThinkbackArgs,
 };
 
 /// Extract a string value by key path from a JSON object map.
@@ -38,6 +42,20 @@ fn nested_u64(map: &serde_json::Map<String, Value>, keys: &[&str]) -> Option<u64
         val = val.as_object()?.get(*k)?;
     }
     val.as_u64()
+}
+
+fn unsupported_command(command: &str, json: bool) -> Result<()> {
+    if json {
+        println!(
+            "{}",
+            serde_json::json!({
+                "command": command,
+                "status": "unsupported",
+                "message": "not implemented in this build"
+            })
+        );
+    }
+    Err(anyhow!("{command} is not implemented in this build"))
 }
 
 // ── cost ───────────────────────────────────────────────────────────────
@@ -61,8 +79,12 @@ pub fn run_cost(config: &RuntimeConfig, store: &SessionStore, args: CostArgs) ->
     }
     if args.json {
         println!(
-            "{{\"total_cost_usd\": {:.6}, \"input_tokens\": {}, \"output_tokens\": {}}}",
-            0.0_f64, inp, out
+            "{}",
+            serde_json::json!({
+                "total_cost_usd": 0.0_f64,
+                "input_tokens": inp,
+                "output_tokens": out,
+            })
         );
     } else {
         println!("Cost: ${:.6}", 0.0_f64);
@@ -181,7 +203,10 @@ pub fn run_model(config: &mut RuntimeConfig, command: ModelCommand) -> Result<()
         ModelCommand::List { json } => {
             let current = config.provider.model.as_deref().unwrap_or("unknown");
             if json {
-                println!("{{\"current\": \"{current}\", \"available\": []}}");
+                println!(
+                    "{}",
+                    serde_json::json!({"current": current, "available": []})
+                );
             } else {
                 println!("Current model: {current}");
             }
@@ -189,7 +214,7 @@ pub fn run_model(config: &mut RuntimeConfig, command: ModelCommand) -> Result<()
         ModelCommand::Get { json } => {
             let model = config.provider.model.as_deref().unwrap_or("unknown");
             if json {
-                println!("\"{model}\"");
+                println!("{}", serde_json::json!(model));
             } else {
                 println!("{model}");
             }
@@ -210,14 +235,14 @@ pub fn run_provider(config: &mut RuntimeConfig, command: ProviderCommand) -> Res
         ProviderCommand::List { json } => {
             let name = &config.provider.name;
             if json {
-                println!("{{\"current\": \"{name}\", \"available\": []}}");
+                println!("{}", serde_json::json!({"current": name, "available": []}));
             } else {
                 println!("Current provider: {name}");
             }
         }
         ProviderCommand::Get { json } => {
             if json {
-                println!("\"{}\"", config.provider.name);
+                println!("{}", serde_json::json!(config.provider.name));
             } else {
                 println!("{}", config.provider.name);
             }
@@ -234,45 +259,23 @@ pub fn run_provider(config: &mut RuntimeConfig, command: ProviderCommand) -> Res
 
 /// Compact the current session context.
 pub async fn run_compact(config: &mut RuntimeConfig, store: &SessionStore) -> Result<()> {
-    let conversation = store.load_conversation(config.session_id)?;
-    let total = conversation.len();
-    println!("Context compaction requested.");
-    println!("  Session entries: {total}");
-    println!(
-        "  Model: {}",
-        config.provider.model.as_deref().unwrap_or("unknown")
-    );
-    Ok(())
+    let _ = (config, store);
+    unsupported_command("compact", false)
 }
 
 // ── theme ─────────────────────────────────────────────────────────────
 
 /// Show or set the UI theme.
 pub fn run_theme(_config: &RuntimeConfig, args: ThemeArgs) -> Result<()> {
-    if let Some(name) = &args.name {
-        if args.json {
-            println!("{{\"theme\": \"{name}\"}}");
-        } else {
-            println!("Theme set to \"{name}\"");
-        }
-    } else if args.json {
-        println!("{{\"theme\": \"default\"}}");
-    } else {
-        println!("Current theme: default");
-    }
-    Ok(())
+    unsupported_command("theme", args.json)
 }
 
 // ── feedback ──────────────────────────────────────────────────────────
 
 /// Send feedback to the developer.
 pub async fn run_feedback(config: &RuntimeConfig, args: FeedbackArgs) -> Result<()> {
-    let msg = args.message.join(" ");
-    let fb_type = args.feedback_type.as_deref().unwrap_or("general");
-    let _ = config.session_id;
-    eprintln!("Feedback ({fb_type}): {msg}");
-    println!("Thank you for your feedback!");
-    Ok(())
+    let _ = (config, args);
+    unsupported_command("feedback", false)
 }
 
 // ── summary ───────────────────────────────────────────────────────────
@@ -367,8 +370,13 @@ pub fn run_ctx(config: &RuntimeConfig, store: &SessionStore, args: CtxArgs) -> R
 
     if args.json {
         println!(
-            "{{\"used\": {}, \"total\": 200000, \"threshold\": 160000, \"messages\": {msg_count}}}",
-            msg_count * 500
+            "{}",
+            serde_json::json!({
+                "used": msg_count * 500,
+                "total": 200000,
+                "threshold": 160000,
+                "messages": msg_count,
+            })
         );
     } else {
         let rough_tokens = msg_count * 500;
@@ -391,7 +399,10 @@ pub fn run_diff(config: &RuntimeConfig, store: &SessionStore, args: DiffArgs) ->
     let entries = conversation.as_deref().map(|c| c.len()).unwrap_or(0);
 
     if args.json {
-        println!("{{\"session_id\": \"{target_sid}\", \"entries\": {entries}, \"diff\": []}}");
+        println!(
+            "{}",
+            serde_json::json!({"session_id": target_sid, "entries": entries, "diff": []})
+        );
     } else {
         println!("Session {target_sid}: {entries} conversation entries");
         if let Some(path) = &args.path {
@@ -431,7 +442,7 @@ pub async fn run_help(args: HelpArgs) -> Result<()> {
     if let Some(cmd) = &args.command {
         println!("Help for `{cmd}`: (detailed help not yet implemented)");
     } else if args.json {
-        println!("{{\"commands\": []}}");
+        println!("{}", serde_json::json!({"commands": []}));
     } else {
         println!("Available commands:");
         println!("  doctor      Run diagnostic checks");
@@ -480,8 +491,8 @@ pub fn run_exit() -> Result<()> {
 pub fn run_heapdump(config: &RuntimeConfig, args: HeapdumpArgs) -> Result<()> {
     if args.json {
         println!(
-            "{{ \"session_id\": \"{}\", \"heap\": \"N/A\" }}",
-            config.session_id
+            "{}",
+            serde_json::json!({"session_id": config.session_id, "heap": "N/A"})
         );
     } else {
         println!("Heap dump for session {}:", config.session_id);
@@ -535,14 +546,14 @@ pub fn run_fast(config: &mut RuntimeConfig, args: FastArgs) -> Result<()> {
     if args.enable {
         config.permission_mode = claude_core::PermissionMode::AcceptEdits;
         if args.json {
-            println!("{{\"fast_mode\": true}}");
+            println!("{}", serde_json::json!({"fast_mode": true}));
         } else {
             println!("Fast mode enabled.");
         }
     } else if args.disable {
         config.permission_mode = claude_core::PermissionMode::Default;
         if args.json {
-            println!("{{\"fast_mode\": false}}");
+            println!("{}", serde_json::json!({"fast_mode": false}));
         } else {
             println!("Fast mode disabled.");
         }
@@ -552,7 +563,7 @@ pub fn run_fast(config: &mut RuntimeConfig, args: FastArgs) -> Result<()> {
             claude_core::PermissionMode::AcceptEdits
         );
         if args.json {
-            println!("{{\"fast_mode\": {enabled}}}");
+            println!("{}", serde_json::json!({"fast_mode": enabled}));
         } else {
             println!(
                 "Fast mode: {}",
@@ -565,114 +576,37 @@ pub fn run_fast(config: &mut RuntimeConfig, args: FastArgs) -> Result<()> {
 
 /// Mobile device pairing and management.
 pub async fn run_mobile(args: MobileArgs) -> Result<()> {
-    if args.list || (!args.pair && args.unpair.is_none()) {
-        if args.json {
-            println!("[]");
-        } else {
-            println!("Paired mobile devices: (none)");
-        }
-    } else if args.pair {
-        println!("Mobile pairing initiated. Check your mobile device.");
-    } else if let Some(device) = &args.unpair {
-        println!("Mobile device {device} unpaired.");
-    }
-    Ok(())
+    unsupported_command("mobile", args.json)
 }
 
 /// Show or configure desktop pairing.
 pub async fn run_desktop(args: DesktopArgs) -> Result<()> {
-    if let Some(host) = &args.connect {
-        if args.json {
-            println!("{{\"connected\": true, \"host\": \"{host}\"}}");
-        } else {
-            println!("Connected to desktop: {host}");
-        }
-    } else if args.json {
-        println!("{{\"desktop\": \"not_connected\"}}");
-    } else {
-        println!("Desktop: not connected");
-    }
-    Ok(())
+    unsupported_command("desktop", args.json)
 }
 
 /// Toggle sandbox execution mode.
 pub fn run_sandbox_toggle(_config: &mut RuntimeConfig) -> Result<()> {
-    // Sandbox toggling is an operation on the shell execution policy.
-    // For now, report status.
-    println!("Sandbox mode toggle requested. Current sandboxing: disabled.");
-    Ok(())
+    unsupported_command("sandbox-toggle", false)
 }
 
 /// Reload all plugins from disk.
 pub async fn run_reload_plugins(_config: &mut RuntimeConfig) -> Result<()> {
-    // claude-plugins handles full reload.
-    println!("Plugins reloaded from disk.");
-    Ok(())
+    unsupported_command("reload-plugins", false)
 }
 
 /// Add a directory to the workspace.
 pub fn run_add_dir(_config: &RuntimeConfig, args: AddDirArgs) -> Result<()> {
-    let dir = std::path::Path::new(&args.path);
-    if !dir.exists() {
-        return Err(anyhow!("path does not exist: {}", args.path));
-    }
-    let name = args.name.unwrap_or_else(|| {
-        dir.file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or(&args.path)
-            .to_owned()
-    });
-    let path_str = dir.display();
-    if args.json {
-        println!("{{\"path\": \"{path_str}\", \"name\": \"{name}\"}}");
-    } else {
-        println!("Added directory \"{name}\" at {path_str}");
-    }
-    Ok(())
+    unsupported_command("add-dir", args.json)
 }
 
 /// Mock rate limit responses for testing.
 pub fn run_mock_limits(_config: &RuntimeConfig, args: MockLimitsArgs) -> Result<()> {
-    if args.reset {
-        if args.json {
-            println!("{{\"reset\": true}}");
-        } else {
-            println!("Rate limit mocks cleared.");
-        }
-    } else if let Some(rpm) = args.rpm {
-        if args.json {
-            println!("{{\"rpm\": {rpm}}}");
-        } else {
-            println!("Mock RPM limit set to {rpm}.");
-        }
-    } else if let Some(tpm) = args.tpm {
-        if args.json {
-            println!("{{\"tpm\": {tpm}}}");
-        } else {
-            println!("Mock TPM limit set to {tpm}.");
-        }
-    } else if args.json {
-        println!("{{\"rpm\": null, \"tpm\": null}}");
-    } else {
-        println!("No rate limit mocks configured.");
-    }
-    Ok(())
+    unsupported_command("mock-limits", args.json)
 }
 
 /// Manage GitHub achievement stickers.
 pub async fn run_stickers(_config: &RuntimeConfig, args: StickersArgs) -> Result<()> {
-    if let Some(grant) = &args.grant {
-        if args.json {
-            println!("{{\"granted\": \"{grant}\"}}");
-        } else {
-            println!("Sticker \"{grant}\" granted.");
-        }
-    } else if args.json {
-        println!("[]");
-    } else {
-        println!("Stickers: (none earned yet)");
-    }
-    Ok(())
+    unsupported_command("stickers", args.json)
 }
 
 /// Show release notes for this version.
@@ -681,7 +615,7 @@ pub fn run_release_notes(args: ReleaseNotesArgs) -> Result<()> {
         .version
         .unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_owned());
     if args.json {
-        println!("{{\"version\": \"{version}\", \"notes\": []}}");
+        println!("{}", serde_json::json!({"version": version, "notes": []}));
     } else {
         println!("Release notes for version {version}:");
         println!("  (Release notes not yet bundled in this build)");
@@ -714,7 +648,13 @@ pub fn run_stats(config: &RuntimeConfig, store: &SessionStore, args: StatsArgs) 
 
     if args.json {
         println!(
-            "{{\"session_id\": \"{sid}\", \"messages\": {msg_count}, \"tool_calls\": {tool_calls}, \"errors\": {errors}}}"
+            "{}",
+            serde_json::json!({
+                "session_id": sid,
+                "messages": msg_count,
+                "tool_calls": tool_calls,
+                "errors": errors,
+            })
         );
     } else {
         println!("Stats for session {sid}:");
@@ -756,7 +696,7 @@ pub fn run_diff_real(
         println!("Diff for session {sid}: {} entries", conversation.len());
         for entry in conversation.iter().rev().take(10).rev() {
             let preview = if entry.text.len() > 80 {
-                format!("{}...", &entry.text[..80])
+                format!("{}...", entry.text.chars().take(80).collect::<String>())
             } else {
                 entry.text.clone()
             };
@@ -787,7 +727,7 @@ pub fn run_branch(_config: &RuntimeConfig, command: BranchCommand) -> Result<()>
             }
         }
         BranchCommand::Create { name, start_point } => {
-            let mut args = vec!["branch", "create", &name];
+            let mut args = vec!["branch", &name];
             if let Some(sp) = &start_point {
                 args.push(sp);
             }
@@ -830,7 +770,7 @@ pub fn run_branch(_config: &RuntimeConfig, command: BranchCommand) -> Result<()>
                 .map_err(|e| anyhow!("git rev-parse failed: {e}"))?;
             let branch = String::from_utf8_lossy(&output.stdout).trim().to_owned();
             if json {
-                println!("{{\"branch\": \"{branch}\"}}");
+                println!("{}", serde_json::json!({"branch": branch}));
             } else {
                 println!("{branch}");
             }
@@ -851,7 +791,7 @@ pub async fn run_remote_env(args: RemoteEnvArgs) -> Result<()> {
     } else if let Some(key) = &args.get {
         let val = std::env::var(key).unwrap_or_else(|_| "(not set)".to_owned());
         if args.json {
-            println!("{{\"{key}\": \"{val}\"}}");
+            println!("{}", serde_json::json!({key: val}));
         } else {
             println!("{key}={val}");
         }
@@ -861,7 +801,7 @@ pub async fn run_remote_env(args: RemoteEnvArgs) -> Result<()> {
                 std::env::set_var(key, val);
             }
             if args.json {
-                println!("{{\"set\": \"{key}\", \"value\": \"{val}\"}}");
+                println!("{}", serde_json::json!({"set": key, "value": val}));
             } else {
                 println!("Set {key}={val}");
             }
@@ -871,7 +811,7 @@ pub async fn run_remote_env(args: RemoteEnvArgs) -> Result<()> {
             std::env::remove_var(key);
         }
         if args.json {
-            println!("{{\"unset\": \"{key}\"}}");
+            println!("{}", serde_json::json!({"unset": key}));
         } else {
             println!("Unset {key}");
         }
@@ -881,25 +821,17 @@ pub async fn run_remote_env(args: RemoteEnvArgs) -> Result<()> {
 
 /// Log in with a provider.
 pub async fn run_login(_config: &RuntimeConfig, args: LoginArgs) -> Result<()> {
-    let provider = args.provider.as_deref().unwrap_or("default");
-    if args.json {
-        println!("{{\"provider\": \"{provider}\", \"status\": \"ok\"}}");
-    } else {
-        println!("Logged in to {provider}.");
-    }
-    Ok(())
+    unsupported_command("login", args.json)
 }
 
 /// Log out from current provider.
 pub async fn run_logout(_config: &RuntimeConfig) -> Result<()> {
-    println!("Logged out.");
-    Ok(())
+    unsupported_command("logout", false)
 }
 
 /// Refresh OAuth token.
 pub async fn run_oauth_refresh(_config: &RuntimeConfig) -> Result<()> {
-    println!("OAuth token refreshed.");
-    Ok(())
+    unsupported_command("oauth-refresh", false)
 }
 
 /// Run automated bug hunting.
@@ -908,14 +840,7 @@ pub fn run_bughunter(
     _store: &SessionStore,
     args: BughunterArgs,
 ) -> Result<()> {
-    let mode = if args.deep { "deep" } else { "quick" };
-    if args.json {
-        println!("{{\"mode\": \"{mode}\", \"results\": []}}");
-    } else {
-        println!("Bug hunter ({mode} mode): scanning session...");
-        println!("  No issues found.");
-    }
-    Ok(())
+    unsupported_command("bughunter", args.json)
 }
 
 /// Trace API calls in a session.
@@ -968,10 +893,11 @@ pub fn run_keybindings(command: KeybindingsCommand) -> Result<()> {
             }
         }
         KeybindingsCommand::Set { key, action } => {
-            println!("Keybinding {key} → {action} set.");
+            let _ = (key, action);
+            return unsupported_command("keybindings set", false);
         }
         KeybindingsCommand::Reset => {
-            println!("Keybindings reset to defaults.");
+            return unsupported_command("keybindings reset", false);
         }
     }
     Ok(())
@@ -979,26 +905,179 @@ pub fn run_keybindings(command: KeybindingsCommand) -> Result<()> {
 
 /// Run batch analysis passes.
 pub fn run_passes(_config: &RuntimeConfig, _store: &SessionStore, args: PassesArgs) -> Result<()> {
-    if let Some(name) = &args.name {
-        if args.json {
-            println!("{{\"pass\": \"{name}\", \"status\": \"completed\"}}");
-        } else {
-            println!("Analysis pass '{name}' completed.");
-        }
-    } else if args.all {
-        if args.json {
-            println!(
-                "{{\"passes\": [\"summary\", \"review\", \"audit\"], \"status\": \"completed\"}}"
-            );
-        } else {
-            println!("All analysis passes completed (summary, review, audit).");
-        }
+    unsupported_command("passes", args.json)
+}
+
+// ── P1-A3: High-complexity commands ──────────────────────────────────
+
+/// Teleport a session between environments.
+pub async fn run_teleport(
+    _config: &RuntimeConfig,
+    _store: &SessionStore,
+    args: TeleportArgs,
+) -> Result<()> {
+    unsupported_command("teleport", args.json)
+}
+
+/// Install a GitHub App.
+pub async fn run_install_github_app(args: InstallGithubAppArgs) -> Result<()> {
+    unsupported_command("install-github-app", args.json)
+}
+
+/// Install a Slack App.
+pub async fn run_install_slack_app(args: InstallSlackAppArgs) -> Result<()> {
+    unsupported_command("install-slack-app", args.json)
+}
+
+/// Collaborate with a buddy / peer programmer.
+pub async fn run_buddy(_config: &RuntimeConfig, args: BuddyArgs) -> Result<()> {
+    unsupported_command("buddy", args.json)
+}
+
+/// Manage the agent platform.
+pub async fn run_agents_platform(_config: &RuntimeConfig, args: AgentsPlatformArgs) -> Result<()> {
+    unsupported_command("agents-platform", args.json)
+}
+
+/// Backtrack through agent reasoning.
+pub fn run_thinkback(
+    config: &RuntimeConfig,
+    _store: &SessionStore,
+    args: ThinkbackArgs,
+) -> Result<()> {
+    let _ = config;
+    unsupported_command("thinkback", args.json)
+}
+
+/// Visualize conversation context usage.
+pub fn run_ctx_viz(config: &RuntimeConfig, store: &SessionStore, args: CtxVizArgs) -> Result<()> {
+    let sid = args.session_id.unwrap_or(config.session_id);
+    let conversation = store.load_conversation(sid)?;
+    let total = conversation.len();
+    let estimated_tokens: usize = conversation.iter().map(|e| e.text.len() / 4).sum();
+
+    if let Some(path) = &args.output {
+        let viz = serde_json::json!({
+            "session_id": sid.to_string(),
+            "total_messages": total,
+            "estimated_tokens": estimated_tokens,
+            "max_context": 200000,
+        });
+        std::fs::write(path, serde_json::to_string_pretty(&viz)?)?;
+        println!("Context visualization written to {}.", path.display());
+    } else if args.json {
+        println!(
+            "{}",
+            serde_json::json!({"session_id": sid, "messages": total, "tokens": estimated_tokens, "max": 200000})
+        );
     } else {
-        if args.json {
-            println!("{{\"passes\": [], \"available\": [\"summary\", \"review\", \"audit\"]}}");
-        } else {
-            println!("Available passes: summary, review, audit");
-        }
+        println!("Context visualization for session {sid}:");
+        println!("  Messages:       {total}");
+        println!("  Estimated tokens: ~{estimated_tokens} / 200,000");
+        let ratio = estimated_tokens as f64 / 200_000.0;
+        let bar_len: usize = 30;
+        let filled = (ratio * bar_len as f64).round() as usize;
+        let empty = bar_len.saturating_sub(filled);
+        println!(
+            "  [{}{}] {:.1}%",
+            "#".repeat(filled),
+            ".".repeat(empty),
+            ratio * 100.0
+        );
     }
     Ok(())
+}
+
+// ── P1-A4: 16 remaining commands ────────────────────────────────────
+
+/// Auto-fix a pull request.
+pub async fn run_autofix_pr(_config: &RuntimeConfig, args: AutoFixPrArgs) -> Result<()> {
+    unsupported_command("autofix-pr", args.json)
+}
+
+/// Break the provider response cache.
+pub fn run_break_cache(_config: &RuntimeConfig, args: BreakCacheArgs) -> Result<()> {
+    unsupported_command("break-cache", args.json)
+}
+
+/// Manage bridge connections.
+pub async fn run_bridge(args: BridgeArgs) -> Result<()> {
+    unsupported_command("bridge", args.json)
+}
+
+/// Send a quick "by the way" note.
+pub async fn run_btw(_config: &RuntimeConfig, args: BtwArgs) -> Result<()> {
+    unsupported_command("btw", args.json)
+}
+
+/// Configure Chrome browser MCP integration.
+pub async fn run_chrome(args: ChromeArgs) -> Result<()> {
+    unsupported_command("chrome", args.json)
+}
+
+/// Configure terminal colors.
+pub fn run_color(args: ColorArgs) -> Result<()> {
+    unsupported_command("color", args.json)
+}
+
+/// Manage conversation context.
+pub fn run_context_manage(
+    _config: &RuntimeConfig,
+    _store: &SessionStore,
+    args: ContextManageArgs,
+) -> Result<()> {
+    unsupported_command("context", args.json)
+}
+
+/// IDE integration configuration.
+pub async fn run_ide(args: IdeArgs) -> Result<()> {
+    unsupported_command("ide", args.json)
+}
+
+/// Manage GitHub issues.
+pub async fn run_issue(_config: &RuntimeConfig, args: IssueArgs) -> Result<()> {
+    unsupported_command("issue", args.json)
+}
+
+/// First-run onboarding wizard.
+pub async fn run_onboarding(
+    _config: &RuntimeConfig,
+    _store: &SessionStore,
+    args: OnboardingArgs,
+) -> Result<()> {
+    unsupported_command("onboarding", args.json)
+}
+
+/// Diagnose performance issues.
+pub fn run_perf_issue(
+    _config: &RuntimeConfig,
+    _store: &SessionStore,
+    args: PerfIssueArgs,
+) -> Result<()> {
+    unsupported_command("perf-issue", args.json)
+}
+
+/// Manage permission rules.
+pub fn run_permissions(_config: &RuntimeConfig, args: PermissionsArgs) -> Result<()> {
+    unsupported_command("permissions", args.json)
+}
+
+/// View pull request comments.
+pub async fn run_pr_comments(args: PrCommentsArgs) -> Result<()> {
+    unsupported_command("pr-comments", args.json)
+}
+
+/// Configure privacy settings.
+pub fn run_privacy_settings(args: PrivacySettingsArgs) -> Result<()> {
+    unsupported_command("privacy-settings", args.json)
+}
+
+/// Configure rate limit options.
+pub fn run_rate_limit_options(_config: &RuntimeConfig, args: RateLimitOptionsArgs) -> Result<()> {
+    unsupported_command("rate-limit-options", args.json)
+}
+
+/// Set up remote access.
+pub async fn run_remote_setup(_config: &RuntimeConfig, args: RemoteSetupArgs) -> Result<()> {
+    unsupported_command("remote-setup", args.json)
 }

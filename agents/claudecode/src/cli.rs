@@ -339,6 +339,54 @@ pub enum Commands {
     },
     /// Run batch analysis passes.
     Passes(PassesArgs),
+    // ── P1-A3 commands ─────────────────────────────────────────────
+    /// Teleport a session between environments.
+    Teleport(TeleportArgs),
+    /// Install a GitHub App.
+    InstallGithubApp(InstallGithubAppArgs),
+    /// Install a Slack App.
+    InstallSlackApp(InstallSlackAppArgs),
+    /// Collaborate with a buddy / peer programmer.
+    Buddy(BuddyArgs),
+    /// Manage the agent platform.
+    AgentsPlatform(AgentsPlatformArgs),
+    /// Backtrack through agent reasoning.
+    Thinkback(ThinkbackArgs),
+    /// Visualize conversation context usage.
+    CtxViz(CtxVizArgs),
+    // ── P1-A4 commands ─────────────────────────────────────────────
+    /// Auto-fix a pull request.
+    AutoFixPr(AutoFixPrArgs),
+    /// Break the provider response cache.
+    BreakCache(BreakCacheArgs),
+    /// Manage bridge connections.
+    Bridge(BridgeArgs),
+    /// Send a quick "by the way" note.
+    Btw(BtwArgs),
+    /// Configure Chrome browser MCP integration.
+    Chrome(ChromeArgs),
+    /// Configure terminal colors.
+    Color(ColorArgs),
+    /// Manage conversation context (different from ctx).
+    ContextManage(ContextManageArgs),
+    /// IDE integration configuration.
+    Ide(IdeArgs),
+    /// Manage GitHub issues.
+    Issue(IssueArgs),
+    /// First-run onboarding wizard.
+    Onboarding(OnboardingArgs),
+    /// Diagnose performance issues.
+    PerfIssue(PerfIssueArgs),
+    /// Manage permission rules.
+    Permissions(PermissionsArgs),
+    /// View pull request comments.
+    PrComments(PrCommentsArgs),
+    /// Configure privacy settings.
+    PrivacySettings(PrivacySettingsArgs),
+    /// Configure rate limit options.
+    RateLimitOptions(RateLimitOptionsArgs),
+    /// Set up remote access.
+    RemoteSetup(RemoteSetupArgs),
 }
 
 /// Subcommands for the update command.
@@ -1851,6 +1899,267 @@ pub struct PassesArgs {
     pub all: bool,
     #[arg(long)]
     pub name: Option<String>,
+    #[arg(long)]
+    pub json: bool,
+}
+
+// ── P1-A3: New CLI Args ───────────────────────────────────────────────
+
+#[derive(Args, Debug)]
+pub struct TeleportArgs {
+    pub session_id: Uuid,
+    #[arg(long)]
+    pub target: String,
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct InstallGithubAppArgs {
+    #[arg(long)]
+    pub app_id: Option<String>,
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct InstallSlackAppArgs {
+    #[arg(long)]
+    pub workspace: Option<String>,
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct BuddyArgs {
+    #[arg(long)]
+    pub invite: Option<String>,
+    #[arg(long)]
+    pub accept: Option<String>,
+    #[arg(long)]
+    pub leave: bool,
+    #[arg(long)]
+    pub status: bool,
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct AgentsPlatformArgs {
+    #[arg(long)]
+    pub list: bool,
+    #[arg(long)]
+    pub agent_type: Option<String>,
+    #[arg(long)]
+    pub deploy: Option<String>,
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct ThinkbackArgs {
+    pub session_id: Option<Uuid>,
+    #[arg(long)]
+    pub steps: Option<u32>,
+    #[arg(long)]
+    pub last: bool,
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct CtxVizArgs {
+    pub session_id: Option<Uuid>,
+    #[arg(long)]
+    pub detailed: bool,
+    #[arg(long)]
+    pub output: Option<PathBuf>,
+    #[arg(long)]
+    pub json: bool,
+}
+
+// ── P1-A4: New CLI Args ───────────────────────────────────────────────
+
+#[derive(Args, Debug)]
+pub struct AutoFixPrArgs {
+    #[arg(long)]
+    pub pr_url: Option<String>,
+    #[arg(long)]
+    pub dry_run: bool,
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct BreakCacheArgs {
+    #[arg(long)]
+    pub provider: Option<String>,
+    #[arg(long)]
+    pub all: bool,
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct BridgeArgs {
+    #[arg(long)]
+    pub list: bool,
+    #[arg(long)]
+    pub connect: Option<String>,
+    #[arg(long)]
+    pub disconnect: Option<String>,
+    #[arg(long)]
+    pub status: bool,
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct BtwArgs {
+    pub message: Vec<String>,
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct ChromeArgs {
+    #[arg(long)]
+    pub port: Option<u16>,
+    #[arg(long)]
+    pub debug: bool,
+    #[arg(long)]
+    pub status: bool,
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct ColorArgs {
+    pub scheme: Option<String>,
+    #[arg(long)]
+    pub list: bool,
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct ContextManageArgs {
+    #[arg(long)]
+    pub show: bool,
+    #[arg(long)]
+    pub reset: bool,
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct IdeArgs {
+    #[arg(long)]
+    pub name: Option<String>,
+    #[arg(long)]
+    pub connect: Option<String>,
+    #[arg(long)]
+    pub disconnect: bool,
+    #[arg(long)]
+    pub status: bool,
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct IssueArgs {
+    #[arg(long)]
+    pub create: Option<String>,
+    #[arg(long)]
+    pub list: bool,
+    #[arg(long)]
+    pub show: Option<String>,
+    #[arg(long)]
+    pub repo: Option<String>,
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct OnboardingArgs {
+    #[arg(long)]
+    pub skip: bool,
+    #[arg(long)]
+    pub reset: bool,
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct PerfIssueArgs {
+    #[arg(long)]
+    pub session_id: Option<Uuid>,
+    #[arg(long)]
+    pub deep: bool,
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct PermissionsArgs {
+    #[arg(long)]
+    pub mode: Option<String>,
+    #[arg(long)]
+    pub list_rules: bool,
+    #[arg(long)]
+    pub add_rule: Option<String>,
+    #[arg(long)]
+    pub remove_rule: Option<String>,
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct PrCommentsArgs {
+    #[arg(long)]
+    pub pr_url: Option<String>,
+    #[arg(long)]
+    pub refresh: bool,
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct PrivacySettingsArgs {
+    #[arg(long)]
+    pub show: bool,
+    #[arg(long)]
+    pub telemetry: Option<bool>,
+    #[arg(long)]
+    pub crash_reports: Option<bool>,
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct RateLimitOptionsArgs {
+    #[arg(long)]
+    pub show: bool,
+    #[arg(long)]
+    pub rpm: Option<u64>,
+    #[arg(long)]
+    pub tpm: Option<u64>,
+    #[arg(long)]
+    pub reset: bool,
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct RemoteSetupArgs {
+    #[arg(long)]
+    pub url: Option<String>,
+    #[arg(long)]
+    pub token: Option<String>,
+    #[arg(long)]
+    pub name: Option<String>,
+    #[arg(long)]
+    pub show: bool,
     #[arg(long)]
     pub json: bool,
 }
