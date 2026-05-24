@@ -1,6 +1,7 @@
 //! Command-line tool implementations: bash_command, powershell, repl.
 
 use std::process::Stdio;
+use std::sync::OnceLock;
 
 use anyhow::{Context, Result, anyhow};
 use serde_json::Value;
@@ -44,18 +45,24 @@ pub(crate) async fn powershell_tool(
 ///
 /// Prefers `pwsh` (PowerShell 7+, cross-platform) over `powershell`
 /// (Windows PowerShell 5.1) for better compatibility and features.
-pub(crate) fn which_powershell() -> String {
-    let pwsh_candidates = ["pwsh", "pwsh.exe"];
-    for candidate in &pwsh_candidates {
-        if let Ok(output) = std::process::Command::new(candidate)
-            .arg("-Version")
-            .output()
-            && output.status.success()
-        {
-            return candidate.to_string();
+/// Result is cached after the first detection to avoid repeated blocking
+/// `std::process::Command` calls in async contexts.
+static POWERSHELL_PATH: OnceLock<String> = OnceLock::new();
+
+pub(crate) fn which_powershell() -> &'static str {
+    POWERSHELL_PATH.get_or_init(|| {
+        let pwsh_candidates = ["pwsh", "pwsh.exe"];
+        for candidate in &pwsh_candidates {
+            if let Ok(output) = std::process::Command::new(candidate)
+                .arg("-Version")
+                .output()
+                && output.status.success()
+            {
+                return candidate.to_string();
+            }
         }
-    }
-    "powershell".to_string()
+        "powershell".to_string()
+    })
 }
 
 pub(crate) async fn repl_tool(input: &Value, context: &ToolExecutionContext) -> Result<String> {

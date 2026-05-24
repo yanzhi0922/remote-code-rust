@@ -83,6 +83,10 @@ fn normalize_ask_user_questions(input: &Value) -> Result<Vec<Value>> {
 }
 
 fn validate_ask_user_questions(questions: &[Value]) -> Result<()> {
+    // Limit to 1-4 questions: this matches the UI prompt surface and prevents
+    // the agent from overwhelming the user with too many questions at once.
+    // The 4-question cap keeps the interaction tractable for both the terminal
+    // and the GUI rendering layer.
     if !(1..=4).contains(&questions.len()) {
         return Err(anyhow!("ask_user requires 1-4 questions"));
     }
@@ -405,11 +409,18 @@ pub(crate) fn notebook_edit(input: &Value, context: &ToolExecutionContext) -> Re
 }
 
 fn notebook_mtime_ms(path: &std::path::Path) -> Result<u128> {
-    Ok(std::fs::metadata(path)?
-        .modified()?
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis())
+    let modified = std::fs::metadata(path)?.modified()?;
+    match modified.duration_since(UNIX_EPOCH) {
+        Ok(dur) => Ok(dur.as_millis()),
+        Err(e) => {
+            tracing::warn!(
+                "notebook_mtime_ms: file {:?} has modification time before UNIX epoch: {}",
+                path,
+                e
+            );
+            Ok(0)
+        }
+    }
 }
 
 fn notebook_cell_index(cells: &[Value], input: &Value, edit_mode: &str) -> Result<usize> {
@@ -462,7 +473,13 @@ fn notebook_cell_index(cells: &[Value], input: &Value, edit_mode: &str) -> Resul
 
 fn parse_cell_id(cell_id: &str) -> Option<usize> {
     let suffix = cell_id.strip_prefix("cell-")?;
-    suffix.parse::<usize>().ok()
+    let index = suffix.parse::<usize>().ok()?;
+    // Reject unreasonably large indices to avoid panicking on out-of-bounds
+    // access downstream. Real notebooks rarely exceed a few hundred cells.
+    if index >= 10_000 {
+        return None;
+    }
+    Some(index)
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -592,6 +609,10 @@ pub(crate) async fn remote_trigger_tool(input: &Value) -> Result<String> {
     let url = input["url"]
         .as_str()
         .ok_or_else(|| anyhow!("url is required"))?;
+
+    // SSRF protection: block private IPs and localhost
+    super::web::validate_url(url)?;
+
     let event = input["event"]
         .as_str()
         .ok_or_else(|| anyhow!("event is required"))?;
@@ -633,6 +654,24 @@ pub(crate) async fn tungsten_tool(input: &Value, context: &ToolExecutionContext)
     let target = input["target"]
         .as_str()
         .ok_or_else(|| anyhow!("target is required"))?;
+
+    // Validate target is a reasonable path without shell metacharacters.
+    if target.contains("..")
+        || target.contains('|')
+        || target.contains('&')
+        || target.contains(';')
+        || target.contains('$')
+        || target.contains('`')
+        || target.contains('(')
+        || target.contains(')')
+        || target.contains('\n')
+    {
+        return Err(anyhow!("target contains invalid characters"));
+    }
+    let target_path = std::path::Path::new(target);
+    if target_path.is_absolute() {
+        return Err(anyhow!("target must be a relative path within the workspace"));
+    }
 
     // Detect project type by checking for marker files.
     let is_rust = context.cwd.join("Cargo.toml").exists()
@@ -888,7 +927,16 @@ pub(crate) fn skill_execute_tool(input: &Value, context: &ToolExecutionContext) 
     ))
 }
 
-pub(crate) fn voice_input_tool(input: &Value) -> Result<String> {
+pub(crate) async fn voice_input_tool(input: &Value) -> Result<String> {
+    // The recording and transcription subprocess calls are blocking; run them
+    // on a dedicated thread so we don't stall the Tokio runtime.
+    let input = input.clone();
+    tokio::task::spawn_blocking(move || voice_input_tool_blocking(&input))
+        .await
+        .map_err(|e| anyhow::anyhow!("voice_input task join error: {e}"))?
+}
+
+fn voice_input_tool_blocking(input: &Value) -> Result<String> {
     let duration_secs = input
         .get("duration_secs")
         .and_then(Value::as_u64)

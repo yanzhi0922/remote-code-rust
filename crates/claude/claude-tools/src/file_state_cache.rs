@@ -172,7 +172,10 @@ impl FileStateCacheInner {
     }
 
     fn touch(&mut self, key: &str) {
-        self.lru.retain(|candidate| candidate != key);
+        // O(1) amortized: find the entry, swap_remove it, then push to back.
+        if let Some(pos) = self.lru.iter().position(|candidate| candidate == key) {
+            self.lru.swap_remove_front(pos);
+        }
         self.lru.push_back(key.to_owned());
     }
 

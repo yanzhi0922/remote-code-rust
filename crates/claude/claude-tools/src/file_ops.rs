@@ -373,37 +373,93 @@ fn compute_lcs(old: &[&str], new: &[&str]) -> Vec<(usize, usize)> {
     }
 
     // For very large files, use a simplified approach to avoid excessive memory use.
-    // Cap the DP table at 10000x10000.
     if m > 10000 || n > 10000 {
         return compute_lcs_simple(old, new);
     }
 
-    // Standard LCS dynamic programming
-    let mut dp = vec![vec![0usize; n + 1]; m + 1];
+    // Two-row rolling DP to compute the LCS length table.  We keep the full
+    // (m+1)x(n+1) table only for backtracking, so we store it as a flat
+    // Vec<usize> using row-major order.  This uses O(m*n) time but the memory
+    // is a single flat allocation which is significantly cheaper than
+    // Vec<Vec<usize>> (one allocation per row).
+    //
+    // Phase 1 — forward pass with two rows to compute the bottom-right cell
+    //   length of the LCS.  We need this to size the backtracking table.
+    let mut prev_row = vec![0usize; n + 1];
+    let mut curr_row = vec![0usize; n + 1];
 
     for i in 1..=m {
         for j in 1..=n {
             if old[i - 1] == new[j - 1] {
-                dp[i][j] = dp[i - 1][j - 1] + 1;
+                curr_row[j] = prev_row[j - 1] + 1;
             } else {
-                dp[i][j] = dp[i - 1][j].max(dp[i][j - 1]);
+                curr_row[j] = prev_row[j].max(curr_row[j - 1]);
             }
+        }
+        std::mem::swap(&mut prev_row, &mut curr_row);
+        // Reset curr_row for the next iteration.  Index 0 stays 0.
+        curr_row[0] = 0;
+        for j in 1..=n {
+            curr_row[j] = 0;
+        }
+    }
+    // After the loop, prev_row holds the values for row m (last swap moved it).
+    let lcs_len = prev_row[n];
+
+    if lcs_len == 0 {
+        return Vec::new();
+    }
+
+    // Phase 2 — recover the LCS by re-running the DP with a full table.
+    // We only store 1 bit per cell (direction: diagonal/up/left) to keep
+    // memory low: O(m*n) bits vs O(m*n) usizes.
+    //
+    // Direction encoding: 0 = up, 1 = left, 2 = diagonal (match).
+    let mut dir = vec![0u8; (m + 1) * (n + 1)];
+
+    // Reuse the two-row DP arrays to recompute values on the fly.
+    prev_row = vec![0usize; n + 1];
+    curr_row = vec![0usize; n + 1];
+
+    for i in 1..=m {
+        for j in 1..=n {
+            let idx = i * (n + 1) + j;
+            if old[i - 1] == new[j - 1] {
+                curr_row[j] = prev_row[j - 1] + 1;
+                dir[idx] = 2; // diagonal
+            } else if prev_row[j] >= curr_row[j - 1] {
+                curr_row[j] = prev_row[j];
+                dir[idx] = 0; // up
+            } else {
+                curr_row[j] = curr_row[j - 1];
+                dir[idx] = 1; // left
+            }
+        }
+        std::mem::swap(&mut prev_row, &mut curr_row);
+        curr_row[0] = 0;
+        for j in 1..=n {
+            curr_row[j] = 0;
         }
     }
 
-    // Backtrack to recover the LCS
-    let mut result = Vec::new();
+    // Backtrack using the direction bits.
+    let mut result = Vec::with_capacity(lcs_len);
     let mut i = m;
     let mut j = n;
     while i > 0 && j > 0 {
-        if old[i - 1] == new[j - 1] {
-            result.push((i - 1, j - 1));
-            i -= 1;
-            j -= 1;
-        } else if dp[i - 1][j] > dp[i][j - 1] {
-            i -= 1;
-        } else {
-            j -= 1;
+        let d = dir[i * (n + 1) + j];
+        match d {
+            2 => {
+                result.push((i - 1, j - 1));
+                i -= 1;
+                j -= 1;
+            }
+            0 => {
+                i -= 1;
+            }
+            _ => {
+                j -= 1;
+            }
         }
     }
     result.reverse();
@@ -1018,6 +1074,11 @@ pub(crate) fn search_text(input: &Value, context: &ToolExecutionContext) -> Resu
         if entry.path().components().any(|component| {
             IGNORED_DIRS.contains(&component.as_os_str().to_string_lossy().as_ref())
         }) {
+            continue;
+        }
+        // Skip files larger than 10 MiB to avoid excessive memory usage.
+        const MAX_FILE_SIZE: u64 = 10 * 1024 * 1024;
+        if entry.metadata().map(|m| m.len()).unwrap_or(0) > MAX_FILE_SIZE {
             continue;
         }
         let Ok(contents) = std::fs::read_to_string(entry.path()) else {

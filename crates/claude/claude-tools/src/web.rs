@@ -2,6 +2,7 @@
 
 use std::env;
 use std::fs;
+use std::net::IpAddr;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result, anyhow};
@@ -12,6 +13,57 @@ use tokio::time::{Duration, timeout};
 use uuid::Uuid;
 
 use super::ToolExecutionContext;
+
+/// Validate that a URL is safe to fetch (SSRF protection).
+///
+/// Only allows `http://` and `https://` schemes and blocks:
+/// - Private/reserved IP ranges (10.x, 172.16-31.x, 192.168.x, 127.x, 169.254.x, ::1, fc00::/7)
+/// - `localhost` hostname
+pub(crate) fn validate_url(url: &str) -> Result<()> {
+    let parsed = url::Url::parse(url).map_err(|e| anyhow!("invalid URL '{}': {e}", url))?;
+
+    match parsed.scheme() {
+        "http" | "https" => {}
+        _ => return Err(anyhow!("URL scheme must be http or https, got '{}'", parsed.scheme())),
+    }
+
+    let host = parsed
+        .host_str()
+        .ok_or_else(|| anyhow!("URL has no host: '{}'", url))?
+        .to_owned();
+
+    // Block localhost
+    if host.eq_ignore_ascii_case("localhost") {
+        return Err(anyhow!("URL resolves to localhost, which is blocked for security"));
+    }
+
+    // Block IP addresses in private/reserved ranges
+    if let Ok(ip) = host.parse::<IpAddr>() {
+        match ip {
+            IpAddr::V4(v4) => {
+                if v4.is_loopback()
+                    || v4.is_private()
+                    || v4.is_link_local()
+                    || v4.is_broadcast()
+                    || v4.is_documentation()
+                {
+                    return Err(anyhow!(
+                        "URL resolves to a private/reserved IP address ({ip}), which is blocked for security"
+                    ));
+                }
+            }
+            IpAddr::V6(v6) => {
+                if v6.is_loopback() || v6.is_unique_local() {
+                    return Err(anyhow!(
+                        "URL resolves to a private/reserved IP address ({ip}), which is blocked for security"
+                    ));
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
 
 pub(crate) async fn web_fetch(input: &Value, _context: &ToolExecutionContext) -> Result<String> {
     let url = input
@@ -26,6 +78,9 @@ pub(crate) async fn web_fetch(input: &Value, _context: &ToolExecutionContext) ->
             url
         ));
     }
+
+    // SSRF protection: block private IPs and localhost
+    validate_url(url)?;
 
     let prompt = input
         .get("prompt")
@@ -93,9 +148,14 @@ pub(crate) async fn web_fetch(input: &Value, _context: &ToolExecutionContext) ->
     // Truncate to prevent excessive context usage
     const MAX_CONTENT_LENGTH: usize = 100_000;
     let truncated = if readable_content.len() > MAX_CONTENT_LENGTH {
+        // Find the nearest char boundary to avoid panicking on mid-UTF8 slices.
+        let truncate_at = readable_content
+            .char_indices()
+            .find(|(i, _)| *i >= MAX_CONTENT_LENGTH)
+            .map_or(readable_content.len(), |(i, _)| i);
         format!(
             "{}\n\n[Content truncated due to length...]",
-            &readable_content[..MAX_CONTENT_LENGTH]
+            &readable_content[..truncate_at]
         )
     } else {
         readable_content
@@ -117,23 +177,28 @@ pub(crate) async fn web_fetch(input: &Value, _context: &ToolExecutionContext) ->
 
 /// Convert HTML to readable plain text by stripping tags and normalizing whitespace.
 fn html_to_readable_text(html: &str) -> String {
+    // Pre-compiled regexes to avoid recompilation on every call.
+    use once_cell::sync::Lazy;
+    static RE_SCRIPT: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"(?is)<script[^>]*>.*?</script>").expect("valid script regex"));
+    static RE_STYLE: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"(?is)<style[^>]*>.*?</style>").expect("valid style regex"));
+    static RE_BLOCK: Lazy<Regex> = Lazy::new(|| {
+        Regex::new(r"(?i)</?(p|div|br|h[1-6]|li|tr|hr|blockquote|pre|section|article|header|footer|nav|aside|main|figure|figcaption|details|summary)[^>]*>")
+            .expect("valid block regex")
+    });
+    static RE_TAG: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"<[^>]+>").expect("valid tag regex"));
+
     // Remove script and style blocks entirely
-    let re_script = Regex::new(r"(?is)<script[^>]*>.*?</script>")
-        .unwrap_or_else(|_| Regex::new(".").expect("fallback regex"));
-    let re_style = Regex::new(r"(?is)<style[^>]*>.*?</style>")
-        .unwrap_or_else(|_| Regex::new(".").expect("fallback regex"));
-    let no_scripts = re_script.replace_all(html, "");
-    let no_style = re_style.replace_all(&no_scripts, "");
+    let no_scripts = RE_SCRIPT.replace_all(html, "");
+    let no_style = RE_STYLE.replace_all(&no_scripts, "");
 
     // Convert block-level elements to newlines for structure
-    let re_block = Regex::new(r"(?i)</?(p|div|br|h[1-6]|li|tr|hr|blockquote|pre|section|article|header|footer|nav|aside|main|figure|figcaption|details|summary)[^>]*>")
-        .unwrap_or_else(|_| Regex::new(".").expect("fallback regex"));
-    let with_breaks = re_block.replace_all(&no_style, "\n");
+    let with_breaks = RE_BLOCK.replace_all(&no_style, "\n");
 
     // Strip remaining tags
-    let re_tag =
-        Regex::new(r"<[^>]+>").unwrap_or_else(|_| Regex::new(".").expect("fallback regex"));
-    let stripped = re_tag.replace_all(&with_breaks, "");
+    let stripped = RE_TAG.replace_all(&with_breaks, "");
 
     // Decode common HTML entities
     let decoded = stripped
@@ -534,13 +599,24 @@ pub(crate) async fn web_browser_tool(
         .get("url")
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow!("url is required"))?;
+
+    // SSRF protection: block private IPs and localhost
+    validate_url(url)?;
+
     let action = input
         .get("action")
         .and_then(Value::as_str)
         .unwrap_or("fetch");
+
+    // Build a client with a 30-second timeout for all browser actions.
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .build()
+        .context("failed to build HTTP client for web_browser")?;
+
     match action {
         "fetch" => {
-            let response = reqwest::get(url).await.context("failed to fetch URL")?;
+            let response = client.get(url).send().await.context("failed to fetch URL")?;
             let status = response.status();
             if !status.is_success() {
                 return Err(anyhow!("HTTP {} for {}", status, url));
@@ -555,7 +631,9 @@ pub(crate) async fn web_browser_tool(
         }
         "screenshot" => capture_visual_screenshot(url, _context).await,
         "extract_links" => {
-            let response = reqwest::get(url)
+            let response = client
+                .get(url)
+                .send()
                 .await
                 .context("failed to fetch URL for link extraction")?;
             let status = response.status();
@@ -580,7 +658,9 @@ pub(crate) async fn web_browser_tool(
             .to_string())
         }
         "extract_text" => {
-            let response = reqwest::get(url)
+            let response = client
+                .get(url)
+                .send()
                 .await
                 .context("failed to fetch URL for text extraction")?;
             let status = response.status();

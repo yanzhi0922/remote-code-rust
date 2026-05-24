@@ -103,7 +103,12 @@ pub(crate) fn config_read(input: &Value, context: &ToolExecutionContext) -> Resu
                 obj.insert(key.to_owned(), value.clone());
             }
             let content = serde_json::to_string_pretty(&config)?;
-            std::fs::write(&config_path, content)?;
+            // Write atomically: write to temp file then rename.
+            let tmp_path = config_path.with_extension("tmp");
+            std::fs::write(&tmp_path, &content)
+                .context("failed to write config temp file")?;
+            std::fs::rename(&tmp_path, &config_path)
+                .context("failed to rename config temp file")?;
             Ok(format!("Set {} in config.", key))
         }
         _ => Err(anyhow!("config action must be 'get' or 'set'")),
@@ -111,6 +116,9 @@ pub(crate) fn config_read(input: &Value, context: &ToolExecutionContext) -> Resu
 }
 
 pub(crate) async fn sleep_tool(input: &Value) -> Result<String> {
+    // Cap at 30 seconds: longer sleeps block the agent event loop and provide
+    // no user value. Callers that need extended waits should use background
+    // tasks or polling instead.
     let seconds = input["seconds"]
         .as_u64()
         .ok_or_else(|| anyhow!("seconds is required"))?
@@ -375,7 +383,16 @@ pub(crate) async fn terminal_capture_tool(
     .to_string())
 }
 
-pub(crate) fn monitor_tool(input: &Value) -> Result<String> {
+pub(crate) async fn monitor_tool(input: &Value) -> Result<String> {
+    // Process queries and filesystem reads are blocking; offload to a
+    // dedicated thread so we don't stall the Tokio runtime.
+    let input = input.clone();
+    tokio::task::spawn_blocking(move || monitor_tool_blocking(&input))
+        .await
+        .map_err(|e| anyhow!("monitor task join error: {e}"))?
+}
+
+fn monitor_tool_blocking(input: &Value) -> Result<String> {
     let target = input["target"]
         .as_str()
         .ok_or_else(|| anyhow!("target is required (agents, tasks, or sessions)"))?;
@@ -540,6 +557,13 @@ fn role_name(role: &ConversationRole) -> &'static str {
     }
 }
 
+/// Rough heuristic token estimator.
+///
+/// This is NOT a real BPE tokenizer -- it uses character-ratio approximations.
+/// For ASCII/latin text the ratio is ~3.5 chars/token (tighter than the naive
+/// 4.0 since code is full of short identifiers, brackets, and operators that
+/// typically tokenize as single tokens). CJK characters use ~1.5 chars/token.
+/// Use this only for coarse context-budget estimates.
 fn estimate_text_tokens(text: &str) -> u64 {
     if text.is_empty() {
         return 0;
@@ -565,7 +589,7 @@ fn estimate_text_tokens(text: &str) -> u64 {
         }
     }
 
-    (ascii_chars / 4.0 + cjk_chars / 1.5).ceil() as u64
+    (ascii_chars / 3.5 + cjk_chars / 1.5).ceil() as u64
 }
 
 fn estimate_value_tokens(value: &Value) -> u64 {
