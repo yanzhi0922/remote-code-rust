@@ -68,6 +68,7 @@ const diffRaw = execFileSync(
 const changes = [];
 for (const line of diffRaw.trim().split("\n")) {
   if (!line) continue;
+  if (!line.includes("\t")) continue;
   const [meta, filePath] = line.split("\t");
   const parts = meta.replace(/^:/, "").split(/\s+/);
   const [oldMode, newMode, oldSha, newSha, status] = parts;

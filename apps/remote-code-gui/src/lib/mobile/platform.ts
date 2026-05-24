@@ -20,7 +20,7 @@ export function isMobileSync(): boolean {
   if (typeof window === 'undefined') return false;
   const ua = navigator.userAgent;
   _cachedIsMobile = /Android|iPhone|iPad|iPod/i.test(ua);
-  isMobile().then((m) => { _cachedIsMobile = m; });
+  isMobile().then((m) => { _cachedIsMobile = m; }).catch(() => {});
   return _cachedIsMobile;
 }
 
