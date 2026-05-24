@@ -58,11 +58,13 @@ impl AnalyticsEventsQueue {
     pub(crate) fn new(auth_manager: Arc<AuthManager>, base_url: String) -> Self {
         let (sender, mut receiver) = mpsc::channel(ANALYTICS_EVENTS_QUEUE_SIZE);
         tokio::spawn(async move {
+            // Create the HTTP client once and reuse across all event batches.
+            let client = create_client();
             let mut reducer = AnalyticsReducer::default();
             while let Some(input) = receiver.recv().await {
                 let mut events = Vec::new();
                 reducer.ingest(input, &mut events).await;
-                send_track_events(&auth_manager, &base_url, events).await;
+                send_track_events(&client, &auth_manager, &base_url, events).await;
             }
         });
         Self {
@@ -352,6 +354,7 @@ impl AnalyticsEventsClient {
 }
 
 async fn send_track_events(
+    client: &codex_client::CodexHttpClient,
     auth_manager: &AuthManager,
     base_url: &str,
     events: Vec<TrackEventRequest>,
@@ -370,7 +373,7 @@ async fn send_track_events(
     let url = format!("{base_url}/codex/analytics-events/events");
     let payload = TrackEventsRequest { events };
 
-    let response = create_client()
+    let response = client
         .post(&url)
         .timeout(ANALYTICS_EVENTS_TIMEOUT)
         .headers(codex_model_provider::auth_provider_from_auth(&auth).to_auth_headers())

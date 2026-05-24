@@ -37,7 +37,7 @@ pub trait CodeModeTurnHost: Send + Sync {
 
 #[derive(Clone)]
 struct SessionHandle {
-    control_tx: mpsc::UnboundedSender<SessionControlCommand>,
+    control_tx: mpsc::Sender<SessionControlCommand>,
     runtime_tx: std::sync::mpsc::Sender<RuntimeCommand>,
 }
 
@@ -93,7 +93,7 @@ impl CodeModeService {
         let cell_id = request.cell_id.clone();
         let initial_yield_time_ms = request.yield_time_ms.unwrap_or(DEFAULT_EXEC_YIELD_TIME_MS);
         let (event_tx, event_rx) = mpsc::unbounded_channel();
-        let (control_tx, control_rx) = mpsc::unbounded_channel();
+        let (control_tx, control_rx) = mpsc::channel(256);
         let (response_tx, response_rx) = oneshot::channel();
         let (runtime_tx, runtime_terminate_handle) = {
             let mut sessions = self.inner.sessions.lock().await;
@@ -155,7 +155,7 @@ impl CodeModeService {
                 response_tx,
             }
         };
-        if handle.control_tx.send(control_message).is_err() {
+        if handle.control_tx.try_send(control_message).is_err() {
             return Ok(WaitOutcome::MissingCell(missing_cell_response(cell_id)));
         }
         match response_rx.await {
@@ -309,7 +309,7 @@ async fn run_session_control(
     inner: Arc<Inner>,
     context: SessionControlContext,
     mut event_rx: mpsc::UnboundedReceiver<RuntimeEvent>,
-    mut control_rx: mpsc::UnboundedReceiver<SessionControlCommand>,
+    mut control_rx: mpsc::Receiver<SessionControlCommand>,
     initial_response_tx: oneshot::Sender<RuntimeResponse>,
     initial_yield_time_ms: u64,
 ) {
@@ -889,7 +889,7 @@ image({
     async fn terminate_waits_for_runtime_shutdown_before_responding() {
         let inner = test_inner();
         let (event_tx, event_rx) = mpsc::unbounded_channel();
-        let (control_tx, control_rx) = mpsc::unbounded_channel();
+        let (control_tx, control_rx) = mpsc::channel(256);
         let (initial_response_tx, initial_response_rx) = oneshot::channel();
         let (runtime_event_tx, _runtime_event_rx) = mpsc::unbounded_channel();
         let (runtime_tx, runtime_terminate_handle) = spawn_runtime(
@@ -915,8 +915,8 @@ image({
             /*initial_yield_time_ms*/ 60_000,
         ));
 
-        event_tx.send(RuntimeEvent::Started).unwrap();
-        event_tx.send(RuntimeEvent::YieldRequested).unwrap();
+        event_tx.try_send(RuntimeEvent::Started).unwrap();
+        event_tx.try_send(RuntimeEvent::YieldRequested).unwrap();
         assert_eq!(
             initial_response_rx.await.unwrap(),
             RuntimeResponse::Yielded {

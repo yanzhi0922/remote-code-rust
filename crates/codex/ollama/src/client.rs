@@ -174,7 +174,7 @@ impl OllamaClient {
         }
 
         let mut stream = resp.bytes_stream();
-        let mut buf = BytesMut::new();
+        let mut buf = BytesMut::with_capacity(8192);
         let _pending: VecDeque<PullEvent> = VecDeque::new();
 
         // Using an async stream adaptor backed by unfold-like manual loop.

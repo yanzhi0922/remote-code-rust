@@ -21,6 +21,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::LazyLock;
+use std::sync::OnceLock;
 use std::thread;
 use std::time::Duration;
 
@@ -56,6 +57,20 @@ static LOGIN_ERROR_PAGE_TEMPLATE: LazyLock<Template> = LazyLock::new(|| {
     Template::parse(include_str!("assets/error.html"))
         .unwrap_or_else(|err| panic!("login error page template must parse: {err}"))
 });
+
+static OAUTH_HTTP_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+
+fn oauth_http_client() -> reqwest::Client {
+    OAUTH_HTTP_CLIENT
+        .get_or_init(|| {
+            build_reqwest_client_with_custom_ca(reqwest::Client::builder())
+                .unwrap_or_else(|error| {
+                    tracing::warn!("failed to build OAuth HTTP client: {error}");
+                    reqwest::Client::new()
+                })
+        })
+        .clone()
+}
 
 /// Options for launching the local login callback server.
 #[derive(Debug, Clone)]
@@ -722,7 +737,7 @@ pub(crate) async fn exchange_code_for_tokens(
         refresh_token: String,
     }
 
-    let client = build_reqwest_client_with_custom_ca(reqwest::Client::builder())?;
+    let client = oauth_http_client();
     let token_endpoint = format!("{}/oauth/token", issuer.trim_end_matches('/'));
     info!(
         issuer = %sanitize_url_for_logging(issuer),
@@ -1105,7 +1120,7 @@ pub(crate) async fn obtain_api_key(
     struct ExchangeResp {
         access_token: String,
     }
-    let client = build_reqwest_client_with_custom_ca(reqwest::Client::builder())?;
+    let client = oauth_http_client();
     let token_endpoint = format!("{}/oauth/token", issuer.trim_end_matches('/'));
     let resp = client
         .post(token_endpoint)

@@ -74,7 +74,7 @@ pub(crate) struct ThreadState {
     pub(crate) cancel_tx: Option<oneshot::Sender<()>>,
     pub(crate) experimental_raw_events: bool,
     pub(crate) listener_generation: u64,
-    listener_command_tx: Option<mpsc::UnboundedSender<ThreadListenerCommand>>,
+    listener_command_tx: Option<mpsc::Sender<ThreadListenerCommand>>,
     current_turn_history: ThreadHistoryBuilder,
     listener_thread: Option<Weak<CodexThread>>,
 }
@@ -91,12 +91,12 @@ impl ThreadState {
         &mut self,
         cancel_tx: oneshot::Sender<()>,
         conversation: &Arc<CodexThread>,
-    ) -> (mpsc::UnboundedReceiver<ThreadListenerCommand>, u64) {
+    ) -> (mpsc::Receiver<ThreadListenerCommand>, u64) {
         if let Some(previous) = self.cancel_tx.replace(cancel_tx) {
             let _ = previous.send(());
         }
         self.listener_generation = self.listener_generation.wrapping_add(1);
-        let (listener_command_tx, listener_command_rx) = mpsc::unbounded_channel();
+        let (listener_command_tx, listener_command_rx) = mpsc::channel(64);
         self.listener_command_tx = Some(listener_command_tx);
         self.listener_thread = Some(Arc::downgrade(conversation));
         (listener_command_rx, self.listener_generation)
@@ -117,7 +117,7 @@ impl ThreadState {
 
     pub(crate) fn listener_command_tx(
         &self,
-    ) -> Option<mpsc::UnboundedSender<ThreadListenerCommand>> {
+    ) -> Option<mpsc::Sender<ThreadListenerCommand>> {
         self.listener_command_tx.clone()
     }
 
@@ -154,7 +154,7 @@ pub(crate) async fn resolve_server_request_on_thread_listener(
     };
 
     if listener_command_tx
-        .send(ThreadListenerCommand::ResolveServerRequest {
+        .try_send(ThreadListenerCommand::ResolveServerRequest {
             request_id,
             completion_tx,
         })

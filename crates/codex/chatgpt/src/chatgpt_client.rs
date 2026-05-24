@@ -3,8 +3,16 @@ use codex_login::AuthManager;
 use codex_login::default_client::create_client;
 
 use anyhow::Context;
+use codex_client::CodexHttpClient;
 use serde::de::DeserializeOwned;
+use std::sync::OnceLock;
 use std::time::Duration;
+
+static SHARED_CLIENT: OnceLock<CodexHttpClient> = OnceLock::new();
+
+fn shared_client() -> CodexHttpClient {
+    SHARED_CLIENT.get_or_init(create_client).clone()
+}
 
 /// Make a GET request to the ChatGPT backend API.
 pub(crate) async fn chatgpt_get_request<T: DeserializeOwned>(
@@ -36,7 +44,7 @@ pub(crate) async fn chatgpt_get_request_with_timeout<T: DeserializeOwned>(
     );
 
     // Make direct HTTP request to ChatGPT backend API with the token
-    let client = create_client();
+    let client = shared_client();
     let url = format!(
         "{}/{}",
         chatgpt_base_url.trim_end_matches('/'),

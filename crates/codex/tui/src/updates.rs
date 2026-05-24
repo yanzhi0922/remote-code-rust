@@ -17,7 +17,15 @@ use serde::Serialize;
 use std::path::Path;
 use std::path::PathBuf;
 
+use std::sync::OnceLock;
+
 use crate::version::CODEX_CLI_VERSION;
+
+static SHARED_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+
+fn shared_client() -> reqwest::Client {
+    SHARED_CLIENT.get_or_init(create_client).clone()
+}
 
 pub fn get_upgrade_version(config: &Config) -> Option<String> {
     if !config.check_for_update_on_startup || is_source_build_version(CODEX_CLI_VERSION) {
@@ -85,9 +93,10 @@ fn read_version_info(version_file: &Path) -> anyhow::Result<VersionInfo> {
 }
 
 async fn check_for_update(version_file: &Path, action: Option<UpdateAction>) -> anyhow::Result<()> {
+    let client = shared_client();
     let latest_version = match action {
         Some(UpdateAction::BrewUpgrade) => {
-            let HomebrewCaskInfo { version } = create_client()
+            let HomebrewCaskInfo { version } = client
                 .get(HOMEBREW_CASK_API_URL)
                 .send()
                 .await?
@@ -98,7 +107,7 @@ async fn check_for_update(version_file: &Path, action: Option<UpdateAction>) -> 
         }
         Some(UpdateAction::NpmGlobalLatest) | Some(UpdateAction::BunGlobalLatest) => {
             let latest_version = fetch_latest_github_release_version().await?;
-            let package_info = create_client()
+            let package_info = client
                 .get(npm_registry::PACKAGE_URL)
                 .send()
                 .await?
@@ -132,7 +141,7 @@ async fn check_for_update(version_file: &Path, action: Option<UpdateAction>) -> 
 async fn fetch_latest_github_release_version() -> anyhow::Result<String> {
     let ReleaseInfo {
         tag_name: latest_tag_name,
-    } = create_client()
+    } = shared_client()
         .get(LATEST_RELEASE_URL)
         .send()
         .await?

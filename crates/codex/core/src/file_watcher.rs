@@ -334,10 +334,10 @@ impl FileWatcher {
     /// Creates a live filesystem watcher and starts its background event loop
     /// on the current Tokio runtime.
     pub fn new() -> notify::Result<Self> {
-        let (raw_tx, raw_rx) = mpsc::unbounded_channel();
+        let (raw_tx, raw_rx) = mpsc::channel(4096);
         let raw_tx_clone = raw_tx;
         let watcher = notify::recommended_watcher(move |res| {
-            let _ = raw_tx_clone.send(res);
+            let _ = raw_tx_clone.try_send(res);
         })?;
         let inner = FileWatcherInner {
             watcher,
@@ -599,7 +599,7 @@ impl FileWatcher {
 
     // Bridge `notify`'s callback-based events into the Tokio runtime and
     // notify the matching subscribers.
-    fn spawn_event_loop(&self, mut raw_rx: mpsc::UnboundedReceiver<notify::Result<Event>>) {
+    fn spawn_event_loop(&self, mut raw_rx: mpsc::Receiver<notify::Result<Event>>) {
         if let Ok(handle) = Handle::try_current() {
             let state = Arc::clone(&self.state);
             let inner = self.inner.as_ref().map(Arc::downgrade);
@@ -697,7 +697,7 @@ impl FileWatcher {
     #[cfg(test)]
     pub(crate) fn spawn_event_loop_for_test(
         &self,
-        raw_rx: mpsc::UnboundedReceiver<notify::Result<Event>>,
+        raw_rx: mpsc::Receiver<notify::Result<Event>>,
     ) {
         self.spawn_event_loop(raw_rx);
     }
