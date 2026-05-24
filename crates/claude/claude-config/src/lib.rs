@@ -932,7 +932,9 @@ fn get_or_create_device_id() -> String {
     let id = &id[..64];
 
     if let Some(ref path) = config_path {
-        let _ = fs::write(path, id);
+        if let Err(e) = fs::write(path, id) {
+            eprintln!("warning: failed to persist device ID to {}: {e}", path.display());
+        }
     }
 
     id.to_owned()
