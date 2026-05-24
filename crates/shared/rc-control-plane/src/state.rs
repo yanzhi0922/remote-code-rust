@@ -84,6 +84,8 @@ pub struct ControlPlaneService {
     pub(crate) bootstrap_secret_hash: Option<String>,
     pub(crate) registry: Arc<RwLock<Registry>>,
     pub(crate) timeline: TimelineStore,
+    // NOTE(perf): Write locks dominate (mint/consume both write), so a plain
+    // Mutex would be more efficient than RwLock.  Deferred to avoid API churn.
     pub(crate) stream_tickets: Arc<RwLock<BTreeMap<String, StreamTicket>>>,
     pub(crate) allowed_user_key_hashes: Vec<String>,
     /// Shared HTTP client for runner relay requests.  Reusing a single
@@ -108,6 +110,58 @@ pub(crate) struct PersistedControlPlaneState {
 }
 
 impl ControlPlaneService {
+    /// Create a new `ControlPlaneService` using a pre-configured HTTP client.
+    ///
+    /// Prefer this over [`new`](Self::new) when the caller already has a
+    /// long-lived `reqwest::Client` so TCP connections and TLS sessions are
+    /// reused across components.
+    pub fn with_http_client(
+        config: ControlPlaneConfig,
+        version: impl Into<String>,
+        http_client: reqwest::Client,
+    ) -> Self {
+        let service_name = config.service_name.clone();
+        let state_db_path = config.state_db_path.clone();
+        let artifact_root_dir = config.artifact_root_dir.clone();
+        let auth_token = config.auth_token.clone();
+        let bootstrap_secret_hash = config.bootstrap_secret.as_deref().map(hash_secret_value);
+        let (registry, timeline) = load_persisted_state(&state_db_path).unwrap_or_else(|e| {
+            tracing::error!("Failed to load persisted state, starting fresh: {e:#}");
+            (
+                Registry::default(),
+                TimelineStore::new(DEFAULT_EVENT_HISTORY_LIMIT, EVENT_STREAM_BUFFER),
+            )
+        });
+        let auth_required =
+            auth_token.is_some() || bootstrap_secret_hash.is_some() || registry.owner_claimed();
+        Self {
+            meta: ControlPlaneMeta {
+                service: service_name,
+                version: version.into(),
+                phase: PHASE.to_owned(),
+                bind: config.bind.to_string(),
+                public_base_url: config.public_base_url,
+                runner_lease_ttl_secs: config.runner_lease_ttl_secs,
+                profile_dir: config.profile_dir.display().to_string(),
+                state_db_path: state_db_path.display().to_string(),
+                artifact_root_dir: artifact_root_dir.display().to_string(),
+                auth_required,
+                bootstrap_secret_configured: bootstrap_secret_hash.is_some(),
+            },
+            runner_lease_ttl_secs: config.runner_lease_ttl_secs,
+            state_db_path,
+            artifact_root_dir,
+            auth_token,
+            bootstrap_secret_hash,
+            registry: Arc::new(RwLock::new(registry)),
+            timeline,
+            stream_tickets: Arc::new(RwLock::new(BTreeMap::new())),
+            allowed_user_key_hashes: load_allowed_user_key_hashes_from_env(),
+            http_client,
+            downloads_dir: config.downloads_dir,
+        }
+    }
+
     pub fn new(config: ControlPlaneConfig, version: impl Into<String>) -> Self {
         let service_name = config.service_name.clone();
         let state_db_path = config.state_db_path.clone();

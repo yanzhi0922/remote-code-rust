@@ -37,6 +37,20 @@ impl OutboundPollTransport {
             cancel,
         }
     }
+
+    /// Create with a shared HTTP client to reuse TCP connections and TLS sessions.
+    pub fn with_client(reconnect: ReconnectPolicy, client: reqwest::Client) -> Self {
+        let (cancel, _) = tokio::sync::watch::channel(false);
+        Self {
+            state: ConnectionState::Disconnected,
+            config: None,
+            metrics: TransportMetrics::default(),
+            event_rx: None,
+            client,
+            reconnect,
+            cancel,
+        }
+    }
 }
 
 #[async_trait]
@@ -208,7 +222,11 @@ async fn poll_events_loop(
                                 );
                                 continue;
                             }
-                            String::from_utf8_lossy(&bytes).into_owned()
+                            // Convert to String and immediately drop the Bytes
+                            // to avoid holding both allocations simultaneously.
+                            let text = String::from_utf8_lossy(&bytes).into_owned();
+                            drop(bytes);
+                            text
                         }
                     };
                     let mut max_seq: u64 = 0;

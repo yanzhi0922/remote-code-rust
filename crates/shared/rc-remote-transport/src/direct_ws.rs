@@ -32,6 +32,18 @@ impl DirectWsTransport {
             reconnect,
         }
     }
+
+    /// Create with a shared HTTP client to reuse TCP connections and TLS sessions.
+    pub fn with_client(reconnect: ReconnectPolicy, client: reqwest::Client) -> Self {
+        Self {
+            state: ConnectionState::Disconnected,
+            config: None,
+            metrics: TransportMetrics::default(),
+            event_rx: None,
+            client,
+            reconnect,
+        }
+    }
 }
 
 #[async_trait]

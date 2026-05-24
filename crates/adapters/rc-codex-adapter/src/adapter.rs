@@ -540,6 +540,13 @@ impl CodexInProcessAdapter {
 
         let pump_loop = async {
             loop {
+                // NOTE(perf): The client lock is held across next_event().await,
+                // which blocks until the next Codex event arrives.  This prevents
+                // concurrent resolve/reject calls from acquiring the client while
+                // an event is being read, which is correct (the client is
+                // single-threaded internally).  If contention becomes an issue,
+                // consider splitting into a dedicated event-reader task that
+                // forwards events through an mpsc channel.
                 let event = {
                     let mut locked = client.lock().await;
                     locked.next_event().await

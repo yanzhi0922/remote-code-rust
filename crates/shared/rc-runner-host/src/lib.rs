@@ -5,7 +5,7 @@
 //! `remote-code-runner` binary should stay focused on CLI parsing and
 //! startup wiring.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, VecDeque, hash_map::Entry};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -40,6 +40,8 @@ pub fn effective_heartbeat_interval(
     )
 }
 
+/// Returns exponential backoff delay, capped at 30 seconds.
+/// Caller is responsible for overall retry budget.
 pub fn next_retry_delay(current: Duration) -> Duration {
     current.saturating_mul(2).min(Duration::from_secs(30))
 }
@@ -61,6 +63,8 @@ const MAX_SESSION_INPUT_QUEUE: usize = 256;
 /// Maximum number of concurrent pending tool input accumulators. Oldest are
 /// evicted when this limit is exceeded.
 const MAX_PENDING_TOOL_INPUTS: usize = 1000;
+/// Maximum accumulated bytes per tool input before stopping accumulation.
+const MAX_TOOL_INPUT_BYTES: usize = 1024 * 1024; // 1 MiB
 
 #[derive(Clone)]
 pub struct HostedSessionManager {
@@ -181,9 +185,15 @@ impl HostedSessionManager {
     }
 
     async fn spawn_hosted_session(&self, session: RunnerSessionRecord) -> Result<()> {
-        if self.sessions.lock().await.contains_key(&session.session_id) {
+        // Use entry API to check existence and insert in a single lock scope,
+        // eliminating the TOCTOU race between the existence check and insertion.
+        let session_id = session.session_id;
+        let mut sessions = self.sessions.lock().await;
+        if let Entry::Occupied(_) = sessions.entry(session_id) {
             return Ok(());
         }
+        // Hold the lock while preparing the session so no concurrent caller
+        // can race past the existence check.
         let workspace = self
             .api
             .meta()
@@ -239,10 +249,9 @@ impl HostedSessionManager {
             pending_tool_inputs: Arc::new(Mutex::new(HashMap::new())),
             workspace_dir: workspace.root_dir.clone(),
         };
-        self.sessions
-            .lock()
-            .await
-            .insert(session.session_id, handle.clone());
+        // Insert using the entry we already verified is vacant (still holding the lock).
+        sessions.insert(session_id, handle.clone());
+        drop(sessions);
 
         self.post_runtime_event(
             session.session_id,
@@ -891,7 +900,12 @@ impl HostedSessionManager {
         };
         let mut inputs = handle.pending_tool_inputs.lock().await;
         if let Some(acc) = inputs.get_mut(&tool_use_id) {
-            acc.push_str(delta);
+            if acc.len() + delta.len() <= MAX_TOOL_INPUT_BYTES {
+                acc.push_str(delta);
+            }
+            // If the limit is exceeded, silently stop accumulating. The entry
+            // remains so handle_tool_finished can still clean it up, but the
+            // accumulated input will be too short/incomplete for auto-upload.
         }
     }
 
@@ -1271,6 +1285,8 @@ pub async fn run_control_plane_sync(
     let configured_interval_secs = config.heartbeat_interval_secs;
     let control_plane_auth_token = config.control_plane_auth_token.clone();
     let mut retry_delay = Duration::from_secs(1);
+    // Reuse a single HTTP client so TCP connections and TLS sessions are
+    // shared across heartbeat and registration requests.
     let client = reqwest::Client::new();
 
     loop {
@@ -1335,6 +1351,8 @@ pub async fn run_outbound_poll_loop(
         }
     };
     let runner_id = &config.runner_id;
+    // Reuse a single HTTP client so TCP connections and TLS sessions are
+    // shared across poll requests.
     let client = reqwest::Client::new();
     let poll_timeout = Duration::from_secs(30);
 

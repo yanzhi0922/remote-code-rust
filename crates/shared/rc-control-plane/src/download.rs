@@ -9,38 +9,47 @@ use crate::state::ControlPlaneService;
 
 /// Serve the download page listing all available files.
 pub(crate) async fn download_page(State(service): State<ControlPlaneService>) -> impl IntoResponse {
-    let Some(dir) = &service.downloads_dir else {
-        return Html(render_empty_page("Downloads not configured."));
+    let dir = match &service.downloads_dir {
+        Some(d) => d.clone(),
+        None => return Html(render_empty_page("Downloads not configured.")),
     };
 
-    let entries = match std::fs::read_dir(dir) {
-        Ok(rd) => rd,
-        Err(_) => return Html(render_empty_page("No downloads available yet.")),
-    };
-
-    let mut files: Vec<FileEntry> = Vec::new();
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if !path.is_file() {
-            continue;
-        }
-        let name = path
-            .file_name()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .to_string();
-        let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
-        let icon = match name.rsplit('.').next() {
-            Some("apk") => "📱",
-            Some("ipa") => "🍎",
-            Some("dmg") | Some("app") => "💻",
-            Some("exe") | Some("msi") => "🖥️",
-            _ => "📦",
+    let files = tokio::task::spawn_blocking(move || {
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(rd) => rd,
+            Err(_) => return Vec::new(),
         };
-        files.push(FileEntry { name, size, icon });
-    }
 
-    files.sort_by(|a, b| a.name.cmp(&b.name));
+        let mut files: Vec<FileEntry> = Vec::new();
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            let name = path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
+            let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+            let icon = match name.rsplit('.').next() {
+                Some("apk") => "📱",
+                Some("ipa") => "🍎",
+                Some("dmg") | Some("app") => "💻",
+                Some("exe") | Some("msi") => "🖥️",
+                _ => "📦",
+            };
+            files.push(FileEntry { name, size, icon });
+        }
+        files.sort_by(|a, b| a.name.cmp(&b.name));
+        files
+    })
+    .await
+    .unwrap_or_default();
+
+    if files.is_empty() {
+        return Html(render_empty_page("No downloads available yet."));
+    }
     Html(render_download_page(&files))
 }
 
@@ -50,7 +59,7 @@ pub(crate) async fn download_file(
     Path(filename): Path<String>,
 ) -> Response {
     let dir = match &service.downloads_dir {
-        Some(d) => d,
+        Some(d) => d.clone(),
         None => return StatusCode::NOT_FOUND.into_response(),
     };
 
@@ -89,31 +98,49 @@ pub(crate) async fn download_file(
     }
 
     let path = dir.join(&filename);
-    // Verify the resolved path is still inside the downloads directory.
-    // This catches edge cases where path normalization (symlinks, etc.)
-    // causes the resolved path to escape the downloads directory.
-    let canonical_path = match std::fs::canonicalize(&path) {
-        Ok(p) => p,
-        Err(_) => return StatusCode::NOT_FOUND.into_response(),
-    };
-    let canonical_dir = match std::fs::canonicalize(dir) {
-        Ok(d) => d,
+
+    // Maximum file size for in-memory download serving.
+    const MAX_DOWNLOAD_FILE_SIZE: u64 = 100 * 1024 * 1024; // 100 MB
+
+    // Move all blocking fs operations into spawn_blocking to avoid blocking
+    // the async tokio runtime.
+    let filename_for_header = filename.clone();
+    let result = tokio::task::spawn_blocking(move || -> Result<(Vec<u8>, String), StatusCode> {
+        // Verify the resolved path is still inside the downloads directory.
+        // This catches edge cases where path normalization (symlinks, etc.)
+        // causes the resolved path to escape the downloads directory.
+        let canonical_path = std::fs::canonicalize(&path).map_err(|_| StatusCode::NOT_FOUND)?;
+        let canonical_dir =
+            std::fs::canonicalize(dir).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        if !canonical_path.starts_with(&canonical_dir) {
+            return Err(StatusCode::BAD_REQUEST);
+        }
+        if !canonical_path.is_file() {
+            return Err(StatusCode::NOT_FOUND);
+        }
+
+        let metadata =
+            std::fs::metadata(&canonical_path).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        if metadata.len() > MAX_DOWNLOAD_FILE_SIZE {
+            return Err(StatusCode::PAYLOAD_TOO_LARGE);
+        }
+
+        let bytes = std::fs::read(&canonical_path).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        Ok((bytes, filename_for_header))
+    })
+    .await;
+
+    let (bytes, filename_for_header) = match result {
+        Ok(Ok(pair)) => pair,
+        Ok(Err(status)) => return status.into_response(),
         Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     };
-    if !canonical_path.starts_with(&canonical_dir) {
-        return StatusCode::BAD_REQUEST.into_response();
-    }
-    if !canonical_path.is_file() {
-        return StatusCode::NOT_FOUND.into_response();
-    }
 
-    let bytes = match std::fs::read(&canonical_path) {
-        Ok(b) => b,
-        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
-    };
-
-    let mime = guess_mime(&filename);
-    let disposition = format!("attachment; filename=\"{}\"", sanitize_filename(&filename));
+    let mime = guess_mime(&filename_for_header);
+    let disposition = format!(
+        "attachment; filename=\"{}\"",
+        sanitize_filename(&filename_for_header)
+    );
 
     Response::builder()
         .status(StatusCode::OK)
@@ -144,12 +171,11 @@ fn guess_mime(filename: &str) -> &'static str {
 }
 
 fn sanitize_filename(name: &str) -> String {
-    // Strip characters that are dangerous inside a Content-Disposition header
-    // (double quotes, backslashes, and CRLF sequences for header injection).
-    name.replace('\\', "")
-        .replace('"', "\\\"")
-        .replace('\r', "")
-        .replace('\n', "")
+    // Only allow alphanumeric, dash, underscore, and dot to prevent homoglyph
+    // and header-injection attacks.
+    name.chars()
+        .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_' || *c == '.')
+        .collect()
 }
 
 fn human_size(bytes: u64) -> String {
@@ -255,4 +281,5 @@ fn html_escape(s: &str) -> String {
         .replace('<', "&lt;")
         .replace('>', "&gt;")
         .replace('"', "&quot;")
+        .replace('\'', "&#39;")
 }

@@ -1,5 +1,6 @@
 //! Offline command queue — persists commands when disconnected, replays on reconnect.
 
+use std::collections::VecDeque;
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
@@ -24,14 +25,14 @@ pub struct QueuedCommand {
 /// In-memory offline queue (optionally persisted to disk on mobile).
 #[derive(Debug, Clone)]
 pub struct OfflineQueue {
-    inner: Arc<RwLock<Vec<QueuedCommand>>>,
+    inner: Arc<RwLock<VecDeque<QueuedCommand>>>,
     stale_threshold_secs: i64,
 }
 
 impl OfflineQueue {
     pub fn new() -> Self {
         Self {
-            inner: Arc::new(RwLock::new(Vec::new())),
+            inner: Arc::new(RwLock::new(VecDeque::new())),
             stale_threshold_secs: STALE_THRESHOLD_SECS,
         }
     }
@@ -48,13 +49,15 @@ impl OfflineQueue {
         };
         let mut queue = self.inner.write().await;
         if queue.len() >= MAX_QUEUE_SIZE {
-            let dropped = queue.remove(0); // Drop oldest
-            tracing::warn!(
-                command_type = ?dropped.command,
-                "offline queue full; dropped oldest command"
-            );
+            let dropped = queue.pop_front(); // Drop oldest — O(1) for VecDeque
+            if let Some(dropped) = dropped {
+                tracing::warn!(
+                    command_type = ?dropped.command,
+                    "offline queue full; dropped oldest command"
+                );
+            }
         }
-        queue.push(item);
+        queue.push_back(item);
         id
     }
 

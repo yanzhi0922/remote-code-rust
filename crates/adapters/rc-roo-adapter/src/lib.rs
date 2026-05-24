@@ -1127,10 +1127,21 @@ impl RooInProcessAdapter {
         self.external_mcp_servers = servers;
     }
 
+    #[allow(dead_code)] // kept for test usage and sync callers
     fn build_system_prompt(
         &self,
         has_mcp: bool,
         custom_modes: Option<&[roo_types::mode::ModeConfig]>,
+    ) -> String {
+        let rooignore_content = std::fs::read_to_string(self.cwd.join(".rooignore")).ok();
+        self.build_system_prompt_with_rooignore(has_mcp, custom_modes, rooignore_content)
+    }
+
+    fn build_system_prompt_with_rooignore(
+        &self,
+        has_mcp: bool,
+        custom_modes: Option<&[roo_types::mode::ModeConfig]>,
+        rooignore_content: Option<String>,
     ) -> String {
         let cwd_str = self.cwd.to_string_lossy();
         let shell = current_shell();
@@ -1139,12 +1150,10 @@ impl RooInProcessAdapter {
             .unwrap_or_else(|| "/tmp".to_string());
         let os_info = format!("{} {}", std::env::consts::OS, std::env::consts::ARCH);
         let mut ignore_controller = RooIgnoreController::new(&cwd_str);
-        let roo_ignore_instructions = std::fs::read_to_string(self.cwd.join(".rooignore"))
-            .ok()
-            .and_then(|content| {
-                ignore_controller.load_patterns(&content);
-                ignore_controller.get_instructions()
-            });
+        let roo_ignore_instructions = rooignore_content.and_then(|content| {
+            ignore_controller.load_patterns(&content);
+            ignore_controller.get_instructions()
+        });
         let settings = roo_prompt::types::SystemPromptSettings::default();
 
         build_system_prompt(
@@ -1263,36 +1272,54 @@ impl RooInProcessAdapter {
         // boolean decision. Prefer active text interactions first because the
         // native loop has no separate boolean channel for those asks.
         if request_kind.is_none() {
-            if self.resolve_completion_feedback(if allowed {
-                String::new()
-            } else {
-                "The user rejected the completion result.".to_string()
-            }) {
+            if self
+                .resolve_completion_feedback_async(if allowed {
+                    String::new()
+                } else {
+                    "The user rejected the completion result.".to_string()
+                })
+                .await
+            {
                 return Ok(());
             }
-            if self.resolve_followup_response(if allowed {
-                response.unwrap_or_default()
-            } else {
-                response
-                    .filter(|text| !text.trim().is_empty())
-                    .unwrap_or_else(|| {
-                        "The user declined to answer the follow-up question.".to_string()
-                    })
-            }) {
+            if self
+                .resolve_followup_response_async(if allowed {
+                    response.unwrap_or_default()
+                } else {
+                    response
+                        .filter(|text| !text.trim().is_empty())
+                        .unwrap_or_else(|| {
+                            "The user declined to answer the follow-up question.".to_string()
+                        })
+                })
+                .await
+            {
                 return Ok(());
             }
         }
 
+        // Use spawn_blocking to avoid holding a std::sync::Mutex on the async
+        // runtime thread.  The lock is held for only a single .take()
+        // (nanoseconds), but wrapping keeps the async executor responsive.
         if let Some(ref handle) = self.approval_handle {
-            let mut guard = match handle.lock() {
-                Ok(g) => g,
-                Err(e) => {
-                    warn!("Approval mutex poisoned, recovering: {e}");
-                    e.into_inner()
+            let handle = Arc::clone(handle);
+            let sent = tokio::task::spawn_blocking(move || {
+                let mut guard = match handle.lock() {
+                    Ok(g) => g,
+                    Err(e) => {
+                        warn!("Approval mutex poisoned, recovering: {e}");
+                        e.into_inner()
+                    }
+                };
+                if let Some(tx) = guard.take() {
+                    let _ = tx.send(allowed);
+                    return true;
                 }
-            };
-            if let Some(tx) = guard.take() {
-                let _ = tx.send(allowed);
+                false
+            })
+            .await
+            .unwrap_or(false);
+            if sent {
                 debug!(allowed, "Sent approval response to AgentLoop");
                 return Ok(());
             }
@@ -1322,6 +1349,42 @@ impl RooInProcessAdapter {
         false
     }
 
+    /// Async-safe wrapper that avoids holding a std::sync::Mutex on the async
+    /// runtime thread.
+    async fn resolve_text_handle_async(
+        handle: &Option<StringDecisionHandle>,
+        text: String,
+    ) -> bool {
+        let Some(handle) = handle else {
+            return false;
+        };
+        let handle = Arc::clone(handle);
+        tokio::task::spawn_blocking(move || {
+            let mut guard = match handle.lock() {
+                Ok(g) => g,
+                Err(e) => {
+                    warn!("Text-response mutex poisoned, recovering: {e}");
+                    e.into_inner()
+                }
+            };
+            if let Some(tx) = guard.take() {
+                let _ = tx.send(text);
+                return true;
+            }
+            false
+        })
+        .await
+        .unwrap_or(false)
+    }
+
+    async fn resolve_followup_response_async(&self, response: String) -> bool {
+        Self::resolve_text_handle_async(&self.followup_handle, response).await
+    }
+
+    async fn resolve_completion_feedback_async(&self, feedback: String) -> bool {
+        Self::resolve_text_handle_async(&self.completion_handle, feedback).await
+    }
+
     fn resolve_followup_response(&mut self, response: String) -> bool {
         Self::resolve_text_handle(&self.followup_handle, response)
     }
@@ -1332,15 +1395,24 @@ impl RooInProcessAdapter {
 
     async fn resolve_api_retry(&mut self, allowed: bool) -> anyhow::Result<()> {
         if let Some(ref handle) = self.api_retry_handle {
-            let mut guard = match handle.lock() {
-                Ok(g) => g,
-                Err(e) => {
-                    warn!("API retry mutex poisoned, recovering: {e}");
-                    e.into_inner()
+            let handle = Arc::clone(handle);
+            let sent = tokio::task::spawn_blocking(move || {
+                let mut guard = match handle.lock() {
+                    Ok(g) => g,
+                    Err(e) => {
+                        warn!("API retry mutex poisoned, recovering: {e}");
+                        e.into_inner()
+                    }
+                };
+                if let Some(tx) = guard.take() {
+                    let _ = tx.send(allowed);
+                    return true;
                 }
-            };
-            if let Some(tx) = guard.take() {
-                let _ = tx.send(allowed);
+                false
+            })
+            .await
+            .unwrap_or(false);
+            if sent {
                 debug!(retry = allowed, "Sent API retry response to AgentLoop");
                 return Ok(());
             }
@@ -1351,15 +1423,24 @@ impl RooInProcessAdapter {
 
     async fn resolve_auto_approval_limit(&mut self, allowed: bool) -> anyhow::Result<()> {
         if let Some(ref handle) = self.auto_approval_limit_handle {
-            let mut guard = match handle.lock() {
-                Ok(g) => g,
-                Err(e) => {
-                    warn!("Auto-approval-limit mutex poisoned, recovering: {e}");
-                    e.into_inner()
+            let handle = Arc::clone(handle);
+            let sent = tokio::task::spawn_blocking(move || {
+                let mut guard = match handle.lock() {
+                    Ok(g) => g,
+                    Err(e) => {
+                        warn!("Auto-approval-limit mutex poisoned, recovering: {e}");
+                        e.into_inner()
+                    }
+                };
+                if let Some(tx) = guard.take() {
+                    let _ = tx.send(allowed);
+                    return true;
                 }
-            };
-            if let Some(tx) = guard.take() {
-                let _ = tx.send(allowed);
+                false
+            })
+            .await
+            .unwrap_or(false);
+            if sent {
                 debug!(
                     approved = allowed,
                     "Sent auto-approval-limit response to AgentLoop"
@@ -1380,22 +1461,31 @@ impl RooInProcessAdapter {
         feedback: Option<String>,
     ) -> anyhow::Result<()> {
         if let Some(ref handle) = self.mistake_limit_handle {
-            let mut guard = match handle.lock() {
-                Ok(g) => g,
-                Err(e) => {
-                    warn!("Mistake-limit mutex poisoned, recovering: {e}");
-                    e.into_inner()
-                }
-            };
-            if let Some(tx) = guard.take() {
-                let action = if allowed {
-                    MistakeLimitAction::Continue {
-                        feedback: feedback.filter(|text| !text.trim().is_empty()),
+            let handle = Arc::clone(handle);
+            let sent = tokio::task::spawn_blocking(move || {
+                let mut guard = match handle.lock() {
+                    Ok(g) => g,
+                    Err(e) => {
+                        warn!("Mistake-limit mutex poisoned, recovering: {e}");
+                        e.into_inner()
                     }
-                } else {
-                    MistakeLimitAction::Cancel
                 };
-                let _ = tx.send(action);
+                if let Some(tx) = guard.take() {
+                    let action = if allowed {
+                        MistakeLimitAction::Continue {
+                            feedback: feedback.filter(|text| !text.trim().is_empty()),
+                        }
+                    } else {
+                        MistakeLimitAction::Cancel
+                    };
+                    let _ = tx.send(action);
+                    return true;
+                }
+                false
+            })
+            .await
+            .unwrap_or(false);
+            if sent {
                 debug!(
                     continue_task = allowed,
                     "Sent mistake-limit response to AgentLoop"
@@ -1691,6 +1781,13 @@ impl RooInProcessAdapter {
                     let engine_history = agent_loop.engine().api_conversation_history();
                     let mut h = history.blocking_lock();
                     *h = engine_history.to_vec();
+                    // Truncate unbounded conversation history to prevent
+                    // memory exhaustion in long-running sessions.
+                    const MAX_CONVERSATION_TURNS: usize = 1000;
+                    let excess = h.len().saturating_sub(MAX_CONVERSATION_TURNS);
+                    if excess > 0 {
+                        h.drain(..excess);
+                    }
                 }
 
                 let final_message = result.final_message.clone().unwrap_or_default();
@@ -1827,7 +1924,12 @@ impl AgentAdapter for RooInProcessAdapter {
         let has_mcp = !mcp_servers.is_empty();
 
         // Build system prompt and message builder.
-        let system_prompt = self.build_system_prompt(has_mcp, Some(&custom_modes));
+        // Pre-read .rooignore in async context to avoid blocking fs calls.
+        let rooignore_content = tokio::fs::read_to_string(self.cwd.join(".rooignore"))
+            .await
+            .ok();
+        let system_prompt =
+            self.build_system_prompt_with_rooignore(has_mcp, Some(&custom_modes), rooignore_content);
         let message_builder = MessageBuilder::new(&system_prompt);
 
         // Build tool dispatcher with a live MCP hub so MCP tools can execute.

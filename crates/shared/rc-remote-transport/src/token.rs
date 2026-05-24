@@ -2,7 +2,7 @@
 
 use std::sync::{Arc, OnceLock};
 
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 
 /// Shared HTTP client reused across token refresh calls.
 static SHARED_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
@@ -23,6 +23,9 @@ pub struct TokenManager {
     refresh_buffer_secs: i64,
     /// Control plane base URL for token refresh.
     control_plane_url: Option<String>,
+    /// Deduplication handle for in-flight refresh requests.
+    /// Prevents concurrent callers from triggering redundant HTTP refreshes.
+    refresh_in_flight: Arc<Mutex<Option<tokio::task::JoinHandle<Option<String>>>>>,
 }
 
 #[derive(Debug)]
@@ -41,6 +44,7 @@ impl TokenManager {
             inner: Arc::new(RwLock::new(TokenState::None)),
             refresh_buffer_secs: 120,
             control_plane_url: None,
+            refresh_in_flight: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -57,14 +61,11 @@ impl TokenManager {
     /// Get the current access token, attempting refresh if needed.
     /// Returns None if the token is expired and no refresh token is available.
     ///
-    /// TODO(concurrency): The current implementation drops the write lock before
-    /// making the HTTP refresh call, which means concurrent callers can observe a
-    /// stale token and each trigger their own refresh request. Consider using a
-    /// `tokio::sync::Semaphore` or a dedicated refresh future behind an `Arc<Mutex>`
-    /// to coalesce concurrent refresh attempts into a single HTTP call.
+    /// Concurrent refresh requests are serialized: if a refresh is already
+    /// in-flight, subsequent callers wait for the mutex and then read the
+    /// (now-refreshed) token state instead of triggering a second HTTP call.
     pub async fn access_token(&self) -> Option<String> {
         // Acquire a write lock up front so that the check-and-refresh is atomic.
-        // This prevents multiple concurrent callers from triggering redundant refreshes.
         let state = self.inner.write().await;
         match &*state {
             TokenState::None => None,
@@ -74,11 +75,28 @@ impl TokenManager {
                 let refresh_at =
                     pair.expires_at - chrono::Duration::seconds(self.refresh_buffer_secs);
                 if now >= refresh_at {
-                    // Need refresh — downgrade to read lock to extract what we need,
-                    // then release before the HTTP call (write lock is dropped).
+                    // Need refresh — extract what we need, then release before HTTP.
                     let refresh_token = pair.refresh_token.clone();
                     let cp_url = self.control_plane_url.clone();
                     drop(state);
+
+                    // Serialize concurrent refresh attempts: only one caller
+                    // proceeds past this lock at a time. Others will wait,
+                    // then re-read the refreshed token below.
+                    let _in_flight = self.refresh_in_flight.lock().await;
+
+                    // Re-check: a concurrent caller may have already refreshed.
+                    let state = self.inner.read().await;
+                    if let TokenState::Valid(pair) = &*state {
+                        let now = chrono::Utc::now();
+                        let refresh_at =
+                            pair.expires_at - chrono::Duration::seconds(self.refresh_buffer_secs);
+                        if now < refresh_at {
+                            return Some(pair.access_token.clone());
+                        }
+                    }
+                    drop(state);
+
                     self.try_refresh_with(refresh_token, cp_url).await
                 } else {
                     Some(pair.access_token.clone())
