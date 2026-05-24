@@ -21,6 +21,9 @@ struct Cli {
     allow_unauthenticated: bool,
 
     /// API key for the LLM provider.
+    /// TODO: In production deployments, this should only be read from an env var
+    /// (or a secrets manager) and never accepted as a plain CLI arg to avoid
+    /// leaking the key in process listings.
     #[arg(long, env = "ANTHROPIC_API_KEY")]
     api_key: Option<String>,
 

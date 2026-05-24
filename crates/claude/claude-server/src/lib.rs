@@ -49,10 +49,14 @@ fn default_buffer_size() -> usize {
     256
 }
 
+const DEFAULT_BIND_ADDR: &str = "127.0.0.1:9090";
+
 impl Default for ServerConfig {
     fn default() -> Self {
         Self {
-            bind: "127.0.0.1:9090".parse().unwrap(),
+            bind: DEFAULT_BIND_ADDR
+                .parse()
+                .expect("default bind address is valid"),
             auth_token: None,
             allow_unauthenticated: false,
             profile_dir: None,
@@ -118,6 +122,10 @@ pub async fn serve(config: ServerConfig) -> Result<()> {
 
     let listener = tokio::net::TcpListener::bind(&config.bind).await?;
     tracing::info!("claude-server listening on {}", config.bind);
+    tracing::warn!(
+        "claude-server is using BypassPermissions mode — all tool calls are auto-approved. \
+         Ensure this server is only accessible to trusted clients."
+    );
     axum::serve(listener, app).await?;
     Ok(())
 }

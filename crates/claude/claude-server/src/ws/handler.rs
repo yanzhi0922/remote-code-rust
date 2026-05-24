@@ -15,7 +15,9 @@ pub async fn ws_upgrade(
     State(state): State<ServerState>,
     AxumPath(session_id): AxumPath<Uuid>,
 ) -> Response {
-    ws.on_upgrade(move |socket| handle_ws(socket, state, session_id))
+    ws.max_frame_size(16 * 1024 * 1024)
+        .max_message_size(16 * 1024 * 1024)
+        .on_upgrade(move |socket| handle_ws(socket, state, session_id))
 }
 
 async fn handle_ws(socket: axum::extract::ws::WebSocket, state: ServerState, session_id: Uuid) {
@@ -31,7 +33,13 @@ async fn handle_ws(socket: axum::extract::ws::WebSocket, state: ServerState, ses
     }
 
     // Subscribe to the session's broadcast channel.
-    let mut rx = state.ensure_active_session(session_id);
+    let mut rx = match state.ensure_active_session(session_id) {
+        Ok(rx) => rx,
+        Err(e) => {
+            tracing::error!(%session_id, "cannot create session: {e}");
+            return;
+        }
+    };
 
     // Send "connected" message.
     let connected = ServerMessage::Connected { session_id };
@@ -229,6 +237,12 @@ fn spawn_query(state: &ServerState, session_id: Uuid, content: String) {
 
         // Build user message.
         let user_message = vec![Message::from(ConversationEntry::user(&content))];
+        // Intentional: BypassPermissions is used because the server is a
+        // local-first, headless deployment that is already gated by HTTP bearer
+        // auth. The user explicitly approved operations when they sent the
+        // message via the WS API.
+        // TODO: Make permission mode configurable per-session so remote/CI
+        // deployments can opt into stricter sandboxing.
         let context = ProcessUserInputContext::new(
             SessionId::from(session_id),
             claude_core::PermissionMode::BypassPermissions,
@@ -277,6 +291,14 @@ fn spawn_query(state: &ServerState, session_id: Uuid, content: String) {
         let mut sessions = state.active_sessions.write();
         if let Some(active) = sessions.get_mut(&session_id) {
             active.query_task = Some(handle);
+        } else {
+            // The session was removed between creation and handle storage
+            // (tiny race window). Log rather than panic — the task will
+            // still run to completion but cannot be aborted via StopGeneration.
+            tracing::warn!(
+                %session_id,
+                "session removed before query task handle could be stored"
+            );
         }
     }
 }

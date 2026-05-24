@@ -12,6 +12,9 @@ use uuid::Uuid;
 use crate::ServerConfig;
 use crate::ws::protocol::ServerMessage;
 
+/// Maximum number of concurrent active sessions to prevent resource exhaustion.
+const MAX_ACTIVE_SESSIONS: usize = 1000;
+
 /// An active session with at least one connected WS client.
 pub struct ActiveSession {
     /// Broadcast sender for ServerMessage events to all WS clients.
@@ -51,8 +54,20 @@ impl ServerState {
     }
 
     /// Get or create an ActiveSession entry, returning a broadcast receiver.
-    pub fn ensure_active_session(&self, session_id: Uuid) -> broadcast::Receiver<ServerMessage> {
+    ///
+    /// Returns an error if the number of active sessions would exceed
+    /// `MAX_ACTIVE_SESSIONS`.
+    pub fn ensure_active_session(
+        &self,
+        session_id: Uuid,
+    ) -> Result<broadcast::Receiver<ServerMessage>, &'static str> {
         let mut sessions = self.active_sessions.write();
+        // Check the limit before inserting a new entry. If the session already
+        // exists, we can always return it (it doesn't add to the count).
+        let already_exists = sessions.contains_key(&session_id);
+        if !already_exists && sessions.len() >= MAX_ACTIVE_SESSIONS {
+            return Err("too many active sessions");
+        }
         let active = sessions.entry(session_id).or_insert_with(|| {
             let (tx, _) = broadcast::channel(self.config.event_buffer_size);
             ActiveSession {
@@ -61,7 +76,7 @@ impl ServerState {
                 interrupted: Arc::new(AtomicBool::new(false)),
             }
         });
-        active.event_tx.subscribe()
+        Ok(active.event_tx.subscribe())
     }
 
     /// Broadcast a ServerMessage to all WS clients subscribed to a session.
