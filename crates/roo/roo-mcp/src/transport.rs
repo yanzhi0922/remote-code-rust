@@ -214,8 +214,10 @@ impl McpTransport for StdioTransport {
         let is_known_safe = known_safe_binaries.iter().any(|&safe| bare_cmd == safe);
         if !is_absolute && !is_known_safe {
             tracing::warn!(
-                "MCP server command '{command}' is not an absolute path or known safe binary — \
-                 consider using an absolute path to reduce PATH-hijacking risk"
+                "SECURITY: MCP server command '{command}' with args {args:?} is NOT an absolute \
+                 path and is NOT in the known-safe list.  Spawning this command could execute \
+                 an arbitrary binary if the config file is untrusted.  Use an absolute path to \
+                 suppress this warning."
             );
         }
 
@@ -462,36 +464,30 @@ impl SseTransport {
     }
 
     /// Resolve a potentially relative endpoint URL against the base SSE URL.
-    fn resolve_endpoint_url(base_url: &str, endpoint_data: &str) -> String {
+    ///
+    /// Returns an error if the URL cannot be resolved rather than falling back
+    /// to the raw unvalidated input, preventing use of malformed URLs.
+    fn resolve_endpoint_url(base_url: &str, endpoint_data: &str) -> Result<String, String> {
         let endpoint_data = endpoint_data.trim();
 
-        // If it's already an absolute URL, use it directly
+        // If it's already an absolute URL, validate and use it directly
         if endpoint_data.starts_with("http://") || endpoint_data.starts_with("https://") {
-            return endpoint_data.to_string();
+            // Validate that the absolute URL is well-formed.
+            if url::Url::parse(endpoint_data).is_ok() {
+                return Ok(endpoint_data.to_string());
+            }
+            return Err(format!("endpoint URL '{}' is not a valid URL", endpoint_data));
         }
 
         // Parse the base URL and join the relative path
-        match url::Url::parse(base_url) {
-            Ok(base) => match base.join(endpoint_data) {
-                Ok(resolved) => resolved.to_string(),
-                Err(e) => {
-                    tracing::warn!(
-                        "Failed to resolve relative endpoint '{}': {}. Using as-is.",
-                        endpoint_data,
-                        e
-                    );
-                    endpoint_data.to_string()
-                }
-            },
-            Err(e) => {
-                tracing::warn!(
-                    "Failed to parse base URL '{}': {}. Using endpoint as-is.",
-                    base_url,
-                    e
-                );
-                endpoint_data.to_string()
-            }
-        }
+        let base = url::Url::parse(base_url)
+            .map_err(|e| format!("failed to parse base URL '{}': {}", base_url, e))?;
+        base.join(endpoint_data)
+            .map(|resolved| resolved.to_string())
+            .map_err(|e| format!(
+                "failed to resolve relative endpoint '{}' against '{}': {}",
+                endpoint_data, base_url, e
+            ))
     }
 }
 
@@ -533,14 +529,26 @@ impl McpTransport for SseTransport {
         let timeout = std::time::Duration::from_secs(30);
         match tokio::time::timeout(timeout, endpoint_rx.recv()).await {
             Ok(Some(discovered_endpoint)) => {
-                // Resolve relative URLs against the base SSE URL
-                let resolved = Self::resolve_endpoint_url(&self.url, &discovered_endpoint);
-                tracing::info!(
-                    "SSE transport discovered POST endpoint: {} (raw: {})",
-                    resolved,
-                    discovered_endpoint
-                );
-                self.post_endpoint = Some(resolved);
+                // Resolve relative URLs against the base SSE URL.
+                // Reject unresolvable/malformed endpoints rather than using raw input.
+                match Self::resolve_endpoint_url(&self.url, &discovered_endpoint) {
+                    Ok(resolved) => {
+                        tracing::info!(
+                            "SSE transport discovered POST endpoint: {} (raw: {})",
+                            resolved,
+                            discovered_endpoint
+                        );
+                        self.post_endpoint = Some(resolved);
+                    }
+                    Err(e) => {
+                        tracing::error!(
+                            "SSE transport failed to resolve endpoint '{}': {}. Aborting connection.",
+                            discovered_endpoint,
+                            e
+                        );
+                        return Err(McpError::ConnectionFailed(e));
+                    }
+                }
             }
             Ok(None) => {
                 // Channel closed without receiving an endpoint — the listener

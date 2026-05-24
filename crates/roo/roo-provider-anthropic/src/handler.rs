@@ -1047,7 +1047,15 @@ impl AnthropicVertexHandler {
         // Try to create a token provider from service account credentials.
         // If the access_token is not valid service account JSON, fall back to
         // using it as a raw access token (backward-compatible).
-        let token_provider = VertexTokenProvider::new(&config.access_token).ok();
+        let token_provider = VertexTokenProvider::new(&config.access_token)
+            .map_err(|e| {
+                tracing::warn!(
+                    "VertexTokenProvider creation failed (falling back to raw token): {}",
+                    e
+                );
+                e
+            })
+            .ok();
 
         let max_thinking_tokens = config.max_thinking_tokens.take();
 
