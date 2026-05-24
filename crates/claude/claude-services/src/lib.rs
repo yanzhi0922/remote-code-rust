@@ -17,3 +17,12 @@ pub use prompt_suggestions::{PromptSuggestion, PromptSuggestionService, Suggesti
 
 mod context_monitor;
 pub use context_monitor::ContextMonitor;
+
+pub mod cost_hook;
+pub use cost_hook::{CostAlert, CostAlertType, CostHook, CostHookConfig};
+
+pub mod local_recovery_cli;
+pub use local_recovery_cli::{LocalRecoveryCli, RecoveryReport};
+
+pub mod onboarding_state;
+pub use onboarding_state::{OnboardingManager, OnboardingState, OnboardingStep};

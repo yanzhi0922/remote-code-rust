@@ -1,0 +1,49 @@
+[package]
+name = "claude-server"
+description = "HTTP/WS server for Claude agent — hub for IM adapters"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow.workspace = true
+async-trait.workspace = true
+axum.workspace = true
+chrono.workspace = true
+constant_time_eq.workspace = true
+futures.workspace = true
+parking_lot.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tokio.workspace = true
+tower-http.workspace = true
+tracing.workspace = true
+urlencoding.workspace = true
+uuid.workspace = true
+
+clap.workspace = true
+tracing-subscriber.workspace = true
+
+claude-core = { path = "../claude-core" }
+claude-session = { path = "../claude-session" }
+claude-config = { path = "../claude-config" }
+claude-provider = { path = "../claude-provider" }
+claude-query-engine = { path = "../claude-query-engine" }
+claude-tools = { path = "../claude-tools" }
+claude-permissions = { path = "../claude-permissions" }
+rc-engine-events = { path = "../../shared/rc-engine-events" }
+
+[[bin]]
+name = "claude-server"
+path = "src/main.rs"
+
+[dev-dependencies]
+tempfile.workspace = true
+tower = "0.5"

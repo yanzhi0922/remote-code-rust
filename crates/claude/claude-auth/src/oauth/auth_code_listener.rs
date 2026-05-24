@@ -113,13 +113,49 @@ impl AuthCodeListener {
         let request = String::from_utf8_lossy(&buf[..n]);
 
         // Parse the HTTP request line to extract the path + query
-        let first_line = request.lines().next().expect("request has a first line");
-        let path = first_line
-            .split_whitespace()
-            .nth(1)
-            .expect("HTTP request has a path");
+        let first_line = match request.lines().next() {
+            Some(line) => line,
+            None => {
+                let body = "Bad Request: empty HTTP request";
+                let response = format!(
+                    "HTTP/1.1 400 Bad Request\r\nContent-Length: {}\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                let _ = stream.write_all(response.as_bytes()).await;
+                let _ = stream.flush().await;
+                return Err(AuthCodeListenerError::NoAuthCode);
+            }
+        };
+        let path = match first_line.split_whitespace().nth(1) {
+            Some(p) => p,
+            None => {
+                let body = "Bad Request: malformed HTTP request line";
+                let response = format!(
+                    "HTTP/1.1 400 Bad Request\r\nContent-Length: {}\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                let _ = stream.write_all(response.as_bytes()).await;
+                let _ = stream.flush().await;
+                return Err(AuthCodeListenerError::NoAuthCode);
+            }
+        };
 
-        let (code, state) = parse_callback_query(path);
+        let (code, state) = match parse_callback_query(path) {
+            Some(result) => result,
+            None => {
+                let body = "Bad Request: missing query string in callback URL";
+                let response = format!(
+                    "HTTP/1.1 400 Bad Request\r\nContent-Length: {}\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                let _ = stream.write_all(response.as_bytes()).await;
+                let _ = stream.flush().await;
+                return Err(AuthCodeListenerError::NoAuthCode);
+            }
+        };
 
         let is_automatic = code.is_some() && state.as_deref() == Some(&expected_state);
 
@@ -168,13 +204,15 @@ impl AuthCodeListener {
 
 /// Parse `code` and `state` from a callback URL path like
 /// `/callback?code=ABC&state=XYZ`.
-fn parse_callback_query(path: &str) -> (Option<String>, Option<String>) {
-    let query = path.split('?').nth(1).expect("path has query");
+///
+/// Returns `None` if the path does not contain a query string.
+fn parse_callback_query(path: &str) -> Option<(Option<String>, Option<String>)> {
+    let query = path.split('?').nth(1)?;
     let mut code = None;
     let mut state = None;
     for pair in query.split('&') {
         let mut kv = pair.splitn(2, '=');
-        let key = kv.next().expect("pair has key");
+        let key = kv.next().unwrap_or("");
         let value = kv.next().map(str::to_owned);
         match key {
             "code" => code = value,
@@ -182,7 +220,7 @@ fn parse_callback_query(path: &str) -> (Option<String>, Option<String>) {
             _ => {}
         }
     }
-    (code, state)
+    Some((code, state))
 }
 
 #[cfg(test)]
@@ -191,15 +229,20 @@ mod tests {
 
     #[test]
     fn parse_callback_query_basic() {
-        let (code, state) = parse_callback_query("/callback?code=ABC123&state=XYZ789");
+        let (code, state) = parse_callback_query("/callback?code=ABC123&state=XYZ789").unwrap();
         assert_eq!(code.as_deref(), Some("ABC123"));
         assert_eq!(state.as_deref(), Some("XYZ789"));
     }
 
     #[test]
     fn parse_callback_query_missing_code() {
-        let (code, state) = parse_callback_query("/callback?state=XYZ789");
+        let (code, state) = parse_callback_query("/callback?state=XYZ789").unwrap();
         assert!(code.is_none());
         assert_eq!(state.as_deref(), Some("XYZ789"));
+    }
+
+    #[test]
+    fn parse_callback_query_no_query_string() {
+        assert!(parse_callback_query("/callback").is_none());
     }
 }

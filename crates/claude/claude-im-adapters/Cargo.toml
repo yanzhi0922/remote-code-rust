@@ -1,0 +1,52 @@
+[package]
+name = "claude-im-adapters"
+description = "IM adapters for claude-server — Telegram, Feishu, DingTalk, WeChat"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow.workspace = true
+async-trait.workspace = true
+axum.workspace = true
+chrono.workspace = true
+clap.workspace = true
+constant_time_eq.workspace = true
+futures.workspace = true
+hmac.workspace = true
+parking_lot.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tokio.workspace = true
+tokio-tungstenite.workspace = true
+tower-http.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+url.workspace = true
+uuid.workspace = true
+
+claude-server = { path = "../claude-server" }
+
+[[bin]]
+name = "claude-im-telegram"
+path = "src/bin/telegram.rs"
+
+[[bin]]
+name = "claude-im-feishu"
+path = "src/bin/feishu.rs"
+
+[[bin]]
+name = "claude-im-dingtalk"
+path = "src/bin/dingtalk.rs"
+
+[[bin]]
+name = "claude-im-wechat"
+path = "src/bin/wechat.rs"

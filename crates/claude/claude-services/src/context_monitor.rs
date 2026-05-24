@@ -4,11 +4,10 @@
 //! model's context window limit and suggests or triggers compaction
 //! before the provider returns a 413 / `prompt_too_long` error.
 
-
 use anyhow::Result;
 use claude_config::RuntimeConfig;
-use claude_session::SessionStore;
 use claude_provider::context::TokenEstimator;
+use claude_session::SessionStore;
 use tracing::{debug, info, warn};
 
 /// Context window threshold ratios.
@@ -38,11 +37,23 @@ pub enum ContextAdvice {
     /// Context is healthy — no action needed.
     Healthy,
     /// Context is growing — user should consider compacting.
-    Warning { ratio: f64, estimated_tokens: u64, max_tokens: u64 },
+    Warning {
+        ratio: f64,
+        estimated_tokens: u64,
+        max_tokens: u64,
+    },
     /// Context should be compacted now.
-    Compact { ratio: f64, estimated_tokens: u64, max_tokens: u64 },
+    Compact {
+        ratio: f64,
+        estimated_tokens: u64,
+        max_tokens: u64,
+    },
     /// Context is critically full — immediate compaction required.
-    Critical { ratio: f64, estimated_tokens: u64, max_tokens: u64 },
+    Critical {
+        ratio: f64,
+        estimated_tokens: u64,
+        max_tokens: u64,
+    },
 }
 
 impl ContextAdvice {
@@ -79,11 +90,7 @@ impl ContextMonitor {
     ///
     /// Uses `claude-provider`'s token estimator to approximate current
     /// usage against a configurable max_input_tokens.
-    pub fn evaluate(
-        &self,
-        config: &RuntimeConfig,
-        store: &SessionStore,
-    ) -> Result<ContextAdvice> {
+    pub fn evaluate(&self, config: &RuntimeConfig, store: &SessionStore) -> Result<ContextAdvice> {
         let conversation = store.load_conversation(config.session_id)?;
         let max_tokens = config.provider.max_output_tokens.max(4096) as u64;
         let max_input: u64 = 200_000; // Claude's default context window
@@ -98,9 +105,7 @@ impl ContextMonitor {
         if ratio >= self.thresholds.critical_ratio {
             warn!(
                 estimated_tokens,
-                max_input,
-                ratio,
-                "Context critically full — immediate compaction recommended"
+                max_input, ratio, "Context critically full — immediate compaction recommended"
             );
             Ok(ContextAdvice::Critical {
                 ratio,
@@ -110,9 +115,7 @@ impl ContextMonitor {
         } else if ratio >= self.thresholds.compact_ratio {
             info!(
                 estimated_tokens,
-                max_input,
-                ratio,
-                "Context nearing limit — compaction advised"
+                max_input, ratio, "Context nearing limit — compaction advised"
             );
             Ok(ContextAdvice::Compact {
                 ratio,
@@ -120,12 +123,7 @@ impl ContextMonitor {
                 max_tokens,
             })
         } else if ratio >= self.thresholds.warning_ratio {
-            debug!(
-                estimated_tokens,
-                max_input,
-                ratio,
-                "Context usage rising"
-            );
+            debug!(estimated_tokens, max_input, ratio, "Context usage rising");
             Ok(ContextAdvice::Warning {
                 ratio,
                 estimated_tokens,

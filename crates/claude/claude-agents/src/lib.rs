@@ -35,6 +35,7 @@ pub mod display;
 pub mod fork;
 pub mod loader;
 pub mod memory;
+pub mod peer_session;
 pub mod prompt;
 pub mod resume;
 pub mod runner;

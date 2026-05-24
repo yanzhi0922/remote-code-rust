@@ -17,10 +17,12 @@ claude-context = { path = "../claude-context" }
 
 anyhow.workspace = true
 async-trait.workspace = true
+aes-gcm.workspace = true
 base64.workspace = true
 chrono.workspace = true
 directories.workspace = true
 getrandom.workspace = true
+hkdf.workspace = true
 hmac.workspace = true
 once_cell.workspace = true
 reqwest.workspace = true
@@ -30,6 +32,7 @@ sha2.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
+whoami.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

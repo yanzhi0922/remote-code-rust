@@ -245,13 +245,98 @@ async fn delete_secret(service: &str, account: &str) -> Result<(), SecureStorage
     file_based_delete(service, account).await
 }
 
-// ── File-based fallback ────────────────────────────────────────────────
+// ── File-based fallback (AES-256-GCM encrypted) ────────────────────────
 
-/// File-based secret storage fallback.
+/// Version byte prepended to encrypted files so we can migrate formats later.
+const ENCRYPTED_FILE_VERSION: u8 = 1;
+
+/// Derive a 256-bit AES key from machine-specific material using HKDF-SHA256.
 ///
-/// Secrets are stored as plain text in the user's config directory.
-/// **This is NOT secure** — it exists as a fallback when no platform
-/// keychain is available. In production, use a proper credential store.
+/// The IKM combines username, hostname, and the config directory path.
+/// This is not as strong as a proper keychain (the key is deterministic),
+/// but it means stealing the ciphertext file is not sufficient to recover
+/// the secret — an attacker also needs to be on the same machine (or know
+/// the machine identity).
+fn derive_encryption_key() -> Result<[u8; 32], SecureStorageError> {
+    use hkdf::Hkdf;
+    use sha2::Sha256;
+
+    // Build machine-specific seed material
+    let username = whoami::fallible::username().unwrap_or_default();
+    let hostname = whoami::fallible::hostname().unwrap_or_default();
+    let config_dir = secrets_dir()?.to_string_lossy().to_string();
+    let ikm = format!("{username}@{hostname}:{config_dir}");
+
+    // HKDF with a fixed info string for domain separation
+    let hkdf = Hkdf::<Sha256>::new(Some(b"remote-code-secret-storage-v1"), ikm.as_bytes());
+    let mut key = [0u8; 32];
+    hkdf.expand(b"aes-256-gcm-key", &mut key)
+        .map_err(|_| SecureStorageError::Io(std::io::Error::other("HKDF expand failed")))?;
+    Ok(key)
+}
+
+/// Encrypt plaintext using AES-256-GCM with a random nonce.
+///
+/// Returns `nonce (12 bytes) || ciphertext || tag (16 bytes)`.
+fn encrypt_secret(plaintext: &[u8], key: &[u8; 32]) -> Result<Vec<u8>, SecureStorageError> {
+    use aes_gcm::aead::Aead;
+    use aes_gcm::{Aes256Gcm, KeyInit, Nonce};
+
+    let cipher = Aes256Gcm::new_from_slice(key)
+        .map_err(|_| SecureStorageError::Io(std::io::Error::other("AES key init failed")))?;
+
+    let mut nonce_bytes = [0u8; 12];
+    getrandom::fill(&mut nonce_bytes)
+        .map_err(|e| SecureStorageError::Io(std::io::Error::other(format!("rng failed: {e}"))))?;
+    let nonce = Nonce::from_slice(&nonce_bytes);
+
+    let ciphertext = cipher.encrypt(nonce, plaintext).map_err(|e| {
+        SecureStorageError::Io(std::io::Error::other(format!("encryption failed: {e}")))
+    })?;
+
+    // Format: version(1) || nonce(12) || ciphertext+tag
+    let mut out = Vec::with_capacity(1 + 12 + ciphertext.len());
+    out.push(ENCRYPTED_FILE_VERSION);
+    out.extend_from_slice(&nonce_bytes);
+    out.extend_from_slice(&ciphertext);
+    Ok(out)
+}
+
+/// Decrypt ciphertext produced by [`encrypt_secret`].
+fn decrypt_secret(data: &[u8], key: &[u8; 32]) -> Result<Vec<u8>, SecureStorageError> {
+    use aes_gcm::aead::Aead;
+    use aes_gcm::{Aes256Gcm, KeyInit, Nonce};
+
+    if data.len() < 1 + 12 + 16 {
+        return Err(SecureStorageError::Io(std::io::Error::other(
+            "ciphertext too short",
+        )));
+    }
+
+    let version = data[0];
+    if version != ENCRYPTED_FILE_VERSION {
+        return Err(SecureStorageError::Io(std::io::Error::other(format!(
+            "unsupported encrypted file version: {version}"
+        ))));
+    }
+
+    let nonce_bytes = &data[1..13];
+    let ciphertext = &data[13..];
+
+    let cipher = Aes256Gcm::new_from_slice(key)
+        .map_err(|_| SecureStorageError::Io(std::io::Error::other("AES key init failed")))?;
+
+    let nonce = Nonce::from_slice(nonce_bytes);
+    cipher.decrypt(nonce, ciphertext).map_err(|e| {
+        SecureStorageError::Io(std::io::Error::other(format!("decryption failed: {e}")))
+    })
+}
+
+/// File-based secret storage fallback (AES-256-GCM encrypted).
+///
+/// Secrets are encrypted with a key derived from machine-specific material
+/// and stored in the user's config directory. This is a defense-in-depth
+/// measure — a proper OS keychain is still preferred when available.
 async fn file_based_save(
     service: &str,
     account: &str,
@@ -267,10 +352,24 @@ async fn file_based_save(
     tokio::fs::create_dir_all(parent)
         .await
         .map_err(SecureStorageError::Io)?;
-    tokio::fs::write(&path, secret.as_bytes())
+
+    let key = derive_encryption_key()?;
+    let encrypted = encrypt_secret(secret.as_bytes(), &key)?;
+
+    tokio::fs::write(&path, &encrypted)
         .await
         .map_err(SecureStorageError::Io)?;
-    debug!("Saved secret to file for {service}:{account}");
+
+    // Set restrictive file permissions on Unix so only the owner can read/write.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&path)?.permissions();
+        perms.set_mode(0o600);
+        std::fs::set_permissions(&path, perms)?;
+    }
+
+    debug!("Saved encrypted secret to file for {service}:{account}");
     Ok(())
 }
 
@@ -282,10 +381,24 @@ async fn file_based_load(
     if !path.exists() {
         return Ok(None);
     }
-    let secret = tokio::fs::read_to_string(&path)
+    let data = tokio::fs::read(&path)
         .await
         .map_err(SecureStorageError::Io)?;
-    Ok(Some(secret))
+
+    // Try encrypted format first (version byte = 1)
+    if !data.is_empty() && data[0] == ENCRYPTED_FILE_VERSION {
+        let key = derive_encryption_key()?;
+        let plaintext = decrypt_secret(&data, &key)?;
+        return Ok(Some(String::from_utf8(plaintext).map_err(|e| {
+            SecureStorageError::Io(std::io::Error::other(format!(
+                "invalid UTF-8 in secret: {e}"
+            )))
+        })?));
+    }
+
+    // Fallback: read as plaintext for backwards compatibility with existing files
+    tracing::warn!("Reading legacy plaintext secret file — will re-encrypt on next save");
+    Ok(Some(String::from_utf8_lossy(&data).to_string()))
 }
 
 async fn file_based_delete(service: &str, account: &str) -> Result<(), SecureStorageError> {

@@ -3,7 +3,9 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Result, anyhow};
 use claude_config::{RuntimeConfig, SettingSource};
-use claude_mcp::{McpClientInfo, McpServerInspection, inspect_server};
+use claude_mcp::{
+    McpCapabilityMatrix, McpClientInfo, McpServerConfig, McpServerInspection, inspect_server,
+};
 use claude_ui_bridge::{
     UiRuntimeMcpInventorySummary, UiRuntimeMcpOriginCounts, UiRuntimeMcpServerStatus,
     UiRuntimeMcpStatusCounts,
@@ -385,6 +387,32 @@ fn collect_runtime_mcp_candidates(
         }
     }
 
+    // ── Built-in: chrome-mcp (browser automation) ─────────────────────────────
+    if !load_only_explicit
+        && setting_source_enabled(config, SettingSource::User)
+        && builtin_mcp_auto_discovery_enabled()
+    {
+        if let Some(entry) = discover_builtin_chrome_mcp() {
+            let name = entry.server.name.clone();
+            if !servers.iter().any(|s| s.server.name == name) {
+                servers.push(entry);
+            }
+        }
+    }
+
+    // ── Built-in: computer-use (desktop automation) ──────────────────────────
+    if !load_only_explicit
+        && setting_source_enabled(config, SettingSource::User)
+        && builtin_mcp_auto_discovery_enabled()
+    {
+        if let Some(entry) = discover_builtin_computer_use() {
+            let name = entry.server.name.clone();
+            if !servers.iter().any(|s| s.server.name == name) {
+                servers.push(entry);
+            }
+        }
+    }
+
     RuntimeMcpDiscovery { servers, warnings }
 }
 
@@ -624,10 +652,121 @@ fn append_runtime_mcp_servers(
     }
 }
 
+fn env_value_is_truthy(value: &str) -> bool {
+    matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "1" | "true" | "yes" | "on"
+    )
+}
+
+fn builtin_mcp_auto_discovery_enabled() -> bool {
+    std::env::var("REMOTE_CODE_ENABLE_BUILTIN_MCP")
+        .map(|value| env_value_is_truthy(&value))
+        .unwrap_or(false)
+}
+
+/// Auto-detect `chrome-mcp` binary and register it as a built-in MCP server.
+///
+/// Returns `None` if:
+/// - The `chrome-mcp` binary is not found in PATH
+/// - A Chromium-based browser is not detected on the system
+fn discover_builtin_chrome_mcp() -> Option<RuntimeMcpServerEntry> {
+    use claude_mcp::transport::McpTransportConfig;
+
+    let binary = which_chrome_mcp_binary()?;
+    let config = McpServerConfig {
+        name: "chrome-mcp".to_owned(),
+        enabled: true,
+        transport: McpTransportConfig::Stdio {
+            command: binary,
+            args: vec![],
+            cwd: None,
+            env: BTreeMap::new(),
+        },
+        capabilities: McpCapabilityMatrix {
+            supports_tools: true,
+            ..Default::default()
+        },
+        startup_timeout_secs: Some(15),
+        request_timeout_secs: Some(60),
+        metadata: BTreeMap::new(),
+        oauth: None,
+        tool_policy: Default::default(),
+    };
+
+    Some(RuntimeMcpServerEntry {
+        origin_kind: "builtin",
+        origin_name: "chrome-mcp".to_owned(),
+        config_path: PathBuf::from("builtin://chrome-mcp"),
+        server: config,
+    })
+}
+
+/// Locate the `chrome-mcp` binary in PATH.
+fn which_chrome_mcp_binary() -> Option<String> {
+    resolve_binary_from_path("chrome-mcp")
+}
+
+fn resolve_binary_from_path(binary_name: &str) -> Option<String> {
+    let resolver = if cfg!(windows) { "where" } else { "which" };
+    std::process::Command::new(resolver)
+        .arg(binary_name)
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .and_then(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .next()
+                .map(str::trim)
+                .filter(|v| !v.is_empty())
+                .and_then(|s| std::fs::canonicalize(s).ok())
+                .map(|path| path.display().to_string())
+        })
+}
+
+/// Auto-detect `computer-use` binary and register it as a built-in MCP server.
+fn discover_builtin_computer_use() -> Option<RuntimeMcpServerEntry> {
+    use claude_mcp::transport::McpTransportConfig;
+
+    let binary = which_computer_use_binary()?;
+    let config = McpServerConfig {
+        name: "computer-use".to_owned(),
+        enabled: true,
+        transport: McpTransportConfig::Stdio {
+            command: binary,
+            args: vec![],
+            cwd: None,
+            env: BTreeMap::new(),
+        },
+        capabilities: McpCapabilityMatrix {
+            supports_tools: true,
+            ..Default::default()
+        },
+        startup_timeout_secs: Some(10),
+        request_timeout_secs: Some(30),
+        metadata: BTreeMap::new(),
+        oauth: None,
+        tool_policy: Default::default(),
+    };
+
+    Some(RuntimeMcpServerEntry {
+        origin_kind: "builtin",
+        origin_name: "computer-use".to_owned(),
+        config_path: PathBuf::from("builtin://computer-use"),
+        server: config,
+    })
+}
+
+fn which_computer_use_binary() -> Option<String> {
+    resolve_binary_from_path("computer-use")
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        discover_runtime_mcp_resolution, observe_runtime_mcp_servers, runtime_mcp_inventory_summary,
+        discover_runtime_mcp_resolution, env_value_is_truthy, observe_runtime_mcp_servers,
+        runtime_mcp_inventory_summary,
     };
     use claude_config::{ProviderOverrides, RuntimeOverrides, SettingSource, load_runtime_config};
     use claude_core::{InputFormat, OutputFormat, PermissionMode};
@@ -635,6 +774,18 @@ mod tests {
     use claude_ui_bridge::UiRuntimeMcpServerStatus;
     use std::fs;
     use tempfile::tempdir;
+
+    #[test]
+    fn builtin_mcp_auto_discovery_is_explicit_opt_in() {
+        assert!(env_value_is_truthy("1"));
+        assert!(env_value_is_truthy("true"));
+        assert!(env_value_is_truthy("YES"));
+        assert!(env_value_is_truthy("on"));
+        assert!(!env_value_is_truthy(""));
+        assert!(!env_value_is_truthy("false"));
+        assert!(!env_value_is_truthy("0"));
+        assert!(!env_value_is_truthy("enabled"));
+    }
 
     #[test]
     fn runtime_mcp_inventory_summary_resolves_higher_precedence_duplicates() {

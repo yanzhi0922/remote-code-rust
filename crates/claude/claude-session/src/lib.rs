@@ -5,6 +5,7 @@
 //! metadata and an NDJSON file for the full event transcript.
 
 pub mod conversation;
+pub mod inbound;
 pub mod plan_state;
 pub mod replay;
 pub mod resume_state;

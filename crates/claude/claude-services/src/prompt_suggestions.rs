@@ -3,7 +3,6 @@
 //! Analyzes the current session state and conversation history to rank
 //! suggestions for follow-up actions, commands, and queries.
 
-
 use claude_core::ConversationEntry;
 use serde::{Deserialize, Serialize};
 
@@ -96,12 +95,19 @@ impl PromptSuggestionService {
         let last_text: String = last_msgs
             .iter()
             .filter_map(|e| {
-                if e.text.is_empty() { None } else { Some(e.text.as_str()) }
+                if e.text.is_empty() {
+                    None
+                } else {
+                    Some(e.text.as_str())
+                }
             })
             .collect::<Vec<_>>()
             .join(" ");
 
-        if last_text.contains("error") || last_text.contains("failed") || last_text.contains("panic") {
+        if last_text.contains("error")
+            || last_text.contains("failed")
+            || last_text.contains("panic")
+        {
             suggestions.push(PromptSuggestion {
                 display: "Debug and fix".into(),
                 prompt: "Debug and fix the error described above. Explain root cause.".into(),
@@ -172,25 +178,35 @@ mod tests {
 
     #[test]
     fn suggests_debug_on_error_keyword() {
-        let conv = vec![
-            make_entry("I got an error when running cargo build"),
-        ];
+        let conv = vec![make_entry("I got an error when running cargo build")];
         let suggestions = PromptSuggestionService::suggest(&conv, 0, 0);
-        assert!(suggestions.iter().any(|s| s.category == SuggestionCategory::Debug));
+        assert!(
+            suggestions
+                .iter()
+                .any(|s| s.category == SuggestionCategory::Debug)
+        );
     }
 
     #[test]
     fn suggests_test_on_test_keyword() {
         let conv = vec![make_entry("Run tests for the auth module")];
         let suggestions = PromptSuggestionService::suggest(&conv, 0, 0);
-        assert!(suggestions.iter().any(|s| s.category == SuggestionCategory::Command));
+        assert!(
+            suggestions
+                .iter()
+                .any(|s| s.category == SuggestionCategory::Command)
+        );
     }
 
     #[test]
     fn suggests_commit_on_git_keyword() {
         let conv = vec![make_entry("git add and commit the changes")];
         let suggestions = PromptSuggestionService::suggest(&conv, 0, 0);
-        assert!(suggestions.iter().any(|s| s.category == SuggestionCategory::Review));
+        assert!(
+            suggestions
+                .iter()
+                .any(|s| s.category == SuggestionCategory::Review)
+        );
     }
 
     #[test]

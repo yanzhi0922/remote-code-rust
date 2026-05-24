@@ -1,0 +1,27 @@
+[proxy]
+bind = "127.0.0.1:8787"
+auth_token = ""
+# Keep this false outside isolated local development. Prefer passing
+# --auth-token or setting auth_token from a local, untracked config.
+allow_unauthenticated = false
+
+[[providers]]
+name = "minimax"
+model = "minimax-m2.7"
+api_key_env = "MINIMAX_API_KEY"
+anthropic_url = "https://api.minimaxi.com/anthropic"
+openai_url = "https://api.minimaxi.com/v1"
+
+[[providers]]
+name = "kuaikat"
+model = "kat-coder-pro-v2"
+api_key_env = "KUAIKAT_API_KEY"
+anthropic_url = "https://wanqing.streamlakeapi.com/api/gateway/coding/kat-coder-pro-v2/claude-code-proxy"
+openai_url = "https://wanqing.streamlakeapi.com/api/gateway/coding/v1"
+
+[[providers]]
+name = "deepseek"
+model = "deepseek-v4-flash"
+api_key_env = "DEEPSEEK_API_KEY"
+anthropic_url = "https://api.deepseek.com/anthropic"
+openai_url = "https://api.deepseek.com"

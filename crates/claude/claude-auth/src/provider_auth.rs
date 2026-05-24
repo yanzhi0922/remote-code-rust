@@ -259,6 +259,23 @@ fn resolve_openai_compatible_auth(
 
 /// Execute an AWS credential export command and parse JSON output.
 async fn execute_aws_credential_export(command: &str) -> Result<AwsCredentials, ProviderAuthError> {
+    // Validate the first token of the command is an absolute path or a known
+    // safe binary name to reduce PATH-hijacking risk.
+    if let Some(binary) = command.split_whitespace().next() {
+        let bare = binary.trim_matches(|c| c == '"' || c == '\'');
+        let is_absolute = bare.starts_with('/')
+            || bare.starts_with('\\')
+            || (bare.len() >= 2 && bare.as_bytes()[1] == b':');
+        let known_safe = ["aws", "vault", "op", "doppler", "infisical", "saml2aws"]
+            .iter()
+            .any(|&safe| bare == safe);
+        if !is_absolute && !known_safe {
+            tracing::warn!(
+                "aws_credential_export command does not start with an absolute path or known safe binary: {command}"
+            );
+        }
+    }
+
     tracing::warn!(
         "Executing aws_credential_export command from config — ensure this is trusted: {command}"
     );

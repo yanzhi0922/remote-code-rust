@@ -327,6 +327,24 @@ async fn run_api_key_helper_command(command: &str) -> Result<String, ApiKeyHelpe
 }
 
 fn shell_command(command: &str) -> tokio::process::Command {
+    // Validate the first token of the command is an absolute path or a known
+    // safe binary name to reduce PATH-hijacking risk.
+    if let Some(binary) = command.split_whitespace().next() {
+        // Strip common quoting characters for validation purposes.
+        let bare = binary.trim_matches(|c| c == '"' || c == '\'');
+        let is_absolute = bare.starts_with('/')
+            || bare.starts_with('\\')
+            || (bare.len() >= 2 && bare.as_bytes()[1] == b':');
+        let known_safe = ["aws", "vault", "op", "doppler", "infisical", "saml2aws"]
+            .iter()
+            .any(|&safe| bare == safe);
+        if !is_absolute && !known_safe {
+            tracing::warn!(
+                "apiKeyHelper command does not start with an absolute path or known safe binary: {command}"
+            );
+        }
+    }
+
     tracing::warn!(
         "Executing apiKeyHelper command from config — ensure this is trusted: {command}"
     );

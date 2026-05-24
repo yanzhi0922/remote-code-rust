@@ -25,7 +25,7 @@ claude-system-prompt = { path = "../claude-system-prompt" }
 claude-tools = { path = "../claude-tools" }
 claude-mcp = { path = "../claude-mcp" }
 claude-agents = { path = "../claude-agents" }
-rc-agent-protocol = { path = "../../shared/rc-agent-protocol" }
+rc-agent-protocol = { path = "../../shared/rc-agent-protocol", features = ["test-helpers"] }
 claude-swarm = { path = "../claude-swarm" }
 claude-transcript = { path = "../claude-transcript" }
 claude-config = { path = "../claude-config" }

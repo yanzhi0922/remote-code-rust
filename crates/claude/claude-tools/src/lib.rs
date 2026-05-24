@@ -40,7 +40,6 @@ pub mod tool_prompts;
 pub mod tool_result_storage;
 pub mod tool_result_summary;
 pub mod web;
-pub mod web_browser;
 pub mod workflow;
 
 use std::future::Future;

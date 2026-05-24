@@ -188,6 +188,9 @@ pub async fn execute_in_sandbox(command: &str, config: &SandboxConfig) -> Result
             // until the `landlock` crate is added as a dependency.  The policy
             // fields (`allowed_dirs`, `allow_network`) are preserved here so
             // they can be wired in once the crate is available.
+            tracing::warn!(
+                "Landlock sandbox is not yet implemented. Falling back to basic execution without filesystem restrictions."
+            );
             execute_basic(command, config, timeout).await
         }
 
@@ -260,6 +263,12 @@ async fn execute_basic(
 }
 
 /// Windows sandbox: basic isolation with restricted environment.
+///
+/// **LIMITATION**: The Windows sandbox implementation does not enforce filesystem
+/// access restrictions. Commands run with the full filesystem access of the
+/// current user. Only environment variable stripping and working directory
+/// confinement are applied. This means sandboxed commands can read and write
+/// any file accessible to the invoking user.
 #[cfg(target_os = "windows")]
 async fn execute_windows(
     command: &str,
@@ -267,6 +276,10 @@ async fn execute_windows(
     config: &SandboxConfig,
     timeout: Duration,
 ) -> Result<SandboxResult> {
+    tracing::warn!(
+        "Sandbox filesystem restrictions are not enforced on Windows. Commands have full filesystem access."
+    );
+
     let mut cmd = build_shell_command(command);
     strip_environment(&mut cmd);
 

@@ -79,9 +79,9 @@ impl RateLimiter {
     /// suggested backoff duration when rate-limited.
     pub fn check(&self, provider: &str, estimated_tokens: u64) -> std::result::Result<(), u64> {
         let mut state = self.state.lock().unwrap();
-        let (used_req, used_tok, window_start) = state.entry(provider.to_owned()).or_insert_with(|| {
-            (0, 0, Instant::now())
-        });
+        let (used_req, used_tok, window_start) = state
+            .entry(provider.to_owned())
+            .or_insert_with(|| (0, 0, Instant::now()));
 
         let elapsed = window_start.elapsed().as_secs();
         if elapsed >= 60 {
@@ -92,7 +92,9 @@ impl RateLimiter {
         }
 
         if *used_req >= self.config.default_rpm {
-            let retry_after = self.config.base_retry_secs
+            let retry_after = self
+                .config
+                .base_retry_secs
                 .saturating_mul(2u64.pow(std::cmp::min(*used_req as u32 / 10, 5)))
                 .min(self.config.max_retry_secs);
             warn!(%provider, used_req = *used_req, retry_after, "Rate limited (RPM)");
@@ -111,9 +113,9 @@ impl RateLimiter {
     /// Record a successful API call, consuming tokens.
     pub fn record_success(&self, provider: &str, tokens_consumed: u64) {
         let mut state = self.state.lock().unwrap();
-        let (used_req, used_tok, _) = state.entry(provider.to_owned()).or_insert_with(|| {
-            (0, 0, Instant::now())
-        });
+        let (used_req, used_tok, _) = state
+            .entry(provider.to_owned())
+            .or_insert_with(|| (0, 0, Instant::now()));
         *used_req += 1;
         *used_tok += tokens_consumed;
     }
@@ -137,15 +139,17 @@ impl RateLimiter {
     /// Return current rate limit state for a provider.
     pub fn state(&self, provider: &str) -> Option<RateLimitState> {
         let state = self.state.lock().unwrap();
-        state.get(provider).map(|(used_req, used_tok, window_start)| {
-            let _elapsed = window_start.elapsed().as_secs();
-            RateLimitState {
-                provider: provider.to_owned(),
-                requests_remaining: self.config.default_rpm.saturating_sub(*used_req),
-                tokens_remaining: self.config.default_tpm.saturating_sub(*used_tok),
-                resets_at: (window_start.elapsed().as_secs_f64() + 60.0) as u64,
-            }
-        })
+        state
+            .get(provider)
+            .map(|(used_req, used_tok, window_start)| {
+                let _elapsed = window_start.elapsed().as_secs();
+                RateLimitState {
+                    provider: provider.to_owned(),
+                    requests_remaining: self.config.default_rpm.saturating_sub(*used_req),
+                    tokens_remaining: self.config.default_tpm.saturating_sub(*used_tok),
+                    resets_at: (window_start.elapsed().as_secs_f64() + 60.0) as u64,
+                }
+            })
     }
 
     /// Reset all rate limit tracking.

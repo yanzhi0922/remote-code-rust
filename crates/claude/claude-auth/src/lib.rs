@@ -25,6 +25,7 @@
 //! ```
 
 pub mod api_key_helper;
+pub mod jwt;
 pub mod oauth;
 pub mod provider_auth;
 pub mod secure_storage;

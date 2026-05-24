@@ -126,6 +126,7 @@ fn set_core_file_size_limit_to_zero() {
 #[cfg(windows)]
 pub(crate) fn pre_main_hardening_windows() {
     // TODO(mbolin): Perform the appropriate configuration for Windows.
+    eprintln!("WARNING: Process hardening is not yet implemented on Windows");
 }
 
 #[cfg(unix)]

@@ -2,7 +2,7 @@
 name = "claude-services"
 version.workspace = true
 edition.workspace = true
-description = "Service layer: rate limiting, prompt suggestions, context monitoring"
+description = "Service layer: rate limiting, prompt suggestions, context monitoring, cost hooks, recovery CLI, onboarding"
 
 [dependencies]
 anyhow.workspace = true
