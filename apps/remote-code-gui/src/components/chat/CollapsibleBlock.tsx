@@ -24,7 +24,7 @@ export default function CollapsibleBlock({
   const [isOpen, setIsOpen] = useState(defaultOpen);
 
   return (
-    <div className={cn('overflow-hidden rounded-md border border-rc-border-primary bg-rc-bg-elevated', className)}>
+    <div className={cn('overflow-hidden rounded-lg border border-rc-border-primary bg-rc-bg-elevated shadow-xs', className)}>
       <button
         type="button"
         aria-expanded={isOpen}

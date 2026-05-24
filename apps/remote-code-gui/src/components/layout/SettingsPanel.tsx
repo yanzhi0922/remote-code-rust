@@ -125,7 +125,7 @@ export function SettingsPanel({ open, onClose, initialTab = 'provider' }: Settin
         role="dialog"
         aria-modal="true"
         aria-label="Settings"
-        className="grid h-full w-full grid-cols-[240px_minmax(0,1fr)] overflow-hidden bg-rc-bg-chat text-rc-text-primary"
+        className="grid h-full w-full grid-cols-[300px_minmax(0,1fr)] overflow-hidden bg-rc-bg-base text-rc-text-primary"
       >
         <aside className="flex min-h-0 flex-col border-r border-rc-border-secondary bg-rc-bg-sidebar">
           <div className="border-b border-rc-border-secondary px-3 py-3">
@@ -167,8 +167,8 @@ export function SettingsPanel({ open, onClose, initialTab = 'provider' }: Settin
           </div>
         </aside>
 
-        <div className="flex min-h-0 flex-col bg-rc-bg-chat">
-          <header className="flex h-12 shrink-0 items-center justify-between border-b border-rc-border-secondary bg-rc-bg-surface px-5">
+        <div className="flex min-h-0 flex-col rounded-tl-xl border-l border-t border-rc-border-secondary bg-rc-bg-chat shadow-xs">
+          <header className="flex h-14 shrink-0 items-center justify-between border-b border-rc-border-secondary bg-rc-bg-surface px-6">
             <div className="min-w-0">
               <h2 className="truncate text-sm font-semibold text-rc-text-primary">
                 {TABS.find((tab) => tab.key === activeTab)?.label ?? 'Settings'}
@@ -187,9 +187,9 @@ export function SettingsPanel({ open, onClose, initialTab = 'provider' }: Settin
             id={`settings-panel-${activeTab}`}
             role="tabpanel"
             aria-labelledby={`settings-tab-${activeTab}`}
-            className="min-h-0 flex-1 overflow-y-auto px-5 py-7"
+            className="min-h-0 flex-1 overflow-y-auto px-6 py-12"
           >
-            <div className="mx-auto w-full max-w-[940px]">
+            <div className="mx-auto w-full max-w-[860px]">
               {!settings ? (
                 <div className="py-10 text-sm text-rc-text-secondary">正在加载设置…</div>
               ) : activeTab === 'provider' ? (
@@ -211,7 +211,7 @@ export function SettingsPanel({ open, onClose, initialTab = 'provider' }: Settin
             </div>
           </div>
 
-          <footer className="flex shrink-0 items-center justify-end gap-3 border-t border-rc-border-secondary bg-rc-bg-surface px-5 py-3">
+          <footer className="flex shrink-0 items-center justify-end gap-3 border-t border-rc-border-secondary bg-rc-bg-surface px-6 py-3">
             <button
               onClick={() => setDraft({})}
               className="rounded-md px-4 py-2 text-sm font-medium text-rc-text-secondary transition-colors hover:bg-rc-bg-hover hover:text-rc-text-primary"

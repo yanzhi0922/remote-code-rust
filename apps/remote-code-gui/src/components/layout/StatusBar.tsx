@@ -87,7 +87,7 @@ export function StatusBar() {
   const sessionLabel = activeSession ? (privacyMode ? 'Hidden session' : activeSession.title) : 'No session';
 
   return (
-    <div className="flex h-status-bar shrink-0 items-center border-t border-rc-border-secondary glass px-3 text-[11px] text-rc-text-tertiary select-none">
+    <div className="flex h-status-bar shrink-0 items-center border-t border-rc-border-secondary bg-rc-bg-base px-3 text-[11px] text-rc-text-tertiary select-none">
       <div className="flex min-w-0 items-center gap-3">
         <span className="flex items-center gap-1.5">
           <Cpu size={12} />

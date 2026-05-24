@@ -23,7 +23,7 @@ const ThemeContext = createContext<ThemeContextValue>({
   toggle: () => {},
 });
 
-const STORAGE_KEY = 'rc-theme-mode';
+const STORAGE_KEY = 'rc-theme-mode-v2';
 
 function getSystemTheme(): 'light' | 'dark' {
   if (typeof window === 'undefined') return 'light';

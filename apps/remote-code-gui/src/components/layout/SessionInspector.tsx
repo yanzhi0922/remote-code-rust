@@ -1,4 +1,4 @@
-import { Activity, Cpu, FolderGit2, Network, Settings2, Shield, TerminalSquare } from 'lucide-react';
+import { Activity, Cpu, Network, Settings2, Shield, TerminalSquare } from 'lucide-react';
 import type { ElementType, ReactNode } from 'react';
 import { useMemo } from 'react';
 import { useAppStore } from '../../stores/useAppStore';
@@ -22,7 +22,7 @@ function InspectorRow({
         : 'text-rc-text-primary';
 
   return (
-    <div className="flex items-start justify-between gap-3 border-b border-rc-border-secondary py-2.5 last:border-b-0">
+    <div className="flex items-start justify-between gap-3 border-b border-rc-border-secondary py-2 last:border-b-0">
       <span className="shrink-0 text-xs text-rc-text-tertiary">{label}</span>
       <span className={`min-w-0 truncate text-right text-xs font-medium ${toneClass}`}>{value}</span>
     </div>
@@ -39,7 +39,7 @@ function InspectorSection({
   children: ReactNode;
 }) {
   return (
-    <section className="border-b border-rc-border-secondary px-4 py-3.5 last:border-b-0">
+    <section className="border-b border-rc-border-secondary px-4 py-3 last:border-b-0">
       <div className="mb-2 flex items-center gap-2 text-[10px] font-semibold uppercase text-rc-text-tertiary">
         <Icon size={13} />
         {title}
@@ -99,10 +99,10 @@ export function SessionInspector() {
   return (
     <aside
       aria-label="Environment information"
-      className="hidden w-[328px] shrink-0 border-l border-rc-border-secondary bg-rc-bg-chat p-3 xl:flex xl:flex-col"
+      className="hidden w-[304px] shrink-0 bg-rc-bg-chat px-3 pb-3 pt-[68px] xl:flex xl:flex-col"
     >
-      <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-md border border-rc-border-primary bg-rc-bg-surface shadow-sm">
-        <div className="flex h-11 shrink-0 items-center justify-between border-b border-rc-border-secondary px-4">
+      <div className="flex max-h-[calc(100dvh-116px)] min-h-0 flex-col overflow-hidden rounded-xl border border-rc-border-primary bg-rc-bg-surface shadow-md">
+        <div className="flex h-12 shrink-0 items-center justify-between border-b border-rc-border-secondary px-4">
           <div className="text-sm font-semibold text-rc-text-primary">环境信息</div>
           <Settings2 size={16} className="text-rc-text-tertiary" />
         </div>
@@ -110,19 +110,17 @@ export function SessionInspector() {
         <div className="min-h-0 flex-1 overflow-auto">
         <InspectorSection icon={TerminalSquare} title="会话">
           <InspectorRow label="标题" value={activeSession ? (privacyMode ? '会话已隐藏' : activeSession.title) : '—'} />
-          <InspectorRow label="ID" value={activeSessionId ? activeSessionId.slice(0, 8) : '—'} />
           <InspectorRow label="项目" value={activeProjectPath ? formatSensitivePath(activeProjectPath, privacyMode) : '—'} />
         </InspectorSection>
 
         <InspectorSection icon={Cpu} title="Agent">
           <InspectorRow label="类型" value={formatAgentName(agentType)} />
+          <InspectorRow label="模型" value={activeSession?.model ?? runtimeStatus?.provider.model ?? provider?.model ?? '—'} />
           <InspectorRow
-            label="状态"
+            label={runtimeStatus?.provider.name ?? provider?.name ?? 'Provider'}
             value={formatAgentStatus(agentStatus)}
             tone={agentStatus === 'ready' ? 'success' : runtimeStatus ? 'default' : 'warning'}
           />
-          <InspectorRow label="Provider" value={runtimeStatus?.provider.name ?? provider?.name ?? '—'} />
-          <InspectorRow label="模型" value={activeSession?.model ?? runtimeStatus?.provider.model ?? provider?.model ?? '—'} />
         </InspectorSection>
 
         <InspectorSection icon={Shield} title="权限">
@@ -145,11 +143,10 @@ export function SessionInspector() {
             value={mcpSummary ? `${mcpSummary.status_counts.connected}/${mcpSummary.enabled_servers}` : '—'}
             tone={mcpSummary && mcpSummary.status_counts.connected > 0 ? 'success' : 'default'}
           />
-          <InspectorRow label="警告" value={mcpSummary ? String(mcpSummary.warning_count) : '—'} />
           <InspectorRow
-            label="需认证"
-            value={mcpSummary ? String(mcpSummary.status_counts.needs_auth) : '—'}
-            tone={mcpSummary && mcpSummary.status_counts.needs_auth > 0 ? 'warning' : 'default'}
+            label="警告 / 认证"
+            value={mcpSummary ? `${mcpSummary.warning_count}/${mcpSummary.status_counts.needs_auth}` : '—'}
+            tone={mcpSummary && (mcpSummary.warning_count > 0 || mcpSummary.status_counts.needs_auth > 0) ? 'warning' : 'default'}
           />
         </InspectorSection>
 
@@ -157,12 +154,6 @@ export function SessionInspector() {
           <InspectorRow label="活动工具" value={String(liveToolProgress.length)} />
           <InspectorRow label="工具结果" value={String(liveToolResults.length)} />
           <InspectorRow label="运行时" value={runtimeStatus ? '在线' : '离线'} tone={runtimeStatus ? 'success' : 'warning'} />
-        </InspectorSection>
-
-        <InspectorSection icon={FolderGit2} title="工作区">
-          <div className="break-all font-mono text-[11px] leading-5 text-rc-text-tertiary">
-            {activeProjectPath ? formatSensitivePath(activeProjectPath, privacyMode) : '未选择项目'}
-          </div>
         </InspectorSection>
         </div>
       </div>

@@ -183,7 +183,7 @@ export function WorkspaceOverview() {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col bg-rc-bg-chat">
-      <div className="flex h-11 shrink-0 items-center justify-between border-b border-rc-border-secondary bg-rc-bg-surface px-4">
+      <div className="flex h-12 shrink-0 items-center justify-between border-b border-rc-border-secondary bg-rc-bg-surface px-4">
         <div className="flex min-w-0 items-center gap-2 text-xs text-rc-text-secondary">
           <TerminalSquare size={14} className="shrink-0 text-rc-text-tertiary" />
           <span className="font-semibold text-rc-text-primary">Workbench</span>
@@ -209,37 +209,36 @@ export function WorkspaceOverview() {
         </div>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-auto px-5 py-6">
-        <div className="mx-auto flex w-full max-w-[860px] flex-col gap-5">
-          <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-            <StatCard
-              icon={FolderGit2}
-              label="当前项目"
-              value={activeProject?.name ?? '未选择'}
-              sub={activeProject ? formatSensitivePath(activeProject.path, privacyMode) : '—'}
-              accent="text-rc-accent-info"
-            />
-            <StatCard
-              icon={MessageSquareText}
-              label="会话总数"
-              value={sessionCount}
-              sub={`${projectCount} 个项目`}
-              accent="text-rc-accent-success"
-            />
-            <StatCard
-              icon={Bot}
-              label="活跃 Agent"
-              value={formatAgentName(activeAgentType)}
-              sub={runtimeStatus ? '运行时在线' : '运行时离线'}
-              accent="text-rc-accent-warning"
-            />
-            <StatCard
-              icon={Network}
-              label="MCP 服务器"
-              value={mcpSummary ? `${mcpSummary.status_counts.connected}/${mcpSummary.enabled_servers}` : '—'}
-              sub={`共 ${mcpSummary?.total_servers ?? 0} 个`}
-              accent="text-rc-accent-primary"
-            />
+      <div className="min-h-0 flex-1 overflow-auto px-5 py-8">
+        <div className="mx-auto flex w-full max-w-chat flex-col gap-6">
+          <section className="rounded-xl border border-rc-border-primary bg-rc-bg-surface shadow-xs">
+            <div className="grid divide-y divide-rc-border-secondary md:grid-cols-2 md:divide-x md:divide-y-0">
+              <div className="flex items-center gap-3 px-4 py-3">
+                <FolderGit2 size={16} className="text-rc-text-tertiary" />
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-sm font-semibold text-rc-text-primary">{activeProject?.name ?? '未选择项目'}</div>
+                  <div className="mt-0.5 truncate text-xs text-rc-text-tertiary">
+                    {activeProject ? formatSensitivePath(activeProject.path, privacyMode) : `${projectCount} 个项目`}
+                  </div>
+                </div>
+              </div>
+              <div className="grid grid-cols-3 divide-x divide-rc-border-secondary">
+                <div className="px-3 py-3">
+                  <div className="text-[10px] uppercase text-rc-text-tertiary">Sessions</div>
+                  <div className="mt-1 text-sm font-semibold text-rc-text-primary">{sessionCount}</div>
+                </div>
+                <div className="px-3 py-3">
+                  <div className="text-[10px] uppercase text-rc-text-tertiary">Agent</div>
+                  <div className="mt-1 truncate text-sm font-semibold text-rc-text-primary">{formatAgentName(activeAgentType)}</div>
+                </div>
+                <div className="px-3 py-3">
+                  <div className="text-[10px] uppercase text-rc-text-tertiary">MCP</div>
+                  <div className="mt-1 text-sm font-semibold text-rc-text-primary">
+                    {mcpSummary ? `${mcpSummary.status_counts.connected}/${mcpSummary.enabled_servers}` : '—'}
+                  </div>
+                </div>
+              </div>
+            </div>
           </section>
 
           <section>

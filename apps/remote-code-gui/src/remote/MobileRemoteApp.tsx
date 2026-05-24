@@ -119,6 +119,10 @@ const APPROVAL_DECISIONS: Array<{
 
 // ═══════════════════════════════════════════════════════════════════════════
 // MobileRemoteApp
+// TODO: TimelineCard component and helper functions (toolLabel, toolSummary,
+// approvalSummary, artifactSummary, sessionEventSummary, runnerEventSummary,
+// describeSessionControl) are duplicated from RemoteApp.tsx. Extract
+// into a shared module to eliminate the duplication.
 // ═══════════════════════════════════════════════════════════════════════════
 
 export default function MobileRemoteApp() {
