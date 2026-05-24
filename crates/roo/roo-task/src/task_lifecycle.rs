@@ -537,7 +537,7 @@ impl TaskLifecycle {
         // request loop. In Rust we spawn it on a dedicated OS thread
         // because the AgentLoop may contain !Send types (e.g. git2).
         if let Some(provider) = self.provider.take() {
-            self.spawn_agent_loop(provider);
+            self.spawn_agent_loop(provider)?;
         } else {
             warn!(
                 task_id = %self.task_id(),
@@ -555,7 +555,7 @@ impl TaskLifecycle {
     ///
     /// Events from the agent loop's engine are forwarded to this lifecycle's
     /// engine emitter so that the server layer can deliver them to clients.
-    fn spawn_agent_loop(&mut self, provider: Box<dyn Provider>) {
+    fn spawn_agent_loop(&mut self, provider: Box<dyn Provider>) -> Result<(), TaskError> {
         let task_id = self.task_id().to_string();
 
         // Build a fresh TaskEngine for the AgentLoop (it needs its own state).
@@ -564,7 +564,10 @@ impl TaskLifecycle {
             Ok(e) => e,
             Err(e) => {
                 error!(task_id = %task_id, error = %e, "Failed to create engine for AgentLoop");
-                return;
+                return Err(TaskError::General(format!(
+                    "Failed to create engine: {}",
+                    e
+                )));
             }
         };
 
@@ -687,8 +690,9 @@ impl TaskLifecycle {
             })
             .map_err(|e| {
                 error!(task_id = %spawn_task_id, error = %e, "Failed to spawn AgentLoop thread");
-            })
-            .ok();
+                TaskError::General(format!("Failed to spawn AgentLoop thread: {}", e))
+            })?;
+        Ok(())
     }
 
     /// Check MCP tools count and warn if too many.

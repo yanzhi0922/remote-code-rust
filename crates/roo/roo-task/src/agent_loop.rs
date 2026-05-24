@@ -588,7 +588,10 @@ pub fn check_tool_approval_with_context(
     }
 
     if let Some(mcp_use) = mcp_use_for_approval(tool_name, params) {
-        let text = serde_json::to_string(&mcp_use).ok();
+        let text = serde_json::to_string(&mcp_use).map_err(|e| {
+            warn!(tool = tool_name, error = %e, "Failed to serialize MCP use for approval check");
+            e
+        }).ok();
         let result = check_auto_approval(CheckAutoApprovalParams {
             state: auto_approval,
             ask: &AskType::UseMcpServer,
@@ -605,7 +608,10 @@ pub fn check_tool_approval_with_context(
         };
     };
 
-    let text = serde_json::to_string(&tool_action).ok();
+    let text = serde_json::to_string(&tool_action).map_err(|e| {
+        warn!(tool = tool_name, error = %e, "Failed to serialize tool action for approval check");
+        e
+    }).ok();
     let result = check_auto_approval(CheckAutoApprovalParams {
         state: auto_approval,
         ask: &AskType::Tool,

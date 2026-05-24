@@ -1726,28 +1726,42 @@ impl Handler {
 
                 let checkpoints_dir = std::path::Path::new(&cwd).join(".roo").join("checkpoints");
 
-                // Try to find any task directory
-                if let Ok(entries) = std::fs::read_dir(&checkpoints_dir) {
-                    for entry in entries.flatten() {
-                        if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
-                            let task_id = entry.file_name().to_string_lossy().to_string();
-                            if let Ok(mut service) =
-                                roo_checkpoint::service::ShadowCheckpointService::new(
-                                    &task_id,
-                                    &entry.path(),
-                                    &cwd,
-                                    None,
-                                )
-                            {
-                                if service.init_shadow_git().await.is_ok() {
-                                    match service.restore_checkpoint(commit_hash).await {
-                                        Ok(()) => return Ok(json!({"status": "restored"})),
-                                        Err(e) => {
-                                            return Ok(
-                                                json!({"status": "error", "error": e.to_string()}),
-                                            );
-                                        }
-                                    }
+                // Read directory entries in spawn_blocking to avoid blocking the async runtime
+                let cp_dir = checkpoints_dir.clone();
+                let dir_entries: Vec<std::path::PathBuf> =
+                    match tokio::task::spawn_blocking(move || {
+                        let mut out = Vec::new();
+                        if let Ok(entries) = std::fs::read_dir(&cp_dir) {
+                            for entry in entries.flatten() {
+                                if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                                    out.push(entry.path());
+                                }
+                            }
+                        }
+                        out
+                    })
+                    .await
+                    {
+                        Ok(entries) => entries,
+                        Err(_) => Vec::new(),
+                    };
+
+                for entry_path in dir_entries {
+                    let task_id = entry_path
+                        .file_name()
+                        .map(|n| n.to_string_lossy().to_string())
+                        .unwrap_or_default();
+                    if let Ok(mut service) = roo_checkpoint::service::ShadowCheckpointService::new(
+                        &task_id,
+                        &entry_path,
+                        &cwd,
+                        None,
+                    ) {
+                        if service.init_shadow_git().await.is_ok() {
+                            match service.restore_checkpoint(commit_hash).await {
+                                Ok(()) => return Ok(json!({"status": "restored"})),
+                                Err(e) => {
+                                    return Ok(json!({"status": "error", "error": e.to_string()}));
                                 }
                             }
                         }
@@ -4136,11 +4150,22 @@ impl Handler {
         let header = parts[0];
         let b64_data = parts[1];
 
-        // Extract format from header
-        let format = header
+        // Extract format from header — validate against a whitelist to prevent
+        // path traversal via crafted data-URI headers (e.g. "data:image/../../evil")
+        let raw_format = header
             .strip_prefix("data:image/")
             .and_then(|s| s.split(';').next())
             .unwrap_or("png");
+        let allowed_formats = ["png", "jpg", "jpeg", "gif", "webp", "svg"];
+        let format = if allowed_formats.contains(&raw_format) {
+            raw_format
+        } else {
+            tracing::warn!(
+                "Rejected image format '{}' from data URI, defaulting to png",
+                raw_format
+            );
+            "png"
+        };
 
         let cwd = {
             let app = self.app.read().await;
@@ -4156,10 +4181,16 @@ impl Handler {
 
         // Decode base64 using a simple manual decoder (no external crate needed)
         match decode_base64(b64_data) {
-            Ok(bytes) => match std::fs::write(&save_path, bytes) {
-                Ok(()) => Ok(json!({"status": "saved", "path": save_path.to_string_lossy()})),
-                Err(e) => Ok(json!({"status": "error", "error": e.to_string()})),
-            },
+            Ok(bytes) => {
+                let sp = save_path.clone();
+                match tokio::task::spawn_blocking(move || std::fs::write(&sp, bytes)).await {
+                    Ok(Ok(())) => {
+                        Ok(json!({"status": "saved", "path": save_path.to_string_lossy()}))
+                    }
+                    Ok(Err(e)) => Ok(json!({"status": "error", "error": e.to_string()})),
+                    Err(e) => Ok(json!({"status": "error", "error": e.to_string()})),
+                }
+            }
             Err(e) => {
                 Ok(json!({"status": "error", "error": format!("base64 decode failed: {}", e)}))
             }
@@ -4452,6 +4483,16 @@ impl Handler {
             || mention.starts_with("https://")
         {
             let url = mention.trim_start_matches("@url:").trim();
+            // Validate scheme to prevent arbitrary command execution via opener::open
+            // (e.g. file://, or on Windows, bare paths that resolve to binaries).
+            if !url.starts_with("http://") && !url.starts_with("https://") {
+                tracing::warn!("Blocked opener::open for non-HTTP URL: {}", url);
+                return Ok(json!({
+                    "status": "error",
+                    "mention": mention,
+                    "error": "Only http:// and https:// URLs are allowed",
+                }));
+            }
             match opener::open(url) {
                 Ok(()) => Ok(json!({"status": "opened", "mention": mention})),
                 Err(e) => {
@@ -4600,10 +4641,17 @@ impl Handler {
             });
         };
 
-        match std::fs::remove_file(file_path) {
-            Ok(()) => {
+        let fp = file_path.to_path_buf();
+        match tokio::task::spawn_blocking(move || std::fs::remove_file(&fp)).await {
+            Ok(Ok(())) => {
                 debug!(name = name, path = %file_path.display(), "Deleted command");
                 Ok(json!({"status": "deleted", "name": name}))
+            }
+            Ok(Err(e)) => {
+                error!(name = name, error = %e, "Failed to delete command");
+                Err(ServerError::Internal(format!(
+                    "failed to delete command: {e}"
+                )))
             }
             Err(e) => {
                 error!(name = name, error = %e, "Failed to delete command");
@@ -4618,12 +4666,17 @@ impl Handler {
     ///
     /// Source: TS `webviewMessageHandler.ts` — `createCommand`
     async fn handle_command_create(&self, params: Value) -> ServerResult<Value> {
-        let name = params.get("text").and_then(|v| v.as_str()).unwrap_or("");
+        let name = params
+            .get("text")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
         let content = params
             .get("values")
             .and_then(|v| v.get("content"))
             .and_then(|v| v.as_str())
-            .unwrap_or("");
+            .unwrap_or("")
+            .to_string();
 
         if name.is_empty() {
             return Err(ServerError::InvalidParams {
@@ -4636,19 +4689,36 @@ impl Handler {
         let cwd_path = Path::new(&cwd);
         let commands_dir = paths::get_project_roo_directory_for_cwd(cwd_path).join("commands");
 
-        // Create the commands directory if it doesn't exist
-        if let Err(e) = std::fs::create_dir_all(&commands_dir) {
-            error!(dir = %commands_dir.display(), error = %e, "Failed to create commands directory");
-            return Err(ServerError::Internal(format!(
-                "failed to create commands directory: {e}"
-            )));
+        // Create the commands directory if it doesn't exist (async-safe via spawn_blocking)
+        let dir = commands_dir.clone();
+        match tokio::task::spawn_blocking(move || std::fs::create_dir_all(&dir)).await {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => {
+                error!(dir = %commands_dir.display(), error = %e, "Failed to create commands directory");
+                return Err(ServerError::Internal(format!(
+                    "failed to create commands directory: {e}"
+                )));
+            }
+            Err(e) => {
+                error!(dir = %commands_dir.display(), error = %e, "Failed to create commands directory");
+                return Err(ServerError::Internal(format!(
+                    "failed to create commands directory: {e}"
+                )));
+            }
         }
 
         let file_path = commands_dir.join(format!("{name}.md"));
-        match std::fs::write(&file_path, content) {
-            Ok(()) => {
+        let fp = file_path.clone();
+        match tokio::task::spawn_blocking(move || std::fs::write(&fp, content)).await {
+            Ok(Ok(())) => {
                 debug!(name = name, path = %file_path.display(), "Created command");
                 Ok(json!({"status": "created", "name": name, "source": "project"}))
+            }
+            Ok(Err(e)) => {
+                error!(name = name, error = %e, "Failed to write command");
+                Err(ServerError::Internal(format!(
+                    "failed to write command: {e}"
+                )))
             }
             Err(e) => {
                 error!(name = name, error = %e, "Failed to write command");
@@ -4991,13 +5061,35 @@ impl Handler {
     /// Open a file in the system editor.
     ///
     /// Source: TS `webviewMessageHandler.ts` — `openFile`
+    ///
+    /// SECURITY: Validates the path is within the workspace directory before
+    /// passing it to `opener::open()` to prevent arbitrary file/URL execution.
     async fn handle_file_open(&self, params: Value) -> ServerResult<Value> {
         let path = params.get("text").and_then(|v| v.as_str()).unwrap_or("");
         debug!(path = path, "Opening file");
         if path.is_empty() {
             return Ok(json!({"status": "error", "error": "missing path"}));
         }
-        match opener::open(path) {
+        // Validate that the path is within the workspace directory.
+        let cwd = self.get_cwd().await;
+        let canonical_cwd = std::path::Path::new(&cwd).canonicalize().ok();
+        let target = std::path::Path::new(path);
+        // Resolve relative paths against workspace root.
+        let resolved = if target.is_absolute() {
+            target.to_path_buf()
+        } else {
+            std::path::Path::new(&cwd).join(target)
+        };
+        let canonical_target = match resolved.canonicalize() {
+            Ok(p) => p,
+            Err(e) => return Ok(json!({"status": "error", "error": format!("path does not exist: {e}")})),
+        };
+        if let Some(ref cwd_canonical) = canonical_cwd {
+            if !canonical_target.starts_with(cwd_canonical) {
+                return Ok(json!({"status": "error", "error": "path is outside the workspace directory"}));
+            }
+        }
+        match opener::open(&canonical_target) {
             Ok(()) => Ok(json!({"status": "opened"})),
             Err(e) => Ok(json!({"status": "error", "error": e.to_string()})),
         }
@@ -5006,11 +5098,18 @@ impl Handler {
     /// Open external URL in the system browser.
     ///
     /// Source: TS `webviewMessageHandler.ts` — `openExternal`
+    ///
+    /// SECURITY: Validates the URL starts with http:// or https:// before
+    /// passing it to `opener::open()` to prevent arbitrary scheme execution.
     async fn handle_external_open(&self, params: Value) -> ServerResult<Value> {
         let url = params.get("url").and_then(|v| v.as_str()).unwrap_or("");
         debug!(url = url, "Opening external URL");
         if url.is_empty() {
             return Ok(json!({"status": "error", "error": "missing url"}));
+        }
+        // Validate URL scheme to prevent arbitrary command execution.
+        if !url.starts_with("http://") && !url.starts_with("https://") {
+            return Ok(json!({"status": "error", "error": "only http:// and https:// URLs are allowed"}));
         }
         match opener::open(url) {
             Ok(()) => Ok(json!({"status": "opened"})),

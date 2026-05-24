@@ -708,9 +708,12 @@ impl ToolHandler for ApplyDiffHandler {
             return ToolExecutionResult::error(format!("File not found: {}", path));
         }
 
-        // Read original content
-        let original = match std::fs::read_to_string(&file_path) {
-            Ok(s) => s,
+        // Read original content (async-safe via spawn_blocking)
+        let fp = file_path.clone();
+        let original = match tokio::task::spawn_blocking(move || std::fs::read_to_string(&fp)).await
+        {
+            Ok(Ok(s)) => s,
+            Ok(Err(e)) => return ToolExecutionResult::error(format!("Failed to read file: {}", e)),
             Err(e) => return ToolExecutionResult::error(format!("Failed to read file: {}", e)),
         };
 
@@ -737,13 +740,27 @@ impl ToolHandler for ApplyDiffHandler {
         }
 
         let new_content = result.content.unwrap_or(original);
+        // Capture strategy name before dropping (strategy is !Send).
+        let strategy_name = strategy.name().to_string();
+        drop(strategy);
 
-        // Write result
-        if let Err(e) = std::fs::write(&file_path, &new_content) {
-            return ToolExecutionResult::error(format!("Failed to write file: {}", e));
+        // Write result (async-safe via spawn_blocking)
+        {
+            let fp = file_path.clone();
+            let content_to_write = new_content;
+            match tokio::task::spawn_blocking(move || std::fs::write(&fp, &content_to_write)).await
+            {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => {
+                    return ToolExecutionResult::error(format!("Failed to write file: {}", e));
+                }
+                Err(e) => {
+                    return ToolExecutionResult::error(format!("Failed to write file: {}", e));
+                }
+            }
         }
 
-        let mut msg = format!("Applied diff to {} (strategy: {})", path, strategy.name());
+        let mut msg = format!("Applied diff to {} (strategy: {})", path, strategy_name);
         if !warnings.is_empty() {
             msg.push_str(&format!("\nWarnings: {}", warnings.join(", ")));
         }
@@ -920,9 +937,13 @@ impl ToolHandler for SearchReplaceHandler {
             return ToolExecutionResult::error(format!("File not found: {}", sr_params.file_path));
         }
 
-        // Read file
-        let content = match std::fs::read_to_string(&full_path) {
-            Ok(s) => s,
+        // Read file (async-safe via spawn_blocking)
+        let fp_read = full_path.clone();
+        let content = match tokio::task::spawn_blocking(move || std::fs::read_to_string(&fp_read))
+            .await
+        {
+            Ok(Ok(s)) => s,
+            Ok(Err(e)) => return ToolExecutionResult::error(format!("Failed to read file: {}", e)),
             Err(e) => return ToolExecutionResult::error(format!("Failed to read file: {}", e)),
         };
 
@@ -934,9 +955,19 @@ impl ToolHandler for SearchReplaceHandler {
             sr_params.replace_all,
         ) {
             Ok(result) => {
-                // Write result
-                if let Err(e) = std::fs::write(&full_path, &result.new_content) {
-                    return ToolExecutionResult::error(format!("Failed to write file: {}", e));
+                // Write result (async-safe via spawn_blocking)
+                let fp_write = full_path.clone();
+                let new_content = result.new_content;
+                match tokio::task::spawn_blocking(move || std::fs::write(&fp_write, &new_content))
+                    .await
+                {
+                    Ok(Ok(())) => {}
+                    Ok(Err(e)) => {
+                        return ToolExecutionResult::error(format!("Failed to write file: {}", e));
+                    }
+                    Err(e) => {
+                        return ToolExecutionResult::error(format!("Failed to write file: {}", e));
+                    }
                 }
                 ToolExecutionResult::success(format!(
                     "Search and replace applied to {}",
@@ -1068,20 +1099,27 @@ impl ToolHandler for ApplyPatchHandler {
             Err(e) => return ToolExecutionResult::error(format!("apply_patch parse error: {}", e)),
         };
 
-        // Process all hunks — resolve file paths relative to cwd
+        // Process all hunks — resolve file paths relative to cwd.
+        // The closure performs blocking I/O, so we wrap the whole call
+        // in spawn_blocking to avoid stalling the async runtime.
         let cwd = context.cwd.clone();
-        let changes =
-            match roo_tools_fs::apply_patch::process_all_hunks(&parsed.hunks, |file_path| {
+        let hunks = parsed.hunks.clone();
+        let changes_result = tokio::task::spawn_blocking(move || {
+            roo_tools_fs::apply_patch::process_all_hunks(&hunks, |file_path| {
                 let full_path = if std::path::Path::new(file_path).is_absolute() {
                     std::path::PathBuf::from(file_path)
                 } else {
                     cwd.join(file_path)
                 };
                 std::fs::read_to_string(&full_path)
-            }) {
-                Ok(c) => c,
-                Err(e) => return ToolExecutionResult::error(format!("apply_patch error: {}", e)),
-            };
+            })
+        })
+        .await;
+        let changes = match changes_result {
+            Ok(Ok(c)) => c,
+            Ok(Err(e)) => return ToolExecutionResult::error(format!("apply_patch error: {}", e)),
+            Err(e) => return ToolExecutionResult::error(format!("apply_patch error: {}", e)),
+        };
 
         // Apply changes to disk — check ignore/protect for each file
         let mut results = Vec::new();
@@ -2439,8 +2477,12 @@ impl ToolHandler for GenerateImageHandler {
                         img_path
                     ));
                 }
-                match std::fs::read(&full_path) {
-                    Ok(data) => {
+                // Read input image (async-safe via spawn_blocking)
+                let fp_img = full_path.clone();
+                let img_read_result =
+                    tokio::task::spawn_blocking(move || std::fs::read(&fp_img)).await;
+                match img_read_result {
+                    Ok(Ok(data)) => {
                         let ext = full_path
                             .extension()
                             .and_then(|e| e.to_str())
@@ -2448,6 +2490,12 @@ impl ToolHandler for GenerateImageHandler {
                         Some(roo_tools_misc::generate_image::encode_image_to_data_uri(
                             &data, ext,
                         ))
+                    }
+                    Ok(Err(e)) => {
+                        return ToolExecutionResult::error(format!(
+                            "Failed to read input image '{}': {}",
+                            img_path, e
+                        ));
                     }
                     Err(e) => {
                         return ToolExecutionResult::error(format!(
@@ -2517,23 +2565,49 @@ impl ToolHandler for GenerateImageHandler {
                             ));
                         }
 
-                        // Create parent directories if needed
-                        if let Some(parent) = full_save_path.parent()
-                            && !parent.exists()
-                            && let Err(e) = std::fs::create_dir_all(parent)
+                        // Create parent directories if needed (async-safe via spawn_blocking)
                         {
-                            return ToolExecutionResult::error(format!(
-                                "Failed to create directory for '{}': {}",
-                                final_path, e
-                            ));
+                            let parent = full_save_path.parent().map(|p| p.to_path_buf());
+                            if let Some(parent) = parent {
+                                if !parent.exists() {
+                                    match tokio::task::spawn_blocking(move || {
+                                        std::fs::create_dir_all(&parent)
+                                    })
+                                    .await
+                                    {
+                                        Ok(Ok(())) => {}
+                                        Ok(Err(e)) => {
+                                            return ToolExecutionResult::error(format!(
+                                                "Failed to create directory for '{}': {}",
+                                                final_path, e
+                                            ));
+                                        }
+                                        Err(e) => {
+                                            return ToolExecutionResult::error(format!(
+                                                "Failed to create directory for '{}': {}",
+                                                final_path, e
+                                            ));
+                                        }
+                                    }
+                                }
+                            }
                         }
 
-                        match std::fs::write(&full_save_path, &raw_bytes) {
-                            Ok(()) => ToolExecutionResult::success(format!(
+                        // Save image (async-safe via spawn_blocking)
+                        let byte_count = raw_bytes.len();
+                        let fp_save = full_save_path.clone();
+                        match tokio::task::spawn_blocking(move || {
+                            std::fs::write(&fp_save, &raw_bytes)
+                        })
+                        .await
+                        {
+                            Ok(Ok(())) => ToolExecutionResult::success(format!(
                                 "Image generated and saved to '{}' (format: {}, size: {} bytes)",
-                                final_path,
-                                format,
-                                raw_bytes.len()
+                                final_path, format, byte_count
+                            )),
+                            Ok(Err(e)) => ToolExecutionResult::error(format!(
+                                "Failed to save image to '{}': {}",
+                                final_path, e
                             )),
                             Err(e) => ToolExecutionResult::error(format!(
                                 "Failed to save image to '{}': {}",
@@ -2656,17 +2730,22 @@ impl ToolHandler for CustomToolHandler {
             .and_then(|v| v.as_str())
             .unwrap_or("custom_tool");
 
-        let registry = match self.registry.lock() {
-            Ok(r) => r,
-            Err(e) => {
-                return ToolExecutionResult::error(format!(
-                    "Failed to acquire custom tool registry lock: {}",
-                    e
-                ));
-            }
+        // Extract the definition from the registry within a scope to ensure
+        // the MutexGuard is dropped before any await points (MutexGuard is !Send).
+        let definition = {
+            let registry = match self.registry.lock() {
+                Ok(r) => r,
+                Err(e) => {
+                    return ToolExecutionResult::error(format!(
+                        "Failed to acquire custom tool registry lock: {}",
+                        e
+                    ));
+                }
+            };
+            registry.get(tool_name).cloned()
         };
 
-        match registry.get(tool_name) {
+        match definition {
             Some(definition) => {
                 match definition.handler_type {
                     roo_custom_tools::HandlerType::Builtin => {
@@ -2718,29 +2797,47 @@ impl ToolHandler for CustomToolHandler {
                             }
                         };
 
-                        // Collect parameter values to pass as arguments
+                        // Collect parameter values to pass as arguments.
+                        // SECURITY NOTE: Values come from LLM-generated JSON.  While
+                        // Command::new bypasses the shell, a value starting with "-"
+                        // could be interpreted as a flag by the target program.  We
+                        // therefore prepend such values with "--" (end-of-options
+                        // marker) and sanitize any leading dashes in the value itself
+                        // by wrapping it so the child process cannot treat it as a flag.
                         let param_args: Vec<String> = params
                             .as_object()
                             .map(|obj| {
-                                obj.iter()
-                                    .filter(|(k, _)| *k != "_custom_tool_name")
-                                    .flat_map(|(k, v)| {
-                                        let val = if v.is_string() {
-                                            v.as_str().unwrap_or("").to_string()
-                                        } else {
-                                            v.to_string()
-                                        };
-                                        vec![format!("--{}", k), val]
-                                    })
-                                    .collect()
+                                let mut args = Vec::new();
+                                // Insert "--" end-of-options separator before any user values
+                                args.push("--".to_string());
+                                for (k, v) in obj.iter() {
+                                    if k == "_custom_tool_name" {
+                                        continue;
+                                    }
+                                    let val = if v.is_string() {
+                                        v.as_str().unwrap_or("").to_string()
+                                    } else {
+                                        v.to_string()
+                                    };
+                                    args.push(format!("--{}", k));
+                                    args.push(val);
+                                }
+                                args
                             })
                             .unwrap_or_default();
 
                         let mut all_args: Vec<String> = args;
                         all_args.extend(param_args);
 
-                        match std::process::Command::new(program).args(&all_args).output() {
-                            Ok(output) => {
+                        // Run custom tool in spawn_blocking to avoid blocking the async runtime
+                        let cmd_output = tokio::task::spawn_blocking(move || {
+                            std::process::Command::new(&program)
+                                .args(&all_args)
+                                .output()
+                        })
+                        .await;
+                        match cmd_output {
+                            Ok(Ok(output)) => {
                                 let stdout = String::from_utf8_lossy(&output.stdout);
                                 let stderr = String::from_utf8_lossy(&output.stderr);
                                 if output.status.success() {
@@ -2760,6 +2857,10 @@ impl ToolHandler for CustomToolHandler {
                                     ))
                                 }
                             }
+                            Ok(Err(e)) => ToolExecutionResult::error(format!(
+                                "Failed to execute script '{}': {}",
+                                script_path, e
+                            )),
                             Err(e) => ToolExecutionResult::error(format!(
                                 "Failed to execute script '{}': {}",
                                 script_path, e
