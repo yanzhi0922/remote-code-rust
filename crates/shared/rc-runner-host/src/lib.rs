@@ -78,6 +78,8 @@ pub struct HostedSessionManager {
     /// Buffered runtime events that failed to reach the control plane.
     /// Keyed by session_id; flushed on next successful post.
     event_buffer: Arc<Mutex<HashMap<Uuid, VecDeque<RuntimeEventDetail>>>>,
+    /// Number of consecutive flush failures. After 10, back off 30s.
+    consecutive_flush_failures: Arc<Mutex<u32>>,
 }
 
 #[derive(Clone)]
@@ -101,15 +103,34 @@ impl HostedSessionManager {
         profile_dir: PathBuf,
         auth_token: Option<String>,
     ) -> Self {
+        Self::with_client(
+            api,
+            control_plane_url,
+            remote_code_bin,
+            profile_dir,
+            auth_token,
+            reqwest::Client::new(),
+        )
+    }
+
+    pub fn with_client(
+        api: RunnerApi,
+        control_plane_url: String,
+        remote_code_bin: PathBuf,
+        profile_dir: PathBuf,
+        auth_token: Option<String>,
+        client: reqwest::Client,
+    ) -> Self {
         Self {
             api,
             control_plane_url,
             remote_code_bin,
             profile_dir,
-            client: reqwest::Client::new(),
+            client,
             auth_token,
             sessions: Arc::new(Mutex::new(HashMap::new())),
             event_buffer: Arc::new(Mutex::new(HashMap::new())),
+            consecutive_flush_failures: Arc::new(Mutex::new(0)),
         }
     }
 
@@ -764,8 +785,8 @@ impl HostedSessionManager {
         let mut buffer = self.event_buffer.lock().await;
         let buf = buffer.entry(session_id).or_default();
         if buf.len() >= MAX_EVENT_BUFFER_PER_SESSION {
-            let dropped = buf.drain(..buf.len() / 2).count();
-            warn!("event buffer cap hit for session {session_id}, dropped {dropped} oldest events");
+            let _ = buf.pop_front();
+            warn!("event buffer cap hit for session {session_id}, dropped 1 oldest event");
         }
         buf.push_back(detail);
     }
@@ -773,6 +794,14 @@ impl HostedSessionManager {
     /// Attempt to flush buffered runtime events for a session.
     /// Caps buffer at [`MAX_EVENT_BUFFER_PER_SESSION`] to prevent unbounded memory growth.
     async fn flush_event_buffer(&self, session_id: Uuid) {
+        // Back off after too many consecutive failures.
+        {
+            let failures = self.consecutive_flush_failures.lock().await;
+            if *failures >= 10 {
+                tokio::time::sleep(Duration::from_secs(30)).await;
+            }
+        }
+
         let mut events: VecDeque<RuntimeEventDetail> = {
             let mut buffer = self.event_buffer.lock().await;
             buffer.remove(&session_id).unwrap_or_default()
@@ -793,10 +822,12 @@ impl HostedSessionManager {
                 .await
                 .is_ok_and(|r| r.status().is_success())
             {
-                // Flushed one successfully, continue
+                // Flushed one successfully, reset failure counter and continue
+                *self.consecutive_flush_failures.lock().await = 0;
             } else {
                 // Control plane still unreachable — re-buffer remaining and stop
                 warn!("control plane still unreachable during flush for session {session_id}");
+                *self.consecutive_flush_failures.lock().await += 1;
                 events.push_front(detail);
                 let mut buffer = self.event_buffer.lock().await;
                 if let Some(mut newer_events) = buffer.remove(&session_id) {

@@ -13,6 +13,7 @@ use sha2::{Digest, Sha256};
 use tokio::sync::{Mutex, broadcast};
 use uuid::Uuid;
 
+use crate::auth::constant_time_value_eq;
 use crate::helpers::{
     runner_can_host, runner_rank, sanitize_artifact_component, session_state_after_approval,
     session_state_from_runner,
@@ -237,20 +238,7 @@ fn sha256_hex(raw: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(raw.as_bytes());
     let digest = hasher.finalize();
-    let mut encoded = String::with_capacity(digest.len() * 2);
-    for byte in digest {
-        #[allow(clippy::format_push_string)]
-        encoded.push_str(&format!("{byte:02x}"));
-    }
-    encoded
-}
-
-fn constant_time_hash_eq(actual: &str, expected: &str) -> bool {
-    use sha2::{Digest, Sha256};
-
-    let actual_digest: [u8; 32] = Sha256::digest(actual.as_bytes()).into();
-    let expected_digest: [u8; 32] = Sha256::digest(expected.as_bytes()).into();
-    constant_time_eq::constant_time_eq_32(&actual_digest, &expected_digest)
+    hex::encode(digest)
 }
 
 fn mint_secret(prefix: &str) -> String {
@@ -326,7 +314,7 @@ impl Registry {
         // Try access token first.
         for device in self.trusted_devices.values() {
             if let Some(ref at_hash) = device.access_token_hash
-                && constant_time_hash_eq(&hash, at_hash)
+                && constant_time_value_eq(&hash, at_hash)
             {
                 let expired = device.access_token_expires_at.is_none_or(|exp| now >= exp);
                 if !expired {
@@ -342,7 +330,7 @@ impl Registry {
         let device_id = self
             .trusted_devices
             .values()
-            .find(|device| constant_time_hash_eq(&hash, &device.token_hash))
+            .find(|device| constant_time_value_eq(&hash, &device.token_hash))
             .map(|device| device.device_id)?;
         let device = self.trusted_devices.get_mut(&device_id)?;
         device.last_seen_at = now;
@@ -366,7 +354,7 @@ impl Registry {
         let device_id = self
             .trusted_devices
             .values()
-            .find(|device| constant_time_hash_eq(&hash, &device.token_hash))
+            .find(|device| constant_time_value_eq(&hash, &device.token_hash))
             .map(|device| device.device_id)
             .ok_or_else(|| ApiError::unauthorized("invalid or expired refresh token".to_owned()))?;
 
@@ -409,7 +397,7 @@ impl Registry {
                     .to_owned(),
             ));
         };
-        if !constant_time_hash_eq(
+        if !constant_time_value_eq(
             &sha256_hex(request.bootstrap_secret.trim()),
             expected_secret_hash,
         ) {
@@ -495,7 +483,7 @@ impl Registry {
                 request.offer_id
             )));
         }
-        if !constant_time_hash_eq(
+        if !constant_time_value_eq(
             &sha256_hex(request.pairing_secret.trim()),
             &offer.pairing_secret_hash,
         ) {

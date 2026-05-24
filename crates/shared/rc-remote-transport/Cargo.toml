@@ -27,6 +27,7 @@ chrono = { workspace = true, features = ["serde"] }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 futures = { workspace = true }
+rand = { workspace = true }
 sha2 = { workspace = true }
 rustls = { workspace = true, features = ["ring", "std"] }
 rustls-native-certs = { workspace = true }

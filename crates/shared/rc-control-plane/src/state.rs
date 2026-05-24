@@ -10,10 +10,10 @@ use rusqlite::Row;
 use rusqlite::params_from_iter;
 use rusqlite::types::Value as SqlValue;
 use rusqlite::{Connection, OptionalExtension, params};
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 use uuid::Uuid;
 
-use crate::auth::hash_secret_value;
+use crate::auth::{constant_time_value_eq, hash_secret_value};
 use crate::helpers;
 use crate::registry::{Registry, TimelineSnapshot, TimelineStore};
 use crate::types::{
@@ -78,6 +78,7 @@ impl AuthPrincipal {
 pub struct ControlPlaneService {
     pub(crate) meta: ControlPlaneMeta,
     pub(crate) runner_lease_ttl_secs: u64,
+    #[allow(dead_code)]
     pub(crate) state_db_path: PathBuf,
     pub(crate) artifact_root_dir: PathBuf,
     pub(crate) auth_token: Option<String>,
@@ -94,6 +95,8 @@ pub struct ControlPlaneService {
     pub(crate) http_client: reqwest::Client,
     /// Directory containing downloadable app binaries (APK, dmg, etc.).
     pub(crate) downloads_dir: Option<PathBuf>,
+    /// Shared SQLite connection, opened once and reused across queries.
+    db_connection: Arc<Mutex<Connection>>,
 }
 
 #[derive(Debug, Clone)]
@@ -125,13 +128,24 @@ impl ControlPlaneService {
         let artifact_root_dir = config.artifact_root_dir.clone();
         let auth_token = config.auth_token.clone();
         let bootstrap_secret_hash = config.bootstrap_secret.as_deref().map(hash_secret_value);
-        let (registry, timeline) = load_persisted_state(&state_db_path).unwrap_or_else(|e| {
-            tracing::error!("Failed to load persisted state, starting fresh: {e:#}");
+        let db_connection = open_state_connection(&state_db_path)
+            .map_err(|e| tracing::error!("Failed to open state DB connection: {e:#}"))
+            .ok();
+        let (registry, timeline) = if let Some(ref conn) = db_connection {
+            load_persisted_state_with_conn(conn, &state_db_path).unwrap_or_else(|e| {
+                tracing::error!("Failed to load persisted state, starting fresh: {e:#}");
+                (
+                    Registry::default(),
+                    TimelineStore::new(DEFAULT_EVENT_HISTORY_LIMIT, EVENT_STREAM_BUFFER),
+                )
+            })
+        } else {
+            tracing::warn!("No DB connection available, starting fresh");
             (
                 Registry::default(),
                 TimelineStore::new(DEFAULT_EVENT_HISTORY_LIMIT, EVENT_STREAM_BUFFER),
             )
-        });
+        };
         let auth_required =
             auth_token.is_some() || bootstrap_secret_hash.is_some() || registry.owner_claimed();
         Self {
@@ -159,50 +173,17 @@ impl ControlPlaneService {
             allowed_user_key_hashes: load_allowed_user_key_hashes_from_env(),
             http_client,
             downloads_dir: config.downloads_dir,
+            db_connection: Arc::new(Mutex::new(
+                db_connection.unwrap_or_else(||
+                    open_state_connection(std::path::Path::new(":memory:"))
+                        .expect("in-memory SQLite should always open")
+                ),
+            )),
         }
     }
 
     pub fn new(config: ControlPlaneConfig, version: impl Into<String>) -> Self {
-        let service_name = config.service_name.clone();
-        let state_db_path = config.state_db_path.clone();
-        let artifact_root_dir = config.artifact_root_dir.clone();
-        let auth_token = config.auth_token.clone();
-        let bootstrap_secret_hash = config.bootstrap_secret.as_deref().map(hash_secret_value);
-        let (registry, timeline) = load_persisted_state(&state_db_path).unwrap_or_else(|e| {
-            tracing::error!("Failed to load persisted state, starting fresh: {e:#}");
-            (
-                Registry::default(),
-                TimelineStore::new(DEFAULT_EVENT_HISTORY_LIMIT, EVENT_STREAM_BUFFER),
-            )
-        });
-        let auth_required =
-            auth_token.is_some() || bootstrap_secret_hash.is_some() || registry.owner_claimed();
-        Self {
-            meta: ControlPlaneMeta {
-                service: service_name,
-                version: version.into(),
-                phase: PHASE.to_owned(),
-                bind: config.bind.to_string(),
-                public_base_url: config.public_base_url,
-                runner_lease_ttl_secs: config.runner_lease_ttl_secs,
-                profile_dir: config.profile_dir.display().to_string(),
-                state_db_path: state_db_path.display().to_string(),
-                artifact_root_dir: artifact_root_dir.display().to_string(),
-                auth_required,
-                bootstrap_secret_configured: bootstrap_secret_hash.is_some(),
-            },
-            runner_lease_ttl_secs: config.runner_lease_ttl_secs,
-            state_db_path,
-            artifact_root_dir,
-            auth_token,
-            bootstrap_secret_hash,
-            registry: Arc::new(RwLock::new(registry)),
-            timeline,
-            stream_tickets: Arc::new(RwLock::new(BTreeMap::new())),
-            allowed_user_key_hashes: load_allowed_user_key_hashes_from_env(),
-            http_client: reqwest::Client::new(),
-            downloads_dir: config.downloads_dir,
-        }
+        Self::with_http_client(config, version, reqwest::Client::new())
     }
 
     #[must_use]
@@ -227,11 +208,6 @@ impl ControlPlaneService {
             .any(|expected| constant_time_value_eq(&provided_hash, expected))
     }
 
-    // TODO(resource): Stream tickets are only pruned when mint_stream_ticket or
-    // consume_stream_ticket is called.  If neither is invoked for a long period,
-    // expired tickets accumulate indefinitely.  Consider adding a periodic
-    // background task (e.g. a tokio::spawn interval) to prune expired tickets
-    // proactively, or switch to a TTL-aware cache such as `moka`.
     pub(crate) async fn mint_stream_ticket(
         &self,
         principal: AuthPrincipal,
@@ -272,19 +248,23 @@ impl ControlPlaneService {
         &self,
         query: PersistedEventQuery,
     ) -> Result<Vec<crate::types::TimelineEvent>> {
-        let state_db_path = self.state_db_path.clone();
-        tokio::task::spawn_blocking(move || load_persisted_events(&state_db_path, &query))
-            .await
-            .context("control-plane event query task failed to join")?
+        let conn = self.db_connection.clone();
+        tokio::task::spawn_blocking(move || {
+            let conn = conn.blocking_lock();
+            load_persisted_events_with_conn(&conn, &query)
+        })
+        .await
+        .context("control-plane event query task failed to join")?
     }
 
     pub(crate) async fn latest_persisted_event_sequence(
         &self,
         query: PersistedEventQuery,
     ) -> Result<Option<u64>> {
-        let state_db_path = self.state_db_path.clone();
+        let conn = self.db_connection.clone();
         tokio::task::spawn_blocking(move || {
-            load_latest_persisted_event_sequence(&state_db_path, &query)
+            let conn = conn.blocking_lock();
+            load_latest_persisted_event_sequence_with_conn(&conn, &query)
         })
         .await
         .context("control-plane latest event query task failed to join")?
@@ -295,20 +275,17 @@ impl ControlPlaneService {
         draft: TimelineEventDraft,
     ) -> crate::types::TimelineEvent {
         let event = self.timeline.publish(draft).await;
-        let snapshot = PersistedControlPlaneState {
-            registry: self.registry.read().await.clone(),
-            timeline: self.timeline.snapshot().await,
-        };
-        let state_db_path = self.state_db_path.clone();
+        let conn = self.db_connection.clone();
         let event_to_persist = event.clone();
         let result = tokio::task::spawn_blocking(move || {
-            persist_control_plane_state(&state_db_path, &snapshot, Some(&event_to_persist))
+            let conn = conn.blocking_lock();
+            persist_timeline_event(&conn, &event_to_persist)
         })
         .await;
         if let Err(e) = &result {
-            tracing::error!("Failed to spawn persistence task: {e}");
+            tracing::error!("Failed to spawn event persistence task: {e}");
         } else if let Ok(Err(e)) = &result {
-            tracing::error!("Failed to persist control plane state after event: {e:#}");
+            tracing::error!("Failed to persist timeline event: {e:#}");
         }
         event
     }
@@ -318,9 +295,10 @@ impl ControlPlaneService {
             registry: self.registry.read().await.clone(),
             timeline: self.timeline.snapshot().await,
         };
-        let state_db_path = self.state_db_path.clone();
+        let conn = self.db_connection.clone();
         tokio::task::spawn_blocking(move || {
-            persist_control_plane_state(&state_db_path, &snapshot, None)
+            let conn = conn.blocking_lock();
+            persist_control_plane_state_with_conn(&conn, &snapshot, None)
         })
         .await
         .context("control-plane snapshot task failed to join")??;
@@ -355,14 +333,6 @@ fn load_allowed_user_key_hashes_from_env() -> Vec<String> {
 
 fn is_sha256_hex(value: &str) -> bool {
     value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
-}
-
-fn constant_time_value_eq(provided: &str, expected: &str) -> bool {
-    use sha2::{Digest, Sha256};
-
-    let provided_digest: [u8; 32] = Sha256::digest(provided.as_bytes()).into();
-    let expected_digest: [u8; 32] = Sha256::digest(expected.as_bytes()).into();
-    constant_time_eq::constant_time_eq_32(&provided_digest, &expected_digest)
 }
 
 fn prune_expired_stream_tickets(tickets: &mut BTreeMap<String, StreamTicket>) {
@@ -507,8 +477,7 @@ fn is_local_control_plane_url(raw: &str) -> bool {
 // State persistence (SQLite)
 // ---------------------------------------------------------------------------
 
-fn load_persisted_state(state_db_path: &std::path::Path) -> Result<(Registry, TimelineStore)> {
-    let connection = open_state_connection(state_db_path)?;
+fn load_persisted_state_with_conn(connection: &Connection, state_db_path: &std::path::Path) -> Result<(Registry, TimelineStore)> {
     let payload = connection
         .query_row(
             "SELECT payload FROM control_plane_snapshot WHERE id = 1",
@@ -537,15 +506,14 @@ fn load_persisted_state(state_db_path: &std::path::Path) -> Result<(Registry, Ti
     ))
 }
 
-pub(crate) fn persist_control_plane_state(
-    state_db_path: &std::path::Path,
+pub(crate) fn persist_control_plane_state_with_conn(
+    connection: &Connection,
     snapshot: &PersistedControlPlaneState,
     event: Option<&crate::types::TimelineEvent>,
 ) -> Result<()> {
-    let mut connection = open_state_connection(state_db_path)?;
-    let transaction = connection.transaction()?;
+    let transaction = connection.unchecked_transaction()?;
     let payload = serde_json::to_string(snapshot)
-        .with_context(|| format!("failed to encode {}", state_db_path.display()))?;
+        .context("failed to encode control plane snapshot")?;
     transaction
         .execute(
             "INSERT INTO control_plane_snapshot (id, payload, updated_at)
@@ -553,13 +521,12 @@ pub(crate) fn persist_control_plane_state(
              ON CONFLICT(id) DO UPDATE SET payload = excluded.payload, updated_at = CURRENT_TIMESTAMP",
             params![payload],
         )
-        .with_context(|| format!("failed to persist {}", state_db_path.display()))?;
+        .context("failed to persist control plane snapshot")?;
     if let Some(event) = event {
         persist_timeline_event(&transaction, event).with_context(|| {
             format!(
-                "failed to persist event {} in {}",
+                "failed to persist event {} in control plane state",
                 event.sequence,
-                state_db_path.display()
             )
         })?;
     }
@@ -567,10 +534,6 @@ pub(crate) fn persist_control_plane_state(
     Ok(())
 }
 
-// TODO(perf): Consider introducing connection pooling (e.g. r2d2 or a single
-// long-lived Connection behind an Arc<Mutex>) instead of opening a new SQLite
-// connection for every query. This would amortise PRAGMA checks, WAL setup, and
-// statement preparation across calls.
 fn open_state_connection(state_db_path: &std::path::Path) -> Result<Connection> {
     let connection = Connection::open(state_db_path)
         .with_context(|| format!("failed to open {}", state_db_path.display()))?;
@@ -637,11 +600,10 @@ fn backfill_persisted_events(connection: &Connection, snapshot: &TimelineSnapsho
     Ok(())
 }
 
-fn load_persisted_events(
-    state_db_path: &std::path::Path,
+fn load_persisted_events_with_conn(
+    connection: &Connection,
     query: &PersistedEventQuery,
 ) -> Result<Vec<crate::types::TimelineEvent>> {
-    let connection = open_state_connection(state_db_path)?;
     let mut sql_params: Vec<SqlValue> = Vec::new();
     let mut clauses = Vec::new();
     if let Some(after) = query.after {
@@ -693,11 +655,10 @@ fn load_persisted_events(
     Ok(events)
 }
 
-fn load_latest_persisted_event_sequence(
-    state_db_path: &std::path::Path,
+fn load_latest_persisted_event_sequence_with_conn(
+    connection: &Connection,
     query: &PersistedEventQuery,
 ) -> Result<Option<u64>> {
-    let connection = open_state_connection(state_db_path)?;
     let mut sql_params: Vec<SqlValue> = Vec::new();
     let mut clauses = Vec::new();
     if let Some(session_id) = query.session_id {

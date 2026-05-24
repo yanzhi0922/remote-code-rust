@@ -38,10 +38,9 @@ impl ReconnectPolicy {
                 .powi(i32::try_from(attempt).unwrap_or(i32::MAX));
         let capped = base_secs.min(self.max_delay.as_secs_f64());
         let jitter = if self.jitter_fraction > 0.0 {
+            let rand_val: f64 = rand::Rng::random_range(&mut rand::rng(), 0.0..1.0);
             let rand_factor = 1.0 - self.jitter_fraction
-                + (2.0
-                    * self.jitter_fraction
-                    * ((attempt.wrapping_mul(2654435761) % 1000) as f64 / 1000.0));
+                + (2.0 * self.jitter_fraction * rand_val);
             capped * rand_factor
         } else {
             capped

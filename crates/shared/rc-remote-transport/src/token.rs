@@ -23,9 +23,9 @@ pub struct TokenManager {
     refresh_buffer_secs: i64,
     /// Control plane base URL for token refresh.
     control_plane_url: Option<String>,
-    /// Deduplication handle for in-flight refresh requests.
+    /// Deduplication guard for in-flight refresh requests.
     /// Prevents concurrent callers from triggering redundant HTTP refreshes.
-    refresh_in_flight: Arc<Mutex<Option<tokio::task::JoinHandle<Option<String>>>>>,
+    refresh_in_flight: Arc<Mutex<()>>,
 }
 
 #[derive(Debug)]
@@ -44,7 +44,7 @@ impl TokenManager {
             inner: Arc::new(RwLock::new(TokenState::None)),
             refresh_buffer_secs: 120,
             control_plane_url: None,
-            refresh_in_flight: Arc::new(Mutex::new(None)),
+            refresh_in_flight: Arc::new(Mutex::new(())),
         }
     }
 

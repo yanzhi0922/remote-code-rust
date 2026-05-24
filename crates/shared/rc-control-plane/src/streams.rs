@@ -119,9 +119,13 @@ async fn send_timeline_event(
     socket: &mut WebSocket,
     event: &TimelineEvent,
 ) -> std::result::Result<(), ()> {
-    let payload = serde_json::to_string(event).map_err(|_| ())?;
+    let payload = serde_json::to_string(event).map_err(|e| {
+        tracing::warn!(sequence = event.sequence, "failed to serialize timeline event: {e}");
+    })?;
     socket
         .send(Message::Text(payload.into()))
         .await
-        .map_err(|_| ())
+        .map_err(|e| {
+            tracing::warn!(sequence = event.sequence, "failed to send timeline event on websocket: {e}");
+        })
 }

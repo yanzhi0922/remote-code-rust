@@ -18,6 +18,7 @@ base64.workspace = true
 chrono.workspace = true
 constant_time_eq.workspace = true
 futures.workspace = true
+hex = "0.4"
 reqwest.workspace = true
 rusqlite.workspace = true
 serde.workspace = true

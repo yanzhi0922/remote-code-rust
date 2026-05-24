@@ -13,6 +13,7 @@ use tokio::sync::broadcast;
 use tokio::task::JoinSet;
 use uuid::Uuid;
 
+use crate::auth::constant_time_value_eq;
 use crate::helpers;
 use crate::state::ControlPlaneService;
 use crate::types::{ApiError, TimelineEvent, TimelineEventDetail, TimelineEventDraft};
@@ -54,19 +55,26 @@ pub async fn start_quic_listener(
     let mut tasks: JoinSet<()> = JoinSet::new();
 
     loop {
-        match endpoint.accept().await {
-            Some(incoming) => {
-                let service = service.clone();
-                tasks.spawn(async move {
-                    if let Err(e) = handle_quic_connection(incoming, service).await {
-                        tracing::debug!("QUIC connection error: {e}");
+        tokio::select! {
+            incoming = endpoint.accept() => {
+                match incoming {
+                    Some(incoming) => {
+                        let service = service.clone();
+                        tasks.spawn(async move {
+                            if let Err(e) = handle_quic_connection(incoming, service).await {
+                                tracing::debug!("QUIC connection error: {e}");
+                            }
+                        });
                     }
-                });
+                    None => break,
+                }
             }
-            None => break,
+            result = tasks.join_next(), if !tasks.is_empty() => {
+                if let Some(Err(e)) = result {
+                    tracing::debug!("QUIC task join error: {e}");
+                }
+            }
         }
-
-        while tasks.try_join_next().is_some() {}
     }
 
     Ok(())
@@ -181,7 +189,7 @@ async fn authenticate_quic_token(service: &ControlPlaneService, provided: &str) 
     if service
         .auth_token
         .as_deref()
-        .is_some_and(|expected| constant_time_eq(provided, expected))
+        .is_some_and(|expected| constant_time_value_eq(provided, expected))
     {
         return true;
     }
@@ -266,33 +274,25 @@ async fn dispatch_runner_session_command(
     session_id: Uuid,
     request: rc_runner::RunnerSessionCommandRequest,
 ) -> anyhow::Result<()> {
-    // TODO(perf): The registry is read-locked twice here — once to resolve the
-    // session → runner mapping and again to look up the runner struct.  Consider
-    // consolidating into a single read-lock scope (or returning a small owned
-    // struct from the first lock) to reduce lock hold time and avoid the overhead
-    // of acquiring the RwLock twice.
-
-    // Look up session → runner → enqueue.
-    let runner_id = {
+    // Single read lock: resolve session -> runner and clone runner data.
+    let (runner_id, runner, uses_pull) = {
         let registry = service.registry.read().await;
         let session = registry
             .get_session(session_id)
             .map_err(|e: ApiError| anyhow::anyhow!("{}", e.message))?;
-        session
+        let runner_id = session
             .owner_runner_id
-            .ok_or_else(|| anyhow::anyhow!("session `{session_id}` is not assigned to a runner"))?
-    };
-
-    let runner = {
-        let registry = service.registry.read().await;
-        registry
+            .ok_or_else(|| anyhow::anyhow!("session `{session_id}` is not assigned to a runner"))?;
+        let runner = registry
             .runners
             .get(&runner_id)
             .cloned()
-            .ok_or_else(|| anyhow::anyhow!("runner `{runner_id}` was not found"))?
+            .ok_or_else(|| anyhow::anyhow!("runner `{runner_id}` was not found"))?;
+        let uses_pull = helpers::runner_uses_pull_commands(&runner);
+        (runner_id, runner, uses_pull)
     };
 
-    if helpers::runner_uses_pull_commands(&runner) {
+    if uses_pull {
         let body = crate::types::RunnerQueuedCommandBody::SessionCommand {
             session_id,
             request,
@@ -530,14 +530,3 @@ struct QuicAuthMessage {
     session_id: String,
 }
 
-/// Constant-time comparison for auth tokens.
-///
-/// Hashes both values with SHA-256 first so that timing cannot reveal
-/// length differences between the provided and expected tokens.
-fn constant_time_eq(a: &str, b: &str) -> bool {
-    use sha2::{Digest, Sha256};
-
-    let a_digest: [u8; 32] = Sha256::digest(a.as_bytes()).into();
-    let b_digest: [u8; 32] = Sha256::digest(b.as_bytes()).into();
-    constant_time_eq::constant_time_eq_32(&a_digest, &b_digest)
-}

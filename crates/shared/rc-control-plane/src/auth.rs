@@ -156,12 +156,7 @@ pub(crate) fn hash_secret_value(raw: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(raw.as_bytes());
     let digest = hasher.finalize();
-    let mut encoded = String::with_capacity(digest.len() * 2);
-    for byte in digest {
-        #[allow(clippy::format_push_string)]
-        encoded.push_str(&format!("{byte:02x}"));
-    }
-    encoded
+    hex::encode(digest)
 }
 
 pub(crate) fn derived_user_id_from_key(raw: &str) -> String {
@@ -219,7 +214,7 @@ pub(crate) async fn require_api_auth(
     if service
         .auth_token
         .as_deref()
-        .is_some_and(|expected| constant_time_token_eq(&provided, expected))
+        .is_some_and(|expected| constant_time_value_eq(&provided, expected))
     {
         request.extensions_mut().insert(AuthPrincipal::SharedToken);
         return next.run(request).await;
@@ -446,10 +441,14 @@ fn legacy_query_access_tokens_enabled() -> bool {
         .is_ok_and(|value| value.eq_ignore_ascii_case("true"))
 }
 
-fn constant_time_token_eq(provided: &str, expected: &str) -> bool {
+/// Constant-time comparison for secret values.
+///
+/// Hashes both values with SHA-256 first so that timing cannot reveal
+/// length differences between the provided and expected values.
+pub(crate) fn constant_time_value_eq(a: &str, b: &str) -> bool {
     use sha2::{Digest, Sha256};
 
-    let provided_digest: [u8; 32] = Sha256::digest(provided.as_bytes()).into();
-    let expected_digest: [u8; 32] = Sha256::digest(expected.as_bytes()).into();
-    constant_time_eq::constant_time_eq_32(&provided_digest, &expected_digest)
+    let a_digest: [u8; 32] = Sha256::digest(a.as_bytes()).into();
+    let b_digest: [u8; 32] = Sha256::digest(b.as_bytes()).into();
+    constant_time_eq::constant_time_eq_32(&a_digest, &b_digest)
 }

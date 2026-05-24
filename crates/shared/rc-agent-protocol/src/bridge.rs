@@ -189,6 +189,14 @@ fn derive_tool_call_id(session_id: &str, tool_name: &str, payload: &Value) -> Ar
 }
 
 fn extract_tool_call_id(value: &Value) -> Option<String> {
+    const MAX_DEPTH: usize = 16;
+    extract_tool_call_id_recursive(value, 0, MAX_DEPTH)
+}
+
+fn extract_tool_call_id_recursive(value: &Value, depth: usize, max_depth: usize) -> Option<String> {
+    if depth > max_depth {
+        return None;
+    }
     const ID_KEYS: &[&str] = &["tool_call_id", "tool_use_id", "tool_id", "item_id", "id"];
 
     match value {
@@ -203,9 +211,9 @@ fn extract_tool_call_id(value: &Value) -> Option<String> {
                     return Some(id.to_owned());
                 }
             }
-            map.values().find_map(extract_tool_call_id)
+            map.values().find_map(|v| extract_tool_call_id_recursive(v, depth + 1, max_depth))
         }
-        Value::Array(values) => values.iter().find_map(extract_tool_call_id),
+        Value::Array(values) => values.iter().find_map(|v| extract_tool_call_id_recursive(v, depth + 1, max_depth)),
         _ => None,
     }
 }
@@ -218,11 +226,7 @@ fn stable_tool_call_id(session_id: &str, tool_name: &str, payload: &Value) -> St
     hasher.update([0]);
     hasher.update(payload.to_string().as_bytes());
     let digest = hasher.finalize();
-    let mut suffix = String::with_capacity(16);
-    for byte in &digest[..8] {
-        #[allow(clippy::format_push_string)]
-        suffix.push_str(&format!("{byte:02x}"));
-    }
+    let suffix = hex::encode(&digest[..8]);
     let prefix = if tool_name.trim().is_empty() {
         "tool"
     } else {
