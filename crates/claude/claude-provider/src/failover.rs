@@ -199,6 +199,12 @@ impl FailoverProviderClient {
     }
 }
 
+/// Extract an HTTP status code from an error message by string matching.
+///
+/// NOTE: This approach is inherently fragile since it parses error display
+/// strings rather than structured error types. TODO: Replace with a proper
+/// error enum that carries the HTTP status as a typed field so that callers
+/// can match on it directly.
 fn extract_status_from_error(error: &anyhow::Error) -> Option<u16> {
     let msg = error.to_string();
 

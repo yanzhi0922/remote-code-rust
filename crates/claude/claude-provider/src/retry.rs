@@ -62,6 +62,9 @@ const PERSISTENT_MAX_BACKOFF_MS: u64 = 5 * 60 * 1000;
 /// Cap for persistent retry reset delay (6 hours).
 const PERSISTENT_RESET_CAP_MS: u64 = 6 * 60 * 60 * 1000;
 
+/// Wall-clock timeout for persistent retry mode (1 hour).
+const PERSISTENT_TIMEOUT: Duration = Duration::from_secs(60 * 60);
+
 /// Heartbeat interval for persistent retry mode (30 seconds).
 const HEARTBEAT_INTERVAL_MS: u64 = 30_000;
 
@@ -420,6 +423,10 @@ impl Default for RetryConfig {
 
 impl RetryConfig {
     /// Create a retry config from provider settings.
+    ///
+    /// Sets `max_retries`, `base_delay_ms`, and `max_backoff_ms` from the
+    /// given values. All other fields (`max_529_retries`, `respect_retry_after`,
+    /// `max_auth_retries`) use their defaults from [`RetryConfig::default`].
     #[must_use]
     pub fn from_provider(max_retries: u32, initial_backoff_ms: u64, max_backoff_ms: u64) -> Self {
         Self {
@@ -788,8 +795,10 @@ pub fn parse_max_tokens_overflow(body: &str) -> Option<u64> {
     }
 
     // Try to extract "X + Y > Z" from the error message.
-    let re = regex::Regex::new(r"(\d+)\s*\+\s*(\d+)\s*>\s*(\d+)").ok()?;
-    let caps = re.captures(body)?;
+    static RE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(r"(\d+)\s*\+\s*(\d+)\s*>\s*(\d+)").unwrap()
+    });
+    let caps = RE.captures(body)?;
     let input_tokens: u64 = caps[1].parse().ok()?;
     let context_limit: u64 = caps[3].parse().ok()?;
     // New max_tokens = context_limit - input_tokens - buffer
@@ -944,6 +953,7 @@ where
     let mut auth_retries: u32 = 0;
     let mut fast_mode_state = FastModeState::new(context.fast_mode);
     let mut persistent_attempt: u32 = 0;
+    let persistent_start = Instant::now();
 
     for attempt in 0..=config.max_retries {
         context.attempt = attempt + 1;
@@ -1134,6 +1144,14 @@ where
 
                 // --- Gap 4: Persistent retry mode ---
                 let persistent = is_persistent_retry_enabled() && (is_429 || is_529);
+
+                // Wall-clock timeout for persistent retry mode.
+                if persistent && persistent_start.elapsed() > PERSISTENT_TIMEOUT {
+                    return Err(error.context(format!(
+                        "persistent retry exceeded {:?} wall-clock limit",
+                        PERSISTENT_TIMEOUT
+                    )));
+                }
 
                 if attempt >= config.max_retries && !persistent && !header_says_retry {
                     return Err(error.context(format!(
