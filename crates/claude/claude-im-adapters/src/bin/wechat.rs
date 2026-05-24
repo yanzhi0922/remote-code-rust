@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use anyhow::{Result, anyhow};
 use axum::Router;
@@ -12,6 +12,13 @@ use tracing_subscriber::EnvFilter;
 
 use claude_im_adapters::webhook_auth::{validate_webhook_secret, verify_webhook_secret};
 use claude_im_adapters::{ImBridge, ImMessage, ImResponse, ImSender};
+
+/// Shared HTTP client for WeChat API requests.
+static WECHAT_CLIENT: OnceLock<Client> = OnceLock::new();
+
+fn shared_client() -> Client {
+    WECHAT_CLIENT.get_or_init(Client::new).clone()
+}
 
 #[derive(Debug, Deserialize)]
 struct VerifyQuery {
@@ -49,7 +56,7 @@ struct WechatSender {
 impl WechatSender {
     fn new(corp_id: String, corp_secret: String, agent_id: i64) -> Self {
         Self {
-            http: Client::new(),
+            http: shared_client(),
             corp_id,
             corp_secret,
             agent_id,
@@ -58,11 +65,9 @@ impl WechatSender {
     }
 
     async fn get_token(&self) -> Result<String> {
-        {
-            let guard = self.token.read().await;
-            if let Some(t) = guard.as_ref() {
-                return Ok(t.clone());
-            }
+        let mut guard = self.token.write().await;
+        if let Some(t) = guard.as_ref() {
+            return Ok(t.clone());
         }
         let url = format!(
             "https://qyapi.weixin.qq.com/cgi-bin/gettoken?corpid={}&corpsecret={}",
@@ -78,7 +83,7 @@ impl WechatSender {
         let token = resp
             .access_token
             .ok_or_else(|| anyhow::anyhow!("missing access_token"))?;
-        *self.token.write().await = Some(token.clone());
+        *guard = Some(token.clone());
         Ok(token)
     }
 }

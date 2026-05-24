@@ -10,7 +10,7 @@ pub struct CheckpointDiffer;
 impl CheckpointDiffer {
     /// Compute a unified diff between two strings.
     pub fn unified_diff(old: &str, new: &str, path: &str) -> String {
-        let mut output = String::new();
+        let mut output = String::with_capacity(old.len() + new.len());
         output.push_str(&format!("--- a/{path}\n"));
         output.push_str(&format!("+++ b/{path}\n"));
 

@@ -92,6 +92,8 @@ impl ContextMonitor {
     /// usage against a configurable max_input_tokens.
     pub fn evaluate(&self, config: &RuntimeConfig, store: &SessionStore) -> Result<ContextAdvice> {
         let conversation = store.load_conversation(config.session_id)?;
+        // Note: max_tokens here is the model's max output tokens, used only as metadata
+        // in the ContextAdvice variants. The actual context window comparison uses max_input.
         let max_tokens = config.provider.max_output_tokens.max(4096) as u64;
         let max_input: u64 = 200_000; // Claude's default context window
 

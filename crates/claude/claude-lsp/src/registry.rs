@@ -141,10 +141,12 @@ impl LspServerManager {
     pub fn register(&self, id: &str, config: LspServerConfig) {
         let instance = LspServerInstance::from_config(&config, &self.root_uri);
 
-        // Update language mapping
-        let mut lang_map = self.language_map.write();
-        for lang in &config.languages {
-            lang_map.insert(lang.to_lowercase(), id.to_string());
+        // Update language mapping first, then drop the lock before acquiring instances.
+        {
+            let mut lang_map = self.language_map.write();
+            for lang in &config.languages {
+                lang_map.insert(lang.to_lowercase(), id.to_string());
+            }
         }
 
         self.instances.write().insert(id.to_string(), instance);

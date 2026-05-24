@@ -69,8 +69,9 @@ impl PeerSessionManager {
             endpoint: None,
         };
         let id = session.session_id;
+        let clone = session.clone();
         self.sessions.insert(id, session);
-        self.sessions.get(&id).cloned().unwrap()
+        clone
     }
 
     /// Accept an incoming peer session invitation.

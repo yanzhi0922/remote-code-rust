@@ -835,6 +835,8 @@ impl ProviderClient {
             // Parse complete event stream frames from the buffer.
             while buffer.len() >= 12 {
                 // Minimum frame size: 4 (total_len) + 4 (headers_len) + 4 (prelude_crc)
+                // u32-to-usize is safe: usize >= 32 bits on all supported targets.
+                #[allow(clippy::cast_possible_truncation)]
                 let total_len =
                     u32::from_be_bytes([buffer[0], buffer[1], buffer[2], buffer[3]]) as usize;
                 if total_len < 14 {
@@ -849,6 +851,8 @@ impl ProviderClient {
                     break; // Incomplete frame, wait for more data.
                 }
 
+                // u32-to-usize is safe: usize >= 32 bits on all supported targets.
+                #[allow(clippy::cast_possible_truncation)]
                 let headers_len =
                     u32::from_be_bytes([buffer[4], buffer[5], buffer[6], buffer[7]]) as usize;
 

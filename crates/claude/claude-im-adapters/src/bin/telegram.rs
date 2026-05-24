@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use anyhow::{Result, anyhow};
 use axum::extract::{Path, State};
@@ -13,6 +13,13 @@ use claude_im_adapters::webhook_auth::{
     append_secret_to_webhook_url, validate_webhook_secret, verify_webhook_secret,
 };
 use claude_im_adapters::{ImBridge, ImMessage, ImResponse, ImSender};
+
+/// Shared HTTP client for Telegram API requests.
+static TELEGRAM_CLIENT: OnceLock<Client> = OnceLock::new();
+
+fn shared_client() -> Client {
+    TELEGRAM_CLIENT.get_or_init(Client::new).clone()
+}
 
 #[derive(Debug, Deserialize)]
 struct Update {
@@ -58,7 +65,7 @@ struct TelegramSender {
 impl TelegramSender {
     fn new(bot_token: String) -> Self {
         Self {
-            client: Client::new(),
+            client: shared_client(),
             bot_token,
         }
     }

@@ -25,7 +25,7 @@ use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 use tracing::{debug, warn};
 
@@ -311,7 +311,7 @@ pub struct HttpConnection {
     status: Arc<std::sync::Mutex<IdeStatus>>,
     outbox: Arc<Mutex<Vec<String>>>,
     http_client: Option<reqwest::blocking::Client>,
-    retry_count: AtomicU64,
+    retry_count: AtomicU32,
     max_retries: u32,
     backoff_base_ms: u64,
 }
@@ -324,7 +324,7 @@ impl HttpConnection {
             status: Arc::new(std::sync::Mutex::new(IdeStatus::Disconnected)),
             outbox: Arc::new(Mutex::new(Vec::new())),
             http_client: None,
-            retry_count: AtomicU64::new(0),
+            retry_count: AtomicU32::new(0),
             max_retries: 5,
             backoff_base_ms: 100,
         }
@@ -337,7 +337,7 @@ impl HttpConnection {
             status: Arc::new(std::sync::Mutex::new(IdeStatus::Disconnected)),
             outbox: Arc::new(Mutex::new(Vec::new())),
             http_client: None,
-            retry_count: AtomicU64::new(0),
+            retry_count: AtomicU32::new(0),
             max_retries,
             backoff_base_ms,
         }
@@ -358,14 +358,15 @@ impl HttpConnection {
     }
 
     /// Return the current retry count.
-    pub fn retry_count(&self) -> u64 {
+    pub fn retry_count(&self) -> u32 {
         self.retry_count.load(Ordering::SeqCst)
     }
 
     /// Compute the backoff duration for the current retry attempt.
     pub fn backoff_duration(&self) -> Duration {
         let attempt = self.retry_count.load(Ordering::SeqCst);
-        let millis = self.backoff_base_ms * 2u64.pow(u32::try_from(attempt).unwrap_or(0));
+        let exp = attempt.min(10); // cap at 2^10
+        let millis = self.backoff_base_ms.saturating_mul(1u64 << exp);
         Duration::from_millis(millis)
     }
 
@@ -374,7 +375,7 @@ impl HttpConnection {
         self.set_status(IdeStatus::Reconnecting);
 
         let attempt = self.retry_count.fetch_add(1, Ordering::SeqCst);
-        if attempt >= self.max_retries as u64 {
+        if attempt >= self.max_retries {
             warn!(attempt, max = self.max_retries, "Max retries exceeded");
             self.set_status(IdeStatus::Disconnected);
             return Err(anyhow::anyhow!(

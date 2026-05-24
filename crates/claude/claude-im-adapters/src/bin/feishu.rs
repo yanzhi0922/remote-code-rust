@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use anyhow::{Result, anyhow};
 use axum::Router;
@@ -11,6 +11,13 @@ use tracing_subscriber::EnvFilter;
 
 use claude_im_adapters::webhook_auth::{validate_webhook_secret, verify_webhook_secret};
 use claude_im_adapters::{ImBridge, ImMessage, ImResponse, ImSender};
+
+/// Shared HTTP client for Feishu API requests.
+static FEISHU_CLIENT: OnceLock<Client> = OnceLock::new();
+
+fn shared_client() -> Client {
+    FEISHU_CLIENT.get_or_init(Client::new).clone()
+}
 
 #[derive(Debug, Deserialize)]
 struct FeishuUrlVerification {
@@ -55,7 +62,7 @@ struct FeishuClient {
 impl FeishuClient {
     fn new(app_id: String, app_secret: String) -> Self {
         Self {
-            http: Client::new(),
+            http: shared_client(),
             app_id,
             app_secret,
             token: tokio::sync::RwLock::new(None),
@@ -63,11 +70,9 @@ impl FeishuClient {
     }
 
     async fn get_token(&self) -> Result<String> {
-        {
-            let guard = self.token.read().await;
-            if let Some(t) = guard.as_ref() {
-                return Ok(t.clone());
-            }
+        let mut guard = self.token.write().await;
+        if let Some(t) = guard.as_ref() {
+            return Ok(t.clone());
         }
         let resp: FeishuTokenResponse = self
             .http
@@ -80,7 +85,7 @@ impl FeishuClient {
         let token = resp
             .tenant_access_token
             .ok_or_else(|| anyhow::anyhow!("missing tenant_access_token"))?;
-        *self.token.write().await = Some(token.clone());
+        *guard = Some(token.clone());
         Ok(token)
     }
 }

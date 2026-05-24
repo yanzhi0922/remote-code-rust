@@ -259,6 +259,8 @@ impl IdeBridge {
 
         if let Ok(mut queue) = self.outgoing.lock() {
             queue.push(payload);
+        } else {
+            warn!("Failed to acquire outgoing lock — notification dropped");
         }
         Ok(())
     }
@@ -315,6 +317,8 @@ impl IdeBridge {
         // Enqueue the serialized request for the transport layer.
         if let Ok(mut queue) = self.outgoing.lock() {
             queue.push(payload);
+        } else {
+            warn!("Failed to acquire outgoing lock — notification dropped");
         }
 
         // Check if a response was already received for this request ID.
@@ -380,6 +384,8 @@ impl IdeBridge {
                 }
             };
             pending.insert(id, ide_response);
+        } else if self.pending_responses.lock().is_err() {
+            warn!("Failed to acquire pending_responses lock — response dropped");
         }
 
         Ok(())
@@ -394,7 +400,10 @@ impl IdeBridge {
     pub fn drain_outgoing(&self) -> Vec<String> {
         match self.outgoing.lock() {
             Ok(mut queue) => std::mem::take(&mut *queue),
-            Err(_) => Vec::new(),
+            Err(e) => {
+                warn!("Failed to acquire outgoing lock: {e} — messages lost");
+                Vec::new()
+            }
         }
     }
 
