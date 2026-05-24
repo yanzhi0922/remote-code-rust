@@ -14,7 +14,13 @@ use super::types::{
     OAuthConfig, OAuthFlowResult, OAuthProfileResponse, OAuthTokenExchangeResponse, OAuthTokens,
 };
 
-static SHARED_HTTP_CLIENT: Lazy<reqwest::Client> = Lazy::new(reqwest::Client::new);
+static SHARED_HTTP_CLIENT: Lazy<reqwest::Client> = Lazy::new(|| {
+    reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .pool_idle_timeout(std::time::Duration::from_secs(90))
+        .build()
+        .expect("failed to build shared OAuth HTTP client")
+});
 
 /// Errors produced by the OAuth client.
 #[derive(Debug, thiserror::Error)]

@@ -104,13 +104,27 @@ impl AuthCodeListener {
         // Accept a single connection
         let (stream, _) = self.listener.accept().await?;
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
-        let mut buf = vec![0u8; 4096];
+        let mut buf = vec![0u8; 8192];
         let mut stream = stream;
-        let n = stream
-            .read(&mut buf)
-            .await
-            .map_err(AuthCodeListenerError::Io)?;
-        let request = String::from_utf8_lossy(&buf[..n]);
+        let mut total = 0;
+        // Read until we find the end-of-headers marker or fill the buffer.
+        // OAuth callback requests are small (well under 8 KB), but some
+        // browsers send extra headers. Up to 3 read attempts ensures we
+        // capture the full request even with small initial TCP segments.
+        for _ in 0..3 {
+            let n = stream
+                .read(&mut buf[total..])
+                .await
+                .map_err(AuthCodeListenerError::Io)?;
+            total += n;
+            if n == 0 || buf[..total].windows(4).any(|w| w == b"\r\n\r\n") {
+                break;
+            }
+            if total >= buf.len() {
+                break;
+            }
+        }
+        let request = String::from_utf8_lossy(&buf[..total]);
 
         // Parse the HTTP request line to extract the path + query
         let first_line = match request.lines().next() {

@@ -316,11 +316,15 @@ async fn execute_aws_credential_export(command: &str) -> Result<AwsCredentials, 
 
 /// Execute `gcloud auth print-access-token` to obtain a GCP access token.
 async fn execute_gcloud_auth() -> Result<String, ProviderAuthError> {
-    let output = tokio::process::Command::new("gcloud")
-        .args(["auth", "print-access-token"])
-        .output()
-        .await
-        .map_err(|e| ProviderAuthError::GcpAuthFailed(e.to_string()))?;
+    let output = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        tokio::process::Command::new("gcloud")
+            .args(["auth", "print-access-token"])
+            .output(),
+    )
+    .await
+    .map_err(|_| ProviderAuthError::GcpAuthFailed("gcloud auth timed out after 30s".to_owned()))?
+    .map_err(|e| ProviderAuthError::GcpAuthFailed(e.to_string()))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);

@@ -421,8 +421,9 @@ fn secrets_dir() -> Result<std::path::PathBuf, SecureStorageError> {
 }
 
 fn safe_filename(service: &str, account: &str) -> String {
-    use std::hash::{Hash, Hasher};
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    format!("{service}:{account}").hash(&mut hasher);
-    format!("{:016x}.secret", hasher.finish())
+    use sha2::{Digest, Sha256};
+    let input = format!("{service}:{account}");
+    let hash = Sha256::digest(input.as_bytes());
+    // Use the first 16 bytes (128 bits) for a reasonably short filename.
+    format!("{:032x}.secret", u128::from_be_bytes(hash[..16].try_into().expect("16 bytes")))
 }

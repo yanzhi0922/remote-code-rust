@@ -355,7 +355,7 @@ fn shell_command(command: &str) -> tokio::process::Command {
 
     #[cfg(not(windows))]
     {
-        let mut process = tokio::process::Command::new("sh");
+        let mut process = tokio::process::Command::new("/bin/sh");
         process.args(["-c", command]);
         process
     }
