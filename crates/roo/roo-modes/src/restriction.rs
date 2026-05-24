@@ -74,6 +74,7 @@ pub fn check_file_restriction(
 ) -> Result<(), FileRestrictionError> {
     let re = Regex::new(pattern).unwrap_or_else(|_| {
         // If the pattern is invalid, create a regex that never matches
+        // SAFE: invariant guaranteed by construction — compile-time constant regex
         Regex::new("$^").unwrap()
     });
 

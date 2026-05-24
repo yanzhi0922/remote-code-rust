@@ -238,9 +238,8 @@ impl SimpleInstaller {
             .ok_or(InstallError::McpMissingContent)?;
 
         // Get the content to use
-        let mut content_to_use = if content_value.is_array() {
+        let mut content_to_use = if let Some(arr) = content_value.as_array() {
             let index = options.selected_index.unwrap_or(0);
-            let arr = content_value.as_array().unwrap();
             let method = arr.get(index).or_else(|| arr.first());
             match method {
                 Some(m) => m

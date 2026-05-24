@@ -47,7 +47,7 @@ pub fn extract_blocks(content: &str) -> Vec<IndentationBlock> {
         } else if indent < block_indent {
             // Dedented below block start — end current block, start new
             blocks.push(IndentationBlock {
-                start_line: current_block_start.unwrap(),
+                start_line: current_block_start.unwrap(), // SAFE: guaranteed Some — first iteration always sets block_indent >= 0 and current_block_start = Some(0)
                 end_line: line_num - 1,
                 content: current_content.clone(),
                 indent_level: block_indent,
@@ -61,7 +61,7 @@ pub fn extract_blocks(content: &str) -> Vec<IndentationBlock> {
             if seen_deeper {
                 // Returned to block indent after deeper content — new sibling block
                 blocks.push(IndentationBlock {
-                    start_line: current_block_start.unwrap(),
+                    start_line: current_block_start.unwrap(), // SAFE: guaranteed Some — seen_deeper requires a prior deeper block, which requires current_block_start to be set
                     end_line: line_num - 1,
                     content: current_content.clone(),
                     indent_level: block_indent,

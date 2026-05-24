@@ -73,11 +73,9 @@ pub struct ExportData {
 ///
 /// Source: `importExport.ts` — `sanitizeProviderConfig`
 pub fn sanitize_provider_config(config_name: &str, api_config: &Value) -> (Value, Option<String>) {
-    if !api_config.is_object() {
+    let Some(obj) = api_config.as_object() else {
         return (api_config.clone(), None);
-    }
-
-    let obj = api_config.as_object().unwrap();
+    };
 
     // Valid provider names
     let valid_providers = [

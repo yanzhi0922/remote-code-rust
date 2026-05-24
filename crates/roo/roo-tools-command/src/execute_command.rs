@@ -45,7 +45,7 @@ pub fn unescape_command(command: &str) -> String {
         .replace("&apos;", "'");
 
     // Handle hex numeric references: &#xHH; or &#XHH;
-    let hex_re = regex::Regex::new(r"&#[xX]([0-9a-fA-F]+);").unwrap();
+    let hex_re = regex::Regex::new(r"&#[xX]([0-9a-fA-F]+);").unwrap(); // SAFE: invariant guaranteed by construction
     let hex_result = hex_re.replace_all(&result, |caps: &regex::Captures| {
         if let Ok(code) = u32::from_str_radix(&caps[1], 16) {
             char::from_u32(code).map_or_else(|| caps[0].to_string(), |c| c.to_string())
@@ -56,7 +56,7 @@ pub fn unescape_command(command: &str) -> String {
     result = hex_result.into_owned();
 
     // Handle decimal numeric references: &#NN;
-    let dec_re = regex::Regex::new(r"&#(\d+);").unwrap();
+    let dec_re = regex::Regex::new(r"&#(\d+);").unwrap(); // SAFE: invariant guaranteed by construction
     let dec_result = dec_re.replace_all(&result, |caps: &regex::Captures| {
         if let Ok(code) = caps[1].parse::<u32>() {
             char::from_u32(code).map_or_else(|| caps[0].to_string(), |c| c.to_string())
@@ -193,10 +193,10 @@ impl<'a> StreamingCallbacks<'a> {
 
     /// Emit throttled partial output.
     fn maybe_emit(&self) {
-        let mut last = self.last_emit.lock().unwrap();
+        let mut last = self.last_emit.lock().unwrap_or_else(|e| e.into_inner());
         let elapsed = last.elapsed().as_millis() as u64;
         if elapsed >= self.throttle_ms {
-            let acc = self.accumulated.lock().unwrap();
+            let acc = self.accumulated.lock().unwrap_or_else(|e| e.into_inner());
             if !acc.is_empty() {
                 self.streamer.on_output(&acc, true);
             }
@@ -208,7 +208,7 @@ impl<'a> StreamingCallbacks<'a> {
 impl TerminalCallbacks for StreamingCallbacks<'_> {
     fn on_line(&self, line: &str) {
         const MAX_ACCUMULATED: usize = 100_000;
-        let mut acc = self.accumulated.lock().unwrap();
+        let mut acc = self.accumulated.lock().unwrap_or_else(|e| e.into_inner());
         acc.push_str(line);
         acc.push('\n');
         if acc.len() > MAX_ACCUMULATED {
@@ -221,7 +221,7 @@ impl TerminalCallbacks for StreamingCallbacks<'_> {
 
     fn on_completed(&self, result: &CommandResult) {
         // Final emit (non-partial).
-        let acc = self.accumulated.lock().unwrap();
+        let acc = self.accumulated.lock().unwrap_or_else(|e| e.into_inner());
         let final_output = if result.full_output().len() > acc.len() {
             result.full_output()
         } else {

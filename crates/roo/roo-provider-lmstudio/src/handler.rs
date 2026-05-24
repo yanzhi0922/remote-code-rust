@@ -77,8 +77,8 @@ impl TagMatcher {
             let next = match (open_idx, close_idx) {
                 (Some(o), Some(c)) if o <= c => Some(("open", o)),
                 (Some(_), Some(c)) => Some(("close", c)),
-                (Some(_), None) => Some(("open", open_idx.unwrap())),
-                (None, Some(_)) => Some(("close", close_idx.unwrap())),
+                (Some(_), None) => Some(("open", open_idx.unwrap())), // SAFE: match arm guarantees Some
+                (None, Some(_)) => Some(("close", close_idx.unwrap())), // SAFE: match arm guarantees Some
                 (None, None) => None,
             };
 
@@ -225,7 +225,10 @@ impl LmStudioHandler {
     pub async fn fetch_models(&self) -> Result<ModelRecord> {
         // Check cache first
         {
-            let cache = self.dynamic_models.read().unwrap();
+            let cache = self
+                .dynamic_models
+                .read()
+                .unwrap_or_else(|e| e.into_inner());
             if let Some(ref models) = *cache {
                 return Ok(models.clone());
             }
@@ -243,14 +246,20 @@ impl LmStudioHandler {
             Err(_) => {
                 // For local providers, connection failure is expected if not running
                 let empty: ModelRecord = HashMap::new();
-                *self.dynamic_models.write().unwrap() = Some(empty.clone());
+                *self
+                    .dynamic_models
+                    .write()
+                    .unwrap_or_else(|e| e.into_inner()) = Some(empty.clone());
                 return Ok(empty);
             }
         };
 
         if !response.status().is_success() {
             let empty: ModelRecord = HashMap::new();
-            *self.dynamic_models.write().unwrap() = Some(empty.clone());
+            *self
+                .dynamic_models
+                .write()
+                .unwrap_or_else(|e| e.into_inner()) = Some(empty.clone());
             return Ok(empty);
         }
 
@@ -279,7 +288,10 @@ impl LmStudioHandler {
         }
 
         // Cache result
-        *self.dynamic_models.write().unwrap() = Some(model_map.clone());
+        *self
+            .dynamic_models
+            .write()
+            .unwrap_or_else(|e| e.into_inner()) = Some(model_map.clone());
 
         Ok(model_map)
     }
@@ -323,7 +335,7 @@ impl Provider for LmStudioHandler {
             let m = matcher.clone();
             let results: Vec<Result<ApiStreamChunk>> = match chunk_result {
                 Ok(ApiStreamChunk::Text { ref text }) => {
-                    let mut guard = m.lock().unwrap();
+                    let mut guard = m.lock().unwrap_or_else(|e| e.into_inner());
                     let tag_results = guard.update(text);
                     tag_results
                         .into_iter()

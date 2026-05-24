@@ -230,7 +230,7 @@ fn format_reasoning_text(reasoning: &str) -> String {
 
     // Add line breaks before **Title** patterns that appear after sentence endings
     // Regex: ([.!?])\*\*([^\*\n]+)\*\* → $1\n\n**$2**
-    let re = regex::Regex::new(r"([.!?])\*\*([^\*\n]+)\*\*").unwrap();
+    let re = regex::Regex::new(r"([.!?])\*\*([^\*\n]+)\*\*").unwrap(); // SAFE: invariant guaranteed by construction
     re.replace_all(reasoning, "$1\n\n**$2**").to_string()
 }
 

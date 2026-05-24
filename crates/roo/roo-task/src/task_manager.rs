@@ -48,20 +48,39 @@ impl TaskManager {
     /// Create a task: insert the lifecycle and set it as the active task.
     pub fn create_task(&self, task_id: String, lifecycle: TaskLifecycle) {
         let wrapped = Arc::new(tokio::sync::Mutex::new(lifecycle));
-        self.tasks.lock().unwrap().insert(task_id.clone(), wrapped);
-        *self.active_task_id.lock().unwrap() = Some(task_id);
+        self.tasks
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(task_id.clone(), wrapped);
+        *self
+            .active_task_id
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some(task_id);
     }
 
     /// Get a task lifecycle by its ID.
     pub fn get_task(&self, task_id: &str) -> Option<Arc<tokio::sync::Mutex<TaskLifecycle>>> {
-        self.tasks.lock().unwrap().get(task_id).cloned()
+        self.tasks
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(task_id)
+            .cloned()
     }
 
     /// Get the currently active task lifecycle.
     pub fn get_active_task(&self) -> Option<Arc<tokio::sync::Mutex<TaskLifecycle>>> {
-        let active_id = self.active_task_id.lock().unwrap().clone();
+        let active_id = self
+            .active_task_id
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
         match active_id {
-            Some(ref id) => self.tasks.lock().unwrap().get(id).cloned(),
+            Some(ref id) => self
+                .tasks
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .get(id)
+                .cloned(),
             None => None,
         }
     }
@@ -70,8 +89,16 @@ impl TaskManager {
     ///
     /// No-op if the task ID is not found in the task map.
     pub fn set_active_task(&self, task_id: &str) {
-        if self.tasks.lock().unwrap().contains_key(task_id) {
-            *self.active_task_id.lock().unwrap() = Some(task_id.to_string());
+        if self
+            .tasks
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains_key(task_id)
+        {
+            *self
+                .active_task_id
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()) = Some(task_id.to_string());
         }
     }
 
@@ -80,9 +107,16 @@ impl TaskManager {
     /// If the removed task was the active task, the active task is cleared.
     /// Returns the removed lifecycle, if any.
     pub fn remove_task(&self, task_id: &str) -> Option<Arc<tokio::sync::Mutex<TaskLifecycle>>> {
-        let removed = self.tasks.lock().unwrap().remove(task_id);
+        let removed = self
+            .tasks
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(task_id);
         if removed.is_some() {
-            let mut active = self.active_task_id.lock().unwrap();
+            let mut active = self
+                .active_task_id
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             if active.as_deref() == Some(task_id) {
                 *active = None;
             }
@@ -92,7 +126,12 @@ impl TaskManager {
 
     /// List all task IDs.
     pub fn list_tasks(&self) -> Vec<String> {
-        self.tasks.lock().unwrap().keys().cloned().collect()
+        self.tasks
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .keys()
+            .cloned()
+            .collect()
     }
 }
 

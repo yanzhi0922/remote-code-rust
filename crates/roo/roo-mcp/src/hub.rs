@@ -329,7 +329,7 @@ impl McpHub {
     /// file watchers are set up. This enables spawned tasks to call
     /// back into the hub.
     pub fn initialize_weak_self(self: &Arc<Self>) {
-        *self.weak_self.lock().unwrap() = Some(Arc::downgrade(self));
+        *self.weak_self.lock().unwrap_or_else(|e| e.into_inner()) = Some(Arc::downgrade(self));
     }
 
     /// Register a client (increment reference count).
@@ -1733,7 +1733,11 @@ impl McpHub {
         } = config
         {
             // Get the weak self reference for the spawned tasks
-            let weak_hub = self.weak_self.lock().unwrap().clone();
+            let weak_hub = self
+                .weak_self
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone();
             let weak_hub = match weak_hub {
                 Some(w) => w,
                 None => {

@@ -203,6 +203,7 @@ impl MultiSearchReplaceDiffStrategy {
     pub fn apply_diff(&self, original_content: &str, diff_content: &str) -> DiffResult {
         let valid_seq = validate_marker_sequencing(diff_content);
         if !valid_seq.success {
+            // SAFE: invariant guaranteed by construction — validate_marker_sequencing sets error when !success
             return DiffResult::fail(valid_seq.error.unwrap());
         }
 

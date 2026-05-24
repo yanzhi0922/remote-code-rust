@@ -314,8 +314,8 @@ fn merge_user_content(last: &mut Value, new_content: &Value) {
 
 /// Convert a content value to a Vec of content parts.
 fn content_to_array(content: &Value) -> Vec<Value> {
-    if content.is_array() {
-        content.as_array().unwrap().clone()
+    if let Some(arr) = content.as_array() {
+        arr.clone()
     } else if content.is_string() {
         vec![json!({ "type": "text", "text": content })]
     } else {

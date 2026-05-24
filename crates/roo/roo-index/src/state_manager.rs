@@ -81,17 +81,24 @@ impl CodeIndexStateManager {
 
     /// Returns the current indexing state.
     pub fn state(&self) -> IndexingState {
-        self.status.lock().unwrap().system_status.clone()
+        self.status
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .system_status
+            .clone()
     }
 
     /// Returns the current status.
     pub fn get_current_status(&self) -> IndexingStatus {
-        self.status.lock().unwrap().clone()
+        self.status
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 
     /// Sets the system state with an optional message.
     pub fn set_system_state(&self, new_state: IndexingState, message: Option<&str>) {
-        let mut status = self.status.lock().unwrap();
+        let mut status = self.status.lock().unwrap_or_else(|e| e.into_inner());
 
         let state_changed = new_state != status.system_status
             || message.is_some() && message != Some(status.message.as_str());
@@ -127,7 +134,7 @@ impl CodeIndexStateManager {
 
     /// Reports block indexing progress.
     pub fn report_block_indexing_progress(&self, processed_items: usize, total_items: usize) {
-        let mut status = self.status.lock().unwrap();
+        let mut status = self.status.lock().unwrap_or_else(|e| e.into_inner());
 
         // Don't override Stopping state with progress updates
         if status.system_status == IndexingState::Stopping {
@@ -173,7 +180,7 @@ impl CodeIndexStateManager {
         total_files: usize,
         current_file_basename: Option<&str>,
     ) {
-        let mut status = self.status.lock().unwrap();
+        let mut status = self.status.lock().unwrap_or_else(|e| e.into_inner());
 
         // Don't override Stopping state with progress updates
         if status.system_status == IndexingState::Stopping {

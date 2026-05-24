@@ -35,12 +35,12 @@ pub fn parse_markdown(content: &str) -> Vec<MarkdownCapture> {
     let mut captures = Vec::new();
 
     // Regular expressions for different header types
-    let atx_header_re = regex::Regex::new(r"^(#{1,6})\s+(.+)$").unwrap();
+    let atx_header_re = regex::Regex::new(r"^(#{1,6})\s+(.+)$").unwrap(); // SAFE: invariant guaranteed by construction
     // Setext headers must have at least 3 = or - characters
-    let setext_h1_re = regex::Regex::new(r"^={3,}\s*$").unwrap();
-    let setext_h2_re = regex::Regex::new(r"^-{3,}\s*$").unwrap();
+    let setext_h1_re = regex::Regex::new(r"^={3,}\s*$").unwrap(); // SAFE: invariant guaranteed by construction
+    let setext_h2_re = regex::Regex::new(r"^-{3,}\s*$").unwrap(); // SAFE: invariant guaranteed by construction
     // Valid setext header text line should be plain text
-    let valid_setext_text_re = regex::Regex::new(r"^\s*[^#<>\[\]`\t]+[^\n]$").unwrap();
+    let valid_setext_text_re = regex::Regex::new(r"^\s*[^#<>\[\]`\t]+[^\n]$").unwrap(); // SAFE: invariant guaranteed by construction
 
     // Find all headers in the document
     for i in 0..lines.len() {
@@ -218,7 +218,7 @@ pub fn format_markdown_captures(
 
 /// Extract header level from capture name (e.g., "definition.header.h2" -> 2).
 fn extract_header_level(name: &str) -> usize {
-    let re = regex::Regex::new(r"\.h(\d)$").unwrap();
+    let re = regex::Regex::new(r"\.h(\d)$").unwrap(); // SAFE: invariant guaranteed by construction
     if let Some(caps) = re.captures(name) {
         caps[1].parse::<usize>().unwrap_or(1)
     } else {

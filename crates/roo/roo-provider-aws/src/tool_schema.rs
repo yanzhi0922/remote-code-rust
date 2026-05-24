@@ -38,6 +38,7 @@ pub fn normalize_tool_schema(schema: &mut Value) {
                     .collect();
                 let has_null = types.iter().any(|t| t.as_str() == Some("null"));
                 if has_null && non_null.len() == 1 {
+                    // SAFE: invariant guaranteed by construction — checked len == 1 above
                     let non_null_val = non_null.into_iter().next().unwrap();
                     map.insert("type".to_string(), non_null_val.clone());
                     map.entry("anyOf".to_string()).or_insert_with(|| {

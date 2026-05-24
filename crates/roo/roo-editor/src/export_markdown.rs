@@ -95,7 +95,7 @@ pub fn format_content_block_to_markdown(block: &ContentBlock) -> String {
             let input_str = if input.is_object() {
                 input
                     .as_object()
-                    .unwrap()
+                    .unwrap() // SAFE: guarded by is_object() check above
                     .iter()
                     .map(|(key, value)| {
                         let formatted_key = capitalize_first(key);
@@ -153,7 +153,7 @@ pub fn conversation_to_markdown(messages: &[ConversationMessage]) -> String {
                 message
                     .content
                     .as_array()
-                    .unwrap()
+                    .unwrap() // SAFE: guarded by is_array() check above
                     .iter()
                     .map(format_value_to_markdown)
                     .collect::<Vec<_>>()
@@ -186,7 +186,9 @@ pub async fn write_markdown_to_file(
 pub fn find_tool_name(tool_call_id: &str, messages: &[ConversationMessage]) -> String {
     for message in messages {
         if message.content.is_array() {
-            for block in message.content.as_array().unwrap() {
+            for block in message.content.as_array().unwrap()
+            // SAFE: guarded by is_array() check above
+            {
                 if let Some(block_type) = block.get("type")
                     && block_type == "tool_use"
                     && block.get("id").and_then(|v| v.as_str()) == Some(tool_call_id)

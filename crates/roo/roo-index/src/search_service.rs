@@ -175,7 +175,7 @@ impl VectorStore for InMemoryVectorStore {
         min_score: f64,
         max_results: usize,
     ) -> Result<Vec<VectorStoreSearchResult>, IndexError> {
-        let entries = self.entries.lock().unwrap();
+        let entries = self.entries.lock().unwrap_or_else(|e| e.into_inner());
 
         let mut results: Vec<VectorStoreSearchResult> = entries
             .iter()
@@ -247,7 +247,11 @@ impl VectorStore for InMemoryVectorStore {
     }
 
     fn has_indexed_data(&self) -> Result<bool, IndexError> {
-        Ok(!self.entries.lock().unwrap().is_empty())
+        Ok(!self
+            .entries
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .is_empty())
     }
 
     fn upsert(
@@ -256,7 +260,7 @@ impl VectorStore for InMemoryVectorStore {
         vectors: &[Vec<f64>],
         payloads: &[serde_json::Value],
     ) -> Result<(), IndexError> {
-        let mut entries = self.entries.lock().unwrap();
+        let mut entries = self.entries.lock().unwrap_or_else(|e| e.into_inner());
         for ((id, vector), payload) in ids.iter().zip(vectors.iter()).zip(payloads.iter()) {
             entries.push(VectorStoreEntry {
                 id: id.clone(),
@@ -268,7 +272,7 @@ impl VectorStore for InMemoryVectorStore {
     }
 
     fn delete_by_prefix(&self, prefix: &str) -> Result<(), IndexError> {
-        let mut entries = self.entries.lock().unwrap();
+        let mut entries = self.entries.lock().unwrap_or_else(|e| e.into_inner());
         entries.retain(|e| {
             let file_path = e
                 .payload

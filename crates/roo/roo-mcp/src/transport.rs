@@ -199,6 +199,26 @@ impl McpTransport for StdioTransport {
             (self.command.clone(), self.args.clone())
         };
 
+        // Log the MCP server command being spawned for auditability.
+        tracing::info!("Spawning MCP server: {command} {:?}", args);
+
+        // Validate that the command is either an absolute path or a known safe binary.
+        // This reduces the risk of PATH-hijacking when spawning MCP servers from config.
+        let bare_cmd = command.trim_matches(|c| c == '"' || c == '\'');
+        let is_absolute = bare_cmd.starts_with('/')
+            || bare_cmd.starts_with('\\')
+            || (bare_cmd.len() >= 2 && bare_cmd.as_bytes().get(1).map_or(false, |&b| b == b':'));
+        let known_safe_binaries = [
+            "npx", "node", "python", "python3", "uvx", "uv", "cmd.exe", "cmd",
+        ];
+        let is_known_safe = known_safe_binaries.iter().any(|&safe| bare_cmd == safe);
+        if !is_absolute && !is_known_safe {
+            tracing::warn!(
+                "MCP server command '{command}' is not an absolute path or known safe binary — \
+                 consider using an absolute path to reduce PATH-hijacking risk"
+            );
+        }
+
         let mut cmd = Command::new(&command);
         cmd.args(&args)
             .stdin(std::process::Stdio::piped())

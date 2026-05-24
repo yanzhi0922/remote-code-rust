@@ -21,6 +21,15 @@ pub fn validate_definition(definition: &CustomToolDefinition) -> Result<(), Cust
         ));
     }
 
+    // Validate script paths are within the workspace (no absolute paths or traversal)
+    if let Some(path) = &definition.path {
+        if path.starts_with('/') || path.contains("..") {
+            return Err(CustomToolError::InvalidDefinition(
+                "Script path must be relative and within the workspace (no absolute paths or '..' traversal)".to_string(),
+            ));
+        }
+    }
+
     // Validate parameters_schema is an object or null
     match &definition.parameters_schema {
         serde_json::Value::Null => {}

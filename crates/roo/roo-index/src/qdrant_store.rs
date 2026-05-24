@@ -589,10 +589,12 @@ impl QdrantVectorStore {
                         .map(|(i, seg)| (i.to_string(), json!(seg)))
                         .collect();
                     let mut merged = payload.clone();
-                    merged.as_object_mut().unwrap().insert(
-                        "pathSegments".to_string(),
-                        serde_json::Value::Object(path_segments),
-                    );
+                    if let Some(obj) = merged.as_object_mut() {
+                        obj.insert(
+                            "pathSegments".to_string(),
+                            serde_json::Value::Object(path_segments),
+                        );
+                    }
                     merged
                 } else {
                     payload.clone()

@@ -264,12 +264,12 @@ fn natural_cmp(a: &str, b: &str) -> std::cmp::Ordering {
 
                 if a_is_digit && b_is_digit {
                     // Both are digits — consume the full numeric run and compare by value
-                    let mut a_num: u64 = ac.to_digit(10).unwrap() as u64;
-                    let mut b_num: u64 = bc.to_digit(10).unwrap() as u64;
+                    let mut a_num: u64 = ac.to_digit(10).unwrap() as u64; // SAFE: is_ascii_digit guard guarantees success
+                    let mut b_num: u64 = bc.to_digit(10).unwrap() as u64; // SAFE: is_ascii_digit guard guarantees success
 
                     while let Some(&d) = a_chars.peek() {
                         if d.is_ascii_digit() {
-                            a_num = a_num * 10 + d.to_digit(10).unwrap() as u64;
+                            a_num = a_num * 10 + d.to_digit(10).unwrap() as u64; // SAFE: is_ascii_digit guard guarantees success
                             a_chars.next();
                         } else {
                             break;
@@ -277,7 +277,7 @@ fn natural_cmp(a: &str, b: &str) -> std::cmp::Ordering {
                     }
                     while let Some(&d) = b_chars.peek() {
                         if d.is_ascii_digit() {
-                            b_num = b_num * 10 + d.to_digit(10).unwrap() as u64;
+                            b_num = b_num * 10 + d.to_digit(10).unwrap() as u64; // SAFE: is_ascii_digit guard guarantees success
                             b_chars.next();
                         } else {
                             break;
@@ -290,8 +290,8 @@ fn natural_cmp(a: &str, b: &str) -> std::cmp::Ordering {
                     }
                 } else if !a_is_digit && !b_is_digit {
                     // Both non-digit — case-insensitive comparison (sensitivity: "base")
-                    let a_lower = ac.to_lowercase().next().unwrap();
-                    let b_lower = bc.to_lowercase().next().unwrap();
+                    let a_lower = ac.to_lowercase().next().unwrap(); // SAFE: non-ASCII-digit char always has a lowercase mapping
+                    let b_lower = bc.to_lowercase().next().unwrap(); // SAFE: non-ASCII-digit char always has a lowercase mapping
                     match a_lower.cmp(&b_lower) {
                         Ordering::Equal => continue,
                         ord => return ord,

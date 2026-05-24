@@ -32,6 +32,7 @@ pub fn safe_json_parse<T: DeserializeOwned>(
 
 /// Safely parse a JSON string with a required default.
 pub fn safe_json_parse_or<T: DeserializeOwned>(json_string: Option<&str>, default: T) -> T {
+    // SAFE: invariant guaranteed by construction — always passes Some(default)
     safe_json_parse(json_string, Some(default)).unwrap()
 }
 

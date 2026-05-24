@@ -27,25 +27,35 @@ pub struct ExtractTextResult {
 pub fn format_file_read_result(file_path: &str, result: &ExtractTextResult) -> String {
     let header = format!("[read_file for '{}']", file_path);
 
-    if result.was_truncated && result.lines_shown.is_some() {
-        let (start, end) = result.lines_shown.unwrap();
-        let next_offset = end + 1;
-        format!(
-            "{header}\n\
-             IMPORTANT: File content truncated.\n\
-             Status: Showing lines {start}-{end} of {total_lines} total lines.\n\
-             To read more: Use the read_file tool with offset={next_offset} and limit={DEFAULT_LINE_LIMIT}.\n\
-             \n\
-             File: {file_path}\n\
-             {content}",
-            header = header,
-            start = start,
-            end = end,
-            total_lines = result.total_lines,
-            next_offset = next_offset,
-            file_path = file_path,
-            content = result.content,
-        )
+    if result.was_truncated {
+        if let Some((start, end)) = result.lines_shown {
+            let next_offset = end + 1;
+            format!(
+                "{header}\n\
+                 IMPORTANT: File content truncated.\n\
+                 Status: Showing lines {start}-{end} of {total_lines} total lines.\n\
+                 To read more: Use the read_file tool with offset={next_offset} and limit={DEFAULT_LINE_LIMIT}.\n\
+                 \n\
+                 File: {file_path}\n\
+                 {content}",
+                header = header,
+                start = start,
+                end = end,
+                total_lines = result.total_lines,
+                next_offset = next_offset,
+                file_path = file_path,
+                content = result.content,
+            )
+        } else {
+            format!(
+                "{header}\n\
+                 File: {file_path}\n\
+                 {content}",
+                header = header,
+                file_path = file_path,
+                content = result.content,
+            )
+        }
     } else {
         format!(
             "{header}\n\

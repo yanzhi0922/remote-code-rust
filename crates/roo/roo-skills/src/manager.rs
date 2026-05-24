@@ -221,7 +221,7 @@ impl SkillsManager {
         // Validate the name
         let validation = validate_skill_name(&name);
         if !validation.valid {
-            let error = validation.error.unwrap();
+            let error = validation.error.unwrap(); // SAFE: invariant — valid==false implies error is Some
             return Err(SkillsError::InvalidName(get_skill_name_error_message(
                 &name, error,
             )));
@@ -441,7 +441,7 @@ impl SkillsManager {
         // Validate name
         let validation = validate_skill_name(name);
         if !validation.valid {
-            let error = validation.error.unwrap();
+            let error = validation.error.unwrap(); // SAFE: invariant — valid==false implies error is Some
             return Err(SkillsError::InvalidName(get_skill_name_error_message(
                 name, error,
             )));

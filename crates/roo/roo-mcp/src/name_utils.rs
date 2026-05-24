@@ -56,6 +56,7 @@ pub fn sanitize_mcp_name(name: &str) -> String {
 
     // Ensure the name starts with a letter or underscore
     if !sanitized.is_empty() {
+        // SAFE: invariant guaranteed by construction — checked !is_empty() above
         let first = sanitized.chars().next().unwrap();
         if !first.is_ascii_alphabetic() && first != '_' {
             sanitized = format!("_{}", sanitized);

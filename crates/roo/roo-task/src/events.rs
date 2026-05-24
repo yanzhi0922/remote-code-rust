@@ -375,7 +375,10 @@ impl TaskEventEmitter {
 
     /// Register a new event listener.
     pub fn on(&self, listener: impl Fn(&TaskEvent) + Send + Sync + 'static) {
-        self.listeners.lock().unwrap().push(Arc::new(listener));
+        self.listeners
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(Arc::new(listener));
     }
 
     // --- Task Provider Lifecycle emit methods ---
@@ -890,7 +893,7 @@ impl TaskEventEmitter {
 
     /// Emit an event to all registered listeners.
     pub fn emit(&self, event: &TaskEvent) {
-        let listeners = self.listeners.lock().unwrap();
+        let listeners = self.listeners.lock().unwrap_or_else(|e| e.into_inner());
         for listener in listeners.iter() {
             listener(event);
         }
@@ -898,7 +901,10 @@ impl TaskEventEmitter {
 
     /// Get the number of registered listeners.
     pub fn listener_count(&self) -> usize {
-        self.listeners.lock().unwrap().len()
+        self.listeners
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .len()
     }
 }
 

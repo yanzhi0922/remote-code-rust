@@ -45,6 +45,7 @@ impl McpServerManager {
             *hub = Some(new_hub.clone());
             tracing::info!("McpServerManager: Created new McpHub instance");
         }
+        // SAFE: invariant guaranteed by construction — we just set hub to Some() above
         hub.as_ref().unwrap().clone()
     }
 

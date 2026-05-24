@@ -360,6 +360,7 @@ pub async fn summarize_conversation(
     let system_prompt_blocks = vec![ContentBlock::Text {
         text: system_prompt,
     }];
+    // SAFE: invariant guaranteed by construction — we just pushed a message above
     let summary_msg = new_messages.last().unwrap();
     let context_blocks: Vec<ContentBlock> = system_prompt_blocks
         .into_iter()

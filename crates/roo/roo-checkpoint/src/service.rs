@@ -39,6 +39,12 @@ const GIT_ENV_VARS_TO_SANITIZE: &[&str] = &[
 /// may be set.
 ///
 /// Source: `src/services/checkpoints/ShadowCheckpointService.ts` — `createSanitizedGit()`
+///
+/// SAFETY NOTE: This mutates the process-global environment, which is technically
+/// unsafe in a multi-threaded context. This is acceptable ONLY because:
+/// 1. This function is called during initialization before sessions start
+/// 2. The checkpoint service is created once at startup
+/// If this assumption changes, switch to per-Command env manipulation.
 fn sanitize_git_env() {
     let mut removed = Vec::new();
     for var in GIT_ENV_VARS_TO_SANITIZE {

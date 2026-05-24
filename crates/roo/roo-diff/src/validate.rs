@@ -117,6 +117,7 @@ fn report_line_marker_in_replace_error(marker: &str, line: usize) -> ValidationR
 /// Multiple blocks are allowed. Various error conditions are detected and
 /// reported with helpful messages matching the TypeScript source exactly.
 pub fn validate_marker_sequencing(diff_content: &str) -> ValidationResult {
+    // SAFE: invariant guaranteed by construction — compile-time constant regex
     let search_pattern = Regex::new(r"^<<<<<<< SEARCH>?$").unwrap();
     let mut state = MarkerState::Start;
     let mut line_num: usize = 0;

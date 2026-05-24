@@ -1754,8 +1754,8 @@ impl Default for PresentAssistantMessage {
 /// content = content.replace(/\s?<\/thinking>/g, "")
 /// ```
 pub fn strip_thinking_tags(content: &str) -> String {
-    let re_open = regex::Regex::new(r"<thinking>\s?").unwrap();
-    let re_close = regex::Regex::new(r"\s?</thinking>").unwrap();
+    let re_open = regex::Regex::new(r"<thinking>\s?").unwrap(); // SAFE: invariant guaranteed by construction
+    let re_close = regex::Regex::new(r"\s?</thinking>").unwrap(); // SAFE: invariant guaranteed by construction
     let result = re_open.replace_all(content, "");
     re_close.replace_all(&result, "").into_owned()
 }

@@ -23,6 +23,14 @@ pub fn validate_write_to_file_params(params: &WriteToFileParams) -> Result<(), F
         ));
     }
 
+    // Reject absolute paths to prevent writing outside the workspace root.
+    if params.path.starts_with('/') || (params.path.len() >= 2 && params.path.as_bytes()[1] == b':')
+    {
+        return Err(FsToolError::InvalidPath(
+            "path must be relative (absolute paths are not allowed)".to_string(),
+        ));
+    }
+
     // NOTE: TS source checks `newContent === undefined` (not provided),
     // but allows empty string content for creating empty files.
     // Since we have a String field, it's always present — no validation needed.

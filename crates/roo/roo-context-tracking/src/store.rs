@@ -98,12 +98,12 @@ impl Default for InMemoryMetadataStore {
 
 impl MetadataStore for InMemoryMetadataStore {
     fn load(&self, task_id: &str) -> Result<TaskMetadata> {
-        let data = self.data.read().unwrap();
+        let data = self.data.read().unwrap_or_else(|e| e.into_inner());
         Ok(data.get(task_id).cloned().unwrap_or_default())
     }
 
     fn save(&self, task_id: &str, metadata: &TaskMetadata) -> Result<()> {
-        let mut data = self.data.write().unwrap();
+        let mut data = self.data.write().unwrap_or_else(|e| e.into_inner());
         data.insert(task_id.to_string(), metadata.clone());
         Ok(())
     }

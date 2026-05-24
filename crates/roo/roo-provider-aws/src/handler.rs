@@ -187,10 +187,11 @@ pub struct ArnInfo {
 /// - ARNs with cross-region prefixes like `us.anthropic.claude-3-5-sonnet-20241022-v2:0`
 pub fn parse_arn(arn: &str, configured_region: Option<&str>) -> ArnInfo {
     // Regex: arn:partition:service:region:account:resource-type/resource-id
+    // SAFE: invariant guaranteed by construction — compile-time constant regex
     let re = regex::Regex::new(
         r"^arn:[^:]+:(?:bedrock|sagemaker):([^:]*):([^:]*):(?:([^/]+)/([\w.\-:]+)|([^/]+))$",
     )
-    .unwrap();
+    .unwrap(); // SAFE: invariant guaranteed by construction
 
     let Some(caps) = re.captures(arn) else {
         return ArnInfo {

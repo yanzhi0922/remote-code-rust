@@ -18,15 +18,9 @@ use crate::types::*;
 use roo_ignore::RooIgnoreController;
 use roo_types::tool_params::{IndentationParams, ReadFileMode, ReadFileParams};
 
-/// Cumulative image bytes processed across `read_file` calls in the same
-/// logical read operation. This mirrors the TS `ImageMemoryTracker` which
-/// persists across files in a single `read_file` tool invocation.
-///
-/// The TS version creates a new `ImageMemoryTracker` per `read_file` execute
-/// call. In Rust, `process_read_file` is called once per file, so we track
-/// cumulative memory at module level. Callers should call
-/// [`reset_cumulative_image_bytes`] at the start of each tool invocation to
-/// match the TS per-invocation lifecycle.
+// WARNING: This is a process-global counter. Callers MUST use `image_byte_guard()`
+// at the start of each tool invocation to reset this counter for proper per-task isolation.
+// Without the guard, concurrent tasks will interfere with each other's byte limits.
 static CUMULATIVE_IMAGE_BYTES: AtomicU64 = AtomicU64::new(0);
 
 /// Reset the cumulative image byte counter.
@@ -35,6 +29,40 @@ static CUMULATIVE_IMAGE_BYTES: AtomicU64 = AtomicU64::new(0);
 /// TS behavior where `ImageMemoryTracker` is created fresh per `execute()`.
 pub fn reset_cumulative_image_bytes() {
     CUMULATIVE_IMAGE_BYTES.store(0, Ordering::SeqCst);
+}
+
+/// RAII guard that resets the cumulative image byte counter on Drop.
+///
+/// Callers MUST use [`image_byte_guard()`] at the start of each tool invocation
+/// to ensure per-invocation isolation of the global `CUMULATIVE_IMAGE_BYTES` counter.
+/// Without the guard, concurrent tasks will interfere with each other's byte limits.
+///
+/// # Example
+///
+/// ```ignore
+/// fn execute_read_file(params: &ReadFileParams) -> Result<...> {
+///     let _guard = image_byte_guard(); // resets counter now, and on Drop
+///     // ... process files ...
+/// }
+/// ```
+pub struct ImageByteGuard {
+    _private: (),
+}
+
+/// Create a new [`ImageByteGuard`] that resets the global cumulative image byte
+/// counter immediately and again when dropped.
+///
+/// Use this at the start of each tool invocation to guarantee the counter is
+/// isolated to that single invocation, even if the call panics.
+pub fn image_byte_guard() -> ImageByteGuard {
+    reset_cumulative_image_bytes();
+    ImageByteGuard { _private: () }
+}
+
+impl Drop for ImageByteGuard {
+    fn drop(&mut self) {
+        reset_cumulative_image_bytes();
+    }
 }
 
 /// Read the current cumulative image byte total and convert to megabytes.
@@ -60,6 +88,14 @@ pub fn validate_read_file_params(params: &ReadFileParams) -> Result<(), FsToolEr
     if params.path.contains("..") {
         return Err(FsToolError::InvalidPath(
             "path must not contain '..'".to_string(),
+        ));
+    }
+
+    // Reject absolute paths to prevent reading outside the workspace root.
+    if params.path.starts_with('/') || (params.path.len() >= 2 && params.path.as_bytes()[1] == b':')
+    {
+        return Err(FsToolError::InvalidPath(
+            "path must be relative (absolute paths are not allowed)".to_string(),
         ));
     }
 
@@ -314,7 +350,7 @@ pub fn build_read_result_indentation(
     params: &IndentationParams,
 ) -> Result<ReadResult, FsToolError> {
     let total_lines = content.lines().count();
-    let anchor = params.anchor_line.unwrap() as usize;
+    let anchor = params.anchor_line.unwrap() as usize; // SAFE: validated by caller
 
     if anchor == 0 || anchor > total_lines {
         return Err(FsToolError::Validation(format!(
@@ -631,6 +667,7 @@ fn add_line_numbers_from(content: &str, start_line: usize) -> String {
             result.push('\n');
         }
         let line_num = start_line + i;
+        // SAFE: writing to a String infallible — the fmt::Write impl for String never errors
         write!(result, "{line_num:>width$} | {line}").expect("writing to String cannot fail");
     }
     result

@@ -26,7 +26,7 @@ pub fn ensure_all_required(schema: &Value) -> Value {
     if !schema.is_object() {
         return schema.clone();
     }
-    let obj = schema.as_object().unwrap();
+    let obj = schema.as_object().unwrap(); // SAFE: is_object() guard above
 
     if obj.get("type").and_then(|v| v.as_str()) != Some("object") {
         return schema.clone();
@@ -56,10 +56,9 @@ pub fn ensure_all_required(schema: &Value) -> Value {
             {
                 let mut updated_val = prop.clone();
                 if let Some(items) = prop.get("items").cloned() {
-                    updated_val
-                        .as_object_mut()
-                        .unwrap()
-                        .insert("items".to_string(), ensure_all_required(&items));
+                    if let Some(obj) = updated_val.as_object_mut() {
+                        obj.insert("items".to_string(), ensure_all_required(&items));
+                    }
                 }
                 updated_val
             } else {
@@ -82,7 +81,7 @@ pub fn ensure_additional_properties_false(schema: &Value) -> Value {
     if !schema.is_object() {
         return schema.clone();
     }
-    let obj = schema.as_object().unwrap();
+    let obj = schema.as_object().unwrap(); // SAFE: is_object() guard above // SAFE: guarded by is_object() check above
 
     if obj.get("type").and_then(|v| v.as_str()) != Some("object") {
         return schema.clone();
@@ -105,10 +104,12 @@ pub fn ensure_additional_properties_false(schema: &Value) -> Value {
             {
                 let mut updated_val = prop.clone();
                 if let Some(items) = prop.get("items").cloned() {
-                    updated_val.as_object_mut().unwrap().insert(
-                        "items".to_string(),
-                        ensure_additional_properties_false(&items),
-                    );
+                    if let Some(obj) = updated_val.as_object_mut() {
+                        obj.insert(
+                            "items".to_string(),
+                            ensure_additional_properties_false(&items),
+                        );
+                    }
                 }
                 updated_val
             } else {

@@ -81,7 +81,10 @@ impl BaseTelemetryClient {
 
     /// Get all captured events (for testing).
     pub fn get_captured_events(&self) -> Vec<TelemetryEvent> {
-        self.captured_events.lock().unwrap().clone()
+        self.captured_events
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 
     /// Check if debug mode is enabled.
@@ -117,7 +120,10 @@ impl TelemetryClient for BaseTelemetryClient {
             );
         }
 
-        self.captured_events.lock().unwrap().push(event);
+        self.captured_events
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(event);
     }
 
     fn capture_exception(
@@ -144,7 +150,10 @@ impl TelemetryClient for BaseTelemetryClient {
             properties: Some(properties),
         };
 
-        self.captured_events.lock().unwrap().push(event);
+        self.captured_events
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(event);
     }
 
     fn update_telemetry_state(&mut self, did_user_opt_in: bool) {

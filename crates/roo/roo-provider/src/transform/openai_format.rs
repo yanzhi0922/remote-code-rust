@@ -184,7 +184,7 @@ pub fn sanitize_gemini_messages(messages: &[Value], model_id: &str) -> Vec<Value
                 && !calls.is_empty()
             {
                 let has_reasoning_details =
-                    reasoning_details.is_some() && !reasoning_details.unwrap().is_empty();
+                    reasoning_details.is_some() && !reasoning_details.unwrap().is_empty(); // SAFE: is_some() checked
 
                 if !has_reasoning_details {
                     // No reasoning_details at all — drop all tool calls
@@ -204,7 +204,7 @@ pub fn sanitize_gemini_messages(messages: &[Value], model_id: &str) -> Vec<Value
                 }
 
                 // Filter reasoning_details to only include entries matching tool call IDs
-                let rd_array = reasoning_details.unwrap();
+                let rd_array = reasoning_details.unwrap(); // SAFE: is_some() checked above and we're in the else branch
                 let mut valid_tool_calls: Vec<Value> = Vec::new();
                 let mut valid_reasoning_details: Vec<Value> = Vec::new();
 
@@ -543,12 +543,13 @@ pub fn map_reasoning_details(details: &[Value]) -> Option<Vec<Value>> {
             if detail.get("format").and_then(|f| f.as_str()) == Some("openai-responses-v1")
                 && detail.get("id").is_some()
             {
-                let mut obj = detail
-                    .as_object()
-                    .cloned()
-                    .expect("detail should be an object");
-                obj.remove("id");
-                Value::Object(obj)
+                match detail.as_object().cloned() {
+                    Some(mut obj) => {
+                        obj.remove("id");
+                        Value::Object(obj)
+                    }
+                    None => detail.clone(),
+                }
             } else {
                 detail.clone()
             }

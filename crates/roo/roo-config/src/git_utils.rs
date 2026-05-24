@@ -53,7 +53,7 @@ pub async fn get_git_repository_info(workspace_root: &Path) -> GitRepositoryInfo
     let config_path = git_dir.join("config");
     if let Ok(config_content) = tokio::fs::read_to_string(&config_path).await {
         // Find any URL line
-        let url_re = Regex::new(r"url\s*=\s*(.+?)(?:\r?\n|$)").unwrap();
+        let url_re = Regex::new(r"url\s*=\s*(.+?)(?:\r?\n|$)").unwrap(); // SAFE: invariant guaranteed by construction
         if let Some(caps) = url_re.captures(&config_content)
             && let Some(m) = caps.get(1)
         {
@@ -66,7 +66,7 @@ pub async fn get_git_repository_info(workspace_root: &Path) -> GitRepositoryInfo
         }
 
         // Extract default branch
-        let branch_re = Regex::new(r#"\[branch "([^"]+)"\]"#).unwrap();
+        let branch_re = Regex::new(r#"\[branch "([^"]+)"\]"#).unwrap(); // SAFE: invariant guaranteed by construction
         if let Some(caps) = branch_re.captures(&config_content)
             && let Some(m) = caps.get(1)
         {
@@ -78,7 +78,7 @@ pub async fn get_git_repository_info(workspace_root: &Path) -> GitRepositoryInfo
     if info.default_branch.is_none() {
         let head_path = git_dir.join("HEAD");
         if let Ok(head_content) = tokio::fs::read_to_string(&head_path).await {
-            let head_re = Regex::new(r"ref: refs/heads/(.+)").unwrap();
+            let head_re = Regex::new(r"ref: refs/heads/(.+)").unwrap(); // SAFE: invariant guaranteed by construction
             if let Some(caps) = head_re.captures(&head_content)
                 && let Some(m) = caps.get(1)
             {
@@ -105,24 +105,24 @@ pub fn convert_git_url_to_https(url: &str) -> String {
 
     // SSH format: git@github.com:user/repo.git -> https://github.com/user/repo.git
     if url.starts_with("git@") {
-        let re = Regex::new(r"git@([^:]+):(.+)").unwrap();
+        let re = Regex::new(r"git@([^:]+):(.+)").unwrap(); // SAFE: invariant guaranteed by construction
         if let Some(caps) = re.captures(url)
             && caps.len() == 3
         {
-            let host = caps.get(1).unwrap().as_str();
-            let path = caps.get(2).unwrap().as_str();
+            let host = caps.get(1).unwrap().as_str(); // SAFE: caps.len()==3 guarantees groups 1,2 exist
+            let path = caps.get(2).unwrap().as_str(); // SAFE: caps.len()==3 guarantees groups 1,2 exist
             return format!("https://{host}/{path}");
         }
     }
 
     // SSH with protocol: ssh://git@github.com/user/repo.git
     if url.starts_with("ssh://") {
-        let re = Regex::new(r"ssh://(?:git@)?([^/]+)/(.+)").unwrap();
+        let re = Regex::new(r"ssh://(?:git@)?([^/]+)/(.+)").unwrap(); // SAFE: invariant guaranteed by construction
         if let Some(caps) = re.captures(url)
             && caps.len() == 3
         {
-            let host = caps.get(1).unwrap().as_str();
-            let path = caps.get(2).unwrap().as_str();
+            let host = caps.get(1).unwrap().as_str(); // SAFE: caps.len()==3 guarantees groups 1,2 exist
+            let path = caps.get(2).unwrap().as_str(); // SAFE: caps.len()==3 guarantees groups 1,2 exist
             return format!("https://{host}/{path}");
         }
     }
@@ -150,7 +150,7 @@ pub fn sanitize_git_url(url: &str) -> String {
     }
 
     // For other formats, remove potential tokens (40+ hex chars after colon)
-    let re = Regex::new(r"(?i):[a-f0-9]{40,}@").unwrap();
+    let re = Regex::new(r"(?i):[a-f0-9]{40,}@").unwrap(); // SAFE: invariant guaranteed by construction
     re.replace(url, "@").to_string()
 }
 
@@ -160,11 +160,11 @@ pub fn sanitize_git_url(url: &str) -> String {
 pub fn extract_repository_name(url: &str) -> String {
     let patterns = [
         // HTTPS
-        Regex::new(r"https://[^/]+/([^/]+/[^/]+?)(?:\.git)?$").unwrap(),
+        Regex::new(r"https://[^/]+/([^/]+/[^/]+?)(?:\.git)?$").unwrap(), // SAFE: invariant guaranteed by construction
         // SSH
-        Regex::new(r"git@[^:]+:([^/]+/[^/]+?)(?:\.git)?$").unwrap(),
+        Regex::new(r"git@[^:]+:([^/]+/[^/]+?)(?:\.git)?$").unwrap(), // SAFE: invariant guaranteed by construction
         // SSH with protocol
-        Regex::new(r"ssh://[^/]+/([^/]+/[^/]+?)(?:\.git)?$").unwrap(),
+        Regex::new(r"ssh://[^/]+/([^/]+/[^/]+?)(?:\.git)?$").unwrap(), // SAFE: invariant guaranteed by construction
     ];
 
     for pattern in &patterns {
@@ -239,7 +239,7 @@ pub async fn search_commits(query: &str, cwd: &Path) -> Vec<GitCommit> {
     };
 
     // If no results and query looks like a hash, try searching by hash
-    let hash_re = Regex::new(r"^[a-f0-9]+$").unwrap();
+    let hash_re = Regex::new(r"^[a-f0-9]+$").unwrap(); // SAFE: invariant guaranteed by construction
     if output_text.trim().is_empty()
         && hash_re.is_match(query)
         && let Ok(o) = Command::new("git")

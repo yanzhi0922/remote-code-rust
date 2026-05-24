@@ -258,6 +258,7 @@ pub fn calculate_model_params(opts: GetModelParamsOptions) -> ModelParams {
         if let Some(mt) = max_tokens {
             let cap = ((mt as f64) * 0.8).floor() as u64;
             if reasoning_budget.unwrap() > cap {
+                // SAFE: reasoning_budget is Some when we reach here
                 reasoning_budget = Some(cap);
             }
         }
@@ -271,6 +272,7 @@ pub fn calculate_model_params(opts: GetModelParamsOptions) -> ModelParams {
             1024
         };
         if reasoning_budget.unwrap() < min_thinking_tokens {
+            // SAFE: reasoning_budget is Some when we reach here
             reasoning_budget = Some(min_thinking_tokens);
         }
 

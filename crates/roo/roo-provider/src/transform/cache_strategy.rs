@@ -405,6 +405,7 @@ impl MultiPointStrategy {
         }
 
         // Growing conversation: calculate tokens in new messages.
+        // SAFE: invariant guaranteed by construction — checked !is_empty() above
         let last_previous_index = previous_placements.last().unwrap().index;
         let new_messages_tokens: usize = self.config.messages[last_previous_index + 1..]
             .iter()

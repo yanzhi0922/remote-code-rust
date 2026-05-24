@@ -14,28 +14,28 @@ use crate::types::CommandDecision;
 // ---------------------------------------------------------------------------
 
 static DANGEROUS_PARAMETER_EXPANSION: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"\$\{[^}]*@[PQEAa][^}]*\}").unwrap());
+    Lazy::new(|| Regex::new(r"\$\{[^}]*@[PQEAa][^}]*\}").unwrap()); // SAFE: invariant guaranteed by construction
 
 static PARAMETER_ASSIGNMENT_OCTAL: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"\$\{[^}]*[=+\-?][^}]*\\[0-7]{3}[^}]*\}").unwrap());
+    Lazy::new(|| Regex::new(r"\$\{[^}]*[=+\-?][^}]*\\[0-7]{3}[^}]*\}").unwrap()); // SAFE: invariant guaranteed by construction
 
 static PARAMETER_ASSIGNMENT_HEX: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"\$\{[^}]*[=+\-?][^}]*\\x[0-9a-fA-F]{2}[^}]*\}").unwrap());
+    Lazy::new(|| Regex::new(r"\$\{[^}]*[=+\-?][^}]*\\x[0-9a-fA-F]{2}[^}]*\}").unwrap()); // SAFE: invariant guaranteed by construction
 
 static PARAMETER_ASSIGNMENT_UNICODE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"\$\{[^}]*[=+\-?][^}]*\\u[0-9a-fA-F]{4}[^}]*\}").unwrap());
+    Lazy::new(|| Regex::new(r"\$\{[^}]*[=+\-?][^}]*\\u[0-9a-fA-F]{4}[^}]*\}").unwrap()); // SAFE: invariant guaranteed by construction
 
-static INDIRECT_EXPANSION: Lazy<Regex> = Lazy::new(|| Regex::new(r"\$\{![^}]+\}").unwrap());
+static INDIRECT_EXPANSION: Lazy<Regex> = Lazy::new(|| Regex::new(r"\$\{![^}]+\}").unwrap()); // SAFE: invariant guaranteed by construction
 
 static HERE_STRING_WITH_SUBSTITUTION: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"<<<\s*(\$\(|`)").unwrap());
+    Lazy::new(|| Regex::new(r"<<<\s*(\$\(|`)").unwrap()); // SAFE: invariant guaranteed by construction
 
 /// Matches zsh process substitution `=(...)` — must be at start of string or
 /// preceded by whitespace / `;` / `|` / `&` / `(` / `<`.
 static ZSH_PROCESS_SUBSTITUTION: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"(?:^|[\s;|&(<])=\([^)]+\)").unwrap());
+    Lazy::new(|| Regex::new(r"(?:^|[\s;|&(<])=\([^)]+\)").unwrap()); // SAFE: invariant guaranteed by construction
 
-static ZSH_GLOB_QUALIFIER: Lazy<Regex> = Lazy::new(|| Regex::new(r"[*?+@!]\(e:[^:]+:\)").unwrap());
+static ZSH_GLOB_QUALIFIER: Lazy<Regex> = Lazy::new(|| Regex::new(r"[*?+@!]\(e:[^:]+:\)").unwrap()); // SAFE: invariant guaranteed by construction
 
 // ---------------------------------------------------------------------------
 // Dangerous substitution detection
@@ -428,7 +428,7 @@ fn push_trimmed(result: &mut Vec<String>, current: &mut String) {
 
 /// Remove simple PowerShell-like redirections (e.g. `2>&1`).
 fn remove_powershell_redirections(s: &str) -> String {
-    static REDIR: Lazy<Regex> = Lazy::new(|| Regex::new(r"\d*>&\d*").unwrap());
+    static REDIR: Lazy<Regex> = Lazy::new(|| Regex::new(r"\d*>&\d*").unwrap()); // SAFE: invariant guaranteed by construction
     REDIR.replace_all(s, "").trim().to_string()
 }
 

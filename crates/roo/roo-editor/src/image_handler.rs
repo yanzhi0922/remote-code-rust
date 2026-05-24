@@ -60,11 +60,11 @@ pub fn is_file_path(input: &str) -> bool {
 ///
 /// Source: `image-handler.ts` — data URI parsing
 pub fn parse_data_uri(data_uri: &str) -> Result<ParsedDataUri, ImageHandlerError> {
-    let re = regex_lite::Regex::new(r"^data:image/([a-zA-Z]+);base64,(.+)$").unwrap();
+    let re = regex_lite::Regex::new(r"^data:image/([a-zA-Z]+);base64,(.+)$").unwrap(); // SAFE: invariant guaranteed by construction
 
     if let Some(caps) = re.captures(data_uri) {
-        let format = caps.get(1).unwrap().as_str().to_string();
-        let base64_data = caps.get(2).unwrap().as_str();
+        let format = caps.get(1).unwrap().as_str().to_string(); // SAFE: guaranteed by regex match + capture group
+        let base64_data = caps.get(2).unwrap().as_str(); // SAFE: guaranteed by regex match + capture group
         let data = BASE64.decode(base64_data)?;
 
         Ok(ParsedDataUri { format, data })

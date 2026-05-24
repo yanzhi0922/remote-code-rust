@@ -184,6 +184,7 @@ impl<R> TagMatcher<R> {
         if let Some(last) = self.chunks.last()
             && last.matched == matched
         {
+            // SAFE: invariant guaranteed by construction — just confirmed last exists above
             self.chunks.last_mut().unwrap().data.push_str(&data);
             self.cached.clear();
             return;

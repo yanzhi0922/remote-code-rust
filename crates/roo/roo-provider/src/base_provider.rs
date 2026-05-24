@@ -96,6 +96,7 @@ pub fn convert_tool_schema_for_openai(schema: &Value) -> Value {
                     .cloned()
                     .collect();
                 if non_null.len() == 1 {
+                    // SAFE: invariant guaranteed by construction — checked len == 1 above
                     prop["type"] = non_null.into_iter().next().unwrap();
                 } else if !non_null.is_empty() {
                     prop["type"] = Value::Array(non_null);

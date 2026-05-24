@@ -122,7 +122,10 @@ impl LiteLlmHandler {
     pub async fn fetch_models(&self) -> roo_provider::error::Result<ModelRecord> {
         // Check cache first
         {
-            let cache = self.dynamic_models.read().unwrap();
+            let cache = self
+                .dynamic_models
+                .read()
+                .unwrap_or_else(|e| e.into_inner());
             if let Some(ref models) = *cache {
                 return Ok(models.clone());
             }
@@ -169,7 +172,10 @@ impl LiteLlmHandler {
         }
 
         // Cache result
-        *self.dynamic_models.write().unwrap() = Some(model_map.clone());
+        *self
+            .dynamic_models
+            .write()
+            .unwrap_or_else(|e| e.into_inner()) = Some(model_map.clone());
 
         Ok(model_map)
     }

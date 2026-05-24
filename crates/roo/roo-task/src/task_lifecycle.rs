@@ -863,11 +863,9 @@ impl TaskLifecycle {
     /// Source: TS `getSavedClineMessages()` (line 1152–1154)
     async fn load_saved_cline_messages(&self) -> Result<Vec<ClineMessage>, TaskError> {
         // If no storage path, return empty
-        if self.engine.config().storage_path.is_none() {
+        let Some(storage_path) = self.engine.config().storage_path.as_ref() else {
             return Ok(Vec::new());
-        }
-
-        let storage_path = self.engine.config().storage_path.as_ref().unwrap();
+        };
         let base = std::path::Path::new(storage_path);
         let path = roo_task_persistence::messages_path(base, &self.engine.config().task_id);
         let fs = roo_task_persistence::OsFileSystem;

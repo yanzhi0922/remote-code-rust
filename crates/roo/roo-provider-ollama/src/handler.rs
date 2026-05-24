@@ -87,7 +87,10 @@ impl OllamaHandler {
     pub async fn fetch_models(&self) -> roo_provider::error::Result<ModelRecord> {
         // Check cache first
         {
-            let cache = self.dynamic_models.read().unwrap();
+            let cache = self
+                .dynamic_models
+                .read()
+                .unwrap_or_else(|e| e.into_inner());
             if let Some(ref models) = *cache {
                 return Ok(models.clone());
             }
@@ -109,7 +112,10 @@ impl OllamaHandler {
                 // For local providers, connection failure is expected if not running
                 // Return empty map rather than error
                 let empty: ModelRecord = HashMap::new();
-                *self.dynamic_models.write().unwrap() = Some(empty.clone());
+                *self
+                    .dynamic_models
+                    .write()
+                    .unwrap_or_else(|e| e.into_inner()) = Some(empty.clone());
                 return Ok(empty);
             }
         };
@@ -117,7 +123,10 @@ impl OllamaHandler {
         if !response.status().is_success() {
             // Gracefully handle failures for local provider
             let empty: ModelRecord = HashMap::new();
-            *self.dynamic_models.write().unwrap() = Some(empty.clone());
+            *self
+                .dynamic_models
+                .write()
+                .unwrap_or_else(|e| e.into_inner()) = Some(empty.clone());
             return Ok(empty);
         }
 
@@ -158,7 +167,10 @@ impl OllamaHandler {
         }
 
         // Cache result
-        *self.dynamic_models.write().unwrap() = Some(model_map.clone());
+        *self
+            .dynamic_models
+            .write()
+            .unwrap_or_else(|e| e.into_inner()) = Some(model_map.clone());
 
         Ok(model_map)
     }

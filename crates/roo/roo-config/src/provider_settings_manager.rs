@@ -238,11 +238,13 @@ impl ProviderSettingsManager {
             });
 
             if should_migrate {
-                let old_id = config.model_id.clone().unwrap();
-                for (provider, old_model, new_model) in MODEL_MIGRATIONS {
-                    if config.api_provider.as_deref() == Some(*provider) && old_id == *old_model {
-                        config.model_id = Some(new_model.to_string());
-                        break;
+                if let Some(old_id) = config.model_id.clone() {
+                    for (provider, old_model, new_model) in MODEL_MIGRATIONS {
+                        if config.api_provider.as_deref() == Some(*provider) && old_id == *old_model
+                        {
+                            config.model_id = Some(new_model.to_string());
+                            break;
+                        }
                     }
                 }
             }

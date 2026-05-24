@@ -92,6 +92,7 @@ impl ToolRepetitionDetector {
         let mut keys: Vec<String> = obj.keys().cloned().collect();
         keys.sort();
         for key in &keys {
+            // SAFE: invariant guaranteed by construction — keys are from obj's own key set
             sorted.insert(key.clone(), obj.remove(key).unwrap());
         }
         Value::Object(sorted).to_string()

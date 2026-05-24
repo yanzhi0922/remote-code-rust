@@ -134,9 +134,10 @@ fn compress_terminal_output_with_limits(
 fn strip_ansi_escapes(input: &str) -> String {
     use regex::Regex;
     // Match ANSI escape sequences: ESC [ ... letter, or ESC ] ... BEL/ST
+    // SAFE: invariant guaranteed by construction — compile-time constant regex
     let re =
         Regex::new(r"\x1b\[[0-9;]*[A-Za-z]|\x1b\][^\x07]*\x07|\x1b\][^\x1b]*\x1b\\|\x1b[^\[\]].?")
-            .unwrap();
+            .unwrap(); // SAFE: invariant guaranteed by construction
     re.replace_all(input, "").to_string()
 }
 

@@ -192,7 +192,7 @@ impl HttpEmbedder {
         );
         headers.insert(
             reqwest::header::CONTENT_TYPE,
-            "application/json".parse().unwrap(),
+            "application/json".parse().unwrap(), // SAFE: invariant guaranteed by construction
         );
         for (k, v) in &self.extra_headers {
             let header_name = reqwest::header::HeaderName::from_bytes(k.as_bytes())
@@ -401,7 +401,7 @@ impl BedrockEmbedder {
         );
         headers.insert(
             reqwest::header::CONTENT_TYPE,
-            "application/json".parse().unwrap(),
+            "application/json".parse().unwrap(), // SAFE: invariant guaranteed by construction
         );
         headers.insert(
             "x-amz-date",
@@ -409,10 +409,10 @@ impl BedrockEmbedder {
                 .format("%Y%m%dT%H%M%SZ")
                 .to_string()
                 .parse()
-                .unwrap(),
+                .unwrap(), // SAFE: invariant guaranteed by construction
         );
         let payload_hash = hex_encode(&sha2::Sha256::digest(&body_bytes));
-        headers.insert("x-amz-content-sha256", payload_hash.parse().unwrap());
+        headers.insert("x-amz-content-sha256", payload_hash.parse().unwrap()); // SAFE: hex-encoded string is always valid ASCII
         if let Some(ref token) = self.session_token {
             headers.insert(
                 "x-amz-security-token",

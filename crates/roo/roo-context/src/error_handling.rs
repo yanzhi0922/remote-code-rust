@@ -16,10 +16,10 @@ use roo_provider::error::ProviderError;
 
 static OPENROUTER_CONTEXT_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
     vec![
-        Regex::new(r"(?i)\bcontext\s*(?:length|window)\b").unwrap(),
-        Regex::new(r"(?i)\bmaximum\s*context\b").unwrap(),
-        Regex::new(r"(?i)\b(?:input\s*)?tokens?\s*exceed\b").unwrap(),
-        Regex::new(r"(?i)\btoo\s*many\s*tokens?\b").unwrap(),
+        Regex::new(r"(?i)\bcontext\s*(?:length|window)\b").unwrap(), // SAFE: invariant guaranteed by construction
+        Regex::new(r"(?i)\bmaximum\s*context\b").unwrap(), // SAFE: invariant guaranteed by construction
+        Regex::new(r"(?i)\b(?:input\s*)?tokens?\s*exceed\b").unwrap(), // SAFE: invariant guaranteed by construction
+        Regex::new(r"(?i)\btoo\s*many\s*tokens?\b").unwrap(), // SAFE: invariant guaranteed by construction
     ]
 });
 
@@ -29,13 +29,13 @@ static OPENROUTER_CONTEXT_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
 
 static ANTHROPIC_CONTEXT_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
     vec![
-        Regex::new(r"(?i)prompt is too long").unwrap(),
-        Regex::new(r"(?i)maximum.*tokens").unwrap(),
-        Regex::new(r"(?i)context.*too.*long").unwrap(),
-        Regex::new(r"(?i)exceeds.*context").unwrap(),
-        Regex::new(r"(?i)token.*limit").unwrap(),
-        Regex::new(r"(?i)context_length_exceeded").unwrap(),
-        Regex::new(r"(?i)max_tokens_to_sample").unwrap(),
+        Regex::new(r"(?i)prompt is too long").unwrap(), // SAFE: invariant guaranteed by construction
+        Regex::new(r"(?i)maximum.*tokens").unwrap(), // SAFE: invariant guaranteed by construction
+        Regex::new(r"(?i)context.*too.*long").unwrap(), // SAFE: invariant guaranteed by construction
+        Regex::new(r"(?i)exceeds.*context").unwrap(), // SAFE: invariant guaranteed by construction
+        Regex::new(r"(?i)token.*limit").unwrap(),     // SAFE: invariant guaranteed by construction
+        Regex::new(r"(?i)context_length_exceeded").unwrap(), // SAFE: invariant guaranteed by construction
+        Regex::new(r"(?i)max_tokens_to_sample").unwrap(), // SAFE: invariant guaranteed by construction
     ]
 });
 

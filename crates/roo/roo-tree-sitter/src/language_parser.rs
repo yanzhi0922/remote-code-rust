@@ -248,9 +248,10 @@ pub fn process_captures(
         if !needs_html_filtering {
             return true;
         }
+        // SAFE: invariant guaranteed by construction — compile-time constant regex
         let html_elements_re =
             regex::Regex::new(r"^[^A-Z]*<\/?(?:div|span|button|input|h[1-6]|p|a|img|ul|li|form)\b")
-                .unwrap();
+                .unwrap(); // SAFE: invariant guaranteed by construction
         let trimmed = line.trim();
         !html_elements_re.is_match(trimmed)
     };
