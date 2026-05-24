@@ -99,9 +99,10 @@ for (const change of changes) {
   }
 
   // Read file content from local git (use newSha to get content)
+  // Use binary encoding to avoid corrupting non-UTF8 files (images, binaries, etc.)
   let content;
   try {
-    content = execFileSync("git", ["show", change.newSha], { encoding: "utf-8", maxBuffer: 50 * 1024 * 1024 });
+    content = execFileSync("git", ["show", change.newSha], { encoding: "buffer", maxBuffer: 50 * 1024 * 1024 });
   } catch (e) {
     console.log(`   SKIP ${change.filePath} (could not read content)`);
     continue;
@@ -109,7 +110,7 @@ for (const change of changes) {
 
   const mode = change.newMode || "100644";
 
-  // Create blob
+  // Create blob — content is already a Buffer, convert directly to base64
   const blob = ghPost("blobs", {
     content: Buffer.from(content).toString("base64"),
     encoding: "base64",

@@ -216,6 +216,7 @@ export function WorkspaceOverview() {
               <div className="flex items-center gap-3 px-4 py-3">
                 <FolderGit2 size={16} className="text-rc-text-tertiary" />
                 <div className="min-w-0 flex-1">
+                  <div className="text-[10px] uppercase text-rc-text-tertiary">当前项目</div>
                   <div className="truncate text-sm font-semibold text-rc-text-primary">{activeProject?.name ?? '未选择项目'}</div>
                   <div className="mt-0.5 truncate text-xs text-rc-text-tertiary">
                     {activeProject ? formatSensitivePath(activeProject.path, privacyMode) : `${projectCount} 个项目`}
@@ -224,7 +225,7 @@ export function WorkspaceOverview() {
               </div>
               <div className="grid grid-cols-3 divide-x divide-rc-border-secondary">
                 <div className="px-3 py-3">
-                  <div className="text-[10px] uppercase text-rc-text-tertiary">Sessions</div>
+                  <div className="text-[10px] uppercase text-rc-text-tertiary">会话</div>
                   <div className="mt-1 text-sm font-semibold text-rc-text-primary">{sessionCount}</div>
                 </div>
                 <div className="px-3 py-3">

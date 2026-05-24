@@ -356,9 +356,21 @@ function ProviderTab() {
 
   const handleSave = async () => {
     if (!form.name.trim()) return;
+    // Check for duplicate provider name (excluding the provider being edited)
+    const trimmedName = form.name.trim();
+    const isDuplicate = providers.some(
+      (p) => p.name === trimmedName && p.name !== editingName,
+    );
+    if (isDuplicate) {
+      // eslint-disable-next-line no-alert
+      const proceed = window.confirm(
+        `名为 "${trimmedName}" 的 Provider 已存在，是否覆盖？`,
+      );
+      if (!proceed) return;
+    }
     await saveProviderConfig(
       {
-        name: form.name.trim(),
+        name: trimmedName,
         protocol: form.protocol,
         base_url: form.base_url?.trim() || undefined,
         api_key: form.api_key?.trim() || undefined,
@@ -366,7 +378,7 @@ function ProviderTab() {
         profiles: form.profiles?.filter((p) => p.name.trim()),
         active_profile: form.active_profile,
       },
-      editingName === 'new' || activeProviderName === form.name.trim(),
+      editingName === 'new' || activeProviderName === trimmedName,
     );
     setEditingName(null);
     setForm(emptyProviderConfig());

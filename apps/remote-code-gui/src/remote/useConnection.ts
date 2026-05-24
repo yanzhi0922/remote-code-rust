@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from 'react';
 import type { RemoteTimelineEvent } from './types';
 import {
   getConnectionManager,
@@ -54,11 +54,15 @@ export function useConnection(
 ): UseConnectionReturn {
   const state = useSyncExternalStore(subscribeToState, getSnapshot, getServerSnapshot);
 
-  // Subscribe to transport events via the connection manager.
+  // Keep the latest onEvent in a ref so we subscribe only once and avoid
+  // listener churn on every render when the caller's callback identity changes.
+  const onEventRef = useRef(onEvent);
+  onEventRef.current = onEvent;
+
   useEffect(() => {
-    if (!onEvent) return;
-    return onConnectionManagerEvent(onEvent);
-  }, [onEvent]);
+    const handler = (event: RemoteTimelineEvent) => onEventRef.current?.(event);
+    return onConnectionManagerEvent(handler);
+  }, []);
 
   const connect = useCallback(async (config: TransportConfig, afterSequence = 0) => {
     const mgr = getConnectionManager();

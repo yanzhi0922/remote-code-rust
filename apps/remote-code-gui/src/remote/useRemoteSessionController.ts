@@ -122,6 +122,15 @@ export function useRemoteSessionController({
   const sessionRefreshTimerRef = useRef<number | null>(null);
   const statusTimerRef = useRef<number | null>(null);
 
+  // Clean up status timer on unmount to prevent stale state updates.
+  useEffect(() => {
+    return () => {
+      if (statusTimerRef.current !== null) {
+        window.clearTimeout(statusTimerRef.current);
+      }
+    };
+  }, []);
+
   const activeSession = useMemo(
     () => sessions.find((session) => session.session_id === activeSessionId) ?? null,
     [activeSessionId, sessions],

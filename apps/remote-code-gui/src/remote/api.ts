@@ -388,5 +388,5 @@ function extractRemoteError(payload: string, status: number): string {
     // Fall through to plain-text payloads.
   }
 
-  return `Remote request failed with HTTP ${status}: ${payload}`;
+  return `Remote request failed with HTTP ${status}: ${payload.substring(0, 200)}`;
 }

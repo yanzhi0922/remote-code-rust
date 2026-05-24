@@ -77,10 +77,11 @@ const MarkdownRenderer = memo(function MarkdownRenderer({ content }: MarkdownRen
           </CollapsibleBlock>
         );
       },
-      code: ({ className, children, ...props }) => {
-        // `react-markdown` can surface a `ref` typed from a sibling React install
-        // when this renderer is reused across package boundaries. Drop it so the
-        // shared remote UI remains buildable in both the GUI and mobile app.
+      code: ({ className, children, node, ...props }) => {
+        // Explicitly destructure known react-markdown props (`node`, `className`,
+        // `children`) and only forward safe HTML attributes via the rest spread.
+        // This avoids forwarding unexpected props like `ref` that may appear when
+        // the renderer is reused across package boundaries with sibling React installs.
         const { ref: _ref, ...safeProps } = props as typeof props & { ref?: unknown };
         const match = /language-(\w+)/.exec(className || '');
         const isInline = !match && !className;

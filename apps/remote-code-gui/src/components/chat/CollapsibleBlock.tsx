@@ -39,17 +39,11 @@ export default function CollapsibleBlock({
         <div className="min-w-0 flex-1">{summary}</div>
       </button>
 
-      {/* CSS Grid collapse: GPU-accelerated 0fr↔1fr transition, no JS height measurement */}
-      <div
-        className="grid-collapse"
-        data-collapsed={!isOpen}
-      >
-        <div className="grid-collapse-inner">
-          <div className={cn('border-t border-rc-border-secondary px-3 pb-3 pt-2', contentClassName)}>
-            {children}
-          </div>
+      {isOpen && (
+        <div className={cn('border-t border-rc-border-secondary px-3 pb-3 pt-2', contentClassName)}>
+          {children}
         </div>
-      </div>
+      )}
     </div>
   );
 }

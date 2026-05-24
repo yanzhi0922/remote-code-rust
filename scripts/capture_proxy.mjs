@@ -48,11 +48,16 @@ const server = http.createServer(async (req, res) => {
         console.log(body.substring(0, 500));
     }
 
-    // Forward to target
+    // Forward to target — strip sensitive headers before forwarding
     const headers = { ...req.headers };
     delete headers['x-target-url'];
     delete headers['host'];
     headers['host'] = target.host;
+    for (const hdr of Object.keys(headers)) {
+        if (SENSITIVE_HEADERS.has(hdr.toLowerCase())) {
+            delete headers[hdr];
+        }
+    }
 
     const proxyReq = https.request(target, {
         method: req.method,

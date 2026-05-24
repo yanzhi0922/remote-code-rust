@@ -93,6 +93,7 @@ import { isDirectRunnerEnabled, resolveRemoteRunnerBaseUrl, resolveRemoteTranspo
 import { useConnection } from './useConnection';
 import { useRemoteSessionController } from './useRemoteSessionController';
 import { extractErrorMessage } from './utils';
+import { destroyConnectionManager } from './connection-manager';
 import type { TransportConfig } from './connection-manager';
 import type {
   RemoteApprovalDecision,
@@ -178,6 +179,12 @@ export default function MobileRemoteApp() {
     handleArtifactDownload,
     handleArtifactShare,
   } = useRemoteSessionController({ defaultDeviceName: 'Mobile' });
+
+  // Destroy the ConnectionManager singleton on unmount so transports and
+  // listeners are cleaned up when the remote app is navigated away from.
+  useEffect(() => {
+    return () => destroyConnectionManager();
+  }, []);
 
   const [activeTab, setActiveTab] = useState<MobileTab>('sessions');
   const approvalActions = useMemo(
@@ -740,7 +747,12 @@ function MobileTimelineTab({
           <textarea
             aria-label={copy.followUpPlaceholder}
             value={composer}
-            onChange={(e) => onComposerChange(e.target.value)}
+            onChange={(e) => {
+              onComposerChange(e.target.value);
+              // Auto-grow: reset height then expand to scroll height, clamped to max.
+              e.target.style.height = 'auto';
+              e.target.style.height = `${Math.min(e.target.scrollHeight, 120)}px`;
+            }}
             onKeyDown={(e) => {
               if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); onSend(); }
             }}

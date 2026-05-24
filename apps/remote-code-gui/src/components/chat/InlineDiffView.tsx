@@ -24,6 +24,12 @@ function parseUnifiedDiff(text: string): DiffLine[] {
       continue;
     }
 
+    // Note: lines starting with `---`, `+++`, or `diff ` are skipped as diff
+    // metadata headers. This means that legitimate *content* lines that happen
+    // to start with these prefixes (e.g. "--- a message" or "+++ response")
+    // are silently dropped. This is a known limitation of this simplified
+    // parser — a fully correct implementation would track whether we are inside
+    // a hunk (after the first @@) and only then treat +/- as add/remove lines.
     if (line.startsWith('---') || line.startsWith('+++') || line.startsWith('diff ')) {
       continue;
     }
@@ -41,7 +47,9 @@ function parseUnifiedDiff(text: string): DiffLine[] {
 }
 
 function detectDiffContent(text: string): { isDiff: boolean; fileName: string | null } {
-  if (text.includes('--- a/') || text.includes('+++ b/') || text.includes('@@ ')) {
+  // Require both `--- a/` and `+++ b/` at line start to avoid false positives
+  // on messages that merely contain diff-like substrings inline.
+  if (/^--- a\/.*\n\+\+\+ b\//m.test(text)) {
     const match = text.match(/--- a\/(.+?)(?:\n|\r\n)\+\+\+ b\//);
     return { isDiff: true, fileName: match?.[1] ?? null };
   }

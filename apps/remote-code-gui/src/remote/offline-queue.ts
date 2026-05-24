@@ -71,6 +71,15 @@ export async function enqueueCommand(
     const store = tx.objectStore(STORE_NAME);
 
     // Enforce max size — evict oldest.
+    //
+    // Known tradeoff: The count() and subsequent cursor.delete() run in the
+    // same readwrite transaction but are not atomic with respect to concurrent
+    // writers. If two tabs enqueue simultaneously, both may see count < MAX
+    // and neither evicts, allowing the queue to exceed the limit by a small
+    // margin. This is acceptable because: (a) the drain path also prunes stale
+    // entries, (b) IndexedDB serialises transactions per database connection so
+    // the race window is narrow, and (c) a strict compare-and-swap would
+    // require a dedicated lock store, adding complexity for negligible benefit.
     const countReq = store.count();
     countReq.onsuccess = () => {
       if (countReq.result >= MAX_QUEUE_SIZE) {

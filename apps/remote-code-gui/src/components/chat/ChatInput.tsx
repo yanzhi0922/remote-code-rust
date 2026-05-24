@@ -241,6 +241,7 @@ export function ChatInput() {
   const [isDragOver, setIsDragOver] = useState(false);
   const textAreaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const pendingFileReadersRef = useRef<FileReader[]>([]);
 
   const sending = useAppStore((state) => state.sending);
   const activeSessionId = useAppStore((state) => state.activeSessionId);
@@ -254,6 +255,17 @@ export function ChatInput() {
   const updateSettings = useAppStore((state) => state.updateSettings);
   const setActiveProvider = useAppStore((state) => state.setActiveProvider);
   const selectAgent = useAgentStore((state) => state.selectAgent);
+
+  // Abort any pending FileReader operations on unmount to prevent
+  // state updates after the component is gone.
+  useEffect(() => {
+    return () => {
+      for (const reader of pendingFileReadersRef.current) {
+        try { reader.abort(); } catch { /* already completed */ }
+      }
+      pendingFileReadersRef.current = [];
+    };
+  }, []);
 
   useEffect(() => {
     const element = textAreaRef.current;
@@ -285,8 +297,11 @@ export function ChatInput() {
 
     Array.from(files).forEach((file, i) => {
       if (file.type.startsWith('image/')) {
+        // Skip preview generation for large files to avoid bloating memory
+        if (file.size > 500 * 1024) return;
         const targetId = newFiles[i].id;
         const reader = new FileReader();
+        pendingFileReadersRef.current.push(reader);
         reader.onload = (e) => {
           const preview = e.target?.result as string;
           setAttachments((prev) =>
@@ -485,7 +500,7 @@ export function ChatInput() {
               disabled={sending}
               rows={1}
               aria-label="Prompt input"
-              placeholder="向 agent 发送指令，粘贴代码，或输入 / 调用命令"
+              placeholder="向 agent 发送指令或代码片段"
               className="min-h-[58px] max-h-[180px] w-full resize-none border-0 bg-transparent px-1 py-1 text-sm leading-6 text-rc-text-primary outline-none placeholder:text-rc-text-tertiary disabled:cursor-not-allowed focus-visible:outline-none"
             />
           </div>
@@ -505,7 +520,7 @@ export function ChatInput() {
           <div
             role="group"
             aria-label="Composer controls"
-            className="flex min-h-11 flex-wrap items-center gap-2 border-t border-rc-border-secondary bg-rc-bg-elevated/80 px-3 py-2"
+            className="flex min-h-11 flex-wrap items-center gap-2 border-t border-rc-border-secondary bg-rc-bg-elevated px-3 py-2"
           >
             <AgentSelector
               availableAgents={availableAgents}
