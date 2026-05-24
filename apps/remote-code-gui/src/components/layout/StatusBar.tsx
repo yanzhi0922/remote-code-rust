@@ -4,6 +4,52 @@ import { formatSensitivePath } from '../../lib/utils';
 import { useAppStore } from '../../stores/useAppStore';
 import { useAgentStore } from '../../stores/useAgentStore';
 
+function ContextGauge({ ratio }: { ratio: number }) {
+  const percent = Math.round(ratio * 100);
+  const color =
+    percent > 90
+      ? 'bg-rc-accent-error'
+      : percent > 75
+        ? 'bg-rc-accent-warning'
+        : 'bg-rc-accent-success';
+
+  return (
+    <div className="flex items-center gap-1.5">
+      <div className="h-1.5 w-16 overflow-hidden rounded-full bg-rc-bg-tertiary">
+        <div
+          className={`h-full rounded-full transition-all duration-500 ${color}`}
+          style={{ width: `${Math.min(percent, 100)}%` }}
+        />
+      </div>
+      <span className={`font-mono ${percent > 80 ? 'text-rc-accent-warning' : ''}`}>
+        ctx {percent}%
+      </span>
+    </div>
+  );
+}
+
+function TokenUsage({
+  inputTokens,
+  outputTokens,
+}: {
+  inputTokens: number;
+  outputTokens: number;
+}) {
+  const format = (n: number) => {
+    if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+    if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
+    return String(n);
+  };
+
+  return (
+    <span className="font-mono">
+      <span className="text-rc-accent-info">↑{format(inputTokens)}</span>
+      {' '}
+      <span className="text-rc-accent-success">↓{format(outputTokens)}</span>
+    </span>
+  );
+}
+
 export function StatusBar() {
   const provider = useAppStore((state) => state.provider);
   const runtimeStatus = useAppStore((state) => state.runtimeStatus);
@@ -37,19 +83,18 @@ export function StatusBar() {
     ? `MCP ${mcpSummary.status_counts.connected}/${mcpSummary.enabled_servers}`
     : 'MCP —';
 
-  const contextPercent = contextUsage ? Math.round(contextUsage.ratio * 100) : null;
   const projectLabel = activeProjectPath ? formatSensitivePath(activeProjectPath, privacyMode) : 'No project';
   const sessionLabel = activeSession ? (privacyMode ? 'Hidden session' : activeSession.title) : 'No session';
 
   return (
-    <div className="flex h-status-bar shrink-0 items-center border-t border-rc-border-secondary bg-rc-bg-sidebar px-3 text-[11px] text-rc-text-tertiary select-none">
+    <div className="flex h-status-bar shrink-0 items-center border-t border-rc-border-secondary glass px-3 text-[11px] text-rc-text-tertiary select-none">
       <div className="flex min-w-0 items-center gap-3">
         <span className="flex items-center gap-1.5">
           <Cpu size={12} />
           <span className="text-rc-text-secondary">{agentLabel}</span>
         </span>
         <span className="text-rc-text-secondary">{providerName}</span>
-        <span className="max-w-[200px] truncate font-mono text-rc-text-tertiary">{modelName}</span>
+        <span className="hidden max-w-[200px] truncate font-mono text-rc-text-tertiary sm:inline">{modelName}</span>
         <span className="hidden max-w-[260px] truncate text-rc-text-secondary lg:inline">{projectLabel}</span>
         <span className="hidden max-w-[220px] truncate xl:inline">{sessionLabel}</span>
       </div>
@@ -58,26 +103,27 @@ export function StatusBar() {
 
       <div className="flex items-center gap-3">
         {lastPromptResult && (
-          <span className="font-mono">
-            ↑{lastPromptResult.usage.input_tokens.toLocaleString()}
-            {' '}↓{lastPromptResult.usage.output_tokens.toLocaleString()}
-          </span>
+          <TokenUsage
+            inputTokens={lastPromptResult.usage.input_tokens}
+            outputTokens={lastPromptResult.usage.output_tokens}
+          />
         )}
 
-        {contextPercent !== null && (
-          <span className={contextPercent > 80 ? 'text-rc-accent-warning' : ''}>
-            ctx {contextPercent}%
-          </span>
-        )}
+        {contextUsage && <ContextGauge ratio={contextUsage.ratio} />}
 
-        <span className={`flex items-center gap-1.5 ${mcpIssueCount > 0 ? 'text-rc-accent-warning' : ''}`}>
+        <span className={`hidden items-center gap-1.5 sm:flex ${mcpIssueCount > 0 ? 'text-rc-accent-warning' : ''}`}>
           <Network size={12} />
           <span>{mcpLabel}</span>
         </span>
 
         <span className="flex items-center gap-1.5">
           {runtimeStatus ? <Wifi size={12} className="text-rc-accent-success" /> : <WifiOff size={12} />}
-          <span>{runtimeStatus ? 'Online' : 'Offline'}</span>
+          <span className="hidden sm:inline">{runtimeStatus ? 'Online' : 'Offline'}</span>
+        </span>
+
+        <span className="hidden items-center gap-1 text-rc-text-tertiary md:flex">
+          <kbd className="rounded border border-rc-border-primary bg-rc-bg-tertiary px-1 text-[9px]">⌘K</kbd>
+          <span>命令</span>
         </span>
       </div>
     </div>

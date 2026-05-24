@@ -28,7 +28,7 @@ describe('Layout', () => {
     const { container } = render(<Layout><div /></Layout>);
     const outer = container.firstElementChild as HTMLElement;
     expect(outer.classList.contains('flex')).toBe(true);
-    expect(outer.classList.contains('min-h-dvh')).toBe(true);
+    expect(outer.classList.contains('h-dvh')).toBe(true);
   });
 
   it('renders the desktop workbench regions', () => {

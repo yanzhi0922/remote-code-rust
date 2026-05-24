@@ -4,9 +4,9 @@ import type { AgentTypeInfo, AgentType } from '../../lib/types';
 
 /** Agent 类型对应的默认显示信息（后端未返回时用作 fallback） */
 const AGENT_DEFAULTS: Record<AgentType, { displayName: string; description: string }> = {
-  remote_claude: { displayName: 'Remote Claude', description: '内置 Agent，直接调用 provider API' },
-  remote_roo: { displayName: 'Remote Roo', description: 'Rust 原生 in-process Agent' },
-  remote_codex: { displayName: 'Remote Codex', description: 'Rust 原生 in-process Agent' },
+  remote_claude: { displayName: 'Claude', description: '内置 Agent，直接调用 provider API' },
+  remote_roo: { displayName: 'Roo', description: 'Rust 原生 in-process Agent' },
+  remote_codex: { displayName: 'Codex', description: 'Rust 原生 in-process Agent' },
 };
 
 interface AgentSelectorProps {
@@ -24,7 +24,7 @@ export function AgentSelector({ availableAgents, activeAgentType, onSelect }: Ag
     description: string;
     installed: boolean;
     available: boolean;
-  }> = (['remote_claude', 'remote_roo', 'remote_codex'] as const).map((type) => {
+  }> = (['remote_codex', 'remote_claude', 'remote_roo'] as const).map((type) => {
     const info = availableAgents.find((agent) => agent.agentType === type);
     const defaults = AGENT_DEFAULTS[type];
     return {
@@ -38,8 +38,8 @@ export function AgentSelector({ availableAgents, activeAgentType, onSelect }: Ag
 
   const activeLabel =
     activeAgentType === null
-      ? 'Remote Claude'
-      : agentEntries.find((entry) => entry.agentType === activeAgentType)?.displayName ?? 'Remote Claude';
+      ? 'Claude'
+      : agentEntries.find((entry) => entry.agentType === activeAgentType)?.displayName ?? 'Claude';
 
   const renderStatusDot = (installed: boolean, available: boolean) => {
     const colorClass = !installed
@@ -91,7 +91,7 @@ export function AgentSelector({ availableAgents, activeAgentType, onSelect }: Ag
               >
                 {renderStatusDot(true, true)}
                 <div className="min-w-0">
-                  <div className="truncate text-sm font-medium">Remote Claude（默认）</div>
+                  <div className="truncate text-sm font-medium">Claude（默认）</div>
                   <div className="mt-0.5 text-xs text-rc-text-tertiary">内置 Agent，直接调用 provider API</div>
                 </div>
               </button>

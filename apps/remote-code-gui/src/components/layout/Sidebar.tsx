@@ -1,6 +1,7 @@
 import {
   Archive,
   ChevronRight,
+  Clock,
   Folder,
   FolderOpen,
   FolderPlus,
@@ -12,6 +13,7 @@ import {
 import { useEffect, useMemo, useState } from 'react';
 import type { ConversationEntry, SessionSubtask, SessionSummary, ToolCallInfo } from '../../lib/types';
 import { cn, normalizePathKey, truncateMiddle } from '../../lib/utils';
+import { useDebouncedValue } from '../../lib/hooks';
 import { useAppStore } from '../../stores/useAppStore';
 import { useAgentStore } from '../../stores/useAgentStore';
 
@@ -25,6 +27,32 @@ interface SessionTaskItem {
   depth: number;
 }
 
+// ── Time bucketing (from CodexMonitor pattern) ────────────────
+
+type TimeBucket = 'now' | 'today' | 'yesterday' | 'week' | 'older';
+
+function getTimeBucket(iso: string): TimeBucket {
+  const now = new Date();
+  const then = new Date(iso);
+  const diffMs = now.getTime() - then.getTime();
+  const diffMinutes = Math.floor(diffMs / 60_000);
+  if (diffMinutes < 30) return 'now';
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  if (then.getTime() >= startOfToday) return 'today';
+  if (then.getTime() >= startOfToday - 86_400_000) return 'yesterday';
+  if (then.getTime() >= startOfToday - 7 * 86_400_000) return 'week';
+  return 'older';
+}
+
+const BUCKET_ORDER: TimeBucket[] = ['now', 'today', 'yesterday', 'week', 'older'];
+const BUCKET_LABELS: Record<TimeBucket, string> = {
+  now: '刚刚',
+  today: '今天',
+  yesterday: '昨天',
+  week: '本周',
+  older: '更早',
+};
+
 function formatRelativeTime(iso: string): string {
   const now = Date.now();
   const then = new Date(iso).getTime();
@@ -36,6 +64,25 @@ function formatRelativeTime(iso: string): string {
   const diffDays = Math.floor(diffHours / 24);
   if (diffDays < 7) return `${diffDays} 天前`;
   return new Date(iso).toLocaleDateString('zh-CN');
+}
+
+// ── Search highlighting (from CodexMonitor pattern) ───────────
+
+function HighlightedText({ text, query }: { text: string; query: string }) {
+  if (!query.trim()) return <>{text}</>;
+
+  const lowerText = text.toLowerCase();
+  const lowerQuery = query.toLowerCase();
+  const idx = lowerText.indexOf(lowerQuery);
+  if (idx === -1) return <>{text}</>;
+
+  return (
+    <>
+      {text.slice(0, idx)}
+      <mark className="search-highlight">{text.slice(idx, idx + query.length)}</mark>
+      {text.slice(idx + query.length)}
+    </>
+  );
 }
 
 function parseJson(value: unknown): Record<string, unknown> | null {
@@ -214,6 +261,7 @@ function SessionRow({
   tasks,
   expanded,
   privacyMode,
+  searchQuery,
   onToggleExpanded,
   onSelect,
   onArchive,
@@ -223,6 +271,7 @@ function SessionRow({
   tasks: SessionTaskItem[];
   expanded: boolean;
   privacyMode: boolean;
+  searchQuery: string;
   onToggleExpanded: () => void;
   onSelect: () => void;
   onArchive: () => void;
@@ -230,12 +279,12 @@ function SessionRow({
   const hasTasks = tasks.length > 0;
 
   return (
-    <div className="space-y-1">
+    <div className="space-y-0.5">
       <div
         className={cn(
-          'group mx-2 flex items-start gap-2 rounded-md px-2.5 py-2 transition-colors duration-150',
+          'group mx-2 flex items-start gap-2 rounded-md border px-2.5 py-2 transition-colors duration-150',
           active
-            ? 'bg-rc-bg-active'
+            ? 'border-rc-border-primary bg-rc-bg-active shadow-xs'
             : 'border border-transparent hover:bg-rc-bg-hover',
         )}
       >
@@ -259,9 +308,11 @@ function SessionRow({
 
         <button type="button" onClick={onSelect} className="min-w-0 flex-1 text-left">
           <div className="truncate text-sm font-medium text-rc-text-primary">
-            {privacyMode ? '会话已隐藏' : session.title}
+            {privacyMode ? '会话已隐藏' : (
+              <HighlightedText text={session.title} query={searchQuery} />
+            )}
           </div>
-          <div className="mt-1 flex items-center gap-2 text-xs text-rc-text-tertiary">
+          <div className="mt-1 flex min-w-0 items-center gap-2 text-xs text-rc-text-tertiary">
             <span className="truncate">
               {session.provider_name}
               {session.model && <span className="mx-1">·</span>}
@@ -282,14 +333,99 @@ function SessionRow({
         </button>
       </div>
 
-      {expanded && hasTasks && (
-        <div className="space-y-0.5 pl-2">
+      {/* CSS Grid collapse for task expansion */}
+      <div className="grid-collapse pl-2" data-collapsed={!expanded}>
+        <div className="grid-collapse-inner space-y-0.5">
           {tasks.map((task) => (
             <SessionTaskRow key={task.id} task={task} />
           ))}
         </div>
-      )}
+      </div>
     </div>
+  );
+}
+
+// ── Time-bucketed session groups ──────────────────────────────
+
+function SessionTimeGroups({
+  sessions,
+  activeSessionId,
+  privacyMode,
+  searchQuery,
+  activeSessionTasks,
+  liveSessionTasks,
+  expandedSessions,
+  onToggleSessionTasks,
+  onSelectSession,
+  onArchiveSession,
+  setProjectPath,
+}: {
+  sessions: SessionSummary[];
+  activeSessionId: string | null;
+  privacyMode: boolean;
+  searchQuery: string;
+  activeSessionTasks: SessionTaskItem[];
+  liveSessionTasks: Record<string, SessionTaskItem[]>;
+  expandedSessions: Record<string, boolean>;
+  onToggleSessionTasks: (id: string) => void;
+  onSelectSession: (session: SessionSummary) => void;
+  onArchiveSession: (id: string) => void;
+  setProjectPath: () => void;
+}) {
+  const bucketed = useMemo(() => {
+    const map = new Map<TimeBucket, SessionSummary[]>();
+    for (const bucket of BUCKET_ORDER) map.set(bucket, []);
+    const sorted = [...sessions].sort(
+      (a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime(),
+    );
+    for (const session of sorted) {
+      const bucket = getTimeBucket(session.updated_at);
+      map.get(bucket)!.push(session);
+    }
+    return map;
+  }, [sessions]);
+
+  const hasMultipleBuckets = BUCKET_ORDER.filter((b) => (bucketed.get(b)?.length ?? 0) > 0).length > 1;
+
+  if (sessions.length === 0) {
+    return <div className="px-8 py-2 text-xs text-rc-text-tertiary">暂无会话</div>;
+  }
+
+  return (
+    <>
+      {BUCKET_ORDER.map((bucket) => {
+        const bucketSessions = bucketed.get(bucket);
+        if (!bucketSessions?.length) return null;
+
+        return (
+          <div key={bucket}>
+            {hasMultipleBuckets && (
+              <div className="flex items-center gap-2 px-5 py-1.5 text-[10px] uppercase tracking-[0.08em] text-rc-text-tertiary">
+                <Clock size={10} />
+                {BUCKET_LABELS[bucket]}
+              </div>
+            )}
+            {bucketSessions.map((session) => (
+              <SessionRow
+                key={session.id}
+                session={session}
+                active={session.id === activeSessionId}
+                privacyMode={privacyMode}
+                searchQuery={searchQuery}
+                tasks={session.id === activeSessionId ? activeSessionTasks : liveSessionTasks[session.id] ?? []}
+                expanded={!!expandedSessions[session.id]}
+                onToggleExpanded={() => onToggleSessionTasks(session.id)}
+                onSelect={() => {
+                  setProjectPath();
+                  onSelectSession(session);
+                }}
+                onArchive={() => onArchiveSession(session.id)}
+              />
+            ))}
+          </div>
+        );
+      })}
+    </>
   );
 }
 
@@ -312,6 +448,7 @@ export function Sidebar() {
   const [expandedProjects, setExpandedProjects] = useState<Record<string, boolean>>({});
   const [expandedSessions, setExpandedSessions] = useState<Record<string, boolean>>({});
   const [searchQuery, setSearchQuery] = useState('');
+  const debouncedSearch = useDebouncedValue(searchQuery, 150);
 
   const projectSessionGroups = useMemo(() => {
     const projectMap = new Map<string, SessionSummary[]>();
@@ -340,7 +477,7 @@ export function Sidebar() {
     return deriveAgentTasks(conversation);
   }, [activeSessionId, conversation, liveSessionTasks]);
 
-  const normalizedSearch = searchQuery.trim().toLowerCase();
+  const normalizedSearch = debouncedSearch.trim().toLowerCase();
   const visibleProjectRows = useMemo(() => {
     return projects
       .map((project) => {
@@ -389,8 +526,8 @@ export function Sidebar() {
           value={searchQuery}
           onChange={(event) => setSearchQuery(event.target.value)}
           aria-label="搜索项目和会话"
-          placeholder="搜索项目或会话"
-          className="h-8 w-full rounded-md border border-transparent bg-rc-bg-tertiary pl-7 pr-7 text-xs text-rc-text-primary outline-none transition-colors placeholder:text-rc-text-tertiary focus:border-rc-border-focus"
+          placeholder="搜索项目、会话"
+          className="h-8 w-full rounded-md border border-transparent bg-rc-bg-tertiary pl-7 pr-7 text-xs text-rc-text-primary outline-none transition-colors placeholder:text-rc-text-tertiary focus:border-rc-border-focus focus-visible:outline-none"
         />
         {searchQuery && (
           <button
@@ -405,35 +542,45 @@ export function Sidebar() {
       </div>
 
       {/* Toolbar */}
-      <div className="flex items-center gap-1 border-b border-rc-border-secondary px-2 py-1.5">
+      <div className="grid gap-1.5 border-b border-rc-border-secondary px-2 py-2">
+        <button
+          onClick={() => { void createSession(undefined, activeProjectPath ?? undefined); }}
+          aria-label="创建新会话"
+          className="inline-flex h-8 w-full items-center justify-center gap-2 rounded-md border border-rc-border-primary bg-rc-bg-surface px-2 text-xs font-semibold text-rc-text-primary transition-colors hover:border-rc-border-hover hover:bg-rc-bg-hover"
+        >
+          <Plus size={14} />
+          新会话
+        </button>
+        <div className="flex items-center gap-1">
         <button
           onClick={() => { void pickFolderAndAddProject(); }}
-          aria-label="Add Project"
-          className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs text-rc-text-secondary transition-colors hover:bg-rc-bg-hover hover:text-rc-text-primary"
+          aria-label="添加项目"
+          className="inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-xs text-rc-text-secondary transition-colors hover:bg-rc-bg-hover hover:text-rc-text-primary"
         >
           <FolderPlus size={13} />
-          Add Project
+          添加项目
         </button>
         <div className="flex-1" />
-        <span className="text-[10px] uppercase text-rc-text-tertiary">{projects.length} projects</span>
+        <span className="text-[10px] uppercase tracking-[0.08em] text-rc-text-tertiary">{projects.length} projects</span>
+        </div>
       </div>
 
-      {/* Content */}
-      <div className="flex-1 overflow-y-auto">
+      {/* Content with scroll fade mask */}
+      <div className="scroll-fade flex-1 overflow-y-auto">
         {sessionsLoading ? (
           <div className="flex items-center gap-2 px-4 py-4 text-xs text-rc-text-secondary">
             <div className="h-3 w-3 animate-spin rounded-full border-2 border-rc-border-primary border-t-rc-accent-primary" />
-            Loading…
+            正在加载…
           </div>
         ) : (
           <div className="py-2">
             {projects.length === 0 ? (
               <div className="px-4 py-6 text-center text-xs text-rc-text-tertiary">
-                <div className="mb-2">No projects yet</div>
+                <div className="mb-2">暂无项目</div>
               </div>
             ) : visibleProjectRows.length === 0 ? (
               <div className="px-4 py-4 text-center text-xs text-rc-text-tertiary">
-                No matching results
+                无匹配结果
               </div>
             ) : (
               visibleProjectRows.map(({ project, sessions: projectSessions }) => {
@@ -444,11 +591,13 @@ export function Sidebar() {
                 const active = normalizePathKey(activeProjectPath ?? '') === projectKey;
 
                 return (
-                  <div key={project.path}>
+                  <div key={project.path} className="mb-1.5">
                     <div
                       className={cn(
-                        'group mx-2 flex items-center gap-1 rounded-md px-2 py-1.5 text-xs transition-colors',
-                        active ? 'bg-rc-bg-active text-rc-text-primary' : 'text-rc-text-secondary hover:bg-rc-bg-hover',
+                        'group mx-2 flex items-center gap-1 rounded-md border px-2 py-1.5 text-xs transition-colors',
+                        active
+                          ? 'border-rc-border-primary bg-rc-bg-active text-rc-text-primary'
+                          : 'border-transparent text-rc-text-secondary hover:bg-rc-bg-hover',
                       )}
                     >
                       <button
@@ -463,7 +612,9 @@ export function Sidebar() {
                       ) : (
                         <Folder size={14} className="shrink-0 text-rc-text-tertiary" />
                       )}
-                      <span className="flex-1 truncate font-medium">{project.name}</span>
+                      <span className="flex-1 truncate font-semibold">
+                        <HighlightedText text={project.name} query={debouncedSearch} />
+                      </span>
                       <button
                         type="button"
                         onClick={() => {
@@ -489,30 +640,24 @@ export function Sidebar() {
                       </button>
                     </div>
 
-                    {expanded && (
-                      <div>
-                        {projectSessions.length > 0 ? (
-                          projectSessions.map((session) => (
-                            <SessionRow
-                              key={session.id}
-                              session={session}
-                              active={session.id === activeSessionId}
-                              privacyMode={privacyMode}
-                              tasks={session.id === activeSessionId ? activeSessionTasks : liveSessionTasks[session.id] ?? []}
-                              expanded={!!expandedSessions[session.id]}
-                              onToggleExpanded={() => toggleSessionTasks(session.id)}
-                              onSelect={() => {
-                                setActiveProject(project.path);
-                                void selectSession(session.id);
-                              }}
-                              onArchive={() => { void archiveSession(session.id); }}
-                            />
-                          ))
-                        ) : (
-                          <div className="px-8 py-2 text-xs text-rc-text-tertiary">No sessions</div>
-                        )}
+                    {/* CSS Grid collapse for project sessions */}
+                    <div className="grid-collapse" data-collapsed={!expanded}>
+                      <div className="grid-collapse-inner">
+                        <SessionTimeGroups
+                          sessions={projectSessions}
+                          activeSessionId={activeSessionId}
+                          privacyMode={privacyMode}
+                          searchQuery={debouncedSearch}
+                          activeSessionTasks={activeSessionTasks}
+                          liveSessionTasks={liveSessionTasks}
+                          expandedSessions={expandedSessions}
+                          onToggleSessionTasks={toggleSessionTasks}
+                          onSelectSession={(session) => void selectSession(session.id)}
+                          onArchiveSession={(id) => void archiveSession(id)}
+                          setProjectPath={() => setActiveProject(project.path)}
+                        />
                       </div>
-                    )}
+                    </div>
                   </div>
                 );
               })

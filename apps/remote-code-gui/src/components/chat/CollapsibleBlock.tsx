@@ -24,12 +24,12 @@ export default function CollapsibleBlock({
   const [isOpen, setIsOpen] = useState(defaultOpen);
 
   return (
-    <div className={cn('overflow-hidden rounded-md border border-rc-border-secondary bg-rc-bg-secondary', className)}>
+    <div className={cn('overflow-hidden rounded-md border border-rc-border-primary bg-rc-bg-elevated', className)}>
       <button
         type="button"
         aria-expanded={isOpen}
         aria-label={buttonLabel}
-        className="flex w-full items-center gap-2 px-3 py-2 text-left transition-colors hover:bg-rc-bg-hover"
+        className="flex w-full items-center gap-2 px-3 py-1.5 text-left transition-colors hover:bg-rc-bg-hover"
         onClick={() => setIsOpen((state) => !state)}
       >
         <ChevronRight
@@ -39,9 +39,17 @@ export default function CollapsibleBlock({
         <div className="min-w-0 flex-1">{summary}</div>
       </button>
 
-      {isOpen && (
-        <div className={cn('border-t border-rc-border-secondary px-3 pb-3 pt-2', contentClassName)}>{children}</div>
-      )}
+      {/* CSS Grid collapse: GPU-accelerated 0fr↔1fr transition, no JS height measurement */}
+      <div
+        className="grid-collapse"
+        data-collapsed={!isOpen}
+      >
+        <div className="grid-collapse-inner">
+          <div className={cn('border-t border-rc-border-secondary px-3 pb-3 pt-2', contentClassName)}>
+            {children}
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

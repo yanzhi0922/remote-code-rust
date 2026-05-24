@@ -5,10 +5,23 @@ import {
   useEffect,
   useMemo,
   useRef,
+  useState,
   type MutableRefObject,
 } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { GitBranch, MoreHorizontal } from 'lucide-react';
+import {
+  CheckCircle2,
+  ChevronRight,
+  Copy,
+  FileText,
+  GitBranch,
+  Loader2,
+  MoreHorizontal,
+  Terminal,
+  Timer,
+  Wrench,
+  XCircle,
+} from 'lucide-react';
 import type {
   ConversationEntry,
   ToolCallInfo,
@@ -25,6 +38,7 @@ import {
 import { useAppStore } from '../../stores/useAppStore';
 import { WorkspaceOverview } from '../layout/WorkspaceOverview';
 import CollapsibleBlock from './CollapsibleBlock';
+import { InlineDiffView, detectAndRenderDiff } from './InlineDiffView';
 import { GoalStatusBar } from './GoalStatusBar';
 
 const LazyMarkdownRenderer = lazy(() => import('./MarkdownRenderer'));
@@ -40,44 +54,123 @@ function conversationRowKey(entry: ConversationEntry, index: number): string {
   return `${entry.role}-${entry.tool_call_id ?? entry.name ?? 'entry'}-${index}`;
 }
 
-function EmptyState({
-  title,
-}: {
-  title: string;
-}) {
+function CopyButton({ text }: { text: string }) {
+  const handleCopy = () => {
+    void navigator.clipboard.writeText(text);
+  };
+
+  return (
+    <button
+      type="button"
+      onClick={handleCopy}
+      className="flex h-6 w-6 items-center justify-center rounded text-rc-text-tertiary opacity-0 transition-all hover:bg-rc-bg-hover hover:text-rc-text-primary group-hover:opacity-100"
+      aria-label="复制内容"
+      title="复制内容"
+    >
+      <Copy size={12} />
+    </button>
+  );
+}
+
+function ToolIcon({ name }: { name: string }) {
+  if (name.includes('shell') || name.includes('bash') || name.includes('exec')) {
+    return <Terminal size={13} className="text-rc-accent-warning" />;
+  }
+  if (name.includes('file') || name.includes('read') || name.includes('write') || name.includes('edit') || name.includes('patch')) {
+    return <FileText size={13} className="text-rc-accent-info" />;
+  }
+  if (name.includes('git')) {
+    return <GitBranch size={13} className="text-rc-accent-success" />;
+  }
+  return <Wrench size={13} className="text-rc-text-tertiary" />;
+}
+
+function EmptyState({ title }: { title: string }) {
   return (
     <div className="flex h-full min-h-[320px] items-center justify-center px-6">
-      <div className="rounded-md border border-dashed border-rc-border-primary bg-rc-bg-surface px-5 py-4 text-sm text-rc-text-tertiary">
+      <div className="rounded-md border border-dashed border-rc-border-primary bg-rc-bg-elevated px-5 py-4 text-sm text-rc-text-tertiary shadow-xs">
         {title}
       </div>
     </div>
   );
 }
 
+function ToolCallCard({ toolCall }: { toolCall: ToolCallInfo }) {
+  const formattedInput = formatToolInput(toolCall.input);
+  const diffResult = useMemo(() => detectAndRenderDiff(formattedInput), [formattedInput]);
+
+  if (diffResult.isDiff && diffResult.element) {
+    return (
+      <CollapsibleBlock
+        summary={
+          <div className="flex min-w-0 items-center gap-2.5">
+            <ToolIcon name={toolCall.name} />
+            <span className="font-mono text-xs font-medium text-rc-text-primary">{toolCall.name}</span>
+            <span className="truncate text-xs text-rc-text-tertiary">{summarizeToolInput(toolCall)}</span>
+          </div>
+        }
+        buttonLabel={`Toggle diff ${toolCall.name}`}
+        iconColor="text-rc-accent-info"
+      >
+        {diffResult.element}
+      </CollapsibleBlock>
+    );
+  }
+
+  return (
+    <CollapsibleBlock
+      summary={
+        <div className="flex min-w-0 items-center gap-2.5">
+          <ToolIcon name={toolCall.name} />
+          <span className="font-mono text-xs font-medium text-rc-text-primary">{toolCall.name}</span>
+          <span className="truncate text-xs text-rc-text-tertiary">{summarizeToolInput(toolCall)}</span>
+        </div>
+      }
+      buttonLabel={`Toggle tool call ${toolCall.name}`}
+      iconColor="text-rc-accent-success"
+    >
+      <pre className="overflow-x-auto whitespace-pre-wrap rounded bg-rc-bg-code p-3 text-xs font-mono leading-relaxed text-rc-text-primary">
+        {formattedInput}
+      </pre>
+    </CollapsibleBlock>
+  );
+}
+
 function AssistantToolCalls({ toolCalls }: { toolCalls: ToolCallInfo[] }) {
   if (toolCalls.length === 0) return null;
+
+  // Group consecutive tool calls into a summary when there are 3+
+  if (toolCalls.length >= 3) {
+    return (
+      <CollapsibleBlock
+        summary={
+          <div className="flex min-w-0 items-center gap-2.5">
+            <Wrench size={13} className="text-rc-accent-info" />
+            <span className="text-xs font-medium text-rc-text-primary">
+              {toolCalls.length} tool calls
+            </span>
+            <span className="truncate text-xs text-rc-text-tertiary">
+              {toolCalls.map((tc) => tc.name).join(', ')}
+            </span>
+          </div>
+        }
+        buttonLabel={`Toggle ${toolCalls.length} tool calls`}
+        iconColor="text-rc-accent-info"
+        className="mt-3"
+      >
+        <div className="space-y-2">
+          {toolCalls.map((toolCall) => (
+            <ToolCallCard key={toolCall.id} toolCall={toolCall} />
+          ))}
+        </div>
+      </CollapsibleBlock>
+    );
+  }
 
   return (
     <div className="mt-3 space-y-2">
       {toolCalls.map((toolCall) => (
-        <CollapsibleBlock
-          key={toolCall.id}
-          summary={
-            <div className="flex min-w-0 items-center gap-2.5">
-              <span className="rounded bg-rc-accent-success-bg px-1.5 py-0.5 text-[10px] font-semibold uppercase text-rc-accent-success">
-                Tool
-              </span>
-              <span className="font-mono text-xs font-medium text-rc-text-primary">{toolCall.name}</span>
-              <span className="truncate text-xs text-rc-text-tertiary">{summarizeToolInput(toolCall)}</span>
-            </div>
-          }
-          buttonLabel={`Toggle tool call ${toolCall.name}`}
-          iconColor="text-rc-accent-success"
-        >
-          <pre className="overflow-x-auto whitespace-pre-wrap rounded bg-rc-bg-code p-3 text-xs font-mono leading-relaxed text-rc-text-primary">
-            {formatToolInput(toolCall.input)}
-          </pre>
-        </CollapsibleBlock>
+        <ToolCallCard key={toolCall.id} toolCall={toolCall} />
       ))}
     </div>
   );
@@ -85,36 +178,37 @@ function AssistantToolCalls({ toolCalls }: { toolCalls: ToolCallInfo[] }) {
 
 function ToolMessage({ entry }: { entry: ConversationEntry }) {
   const label = entry.name ?? 'tool';
+  const diffResult = useMemo(() => detectAndRenderDiff(entry.text), [entry.text]);
 
   return (
     <CollapsibleBlock
       summary={
         <div className="flex min-w-0 items-center gap-2.5">
-          <span
-            className={`rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase ${
-              entry.is_error
-                ? 'bg-rc-accent-error-bg text-rc-accent-error'
-                : 'bg-rc-bg-active text-rc-text-tertiary'
-            }`}
-          >
-            {entry.is_error ? 'Error' : 'Result'}
-          </span>
+          {entry.is_error ? (
+            <XCircle size={13} className="text-rc-accent-error" />
+          ) : (
+            <CheckCircle2 size={13} className="text-rc-accent-success" />
+          )}
           <span className="font-mono text-xs font-medium text-rc-text-primary">{label}</span>
           <span className="truncate text-xs text-rc-text-tertiary">{summarizeToolOutput(entry.text)}</span>
         </div>
       }
       buttonLabel={`Toggle tool result ${label}`}
-      iconColor={entry.is_error ? 'text-rc-accent-error' : 'text-rc-text-tertiary'}
+      iconColor={entry.is_error ? 'text-rc-accent-error' : 'text-rc-accent-success'}
     >
-      <pre
-        className={`overflow-x-auto whitespace-pre-wrap rounded p-3 text-xs font-mono leading-relaxed ${
-          entry.is_error
-            ? 'bg-rc-accent-error-bg text-rc-accent-error'
-            : 'bg-rc-bg-code text-rc-text-primary'
-        }`}
-      >
-        {entry.text}
-      </pre>
+      {diffResult.isDiff && diffResult.element ? (
+        diffResult.element
+      ) : (
+        <pre
+          className={`overflow-x-auto whitespace-pre-wrap rounded p-3 text-xs font-mono leading-relaxed ${
+            entry.is_error
+              ? 'bg-rc-accent-error-bg text-rc-accent-error'
+              : 'bg-rc-bg-code text-rc-text-primary'
+          }`}
+        >
+          {entry.text}
+        </pre>
+      )}
     </CollapsibleBlock>
   );
 }
@@ -151,7 +245,7 @@ function AssistantMessage({ entry }: { entry: ConversationEntry }) {
   const thinkingBlocks = extractThinkingBlocks(entry);
 
   return (
-    <div className="rounded-lg border border-rc-border-secondary bg-rc-bg-assistant px-4 py-3 shadow-xs">
+    <article className="group border-b border-rc-border-secondary py-5 last:border-b-0">
       <div className="mb-3 flex items-center gap-2">
         <span className="h-2 w-2 rounded-full bg-rc-accent-info" />
         <span className="text-[10px] font-semibold uppercase text-rc-text-tertiary">
@@ -172,7 +266,7 @@ function AssistantMessage({ entry }: { entry: ConversationEntry }) {
       )}
 
       <AssistantToolCalls toolCalls={entry.tool_calls} />
-    </div>
+    </article>
   );
 }
 
@@ -186,8 +280,12 @@ const MessageCard = memo(
 
     if (entry.role === 'user') {
       return (
-        <div className="flex justify-end">
-          <div className="max-w-[720px] rounded-lg border border-rc-border-secondary bg-rc-bg-selected px-4 py-3 text-sm leading-6 text-rc-text-primary">
+        <div className="flex justify-end border-b border-rc-border-secondary py-5 last:border-b-0">
+          <div className="max-w-[720px] rounded-md border border-rc-border-primary bg-rc-bg-elevated px-4 py-3 text-sm leading-6 text-rc-text-primary shadow-xs">
+            <div className="mb-2 flex items-center justify-between">
+              <span className="text-[10px] font-semibold uppercase text-rc-text-tertiary">User</span>
+              <CopyButton text={entry.text} />
+            </div>
             <div className="whitespace-pre-wrap break-words">{entry.text}</div>
           </div>
         </div>
@@ -198,6 +296,41 @@ const MessageCard = memo(
   },
   (previous, next) => previous.entry === next.entry,
 );
+
+// ── Working Indicator with elapsed timer (from CodexMonitor pattern) ──
+
+function WorkingIndicator({ sending }: { sending: boolean }) {
+  const [elapsed, setElapsed] = useState(0);
+
+  useEffect(() => {
+    if (!sending) {
+      setElapsed(0);
+      return;
+    }
+    const start = Date.now();
+    const timer = setInterval(() => {
+      setElapsed(Math.floor((Date.now() - start) / 1000));
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [sending]);
+
+  if (!sending) return null;
+
+  const minutes = Math.floor(elapsed / 60);
+  const seconds = elapsed % 60;
+  const timeStr = minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`;
+
+  return (
+    <div className="flex items-center gap-2 rounded-md border border-rc-border-primary bg-rc-bg-elevated px-3 py-2 text-xs text-rc-text-secondary shadow-xs animate-fade-in">
+      <Loader2 size={14} className="animate-spin text-rc-accent-primary" />
+      <span className="font-medium">Processing</span>
+      <span className="flex items-center gap-1 text-rc-text-tertiary">
+        <Timer size={11} />
+        {timeStr}
+      </span>
+    </div>
+  );
+}
 
 function StatusCards({
   sending,
@@ -215,7 +348,7 @@ function StatusCards({
   return (
     <>
       {sending && (
-        <div role="status" className="rounded-lg border border-rc-border-primary bg-rc-bg-assistant px-4 py-3 text-sm text-rc-text-secondary shadow-xs">
+        <div role="status" className="rounded-md border border-rc-border-primary bg-rc-bg-elevated px-4 py-3 text-sm text-rc-text-secondary shadow-xs">
           <div className="flex items-center gap-3">
             <div className="flex h-5 w-5 items-center justify-center">
               <div className="h-5 w-5 animate-spin rounded-full border-2 border-rc-border-primary border-t-rc-accent-primary" />
@@ -228,8 +361,9 @@ function StatusCards({
               {compactProgress.map((progress, index) => (
                 <div
                   key={`${progress.tool_name}-${progress.tool_call_id}-${index}`}
-                  className="flex items-center gap-2 rounded bg-rc-bg-secondary px-2.5 py-1.5 text-xs"
+                    className="flex items-center gap-2 rounded bg-rc-bg-code px-2.5 py-1.5 text-xs"
                 >
+                  <ToolIcon name={progress.tool_name} />
                   <span className="font-mono font-medium text-rc-text-primary">{progress.tool_name || 'tool'}</span>
                   <span className="text-rc-text-tertiary">·</span>
                   <span className="truncate text-rc-text-secondary">{truncateMiddle(progress.active_form ?? progress.message, 120)}</span>
@@ -243,12 +377,13 @@ function StatusCards({
               {compactResults.map((result, index) => (
                 <div
                   key={`${result.tool_name}-${result.tool_call_id}-${index}`}
-                  className={`flex items-center gap-2 rounded-lg px-3 py-2 text-xs ${
+                  className={`flex items-center gap-2 rounded-md px-3 py-2 text-xs ${
                     result.is_error
                       ? 'bg-rc-accent-error-bg text-rc-accent-error'
                       : 'bg-rc-accent-success-bg text-rc-accent-success'
                   }`}
                 >
+                  {result.is_error ? <XCircle size={13} /> : <CheckCircle2 size={13} />}
                   <span className="font-mono font-medium">{result.tool_name}</span>
                   <span className="opacity-60">·</span>
                   <span className="truncate">{truncateMiddle(result.output, 110)}</span>
@@ -260,7 +395,7 @@ function StatusCards({
       )}
 
       {sendError && (
-        <div role="alert" className="rounded-lg border border-rc-accent-error-border bg-rc-accent-error-bg px-4 py-3 text-sm text-rc-accent-error">
+        <div role="alert" className="rounded-md border border-rc-accent-error-border bg-rc-accent-error-bg px-4 py-3 text-sm text-rc-accent-error">
           {sendError}
         </div>
       )}
@@ -299,9 +434,9 @@ function ConversationTimeline({
     <section
       ref={scrollContainerRef}
       aria-label="Conversation transcript"
-      className="flex-1 min-h-0 overflow-y-auto bg-rc-bg-chat px-5 py-5"
+      className="flex-1 min-h-0 overflow-y-auto bg-rc-bg-chat px-5 py-4"
     >
-      <div className="mx-auto flex w-full max-w-[920px] flex-col gap-3">
+      <div className="mx-auto flex w-full max-w-[860px] flex-col">
         {shouldVirtualize ? (
           <div className="relative w-full" style={{ height: `${rowVirtualizer.getTotalSize()}px` }}>
             {rowVirtualizer.getVirtualItems().map((virtualRow) => {
@@ -314,7 +449,7 @@ function ConversationTimeline({
                   className="absolute left-0 top-0 w-full"
                   style={{ transform: `translateY(${virtualRow.start}px)` }}
                 >
-                  <div className="pb-3">
+                  <div>
                     <MessageCard entry={entry} />
                   </div>
                 </div>
@@ -323,11 +458,13 @@ function ConversationTimeline({
           </div>
         ) : (
           conversation.map((entry, index) => (
-            <div key={conversationRowKey(entry, index)} className="pb-3">
+            <div key={conversationRowKey(entry, index)}>
               <MessageCard entry={entry} />
             </div>
           ))
         )}
+
+        <WorkingIndicator sending={sending} />
 
         <StatusCards
           sending={sending}
@@ -351,7 +488,7 @@ function ConversationHeader({
   provider?: string | null;
 }) {
   return (
-    <div className="flex h-12 shrink-0 items-center justify-between border-b border-rc-border-secondary bg-rc-bg-surface px-5">
+    <div className="flex h-11 shrink-0 items-center justify-between border-b border-rc-border-secondary glass-heavy px-4">
       <div className="flex min-w-0 items-center gap-2">
         <div className="min-w-0 truncate text-sm font-semibold text-rc-text-primary">{title}</div>
         <button
@@ -364,7 +501,7 @@ function ConversationHeader({
         </button>
       </div>
 
-      <div className="hidden min-w-0 items-center gap-2 text-xs text-rc-text-tertiary md:flex">
+      <div className="hidden min-w-0 items-center gap-2 rounded-md border border-rc-border-secondary bg-rc-bg-secondary px-2 py-1 text-xs text-rc-text-tertiary md:flex">
         <GitBranch size={14} />
         <span className="truncate">{provider ?? 'provider'}</span>
         {model && (
@@ -406,14 +543,14 @@ export function ChatArea() {
 
   if (conversationLoading) {
     return (
-      <div className="flex h-full min-h-0 flex-1 flex-col bg-rc-bg-chat">
+      <div className="flex min-h-0 flex-1 flex-col bg-rc-bg-chat">
         <ConversationHeader
           title={activeSession?.title ?? 'Session'}
           provider={activeSession?.provider_name}
           model={activeSession?.model}
         />
         <div className="flex-1 overflow-y-auto">
-          <EmptyState title="Loading session" />
+          <EmptyState title="正在加载会话" />
         </div>
       </div>
     );
@@ -421,21 +558,21 @@ export function ChatArea() {
 
   if (conversation.length === 0) {
     return (
-      <div className="flex h-full min-h-0 flex-1 flex-col bg-rc-bg-chat">
+      <div className="flex min-h-0 flex-1 flex-col bg-rc-bg-chat">
         <ConversationHeader
           title={activeSession?.title ?? 'Session'}
           provider={activeSession?.provider_name}
           model={activeSession?.model}
         />
         <div className="flex-1 overflow-y-auto">
-          <EmptyState title="No messages" />
+          <EmptyState title="暂无消息" />
         </div>
       </div>
     );
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-1 flex-col bg-rc-bg-chat">
+    <div className="flex min-h-0 flex-1 flex-col bg-rc-bg-chat">
       <ConversationHeader
         title={activeSession?.title ?? 'Session'}
         provider={activeSession?.provider_name}

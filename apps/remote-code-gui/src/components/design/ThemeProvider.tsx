@@ -16,9 +16,9 @@ interface ThemeContextValue {
 }
 
 const ThemeContext = createContext<ThemeContextValue>({
-  theme: 'light',
-  mode: 'system',
-  isDark: false,
+  theme: 'dark',
+  mode: 'dark',
+  isDark: true,
   setMode: () => {},
   toggle: () => {},
 });
@@ -26,8 +26,8 @@ const ThemeContext = createContext<ThemeContextValue>({
 const STORAGE_KEY = 'rc-theme-mode';
 
 function getSystemTheme(): 'light' | 'dark' {
-  if (typeof window === 'undefined') return 'light';
-  if (typeof window.matchMedia !== 'function') return 'light';
+  if (typeof window === 'undefined') return 'dark';
+  if (typeof window.matchMedia !== 'function') return 'dark';
   return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
 }
 
@@ -40,7 +40,7 @@ export function useTheme(): ThemeContextValue {
   return useContext(ThemeContext);
 }
 
-export function ThemeProvider({ defaultTheme = 'system', children }: ThemeProviderProps) {
+export function ThemeProvider({ defaultTheme = 'dark', children }: ThemeProviderProps) {
   const [mode, setModeState] = useState<ThemeMode>(() => {
     try {
       const stored = localStorage.getItem(STORAGE_KEY);

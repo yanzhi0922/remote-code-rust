@@ -44,6 +44,13 @@ function shouldUseWorkbenchDemo(): boolean {
   return new URLSearchParams(window.location.search).has('workbench-demo');
 }
 
+function shouldUseLocalWorkbenchPreview(nativeRuntime: boolean): boolean {
+  if (nativeRuntime || typeof window === 'undefined') return false;
+  const params = new URLSearchParams(window.location.search);
+  if (params.get('mode') === 'local' || params.has('workbench')) return true;
+  return import.meta.env.DEV;
+}
+
 function getWorkbenchDemoScene(): WorkbenchDemoScene {
   if (typeof window === 'undefined') return 'main';
   const value = new URLSearchParams(window.location.search).get('workbench-demo');
@@ -616,6 +623,14 @@ function App() {
   }
 
   if (!nativeRuntime) {
+    if (shouldUseLocalWorkbenchPreview(nativeRuntime)) {
+      return (
+        <AppErrorBoundary>
+          <DemoLocalApp />
+        </AppErrorBoundary>
+      );
+    }
+
     return (
       <AppErrorBoundary>
         <MarketingSite />

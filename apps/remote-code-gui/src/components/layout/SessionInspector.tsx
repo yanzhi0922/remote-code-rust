@@ -49,6 +49,28 @@ function InspectorSection({
   );
 }
 
+function formatAgentName(agentType: string) {
+  if (agentType === 'remote_codex') return 'Codex';
+  if (agentType === 'remote_roo') return 'Roo';
+  return 'Claude';
+}
+
+function formatAgentStatus(status: string) {
+  if (status === 'ready') return '就绪';
+  if (status === 'running') return '运行中';
+  if (status === 'offline') return '离线';
+  return status;
+}
+
+function formatPermissionMode(mode: string | undefined) {
+  if (mode === 'acceptEdits') return '自动编辑';
+  if (mode === 'bypassPermissions') return '全自动';
+  if (mode === 'dontAsk') return '不询问';
+  if (mode === 'plan') return '规划';
+  if (mode === 'default') return '默认';
+  return mode ?? '—';
+}
+
 export function SessionInspector() {
   const provider = useAppStore((state) => state.provider);
   const runtimeStatus = useAppStore((state) => state.runtimeStatus);
@@ -77,71 +99,71 @@ export function SessionInspector() {
   return (
     <aside
       aria-label="Environment information"
-      className="hidden w-[324px] shrink-0 border-l border-rc-border-secondary bg-rc-bg-chat px-4 py-4 xl:flex xl:flex-col"
+      className="hidden w-[328px] shrink-0 border-l border-rc-border-secondary bg-rc-bg-chat p-3 xl:flex xl:flex-col"
     >
-      <div className="min-h-0 overflow-hidden rounded-lg border border-rc-border-secondary bg-rc-bg-surface shadow-md">
-        <div className="flex h-11 items-center justify-between border-b border-rc-border-secondary px-4">
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-md border border-rc-border-primary bg-rc-bg-surface shadow-sm">
+        <div className="flex h-11 shrink-0 items-center justify-between border-b border-rc-border-secondary px-4">
           <div className="text-sm font-semibold text-rc-text-primary">环境信息</div>
           <Settings2 size={16} className="text-rc-text-tertiary" />
         </div>
 
-        <div className="max-h-[calc(100dvh-112px)] overflow-auto">
-          <InspectorSection icon={TerminalSquare} title="Session">
-            <InspectorRow label="Title" value={activeSession ? (privacyMode ? 'Hidden session' : activeSession.title) : '—'} />
-            <InspectorRow label="ID" value={activeSessionId ? activeSessionId.slice(0, 8) : '—'} />
-            <InspectorRow label="Project" value={activeProjectPath ? formatSensitivePath(activeProjectPath, privacyMode) : '—'} />
-          </InspectorSection>
+        <div className="min-h-0 flex-1 overflow-auto">
+        <InspectorSection icon={TerminalSquare} title="会话">
+          <InspectorRow label="标题" value={activeSession ? (privacyMode ? '会话已隐藏' : activeSession.title) : '—'} />
+          <InspectorRow label="ID" value={activeSessionId ? activeSessionId.slice(0, 8) : '—'} />
+          <InspectorRow label="项目" value={activeProjectPath ? formatSensitivePath(activeProjectPath, privacyMode) : '—'} />
+        </InspectorSection>
 
-          <InspectorSection icon={Cpu} title="Agent">
-            <InspectorRow label="Type" value={agentType} />
-            <InspectorRow
-              label="Status"
-              value={agentStatus}
-              tone={agentStatus === 'ready' ? 'success' : runtimeStatus ? 'default' : 'warning'}
-            />
-            <InspectorRow label="Provider" value={runtimeStatus?.provider.name ?? provider?.name ?? '—'} />
-            <InspectorRow label="Model" value={activeSession?.model ?? runtimeStatus?.provider.model ?? provider?.model ?? '—'} />
-          </InspectorSection>
+        <InspectorSection icon={Cpu} title="Agent">
+          <InspectorRow label="类型" value={formatAgentName(agentType)} />
+          <InspectorRow
+            label="状态"
+            value={formatAgentStatus(agentStatus)}
+            tone={agentStatus === 'ready' ? 'success' : runtimeStatus ? 'default' : 'warning'}
+          />
+          <InspectorRow label="Provider" value={runtimeStatus?.provider.name ?? provider?.name ?? '—'} />
+          <InspectorRow label="模型" value={activeSession?.model ?? runtimeStatus?.provider.model ?? provider?.model ?? '—'} />
+        </InspectorSection>
 
-          <InspectorSection icon={Shield} title="Policy">
-            <InspectorRow label="Permission" value={settings?.permission_mode ?? '—'} />
-            <InspectorRow
-              label="Pending"
-              value={pendingPermission ? pendingPermission.tool_name : 'none'}
-              tone={pendingPermission ? 'warning' : 'default'}
-            />
-            <InspectorRow
-              label="Context"
-              value={contextUsage ? `${Math.round(contextUsage.ratio * 100)}%` : '—'}
-              tone={contextUsage && contextUsage.ratio > 0.8 ? 'warning' : 'default'}
-            />
-          </InspectorSection>
+        <InspectorSection icon={Shield} title="权限">
+          <InspectorRow label="模式" value={formatPermissionMode(settings?.permission_mode)} />
+          <InspectorRow
+            label="待确认"
+            value={pendingPermission ? pendingPermission.tool_name : '无'}
+            tone={pendingPermission ? 'warning' : 'default'}
+          />
+          <InspectorRow
+            label="上下文"
+            value={contextUsage ? `${Math.round(contextUsage.ratio * 100)}%` : '—'}
+            tone={contextUsage && contextUsage.ratio > 0.8 ? 'warning' : 'default'}
+          />
+        </InspectorSection>
 
-          <InspectorSection icon={Network} title="MCP">
-            <InspectorRow
-              label="Connected"
-              value={mcpSummary ? `${mcpSummary.status_counts.connected}/${mcpSummary.enabled_servers}` : '—'}
-              tone={mcpSummary && mcpSummary.status_counts.connected > 0 ? 'success' : 'default'}
-            />
-            <InspectorRow label="Warnings" value={mcpSummary ? String(mcpSummary.warning_count) : '—'} />
-            <InspectorRow
-              label="Needs Auth"
-              value={mcpSummary ? String(mcpSummary.status_counts.needs_auth) : '—'}
-              tone={mcpSummary && mcpSummary.status_counts.needs_auth > 0 ? 'warning' : 'default'}
-            />
-          </InspectorSection>
+        <InspectorSection icon={Network} title="MCP">
+          <InspectorRow
+            label="已连接"
+            value={mcpSummary ? `${mcpSummary.status_counts.connected}/${mcpSummary.enabled_servers}` : '—'}
+            tone={mcpSummary && mcpSummary.status_counts.connected > 0 ? 'success' : 'default'}
+          />
+          <InspectorRow label="警告" value={mcpSummary ? String(mcpSummary.warning_count) : '—'} />
+          <InspectorRow
+            label="需认证"
+            value={mcpSummary ? String(mcpSummary.status_counts.needs_auth) : '—'}
+            tone={mcpSummary && mcpSummary.status_counts.needs_auth > 0 ? 'warning' : 'default'}
+          />
+        </InspectorSection>
 
-          <InspectorSection icon={Activity} title="Runtime Events">
-            <InspectorRow label="Active tools" value={String(liveToolProgress.length)} />
-            <InspectorRow label="Tool results" value={String(liveToolResults.length)} />
-            <InspectorRow label="Runtime" value={runtimeStatus ? 'online' : 'offline'} tone={runtimeStatus ? 'success' : 'warning'} />
-          </InspectorSection>
+        <InspectorSection icon={Activity} title="运行事件">
+          <InspectorRow label="活动工具" value={String(liveToolProgress.length)} />
+          <InspectorRow label="工具结果" value={String(liveToolResults.length)} />
+          <InspectorRow label="运行时" value={runtimeStatus ? '在线' : '离线'} tone={runtimeStatus ? 'success' : 'warning'} />
+        </InspectorSection>
 
-          <InspectorSection icon={FolderGit2} title="Workspace">
-            <div className="break-all font-mono text-[11px] leading-5 text-rc-text-tertiary">
-              {activeProjectPath ? formatSensitivePath(activeProjectPath, privacyMode) : 'No active project'}
-            </div>
-          </InspectorSection>
+        <InspectorSection icon={FolderGit2} title="工作区">
+          <div className="break-all font-mono text-[11px] leading-5 text-rc-text-tertiary">
+            {activeProjectPath ? formatSensitivePath(activeProjectPath, privacyMode) : '未选择项目'}
+          </div>
+        </InspectorSection>
         </div>
       </div>
     </aside>

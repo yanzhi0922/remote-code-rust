@@ -26,9 +26,9 @@ describe('ChatArea', () => {
     render(<ChatArea />);
 
     expect(screen.getByText('Workbench')).toBeInTheDocument();
-    expect(screen.getByText('Projects')).toBeInTheDocument();
-    expect(screen.getByText('Recent Sessions')).toBeInTheDocument();
-    expect(screen.getByText('Active Project')).toBeInTheDocument();
+    expect(screen.getByText('当前项目')).toBeInTheDocument();
+    expect(screen.getByText('会话')).toBeInTheDocument();
+    expect(screen.getByText('暂无打开的会话')).toBeInTheDocument();
   });
 
   it('renders conversation cards, tool details, live progress, and send errors', async () => {
