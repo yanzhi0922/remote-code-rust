@@ -133,7 +133,7 @@ function Chip({
       className={`inline-flex h-7 items-center gap-1.5 rounded-md border px-2 text-xs transition-colors ${
         active
           ? 'border-rc-accent-primary bg-rc-bg-selected text-rc-accent-primary'
-          : 'border-rc-border-primary bg-rc-bg-surface text-rc-text-secondary hover:border-rc-border-hover hover:bg-rc-bg-hover hover:text-rc-text-primary'
+          : 'border-rc-border-secondary bg-rc-bg-elevated text-rc-text-secondary hover:border-rc-border-hover hover:bg-rc-bg-hover hover:text-rc-text-primary'
       } focus-visible:outline-none`}
     >
       <Icon size={14} className={active ? 'text-rc-accent-primary' : 'text-rc-text-tertiary'} />
@@ -430,10 +430,10 @@ export function ChatInput() {
   const imageAttachments = attachments.filter((a) => a.type.startsWith('image/'));
 
   return (
-    <div role="form" aria-label="Prompt composer" className="border-t border-rc-border-secondary bg-rc-bg-chat px-5 py-4">
-      <div className="mx-auto w-full max-w-[860px]">
+    <div role="form" aria-label="Prompt composer" className="bg-rc-bg-chat px-5 pb-5 pt-3">
+      <div className="mx-auto w-full max-w-input">
         <div
-          className={`relative overflow-visible rounded-lg border shadow-md transition-colors ${
+          className={`relative overflow-visible rounded-[18px] border shadow-lg transition-colors ${
             isDragOver
               ? 'border-rc-accent-primary bg-rc-bg-selected'
               : 'border-rc-border-primary bg-rc-bg-surface focus-within:border-rc-border-focus'
@@ -443,7 +443,7 @@ export function ChatInput() {
           onDrop={handleDrop}
         >
           {isDragOver && (
-            <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-lg bg-rc-accent-primary-light">
+            <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-[18px] bg-rc-accent-primary-light">
               <div className="flex items-center gap-2 text-sm font-medium text-rc-accent-primary">
                 <Paperclip size={16} />
                 拖放文件到此处
@@ -468,7 +468,7 @@ export function ChatInput() {
             </div>
           )}
 
-          <div className="px-3 pb-2 pt-3">
+          <div className="px-4 pb-2 pt-3">
             <textarea
               ref={textAreaRef}
               value={input}
@@ -480,8 +480,8 @@ export function ChatInput() {
               disabled={sending}
               rows={1}
               aria-label="Prompt input"
-              placeholder="向 agent 发送指令或代码片段（输入 / 查看命令，拖放文件附件）"
-              className="min-h-[52px] max-h-[180px] w-full resize-none border-0 bg-transparent px-1 py-1 text-sm leading-6 text-rc-text-primary outline-none placeholder:text-rc-text-tertiary disabled:cursor-not-allowed focus-visible:outline-none"
+              placeholder="向 agent 发送指令，粘贴代码，或输入 / 调用命令"
+              className="min-h-[58px] max-h-[180px] w-full resize-none border-0 bg-transparent px-1 py-1 text-sm leading-6 text-rc-text-primary outline-none placeholder:text-rc-text-tertiary disabled:cursor-not-allowed focus-visible:outline-none"
             />
           </div>
 
@@ -500,7 +500,7 @@ export function ChatInput() {
           <div
             role="group"
             aria-label="Composer controls"
-            className="flex min-h-10 flex-wrap items-center gap-2 border-t border-rc-border-secondary bg-rc-bg-secondary px-2.5 py-2"
+            className="flex min-h-11 flex-wrap items-center gap-2 border-t border-rc-border-secondary bg-rc-bg-elevated/80 px-3 py-2"
           >
             <AgentSelector
               availableAgents={availableAgents}
@@ -602,7 +602,7 @@ export function ChatInput() {
               title="附加文件（暂未实现）"
               disabled
               onClick={() => fileInputRef.current?.click()}
-              className="flex h-8 w-8 items-center justify-center rounded-md text-rc-text-tertiary transition-colors hover:bg-rc-bg-hover hover:text-rc-text-primary disabled:cursor-not-allowed disabled:opacity-45 focus-visible:outline-none"
+              className="flex h-8 w-8 items-center justify-center rounded-full text-rc-text-tertiary transition-colors hover:bg-rc-bg-hover hover:text-rc-text-primary disabled:cursor-not-allowed disabled:opacity-45 focus-visible:outline-none"
             >
               <Paperclip size={15} />
             </button>
@@ -625,7 +625,7 @@ export function ChatInput() {
                 onClick={() => {
                   void handleCancel();
                 }}
-                className="flex h-8 w-8 items-center justify-center rounded-md border border-rc-accent-warning-border bg-rc-accent-warning-bg text-rc-accent-warning transition-colors hover:bg-rc-bg-hover focus-visible:outline-none"
+                className="flex h-8 w-8 items-center justify-center rounded-full border border-rc-accent-warning-border bg-rc-accent-warning-bg text-rc-accent-warning transition-colors hover:bg-rc-bg-hover focus-visible:outline-none"
               >
                 <Square size={15} />
               </button>
@@ -638,7 +638,7 @@ export function ChatInput() {
                 void handleSend();
               }}
               disabled={sending || !input.trim()}
-              className="flex h-8 w-8 items-center justify-center rounded-md bg-rc-text-primary text-rc-bg-base transition-colors hover:bg-rc-accent-primary hover:text-white disabled:cursor-not-allowed disabled:opacity-45 focus-visible:outline-none"
+              className="flex h-8 w-8 items-center justify-center rounded-full bg-rc-text-primary text-rc-bg-base shadow-sm transition-colors hover:bg-rc-accent-primary hover:text-white disabled:cursor-not-allowed disabled:opacity-45 focus-visible:outline-none"
             >
               {sending ? (
                 <div className="h-4 w-4 animate-spin rounded-full border-2 border-white/25 border-t-white" />
