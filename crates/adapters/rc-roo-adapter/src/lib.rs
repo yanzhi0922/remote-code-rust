@@ -1656,11 +1656,11 @@ impl RooInProcessAdapter {
         {
             let adapter_token = cancel_token.clone();
             // Use a simple polling approach since CancellationToken doesn't have
-            // a synchronous blocking wait. The poll interval is short enough to
-            // provide responsive cancellation without busy-wait overhead.
+            // a synchronous blocking wait. The 10 ms poll interval provides fast
+            // cancellation response without significant CPU overhead.
             std::thread::spawn(move || {
                 while !adapter_token.is_cancelled() {
-                    std::thread::sleep(std::time::Duration::from_millis(50));
+                    std::thread::sleep(std::time::Duration::from_millis(10));
                 }
                 agent_loop_token.cancel();
             });
@@ -1791,13 +1791,18 @@ impl AgentAdapter for RooInProcessAdapter {
     ) -> anyhow::Result<mpsc::Receiver<UnifiedAgentEvent>> {
         let (tx, rx) = mpsc::channel(256);
 
-        if self.resolve_followup_response(message.to_string()) {
-            let _ = tx.send(UnifiedAgentEvent::Ready).await;
-            return Ok(rx);
-        }
-        if self.resolve_completion_feedback(message.to_string()) {
-            let _ = tx.send(UnifiedAgentEvent::Ready).await;
-            return Ok(rx);
+        // Only attempt followup/completion resolution when the adapter is busy
+        // running an agent loop. Resolving when idle or stopped would silently
+        // consume the message without doing anything useful.
+        if matches!(self.status, AgentStatus::Busy) {
+            if self.resolve_followup_response(message.to_string()) {
+                let _ = tx.send(UnifiedAgentEvent::Ready).await;
+                return Ok(rx);
+            }
+            if self.resolve_completion_feedback(message.to_string()) {
+                let _ = tx.send(UnifiedAgentEvent::Ready).await;
+                return Ok(rx);
+            }
         }
 
         let panic_tx = tx.clone();
@@ -1960,7 +1965,10 @@ impl AgentAdapter for RooInProcessAdapter {
             }
 
             let sleep = std::time::Duration::from_millis(10);
-            let iterations = 50;
+            // 200 iterations x 10 ms = 2 s total window. Slow MCP server
+            // connections (e.g. remote tool servers) can take over 500 ms to
+            // become ready, so the previous 50-iteration window was too short.
+            let iterations = 200;
 
             let approval = std::iter::repeat_with(|| {
                 if let Some(v) = pickup(&approval_out) {
@@ -2042,6 +2050,17 @@ impl AgentAdapter for RooInProcessAdapter {
 
         let (approval, api_retry, auto_approval_limit, mistake_limit, followup, completion) =
             handles;
+
+        if approval.is_none() || followup.is_none() || completion.is_none() {
+            warn!(
+                approval = approval.is_some(),
+                followup = followup.is_some(),
+                completion = completion.is_some(),
+                "One or more AgentLoop handles were not picked up within the polling window; \
+                 slow MCP server connections may be the cause"
+            );
+        }
+
         self.approval_handle = approval;
         self.api_retry_handle = api_retry;
         self.auto_approval_limit_handle = auto_approval_limit;
@@ -2100,8 +2119,12 @@ impl AgentAdapter for RooInProcessAdapter {
         }
         // Drop the worker handle without joining. std::thread::JoinHandle has
         // no timeout-based join API and a blocking join could hang indefinitely.
-        // The cancellation token above should cause the thread to exit promptly;
-        // it may briefly outlive this adapter.
+        // The cancellation token above causes the worker's inner tokio runtime
+        // to shut down, which in turn cancels the agent loop. The thread will
+        // self-terminate shortly after noticing the cancellation; it may briefly
+        // outlive this adapter. A thread::park_timeout-based timed join was
+        // considered but adds complexity for no practical benefit since the
+        // thread is guaranteed to exit once the cancellation token fires.
         self.worker_handle = None;
         self.approval_handle = None;
         self.api_retry_handle = None;

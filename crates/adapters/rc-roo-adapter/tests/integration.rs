@@ -6,7 +6,6 @@
 
 use anyhow::Result;
 use rc_agent_protocol::adapter::AgentAdapter;
-use rc_agent_protocol::permission::PermissionDecision;
 use rc_agent_protocol::types::{AgentCapability, AgentConfig, AgentType};
 use rc_roo_adapter::RooInProcessAdapter;
 
