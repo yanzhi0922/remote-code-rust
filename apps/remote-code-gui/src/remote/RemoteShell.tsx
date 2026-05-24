@@ -283,7 +283,9 @@ function RemoteFrame({ children }: { children: ReactNode }) {
 
 function strategyLabel(copy: RemoteCopy, strategy: string): string {
   switch (strategy) {
-    case 'direct_ws': return copy.strategyDirect;
+    case 'direct_ws':
+    case 'direct_websocket':
+      return copy.strategyDirect;
     case 'server_relay': return copy.strategyRelay;
     case 'outbound_polling': return copy.strategyPolling;
     case 'hybrid': return copy.strategyHybrid;

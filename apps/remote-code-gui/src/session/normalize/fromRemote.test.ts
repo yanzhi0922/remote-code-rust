@@ -125,6 +125,25 @@ describe('fromRemote', () => {
     expect(appended).toHaveLength(1);
   });
 
+  it('deduplicates non-merge repeated event sequences', () => {
+    const event: RemoteTimelineEvent = {
+      sequence: 99,
+      recorded_at: '2026-04-14T09:00:09Z',
+      runner_id: 'runner-1',
+      session_id: 'session-1',
+      detail: {
+        kind: 'session_state_changed',
+        previous_state: 'pending',
+        state: 'running',
+      },
+    };
+
+    const appended = appendRemoteTimelineEvent([event], event);
+
+    expect(appended).toHaveLength(1);
+    expect(appended[0]).toBe(event);
+  });
+
   it('resolves title from metadata when present', () => {
     expect(
       resolveRemoteSessionTitle({

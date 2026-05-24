@@ -4,16 +4,18 @@ import type {
 } from '../../remote/types';
 
 export function hydrateRemoteTimeline(events: RemoteTimelineEvent[]): RemoteTimelineEvent[] {
+  const seen = new Set<number>();
   return [...events]
     .sort((left, right) => left.sequence - right.sequence)
-    .reduce<RemoteTimelineEvent[]>((current, event) => appendRemoteTimelineEvent(current, event), []);
+    .reduce<RemoteTimelineEvent[]>((current, event) => appendRemoteTimelineEvent(current, event, seen), []);
 }
 
 export function appendRemoteTimelineEvent(
   current: RemoteTimelineEvent[],
   nextEvent: RemoteTimelineEvent,
+  seen: Set<number> = new Set(),
 ): RemoteTimelineEvent[] {
-  if (current.some((event) => event.sequence === nextEvent.sequence)) {
+  if (seen.has(nextEvent.sequence) || current.some((event) => event.sequence === nextEvent.sequence)) {
     return current;
   }
 
@@ -25,6 +27,7 @@ export function appendRemoteTimelineEvent(
       }
       return !sameMessageStream(event.detail, committedDetail);
     });
+    seen.add(nextEvent.sequence);
     return [...filtered, nextEvent].sort((left, right) => left.sequence - right.sequence);
   }
 
@@ -39,6 +42,7 @@ export function appendRemoteTimelineEvent(
           delta: `${last.detail.delta}${deltaDetail.delta}`,
         },
       };
+      seen.add(nextEvent.sequence);
       return [...current.slice(0, -1), merged];
     }
   }
@@ -57,6 +61,7 @@ export function appendRemoteTimelineEvent(
             progressDetail.elapsed_time_seconds ?? last.detail.elapsed_time_seconds,
         },
       };
+      seen.add(nextEvent.sequence);
       return [...current.slice(0, -1), merged];
     }
   }
@@ -78,6 +83,7 @@ export function appendRemoteTimelineEvent(
     }
   }
 
+  seen.add(nextEvent.sequence);
   return [...current, nextEvent].sort((left, right) => left.sequence - right.sequence);
 }
 
