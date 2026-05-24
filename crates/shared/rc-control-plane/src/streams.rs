@@ -1,7 +1,6 @@
 //! WebSocket stream serving functions for real-time event delivery.
 
 use axum::extract::ws::{Message, WebSocket};
-use futures::SinkExt;
 use tokio::sync::broadcast;
 use uuid::Uuid;
 
@@ -85,9 +84,9 @@ pub(crate) async fn serve_filtered_event_stream<F>(
         let event = match subscription.recv().await {
             Ok(event) => event,
             Err(broadcast::error::RecvError::Closed) => break,
-            Err(broadcast::error::RecvError::Lagged(_)) => {
-                let _ = socket.close().await;
-                break;
+            Err(broadcast::error::RecvError::Lagged(n)) => {
+                tracing::warn!("Client fell behind by {n} events, resuming from latest");
+                continue;
             }
         };
         if event.sequence <= last_sequence || !filter(&event) {

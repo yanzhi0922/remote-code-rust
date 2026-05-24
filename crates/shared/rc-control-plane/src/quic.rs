@@ -129,7 +129,8 @@ async fn handle_quic_connection(
                         };
                         if let Err(e) = write_len_prefixed_payload(&mut send, &ack).await {
                             tracing::debug!("QUIC command ack write error: {e}");
-                            break;
+                            // Non-fatal: client may have closed its stream. Continue
+                            // accepting new command streams from this connection.
                         }
                     }
                     Err(quinn::ConnectionError::ApplicationClosed(_)) => break,
@@ -488,13 +489,13 @@ struct QuicAuthMessage {
 }
 
 /// Constant-time comparison for auth tokens.
+///
+/// Hashes both values with SHA-256 first so that timing cannot reveal
+/// length differences between the provided and expected tokens.
 fn constant_time_eq(a: &str, b: &str) -> bool {
-    if a.len() != b.len() {
-        return false;
-    }
-    let mut result = 0u8;
-    for (x, y) in a.bytes().zip(b.bytes()) {
-        result |= x ^ y;
-    }
-    result == 0
+    use sha2::{Digest, Sha256};
+
+    let a_digest: [u8; 32] = Sha256::digest(a.as_bytes()).into();
+    let b_digest: [u8; 32] = Sha256::digest(b.as_bytes()).into();
+    constant_time_eq::constant_time_eq_32(&a_digest, &b_digest)
 }

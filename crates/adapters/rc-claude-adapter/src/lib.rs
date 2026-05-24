@@ -820,6 +820,9 @@ impl AgentAdapter for ClaudeInProcessAdapter {
         info!("ClaudeInProcessAdapter: cancel");
         self.abort_worker();
 
+        // Deny all pending permissions to unblock any waiting oneshot channels.
+        self.drain_pending_permissions().await;
+
         // After cancel, the adapter can still accept new messages.
         self.status = AgentStatus::Ready;
         self.info.status = AgentStatus::Ready;
@@ -882,5 +885,16 @@ impl AgentAdapter for ClaudeInProcessAdapter {
 
     fn agent_type(&self) -> AgentType {
         AgentType::RemoteClaude
+    }
+}
+
+impl Drop for ClaudeInProcessAdapter {
+    fn drop(&mut self) {
+        // Abort any running worker task.
+        if let Some(handle) = self.worker_handle.take() {
+            handle.abort();
+        }
+        // Note: drain_pending_permissions requires async, so pending permissions
+        // will time out on their own (30 min). This is a best-effort cleanup.
     }
 }

@@ -1,19 +1,34 @@
-//! Direct conversion from [`EngineEvent`] to [`UnifiedAgentEvent`].
+//! Direct conversion from [`EngineEvent`] to [`UnifiedAgentEvent`] — **test only**.
 //!
-//! This provides a streamlined path from the engine's richest event type
-//! to the adapter protocol, bypassing the [`QueryObserverEvent`] middle
-//! layer used by the Claude adapter's [`event_mapper`].
+//! # Why this exists
 //!
-//! # Usage
+//! The Claude adapter's production path converts events in two stages:
 //!
-//! ```ignore
-//! use rc_agent_protocol::from_engine::engine_event_to_unified;
-//! use rc_engine_events::EngineEvent;
-//!
-//! if let Some(unified) = engine_event_to_unified(&engine_event, "session-1") {
-//!     event_tx.send(unified).await?;
-//! }
+//! ```text
+//! EngineEvent → [QueryEngine] → QueryObserverEvent → [event_mapper] → UnifiedAgentEvent
 //! ```
+//!
+//! The `QueryEngine` enriches raw engine events with higher-level semantics:
+//! budget evaluation (`ContextBudgetEvaluated`), final results with usage stats
+//! (`QueryFinished`), and stop-hook handling. These synthesized events do **not**
+//! exist in the raw `EngineEvent` stream.
+//!
+//! This module provides a **simplified shortcut** that bypasses the enrichment
+//! layer, converting `EngineEvent` directly to `UnifiedAgentEvent`. It is used
+//! only in integration tests and benchmarks where the full pipeline is unnecessary.
+//!
+//! # Known gaps vs the production path
+//!
+//! - No `ContextUsage` events (requires `ContextBudgetEvaluated`/`StreamingUsageUpdated`)
+//! - Empty `Completed` result (no final text, no usage stats)
+//! - No `BudgetExceeded` error mapping
+//! - Thinking deltas are suppressed (production maps them to `MessageDelta`)
+//!
+//! # Codex and Roo adapters
+//!
+//! These adapters do not use `EngineEvent` at all — they have their own native
+//! event types (`AppServerEvent`, `RooTaskEvent`) with dedicated conversion
+//! functions in their respective crates.
 
 use rc_engine_events::types::{ContentBlockDelta, EngineEvent};
 use tracing::warn;
@@ -55,24 +70,32 @@ pub fn engine_event_to_unified(event: &EngineEvent, session_id: &str) -> Option<
 
         // ── Tool calls ──────────────────────────────────────────
         EngineEvent::ToolUseStarted {
-            tool_use_id: _,
+            tool_use_id,
             tool_name,
             input,
             ..
-        } => Some(UnifiedAgentEvent::ToolCallStarted {
-            session_id: session_id.to_owned(),
-            tool_name: tool_name.to_string(),
-            tool_input: (**input).clone(),
-        }),
+        } => {
+            let mut tool_input = (**input).clone();
+            insert_tool_call_id(&mut tool_input, tool_use_id.as_ref());
+            Some(UnifiedAgentEvent::ToolCallStarted {
+                session_id: session_id.to_owned(),
+                tool_name: tool_name.to_string(),
+                tool_input,
+            })
+        }
 
         EngineEvent::ToolUseProgress {
-            tool_use_id: _,
+            tool_use_id,
             progress,
             ..
         } => Some(UnifiedAgentEvent::ToolCallProgress {
             session_id: session_id.to_owned(),
             tool_name: String::new(),
-            progress: progress.message.clone().unwrap_or_default(),
+            progress: format!(
+                "[{}] {}",
+                tool_use_id.as_ref(),
+                progress.message.clone().unwrap_or_default()
+            ),
         }),
 
         EngineEvent::ToolUseCompleted {
@@ -90,9 +113,7 @@ pub fn engine_event_to_unified(event: &EngineEvent, session_id: &str) -> Option<
         }),
 
         EngineEvent::ToolUseError {
-            tool_use_id,
-            error,
-            ..
+            tool_use_id, error, ..
         } => Some(UnifiedAgentEvent::Error {
             session_id: session_id.to_owned(),
             message: format!("Tool {} failed: {}", tool_use_id, error.message),
@@ -149,6 +170,21 @@ pub fn engine_event_to_unified(event: &EngineEvent, session_id: &str) -> Option<
         | EngineEvent::StateUpdated { .. }
         | EngineEvent::CostUpdated { .. }
         | EngineEvent::UsageUpdated { .. } => None,
+    }
+}
+
+fn insert_tool_call_id(value: &mut serde_json::Value, tool_call_id: &str) {
+    match value {
+        serde_json::Value::Object(map) => {
+            map.entry("tool_call_id")
+                .or_insert_with(|| serde_json::Value::String(tool_call_id.to_owned()));
+        }
+        other => {
+            *other = serde_json::json!({
+                "tool_call_id": tool_call_id,
+                "input": other.clone(),
+            });
+        }
     }
 }
 

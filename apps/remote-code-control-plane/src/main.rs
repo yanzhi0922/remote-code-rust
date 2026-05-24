@@ -3,11 +3,11 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
+use claude_telemetry::install_tracing;
 use rc_control_plane::{
     ControlPlaneConfigOverrides, ControlPlaneService, describe_status, load_control_plane_config,
     quic::{QuicServerConfig, start_quic_listener},
 };
-use claude_telemetry::install_tracing;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -114,9 +114,7 @@ async fn main() -> Result<()> {
                         }
                     });
                 } else {
-                    eprintln!(
-                        "QUIC is disabled by REMOTE_CODE_CONTROL_PLANE_QUIC_DISABLE=1"
-                    );
+                    eprintln!("QUIC is disabled by REMOTE_CODE_CONTROL_PLANE_QUIC_DISABLE=1");
                 }
             }
 
@@ -129,14 +127,13 @@ async fn main() -> Result<()> {
 }
 
 fn env_flag(name: &str) -> Option<String> {
-    std::env::var(name).ok().map(|v| v.trim().to_ascii_lowercase())
+    std::env::var(name)
+        .ok()
+        .map(|v| v.trim().to_ascii_lowercase())
 }
 
 fn env_flag_enabled(name: &str) -> bool {
-    matches!(
-        env_flag(name).as_deref(),
-        Some("1" | "true" | "yes" | "on")
-    )
+    matches!(env_flag(name).as_deref(), Some("1" | "true" | "yes" | "on"))
 }
 
 /// QUIC is enabled by default (auto-starts when cert/key are configured).

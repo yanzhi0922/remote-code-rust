@@ -59,13 +59,13 @@ mod tests {
     };
     use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
     use chrono::Utc;
+    use futures::StreamExt;
     use rc_runner::{
         ApprovalRequestRecord, ApprovalState, ListResponse, RunnerApi, RunnerCapabilities,
         RunnerConfigOverrides, RunnerHeartbeat, RunnerPlatform, RunnerRegistrationRequest,
         RunnerSessionCommandRequest, RunnerSessionCommandResponse, RunnerSnapshot, RunnerState,
         RunnerWorkspace, SessionState as RunnerSessionState, load_runner_config,
     };
-    use futures::StreamExt;
     use reqwest::Client;
     use serde::{Deserialize, de::DeserializeOwned};
     use tempfile::{TempDir, tempdir};

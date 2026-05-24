@@ -16,9 +16,14 @@ anyhow = { workspace = true }
 async-trait = { workspace = true }
 uuid = { workspace = true, features = ["v4", "serde"] }
 chrono = { workspace = true, features = ["serde"] }
+sha2 = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 rc-engine-events = { path = "../rc-engine-events" }
+
+[features]
+default = []
+test-helpers = []
 
 [lints]
 workspace = true

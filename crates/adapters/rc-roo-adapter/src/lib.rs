@@ -761,6 +761,10 @@ fn map_task_event(event: &RooTaskEvent, session_id: &str) -> Option<UnifiedAgent
         }),
 
         // --- Context management ---
+        // NOTE: The native Roo events only provide `messages_removed`; they do not
+        // expose the pre/post context sizes needed to compute a meaningful
+        // `usage_ratio`.  We report 0.0 as a sentinel until the upstream API
+        // supplies context-size metrics.
         RooTaskEvent::ContextCondensationCompleted {
             messages_removed, ..
         } => Some(UnifiedAgentEvent::ContextCompacted {
@@ -822,13 +826,15 @@ fn map_task_event(event: &RooTaskEvent, session_id: &str) -> Option<UnifiedAgent
             })
         }
 
-        RooTaskEvent::TaskDelegationCompleted { summary, .. } => {
-            Some(UnifiedAgentEvent::SubtaskCompleted {
-                session_id: session_id.to_string(),
-                task_id: String::new(),
-                result: serde_json::json!({ "summary": summary }),
-            })
-        }
+        RooTaskEvent::TaskDelegationCompleted {
+            child_task_id,
+            summary,
+            ..
+        } => Some(UnifiedAgentEvent::SubtaskCompleted {
+            session_id: session_id.to_string(),
+            task_id: child_task_id.clone(),
+            result: serde_json::json!({ "summary": summary }),
+        }),
 
         // --- Errors ---
         RooTaskEvent::Error { error, .. } => Some(UnifiedAgentEvent::Error {
@@ -1937,90 +1943,111 @@ impl AgentAdapter for RooInProcessAdapter {
         // Pick up the approval handle that was set by the worker thread.
         // Busy-wait briefly because the worker may not have constructed
         // the AgentLoop yet.  In practice this resolves within 1-2 iterations.
-        for _ in 0..50 {
-            let taken = match approval_out.lock() {
-                Ok(mut guard) => guard.take(),
-                Err(e) => {
-                    warn!("Approval-out mutex poisoned during pickup, recovering: {e}");
-                    e.into_inner().take()
+        //
+        // Use spawn_blocking so the std::sync::Mutex locks and thread::sleep
+        // calls don't block the async runtime for up to 3 seconds total.
+        let handles = tokio::task::spawn_blocking(move || {
+            // Helper: try to take a value from a std::sync::Mutex<Option<T>>,
+            // recovering from poison if necessary.
+            fn pickup<T>(lock: &std::sync::Mutex<Option<T>>) -> Option<T> {
+                match lock.lock() {
+                    Ok(mut guard) => guard.take(),
+                    Err(e) => {
+                        warn!("Mutex poisoned during pickup, recovering: {e}");
+                        e.into_inner().take()
+                    }
                 }
-            };
-            if let Some(ah) = taken {
-                self.approval_handle = Some(ah);
-                break;
             }
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
-        for _ in 0..50 {
-            let taken = match api_retry_out.lock() {
-                Ok(mut guard) => guard.take(),
-                Err(e) => {
-                    warn!("API-retry-out mutex poisoned during pickup, recovering: {e}");
-                    e.into_inner().take()
+
+            let sleep = std::time::Duration::from_millis(10);
+            let iterations = 50;
+
+            let approval = std::iter::repeat_with(|| {
+                if let Some(v) = pickup(&approval_out) {
+                    return Some(v);
                 }
-            };
-            if let Some(handle) = taken {
-                self.api_retry_handle = Some(handle);
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
-        for _ in 0..50 {
-            let taken = match auto_approval_limit_out.lock() {
-                Ok(mut guard) => guard.take(),
-                Err(e) => {
-                    warn!("Auto-approval-limit-out mutex poisoned during pickup, recovering: {e}");
-                    e.into_inner().take()
+                std::thread::sleep(sleep);
+                None
+            })
+            .take(iterations)
+            .find(|v| v.is_some())
+            .flatten();
+
+            let api_retry = std::iter::repeat_with(|| {
+                if let Some(v) = pickup(&api_retry_out) {
+                    return Some(v);
                 }
-            };
-            if let Some(handle) = taken {
-                self.auto_approval_limit_handle = Some(handle);
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
-        for _ in 0..50 {
-            let taken = match mistake_limit_out.lock() {
-                Ok(mut guard) => guard.take(),
-                Err(e) => {
-                    warn!("Mistake-limit-out mutex poisoned during pickup, recovering: {e}");
-                    e.into_inner().take()
+                std::thread::sleep(sleep);
+                None
+            })
+            .take(iterations)
+            .find(|v| v.is_some())
+            .flatten();
+
+            let auto_approval_limit = std::iter::repeat_with(|| {
+                if let Some(v) = pickup(&auto_approval_limit_out) {
+                    return Some(v);
                 }
-            };
-            if let Some(handle) = taken {
-                self.mistake_limit_handle = Some(handle);
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
-        for _ in 0..50 {
-            let taken = match followup_out.lock() {
-                Ok(mut guard) => guard.take(),
-                Err(e) => {
-                    warn!("Followup-out mutex poisoned during pickup, recovering: {e}");
-                    e.into_inner().take()
+                std::thread::sleep(sleep);
+                None
+            })
+            .take(iterations)
+            .find(|v| v.is_some())
+            .flatten();
+
+            let mistake_limit = std::iter::repeat_with(|| {
+                if let Some(v) = pickup(&mistake_limit_out) {
+                    return Some(v);
                 }
-            };
-            if let Some(handle) = taken {
-                self.followup_handle = Some(handle);
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
-        for _ in 0..50 {
-            let taken = match completion_out.lock() {
-                Ok(mut guard) => guard.take(),
-                Err(e) => {
-                    warn!("Completion-out mutex poisoned during pickup, recovering: {e}");
-                    e.into_inner().take()
+                std::thread::sleep(sleep);
+                None
+            })
+            .take(iterations)
+            .find(|v| v.is_some())
+            .flatten();
+
+            let followup = std::iter::repeat_with(|| {
+                if let Some(v) = pickup(&followup_out) {
+                    return Some(v);
                 }
-            };
-            if let Some(handle) = taken {
-                self.completion_handle = Some(handle);
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
+                std::thread::sleep(sleep);
+                None
+            })
+            .take(iterations)
+            .find(|v| v.is_some())
+            .flatten();
+
+            let completion = std::iter::repeat_with(|| {
+                if let Some(v) = pickup(&completion_out) {
+                    return Some(v);
+                }
+                std::thread::sleep(sleep);
+                None
+            })
+            .take(iterations)
+            .find(|v| v.is_some())
+            .flatten();
+
+            (
+                approval,
+                api_retry,
+                auto_approval_limit,
+                mistake_limit,
+                followup,
+                completion,
+            )
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("handle pickup task failed: {e}"))?;
+
+        let (approval, api_retry, auto_approval_limit, mistake_limit, followup, completion) =
+            handles;
+        self.approval_handle = approval;
+        self.api_retry_handle = api_retry;
+        self.auto_approval_limit_handle = auto_approval_limit;
+        self.mistake_limit_handle = mistake_limit;
+        self.followup_handle = followup;
+        self.completion_handle = completion;
 
         Ok(rx)
     }
@@ -2067,11 +2094,14 @@ impl AgentAdapter for RooInProcessAdapter {
     async fn stop(&mut self) -> anyhow::Result<()> {
         info!("Stopping Roo In-Process adapter");
 
-        if let Some(ref token) = self.cancel_token {
+        // Signal the worker thread to stop via the cancellation token.
+        if let Some(token) = self.cancel_token.take() {
             token.cancel();
         }
-        // std::thread::JoinHandle has no abort().  The thread will
-        // exit when it observes the cancelled CancellationToken.
+        // Drop the worker handle without joining. std::thread::JoinHandle has
+        // no timeout-based join API and a blocking join could hang indefinitely.
+        // The cancellation token above should cause the thread to exit promptly;
+        // it may briefly outlive this adapter.
         self.worker_handle = None;
         self.approval_handle = None;
         self.api_retry_handle = None;
@@ -2098,6 +2128,21 @@ impl AgentAdapter for RooInProcessAdapter {
 
     fn agent_type(&self) -> AgentType {
         AgentType::RemoteRoo
+    }
+}
+
+impl Drop for RooInProcessAdapter {
+    fn drop(&mut self) {
+        // Signal cancellation to the worker thread.
+        if let Some(token) = self.cancel_token.take() {
+            token.cancel();
+        }
+        // Drop the worker handle without joining. std::thread::JoinHandle has
+        // no timeout-based join, and forcing a join could block the dropper
+        // indefinitely. The cancellation token above should cause the thread
+        // to exit promptly; once it does, the handle (now detached) is cleaned
+        // up by the OS. The thread may briefly outlive the adapter.
+        drop(self.worker_handle.take());
     }
 }
 

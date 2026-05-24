@@ -1026,9 +1026,7 @@ fn load_gui_runner_workspaces(
         let workspace_id = gui_workspace_id(&root_dir);
         if workspaces
             .iter()
-            .any(|workspace: &rc_runner::RunnerWorkspace| {
-                workspace.workspace_id == workspace_id
-            })
+            .any(|workspace: &rc_runner::RunnerWorkspace| workspace.workspace_id == workspace_id)
         {
             continue;
         }

@@ -63,7 +63,9 @@ fn test_permission_request_serde() {
 #[ignore]
 #[tokio::test]
 async fn test_adapter_lifecycle() {
-    unimplemented!("Codex adapter lifecycle test requires Codex runtime - see rc-codex-adapter/src/adapter.rs for the implementation")
+    unimplemented!(
+        "Codex adapter lifecycle test requires Codex runtime - see rc-codex-adapter/src/adapter.rs for the implementation"
+    )
 }
 
 /// Test that the adapter handles cancel before start gracefully.

@@ -6,7 +6,7 @@ license.workspace = true
 description = "In-process adapter for Claude agent — wraps QueryEngine into a unified adapter interface"
 
 [dependencies]
-rc-agent-protocol = { path = "../../shared/rc-agent-protocol" }
+rc-agent-protocol = { path = "../../shared/rc-agent-protocol", features = ["test-helpers"] }
 claude-query-engine = { path = "../../claude/claude-query-engine" }
 claude-core = { path = "../../claude/claude-core" }
 claude-config = { path = "../../claude/claude-config" }

@@ -58,6 +58,18 @@ pub(crate) async fn download_file(
     if filename.contains('/') || filename.contains('\\') || filename.contains("..") {
         return StatusCode::BAD_REQUEST.into_response();
     }
+    // Block URL-encoded traversal sequences (e.g. %2e%2e).
+    if filename.contains("%2e%2e") || filename.contains("%2E%2E") {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
+    // Block Windows alternate data streams (e.g. "file.txt:Zone.Identifier").
+    if cfg!(windows) && filename.contains(':') {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
+    // Block empty filenames after sanitization.
+    if filename.trim().is_empty() {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
 
     let path = dir.join(&filename);
     if !path.is_file() {

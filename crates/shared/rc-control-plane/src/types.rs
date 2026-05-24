@@ -394,8 +394,8 @@ pub struct SessionRecord {
     pub metadata: BTreeMap<String, String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
-    /// Tenant-scoping user identity.  Set to an explicitly provisioned
-    /// user-key token when the session is created by an `AuthPrincipal::User`.
+    /// Tenant-scoping user identity.  Set to a non-secret hash-derived user id
+    /// when the session is created by an `AuthPrincipal::User`.
     /// `None` for legacy sessions or admin-created sessions (visible to all).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub owner_user_id: Option<String>,

@@ -164,6 +164,10 @@ pub(crate) fn hash_secret_value(raw: &str) -> String {
     encoded
 }
 
+pub(crate) fn derived_user_id_from_key(raw: &str) -> String {
+    format!("sha256:{}", hash_secret_value(raw))
+}
+
 // ---------------------------------------------------------------------------
 // Auth middleware
 // ---------------------------------------------------------------------------
@@ -238,14 +242,29 @@ pub(crate) async fn require_api_auth(
     }
 
     if request_allows_tenant_user_auth(&request) && service.accepts_derived_user_key(&provided) {
-        request
-            .extensions_mut()
-            .insert(AuthPrincipal::User { user_id: provided });
+        request.extensions_mut().insert(AuthPrincipal::User {
+            user_id: derived_user_id_from_key(&provided),
+        });
         return next.run(request).await;
     }
 
     ApiError::unauthorized("missing or invalid control plane bearer token".to_owned())
         .into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::derived_user_id_from_key;
+
+    #[test]
+    fn derived_user_id_does_not_store_raw_user_key() {
+        let raw_key = "user-key-with-enough-entropy";
+        let derived = derived_user_id_from_key(raw_key);
+
+        assert_ne!(derived, raw_key);
+        assert!(derived.starts_with("sha256:"));
+        assert_eq!(derived, derived_user_id_from_key(raw_key));
+    }
 }
 
 async fn consume_stream_ticket(

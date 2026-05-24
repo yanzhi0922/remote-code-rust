@@ -17,10 +17,30 @@ fn test_adapter_info_and_type() {
 
     assert_eq!(adapter.agent_type(), AgentType::RemoteRoo);
     assert_eq!(adapter.info().name, "Roo In-Process");
-    assert!(adapter.info().capabilities.contains(&AgentCapability::Streaming));
-    assert!(adapter.info().capabilities.contains(&AgentCapability::ToolUse));
-    assert!(adapter.info().capabilities.contains(&AgentCapability::Subtasks));
-    assert!(adapter.info().capabilities.contains(&AgentCapability::McpSupport));
+    assert!(
+        adapter
+            .info()
+            .capabilities
+            .contains(&AgentCapability::Streaming)
+    );
+    assert!(
+        adapter
+            .info()
+            .capabilities
+            .contains(&AgentCapability::ToolUse)
+    );
+    assert!(
+        adapter
+            .info()
+            .capabilities
+            .contains(&AgentCapability::Subtasks)
+    );
+    assert!(
+        adapter
+            .info()
+            .capabilities
+            .contains(&AgentCapability::McpSupport)
+    );
 }
 
 /// Verify that start() fails gracefully without a real API key.
@@ -33,7 +53,10 @@ async fn test_start_fails_without_api_key() {
             ..Default::default()
         })
         .await;
-    assert!(result.is_err(), "expected start to fail without provider config");
+    assert!(
+        result.is_err(),
+        "expected start to fail without provider config"
+    );
 }
 
 /// Verify that stop is safe on an unstarted adapter (no panic).
@@ -51,7 +74,10 @@ async fn test_stop_without_start_is_safe() -> Result<()> {
 async fn test_send_message_without_provider_returns_error() -> Result<()> {
     let mut adapter = RooInProcessAdapter::new();
     let result = adapter.send_message("test-session", "Hello").await;
-    assert!(result.is_err(), "expected error when no provider is configured");
+    assert!(
+        result.is_err(),
+        "expected error when no provider is configured"
+    );
     Ok(())
 }
 
@@ -75,7 +101,10 @@ fn test_is_alive_before_start() {
 fn test_adapter_has_mcp_capability() {
     let adapter = RooInProcessAdapter::new();
     assert!(
-        adapter.info().capabilities.contains(&AgentCapability::McpSupport),
+        adapter
+            .info()
+            .capabilities
+            .contains(&AgentCapability::McpSupport),
         "Roo adapter should advertise McpSupport"
     );
 }

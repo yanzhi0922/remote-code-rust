@@ -95,10 +95,12 @@ async fn test_adapter_start_stop() -> Result<()> {
     // Adapter starts in Starting state.
     assert_eq!(format!("{}", adapter.info().status), "starting");
 
-    adapter.start(&AgentConfig {
-        agent_type: AgentType::RemoteClaude,
-        ..Default::default()
-    }).await?;
+    adapter
+        .start(&AgentConfig {
+            agent_type: AgentType::RemoteClaude,
+            ..Default::default()
+        })
+        .await?;
 
     // After start the adapter should be ready and alive.
     assert!(adapter.is_alive());
@@ -116,8 +118,18 @@ async fn test_adapter_info_and_type() -> Result<()> {
 
     assert_eq!(adapter.agent_type(), AgentType::RemoteClaude);
     assert_eq!(adapter.info().name, "Remote Claude");
-    assert!(adapter.info().capabilities.contains(&AgentCapability::Streaming));
-    assert!(adapter.info().capabilities.contains(&AgentCapability::ToolUse));
+    assert!(
+        adapter
+            .info()
+            .capabilities
+            .contains(&AgentCapability::Streaming)
+    );
+    assert!(
+        adapter
+            .info()
+            .capabilities
+            .contains(&AgentCapability::ToolUse)
+    );
     // The Claude adapter does not advertise McpSupport by default;
     // MCP capability is loaded dynamically via claude-mcp at runtime.
     Ok(())
@@ -130,10 +142,12 @@ async fn test_send_message_returns_error_without_provider() -> Result<()> {
     let store = Arc::new(SessionStore::open(config.paths.clone())?);
     let mut adapter = ClaudeInProcessAdapter::new(config, store);
 
-    adapter.start(&AgentConfig {
-        agent_type: AgentType::RemoteClaude,
-        ..Default::default()
-    }).await?;
+    adapter
+        .start(&AgentConfig {
+            agent_type: AgentType::RemoteClaude,
+            ..Default::default()
+        })
+        .await?;
 
     // Without a real API key, send_message should either return an error
     // or return a receiver that eventually yields an Error or stop signal.
@@ -149,7 +163,8 @@ async fn test_send_message_returns_error_without_provider() -> Result<()> {
                         _ => {}
                     }
                 }
-            }).await;
+            })
+            .await;
         }
         Err(_) => {
             // Expected: no provider configured.
@@ -165,10 +180,12 @@ async fn test_stop_is_idempotent() -> Result<()> {
     let store = Arc::new(SessionStore::open(config.paths.clone())?);
     let mut adapter = ClaudeInProcessAdapter::new(config, store);
 
-    adapter.start(&AgentConfig {
-        agent_type: AgentType::RemoteClaude,
-        ..Default::default()
-    }).await?;
+    adapter
+        .start(&AgentConfig {
+            agent_type: AgentType::RemoteClaude,
+            ..Default::default()
+        })
+        .await?;
 
     adapter.stop().await?;
     // Second stop should not panic or error.
@@ -183,10 +200,12 @@ async fn test_resolve_unknown_permission_returns_error() -> Result<()> {
     let store = Arc::new(SessionStore::open(config.paths.clone())?);
     let mut adapter = ClaudeInProcessAdapter::new(config, store);
 
-    adapter.start(&AgentConfig {
-        agent_type: AgentType::RemoteClaude,
-        ..Default::default()
-    }).await?;
+    adapter
+        .start(&AgentConfig {
+            agent_type: AgentType::RemoteClaude,
+            ..Default::default()
+        })
+        .await?;
 
     // A permission request with an unknown ID should error.
     let result = adapter
@@ -203,10 +222,12 @@ async fn test_cancel_is_safe_when_not_busy() -> Result<()> {
     let store = Arc::new(SessionStore::open(config.paths.clone())?);
     let mut adapter = ClaudeInProcessAdapter::new(config, store);
 
-    adapter.start(&AgentConfig {
-        agent_type: AgentType::RemoteClaude,
-        ..Default::default()
-    }).await?;
+    adapter
+        .start(&AgentConfig {
+            agent_type: AgentType::RemoteClaude,
+            ..Default::default()
+        })
+        .await?;
 
     // Cancel on an idle adapter should succeed.
     adapter.cancel("test-session").await?;

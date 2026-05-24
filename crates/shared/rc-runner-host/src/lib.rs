@@ -12,6 +12,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
 use chrono::Utc;
+use futures::{SinkExt, StreamExt};
 use rc_control_plane::{
     RunnerCommandPullResponse, RunnerQueuedCommandBody, RuntimeEventCreateRequest,
     RuntimeEventDetail, SessionState as ControlPlaneSessionState, SessionStateUpdateRequest,
@@ -23,7 +24,6 @@ use rc_runner::{
     RunnerSessionStateUpdateRequest, SessionState as RunnerSessionState,
     register_with_control_plane, send_heartbeat,
 };
-use futures::{SinkExt, StreamExt};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{ChildStdin, Command as ProcessCommand};
 use tokio::sync::{Mutex, mpsc, watch};
@@ -533,9 +533,7 @@ impl HostedSessionManager {
 
         let behavior = match approval.state {
             rc_runner::ApprovalState::Approved => "allow",
-            rc_runner::ApprovalState::Denied | rc_runner::ApprovalState::Cancelled => {
-                "deny"
-            }
+            rc_runner::ApprovalState::Denied | rc_runner::ApprovalState::Cancelled => "deny",
             rc_runner::ApprovalState::Pending => return Ok(()),
         };
         let note = approval
@@ -1125,6 +1123,7 @@ fn authorize_control_plane_request(
     }
 }
 
+// TODO: extract to shared utility (duplicated in rc-runner)
 fn encode_path_segment(raw: &str) -> String {
     let mut encoded = String::with_capacity(raw.len());
     for byte in raw.bytes() {
@@ -1168,38 +1167,41 @@ pub async fn apply_pulled_runner_commands(
     response: RunnerCommandPullResponse,
 ) -> Result<()> {
     for command in response.commands {
-        match command.body {
+        let result: Result<(), anyhow::Error> = match command.body {
             RunnerQueuedCommandBody::CreateSession { request } => {
-                let _ = api.create_session_direct(request).await?;
+                api.create_session_direct(request).await.map(|_| ())
             }
             RunnerQueuedCommandBody::UpdateSessionState {
                 session_id,
                 request,
-            } => {
-                let _ = api
-                    .apply_session_state_update_direct(session_id, request)
-                    .await?;
-            }
+            } => api
+                .apply_session_state_update_direct(session_id, request)
+                .await
+                .map(|_| ()),
             RunnerQueuedCommandBody::SessionCommand {
                 session_id,
                 request,
-            } => {
-                let _ = api.post_session_command_direct(session_id, request).await?;
-            }
+            } => api
+                .post_session_command_direct(session_id, request)
+                .await
+                .map(|_| ()),
             RunnerQueuedCommandBody::CreateApproval {
                 session_id,
                 request,
-            } => {
-                let _ = api.create_approval_direct(session_id, request).await?;
-            }
+            } => api
+                .create_approval_direct(session_id, request)
+                .await
+                .map(|_| ()),
             RunnerQueuedCommandBody::ApplyApprovalDecision {
                 approval_id,
                 request,
-            } => {
-                let _ = api
-                    .apply_approval_decision_direct(approval_id, request)
-                    .await?;
-            }
+            } => api
+                .apply_approval_decision_direct(approval_id, request)
+                .await
+                .map(|_| ()),
+        };
+        if let Err(e) = result {
+            tracing::warn!("runner command batch apply error (continuing): {e}");
         }
     }
     Ok(())
@@ -1375,19 +1377,21 @@ pub async fn run_control_plane_command_stream(
     }
 }
 
-type WsStream = tokio_tungstenite::WebSocketStream<
-    tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
->;
+type WsStream =
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 
-async fn try_ws_connect(
-    cp_url: &str,
-    config: &RunnerConfig,
-) -> Option<WsStream> {
+async fn try_ws_connect(cp_url: &str, config: &RunnerConfig) -> Option<WsStream> {
     let base_url = cp_url.trim_end_matches('/');
     let ws_url = if let Some(rest) = base_url.strip_prefix("https://") {
-        format!("wss://{rest}/v1/runners/{}/commands/stream", config.runner_id)
+        format!(
+            "wss://{rest}/v1/runners/{}/commands/stream",
+            config.runner_id
+        )
     } else if let Some(rest) = base_url.strip_prefix("http://") {
-        format!("ws://{rest}/v1/runners/{}/commands/stream", config.runner_id)
+        format!(
+            "ws://{rest}/v1/runners/{}/commands/stream",
+            config.runner_id
+        )
     } else {
         return None;
     };

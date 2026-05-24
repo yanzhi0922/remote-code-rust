@@ -172,9 +172,7 @@ impl RuntimeEventDetail {
                 summary: Some(result.content.clone()),
             }),
             EngineEvent::ToolUseError {
-                tool_use_id,
-                error,
-                ..
+                tool_use_id, error, ..
             } => Some(Self::ToolFinished {
                 tool_call_id: Arc::clone(tool_use_id),
                 tool_name: Arc::from(""),
@@ -191,9 +189,8 @@ impl RuntimeEventDetail {
                 message: error.clone(),
             }),
             EngineEvent::CompactCompleted { result } => Some(Self::ContextCompacted {
-                entries_removed: result
-                    .before_messages
-                    .saturating_sub(result.after_messages) as u32,
+                entries_removed: result.before_messages.saturating_sub(result.after_messages)
+                    as u32,
                 usage_ratio: 0.0,
             }),
             // ── No direct RuntimeEventDetail counterpart ──

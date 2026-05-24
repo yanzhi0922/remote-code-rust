@@ -1054,7 +1054,7 @@ async fn serve_runner_command_stream(
     runner_id: String,
 ) {
     use axum::extract::ws::Message;
-    use tokio::time::{interval, Duration};
+    use tokio::time::{Duration, interval};
 
     let mut ping_interval = interval(Duration::from_secs(15));
     let drain_interval = Duration::from_millis(200);

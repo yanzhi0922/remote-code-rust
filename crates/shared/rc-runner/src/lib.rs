@@ -443,7 +443,10 @@ impl LatencyTracker {
         let prev_max = self.max_latency_ms.load(Ordering::Relaxed);
         if ms > prev_max {
             let _ = self.max_latency_ms.compare_exchange(
-                prev_max, ms, Ordering::Relaxed, Ordering::Relaxed,
+                prev_max,
+                ms,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
             );
         }
     }
@@ -453,7 +456,11 @@ impl LatencyTracker {
         let total = self.total_latency_ms.load(Ordering::Relaxed);
         CommandLatencyMetrics {
             commands_processed: processed,
-            avg_latency_ms: if processed > 0 { total as f64 / processed as f64 } else { 0.0 },
+            avg_latency_ms: if processed > 0 {
+                total as f64 / processed as f64
+            } else {
+                0.0
+            },
             max_latency_ms: self.max_latency_ms.load(Ordering::Relaxed),
         }
     }
@@ -1163,6 +1170,7 @@ fn read_control_plane_auth_token_env() -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
+// TODO: extract to shared utility (duplicated in rc-runner-host)
 fn encode_path_segment(raw: &str) -> String {
     let mut encoded = String::with_capacity(raw.len());
     for byte in raw.bytes() {

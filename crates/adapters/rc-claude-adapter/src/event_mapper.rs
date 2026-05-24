@@ -54,10 +54,12 @@ pub fn map_observer_event(
 
         // ── Tool execution ─────────────────────────────────────────
         QueryObserverEvent::ToolCallStarted { tool_call, .. } => {
+            let mut tool_input = tool_call.input.clone();
+            insert_tool_call_id(&mut tool_input, &tool_call.id);
             Some(UnifiedAgentEvent::ToolCallStarted {
                 session_id: session_id.to_owned(),
                 tool_name: tool_call.name.clone(),
-                tool_input: tool_call.input.clone(),
+                tool_input,
             })
         }
 
@@ -119,11 +121,18 @@ pub fn map_observer_event(
 
         QueryObserverEvent::QueryFailed {
             error, usage: _, ..
-        } => Some(UnifiedAgentEvent::Error {
-            session_id: session_id.to_owned(),
-            message: error,
-            recoverable: true,
-        }),
+        } => {
+            let msg = error.to_lowercase();
+            let recoverable = !msg.contains("invalid api key")
+                && !msg.contains("authentication")
+                && !msg.contains("401")
+                && !msg.contains("403");
+            Some(UnifiedAgentEvent::Error {
+                session_id: session_id.to_owned(),
+                message: error,
+                recoverable,
+            })
+        }
 
         QueryObserverEvent::BudgetExceeded { reason, .. } => Some(UnifiedAgentEvent::Error {
             session_id: session_id.to_owned(),
@@ -142,6 +151,21 @@ pub fn map_observer_event(
         // These engine-internal events are useful for observability in the
         // query engine itself but carry no adapter-protocol semantics.
         _ => None,
+    }
+}
+
+fn insert_tool_call_id(value: &mut serde_json::Value, tool_call_id: &str) {
+    match value {
+        serde_json::Value::Object(map) => {
+            map.entry("tool_call_id")
+                .or_insert_with(|| serde_json::Value::String(tool_call_id.to_owned()));
+        }
+        other => {
+            *other = serde_json::json!({
+                "tool_call_id": tool_call_id,
+                "input": other.clone(),
+            });
+        }
     }
 }
 
@@ -266,7 +290,11 @@ mod tests {
                 ..
             } => {
                 assert_eq!(tool_name, "read_file");
-                assert_eq!(tool_input, input);
+                assert_eq!(tool_input.get("path"), input.get("path"));
+                assert_eq!(
+                    tool_input.get("tool_call_id").and_then(|id| id.as_str()),
+                    Some("tc-1")
+                );
             }
             other => panic!("expected ToolCallStarted, got {other:?}"),
         }

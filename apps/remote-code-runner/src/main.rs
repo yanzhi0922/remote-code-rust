@@ -3,6 +3,7 @@ use std::path::PathBuf;
 
 use anyhow::{Result, anyhow};
 use clap::{Parser, Subcommand};
+use claude_telemetry::install_tracing;
 use rc_runner::{
     RUNNER_EVENT_CHANNEL_CAPACITY, RunnerApi, RunnerConfigOverrides, describe_status,
     load_runner_config, validate_runner_config,
@@ -11,7 +12,6 @@ use rc_runner_host::{
     HostedSessionManager, default_remote_code_bin, run_control_plane_command_stream,
     run_control_plane_sync, run_outbound_poll_loop,
 };
-use claude_telemetry::install_tracing;
 use tokio::sync::{mpsc, watch};
 
 #[derive(Parser, Debug)]

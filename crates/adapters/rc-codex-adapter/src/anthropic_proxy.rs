@@ -649,15 +649,28 @@ fn translate_sse_response(
             };
             buffer.push_str(text);
 
-            // Extract complete SSE events from buffer
-            while let Some(pos) = buffer.find("\n\n") {
+            // Extract complete SSE events from buffer (handle both \n\n and \r\n\r\n delimiters)
+            // Search for \r\n\r\n first; if not found fall back to \n\n.
+            loop {
+                let boundary = buffer.find("\r\n\r\n").or_else(|| buffer.find("\n\n"));
+                let pos = match boundary {
+                    Some(p) => p,
+                    None => break,
+                };
+                let delimiter_len = if buffer.as_bytes().get(pos) == Some(&b'\r') {
+                    4
+                } else {
+                    2
+                };
                 let raw = buffer[..pos].to_string();
-                buffer = buffer[pos + 2..].to_string();
+                buffer = buffer[pos + delimiter_len..].to_string();
 
+                // Strip carriage returns from the raw event text for consistent parsing
+                let normalized = raw.replace('\r', "");
                 let mut event_type = String::new();
                 let mut data = String::new();
 
-                for line in raw.lines() {
+                for line in normalized.lines() {
                     if let Some(rest) = line.strip_prefix("event:") {
                         event_type = rest.trim().to_string();
                     } else if let Some(rest) = line.strip_prefix("data:") {
