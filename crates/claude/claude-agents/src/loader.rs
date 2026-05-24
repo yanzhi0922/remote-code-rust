@@ -79,7 +79,7 @@ pub fn load_agents_from_dir(dir: &Path, source: AgentSource) -> Result<Vec<Agent
 
     let mut agents = Vec::new();
     let mut paths = WalkDir::new(dir)
-        .follow_links(true)
+        .follow_links(false)
         .sort_by(|a, b| a.path().cmp(b.path()))
         .into_iter()
         .filter_map(|entry| match entry {

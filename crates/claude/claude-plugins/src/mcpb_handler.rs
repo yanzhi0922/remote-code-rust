@@ -139,7 +139,20 @@ impl McpbHandler {
             }
         };
 
-        let install_path = self.install_base.join(&metadata.name);
+        // Sanitize metadata.name to prevent path traversal.
+        let name = metadata.name.clone();
+        if name.contains("..") || name.contains('/') || name.contains('\\') {
+            return McpbInstallResult {
+                metadata,
+                install_path: PathBuf::new(),
+                success: false,
+                error: Some(format!(
+                    "MCPB metadata name contains path traversal characters: {name}"
+                )),
+            };
+        }
+
+        let install_path = self.install_base.join(&name);
 
         McpbInstallResult {
             metadata,

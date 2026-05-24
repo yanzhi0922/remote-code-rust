@@ -4,6 +4,7 @@ use std::env;
 use std::fs;
 use std::net::IpAddr;
 use std::path::PathBuf;
+use std::sync::OnceLock;
 
 use anyhow::{Context, Result, anyhow};
 use regex::Regex;
@@ -63,6 +64,35 @@ pub(crate) fn validate_url(url: &str) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Shared HTTP client for DuckDuckGo search backend.
+static SEARCH_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+
+fn search_client() -> &'static reqwest::Client {
+    SEARCH_CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .user_agent(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) \
+                 AppleWebKit/537.36 (KHTML, like Gecko) \
+                 Chrome/120.0.0.0 Safari/537.36",
+            )
+            .build()
+            .expect("failed to build search HTTP client")
+    })
+}
+
+/// Shared HTTP client for web browser tool.
+static BROWSER_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+
+fn browser_client() -> &'static reqwest::Client {
+    BROWSER_CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .timeout(Duration::from_secs(30))
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .expect("failed to build browser HTTP client")
+    })
 }
 
 pub(crate) async fn web_fetch(input: &Value, _context: &ToolExecutionContext) -> Result<String> {
@@ -395,14 +425,7 @@ impl SearchBackend for DuckDuckGoHtmlBackend {
                 urlencoding::encode(&query)
             );
 
-            let client = reqwest::Client::builder()
-                .user_agent(
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) \
-                     AppleWebKit/537.36 (KHTML, like Gecko) \
-                     Chrome/120.0.0.0 Safari/537.36",
-                )
-                .build()
-                .context("failed to build HTTP client for DuckDuckGo HTML search")?;
+            let client = search_client();
 
             let response = client
                 .get(&url)
@@ -630,16 +653,40 @@ pub(crate) async fn web_browser_tool(
         .and_then(Value::as_str)
         .unwrap_or("fetch");
 
-    // Build a client with a 30-second timeout for all browser actions.
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(30))
-        .build()
-        .context("failed to build HTTP client for web_browser")?;
+    // Build a client with a 30-second timeout and no-redirect policy for all browser actions.
+    let client = browser_client();
 
     match action {
         "fetch" => {
             let response = client.get(url).send().await.context("failed to fetch URL")?;
             let status = response.status();
+
+            // Manually handle redirects with URL validation to prevent SSRF bypass.
+            if status.is_redirection() {
+                let location = response
+                    .headers()
+                    .get(reqwest::header::LOCATION)
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or("");
+                let redirect_url = if location.starts_with("http://") || location.starts_with("https://") {
+                    location.to_owned()
+                } else {
+                    // Relative redirect — resolve against original URL.
+                    let base = url::Url::parse(url)?;
+                    base.join(location)?.to_string()
+                };
+                validate_url(&redirect_url)?;
+                let redirect_resp = client.get(&redirect_url).send().await
+                    .context("failed to follow redirect")?;
+                let r_status = redirect_resp.status();
+                if !r_status.is_success() {
+                    return Err(anyhow!("HTTP {} for {} (redirect from {})", r_status, redirect_url, url));
+                }
+                let text = redirect_resp.text().await.context("failed to read response body")?;
+                let truncated: String = text.chars().take(50_000).collect();
+                return Ok(truncated);
+            }
+
             if !status.is_success() {
                 return Err(anyhow!("HTTP {} for {}", status, url));
             }
