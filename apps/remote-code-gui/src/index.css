@@ -12,10 +12,23 @@ html, body, #root {
   overflow: hidden;
 }
 
+html {
+  color-scheme: dark;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+
+html[data-theme='light'] {
+  color-scheme: light;
+}
+
 body {
   margin: 0;
   background: var(--color-bg-base);
   color: var(--color-text-primary);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 button,

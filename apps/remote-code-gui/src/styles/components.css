@@ -145,3 +145,122 @@
   animation: shimmer 1.5s infinite;
   border-radius: var(--radius-md);
 }
+
+/* ═══════════════════════════════════════════════════════════════
+   Glass Morphism (from cc-switch pattern)
+   ═══════════════════════════════════════════════════════════════ */
+
+.glass {
+  background: var(--glass-bg);
+  backdrop-filter: blur(var(--glass-blur));
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  border: 1px solid var(--glass-border);
+}
+
+.glass-heavy {
+  background: var(--glass-bg-heavy);
+  backdrop-filter: blur(var(--glass-blur-heavy));
+  -webkit-backdrop-filter: blur(var(--glass-blur-heavy));
+  border: 1px solid var(--glass-border);
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   CSS Grid Collapse (from CodexMonitor pattern)
+   GPU-accelerated expand/collapse without JS measurement.
+   ═══════════════════════════════════════════════════════════════ */
+
+.grid-collapse {
+  display: grid;
+  grid-template-rows: 1fr;
+  transition: grid-template-rows var(--motion-duration-normal) var(--motion-easing-default);
+}
+
+.grid-collapse[data-collapsed='true'] {
+  grid-template-rows: 0fr;
+}
+
+.grid-collapse > .grid-collapse-inner {
+  overflow: hidden;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   Scroll Fade Mask (from CodexMonitor pattern)
+   ═══════════════════════════════════════════════════════════════ */
+
+.scroll-fade {
+  mask-image: linear-gradient(to bottom, black 88%, transparent 100%);
+  -webkit-mask-image: linear-gradient(to bottom, black 88%, transparent 100%);
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   Hover overlay with ::before pseudo-element (from CodexMonitor)
+   isolation: isolate ensures z-index:-1 paints behind content
+   but in front of the element's own background.
+   ═══════════════════════════════════════════════════════════════ */
+
+.hover-overlay {
+  isolation: isolate;
+  position: relative;
+}
+
+.hover-overlay::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: var(--color-bg-hover);
+  opacity: 0;
+  transition: opacity var(--transition-fast);
+  z-index: -1;
+}
+
+.hover-overlay:hover::before {
+  opacity: 1;
+}
+
+.hover-overlay:active::before {
+  background: var(--color-bg-active);
+  opacity: 1;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   Resize handle (from CodexMonitor pattern)
+   ═══════════════════════════════════════════════════════════════ */
+
+.resize-handle {
+  width: 4px;
+  cursor: col-resize;
+  background: transparent;
+  transition: background var(--transition-fast);
+  flex-shrink: 0;
+}
+
+.resize-handle:hover,
+.resize-handle.active {
+  background: var(--color-accent-primary);
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   Search highlight mark
+   ═══════════════════════════════════════════════════════════════ */
+
+mark.search-highlight {
+  background: color-mix(in srgb, var(--color-accent-primary) 30%, transparent);
+  color: inherit;
+  border-radius: 2px;
+  padding: 0 1px;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   Tauri drag region support (from cc-switch pattern)
+   ═══════════════════════════════════════════════════════════════ */
+
+[data-tauri-drag-region] {
+  -webkit-app-region: drag;
+}
+
+[data-tauri-drag-region] button,
+[data-tauri-drag-region] input,
+[data-tauri-drag-region] select {
+  -webkit-app-region: no-drag;
+}
