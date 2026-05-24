@@ -152,7 +152,11 @@ impl FeatureFlags {
             return Ok(());
         }
         let client = reqwest::Client::new();
-        let resp = client.get(&config.api_endpoint).send().await;
+        let resp = client
+            .get(&config.api_endpoint)
+            .timeout(std::time::Duration::from_secs(10))
+            .send()
+            .await;
         match resp {
             Ok(r) if r.status().is_success() => match r.json::<serde_json::Value>().await {
                 Ok(body) => {

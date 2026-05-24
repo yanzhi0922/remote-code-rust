@@ -54,7 +54,6 @@ impl DatadogExporter {
         if let Some(obj) = payload.as_object_mut() {
             obj.insert("ddsource".to_string(), serde_json::json!("remote-code"));
             obj.insert("service".to_string(), serde_json::json!("rc-analytics"));
-            obj.insert("dd_api_key".to_string(), serde_json::json!(self.api_key));
         }
 
         serde_json::to_string(&payload).map_err(|e| anyhow::anyhow!("Failed to format event: {e}"))
@@ -72,10 +71,7 @@ impl EventExporter for DatadogExporter {
             payload.push_str(&formatted);
             payload.push('\n');
         }
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()?;
-        rt.block_on(async {
+        let do_export = || async {
             let client = reqwest::Client::new();
             let resp = client
                 .post(&self.endpoint)
@@ -95,7 +91,18 @@ impl EventExporter for DatadogExporter {
                     Ok(())
                 }
             }
-        })
+        };
+        // Safe blocking within an existing tokio runtime, or create one if
+        // called from a plain sync context.
+        match tokio::runtime::Handle::try_current() {
+            Ok(handle) => tokio::task::block_in_place(|| handle.block_on(do_export())),
+            Err(_) => {
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()?;
+                rt.block_on(do_export())
+            }
+        }
     }
 }
 
@@ -127,10 +134,7 @@ impl EventExporter for FirstPartyExporter {
             return Ok(());
         }
         let body = serde_json::to_string(events)?;
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()?;
-        rt.block_on(async {
+        let do_export = || async {
             let client = reqwest::Client::new();
             let resp = client
                 .post(&self.endpoint)
@@ -149,7 +153,18 @@ impl EventExporter for FirstPartyExporter {
                     Ok(())
                 }
             }
-        })
+        };
+        // Safe blocking within an existing tokio runtime, or create one if
+        // called from a plain sync context.
+        match tokio::runtime::Handle::try_current() {
+            Ok(handle) => tokio::task::block_in_place(|| handle.block_on(do_export())),
+            Err(_) => {
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()?;
+                rt.block_on(do_export())
+            }
+        }
     }
 }
 
@@ -229,7 +244,9 @@ mod tests {
         let formatted = exporter.format_event(&event).expect("format");
         let parsed: serde_json::Value = serde_json::from_str(&formatted).expect("parse");
         assert_eq!(parsed["ddsource"], "remote-code");
-        assert_eq!(parsed["dd_api_key"], "test-key");
+        // dd_api_key is intentionally excluded from the JSON body; it is sent
+        // via the DD-API-KEY HTTP header instead.
+        assert!(parsed.get("dd_api_key").is_none());
     }
 
     #[test]

@@ -155,6 +155,19 @@ impl AnalyticsService {
     }
 }
 
+impl Drop for AnalyticsService {
+    fn drop(&mut self) {
+        // Best-effort abort of the background flush task. If the tokio
+        // runtime is still alive this cancels the periodic flush; if not,
+        // the task is already gone.
+        if let Ok(mut guard) = self.flush_handle.try_lock() {
+            if let Some(handle) = guard.take() {
+                handle.abort();
+            }
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
