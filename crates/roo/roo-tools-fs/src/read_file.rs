@@ -18,9 +18,16 @@ use crate::types::*;
 use roo_ignore::RooIgnoreController;
 use roo_types::tool_params::{IndentationParams, ReadFileMode, ReadFileParams};
 
-// WARNING: This is a process-global counter. Callers MUST use `image_byte_guard()`
-// at the start of each tool invocation to reset this counter for proper per-task isolation.
-// Without the guard, concurrent tasks will interfere with each other's byte limits.
+// WARNING: This is a process-global counter with known race condition limitations.
+// Concurrent `read_file` invocations may interfere with each other's byte limits
+// because `reset_cumulative_image_bytes()` zeroes the global counter, affecting
+// any in-flight reads from other tasks.
+//
+// TODO: Replace this with a per-invocation counter passed as a parameter to
+// `process_read_file` (and downstream image processing) so that each invocation
+// tracks its own cumulative bytes independently. This avoids:
+//   1. Race conditions when concurrent tasks reset the counter.
+//   2. Exceeding the memory budget when multiple tasks accumulate bytes simultaneously.
 static CUMULATIVE_IMAGE_BYTES: AtomicU64 = AtomicU64::new(0);
 
 /// Reset the cumulative image byte counter.
@@ -677,10 +684,11 @@ fn add_line_numbers_from(content: &str, start_line: usize) -> String {
 fn resolve_path(path: &str, cwd: &std::path::Path) -> Result<std::path::PathBuf, FsToolError> {
     let p = std::path::Path::new(path);
     if p.is_absolute() {
-        Ok(p.to_path_buf())
-    } else {
-        Ok(cwd.join(path))
+        return Err(FsToolError::InvalidPath(
+            "absolute paths are not allowed".to_string(),
+        ));
     }
+    Ok(cwd.join(path))
 }
 
 #[cfg(test)]

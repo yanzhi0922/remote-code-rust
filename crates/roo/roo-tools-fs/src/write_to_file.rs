@@ -132,10 +132,11 @@ pub fn create_backup(file_path: &std::path::Path) -> Result<(), std::io::Error> 
 fn resolve_path(path: &str, cwd: &std::path::Path) -> Result<std::path::PathBuf, FsToolError> {
     let p = std::path::Path::new(path);
     if p.is_absolute() {
-        Ok(p.to_path_buf())
-    } else {
-        Ok(cwd.join(path))
+        return Err(FsToolError::InvalidPath(
+            "absolute paths are not allowed".to_string(),
+        ));
     }
+    Ok(cwd.join(path))
 }
 
 #[cfg(test)]
