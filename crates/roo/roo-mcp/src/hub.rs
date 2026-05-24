@@ -74,48 +74,55 @@ pub enum ErrorLevel {
 /// Corresponds to TS: `getDefaultEnvironment()` from `@modelcontextprotocol/sdk/client/stdio.js`.
 /// Returns essential system environment variables (PATH, HOME, etc.) needed by
 /// child processes to function correctly.
+///
+/// Cached with `OnceLock` to avoid re-allocating on every call.
 pub fn get_default_environment() -> HashMap<String, String> {
-    let mut env = HashMap::new();
+    use std::sync::OnceLock;
+    static CACHED_ENV: OnceLock<HashMap<String, String>> = OnceLock::new();
 
-    // Essential environment variables that child processes typically need
-    const ESSENTIAL_VARS: &[&str] = &[
-        "PATH",
-        "HOME",
-        "USER",
-        "TMPDIR",
-        "TEMP",
-        "TMP",
-        "SHELL",
-        "LANG",
-        "LC_ALL",
-        "LC_CTYPE",
-        "TERM",
-        "NODE_PATH",
-        "NPM_CONFIG_PREFIX",
-        "APPDATA",
-        "LOCALAPPDATA",
-        "PROGRAMFILES",
-        "PROGRAMFILES(X86)",
-        "SYSTEMROOT",
-        "COMSPEC",
-        "PROCESSOR_ARCHITECTURE",
-        "PROGRAMDATA",
-        "ALLUSERSPROFILE",
-        "HOMEDRIVE",
-        "HOMEPATH",
-        "LOGNAME",
-        "XDG_CONFIG_HOME",
-        "XDG_DATA_HOME",
-        "XDG_CACHE_HOME",
-    ];
+    CACHED_ENV.get_or_init(|| {
+        let mut env = HashMap::new();
 
-    for var_name in ESSENTIAL_VARS {
-        if let Ok(value) = std::env::var(var_name) {
-            env.insert(var_name.to_string(), value);
+        // Essential environment variables that child processes typically need
+        const ESSENTIAL_VARS: &[&str] = &[
+            "PATH",
+            "HOME",
+            "USER",
+            "TMPDIR",
+            "TEMP",
+            "TMP",
+            "SHELL",
+            "LANG",
+            "LC_ALL",
+            "LC_CTYPE",
+            "TERM",
+            "NODE_PATH",
+            "NPM_CONFIG_PREFIX",
+            "APPDATA",
+            "LOCALAPPDATA",
+            "PROGRAMFILES",
+            "PROGRAMFILES(X86)",
+            "SYSTEMROOT",
+            "COMSPEC",
+            "PROCESSOR_ARCHITECTURE",
+            "PROGRAMDATA",
+            "ALLUSERSPROFILE",
+            "HOMEDRIVE",
+            "HOMEPATH",
+            "LOGNAME",
+            "XDG_CONFIG_HOME",
+            "XDG_DATA_HOME",
+            "XDG_CACHE_HOME",
+        ];
+
+        for var_name in ESSENTIAL_VARS {
+            if let Ok(value) = std::env::var(var_name) {
+                env.insert(var_name.to_string(), value);
+            }
         }
-    }
 
-    env
+        env
+    }).clone()
 }
 
 /// Deep-compare two `serde_json::Value`s for structural equality.
@@ -371,14 +378,25 @@ impl McpHub {
 
     /// Wait until the hub is marked as initialized.
     /// Corresponds to TS: `waitUntilReady(): Promise<void>`
+    /// Polls every 50ms with a 30s timeout.
     pub async fn wait_until_ready(&self) {
-        let ready = self.initialized.read().await;
-        if *ready {
-            return;
+        let timeout = std::time::Duration::from_secs(30);
+        let interval = std::time::Duration::from_millis(50);
+        let start = std::time::Instant::now();
+
+        loop {
+            {
+                let ready = self.initialized.read().await;
+                if *ready {
+                    return;
+                }
+            }
+            if start.elapsed() >= timeout {
+                tracing::warn!("wait_until_ready timed out after 30s");
+                return;
+            }
+            tokio::time::sleep(interval).await;
         }
-        drop(ready);
-        // Simple spin-wait; the hub is initialized via `set_initialized()`
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
 
     /// Mark the hub as initialized.
@@ -996,13 +1014,19 @@ impl McpHub {
                 // Check if wildcard "*" is in the alwaysAllow config
                 let has_wildcard = always_allow_config.contains(&"*".to_string());
 
+                // Convert to HashSet for O(1) lookups per tool
+                let always_allow_set: std::collections::HashSet<String> =
+                    always_allow_config.into_iter().collect();
+                let disabled_tools_set: std::collections::HashSet<String> =
+                    disabled_tools_list.into_iter().collect();
+
                 // Annotate tools with always_allow and enabled_for_prompt
                 let tools: Vec<McpTool> = raw_tools
                     .into_iter()
                     .map(|mut tool| {
                         tool.always_allow =
-                            has_wildcard || always_allow_config.contains(&tool.name);
-                        tool.enabled_for_prompt = !disabled_tools_list.contains(&tool.name);
+                            has_wildcard || always_allow_set.contains(&tool.name);
+                        tool.enabled_for_prompt = !disabled_tools_set.contains(&tool.name);
                         tool
                     })
                     .collect();
@@ -1530,6 +1554,18 @@ impl McpHub {
         // Sort by config file order: project servers first in their order,
         // then global servers in their order.
         // Corresponds to TS: `notifyWebviewOfServerChanges()` sorting logic.
+        // Build HashMap for O(1) name-to-index lookup instead of O(n) per comparison.
+        let global_index: HashMap<String, usize> = global_order
+            .iter()
+            .enumerate()
+            .map(|(i, name)| (name.clone(), i))
+            .collect();
+        let project_index: HashMap<String, usize> = project_order
+            .iter()
+            .enumerate()
+            .map(|(i, name)| (name.clone(), i))
+            .collect();
+
         servers.sort_by(|a, b| {
             let a_source = seen.get(&a.name).copied().unwrap_or(McpSource::Global);
             let b_source = seen.get(&b.name).copied().unwrap_or(McpSource::Global);
@@ -1538,24 +1574,12 @@ impl McpHub {
             let b_is_global = b_source == McpSource::Global;
 
             if a_is_global && b_is_global {
-                let index_a = global_order
-                    .iter()
-                    .position(|n| n == &a.name)
-                    .unwrap_or(usize::MAX);
-                let index_b = global_order
-                    .iter()
-                    .position(|n| n == &b.name)
-                    .unwrap_or(usize::MAX);
+                let index_a = global_index.get(&a.name).copied().unwrap_or(usize::MAX);
+                let index_b = global_index.get(&b.name).copied().unwrap_or(usize::MAX);
                 index_a.cmp(&index_b)
             } else if !a_is_global && !b_is_global {
-                let index_a = project_order
-                    .iter()
-                    .position(|n| n == &a.name)
-                    .unwrap_or(usize::MAX);
-                let index_b = project_order
-                    .iter()
-                    .position(|n| n == &b.name)
-                    .unwrap_or(usize::MAX);
+                let index_a = project_index.get(&a.name).copied().unwrap_or(usize::MAX);
+                let index_b = project_index.get(&b.name).copied().unwrap_or(usize::MAX);
                 index_a.cmp(&index_b)
             } else {
                 // Project servers come before global servers
@@ -1655,8 +1679,7 @@ impl McpHub {
                 .iter()
                 .find(|conn| {
                     conn.name() == server_name
-                        && (conn.source() == McpSource::Global
-                            || conn.source() == McpSource::Global)
+                        && conn.source() == McpSource::Global
                 })
                 .cloned()
         }
@@ -2434,12 +2457,18 @@ impl McpHub {
         let disabled_tools_list = config.disabled_tools();
         let has_wildcard = always_allow_config.contains(&"*".to_string());
 
+        // Convert to HashSet for O(1) lookups per tool
+        let always_allow_set: std::collections::HashSet<String> =
+            always_allow_config.iter().cloned().collect();
+        let disabled_tools_set: std::collections::HashSet<String> =
+            disabled_tools_list.iter().cloned().collect();
+
         // Annotate tools with always_allow and enabled_for_prompt
         let tools: Vec<McpTool> = raw_tools
             .into_iter()
             .map(|mut tool| {
-                tool.always_allow = has_wildcard || always_allow_config.contains(&tool.name);
-                tool.enabled_for_prompt = !disabled_tools_list.contains(&tool.name);
+                tool.always_allow = has_wildcard || always_allow_set.contains(&tool.name);
+                tool.enabled_for_prompt = !disabled_tools_set.contains(&tool.name);
                 tool
             })
             .collect();

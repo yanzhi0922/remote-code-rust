@@ -141,8 +141,11 @@ impl StdioTransport {
 
 impl Transport for StdioTransport {
     async fn receive(&mut self) -> ServerResult<Option<Message>> {
-        // Content-Length framing read is synchronous
-        match self.read_framed_message() {
+        // Content-Length framing read is synchronous; use block_in_place to
+        // avoid blocking the async runtime. Unlike spawn_blocking, this does
+        // not require the data to be Send since it runs on the same thread.
+        let result = tokio::task::block_in_place(|| self.read_framed_message());
+        match result {
             Ok(Some(body)) => {
                 let message: Message = serde_json::from_str(&body)?;
                 Ok(Some(message))
@@ -154,7 +157,7 @@ impl Transport for StdioTransport {
 
     async fn send(&mut self, message: &Message) -> ServerResult<()> {
         let body = serde_json::to_string(message)?;
-        self.write_framed_message(&body)
+        tokio::task::block_in_place(|| self.write_framed_message(&body))
     }
 }
 

@@ -31,48 +31,58 @@ impl OutputInterceptor {
 
     /// Process incoming output data.
     pub async fn intercept(&self, data: &str) {
-        let mut buffer = self.buffer.write().await;
+        // Process into a local string first, then briefly acquire the write lock
+        let local_buffer = {
+            let current = self.buffer.read().await;
+            let mut local = current.clone();
 
-        for line in data.lines() {
-            // Apply filter if set
-            if let Some(filter) = self.line_filter
-                && !filter(line)
-            {
-                continue;
-            }
-
-            // Process carriage returns (overwrite current line)
-            if line.contains('\r')
-                && let Some(pos) = line.rfind('\r')
-            {
-                let after_cr = &line[pos + 1..];
-                // Replace last line in buffer
-                if let Some(last_newline) = buffer.rfind('\n') {
-                    buffer.truncate(last_newline + 1);
-                    buffer.push_str(after_cr);
-                } else {
-                    buffer.clear();
-                    buffer.push_str(after_cr);
+            for line in data.lines() {
+                // Apply filter if set
+                if let Some(filter) = self.line_filter
+                    && !filter(line)
+                {
+                    continue;
                 }
-                continue;
+
+                // Process carriage returns (overwrite current line)
+                if line.contains('\r')
+                    && let Some(pos) = line.rfind('\r')
+                {
+                    let after_cr = &line[pos + 1..];
+                    // Replace last line in buffer
+                    if let Some(last_newline) = local.rfind('\n') {
+                        local.truncate(last_newline + 1);
+                        local.push_str(after_cr);
+                    } else {
+                        local.clear();
+                        local.push_str(after_cr);
+                    }
+                    continue;
+                }
+
+                if !local.is_empty() && !local.ends_with('\n') {
+                    local.push('\n');
+                }
+                local.push_str(line);
             }
 
-            if !buffer.is_empty() && !buffer.ends_with('\n') {
-                buffer.push('\n');
+            // Trim buffer if it exceeds max size
+            if local.len() > self.max_buffer_size {
+                let excess = local.len() - self.max_buffer_size;
+                let drain_to = local
+                    .char_indices()
+                    .nth(excess)
+                    .map(|(i, _)| i)
+                    .unwrap_or(0);
+                local.drain(..drain_to);
             }
-            buffer.push_str(line);
-        }
 
-        // Trim buffer if it exceeds max size
-        if buffer.len() > self.max_buffer_size {
-            let excess = buffer.len() - self.max_buffer_size;
-            let drain_to = buffer
-                .char_indices()
-                .nth(excess)
-                .map(|(i, _)| i)
-                .unwrap_or(0);
-            buffer.drain(..drain_to);
-        }
+            local
+        };
+
+        // Briefly acquire write lock to swap in the processed buffer
+        let mut buffer = self.buffer.write().await;
+        *buffer = local_buffer;
     }
 
     /// Get the current buffered output.
@@ -89,14 +99,12 @@ impl OutputInterceptor {
     /// Get the last N lines of output.
     pub async fn get_last_lines(&self, n: usize) -> Vec<String> {
         let buffer = self.buffer.read().await;
-        buffer
-            .lines()
-            .rev()
-            .take(n)
+        let lines: Vec<&str> = buffer.lines().collect();
+        let total = lines.len();
+        let start = total.saturating_sub(n);
+        lines[start..]
+            .iter()
             .map(|s| s.to_string())
-            .collect::<Vec<_>>()
-            .into_iter()
-            .rev()
             .collect()
     }
 }

@@ -125,19 +125,47 @@ impl App {
     ///
     /// Source: `src/core/ClineProvider.ts` — initialization logic
     pub async fn initialize(&mut self) -> AppResult<()> {
-        let mut state = self.state.write().await;
-
         tracing::info!(
             "Initializing Roo Code App in workspace: {}",
             self.config.cwd
         );
 
+        // ── Read files BEFORE acquiring the state write lock ─────────────
+        let rooignore_path = std::path::Path::new(&self.config.cwd).join(".rooignore");
+        let rooignore_content = if rooignore_path.exists() {
+            std::fs::read_to_string(&rooignore_path).ok()
+        } else {
+            None
+        };
+
+        let project_mcp_path = std::path::Path::new(&self.config.cwd)
+            .join(".roo")
+            .join("mcp.json");
+        let project_mcp_content = if project_mcp_path.exists() {
+            std::fs::read_to_string(&project_mcp_path).ok()
+        } else {
+            None
+        };
+
+        let global_mcp_content = if !self.config.global_storage_path.is_empty() {
+            let global_mcp_path = std::path::Path::new(&self.config.global_storage_path)
+                .join("settings")
+                .join("mcp_settings.json");
+            if global_mcp_path.exists() {
+                std::fs::read_to_string(&global_mcp_path).ok()
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        // ── Acquire state write lock only for mutation ──────────────────
+        let mut state = self.state.write().await;
+
         // ── Initialize RooIgnore controller ─────────────────────────────
         let mut roo_ignore = roo_ignore::RooIgnoreController::new(&self.config.cwd);
-        let rooignore_path = std::path::Path::new(&self.config.cwd).join(".rooignore");
-        if rooignore_path.exists()
-            && let Ok(content) = std::fs::read_to_string(&rooignore_path)
-        {
+        if let Some(content) = rooignore_content {
             roo_ignore.load_patterns(&content);
             tracing::info!(
                 "Loaded .rooignore patterns from {}",
@@ -164,12 +192,7 @@ impl App {
         hub.initialize_weak_self();
 
         // Load project-level MCP config (.roo/mcp.json)
-        let project_mcp_path = std::path::Path::new(&self.config.cwd)
-            .join(".roo")
-            .join("mcp.json");
-        if project_mcp_path.exists()
-            && let Ok(content) = std::fs::read_to_string(&project_mcp_path)
-        {
+        if let Some(content) = project_mcp_content {
             match serde_json::from_str::<serde_json::Value>(&content) {
                 Ok(config) => {
                     if let Some(servers) = config.get("mcpServers").and_then(|v| v.as_object()) {
@@ -207,47 +230,39 @@ impl App {
         }
 
         // Load global MCP config (<global_storage>/settings/mcp_settings.json)
-        if !self.config.global_storage_path.is_empty() {
-            let global_mcp_path = std::path::Path::new(&self.config.global_storage_path)
-                .join("settings")
-                .join("mcp_settings.json");
-            if global_mcp_path.exists()
-                && let Ok(content) = std::fs::read_to_string(&global_mcp_path)
-            {
-                match serde_json::from_str::<serde_json::Value>(&content) {
-                    Ok(config) => {
-                        if let Some(servers) = config.get("mcpServers").and_then(|v| v.as_object())
+        if let Some(content) = global_mcp_content {
+            match serde_json::from_str::<serde_json::Value>(&content) {
+                Ok(config) => {
+                    if let Some(servers) = config.get("mcpServers").and_then(|v| v.as_object())
+                    {
+                        let server_map: std::collections::HashMap<String, serde_json::Value> =
+                            servers
+                                .into_iter()
+                                .map(|(k, v)| (k.clone(), v.clone()))
+                                .collect();
+                        if let Err(e) = hub
+                            .update_server_connections(
+                                &server_map,
+                                roo_mcp::McpSource::Global,
+                                true,
+                            )
+                            .await
                         {
-                            let server_map: std::collections::HashMap<String, serde_json::Value> =
-                                servers
-                                    .into_iter()
-                                    .map(|(k, v)| (k.clone(), v.clone()))
-                                    .collect();
-                            if let Err(e) = hub
-                                .update_server_connections(
-                                    &server_map,
-                                    roo_mcp::McpSource::Global,
-                                    true,
-                                )
-                                .await
-                            {
-                                tracing::warn!("Failed to load global MCP servers: {}", e);
-                            } else {
-                                tracing::info!(
-                                    "Loaded {} global MCP servers from {}",
-                                    server_map.len(),
-                                    global_mcp_path.display()
-                                );
-                            }
+                            tracing::warn!("Failed to load global MCP servers: {}", e);
+                        } else {
+                            tracing::info!(
+                                "Loaded {} global MCP servers from {}",
+                                server_map.len(),
+                                "mcp_settings.json"
+                            );
                         }
                     }
-                    Err(e) => {
-                        tracing::warn!(
-                            "Failed to parse global MCP config {}: {}",
-                            global_mcp_path.display(),
-                            e
-                        );
-                    }
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "Failed to parse global MCP config: {}",
+                        e
+                    );
                 }
             }
         }

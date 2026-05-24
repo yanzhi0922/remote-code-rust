@@ -25,6 +25,9 @@ use roo_task::task_lifecycle::TaskLifecycle;
 
 use crate::error::{ServerError, ServerResult};
 
+/// Maximum number of pending notifications before oldest are drained.
+const MAX_PENDING_NOTIFICATIONS: usize = 1000;
+
 // ---------------------------------------------------------------------------
 // JSON-RPC Method Names
 // ---------------------------------------------------------------------------
@@ -735,10 +738,14 @@ impl Handler {
         lifecycle.engine().emitter().on(move |event| {
             let notification = task_event_to_notification(event, &task_id);
             if let Some(msg) = notification {
-                notifications
+                let mut guard = notifications
                     .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .push(msg);
+                    .unwrap_or_else(|e| e.into_inner());
+                guard.push(msg);
+                if guard.len() > MAX_PENDING_NOTIFICATIONS {
+                    let drain_count = guard.len() / 10;
+                    guard.drain(..drain_count);
+                }
             }
         });
     }
@@ -1217,38 +1224,43 @@ impl Handler {
             }
         };
 
-        let fs = roo_task_persistence::storage::OsFileSystem;
-        let storage_path = Path::new(&global_storage_path);
+        let task_id_owned = task_id.to_string();
+        let result = tokio::task::spawn_blocking(move || {
+            let fs = roo_task_persistence::storage::OsFileSystem;
+            let storage_path = Path::new(&global_storage_path);
 
-        match roo_task_persistence::history::get_history_item(&fs, storage_path, task_id) {
-            Ok(Some(item)) => {
-                // Return the task's own cost. Child task aggregation requires
-                // scanning all tasks with parent_task_id == this task_id.
-                let own_cost = item.total_cost;
-                let mut children_cost = 0.0;
-                let mut child_count = 0;
+            match roo_task_persistence::history::get_history_item(&fs, storage_path, &task_id_owned) {
+                Ok(Some(item)) => {
+                    let own_cost = item.total_cost;
+                    let mut children_cost = 0.0;
+                    let mut child_count = 0;
 
-                // Scan for child tasks
-                if let Ok(all_items) =
-                    roo_task_persistence::history::list_history(&fs, storage_path)
-                {
-                    for child in &all_items {
-                        if child.parent_task_id.as_deref() == Some(task_id) {
-                            children_cost += child.total_cost;
-                            child_count += 1;
+                    if let Ok(all_items) =
+                        roo_task_persistence::history::list_history(&fs, storage_path)
+                    {
+                        for child in &all_items {
+                            if child.parent_task_id.as_deref() == Some(&task_id_owned) {
+                                children_cost += child.total_cost;
+                                child_count += 1;
+                            }
                         }
                     }
-                }
 
-                Ok(json!({
-                    "taskId": task_id,
-                    "ownCost": own_cost,
-                    "childrenCost": children_cost,
-                    "totalCost": own_cost + children_cost,
-                    "childCount": child_count,
-                }))
+                    Ok(json!({
+                        "taskId": task_id_owned,
+                        "ownCost": own_cost,
+                        "childrenCost": children_cost,
+                        "totalCost": own_cost + children_cost,
+                        "childCount": child_count,
+                    }))
+                }
+                Ok(None) => Ok(json!({"taskId": task_id_owned, "error": "task not found"})),
+                Err(e) => Ok(json!({"taskId": task_id_owned, "error": e.to_string()})),
             }
-            Ok(None) => Ok(json!({"taskId": task_id, "error": "task not found"})),
+        }).await;
+
+        match result {
+            Ok(inner) => inner,
             Err(e) => Ok(json!({"taskId": task_id, "error": e.to_string()})),
         }
     }
@@ -1328,32 +1340,40 @@ impl Handler {
             }
         };
 
-        let fs = roo_task_persistence::storage::OsFileSystem;
-        let storage_path = Path::new(&global_storage_path);
+        let task_id_owned = task_id.to_string();
+        let result = tokio::task::spawn_blocking(move || {
+            let fs = roo_task_persistence::storage::OsFileSystem;
+            let storage_path = Path::new(&global_storage_path);
 
-        if task_id.is_empty() {
-            match roo_task_persistence::history::list_history(&fs, storage_path) {
-                Ok(items) => {
-                    let history: Vec<Value> = items
-                        .iter()
-                        .map(|item| json!({"id": item.id, "task": item.task, "ts": item.timestamp}))
-                        .collect();
-                    Ok(json!({"taskId": task_id, "history": history}))
+            if task_id_owned.is_empty() {
+                match roo_task_persistence::history::list_history(&fs, storage_path) {
+                    Ok(items) => {
+                        let history: Vec<Value> = items
+                            .iter()
+                            .map(|item| json!({"id": item.id, "task": item.task, "ts": item.timestamp}))
+                            .collect();
+                        Ok(json!({"taskId": task_id_owned, "history": history}))
+                    }
+                    Err(e) => {
+                        debug!(error = %e, "Failed to list history");
+                        Ok(json!({"taskId": task_id_owned, "history": []}))
+                    }
                 }
-                Err(e) => {
-                    debug!(error = %e, "Failed to list history");
-                    Ok(json!({"taskId": task_id, "history": []}))
+            } else {
+                match roo_task_persistence::history::get_history_item(&fs, storage_path, &task_id_owned) {
+                    Ok(Some(item)) => Ok(json!({"taskId": task_id_owned, "history": [json!(item)]})),
+                    Ok(None) => Ok(json!({"taskId": task_id_owned, "history": []})),
+                    Err(e) => {
+                        debug!(error = %e, "Failed to get history item");
+                        Ok(json!({"taskId": task_id_owned, "history": []}))
+                    }
                 }
             }
-        } else {
-            match roo_task_persistence::history::get_history_item(&fs, storage_path, task_id) {
-                Ok(Some(item)) => Ok(json!({"taskId": task_id, "history": [json!(item)]})),
-                Ok(None) => Ok(json!({"taskId": task_id, "history": []})),
-                Err(e) => {
-                    debug!(error = %e, "Failed to get history item");
-                    Ok(json!({"taskId": task_id, "history": []}))
-                }
-            }
+        }).await;
+
+        match result {
+            Ok(inner) => inner,
+            Err(e) => Ok(json!({"taskId": task_id, "history": [], "error": e.to_string()})),
         }
     }
 
@@ -1376,18 +1396,27 @@ impl Handler {
             }
         };
 
-        let fs = roo_task_persistence::storage::OsFileSystem;
-        match roo_task_persistence::history::delete_task(
-            &fs,
-            Path::new(&global_storage_path),
-            task_id,
-        ) {
-            Ok(()) => {
+        let task_id_owned = task_id.to_string();
+        let result = tokio::task::spawn_blocking(move || {
+            let fs = roo_task_persistence::storage::OsFileSystem;
+            roo_task_persistence::history::delete_task(
+                &fs,
+                Path::new(&global_storage_path),
+                &task_id_owned,
+            )
+        }).await;
+
+        match result {
+            Ok(Ok(())) => {
                 info!(task_id = task_id, "Deleted task");
                 Ok(json!({"status": "deleted"}))
             }
-            Err(e) => {
+            Ok(Err(e)) => {
                 error!(error = %e, "Failed to delete task");
+                Ok(json!({"status": "error", "error": e.to_string()}))
+            }
+            Err(e) => {
+                error!(error = %e, "spawn_blocking failed");
                 Ok(json!({"status": "error", "error": e.to_string()}))
             }
         }
@@ -1421,33 +1450,48 @@ impl Handler {
             }
         };
 
-        let fs = roo_task_persistence::storage::OsFileSystem;
-        let mut deleted = Vec::new();
-        let mut errors = Vec::new();
+        let ids_clone = ids.clone();
+        let result = tokio::task::spawn_blocking(move || {
+            let fs = roo_task_persistence::storage::OsFileSystem;
+            let mut deleted = Vec::new();
+            let mut errors = Vec::new();
 
-        for id in &ids {
-            match roo_task_persistence::history::delete_task(
-                &fs,
-                Path::new(&global_storage_path),
-                id,
-            ) {
-                Ok(()) => {
-                    deleted.push(id.clone());
-                    // Also remove from TaskManager if present
-                    self.task_manager.remove_task(id);
-                }
-                Err(e) => {
-                    errors.push(json!({"id": id, "error": e.to_string()}));
+            for id in &ids_clone {
+                match roo_task_persistence::history::delete_task(
+                    &fs,
+                    Path::new(&global_storage_path),
+                    id,
+                ) {
+                    Ok(()) => {
+                        deleted.push(id.clone());
+                    }
+                    Err(e) => {
+                        errors.push(json!({"id": id, "error": e.to_string()}));
+                    }
                 }
             }
-        }
 
-        Ok(json!({
-            "status": if errors.is_empty() { "deleted" } else { "partial" },
-            "deletedCount": deleted.len(),
-            "errorCount": errors.len(),
-            "errors": errors,
-        }))
+            (deleted, errors)
+        }).await;
+
+        match result {
+            Ok((deleted, errors)) => {
+                // Remove deleted tasks from TaskManager
+                for id in &deleted {
+                    self.task_manager.remove_task(id);
+                }
+                Ok(json!({
+                    "status": if errors.is_empty() { "deleted" } else { "partial" },
+                    "deletedCount": deleted.len(),
+                    "errorCount": errors.len(),
+                    "errors": errors,
+                }))
+            }
+            Err(e) => Ok(json!({
+                "status": "error",
+                "error": e.to_string(),
+            })),
+        }
     }
 
     async fn handle_history_export(&self, params: Value) -> ServerResult<Value> {
@@ -1469,17 +1513,23 @@ impl Handler {
             }
         };
 
-        let fs = roo_task_persistence::storage::OsFileSystem;
-        let messages_path = Path::new(&global_storage_path)
-            .join("tasks")
-            .join(task_id)
-            .join("messages.json");
-        match roo_task_persistence::messages::read_task_messages(&fs, &messages_path) {
-            Ok(messages) => Ok(json!({"taskId": task_id, "data": messages})),
-            Err(e) => {
+        let task_id_owned = task_id.to_string();
+        let result = tokio::task::spawn_blocking(move || {
+            let fs = roo_task_persistence::storage::OsFileSystem;
+            let messages_path = Path::new(&global_storage_path)
+                .join("tasks")
+                .join(&task_id_owned)
+                .join("messages.json");
+            roo_task_persistence::messages::read_task_messages(&fs, &messages_path)
+        }).await;
+
+        match result {
+            Ok(Ok(messages)) => Ok(json!({"taskId": task_id, "data": messages})),
+            Ok(Err(e)) => {
                 debug!(error = %e, "Failed to export task");
                 Ok(json!({"taskId": task_id, "data": null, "error": e.to_string()}))
             }
+            Err(e) => Ok(json!({"taskId": task_id, "data": null, "error": e.to_string()})),
         }
     }
 
@@ -4206,8 +4256,10 @@ impl Handler {
         if path.is_empty() {
             return Ok(json!({"status": "error", "error": "missing path"}));
         }
-        match opener::open(path) {
-            Ok(()) => Ok(json!({"status": "opened"})),
+        let path = path.to_string();
+        match tokio::task::spawn_blocking(move || opener::open(&path)).await {
+            Ok(Ok(())) => Ok(json!({"status": "opened"})),
+            Ok(Err(e)) => Ok(json!({"status": "error", "error": e.to_string()})),
             Err(e) => Ok(json!({"status": "error", "error": e.to_string()})),
         }
     }
@@ -4493,8 +4545,12 @@ impl Handler {
                     "error": "Only http:// and https:// URLs are allowed",
                 }));
             }
-            match opener::open(url) {
-                Ok(()) => Ok(json!({"status": "opened", "mention": mention})),
+            let url_owned = url.to_string();
+            match tokio::task::spawn_blocking(move || opener::open(&url_owned)).await {
+                Ok(Ok(())) => Ok(json!({"status": "opened", "mention": mention})),
+                Ok(Err(e)) => {
+                    Ok(json!({"status": "error", "mention": mention, "error": e.to_string()}))
+                }
                 Err(e) => {
                     Ok(json!({"status": "error", "mention": mention, "error": e.to_string()}))
                 }
@@ -4599,8 +4655,10 @@ impl Handler {
             return Ok(json!({"status": "not_found", "name": name}));
         };
 
-        match opener::open(&path_to_open) {
-            Ok(()) => Ok(json!({"status": "opened", "path": path_to_open.to_string_lossy()})),
+        let path_display = path_to_open.to_string_lossy().to_string();
+        match tokio::task::spawn_blocking(move || opener::open(&path_to_open)).await {
+            Ok(Ok(())) => Ok(json!({"status": "opened", "path": path_display})),
+            Ok(Err(e)) => Ok(json!({"status": "error", "error": e.to_string()})),
             Err(e) => Ok(json!({"status": "error", "error": e.to_string()})),
         }
     }
@@ -5089,8 +5147,9 @@ impl Handler {
                 return Ok(json!({"status": "error", "error": "path is outside the workspace directory"}));
             }
         }
-        match opener::open(&canonical_target) {
-            Ok(()) => Ok(json!({"status": "opened"})),
+        match tokio::task::spawn_blocking(move || opener::open(&canonical_target)).await {
+            Ok(Ok(())) => Ok(json!({"status": "opened"})),
+            Ok(Err(e)) => Ok(json!({"status": "error", "error": e.to_string()})),
             Err(e) => Ok(json!({"status": "error", "error": e.to_string()})),
         }
     }
@@ -5111,8 +5170,10 @@ impl Handler {
         if !url.starts_with("http://") && !url.starts_with("https://") {
             return Ok(json!({"status": "error", "error": "only http:// and https:// URLs are allowed"}));
         }
-        match opener::open(url) {
-            Ok(()) => Ok(json!({"status": "opened"})),
+        let url_owned = url.to_string();
+        match tokio::task::spawn_blocking(move || opener::open(&url_owned)).await {
+            Ok(Ok(())) => Ok(json!({"status": "opened"})),
+            Ok(Err(e)) => Ok(json!({"status": "error", "error": e.to_string()})),
             Err(e) => Ok(json!({"status": "error", "error": e.to_string()})),
         }
     }
@@ -5138,13 +5199,15 @@ impl Handler {
             .parent()
             .map(|p| p.join("mcp.json"))
             .unwrap_or_else(|| settings_path.clone());
+        let mcp_path_display = mcp_path.to_string_lossy().to_string();
         if mcp_path.exists() {
-            match opener::open(&mcp_path) {
-                Ok(()) => Ok(json!({"status": "opened", "path": mcp_path.to_string_lossy()})),
+            match tokio::task::spawn_blocking(move || opener::open(&mcp_path)).await {
+                Ok(Ok(())) => Ok(json!({"status": "opened", "path": mcp_path_display})),
+                Ok(Err(e)) => Ok(json!({"status": "error", "error": e.to_string()})),
                 Err(e) => Ok(json!({"status": "error", "error": e.to_string()})),
             }
         } else {
-            Ok(json!({"action": "openFile", "path": mcp_path.to_string_lossy(), "exists": false}))
+            Ok(json!({"action": "openFile", "path": mcp_path_display, "exists": false}))
         }
     }
 
@@ -5155,13 +5218,15 @@ impl Handler {
         debug!("Opening project MCP settings");
         let cwd = self.get_cwd().await;
         let mcp_path = std::path::Path::new(&cwd).join(".roo").join("mcp.json");
+        let mcp_path_display = mcp_path.to_string_lossy().to_string();
         if mcp_path.exists() {
-            match opener::open(&mcp_path) {
-                Ok(()) => Ok(json!({"status": "opened", "path": mcp_path.to_string_lossy()})),
+            match tokio::task::spawn_blocking(move || opener::open(&mcp_path)).await {
+                Ok(Ok(())) => Ok(json!({"status": "opened", "path": mcp_path_display})),
+                Ok(Err(e)) => Ok(json!({"status": "error", "error": e.to_string()})),
                 Err(e) => Ok(json!({"status": "error", "error": e.to_string()})),
             }
         } else {
-            Ok(json!({"action": "openFile", "path": mcp_path.to_string_lossy(), "exists": false}))
+            Ok(json!({"action": "openFile", "path": mcp_path_display, "exists": false}))
         }
     }
 
