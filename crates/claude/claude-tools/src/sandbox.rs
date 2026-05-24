@@ -183,13 +183,24 @@ pub async fn execute_in_sandbox(command: &str, config: &SandboxConfig) -> Result
 
         #[cfg(target_os = "linux")]
         SandboxPolicy::Landlock(_policy) => {
-            // NOTE: Landlock (Linux Kernel ≥ 5.13) provides filesystem-level
-            // access control via the `landlock` crate.  Integration is deferred
-            // until the `landlock` crate is added as a dependency.  The policy
-            // fields (`allowed_dirs`, `allow_network`) are preserved here so
-            // they can be wired in once the crate is available.
+            // ╔═══════════════════════════════════════════════════════════════════╗
+            // ║  SECURITY WARNING — Landlock sandbox is a stub on this host.    ║
+            // ║                                                                   ║
+            // ║  A `Landlock` sandbox policy was requested but the Landlock LSM  ║
+            // ║  (Linux Kernel >= 5.13) integration is not implemented.  The    ║
+            // ║  command will run under `Basic` isolation which does **NOT**     ║
+            // ║  restrict filesystem access — the process can read/write any    ║
+            // ║  file accessible to the current user.  This may be a security   ║
+            // ║  risk if the command comes from an untrusted source.             ║
+            // ║                                                                   ║
+            // ║  To resolve: add the `landlock` crate as a dependency and wire  ║
+            // ║  the policy fields (`allowed_dirs`, `allow_network`) into a     ║
+            // ║  real Landlock ruleset.                                          ║
+            // ╚═══════════════════════════════════════════════════════════════════╝
             tracing::warn!(
-                "Landlock sandbox is not yet implemented. Falling back to basic execution without filesystem restrictions."
+                "SECURITY: Landlock sandbox requested but not implemented. \
+                 Falling back to basic execution WITHOUT filesystem restrictions. \
+                 Commands will have full filesystem access of the current user."
             );
             execute_basic(command, config, timeout).await
         }
@@ -264,11 +275,19 @@ async fn execute_basic(
 
 /// Windows sandbox: basic isolation with restricted environment.
 ///
-/// **LIMITATION**: The Windows sandbox implementation does not enforce filesystem
-/// access restrictions. Commands run with the full filesystem access of the
-/// current user. Only environment variable stripping and working directory
-/// confinement are applied. This means sandboxed commands can read and write
-/// any file accessible to the invoking user.
+/// ╔═══════════════════════════════════════════════════════════════════════════╗
+/// ║  SECURITY WARNING — No filesystem restriction on Windows.              ║
+/// ║                                                                         ║
+/// ║  The Windows sandbox implementation does **NOT** enforce filesystem     ║
+/// ║  access restrictions.  Commands run with the full filesystem access    ║
+/// ║  of the current user.  Only environment variable stripping and         ║
+/// ║  working directory confinement are applied.  This means sandboxed      ║
+/// ║  commands can read and write **any** file accessible to the invoking   ║
+/// ║  user.                                                                  ║
+/// ║                                                                         ║
+/// ║  To resolve: implement filesystem restrictions using Windows Job       ║
+/// ║  Objects, or a dedicated sandboxing API.                               ║
+/// ╚═════════════════════════════════════════════════════════════════════════╝
 #[cfg(target_os = "windows")]
 async fn execute_windows(
     command: &str,
@@ -277,7 +296,9 @@ async fn execute_windows(
     timeout: Duration,
 ) -> Result<SandboxResult> {
     tracing::warn!(
-        "Sandbox filesystem restrictions are not enforced on Windows. Commands have full filesystem access."
+        "SECURITY: Windows sandbox does NOT restrict filesystem access. \
+         Commands have full read/write access to all files accessible to the current user. \
+         Only environment stripping and working directory confinement are applied."
     );
 
     let mut cmd = build_shell_command(command);
