@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
-use anyhow::{Result, anyhow};
+use anyhow::{Context, Result, anyhow};
 use claude_config::{RuntimeConfig, runtime_version};
 use claude_tools::mcp_runtime::{
     RuntimeMcpResolution, RuntimeMcpServerObservation, observe_runtime_mcp_servers,
@@ -442,25 +442,26 @@ fn run_mcp_toggle(config: &RuntimeConfig, args: McpToggleArgs, enabled: bool) ->
 
 fn run_mcp_reset(config: &RuntimeConfig, args: McpResetArgs) -> Result<()> {
     let config_path = managed_mcp_config_path(config, args.config_path.as_ref(), args.project);
-    let existing_names = if config_path.exists() {
-        load_managed_mcp_config(&config_path)?
-            .servers
-            .keys()
-            .cloned()
-            .collect::<Vec<_>>()
-    } else {
-        Vec::new()
-    };
-    let status = if config_path.exists() {
-        std::fs::remove_file(&config_path)?;
-        "reset"
-    } else if args.if_exists {
-        "noop"
-    } else {
-        return Err(anyhow!(
-            "Managed MCP config {} does not exist",
-            config_path.display()
-        ));
+    let existing_names = load_managed_mcp_config(&config_path)?
+        .servers
+        .keys()
+        .cloned()
+        .collect::<Vec<_>>();
+    let status = match std::fs::remove_file(&config_path) {
+        Ok(()) => "reset",
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            if args.if_exists {
+                "noop"
+            } else {
+                return Err(anyhow!(
+                    "Managed MCP config {} does not exist",
+                    config_path.display()
+                ));
+            }
+        }
+        Err(e) => {
+            return Err(e).with_context(|| format!("failed to remove {}", config_path.display()));
+        }
     };
 
     let warnings = if status == "reset" {
@@ -862,10 +863,16 @@ fn managed_mcp_config_path(
 }
 
 fn load_managed_mcp_config(path: &Path) -> Result<claude_mcp::McpConfig> {
-    if path.exists() {
-        Ok(claude_mcp::McpConfig::load(path)?)
-    } else {
-        Ok(claude_mcp::McpConfig::default())
+    match claude_mcp::McpConfig::load(path) {
+        Ok(config) => Ok(config),
+        Err(claude_mcp::McpConfigError::Read { source, .. })
+            if source.kind() == std::io::ErrorKind::NotFound =>
+        {
+            Ok(claude_mcp::McpConfig::default())
+        }
+        Err(e) => {
+            Err(e).with_context(|| format!("failed to load MCP config from {}", path.display()))
+        }
     }
 }
 

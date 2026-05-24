@@ -817,6 +817,13 @@ fn print_setting_sources(config: &claude_config::RuntimeConfig) {
     }
 }
 
+/// Shell-escape a string by wrapping it in single quotes and escaping any
+/// embedded single quotes.  This prevents a remote SSH shell from interpreting
+/// metacharacters in user-supplied arguments.
+fn shell_escape(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
 async fn run_ssh(args: cli::SshArgs) -> Result<()> {
     use anyhow::Context as _;
     use std::process::Command as StdCommand;
@@ -868,7 +875,12 @@ async fn run_ssh(args: cli::SshArgs) -> Result<()> {
     cmd_args.push("-o".to_owned());
     cmd_args.push(format!("ConnectTimeout={}", args.timeout));
 
-    // Disable strict host key checking for convenience (can be overridden via config)
+    // Security tradeoff: StrictHostKeyChecking=accept-new automatically accepts
+    // the host key on first connection but will refuse to connect if the key
+    // changes later (protecting against MITM after first trust).  This is less
+    // secure than manually verifying the fingerprint, but is standard practice
+    // for developer tooling.  Users can override this by setting their own
+    // SSH config file with --config.
     cmd_args.push("-o".to_owned());
     cmd_args.push("StrictHostKeyChecking=accept-new".to_owned());
 
@@ -888,7 +900,7 @@ async fn run_ssh(args: cli::SshArgs) -> Result<()> {
         let mut remote_cmd = String::from("remote-code");
         for extra in &args.remote_args {
             remote_cmd.push(' ');
-            remote_cmd.push_str(extra);
+            remote_cmd.push_str(&shell_escape(extra));
         }
         cmd_args.push(remote_cmd);
     }

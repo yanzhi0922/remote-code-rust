@@ -1,6 +1,7 @@
 //! Auto-updater that checks GitHub Releases for new versions.
 
 use anyhow::{Context, Result, anyhow};
+use sha2::{Digest, Sha256};
 use serde::Deserialize;
 
 use crate::doctor::install::{InstallSourceKind, detect_install_source, release_repository_slug};
@@ -155,6 +156,17 @@ pub async fn run_update() -> Result<()> {
         .await
         .context("failed to read download response")?;
 
+    // Compute and log the SHA-256 digest of the downloaded binary.
+    //
+    // TODO: Verify against a signed checksum file (e.g., sha256sums.txt)
+    // shipped alongside the GitHub release assets.  Until that is wired up
+    // the hash is printed so operators can cross-check manually.
+    let mut hasher = Sha256::new();
+    hasher.update(&bytes);
+    let digest_bytes = hasher.finalize();
+    let digest: String = digest_bytes.iter().map(|b| format!("{b:02x}")).collect();
+    println!("SHA-256 of downloaded binary: {digest}");
+
     let current_exe =
         std::env::current_exe().context("failed to determine current executable path")?;
     let temp_path = current_exe.with_extension("new");
@@ -193,7 +205,7 @@ fn latest_release_api_url(repository: &str) -> String {
 fn select_download_asset(assets: &[GitHubAsset], target_suffix: &str) -> Option<String> {
     assets
         .iter()
-        .find(|asset| asset.name.contains(target_suffix))
+        .find(|asset| asset.name.ends_with(target_suffix))
         .map(|asset| asset.browser_download_url.clone())
 }
 
@@ -317,7 +329,7 @@ mod tests {
     }
 
     #[test]
-    fn asset_selection_matches_platform_suffix_substring() {
+    fn asset_selection_matches_platform_suffix_at_end_of_name() {
         let assets = vec![
             GitHubAsset {
                 name: "remote-code-windows-x86_64.zip".to_owned(),
@@ -330,9 +342,15 @@ mod tests {
                 size: 1,
             },
         ];
+        // Suffix must match the end of the asset name (including extension).
+        assert_eq!(
+            select_download_asset(&assets, "x86_64.tar.gz").as_deref(),
+            Some("https://example.com/linux.tar.gz")
+        );
+        // Should not match a substring in the middle.
         assert_eq!(
             select_download_asset(&assets, "linux-x86_64").as_deref(),
-            Some("https://example.com/linux.tar.gz")
+            None
         );
     }
 

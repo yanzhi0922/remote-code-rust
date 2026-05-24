@@ -64,7 +64,7 @@ fn unsupported_command(command: &str, json: bool) -> Result<()> {
 pub fn run_cost(config: &RuntimeConfig, store: &SessionStore, args: CostArgs) -> Result<()> {
     let events = store.load_events(config.session_id).unwrap_or_default();
     let (inp, out) = events.iter().fold((0u64, 0u64), |(i, o), e| {
-        if let Some(ref map) = e.payload.as_ref().and_then(|p| p.as_object()) {
+        if let Some(map) = e.payload.as_ref().and_then(|p| p.as_object()) {
             (
                 i + nested_u64(map, &["usage", "input_tokens"]).unwrap_or(0),
                 o + nested_u64(map, &["usage", "output_tokens"]).unwrap_or(0),
@@ -429,7 +429,10 @@ pub async fn run_copy(config: &RuntimeConfig, store: &SessionStore, args: CopyAr
         return Ok(());
     }
 
-    let tmp = std::env::temp_dir().join(format!("remote-code-copy-{session_id}.txt"));
+    let tmp = std::env::temp_dir().join(format!(
+        "remote-code-copy-{session_id}-{}.txt",
+        uuid::Uuid::new_v4().as_simple()
+    ));
     std::fs::write(&tmp, &text)?;
     println!("Copied {} characters to {}.", text.len(), tmp.display());
     Ok(())
@@ -524,18 +527,16 @@ pub fn run_debug_tool_call(
 
     if args.json {
         println!("{}", serde_json::to_string(&tool_events)?);
+    } else if tool_events.is_empty() {
+        println!("No events found for tool call `{}`.", args.tool_call_id);
     } else {
-        if tool_events.is_empty() {
-            println!("No events found for tool call `{}`.", args.tool_call_id);
-        } else {
-            println!(
-                "Tool call `{}`: {} events",
-                args.tool_call_id,
-                tool_events.len()
-            );
-            for e in &tool_events {
-                println!("  - {} ({})", e.event_type, e.timestamp);
-            }
+        println!(
+            "Tool call `{}`: {} events",
+            args.tool_call_id,
+            tool_events.len()
+        );
+        for e in &tool_events {
+            println!("  - {} ({})", e.event_type, e.timestamp);
         }
     }
     Ok(())
@@ -544,6 +545,7 @@ pub fn run_debug_tool_call(
 /// Toggle fast mode (skip confirmations).
 pub fn run_fast(config: &mut RuntimeConfig, args: FastArgs) -> Result<()> {
     if args.enable {
+        eprintln!("Warning: enabling fast mode allows edits without confirmation.");
         config.permission_mode = claude_core::PermissionMode::AcceptEdits;
         if args.json {
             println!("{}", serde_json::json!({"fast_mode": true}));
@@ -743,11 +745,16 @@ pub fn run_branch(_config: &RuntimeConfig, command: BranchCommand) -> Result<()>
             }
         }
         BranchCommand::Switch { name } => {
-            std::process::Command::new("git")
+            let output = std::process::Command::new("git")
                 .args(["checkout", &name])
                 .output()
                 .map_err(|e| anyhow!("git checkout failed: {e}"))?;
-            println!("Switched to branch '{name}'.");
+            if output.status.success() {
+                println!("Switched to branch '{name}'.");
+            } else {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                return Err(anyhow!("{}", stderr.trim()));
+            }
         }
         BranchCommand::Delete { name, force } => {
             let mut args = vec!["branch"];
@@ -757,11 +764,16 @@ pub fn run_branch(_config: &RuntimeConfig, command: BranchCommand) -> Result<()>
                 args.push("-d");
             }
             args.push(&name);
-            std::process::Command::new("git")
+            let output = std::process::Command::new("git")
                 .args(&args)
                 .output()
                 .map_err(|e| anyhow!("git branch delete failed: {e}"))?;
-            println!("Branch '{name}' deleted.");
+            if output.status.success() {
+                println!("Branch '{name}' deleted.");
+            } else {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                return Err(anyhow!("{}", stderr.trim()));
+            }
         }
         BranchCommand::Current { json } => {
             let output = std::process::Command::new("git")
@@ -781,6 +793,14 @@ pub fn run_branch(_config: &RuntimeConfig, command: BranchCommand) -> Result<()>
 
 /// View or set remote env vars.
 pub async fn run_remote_env(args: RemoteEnvArgs) -> Result<()> {
+    // Validate that only one of --get, --set, --unset is specified.
+    let op_count = [&args.get, &args.set, &args.unset].iter().filter(|o| o.is_some()).count();
+    if op_count > 1 {
+        return Err(anyhow!(
+            "only one of --get, --set, or --unset may be specified at a time"
+        ));
+    }
+
     if args.list || (args.get.is_none() && args.set.is_none() && args.unset.is_none()) {
         if args.json {
             println!("[]");
@@ -796,7 +816,16 @@ pub async fn run_remote_env(args: RemoteEnvArgs) -> Result<()> {
             println!("{key}={val}");
         }
     } else if let Some(key) = &args.set {
+        if args.get.is_some() || args.unset.is_some() {
+            return Err(anyhow!("cannot use --set with --get or --unset"));
+        }
         if let Some(val) = &args.value {
+            // SAFETY: This CLI runs in a single-user, interactive context where the
+            // tokio runtime tasks are not expected to race on environment variables.
+            // The user explicitly invoked `remote-code remote-env --set`, so this is
+            // a deliberate, user-driven mutation rather than an unsolicited API call.
+            // If this command is ever exposed to concurrent or programmatic callers,
+            // replace `set_var` with a thread-safe configuration store.
             unsafe {
                 std::env::set_var(key, val);
             }
@@ -807,6 +836,7 @@ pub async fn run_remote_env(args: RemoteEnvArgs) -> Result<()> {
             }
         }
     } else if let Some(key) = &args.unset {
+        // SAFETY: Same rationale as the --set branch above — single-user CLI usage.
         unsafe {
             std::env::remove_var(key);
         }

@@ -203,13 +203,18 @@ fn run_session_backfill(store: &SessionStore, args: SessionBackfillArgs) -> Resu
             );
         }
     } else {
-        // Full backfill: re-export session bundle and rebuild indexes.
+        // TODO: Full backfill should re-parse events, rebuild search indexes,
+        // and optionally re-index conversation history.  Currently this path
+        // only re-exports the session bundle to JSON as a placeholder.
         let path = store.export_session_bundle_json(args.session_id, None)?;
         if args.json {
-            println!("{{\"backfilled\": true, \"path\": \"{}\"}}", path.display());
+            println!(
+                "{{\"exported\": true, \"path\": \"{}\", \"note\": \"backfill re-indexing is not yet implemented\"}}",
+                path.display()
+            );
         } else {
             println!(
-                "Session {} backfilled to {}.",
+                "Session {} exported to {} (backfill re-indexing is not yet implemented).",
                 args.session_id,
                 path.display()
             );
@@ -221,18 +226,32 @@ fn run_session_backfill(store: &SessionStore, args: SessionBackfillArgs) -> Resu
 fn run_session_rewind(store: &SessionStore, args: SessionRewindArgs) -> Result<()> {
     store.load_session_bundle(args.session_id)?;
     let steps = args.steps.unwrap_or(1) as usize;
+    // TODO: implement actual session rewind — currently this is a placeholder
+    // that validates the session exists but does not truncate conversation history.
     if let Some(ref cp) = args.to_checkpoint {
         if args.json {
-            println!("{{\"rewound\": true, \"checkpoint\": \"{cp}\"}}");
+            println!("{}", serde_json::to_string(&serde_json::json!({
+                "rewound": false,
+                "checkpoint": cp,
+                "note": "session rewind is not yet fully implemented"
+            }))?);
         } else {
-            println!("Session {} rewound to checkpoint {}.", args.session_id, cp);
+            println!(
+                "Session {} rewind to checkpoint {} is not yet fully implemented.",
+                args.session_id, cp
+            );
         }
+    } else if args.json {
+        println!("{}", serde_json::to_string(&serde_json::json!({
+            "rewound": false,
+            "steps": steps,
+            "note": "session rewind is not yet fully implemented"
+        }))?);
     } else {
-        if args.json {
-            println!("{{\"rewound\": true, \"steps\": {steps}}}");
-        } else {
-            println!("Session {} rewound by {} steps.", args.session_id, steps);
-        }
+        println!(
+            "Session {} rewind by {} steps is not yet fully implemented.",
+            args.session_id, steps
+        );
     }
     Ok(())
 }

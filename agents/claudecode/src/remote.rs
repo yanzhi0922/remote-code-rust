@@ -388,6 +388,10 @@ fn print_remote_device_summary(device: &RemoteTrustedDeviceRecord) {
 }
 
 fn print_remote_access_token_help(access_token: &str) {
+    // SECURITY NOTE: The access token is a sensitive credential.
+    // Printing it to stdout is necessary for interactive bootstrap/pairing flows,
+    // but be aware this may be captured in shell history or logs.
+    eprintln!("WARNING: Access token is a sensitive credential. Handle with care.");
     println!("Access token");
     println!("{access_token}");
     println!(
@@ -401,7 +405,14 @@ fn print_remote_pairing_offer(offer: &RemotePairingOfferCreateResponse) {
     println!("- target kind: {}", offer.device_kind.label());
     println!("- created: {}", offer.created_at);
     println!("- expires: {}", offer.expires_at);
-    println!("- pairing secret: {}", offer.pairing_secret);
+    // SECURITY NOTE: Truncate the pairing secret in non-JSON output to reduce
+    // exposure in shell history / logs. Use --json for the full value.
+    let secret = &offer.pairing_secret;
+    if secret.len() > 8 {
+        println!("- pairing secret: {}...[REDACTED] (use --json for full value)", &secret[..8]);
+    } else {
+        println!("- pairing secret: [REDACTED] (use --json for full value)");
+    }
     if let Some(pairing_url) = &offer.pairing_url {
         println!("- pairing URL: {pairing_url}");
     }
