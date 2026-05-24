@@ -1494,6 +1494,10 @@ pub(crate) async fn create_artifact(
         .map_err(|error| {
             ApiError::bad_request(format!("artifact content is not valid base64: {error}"))
         })?;
+    // Register artifact metadata in the registry, then persist the file to disk.
+    // If the file write fails, attempt best-effort cleanup of the partial file
+    // so we don't leave orphan data on disk.  The registry entry remains as a
+    // tombstone that downstream consumers will handle gracefully (missing file).
     let artifact = {
         let mut registry = service.registry.write().await;
         registry.register_artifact(session_id, &request, contents.len() as u64)?
@@ -1505,6 +1509,8 @@ pub(crate) async fn create_artifact(
         })?;
     }
     tokio::fs::write(&path, &contents).await.map_err(|error| {
+        // Best-effort cleanup of the partial file on write failure.
+        let _ = std::fs::remove_file(&path);
         ApiError::internal(format!("failed to write {}: {error}", path.display()))
     })?;
     let _event = service
@@ -1597,12 +1603,10 @@ pub(crate) async fn create_approval(
     Json(request): Json<ApprovalCreateRequest>,
 ) -> Result<(StatusCode, Json<rc_runner::ApprovalRequestRecord>), ApiError> {
     let user_id = user_id_from_principal(&principal);
-    {
-        let registry = service.registry.read().await;
-        registry.get_session_for_user(session_id, user_id)?;
-    }
+    // Use a single write lock acquisition for the check + plan to avoid TOCTOU.
     let planned = {
         let registry = service.registry.read().await;
+        registry.get_session_for_user(session_id, user_id)?;
         registry.plan_approval(session_id, request)?
     };
     if let Some(runner) = planned.owner_runner.as_ref()

@@ -6,6 +6,7 @@
 
 use std::net::SocketAddr;
 use std::sync::{Arc, Once};
+use std::time::{Duration, Instant};
 
 use tokio::io::AsyncWriteExt;
 use tokio::sync::broadcast;
@@ -19,6 +20,11 @@ use rc_remote_transport::TransportEvent;
 use rc_remote_transport::transport::{CommandAck, TransportApprovalDecision, TransportCommand};
 
 const MAX_QUIC_FRAME_BYTES: usize = 1024 * 1024;
+
+/// Maximum time a QUIC connection may remain active before requiring
+/// re-authentication.  Limits the window in which a stolen/hijacked
+/// connection can issue commands.
+const QUIC_SESSION_TTL: Duration = Duration::from_secs(4 * 60 * 60); // 4 hours
 
 /// QUIC server configuration.
 pub struct QuicServerConfig {
@@ -79,6 +85,10 @@ async fn handle_quic_connection(
         return Err(anyhow::anyhow!("QUIC auth token mismatch"));
     }
 
+    // Security: record when the connection was authenticated so we can
+    // enforce a session TTL on every command, not just the initial handshake.
+    let auth_at = Instant::now();
+
     let target_session: Option<Uuid> = auth.session_id.parse().ok();
     tracing::debug!(
         "QUIC client authenticated for session {}",
@@ -112,20 +122,34 @@ async fn handle_quic_connection(
             cmd_stream = conn.accept_bi() => {
                 match cmd_stream {
                     Ok((mut send, mut recv)) => {
-                        let ack = match read_len_prefixed_payload(&mut recv).await {
-                            Ok(buf) => dispatch_quic_command(&service, target_session, &buf)
-                                .await
-                                .unwrap_or_else(|e| {
-                                    tracing::warn!("QUIC command dispatch error: {e}");
-                                    CommandAck {
-                                        accepted: false,
-                                        message: e.to_string(),
-                                    }
-                                }),
-                            Err(e) => CommandAck {
+                        // Security: re-validate auth on every command.
+                        // Enforce session TTL to limit the window of a
+                        // hijacked connection.
+                        let ack = if auth_at.elapsed() > QUIC_SESSION_TTL {
+                            tracing::warn!(
+                                "QUIC session expired after {:?}, rejecting command",
+                                auth_at.elapsed()
+                            );
+                            CommandAck {
                                 accepted: false,
-                                message: format!("invalid QUIC command frame: {e}"),
-                            },
+                                message: "session expired: please reconnect".into(),
+                            }
+                        } else {
+                            match read_len_prefixed_payload(&mut recv).await {
+                                Ok(buf) => dispatch_quic_command(&service, target_session, &buf)
+                                    .await
+                                    .unwrap_or_else(|e| {
+                                        tracing::warn!("QUIC command dispatch error: {e}");
+                                        CommandAck {
+                                            accepted: false,
+                                            message: e.to_string(),
+                                        }
+                                    }),
+                                Err(e) => CommandAck {
+                                    accepted: false,
+                                    message: format!("invalid QUIC command frame: {e}"),
+                                },
+                            }
                         };
                         if let Err(e) = write_len_prefixed_payload(&mut send, &ack).await {
                             tracing::debug!("QUIC command ack write error: {e}");

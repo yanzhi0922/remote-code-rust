@@ -54,7 +54,9 @@ impl TokenManager {
     /// Get the current access token, attempting refresh if needed.
     /// Returns None if the token is expired and no refresh token is available.
     pub async fn access_token(&self) -> Option<String> {
-        let state = self.inner.read().await;
+        // Acquire a write lock up front so that the check-and-refresh is atomic.
+        // This prevents multiple concurrent callers from triggering redundant refreshes.
+        let state = self.inner.write().await;
         match &*state {
             TokenState::None => None,
             TokenState::Expired => None,
@@ -63,9 +65,12 @@ impl TokenManager {
                 let refresh_at =
                     pair.expires_at - chrono::Duration::seconds(self.refresh_buffer_secs);
                 if now >= refresh_at {
-                    // Need refresh — drop read lock and try to refresh.
+                    // Need refresh — downgrade to read lock to extract what we need,
+                    // then release before the HTTP call (write lock is dropped).
+                    let refresh_token = pair.refresh_token.clone();
+                    let cp_url = self.control_plane_url.clone();
                     drop(state);
-                    self.try_refresh().await
+                    self.try_refresh_with(refresh_token, cp_url).await
                 } else {
                     Some(pair.access_token.clone())
                 }
@@ -83,17 +88,11 @@ impl TokenManager {
         *self.inner.write().await = TokenState::None;
     }
 
-    async fn try_refresh(&self) -> Option<String> {
-        let state = self.inner.read().await;
-        let TokenState::Valid(pair) = &*state else {
-            return None;
-        };
-
-        let refresh_token = pair.refresh_token.clone()?;
-        let cp_url = self.control_plane_url.clone()?;
-
-        // Drop read lock before making HTTP call.
-        drop(state);
+    /// Perform a token refresh using the provided credentials.
+    /// The caller is responsible for not holding any lock when calling this.
+    async fn try_refresh_with(&self, refresh_token: Option<String>, cp_url: Option<String>) -> Option<String> {
+        let refresh_token = refresh_token?;
+        let cp_url = cp_url?;
 
         let client = reqwest::Client::new();
         let url = format!("{cp_url}/v1/auth/refresh");

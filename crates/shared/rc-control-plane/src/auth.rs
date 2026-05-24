@@ -177,7 +177,9 @@ pub(crate) async fn require_api_auth(
     mut request: Request,
     next: Next,
 ) -> axum::response::Response {
-    // Explicit disable via env var (local dev only — compiled out in release).
+    // Security: auth bypass is compile-time gated to debug builds via
+    // cfg!(debug_assertions). In release mode this branch is eliminated entirely
+    // and REMOTE_CODE_REQUIRE_AUTH=false has no effect.
     if cfg!(debug_assertions)
         && std::env::var("REMOTE_CODE_REQUIRE_AUTH")
             .as_deref()

@@ -62,14 +62,22 @@ impl rustls::client::danger::ServerCertVerifier for FlexibleVerifier {
         ocsp_response: &[u8],
         now: rustls::pki_types::UnixTime,
     ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
-        // If fingerprints are pinned, verify the leaf cert matches.
+        // If fingerprints are pinned, verify the leaf cert matches using
+        // constant-time comparison to prevent timing side-channel attacks.
         if !self.fingerprints.is_empty() {
-            let fp = sha256_hex(end_entity.as_ref());
-            if self
-                .fingerprints
-                .iter()
-                .any(|p| p.eq_ignore_ascii_case(&fp))
-            {
+            let fp_bytes = sha256_bytes(end_entity.as_ref());
+            let fp_hex = hex::encode(&fp_bytes);
+            let matched = self.fingerprints.iter().any(|p| {
+                // Compare hex-decoded pinned bytes in constant time.
+                match decode_hex(p) {
+                    Ok(pinned_bytes) => constant_time_eq(&fp_bytes, &pinned_bytes),
+                    Err(_) => {
+                        // Fall back to constant-time string comparison for non-hex pins.
+                        constant_time_eq_str(p.as_bytes(), fp_hex.as_bytes())
+                    }
+                }
+            });
+            if matched {
                 return Ok(rustls::client::danger::ServerCertVerified::assertion());
             }
             return Err(rustls::Error::General(
@@ -105,10 +113,44 @@ impl rustls::client::danger::ServerCertVerifier for FlexibleVerifier {
     }
 }
 
+#[allow(dead_code)]
 fn sha256_hex(data: &[u8]) -> String {
+    hex::encode(sha256_bytes(data))
+}
+
+/// Compute the raw SHA-256 digest bytes.
+fn sha256_bytes(data: &[u8]) -> Vec<u8> {
     use sha2::{Digest, Sha256};
-    let digest = Sha256::digest(data);
-    hex::encode(digest)
+    Sha256::digest(data).to_vec()
+}
+
+/// Constant-time byte comparison to prevent timing side-channels.
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut result = 0u8;
+    for (x, y) in a.iter().zip(b.iter()) {
+        result |= x ^ y;
+    }
+    result == 0
+}
+
+/// Constant-time comparison for byte strings of equal length.
+fn constant_time_eq_str(a: &[u8], b: &[u8]) -> bool {
+    constant_time_eq(a, b)
+}
+
+/// Decode a hex string to bytes.
+fn decode_hex(s: &str) -> Result<Vec<u8>, ()> {
+    let s = s.trim();
+    if s.len() % 2 != 0 {
+        return Err(());
+    }
+    (0..s.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&s[i..i + 2], 16).map_err(|_| ()))
+        .collect()
 }
 
 mod hex {

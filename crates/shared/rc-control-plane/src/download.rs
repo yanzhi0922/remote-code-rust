@@ -59,7 +59,14 @@ pub(crate) async fn download_file(
         return StatusCode::BAD_REQUEST.into_response();
     }
     // Block URL-encoded traversal sequences (e.g. %2e%2e).
-    if filename.contains("%2e%2e") || filename.contains("%2E%2E") {
+    // Use case-insensitive comparison to catch mixed-case encodings like %2E%2e.
+    if filename.to_ascii_lowercase().contains("%2e%2e") {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
+    // Block single-dot URL encoding (e.g. %2e.%2e or .%2e).
+    if filename.to_ascii_lowercase().contains("%2e.")
+        || filename.to_ascii_lowercase().contains(".%2e")
+    {
         return StatusCode::BAD_REQUEST.into_response();
     }
     // Block Windows alternate data streams (e.g. "file.txt:Zone.Identifier").

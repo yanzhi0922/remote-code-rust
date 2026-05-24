@@ -14,7 +14,7 @@ websocket = ["dep:tokio-tungstenite"]
 polling = []
 hybrid = ["websocket", "polling"]
 quic = ["dep:quinn"]
-e2e = ["dep:x25519-dalek", "dep:aes-gcm"]
+e2e = ["dep:x25519-dalek", "dep:aes-gcm", "dep:hkdf"]
 
 [dependencies]
 tokio = { workspace = true, features = ["full"] }
@@ -35,6 +35,7 @@ tokio-tungstenite = { workspace = true, optional = true }
 quinn = { version = "0.11", optional = true }
 x25519-dalek = { version = "2", features = ["static_secrets"], optional = true }
 aes-gcm = { version = "0.10", optional = true }
+hkdf = { workspace = true, optional = true }
 
 [lints]
 workspace = true

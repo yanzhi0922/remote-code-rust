@@ -48,7 +48,11 @@ impl OfflineQueue {
         };
         let mut queue = self.inner.write().await;
         if queue.len() >= MAX_QUEUE_SIZE {
-            queue.remove(0); // Drop oldest
+            let dropped = queue.remove(0); // Drop oldest
+            tracing::warn!(
+                command_type = ?dropped.command,
+                "offline queue full; dropped oldest command"
+            );
         }
         queue.push(item);
         id
