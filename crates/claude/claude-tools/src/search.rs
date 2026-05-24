@@ -3,8 +3,11 @@
 //! Provides full-text search over tool names, descriptions, and tags using the
 //! BM25 ranking function. This allows the `tool_search` tool to return
 //! relevance-ranked results instead of simple substring matching.
+//!
+//! TODO: This module duplicates BM25 logic with `discover_skills.rs`. Both
+//! should be refactored into a shared `bm25` module to avoid divergence.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -137,11 +140,23 @@ impl ToolSearchEngine {
             return Vec::new();
         }
 
+        // Precompute IDF for each unique query term once, rather than scanning
+        // all documents per term per document inside the scoring loop.
+        let idf_cache: HashMap<String, f64> = query_tokens
+            .iter()
+            .fold(BTreeSet::<&String>::new(), |mut set, token| {
+                set.insert(token);
+                set
+            })
+            .into_iter()
+            .map(|term| (term.clone(), self.idf(term)))
+            .collect();
+
         let mut scored: Vec<SearchResult> = self
             .documents
             .values()
             .filter_map(|doc| {
-                let score = self.bm25_score(doc, &query_tokens);
+                let score = self.bm25_score(doc, &query_tokens, &idf_cache);
                 if score > 0.0 {
                     Some(SearchResult {
                         name: doc.name.clone(),
@@ -188,8 +203,14 @@ impl ToolSearchEngine {
         ((n - n_t + 0.5) / (n_t + 0.5) + 1.0).ln()
     }
 
-    /// Compute the BM25 score for a single document given query tokens.
-    fn bm25_score(&self, doc: &SearchDocument, query_tokens: &[String]) -> f64 {
+    /// Compute the BM25 score for a single document given query tokens and a
+    /// precomputed IDF cache.
+    fn bm25_score(
+        &self,
+        doc: &SearchDocument,
+        query_tokens: &[String],
+        idf_cache: &HashMap<String, f64>,
+    ) -> f64 {
         let dl = doc.length as f64;
         let avg_dl = if self.avg_dl > 0.0 { self.avg_dl } else { 1.0 };
 
@@ -199,7 +220,7 @@ impl ToolSearchEngine {
             if tf == 0.0 {
                 continue;
             }
-            let idf = self.idf(term);
+            let idf = idf_cache.get(term).copied().unwrap_or(0.0);
             let numerator = tf * (self.k1 + 1.0);
             let denominator = tf + self.k1 * (1.0 - self.b + self.b * (dl / avg_dl));
             score += idf * (numerator / denominator);

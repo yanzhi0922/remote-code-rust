@@ -4,6 +4,9 @@
 //! discover relevant skills based on task descriptions. Searches standard
 //! skill directories: `~/.remote-code/skills/`, `.roo/skills/`, and
 //! project-local skills directories.
+//!
+//! TODO: This module duplicates BM25 logic with `search.rs`. Both should be
+//! refactored into a shared `bm25` module to avoid divergence.
 
 use std::path::{Path, PathBuf};
 
@@ -129,16 +132,17 @@ impl Bm25SkillSearchEngine {
             return Vec::new();
         }
 
-        // Compute document frequency for each query term.
+        // Compute document frequency for each query term in a single pass.
+        let query_token_set: std::collections::HashSet<&String> =
+            query_tokens.iter().collect();
         let df: std::collections::HashMap<String, usize> = {
             let mut map = std::collections::HashMap::new();
-            for token in &query_tokens {
-                let count = self
-                    .documents
-                    .iter()
-                    .filter(|doc| doc.tokens.contains(token))
-                    .count();
-                map.insert(token.clone(), count);
+            for doc in &self.documents {
+                for token in &query_token_set {
+                    if doc.tokens.contains(token) {
+                        *map.entry((*token).clone()).or_insert(0) += 1;
+                    }
+                }
             }
             map
         };

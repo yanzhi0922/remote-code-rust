@@ -521,6 +521,10 @@ impl DelegationEngine {
     }
 
     /// Filter a list of tool names, removing blocked tools.
+    ///
+    /// Used by tests and conditionally compiled callers. Kept because the
+    /// filtering logic mirrors the inline checks in `delegate_single` and may
+    /// be needed again when batch-level tool filtering is added.
     #[allow(dead_code)]
     fn filter_tools(&self, allowed_tools: &[String]) -> Vec<String> {
         if allowed_tools.is_empty() {
@@ -613,17 +617,11 @@ impl DelegationEngine {
 // ---------------------------------------------------------------------------
 
 fn truncate_output(text: &str, max_chars: usize) -> String {
-    if text.len() <= max_chars {
+    if text.chars().count() <= max_chars {
         text.to_owned()
     } else {
-        // Find a valid UTF-8 boundary to avoid slicing mid-character.
-        let boundary = text
-            .char_indices()
-            .take_while(|(i, _)| *i < max_chars)
-            .last()
-            .map(|(i, c)| i + c.len_utf8())
-            .unwrap_or(max_chars.min(text.len()));
-        format!("{}...[truncated]", &text[..boundary])
+        let truncated: String = text.chars().take(max_chars).collect();
+        format!("{}...[truncated]", truncated)
     }
 }
 

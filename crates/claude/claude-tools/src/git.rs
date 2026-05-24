@@ -27,21 +27,23 @@ struct WorktreeChangeSummary {
     commits: usize,
 }
 
-pub fn suggest_pr_tool(context: &ToolExecutionContext) -> Result<String> {
-    let diff_output = std::process::Command::new("git")
+pub async fn suggest_pr_tool(context: &ToolExecutionContext) -> Result<String> {
+    let diff_output = tokio::process::Command::new("git")
         .args(["diff", "--stat"])
         .current_dir(&context.cwd)
-        .output();
+        .output()
+        .await;
 
     let diff_stat = match diff_output {
         Ok(out) => String::from_utf8_lossy(&out.stdout).to_string(),
         Err(_) => "Unable to run git diff.".to_owned(),
     };
 
-    let log_output = std::process::Command::new("git")
+    let log_output = tokio::process::Command::new("git")
         .args(["log", "--oneline", "-10"])
         .current_dir(&context.cwd)
-        .output();
+        .output()
+        .await;
 
     let recent_commits = match log_output {
         Ok(out) => String::from_utf8_lossy(&out.stdout).to_string(),
@@ -101,10 +103,6 @@ pub fn enter_worktree_tool(input: &Value, context: &ToolExecutionContext) -> Res
     )
     .ok()
     .filter(|value| !value.is_empty());
-    let _head_commit = git_stdout(&canonical_root, ["rev-parse", "HEAD"], "resolve HEAD")
-        .ok()
-        .filter(|value| !value.is_empty());
-
     if !worktree_path.exists() {
         let base_ref = current_branch.as_deref().unwrap_or("HEAD");
         let status = std::process::Command::new("git")
@@ -524,22 +522,20 @@ fn parse_worktree_list(text: &str) -> Vec<WorktreeInfo> {
     let mut worktrees = Vec::new();
     let mut current_path = String::new();
     let mut current_branch = String::new();
-    // The first worktree in `git worktree list --porcelain` output is the
-    // main/principal worktree. We track this with an index counter.
-    let mut worktree_index: usize = 0;
 
     for line in text.lines() {
         if let Some(path) = line.strip_prefix("worktree ") {
             if !current_path.is_empty() {
+                // The first entry in the porcelain output is the main worktree.
+                let is_main = worktrees.is_empty();
                 worktrees.push(WorktreeInfo {
                     path: current_path.clone(),
                     branch: current_branch.clone(),
-                    is_main: worktree_index == 0,
+                    is_main,
                 });
             }
             current_path = path.to_owned();
             current_branch.clear();
-            worktree_index += 1;
         } else if let Some(branch) = line.strip_prefix("branch refs/heads/") {
             current_branch = branch.to_owned();
         }
@@ -547,14 +543,15 @@ fn parse_worktree_list(text: &str) -> Vec<WorktreeInfo> {
         // --porcelain`, "bare" indicates a bare repository (no working tree),
         // NOT the main worktree. Previously this was incorrectly treated as
         // is_main = true, which would mark bare repos as the main worktree.
-        // The main worktree is identified by being the first entry (index 0).
+        // The main worktree is identified by being the first entry pushed.
     }
 
     if !current_path.is_empty() {
+        let is_main = worktrees.is_empty();
         worktrees.push(WorktreeInfo {
             path: current_path,
             branch: current_branch,
-            is_main: worktree_index == 0,
+            is_main,
         });
     }
     worktrees

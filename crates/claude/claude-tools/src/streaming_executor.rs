@@ -7,6 +7,7 @@
 //! in the order tools were received.
 
 use parking_lot::Mutex;
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -154,6 +155,8 @@ impl Default for StreamingExecutorConfig {
 /// Shared state behind the `Arc<Mutex<>>`.
 struct SharedState {
     tools: Vec<TrackedTool>,
+    /// O(1) lookup from tool-call ID to index in `tools`.
+    tool_index: HashMap<String, usize>,
     discarded: bool,
     has_errored: bool,
 }
@@ -186,6 +189,7 @@ impl StreamingToolExecutor {
         Self {
             state: Arc::new(Mutex::new(SharedState {
                 tools: Vec::new(),
+                tool_index: HashMap::new(),
                 discarded: false,
                 has_errored: false,
             })),
@@ -240,6 +244,8 @@ impl StreamingToolExecutor {
             input_arc,
             result: None,
         });
+        let idx = state.tools.len() - 1;
+        state.tool_index.insert(id.to_owned(), idx);
 
         self.try_dispatch(&mut state);
     }
@@ -426,7 +432,8 @@ impl StreamingToolExecutor {
                         duration: start.elapsed(),
                     };
                     let mut s = state_arc.lock();
-                    if let Some(tool) = s.tools.iter_mut().find(|t| t.call.id == id) {
+                    if let Some(&idx) = s.tool_index.get(&id) {
+                        let tool = &mut s.tools[idx];
                         tool.call.status = ToolStatus::Completed;
                         tool.result = Some(r);
                     }
@@ -455,7 +462,8 @@ impl StreamingToolExecutor {
                         duration: start.elapsed(),
                     };
                     let mut s = state_arc.lock();
-                    if let Some(tool) = s.tools.iter_mut().find(|t| t.call.id == id) {
+                    if let Some(&idx) = s.tool_index.get(&id) {
+                        let tool = &mut s.tools[idx];
                         tool.call.status = ToolStatus::Completed;
                         tool.result = Some(r);
                     }
@@ -490,7 +498,8 @@ impl StreamingToolExecutor {
                                 duration: start.elapsed(),
                             };
                             let mut s = state_arc.lock();
-                            if let Some(tool) = s.tools.iter_mut().find(|t| t.call.id == id) {
+                            if let Some(&idx) = s.tool_index.get(&id) {
+                                let tool = &mut s.tools[idx];
                                 tool.call.status = ToolStatus::Completed;
                                 tool.result = Some(r);
                             }
@@ -530,7 +539,8 @@ impl StreamingToolExecutor {
                 // Store result
                 {
                     let mut s = state_arc.lock();
-                    if let Some(tool) = s.tools.iter_mut().find(|t| t.call.id == id) {
+                    if let Some(&idx) = s.tool_index.get(&id) {
+                        let tool = &mut s.tools[idx];
                         tool.call.status = ToolStatus::Completed;
                         tool.result = Some(r);
                     }
@@ -619,7 +629,8 @@ impl StreamingToolExecutor {
                                 duration: start.elapsed(),
                             };
                             let mut s = state_arc.lock();
-                            if let Some(tool) = s.tools.iter_mut().find(|t| t.call.id == id) {
+                            if let Some(&idx) = s.tool_index.get(&id) {
+                                let tool = &mut s.tools[idx];
                                 tool.call.status = ToolStatus::Completed;
                                 tool.result = Some(r);
                             }
@@ -657,7 +668,8 @@ impl StreamingToolExecutor {
 
                 {
                     let mut s = state_arc.lock();
-                    if let Some(tool) = s.tools.iter_mut().find(|t| t.call.id == id) {
+                    if let Some(&idx) = s.tool_index.get(&id) {
+                        let tool = &mut s.tools[idx];
                         tool.call.status = ToolStatus::Completed;
                         tool.result = Some(r);
                     }

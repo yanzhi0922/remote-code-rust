@@ -201,7 +201,7 @@ async fn mcp_auth_login(
         let _ = sender.send(result);
     });
 
-    match timeout(Duration::from_millis(300), receiver).await {
+    match timeout(Duration::from_secs(120), receiver).await {
         Ok(Ok(Ok(()))) => Ok(json!({
             "server": server_name,
             "status": "auth_url",
