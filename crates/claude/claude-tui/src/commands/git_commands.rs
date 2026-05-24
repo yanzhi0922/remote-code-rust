@@ -4,11 +4,17 @@ use claude_config::RuntimeConfig;
 use claude_tools::{ToolExecutionContext, git};
 use serde_json::Value;
 
+fn suggest_pr_sync(context: &ToolExecutionContext) -> anyhow::Result<String> {
+    tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current().block_on(git::suggest_pr_tool(context))
+    })
+}
+
 /// Dispatch `/commit` — one-click commit (git add + commit with generated message).
 pub fn render_commit(config: &RuntimeConfig) {
     let context = ToolExecutionContext::from_runtime_config(config);
 
-    match git::suggest_pr_tool(&context)
+    match suggest_pr_sync(&context)
         .and_then(|payload| serde_json::from_str::<Value>(&payload).map_err(Into::into))
     {
         Ok(value) => {
@@ -34,7 +40,7 @@ pub fn render_commit(config: &RuntimeConfig) {
 pub fn render_diff(config: &RuntimeConfig) {
     let context = ToolExecutionContext::from_runtime_config(config);
 
-    match git::suggest_pr_tool(&context)
+    match suggest_pr_sync(&context)
         .and_then(|payload| serde_json::from_str::<Value>(&payload).map_err(Into::into))
     {
         Ok(value) => {
@@ -63,7 +69,7 @@ pub fn render_diff(config: &RuntimeConfig) {
 pub fn render_pr_comments(config: &RuntimeConfig) {
     let context = ToolExecutionContext::from_runtime_config(config);
 
-    match git::suggest_pr_tool(&context)
+    match suggest_pr_sync(&context)
         .and_then(|payload| serde_json::from_str::<Value>(&payload).map_err(Into::into))
     {
         Ok(value) => {
@@ -143,7 +149,7 @@ fn render_branch_list(config: &RuntimeConfig) {
 pub fn render_autofix_pr(config: &RuntimeConfig) {
     let context = ToolExecutionContext::from_runtime_config(config);
 
-    match git::suggest_pr_tool(&context)
+    match suggest_pr_sync(&context)
         .and_then(|payload| serde_json::from_str::<Value>(&payload).map_err(Into::into))
     {
         Ok(value) => {

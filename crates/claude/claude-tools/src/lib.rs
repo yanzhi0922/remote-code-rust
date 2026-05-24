@@ -1861,13 +1861,13 @@ pub async fn execute_tool_call(
             // ── Phase 4: Upstream gap-fill tools ────────────────────────────
             "powershell" => command::powershell_tool(&effective_call.input, context).await,
             "repl" => command::repl_tool(&effective_call.input, context).await,
-            "monitor" => system::monitor_tool(&effective_call.input),
+            "monitor" => system::monitor_tool(&effective_call.input).await,
             "schedule_cron" => workflow::schedule_cron_tool(&effective_call.input, context),
             "cron_delete" => workflow::cron_delete_tool(&effective_call.input, context),
             "cron_list" => workflow::cron_list_tool(&effective_call.input, context),
             "remote_trigger" => misc::remote_trigger_tool(&effective_call.input).await,
             "workflow" => workflow::workflow_tool(&effective_call.input, context),
-            "suggest_pr" => git::suggest_pr_tool(context),
+            "suggest_pr" => git::suggest_pr_tool(context).await,
             "enter_worktree" => git::enter_worktree_tool(&effective_call.input, context),
             "exit_worktree" => git::exit_worktree_tool(&effective_call.input, context),
             "list_worktrees" => git::list_worktrees_tool(context),
@@ -1882,7 +1882,7 @@ pub async fn execute_tool_call(
                 mcp_tools::list_mcp_resources_tool(&effective_call.input, context).await
             }
             "skill_execute" => misc::skill_execute_tool(&effective_call.input, context),
-            "voice_input" => misc::voice_input_tool(&effective_call.input),
+            "voice_input" => misc::voice_input_tool(&effective_call.input).await,
             "daemon" => workflow::daemon_tool(&effective_call.input, context),
             // ── Phase 9: New dedicated tool modules ────────────────────────────
             "team_delete" => team_tools::team_delete(&effective_call.input, context),
