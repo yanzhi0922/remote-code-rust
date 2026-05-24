@@ -4,8 +4,12 @@
 >
 > 当前实际架构:
 > - `crates/adapters/rc-claude-adapter` — `ClaudeInProcessAdapter` (QueryEngine + PermissionBroker + ToolRunner + QueryObserver)
-> - `crates/adapters/rc-codex-adapter` — `CodexInProcessAdapter` (AppServer + event_mapper, 60+ RPC methods)
-> - `crates/adapters/rc-roo-adapter` — `RooInProcessAdapter` (native AgentLoop + Provider + ToolDispatcher, 26 provider backends)
+> - `crates/adapters/rc-codex-adapter` — `CodexInProcessAdapter` (AppServer + event_mapper, 50+ public methods)
+> - `crates/adapters/rc-roo-adapter` — `RooInProcessAdapter` (native AgentLoop + Provider + ToolDispatcher, 25+ provider backends)
+> - `crates/shared/rc-agent-protocol` — AgentAdapter trait + UnifiedAgentEvent + bridge function
+> - `crates/shared/rc-engine-events` — RuntimeEventDetail + EngineEvent
+> - `crates/shared/rc-runner` — RunnerApi (moved from crates/claude/)
+> - `crates/shared/rc-control-plane` — SessionState/handlers (moved from crates/claude/)
 >
 > 详见 [ARCHITECTURE.md](../ARCHITECTURE.md) 和 [PROJECT_STATUS.md](PROJECT_STATUS.md)。
 >

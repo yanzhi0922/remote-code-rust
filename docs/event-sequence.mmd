@@ -1,32 +1,38 @@
 sequenceDiagram
     participant User as User
     participant GUI as GUI - React
-    participant Runner as Runner
-    participant Adapter as AgentAdapter
-    participant Bridge as bridge.rs
-    participant Broadcast as tokio broadcast
+    participant Tauri as Tauri Backend
+    participant Adapter as AgentAdapter (in-process)
+    participant Bridge as bridge.rs (rc-agent-protocol)
+    participant Runner as rc-runner (shared)
     participant CP as Control Plane
 
     User->>GUI: Type prompt
-    GUI->>Runner: POST /v1/sessions/id/commands\nsend_prompt + content
-    Runner->>Adapter: send_message(session_id, prompt)
+    GUI->>Tauri: Tauri invoke send_prompt
+    Tauri->>Adapter: send_message(session_id, prompt)
 
-    Note over Adapter: Adapter calls native engine\nClaude / Roo / Codex in-process
+    Note over Adapter: Adapter calls native engine\nClaude / Roo / Codex in-process\nNo subprocess, no HTTP
 
     loop For each agent event
-        Adapter-->>Runner: mpsc Receiver of UnifiedAgentEvent
+        Adapter-->>Tauri: mpsc Receiver of UnifiedAgentEvent
 
-        Runner->>Bridge: unified_event_to_runtime_detail(event)
-        Bridge-->>Runner: Option of RuntimeEventDetail
+        Tauri->>Bridge: unified_event_to_runtime_detail(event)
+        Bridge-->>Tauri: Option<RuntimeEventDetail>
 
         alt Detail is Some
-            Runner->>Broadcast: publish_stream_event(json_line)
-            Runner->>CP: POST /v1/sessions/id/events\nRuntimeEventDetail
+            Tauri->>GUI: Tauri app.emit() runtime event JSON
+            Tauri->>CP: POST /v1/sessions/id/events RuntimeEventDetail
         else Detail is None - lifecycle
-            Note over Runner: Skip broadcast for lifecycle events
+            Note over Tauri: Skip for lifecycle events\n(QueryStarted, StreamMessage*, etc.)
         end
-
-        Broadcast-->>GUI: WebSocket SSE runtime event JSON
     end
 
     Note over GUI: RemoteApp.tsx renders\nTimelineCard per event
+
+    alt Permission request
+        Adapter-->>Tauri: PermissionRequest event
+        Tauri->>GUI: Show permission modal
+        User->>GUI: Approve/Deny
+        GUI->>Tauri: resolve_permission_request
+        Tauri->>Adapter: resolve_permission(decision)
+    end

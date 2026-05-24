@@ -100,7 +100,7 @@ P2 目标:
 
 ### 7.1 代码规模与组成
 
-当前 workspace 通过 `cargo metadata --no-deps` 实测为 231 个 Rust packages:
+当前 workspace 通过 `cargo metadata --no-deps` 实测为 301 个 Rust packages:
 
 | 分类 | 数量 | 说明 |
 | --- | ---: | --- |
@@ -110,12 +110,12 @@ P2 目标:
 | `apps/remote-code-migrate` | 1 | 遗留 profile 导入 |
 | `apps/remote-code-gui/src-tauri` | 1 | Tauri v2 桌面和移动 Rust 后端 |
 | `crates/adapters` | 3 | Claude/Codex/Roo 三类 agent adapter |
-| `crates/claude` | 42 | Claude runtime、provider、tools、session、permissions、MCP、GUI 支撑等 |
-| `crates/codex` | 108 | Codex core、app-server、CLI、TUI、plugins、tools、sandbox 等 |
-| `crates/roo` | 70 | Roo provider、task、tools、terminal、config、CLI 等 Rust 重写 |
-| `crates/shared` | 3 | 共享 agent 协议、engine events、remote transport |
+| `crates/claude` | ~44 | Claude runtime、provider、tools、session、permissions、MCP、GUI 支撑等 |
+| `crates/codex` | ~97 | Codex core、app-server、CLI、TUI、plugins、tools、sandbox 等 |
+| `crates/roo` | ~72 | Roo provider、task、tools、terminal、config、CLI 等 Rust 重写 |
+| `crates/shared` | 6 | 共享 agent 协议、engine events、remote transport、runner、control-plane、runner-host |
 
-前端主要位于 `apps/remote-code-gui/src`，包含 93 个 TypeScript/TSX 源文件。仓库中 Rust 源文件约 4660 个，测试相关文件约 478 个。
+前端主要位于 `apps/remote-code-gui/src`。仓库中 Rust 源文件约 2936 个（crates/ 目录），总计约 128 万行 Rust 代码。
 
 ### 7.2 应用入口
 
@@ -911,8 +911,8 @@ CI 必须覆盖:
 | Claude adapter | `crates/adapters/rc-claude-adapter` |
 | Codex adapter | `crates/adapters/rc-codex-adapter` |
 | Roo adapter | `crates/adapters/rc-roo-adapter` |
-| Control Plane | `apps/remote-code-control-plane`、`crates/claude/claude-control-plane` |
-| Runner | `apps/remote-code-runner`、`crates/claude/claude-runner` |
+| Control Plane | `apps/remote-code-control-plane`、`crates/shared/rc-control-plane` |
+| Runner | `apps/remote-code-runner`、`crates/shared/rc-runner`、`crates/shared/rc-runner-host` |
 | GUI backend | `apps/remote-code-gui/src-tauri/src/desktop.rs` |
 | GUI frontend local | `apps/remote-code-gui/src/App.tsx`、`src/stores/useAppStore.ts`、`src/components` |
 | GUI frontend remote | `apps/remote-code-gui/src/remote` |

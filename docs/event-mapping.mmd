@@ -1,54 +1,59 @@
 ```mermaid
 graph LR
-    subgraph Unified["UnifiedAgentEvent variants"]
+    subgraph Unified["UnifiedAgentEvent — 16 variants"]
+        U0[Ready]
         U1[MessageDelta]
         U2[ToolCallStarted]
         U3[ToolCallProgress]
+        U3b[CodexAppServerNotification]
         U4[ToolCallCompleted]
-        U5[SubtaskStarted]
-        U6[SubtaskProgress]
-        U7[SubtaskCompleted]
-        U8[BatchProgress]
+        U5[PermissionRequest]
+        U6[SubtaskStarted]
+        U7[SubtaskProgress]
+        U8[SubtaskCompleted]
         U9[ContextUsage]
         U10[ContextOverflow]
         U11[ContextCompacted]
         U12[Error]
+        U13[Completed]
+        U14[Stopped]
     end
 
-    subgraph Runtime["RuntimeEventDetail - 15 variants"]
+    subgraph Runtime["RuntimeEventDetail — 15 variants"]
         R1[MessageDelta]
-        R2[ToolCallStarted]
-        R3[ToolCallProgress]
-        R4[ToolCallCompleted]
-        R5[SubtaskStarted]
-        R6[SubtaskProgress]
-        R7[SubtaskCompleted]
-        R8[BatchProgress]
-        R9[ContextUsage]
-        R10[ContextOverflow]
-        R11[ContextCompacted]
-        R12[RuntimeError]
-        R13[SessionStarted]
-        R14[SessionReady]
-        R15[SessionCompleted]
+        R1b[MessageCommitted]
+        R2[ToolStarted]
+        R3[ToolProgress]
+        R4[ToolFinished]
+        R5[ArtifactManifest]
+        R6[RuntimeError]
+        R7[DaemonPresenceChanged]
+        R8[SubtaskStarted]
+        R9[SubtaskProgress]
+        R10[SubtaskCompleted]
+        R11[BatchProgress]
+        R12[ContextUsage]
+        R13[ContextOverflow]
+        R14[ContextCompacted]
     end
-    
+
     U1 --> R1
     U2 --> R2
     U3 --> R3
     U4 --> R4
-    U5 --> R5
-    U6 --> R6
-    U7 --> R7
-    U8 --> R8
-    U9 --> R9
-    U10 --> R10
-    U11 --> R11
-    U12 --> R12
-    
+    U5 -.->|"no direct mapping\n(GUI handles directly)"| R7
+    U6 --> R8
+    U7 --> R9
+    U8 --> R10
+    U9 --> R12
+    U10 --> R13
+    U11 --> R14
+    U12 --> R6
+
     classDef unified fill:#27ae60,stroke:#1e8449,color:#fff
     classDef runtime fill:#8e44ad,stroke:#6c3483,color:#fff
-    
-    class U1,U2,U3,U4,U5,U6,U7,U8,U9,U10,U11,U12 unified
-    class R1,R2,R3,R4,R5,R6,R7,R8,R9,R10,R11,R12,R13,R14,R15 runtime
+    classDef nomap fill:#95a5a6,stroke:#7f8c8d,color:#fff
+
+    class U0,U1,U2,U3,U3b,U4,U5,U6,U7,U8,U9,U10,U11,U12,U13,U14 unified
+    class R1,R1b,R2,R3,R4,R5,R6,R7,R8,R9,R10,R11,R12,R13,R14 runtime
 ```

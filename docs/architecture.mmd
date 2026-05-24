@@ -16,55 +16,49 @@ graph TB
 
     subgraph Adapters["Agent Adapter Layer - crates/adapters/"]
         direction TB
-        ClaudeAdapter["rc-claude-adapter"]
-        RooAdapter["rc-roo-adapter"]
-        CodexAdapter["rc-codex-adapter"]
+        ClaudeAdapter["rc-claude-adapter\nClaudeInProcessAdapter\n~887 lines"]
+        RooAdapter["rc-roo-adapter\nRooInProcessAdapter\n~2860 lines"]
+        CodexAdapter["rc-codex-adapter\nCodexInProcessAdapter\n~2091 lines"]
     end
 
-    subgraph Shared["Shared Protocol - crates/shared/"]
+    subgraph Shared["Shared Protocol - crates/shared/ (6 crates)"]
         direction TB
-        AgentProtocol["rc-agent-protocol\nAgentAdapter trait\nUnifiedAgentEvent"]
+        AgentProtocol["rc-agent-protocol\nAgentAdapter trait (8 methods)\nUnifiedAgentEvent (20+ variants)"]
         Bridge["bridge.rs\nunified_event_to_runtime_detail"]
-        EngineEvents["rc-engine-events\nRuntimeEventDetail 15 variants"]
+        EngineEvents["rc-engine-events\nRuntimeEventDetail (15 variants)\nEngineEvent (22 variants)"]
+        SharedRunner["rc-runner\nRunnerApi / broadcast channel"]
+        SharedCP["rc-control-plane\nSessionState / handlers / registry"]
+        RunnerHost["rc-runner-host\nrunner hosting logic"]
     end
 
-    subgraph RunnerLib["Runner Infrastructure - crates/claude/"]
-        direction TB
-        RunnerLib_core["claude-runner\nRunnerApi / broadcast channel"]
-    end
-
-    subgraph CPStack["Control Plane Stack - crates/claude/"]
-        direction TB
-        CP_core["claude-control-plane\nSessionState / handlers / registry"]
-        EventBus["claude-event-bus"]
-        Telemetry["claude-telemetry"]
-    end
-
-    subgraph ClaudeEngine["Claude Engine - crates/claude/"]
+    subgraph ClaudeEngine["Claude Engine - crates/claude/ (~44 crates)"]
         direction TB
         ClaudeCore["claude-core"]
         ClaudeQuery["claude-query-engine"]
         ClaudeSession["claude-session"]
         ClaudeProvider["claude-provider"]
-        ClaudeTools["claude-tools"]
-        ClaudePerms["claude-permissions"]
+        ClaudeTools["claude-tools\n50+ built-in tools"]
+        ClaudePerms["claude-permissions\n5 permission modes"]
         ClaudeConfig["claude-config"]
+        ClaudeAuth["claude-auth\nJWT + keychain"]
+        ClaudeEventBus["claude-event-bus"]
+        ClaudeTelemetry["claude-telemetry"]
     end
 
-    subgraph RooEngine["Roo Code Engine - crates/roo/"]
+    subgraph RooEngine["Roo Code Engine - crates/roo/ (~72 crates)"]
         direction TB
         RooApp["roo-app"]
-        RooTask["roo-task / roo-types"]
-        RooProvider["roo-provider\n+ 20+ provider plugins"]
+        RooTask["roo-task / roo-types\n~30K lines"]
+        RooProvider["roo-provider\n+ 25+ provider plugins"]
         RooTools["roo-tools / roo-prompt / roo-modes"]
         RooTerm["roo-terminal / roo-mcp"]
     end
 
-    subgraph CodexEngine["Codex Engine - crates/codex/"]
+    subgraph CodexEngine["Codex Engine - crates/codex/ (~97 crates)"]
         direction TB
         CodexCore["codex-core / codex-protocol"]
         CodexExec["codex-exec-server"]
-        CodexState["codex-state / codex-config"]
+        CodexState["codex-state / codex-config\n50+ feature flags"]
         CodexAppSrv["codex-app-server-client\ncodex-app-server-protocol"]
         CodexFB["codex-feedback / codex-arg0"]
     end
@@ -74,11 +68,11 @@ graph TB
     GUI_Tauri -->|"Tauri IPC"| GUI_Frontend
     GUI_TS --> GUI_Frontend
 
-    Runner -->|"hosts sessions\nbroadcasts events"| RunnerLib_core
-    Runner --> CP_core
+    Runner -->|"hosts sessions\nbroadcasts events"| SharedRunner
+    Runner --> SharedCP
     Runner --> AgentProtocol
-    CP --> CP_core
-    Migrate -->|"schema migrations"| CP_core
+    CP --> SharedCP
+    Migrate -->|"schema migrations"| SharedCP
 
     ClaudeAdapter -->|"implements"| AgentProtocol
     RooAdapter -->|"implements"| AgentProtocol
@@ -95,35 +89,31 @@ graph TB
     AgentProtocol --> Bridge
     AgentProtocol --> EngineEvents
 
-    Bridge -->|"UnifiedAgentEvent to\nRuntimeEventDetail"| RunnerLib_core
+    Bridge -->|"UnifiedAgentEvent to\nRuntimeEventDetail"| SharedRunner
 
-    RunnerLib_core -->|"publish_stream_event\ntokio broadcast"| GUI_Frontend
-    EngineEvents --> CP_core
-    CP_core --> EventBus
-    CP_core --> Telemetry
+    SharedRunner -->|"publish_stream_event\ntokio broadcast"| GUI_Frontend
+    EngineEvents --> SharedCP
+    SharedCP --> ClaudeEventBus
+    SharedCP --> ClaudeTelemetry
 
     GUI_Tauri -->|"optional in-process\nagent hosting"| ClaudeAdapter
     GUI_Tauri -->|"optional in-process\nagent hosting"| RooAdapter
     GUI_Tauri -->|"optional in-process\nagent hosting"| CodexAdapter
 
-    CLI --> RunnerLib_core
-    CLI --> CP_core
+    CLI --> SharedRunner
+    CLI --> SharedCP
     CLI --> ClaudeAdapter
 
     classDef app fill:#4a90d9,stroke:#2c5f8a,color:#fff
     classDef adapter fill:#e67e22,stroke:#b85c1a,color:#fff
     classDef shared fill:#27ae60,stroke:#1e8449,color:#fff
-    classDef runner fill:#8e44ad,stroke:#6c3483,color:#fff
-    classDef cp fill:#2c3e50,stroke:#1a252f,color:#fff
     classDef engine fill:#16a085,stroke:#0e6655,color:#fff
     classDef gui fill:#e74c3c,stroke:#c0392b,color:#fff
 
     class Runner,CP,Migrate,CLI app
     class ClaudeAdapter,RooAdapter,CodexAdapter adapter
-    class AgentProtocol,Bridge,EngineEvents shared
-    class RunnerLib_core runner
-    class CP_core,EventBus,Telemetry cp
-    class ClaudeCore,ClaudeQuery,ClaudeSession,ClaudeProvider,ClaudeTools,ClaudePerms,ClaudeConfig engine
+    class AgentProtocol,Bridge,EngineEvents,SharedRunner,SharedCP,RunnerHost shared
+    class ClaudeCore,ClaudeQuery,ClaudeSession,ClaudeProvider,ClaudeTools,ClaudePerms,ClaudeConfig,ClaudeAuth,ClaudeEventBus,ClaudeTelemetry engine
     class RooApp,RooTask,RooProvider,RooTools,RooTerm engine
     class CodexCore,CodexExec,CodexState,CodexAppSrv,CodexFB engine
     class GUI_Tauri,GUI_Frontend,GUI_TS gui

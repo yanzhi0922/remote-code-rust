@@ -1,9 +1,9 @@
 # Remote Code Rust — 项目状态与路线图
 
-> 更新日期: 2026-05-16
+> 更新日期: 2026-05-24
 > 当前阶段: 发布收敛与安全加固 — 核心门禁已恢复，安装包与真实设备链路仍需发布验收
-> 代码规模: `cargo metadata --no-deps` 实测 231 个 Rust packages；Roo/Codex/Claude 均纳入当前 workspace 视角
-> 当前验证基线: 以本地 `cargo check --workspace --all-targets` / `cargo clippy --workspace -- -D warnings` / `cargo audit --quiet` / `npm test` / `npm run build` 实测为准，不再使用旧的“全绿”静态结论；`tauri build --bundles nsis` 仍需在磁盘空间充足的发布机上完成。
+> 代码规模: `cargo metadata --no-deps` 实测 301 个 Rust packages（~44 claude + ~97 codex + ~72 roo + 6 shared + 3 adapters + 5 apps + 1 agent CLI）；crates/ 目录约 2936 个 .rs 文件，约 128 万行 Rust 代码
+> 当前验证基线: 以本地 `cargo check --workspace --all-targets` / `cargo clippy --workspace -- -D warnings` / `cargo audit --quiet` / `npm test` / `npm run build` 实测为准，不再使用旧的”全绿”静态结论；`tauri build --bundles nsis` 仍需在磁盘空间充足的发布机上完成。
 > 基准分支: `main`
 
 ---
@@ -44,34 +44,39 @@
 │  ┌────▼────────────────────────────▼────┐    ┌──────▼───────┐ │
 │  │ send_prompt() → agent_type routing   │    │  REST/WS API │ │
 │  │ Claude→QueryEngine  Codex→AppServer  │    │  (api.ts)    │ │
-│  │ Roo→Provider+Dispatcher              │    └──────┬───────┘ │
+│  │ Roo→AgentLoop+Provider               │    └──────┬───────┘ │
 │  └────────────────┬────────────────────┘           │        │
 │                   │                                │        │
 ├───────────────────┼────────────────────────────────┼────────┤
 │              核心运行时层            │     Control Plane 层    │
 │  ┌────────────────▼────────────┐   │  ┌──────────────────▼─┐ │
-│  │ claude-core │ claude-session │ claude-tools   │  │ claude-control-plane   │ │
+│  │ claude-core │ claude-session │ claude-tools   │  │ rc-control-plane      │ │
 │  │ claude-provider │ claude-agents │ claude-mcp   │  │ (registry, events, │ │
 │  │ claude-config │ claude-skills │ claude-plugins │  │  approvals, SQLite)│ │
-│  │ claude-compact│claude-context│ rc-query-eng│  └────────────────────┘ │
+│  │ claude-compact│claude-context│ claude-query-eng│  └────────────────────┘ │
 │  │ claude-system-prompt│claude-auth│claude-model  │                         │
 │  └─────────────────────────────┘   │                         │
 │                                     │                         │
 ├─────────────────────────────────────┼─────────────────────────┤
 │              Runner 层              │                         │
 │  ┌─────────────────────────────────▼───────────────────────┐ │
-│  │ claude-runner (daemon, heartbeat, session hosting)          │ │
+│  │ rc-runner (daemon, heartbeat, session hosting)          │ │
+│  │ rc-runner-host (runner hosting logic)                   │ │
 │  └─────────────────────────────────────────────────────────┘ │
 └─────────────────────────────────────────────────────────────┘
 ```
 
-### 1.3 Crate 结构（当前 metadata 视角约 231 packages）
+### 1.3 Crate 结构（当前 metadata 视角约 301 packages）
 
 | 分类 | 数量 | 说明 |
 |------|------|------|
-| Claude / Apps / Adapters | 多个 | claude-core, claude-provider, claude-session, claude-checkpoint, claude-git, rc-* adapters, GUI, Control Plane, Runner, Migrate |
-| Codex | 多个 | protocol, core, exec, app-server 等当前 workspace 依赖图中的 package |
-| Roo | 多个 | provider, task, tools, terminal, checkpoint, config 等来源代码当前纳入 clippy quarantine 管理 |
+| `crates/shared` | 6 | rc-agent-protocol, rc-engine-events, rc-remote-transport, rc-runner, rc-control-plane, rc-runner-host |
+| `crates/adapters` | 3 | rc-claude-adapter, rc-codex-adapter, rc-roo-adapter |
+| `crates/claude` | ~44 | claude-core, claude-provider, claude-session, claude-tools, claude-permissions, claude-query-engine, claude-checkpoint, claude-git 等 |
+| `crates/codex` | ~97 | codex-protocol, codex-core, codex-exec, codex-app-server, codex-state, codex-config 等 (50+ feature flags) |
+| `crates/roo` | ~72 | roo-provider, roo-task, roo-tools, roo-terminal, roo-config 等 (26 provider backends) |
+| `apps/` | 4+1 | remote-code-runner, remote-code-control-plane, remote-code-gui (excluded from workspace), remote-code-migrate |
+| `agents/` | 1 | agents/claudecode (remote-code CLI/TUI/headless/runtime) |
 
 ---
 
