@@ -92,11 +92,8 @@ pub fn format_content_block_to_markdown(block: &ContentBlock) -> String {
         ContentBlock::Text { text } => text.clone(),
         ContentBlock::Image => "[Image]".to_string(),
         ContentBlock::ToolUse { name, input, .. } => {
-            let input_str = if input.is_object() {
-                input
-                    .as_object()
-                    .unwrap() // SAFE: guarded by is_object() check above
-                    .iter()
+            let input_str = if let Some(obj) = input.as_object() {
+                obj.iter()
                     .map(|(key, value)| {
                         let formatted_key = capitalize_first(key);
                         let formatted_value = if value.is_object() || value.is_array() {
@@ -149,12 +146,8 @@ pub fn conversation_to_markdown(messages: &[ConversationMessage]) -> String {
                 "**Assistant:**"
             };
 
-            let content = if message.content.is_array() {
-                message
-                    .content
-                    .as_array()
-                    .unwrap() // SAFE: guarded by is_array() check above
-                    .iter()
+            let content = if let Some(arr) = message.content.as_array() {
+                arr.iter()
                     .map(format_value_to_markdown)
                     .collect::<Vec<_>>()
                     .join("\n")
@@ -185,10 +178,8 @@ pub async fn write_markdown_to_file(
 /// Source: `export-markdown.ts` — `findToolName`
 pub fn find_tool_name(tool_call_id: &str, messages: &[ConversationMessage]) -> String {
     for message in messages {
-        if message.content.is_array() {
-            for block in message.content.as_array().unwrap()
-            // SAFE: guarded by is_array() check above
-            {
+        if let Some(arr) = message.content.as_array() {
+            for block in arr {
                 if let Some(block_type) = block.get("type")
                     && block_type == "tool_use"
                     && block.get("id").and_then(|v| v.as_str()) == Some(tool_call_id)

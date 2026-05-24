@@ -5502,6 +5502,12 @@ impl AgentLoop {
     /// Collect active (busy) terminals from the terminal registry.
     ///
     /// Source: TS `getEnvironmentDetails.ts` — `TerminalRegistry.getTerminals(true, cline.taskId)`
+    ///
+    /// Two-phase locking is intentional: `get_terminals` acquires and releases
+    /// the registry map lock internally (returning Arc clones), then we lock
+    /// each individual terminal outside the map lock. This avoids holding the
+    /// registry map lock while iterating over individual terminal locks, which
+    /// would risk deadlocks with concurrent registry operations.
     async fn collect_active_terminals(&self) -> Vec<roo_environment::types::TerminalInfo> {
         let Some(registry) = &self.terminal_registry else {
             return Vec::new();

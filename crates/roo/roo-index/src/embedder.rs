@@ -9,8 +9,18 @@ use async_trait::async_trait;
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
+use std::sync::OnceLock;
 
 use crate::types::IndexError;
+
+/// Shared HTTP client for all embedder HTTP requests.
+/// Avoids creating a new `reqwest::Client` per embedder instance, which
+/// wastes connection pools and TLS state.
+static EMBEDDER_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+
+fn shared_client() -> &'static reqwest::Client {
+    EMBEDDER_CLIENT.get_or_init(reqwest::Client::new)
+}
 
 /// Response from an embedding creation request.
 #[derive(Clone, Debug)]
@@ -640,7 +650,7 @@ pub fn create_embedder(config: &EmbedderConfig) -> Result<Box<dyn Embedder>, Ind
                 .to_string();
             let dimension = 1536;
             Ok(Box::new(HttpEmbedder {
-                client: reqwest::Client::new(),
+                client: shared_client().clone(),
                 base_url: "https://api.openai.com/v1".to_string(),
                 api_key: api_key.clone(),
                 model,
@@ -660,7 +670,7 @@ pub fn create_embedder(config: &EmbedderConfig) -> Result<Box<dyn Embedder>, Ind
                 .unwrap_or("nomic-embed-text")
                 .to_string();
             Ok(Box::new(HttpEmbedder {
-                client: reqwest::Client::new(),
+                client: shared_client().clone(),
                 base_url: base_url.clone(),
                 api_key: String::new(), // Ollama doesn't need an API key
                 model,
@@ -684,7 +694,7 @@ pub fn create_embedder(config: &EmbedderConfig) -> Result<Box<dyn Embedder>, Ind
                 .unwrap_or("text-embedding-3-small")
                 .to_string();
             Ok(Box::new(HttpEmbedder {
-                client: reqwest::Client::new(),
+                client: shared_client().clone(),
                 base_url: base_url.clone(),
                 api_key: api_key.clone(),
                 model,
@@ -704,7 +714,7 @@ pub fn create_embedder(config: &EmbedderConfig) -> Result<Box<dyn Embedder>, Ind
                 .unwrap_or("gemini-embedding-001")
                 .to_string();
             Ok(Box::new(HttpEmbedder {
-                client: reqwest::Client::new(),
+                client: shared_client().clone(),
                 base_url: "https://generativelanguage.googleapis.com/v1beta/openai/".to_string(),
                 api_key: api_key.clone(),
                 model,
@@ -724,7 +734,7 @@ pub fn create_embedder(config: &EmbedderConfig) -> Result<Box<dyn Embedder>, Ind
                 .unwrap_or("codestral-embed-2505")
                 .to_string();
             Ok(Box::new(HttpEmbedder {
-                client: reqwest::Client::new(),
+                client: shared_client().clone(),
                 base_url: "https://api.mistral.ai/v1".to_string(),
                 api_key: api_key.clone(),
                 model,
@@ -755,8 +765,11 @@ pub fn create_embedder(config: &EmbedderConfig) -> Result<Box<dyn Embedder>, Ind
                 1024
             };
             Ok(Box::new(BedrockEmbedder {
-                client: reqwest::Client::new(),
+                client: shared_client().clone(),
                 region: region.clone(),
+                // NOTE: AWS credentials are read at factory time and won't refresh
+                // until a new embedder is created. If short-lived credentials are
+                // needed, the embedder must be recreated when they rotate.
                 access_key: std::env::var("AWS_ACCESS_KEY_ID").unwrap_or_default(),
                 secret_key: std::env::var("AWS_SECRET_ACCESS_KEY").unwrap_or_default(),
                 session_token: std::env::var("AWS_SESSION_TOKEN").ok(),
@@ -779,7 +792,7 @@ pub fn create_embedder(config: &EmbedderConfig) -> Result<Box<dyn Embedder>, Ind
                 .unwrap_or("openai/text-embedding-3-large")
                 .to_string();
             Ok(Box::new(HttpEmbedder {
-                client: reqwest::Client::new(),
+                client: shared_client().clone(),
                 base_url: "https://openrouter.ai/api/v1".to_string(),
                 api_key: api_key.clone(),
                 model,
@@ -805,7 +818,7 @@ pub fn create_embedder(config: &EmbedderConfig) -> Result<Box<dyn Embedder>, Ind
                 .unwrap_or("openai/text-embedding-3-large")
                 .to_string();
             Ok(Box::new(HttpEmbedder {
-                client: reqwest::Client::new(),
+                client: shared_client().clone(),
                 base_url: "https://ai-gateway.vercel.sh/v1".to_string(),
                 api_key: api_key.clone(),
                 model,

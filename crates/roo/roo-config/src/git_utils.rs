@@ -25,6 +25,12 @@ const GIT_OUTPUT_LINE_LIMIT: usize = 500;
 ///
 /// Source: `src/utils/git.ts` — `getGitRepositoryInfo`
 ///
+/// # Blocking
+///
+/// This function performs blocking file I/O to read `.git/config` and
+/// `.git/HEAD`. When called from an async context, wrap in
+/// `tokio::task::spawn_blocking`.
+///
 /// # Arguments
 /// * `workspace_root` - The root path of the workspace
 ///
@@ -185,6 +191,11 @@ pub fn extract_repository_name(url: &str) -> String {
 /// Checks if Git is installed on the system.
 ///
 /// Source: `src/utils/git.ts` — `checkGitInstalled`
+///
+/// # Blocking
+///
+/// Spawns a `git --version` subprocess via blocking `Command::new().output()`.
+/// When called from an async context, wrap in `tokio::task::spawn_blocking`.
 pub async fn check_git_installed() -> bool {
     run_git_command(&["--version"], Path::new(".")).is_some()
 }
@@ -208,6 +219,11 @@ fn run_git_command(args: &[&str], cwd: &Path) -> Option<String> {
 /// Searches git commits by query string.
 ///
 /// Source: `src/utils/git.ts` — `searchCommits`
+///
+/// # Blocking
+///
+/// Spawns `git log` subprocesses via blocking `Command::new().output()`.
+/// When called from an async context, wrap in `tokio::task::spawn_blocking`.
 pub async fn search_commits(query: &str, cwd: &Path) -> Vec<GitCommit> {
     if !check_git_installed().await {
         warn!("Git is not installed");
@@ -288,6 +304,11 @@ pub async fn search_commits(query: &str, cwd: &Path) -> Vec<GitCommit> {
 /// Gets detailed commit information.
 ///
 /// Source: `src/utils/git.ts` — `getCommitInfo`
+///
+/// # Blocking
+///
+/// Spawns `git show` subprocesses via blocking `Command::new().output()`.
+/// When called from an async context, wrap in `tokio::task::spawn_blocking`.
 pub async fn get_commit_info(hash: &str, cwd: &Path) -> String {
     if !check_git_installed().await {
         return "Git is not installed".to_string();
@@ -365,6 +386,12 @@ pub async fn get_commit_info(hash: &str, cwd: &Path) -> String {
 /// Gets the working directory state (changes and diff).
 ///
 /// Source: `src/utils/git.ts` — `getWorkingState`
+///
+/// # Blocking
+///
+/// Spawns `git status` and `git diff` subprocesses via blocking
+/// `Command::new().output()`. When called from an async context, wrap in
+/// `tokio::task::spawn_blocking`.
 pub async fn get_working_state(cwd: &Path) -> String {
     if !check_git_installed().await {
         return "Git is not installed".to_string();
@@ -411,6 +438,11 @@ pub async fn get_working_state(cwd: &Path) -> String {
 /// Gets git status with configurable file limit.
 ///
 /// Source: `src/utils/git.ts` — `getGitStatus`
+///
+/// # Blocking
+///
+/// Spawns a `git status` subprocess via blocking `Command::new().output()`.
+/// When called from an async context, wrap in `tokio::task::spawn_blocking`.
 pub async fn get_git_status(cwd: &Path, max_files: usize) -> Option<String> {
     if !check_git_installed().await {
         return None;

@@ -19,6 +19,16 @@ use roo_tools::ToolRepetitionDetector;
 use roo_tools_misc::generate_image::ImageGenerationProvider;
 
 use std::net::IpAddr;
+use std::sync::OnceLock;
+
+/// Shared HTTP client for custom tool HTTP calls.
+/// Avoids creating a new `reqwest::Client` per request, which wastes
+/// connection pools and TLS state.
+static CUSTOM_TOOL_HTTP_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+
+fn shared_custom_tool_client() -> &'static reqwest::Client {
+    CUSTOM_TOOL_HTTP_CLIENT.get_or_init(reqwest::Client::new)
+}
 
 // ---------------------------------------------------------------------------
 // SSRF URL validation for custom tool HTTP handlers
@@ -2946,7 +2956,7 @@ impl ToolHandler for CustomToolHandler {
                         }
 
                         // Build the HTTP client and make a POST with tool params as JSON body
-                        let client = reqwest::Client::new();
+                        let client = shared_custom_tool_client().clone();
 
                         // Strip internal parameter before sending
                         let mut body_params = params.clone();
@@ -2954,9 +2964,12 @@ impl ToolHandler for CustomToolHandler {
                             obj.remove("_custom_tool_name");
                         }
 
-                        // TODO: This block_in_place/block_on pattern should be replaced with
-                        // native async once the caller is fully async. It works correctly in
-                        // the current multi-threaded runtime but is not idiomatic.
+                        // TODO(M1): This block_in_place/block_on pattern should be replaced with
+                        // native async once the caller (`execute` trait method) is fully async.
+                        // It works correctly in the current multi-threaded runtime but is not
+                        // idiomatic and will panic on a single-threaded runtime.
+                        // The `ToolHandler::execute` trait method is synchronous, so we cannot
+                        // make this truly async without changing the trait.
                         let response = tokio::task::block_in_place(|| {
                             tokio::runtime::Handle::current().block_on(async {
                                 client

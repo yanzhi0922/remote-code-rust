@@ -167,7 +167,7 @@ impl MultiSearchReplaceDiffStrategy {
     ///
     /// Handles escaped markers like `\<<<<<<<`, `\=======`, `\>>>>>>>`, etc.
     fn unescape_markers(content: &str) -> String {
-        let mut result = String::new();
+        let mut result = String::with_capacity(content.len());
         for line in content.split('\n') {
             let processed = if [
                 "\\<<<<<<<",
@@ -245,6 +245,11 @@ impl MultiSearchReplaceDiffStrategy {
                 } else {
                     delta
                 };
+
+            // Guard against negative start_line from i64 arithmetic or parsed input.
+            if start_line < 0 {
+                start_line = 0;
+            }
 
             // First unescape any escaped markers in the content
             search_content = Self::unescape_markers(&search_content);

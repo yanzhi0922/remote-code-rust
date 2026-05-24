@@ -122,11 +122,17 @@ impl TerminalRegistry {
         task_id: Option<String>,
     ) -> Arc<Mutex<DefaultTerminal>> {
         let cwd = cwd.into();
-        let mut terminals = self.terminals.lock().await;
+
+        // Clone Arc references while holding the map lock, then drop it before
+        // locking individual terminals to avoid nested lock acquisition.
+        let terminal_arcs: Vec<Arc<Mutex<DefaultTerminal>>> = {
+            let terminals = self.terminals.lock().await;
+            terminals.iter().map(|(_, v)| v.clone()).collect()
+        }; // map lock dropped
 
         // First priority: Find a terminal with matching task_id and cwd
         if let Some(ref tid) = task_id {
-            for (_, terminal_arc) in terminals.iter() {
+            for terminal_arc in &terminal_arcs {
                 let terminal = terminal_arc.lock().await;
                 if !terminal.is_busy()
                     && !terminal.is_closed()
@@ -134,17 +140,15 @@ impl TerminalRegistry {
                     && let Some(ref terminal_task_id) = terminal.task_id()
                     && terminal_task_id == tid
                 {
-                    drop(terminal);
                     return Arc::clone(terminal_arc);
                 }
             }
         }
 
         // Second priority: Find any available terminal with matching cwd
-        for (_, terminal_arc) in terminals.iter() {
+        for terminal_arc in &terminal_arcs {
             let terminal = terminal_arc.lock().await;
             if !terminal.is_busy() && !terminal.is_closed() && terminal.get_cwd() == cwd {
-                drop(terminal);
                 return Arc::clone(terminal_arc);
             }
         }
@@ -156,7 +160,7 @@ impl TerminalRegistry {
             terminal.set_task_id(tid);
         }
         let arc = Arc::new(Mutex::new(terminal));
-        terminals.insert(id, Arc::clone(&arc));
+        self.terminals.lock().await.insert(id, Arc::clone(&arc));
         arc
     }
 
@@ -168,9 +172,15 @@ impl TerminalRegistry {
         busy: bool,
         task_id: Option<&str>,
     ) -> Vec<Arc<Mutex<DefaultTerminal>>> {
-        let terminals = self.terminals.lock().await;
+        // Clone Arc references while holding the map lock, then drop it before
+        // locking individual terminals to avoid nested lock acquisition.
+        let terminal_arcs: Vec<Arc<Mutex<DefaultTerminal>>> = {
+            let terminals = self.terminals.lock().await;
+            terminals.iter().map(|(_, v)| v.clone()).collect()
+        }; // map lock dropped
+
         let mut result = Vec::new();
-        for (_, terminal_arc) in terminals.iter() {
+        for terminal_arc in terminal_arcs {
             let terminal = terminal_arc.lock().await;
             if terminal.is_busy() != busy || terminal.is_closed() {
                 continue;
@@ -184,8 +194,7 @@ impl TerminalRegistry {
                     continue;
                 }
             }
-            drop(terminal);
-            result.push(Arc::clone(terminal_arc));
+            result.push(Arc::clone(&terminal_arc));
         }
         result
     }
@@ -198,9 +207,15 @@ impl TerminalRegistry {
         &self,
         busy: Option<bool>,
     ) -> Vec<Arc<Mutex<DefaultTerminal>>> {
-        let terminals = self.terminals.lock().await;
+        // Clone Arc references while holding the map lock, then drop it before
+        // locking individual terminals to avoid nested lock acquisition.
+        let terminal_arcs: Vec<Arc<Mutex<DefaultTerminal>>> = {
+            let terminals = self.terminals.lock().await;
+            terminals.iter().map(|(_, v)| v.clone()).collect()
+        }; // map lock dropped
+
         let mut result = Vec::new();
-        for (_, terminal_arc) in terminals.iter() {
+        for terminal_arc in terminal_arcs {
             let terminal = terminal_arc.lock().await;
             // Only background terminals (no task_id)
             if terminal.task_id().is_some() || terminal.is_closed() {
@@ -211,8 +226,7 @@ impl TerminalRegistry {
             {
                 continue;
             }
-            drop(terminal);
-            result.push(Arc::clone(terminal_arc));
+            result.push(Arc::clone(&terminal_arc));
         }
         result
     }
@@ -221,8 +235,14 @@ impl TerminalRegistry {
     ///
     /// Corresponds to TS: `releaseTerminalsForTask(taskId)`.
     pub async fn release_terminals_for_task(&self, task_id: &str) {
-        let terminals = self.terminals.lock().await;
-        for (_, terminal_arc) in terminals.iter() {
+        // Clone Arc references while holding the map lock, then drop it before
+        // locking individual terminals to avoid nested lock acquisition.
+        let terminal_arcs: Vec<Arc<Mutex<DefaultTerminal>>> = {
+            let terminals = self.terminals.lock().await;
+            terminals.iter().map(|(_, v)| v.clone()).collect()
+        }; // map lock dropped
+
+        for terminal_arc in terminal_arcs {
             let mut terminal = terminal_arc.lock().await;
             if let Some(tid) = terminal.task_id()
                 && tid == task_id

@@ -522,6 +522,12 @@ pub async fn execute_command_with_opts(
         .or(legacy_timeout)
         .unwrap_or_else(|| Duration::from_secs(DEFAULT_TIMEOUT_SECS));
 
+    // NOTE: The terminal MutexGuard is held across the `run_with_dual_timeout`
+    // await below. This is intentional and safe: `run_command` borrows `&self`
+    // from the guard, so the guard must outlive the future. The lock is
+    // per-terminal (not a global lock), so holding it only blocks other
+    // operations on this specific terminal — which is correct since a terminal
+    // can only run one command at a time.
     let result = {
         let guard = terminal.lock().await;
         let cmd_future = guard.run_command(&command, &callbacks);

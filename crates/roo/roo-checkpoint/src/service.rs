@@ -424,12 +424,17 @@ impl ShadowCheckpointService {
     }
 
     /// Saves a checkpoint (creates a new commit in the shadow repo).
+    ///
+    /// Heavy git2 and filesystem operations are offloaded to `spawn_blocking`
+    /// to avoid blocking the async runtime.
     pub async fn save_checkpoint(
         &mut self,
         message: &str,
         options: SaveCheckpointOptions,
     ) -> Result<Option<CheckpointResult>, CheckpointError> {
-        let repo = self.repo.as_ref().ok_or(CheckpointError::NotInitialized)?;
+        if self.repo.is_none() {
+            return Err(CheckpointError::NotInitialized);
+        }
 
         self.log(&format!(
             "[ShadowCheckpointService#saveCheckpoint] starting checkpoint save (allowEmpty: {})",
@@ -437,138 +442,214 @@ impl ShadowCheckpointService {
         ));
 
         let start = Instant::now();
+        let checkpoints_dir = self.checkpoints_dir.clone();
+        let message = message.to_string();
+        let allow_empty = options.allow_empty;
+        let last_checkpoint = self.checkpoints.last().cloned();
+        let base_hash = self.base_hash.clone();
 
-        // Stage all changes.
-        self.stage_all(repo)?;
+        let result = tokio::task::spawn_blocking(move || -> Result<Option<CheckpointResult>, CheckpointError> {
+            let repo = Repository::open(&checkpoints_dir)
+                .map_err(|e| CheckpointError::GitError(e.message().to_string()))?;
 
-        // Build tree from index.
-        let mut index = repo
-            .index()
-            .map_err(|e| CheckpointError::GitError(e.message().to_string()))?;
-        let tree_id = index
-            .write_tree()
-            .map_err(|e| CheckpointError::GitError(e.message().to_string()))?;
-        let tree = repo
-            .find_tree(tree_id)
-            .map_err(|e| CheckpointError::GitError(e.message().to_string()))?;
+            // Stage all changes.
+            {
+                let mut index = repo
+                    .index()
+                    .map_err(|e| CheckpointError::GitError(e.message().to_string()))?;
+                index
+                    .add_all(
+                        ["*"].iter(),
+                        git2::IndexAddOption::DEFAULT,
+                        None::<&mut dyn FnMut(&std::path::Path, &[u8]) -> i32>,
+                    )
+                    .map_err(|e| CheckpointError::GitError(e.message().to_string()))?;
+                index
+                    .write()
+                    .map_err(|e| CheckpointError::GitError(e.message().to_string()))?;
+            }
 
-        // Get current HEAD.
-        let head = repo
-            .head()
-            .map_err(|e| CheckpointError::GitError(e.message().to_string()))?;
-        let head_commit = repo
-            .find_commit(
-                head.target()
-                    .ok_or_else(|| CheckpointError::GitError("No HEAD".to_string()))?,
-            )
-            .map_err(|e| CheckpointError::GitError(e.message().to_string()))?;
+            // Build tree from index.
+            let mut index = repo
+                .index()
+                .map_err(|e| CheckpointError::GitError(e.message().to_string()))?;
+            let tree_id = index
+                .write_tree()
+                .map_err(|e| CheckpointError::GitError(e.message().to_string()))?;
+            let tree = repo
+                .find_tree(tree_id)
+                .map_err(|e| CheckpointError::GitError(e.message().to_string()))?;
 
-        // Check if there are changes.
-        let diff = repo
-            .diff_tree_to_tree(
-                Some(
-                    &head_commit
-                        .tree()
-                        .map_err(|e| CheckpointError::GitError(e.message().to_string()))?,
-                ),
-                Some(&tree),
-                None,
-            )
-            .map_err(|e| CheckpointError::GitError(e.message().to_string()))?;
+            // Get current HEAD.
+            let head = repo
+                .head()
+                .map_err(|e| CheckpointError::GitError(e.message().to_string()))?;
+            let head_commit = repo
+                .find_commit(
+                    head.target()
+                        .ok_or_else(|| CheckpointError::GitError("No HEAD".to_string()))?,
+                )
+                .map_err(|e| CheckpointError::GitError(e.message().to_string()))?;
 
-        let has_changes = diff.deltas().len() > 0;
+            // Check if there are changes.
+            let diff = repo
+                .diff_tree_to_tree(
+                    Some(
+                        &head_commit
+                            .tree()
+                            .map_err(|e| CheckpointError::GitError(e.message().to_string()))?,
+                    ),
+                    Some(&tree),
+                    None,
+                )
+                .map_err(|e| CheckpointError::GitError(e.message().to_string()))?;
 
-        if !has_changes && !options.allow_empty {
-            let duration_ms = start.elapsed().as_millis() as u64;
-            self.log(&format!(
-                "[ShadowCheckpointService#saveCheckpoint] found no changes to commit in {}ms",
-                duration_ms
-            ));
-            return Ok(None);
-        }
+            let has_changes = diff.deltas().len() > 0;
 
-        let sig = repo
-            .signature()
-            .map_err(|e| CheckpointError::GitError(e.message().to_string()))?;
+            if !has_changes && !allow_empty {
+                return Ok(None);
+            }
 
-        let commit_id = repo
-            .commit(Some("HEAD"), &sig, &sig, message, &tree, &[&head_commit])
-            .map_err(|e| CheckpointError::GitError(e.message().to_string()))?;
+            let sig = repo
+                .signature()
+                .map_err(|e| CheckpointError::GitError(e.message().to_string()))?;
 
-        let to_hash = commit_id.to_string();
-        let from_hash = self
-            .checkpoints
-            .last()
-            .cloned()
-            .or_else(|| self.base_hash.clone())
-            .unwrap_or_default();
+            let commit_id = repo
+                .commit(Some("HEAD"), &sig, &sig, &message, &tree, &[&head_commit])
+                .map_err(|e| CheckpointError::GitError(e.message().to_string()))?;
 
-        self.checkpoints.push(to_hash.clone());
+            let to_hash = commit_id.to_string();
+
+            // Compute real insertions/deletions from diff stats.
+            let diff_stats = diff
+                .stats()
+                .map_err(|e| CheckpointError::GitError(e.message().to_string()))?;
+            let insertions = diff_stats.insertions();
+            let deletions = diff_stats.deletions();
+
+            Ok(Some(CheckpointResult {
+                commit: to_hash,
+                branch: None,
+                summary: Some(CommitSummary {
+                    changes: diff.deltas().len(),
+                    insertions,
+                    deletions,
+                }),
+            }))
+        })
+        .await
+        .map_err(|e| CheckpointError::IoError(format!("spawn_blocking join error: {e}")))??;
+
         let duration_ms = start.elapsed().as_millis() as u64;
 
-        // Compute real insertions/deletions from diff stats.
-        let diff_stats = diff
-            .stats()
-            .map_err(|e| CheckpointError::GitError(e.message().to_string()))?;
-        let insertions = diff_stats.insertions();
-        let deletions = diff_stats.deletions();
+        match &result {
+            None => {
+                self.log(&format!(
+                    "[ShadowCheckpointService#saveCheckpoint] found no changes to commit in {}ms",
+                    duration_ms
+                ));
+            }
+            Some(checkpoint_result) => {
+                let to_hash = checkpoint_result.commit.clone();
+                let from_hash = last_checkpoint
+                    .or(base_hash)
+                    .unwrap_or_default();
 
-        let result = CheckpointResult {
-            commit: to_hash.clone(),
-            branch: None,
-            summary: Some(CommitSummary {
-                changes: diff.deltas().len(),
-                insertions,
-                deletions,
-            }),
-        };
+                self.checkpoints.push(to_hash.clone());
 
-        self.emit(CheckpointEvent::Checkpoint {
-            from_hash: from_hash.clone(),
-            to_hash: to_hash.clone(),
-            duration_ms,
-            suppress_message: options.suppress_message,
-        });
+                self.emit(CheckpointEvent::Checkpoint {
+                    from_hash,
+                    to_hash: to_hash.clone(),
+                    duration_ms,
+                    suppress_message: options.suppress_message,
+                });
 
-        self.log(&format!(
-            "[ShadowCheckpointService#saveCheckpoint] checkpoint saved in {}ms -> {}",
-            duration_ms, to_hash
-        ));
+                self.log(&format!(
+                    "[ShadowCheckpointService#saveCheckpoint] checkpoint saved in {}ms -> {}",
+                    duration_ms, to_hash
+                ));
+            }
+        }
 
-        Ok(Some(result))
+        Ok(result)
     }
 
     /// Restores the workspace to a specific checkpoint.
+    ///
+    /// Heavy git2 and filesystem operations are offloaded to `spawn_blocking`
+    /// to avoid blocking the async runtime.
     pub async fn restore_checkpoint(&mut self, commit_hash: &str) -> Result<(), CheckpointError> {
-        let repo = self.repo.as_ref().ok_or(CheckpointError::NotInitialized)?;
+        if self.repo.is_none() {
+            return Err(CheckpointError::NotInitialized);
+        }
 
         self.log("[ShadowCheckpointService#restoreCheckpoint] starting checkpoint restore");
 
         let start = Instant::now();
+        let checkpoints_dir = self.checkpoints_dir.clone();
+        let workspace_dir = self.workspace_dir.clone();
+        let commit_hash_owned = commit_hash.to_string();
+        let commit_hash = commit_hash_owned.clone();
 
-        // Match `git clean -d -f` before reset. A hard reset alone does not
-        // remove files that were created after the checkpoint.
-        self.clean_untracked(repo)?;
+        tokio::task::spawn_blocking(move || -> Result<(), CheckpointError> {
+            let repo = Repository::open(&checkpoints_dir)
+                .map_err(|e| CheckpointError::GitError(e.message().to_string()))?;
 
-        // Reset to the target commit.
-        let oid = git2::Oid::from_str(commit_hash)
-            .map_err(|e| CheckpointError::GitError(e.message().to_string()))?;
-        let commit = repo
-            .find_commit(oid)
-            .map_err(|e| CheckpointError::GitError(e.message().to_string()))?;
+            // Match `git clean -d -f` before reset.
+            {
+                let mut options = git2::StatusOptions::new();
+                options
+                    .include_untracked(true)
+                    .recurse_untracked_dirs(true)
+                    .include_ignored(false);
 
-        // Hard reset.
-        repo.reset(commit.as_object(), git2::ResetType::Hard, None)
-            .map_err(|e| CheckpointError::GitError(e.message().to_string()))?;
+                let statuses = repo
+                    .statuses(Some(&mut options))
+                    .map_err(|e| CheckpointError::GitError(e.message().to_string()))?;
+
+                let mut paths: Vec<PathBuf> = statuses
+                    .iter()
+                    .filter(|entry| entry.status().contains(git2::Status::WT_NEW))
+                    .filter_map(|entry| entry.path().ok().map(|path| workspace_dir.join(path)))
+                    .collect();
+
+                paths.sort_by_key(|path| std::cmp::Reverse(path.components().count()));
+
+                for path in paths {
+                    if !path.starts_with(&workspace_dir) || !path.exists() {
+                        continue;
+                    }
+                    if path.is_dir() {
+                        std::fs::remove_dir_all(&path)?;
+                    } else {
+                        std::fs::remove_file(&path)?;
+                    }
+                }
+            }
+
+            // Reset to the target commit.
+            let oid = git2::Oid::from_str(&commit_hash_owned)
+                .map_err(|e| CheckpointError::GitError(e.message().to_string()))?;
+            let commit = repo
+                .find_commit(oid)
+                .map_err(|e| CheckpointError::GitError(e.message().to_string()))?;
+
+            repo.reset(commit.as_object(), git2::ResetType::Hard, None)
+                .map_err(|e| CheckpointError::GitError(e.message().to_string()))?;
+
+            Ok(())
+        })
+        .await
+        .map_err(|e| CheckpointError::IoError(format!("spawn_blocking join error: {e}")))??;
 
         // Remove all checkpoints after the specified commitHash.
-        if let Some(idx) = self.checkpoints.iter().position(|h| h == commit_hash) {
+        if let Some(idx) = self.checkpoints.iter().position(|h| h == &commit_hash) {
             self.checkpoints.truncate(idx + 1);
         }
 
         let duration_ms = start.elapsed().as_millis() as u64;
         self.emit(CheckpointEvent::Restore {
-            commit_hash: commit_hash.to_string(),
+            commit_hash: commit_hash.clone(),
             duration_ms,
         });
 
@@ -581,134 +662,168 @@ impl ShadowCheckpointService {
     }
 
     /// Gets the diff between two checkpoint states.
+    ///
+    /// Heavy git2 operations are offloaded to `spawn_blocking` to avoid
+    /// blocking the async runtime.
     pub async fn get_diff(
         &self,
         params: GetDiffParams,
     ) -> Result<Vec<CheckpointDiff>, CheckpointError> {
-        let repo = self.repo.as_ref().ok_or(CheckpointError::NotInitialized)?;
-
-        // Reference Roo-Code stages the worktree before diffing so untracked
-        // files are included in review output.
-        self.stage_all(repo)?;
-
-        // Resolve "from" hash.
-        let from_hash = match params.from {
-            Some(ref h) => h.clone(),
-            None => {
-                // Get the root commit.
-                let head = repo
-                    .head()
-                    .map_err(|e| CheckpointError::GitError(e.message().to_string()))?;
-                let head_oid = head
-                    .target()
-                    .ok_or_else(|| CheckpointError::GitError("No HEAD".to_string()))?;
-
-                // Walk to find root commit.
-                let mut revwalk = repo
-                    .revwalk()
-                    .map_err(|e: git2::Error| CheckpointError::GitError(e.message().to_string()))?;
-                revwalk
-                    .push(head_oid)
-                    .map_err(|e: git2::Error| CheckpointError::GitError(e.message().to_string()))?;
-                revwalk
-                    .reset()
-                    .map_err(|e: git2::Error| CheckpointError::GitError(e.message().to_string()))?;
-                revwalk
-                    .set_sorting(git2::Sort::TOPOLOGICAL)
-                    .map_err(|e: git2::Error| CheckpointError::GitError(e.message().to_string()))?;
-
-                let mut root_oid = head_oid;
-                for oid in revwalk {
-                    root_oid = oid.map_err(|e: git2::Error| {
-                        CheckpointError::GitError(e.message().to_string())
-                    })?;
-                }
-                root_oid.to_string()
-            }
-        };
-
-        let from_oid = git2::Oid::from_str(&from_hash)
-            .map_err(|e| CheckpointError::GitError(e.message().to_string()))?;
-        let from_commit = repo
-            .find_commit(from_oid)
-            .map_err(|e| CheckpointError::GitError(e.message().to_string()))?;
-        let from_tree = from_commit
-            .tree()
-            .map_err(|e| CheckpointError::GitError(e.message().to_string()))?;
-
-        let to_tree = match params.to {
-            Some(ref to_hash) => {
-                let to_oid = git2::Oid::from_str(to_hash)
-                    .map_err(|e| CheckpointError::GitError(e.message().to_string()))?;
-                let to_commit = repo
-                    .find_commit(to_oid)
-                    .map_err(|e| CheckpointError::GitError(e.message().to_string()))?;
-                Some(
-                    to_commit
-                        .tree()
-                        .map_err(|e| CheckpointError::GitError(e.message().to_string()))?,
-                )
-            }
-            None => None,
-        };
-
-        let diff = match &to_tree {
-            Some(tt) => repo
-                .diff_tree_to_tree(Some(&from_tree), Some(tt), None)
-                .map_err(|e| CheckpointError::GitError(e.message().to_string()))?,
-            None => repo
-                .diff_tree_to_workdir_with_index(Some(&from_tree), None)
-                .map_err(|e| CheckpointError::GitError(e.message().to_string()))?,
-        };
-
-        let cwd_path = self
-            .get_shadow_git_config_worktree(repo)?
-            .unwrap_or_else(|| self.workspace_dir.to_string_lossy().to_string());
-
-        let mut result = Vec::new();
-        for delta in diff.deltas() {
-            let rel_path = delta
-                .new_file()
-                .path()
-                .or_else(|| delta.old_file().path())
-                .map(|p| p.to_string_lossy().to_string())
-                .unwrap_or_default();
-
-            let abs_path = Path::new(&cwd_path).join(&rel_path);
-
-            // Get "before" content from the from-tree.
-            let before = from_tree
-                .get_path(Path::new(&rel_path))
-                .ok()
-                .and_then(|entry| entry.to_object(repo).ok())
-                .and_then(|obj| obj.as_blob().map(|b| b.content().to_vec()))
-                .map(|bytes| String::from_utf8_lossy(&bytes).to_string())
-                .unwrap_or_default();
-
-            // Get "after" content.
-            let after = match &to_tree {
-                Some(tt) => tt
-                    .get_path(Path::new(&rel_path))
-                    .ok()
-                    .and_then(|entry| entry.to_object(repo).ok())
-                    .and_then(|obj| obj.as_blob().map(|b| b.content().to_vec()))
-                    .map(|bytes| String::from_utf8_lossy(&bytes).to_string())
-                    .unwrap_or_default(),
-                None => tokio::fs::read_to_string(&abs_path)
-                    .await
-                    .unwrap_or_default(),
-            };
-
-            result.push(CheckpointDiff {
-                paths: PathPair {
-                    relative: rel_path,
-                    absolute: abs_path.to_string_lossy().to_string(),
-                },
-                content: ContentPair { before, after },
-            });
+        if self.repo.is_none() {
+            return Err(CheckpointError::NotInitialized);
         }
 
-        Ok(result)
+        let checkpoints_dir = self.checkpoints_dir.clone();
+        let workspace_dir = self.workspace_dir.clone();
+        let params_from = params.from.clone();
+        let params_to = params.to.clone();
+
+        let blocking_result = tokio::task::spawn_blocking(move || -> Result<Vec<CheckpointDiff>, CheckpointError> {
+            let repo = Repository::open(&checkpoints_dir)
+                .map_err(|e| CheckpointError::GitError(e.message().to_string()))?;
+
+            // Stage the worktree before diffing so untracked files are included.
+            {
+                let mut index = repo
+                    .index()
+                    .map_err(|e| CheckpointError::GitError(e.message().to_string()))?;
+                index
+                    .add_all(
+                        ["*"].iter(),
+                        git2::IndexAddOption::DEFAULT,
+                        None::<&mut dyn FnMut(&std::path::Path, &[u8]) -> i32>,
+                    )
+                    .map_err(|e| CheckpointError::GitError(e.message().to_string()))?;
+                index
+                    .write()
+                    .map_err(|e| CheckpointError::GitError(e.message().to_string()))?;
+            }
+
+            // Resolve "from" hash.
+            let from_hash = match params_from {
+                Some(h) => h,
+                None => {
+                    let head = repo
+                        .head()
+                        .map_err(|e| CheckpointError::GitError(e.message().to_string()))?;
+                    let head_oid = head
+                        .target()
+                        .ok_or_else(|| CheckpointError::GitError("No HEAD".to_string()))?;
+
+                    let mut revwalk = repo
+                        .revwalk()
+                        .map_err(|e: git2::Error| CheckpointError::GitError(e.message().to_string()))?;
+                    revwalk
+                        .push(head_oid)
+                        .map_err(|e: git2::Error| CheckpointError::GitError(e.message().to_string()))?;
+                    revwalk
+                        .reset()
+                        .map_err(|e: git2::Error| CheckpointError::GitError(e.message().to_string()))?;
+                    revwalk
+                        .set_sorting(git2::Sort::TOPOLOGICAL)
+                        .map_err(|e: git2::Error| CheckpointError::GitError(e.message().to_string()))?;
+
+                    let mut root_oid = head_oid;
+                    for oid in revwalk {
+                        root_oid = oid.map_err(|e: git2::Error| {
+                            CheckpointError::GitError(e.message().to_string())
+                        })?;
+                    }
+                    root_oid.to_string()
+                }
+            };
+
+            let from_oid = git2::Oid::from_str(&from_hash)
+                .map_err(|e| CheckpointError::GitError(e.message().to_string()))?;
+            let from_commit = repo
+                .find_commit(from_oid)
+                .map_err(|e| CheckpointError::GitError(e.message().to_string()))?;
+            let from_tree = from_commit
+                .tree()
+                .map_err(|e| CheckpointError::GitError(e.message().to_string()))?;
+
+            let to_tree = match params_to {
+                Some(to_hash) => {
+                    let to_oid = git2::Oid::from_str(&to_hash)
+                        .map_err(|e| CheckpointError::GitError(e.message().to_string()))?;
+                    let to_commit = repo
+                        .find_commit(to_oid)
+                        .map_err(|e| CheckpointError::GitError(e.message().to_string()))?;
+                    Some(
+                        to_commit
+                            .tree()
+                            .map_err(|e| CheckpointError::GitError(e.message().to_string()))?,
+                    )
+                }
+                None => None,
+            };
+
+            let diff = match &to_tree {
+                Some(tt) => repo
+                    .diff_tree_to_tree(Some(&from_tree), Some(tt), None)
+                    .map_err(|e| CheckpointError::GitError(e.message().to_string()))?,
+                None => repo
+                    .diff_tree_to_workdir_with_index(Some(&from_tree), None)
+                    .map_err(|e| CheckpointError::GitError(e.message().to_string()))?,
+            };
+
+            // Get worktree path from config for absolute path construction.
+            let cwd_path = match repo.config() {
+                Ok(config) => match config.get_str("core.worktree") {
+                    Ok(val) => Some(val.trim().to_string()),
+                    Err(_) => None,
+                },
+                Err(_) => None,
+            }
+            .unwrap_or_else(|| workspace_dir.to_string_lossy().to_string());
+
+            let mut result = Vec::new();
+            for delta in diff.deltas() {
+                let rel_path = delta
+                    .new_file()
+                    .path()
+                    .or_else(|| delta.old_file().path())
+                    .map(|p| p.to_string_lossy().to_string())
+                    .unwrap_or_default();
+
+                let abs_path = Path::new(&cwd_path).join(&rel_path);
+
+                // Get "before" content from the from-tree.
+                let before = from_tree
+                    .get_path(Path::new(&rel_path))
+                    .ok()
+                    .and_then(|entry| entry.to_object(&repo).ok())
+                    .and_then(|obj| obj.as_blob().map(|b| b.content().to_vec()))
+                    .map(|bytes| String::from_utf8_lossy(&bytes).to_string())
+                    .unwrap_or_default();
+
+                // Get "after" content from tree or read from filesystem.
+                let after = match &to_tree {
+                    Some(tt) => tt
+                        .get_path(Path::new(&rel_path))
+                        .ok()
+                        .and_then(|entry| entry.to_object(&repo).ok())
+                        .and_then(|obj| obj.as_blob().map(|b| b.content().to_vec()))
+                        .map(|bytes| String::from_utf8_lossy(&bytes).to_string())
+                        .unwrap_or_default(),
+                    None => std::fs::read_to_string(&abs_path).unwrap_or_default(),
+                };
+
+                result.push(CheckpointDiff {
+                    paths: PathPair {
+                        relative: rel_path,
+                        absolute: abs_path.to_string_lossy().to_string(),
+                    },
+                    content: ContentPair { before, after },
+                });
+            }
+
+            Ok(result)
+        })
+        .await
+        .map_err(|e| CheckpointError::IoError(format!("spawn_blocking join error: {e}")))?;
+
+        blocking_result
     }
 
     /// Reads the `core.worktree` config from the shadow git repo.
