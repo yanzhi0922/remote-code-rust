@@ -48,15 +48,19 @@ key_for_test.txt
 # Node.js (GUI sub-project)
 node_modules/
 .playwright-cli/
+.playwright-mcp/
 .research/
 output/
 .release-evidence/
+apps/remote-code-gui/screenshots/
 
 # Claude Code session files
 .claude/scheduled_tasks.lock
 .claude/scheduled_tasks.json
 .runner-profile/
 /.kiro/
+.opencode/
+tmp_deps.txt
 
 # One-off scripts with credentials
 gh-push-db.js
