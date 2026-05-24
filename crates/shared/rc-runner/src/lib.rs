@@ -776,7 +776,9 @@ impl RunnerApi {
 
     /// Broadcast a raw JSON event line to direct-connect WebSocket subscribers.
     pub fn publish_stream_event(&self, session_id: Uuid, json_line: &str) {
-        let _ = self.stream_tx.send((session_id, json_line.to_owned()));
+        if self.stream_tx.receiver_count() > 0 {
+            let _ = self.stream_tx.send((session_id, json_line.to_owned()));
+        }
     }
 
     /// Subscribe to broadcast events for direct-connect streaming.
@@ -799,7 +801,13 @@ impl RunnerApi {
         // Broadcast to direct-connect WebSocket subscribers as JSON.
         // The caller (e.g. remote-code-runner) is responsible for also
         // persisting the detail to the control plane via post_runtime_event.
-        let json_line = serde_json::to_string(&detail).unwrap_or_default();
+        let json_line = match serde_json::to_string(&detail) {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::warn!("failed to serialize runtime event detail for session {session_id}: {e}");
+                return true;
+            }
+        };
         self.publish_stream_event(session_id, &json_line);
         true
     }
@@ -813,8 +821,15 @@ impl RunnerApi {
         &self,
         event: &rc_agent_protocol::UnifiedAgentEvent,
     ) -> Option<serde_json::Value> {
-        rc_agent_protocol::unified_event_to_runtime_detail(event)
-            .map(|detail| serde_json::to_value(&detail).unwrap_or_default())
+        rc_agent_protocol::unified_event_to_runtime_detail(event).and_then(|detail| {
+            match serde_json::to_value(&detail) {
+                Ok(v) => Some(v),
+                Err(e) => {
+                    tracing::warn!("failed to serialize runtime event detail: {e}");
+                    None
+                }
+            }
+        })
     }
 }
 

@@ -22,8 +22,11 @@ impl EventStream {
     }
 
     /// Emit an event and intentionally ignore the no-receiver case.
+    /// Skips the broadcast when no subscribers are connected.
     pub fn emit(&self, event: EngineEvent) {
-        let _ = self.sender.send(event);
+        if self.sender.receiver_count() > 0 {
+            let _ = self.sender.send(event);
+        }
     }
 
     /// Emit an event and return the broadcast result to callers that care.

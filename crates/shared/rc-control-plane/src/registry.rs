@@ -220,7 +220,11 @@ impl TimelineStore {
             }
             event
         };
-        let _ = self.tx.send(event.clone());
+        // Only broadcast to subscribers when at least one exists, avoiding
+        // the broadcast channel's internal overhead when idle.
+        if self.tx.receiver_count() > 0 {
+            let _ = self.tx.send(event.clone());
+        }
         event
     }
 

@@ -123,9 +123,12 @@ impl HostedSessionManager {
                         task.abort();
                     }
                 }
-                // Closing the input channel causes the child's stdin to
-                // close, which typically prompts the child process to exit.
-                drop(handle.input_tx.clone());
+                // Dropping a clone of the sender has no effect on the channel
+                // — only dropping the *last* sender closes the channel.  Since
+                // this is a best-effort cleanup path (Drop is sync and the
+                // sessions Mutex is async), we skip input_tx cleanup here.
+                // The child process will be terminated by the OS when the
+                // parent exits, or when the task handles are aborted above.
             }
         }
     }
@@ -765,6 +768,9 @@ impl HostedSessionManager {
             let mut buffer = self.event_buffer.lock().await;
             buffer.remove(&session_id).unwrap_or_default()
         };
+        if events.is_empty() {
+            return;
+        }
         while let Some(detail) = events.pop_front() {
             if self
                 .control_plane_post(format!(
@@ -786,6 +792,12 @@ impl HostedSessionManager {
                 let mut buffer = self.event_buffer.lock().await;
                 if let Some(mut newer_events) = buffer.remove(&session_id) {
                     events.append(&mut newer_events);
+                }
+                let dropped_count = events.len().saturating_sub(MAX_EVENT_BUFFER_PER_SESSION);
+                if dropped_count > 0 {
+                    warn!(
+                        "flush re-buffer overflow for session {session_id}: dropping {dropped_count} events to cap at {MAX_EVENT_BUFFER_PER_SESSION}"
+                    );
                 }
                 while events.len() > MAX_EVENT_BUFFER_PER_SESSION {
                     events.pop_front();

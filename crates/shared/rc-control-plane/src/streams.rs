@@ -74,6 +74,14 @@ pub(crate) async fn serve_filtered_event_stream<F>(
 {
     let mut last_sequence = 0;
     for event in backlog {
+        if event.sequence > last_sequence + 1 && last_sequence > 0 {
+            tracing::warn!(
+                "Stream replay sequence gap: expected {} but got {} ({} events missing)",
+                last_sequence + 1,
+                event.sequence,
+                event.sequence - last_sequence - 1,
+            );
+        }
         if send_timeline_event(&mut socket, &event).await.is_err() {
             return;
         }
@@ -89,6 +97,14 @@ pub(crate) async fn serve_filtered_event_stream<F>(
                 continue;
             }
         };
+        if event.sequence > last_sequence + 1 && last_sequence > 0 {
+            tracing::warn!(
+                "Live stream sequence gap: expected {} but got {} ({} events dropped)",
+                last_sequence + 1,
+                event.sequence,
+                event.sequence - last_sequence - 1,
+            );
+        }
         if event.sequence <= last_sequence || !filter(&event) {
             continue;
         }

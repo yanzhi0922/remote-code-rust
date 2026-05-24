@@ -1071,12 +1071,22 @@ async fn serve_runner_command_stream(
                 last_drain = tokio::time::Instant::now();
                 let commands = {
                     let mut registry = service.registry.write().await;
-                    registry.pull_runner_commands(&runner_id, 16)
-                        .unwrap_or_default()
+                    match registry.pull_runner_commands(&runner_id, 16) {
+                        Ok(cmds) => cmds,
+                        Err(e) => {
+                            tracing::warn!("failed to pull runner commands for {runner_id}: {e:#?}");
+                            Vec::new()
+                        }
+                    }
                 };
                 if !commands.is_empty() {
-                    let response = serde_json::to_string(&RunnerCommandPullResponse { commands })
-                        .unwrap_or_default();
+                    let response = match serde_json::to_string(&RunnerCommandPullResponse { commands }) {
+                        Ok(r) => r,
+                        Err(e) => {
+                            tracing::error!("failed to serialize runner command response: {e}");
+                            break;
+                        }
+                    };
                     if socket.send(Message::Text(response.into())).await.is_err() {
                         break;
                     }

@@ -73,17 +73,41 @@ pub(crate) async fn download_file(
     if cfg!(windows) && filename.contains(':') {
         return StatusCode::BAD_REQUEST.into_response();
     }
+    // NOTE: Unicode normalization edge cases — on Windows, the filesystem
+    // normalizes paths using NFC (or NTFS-specific case folding). An attacker
+    // could theoretically craft a filename with Unicode equivalences that
+    // resolves to a different path than the literal string (e.g., using
+    // precomposed vs decomposed forms, or fullwidth characters that map to
+    // ASCII equivalents). The `dir.join()` call below produces a canonical
+    // path within `dir`, and the subsequent `path.is_file()` check ensures
+    // the resolved target actually exists. For additional hardening, consider
+    // canonicalizing the joined path and verifying it starts with `dir` if
+    // serving from a sensitive directory.
     // Block empty filenames after sanitization.
     if filename.trim().is_empty() {
         return StatusCode::BAD_REQUEST.into_response();
     }
 
     let path = dir.join(&filename);
-    if !path.is_file() {
+    // Verify the resolved path is still inside the downloads directory.
+    // This catches edge cases where path normalization (symlinks, etc.)
+    // causes the resolved path to escape the downloads directory.
+    let canonical_path = match std::fs::canonicalize(&path) {
+        Ok(p) => p,
+        Err(_) => return StatusCode::NOT_FOUND.into_response(),
+    };
+    let canonical_dir = match std::fs::canonicalize(dir) {
+        Ok(d) => d,
+        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    };
+    if !canonical_path.starts_with(&canonical_dir) {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
+    if !canonical_path.is_file() {
         return StatusCode::NOT_FOUND.into_response();
     }
 
-    let bytes = match std::fs::read(&path) {
+    let bytes = match std::fs::read(&canonical_path) {
         Ok(b) => b,
         Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     };
@@ -120,7 +144,12 @@ fn guess_mime(filename: &str) -> &'static str {
 }
 
 fn sanitize_filename(name: &str) -> String {
-    name.replace('"', "\\\"")
+    // Strip characters that are dangerous inside a Content-Disposition header
+    // (double quotes, backslashes, and CRLF sequences for header injection).
+    name.replace('\\', "")
+        .replace('"', "\\\"")
+        .replace('\r', "")
+        .replace('\n', "")
 }
 
 fn human_size(bytes: u64) -> String {
