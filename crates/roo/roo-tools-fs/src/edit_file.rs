@@ -845,9 +845,10 @@ mod tests {
     fn test_token_based_match_succeeds() {
         let dir = tempfile::tempdir().unwrap();
         let file_path = dir.path().join("test.txt");
-        // File has non-whitespace separators between identifiers
-        // Whitespace-tolerant won't match because ':' is not whitespace
-        std::fs::write(&file_path, "function:myFunc\n").unwrap();
+        // File has varied whitespace between tokens; whitespace-tolerant
+        // regex won't match because of the mixed line break + spaces.
+        // Token regex (splits on whitespace, joins with \s+) matches.
+        std::fs::write(&file_path, "function  myFunc\n").unwrap();
 
         let params = EditFileParams {
             file_path: file_path.to_str().unwrap().to_string(),
@@ -897,14 +898,20 @@ mod tests {
     #[test]
     fn test_build_token_regex() {
         let re = build_token_regex("fn foo() { bar }").unwrap();
-        assert!(re.is_match("fn  foo(  )  {  bar  }"));
+        // Token regex splits on whitespace, joins with \s+
+        // "fn foo() { bar }" -> tokens ["fn", "foo()", "{", "bar", "}"]
+        // Wait - TS splits on /\s+/ so "fn foo() { bar }" -> ["fn", "foo()", "{", "bar", "}"]
+        // But our Rust impl also splits on whitespace only (matching TS)
+        assert!(re.is_match("fn  foo()  {  bar  }"));
         assert!(re.is_match("fn foo() { bar }"));
-        assert!(re.is_match("fn...foo...bar"));
+        // Non-whitespace separators should NOT match (matching TS behavior)
+        assert!(!re.is_match("fn...foo...bar"));
     }
 
     #[test]
     fn test_build_token_regex_no_tokens() {
-        let result = build_token_regex("!@#$%^&*()");
+        // Whitespace-only input produces no tokens after split
+        let result = build_token_regex("   \t  \n  ");
         assert!(result.is_err());
     }
 
@@ -951,8 +958,8 @@ mod tests {
 
     #[test]
     fn test_try_token_replace_success() {
-        // Token-based match: identifiers match despite non-whitespace separators
-        let content = "function:myFunc\n";
+        // Token-based match: tokens match despite extra whitespace
+        let content = "function   myFunc\n";
         let result = try_token_replace(content, "function myFunc", "def myFunc", 1);
         assert!(result.is_some());
         let (modified, count) = result.unwrap();
