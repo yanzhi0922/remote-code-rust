@@ -142,7 +142,7 @@ mod tests {
             .unwrap();
         let s = mgr.get(session.session_id).unwrap();
         assert_eq!(s.status, PeerSessionStatus::Active);
-        assert_eq!(s.active_count(), 1);
+        assert_eq!(mgr.active_count(), 1);
     }
 
     #[test]

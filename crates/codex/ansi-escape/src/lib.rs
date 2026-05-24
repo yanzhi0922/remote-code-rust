@@ -103,6 +103,9 @@ fn convert_style(style: core_style::Style) -> Style {
     result.remove_modifier(convert_modifier(style.sub_modifier))
 }
 
+/// `ansi-to-tui` preserves ANSI 256-color and true-color escape sequences as
+/// `Indexed`/`Rgb`. This bridge keeps that parsed terminal output intact.
+#[allow(clippy::disallowed_methods)]
 fn convert_color(color: core_style::Color) -> Color {
     match color {
         core_style::Color::Reset => Color::Reset,

@@ -42,11 +42,9 @@ impl WsClient {
         let tx = Arc::new(tokio::sync::Mutex::new(sink));
 
         // Wait for Connected message.
-        if let Some(Ok(msg)) = stream.next().await {
-            if let Message::Text(text) = msg {
-                if let Ok(ServerMessage::Connected { .. }) = serde_json::from_str(&text) {
-                    tracing::info!(%session_id, "WS connected to claude-server");
-                }
+        if let Some(Ok(Message::Text(text))) = stream.next().await {
+            if let Ok(ServerMessage::Connected { .. }) = serde_json::from_str(&text) {
+                tracing::info!(%session_id, "WS connected to claude-server");
             }
         }
 

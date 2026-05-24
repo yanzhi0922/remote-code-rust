@@ -20,6 +20,12 @@ impl ServerToolRunner {
     }
 }
 
+impl Default for ServerToolRunner {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[async_trait]
 impl claude_query_engine::config::ToolRunner for ServerToolRunner {
     async fn run_tool(

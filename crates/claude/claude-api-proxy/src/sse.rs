@@ -8,7 +8,7 @@ pub fn sse_response(upstream: reqwest::Response) -> axum::response::Response {
         StatusCode::from_u16(upstream.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
     let stream = upstream
         .bytes_stream()
-        .map(|result| result.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e)));
+        .map(|result| result.map_err(std::io::Error::other));
     Response::builder()
         .status(status)
         .header("content-type", "text/event-stream")

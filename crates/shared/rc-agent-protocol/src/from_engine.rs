@@ -191,9 +191,7 @@ fn insert_tool_call_id(value: &mut serde_json::Value, tool_call_id: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rc_engine_events::types::{
-        CompactionResult, ContentBlockType, ToolError, ToolProgress, ToolResult, Usage,
-    };
+    use rc_engine_events::types::{CompactionResult, ToolError};
     use std::sync::Arc;
 
     const SID: &str = "test-session";

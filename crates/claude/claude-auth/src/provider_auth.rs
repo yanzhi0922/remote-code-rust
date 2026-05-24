@@ -266,9 +266,7 @@ async fn execute_aws_credential_export(command: &str) -> Result<AwsCredentials, 
         let is_absolute = bare.starts_with('/')
             || bare.starts_with('\\')
             || (bare.len() >= 2 && bare.as_bytes()[1] == b':');
-        let known_safe = ["aws", "vault", "op", "doppler", "infisical", "saml2aws"]
-            .iter()
-            .any(|&safe| bare == safe);
+        let known_safe = ["aws", "vault", "op", "doppler", "infisical", "saml2aws"].contains(&bare);
         if !is_absolute && !known_safe {
             tracing::warn!(
                 "aws_credential_export command does not start with an absolute path or known safe binary: {command}"
