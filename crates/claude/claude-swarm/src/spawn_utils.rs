@@ -46,14 +46,30 @@ impl SpawnCommand {
         self
     }
 
-    /// Render the command as a string.
+    /// Render the command as a shell-safe string.
+    ///
+    /// Arguments containing spaces or special characters are wrapped in
+    /// single quotes, with any embedded single quotes escaped as `'\''`.
     #[must_use]
     pub fn to_command_string(&self) -> String {
         let mut s = self.program.clone();
         for arg in &self.args {
             s.push(' ');
-            if arg.contains(' ') {
-                s.push_str(&format!("'{}'", arg));
+            if arg.contains(' ')
+                || arg.contains('\'')
+                || arg.contains('"')
+                || arg.contains('\\')
+                || arg.contains('$')
+                || arg.contains('`')
+                || arg.contains('!')
+                || arg.contains('*')
+                || arg.contains('?')
+                || arg.contains('~')
+            {
+                // Escape single quotes: replace ' with '\'' (end quote,
+                // escaped quote, start quote).
+                let escaped = arg.replace('\'', "'\\''");
+                s.push_str(&format!("'{}'", escaped));
             } else {
                 s.push_str(arg);
             }
@@ -136,13 +152,13 @@ pub fn build_env_vars(config: &SpawnConfig) -> Vec<(String, String)> {
 
 /// Build the working directory for a teammate.
 ///
-/// Uses the worktree path if specified, otherwise the CWD.
+/// Uses the worktree path if specified, otherwise falls back to the CWD.
 #[must_use]
 pub fn build_working_dir(config: &SpawnConfig) -> String {
     config
         .worktree_path
         .clone()
-        .expect("should have worktree path or cwd")
+        .unwrap_or_else(|| config.cwd.clone())
 }
 
 #[cfg(test)]
