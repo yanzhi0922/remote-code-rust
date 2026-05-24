@@ -741,6 +741,10 @@ impl Inner {
         }
         let mut next_sessions = sessions.as_ref().clone();
         next_sessions.insert(process_id.clone(), session);
+        // Copy-on-write: clones the map on each registration. Acceptable
+        // because registration is rare (once per exec session) while reads
+        // on the hot notification path are lock-free via ArcSwap.
+        // Copy-on-write: same tradeoff as register_session.
         self.sessions.store(Arc::new(next_sessions));
         Ok(())
     }
@@ -758,10 +762,10 @@ impl Inner {
 
     async fn take_all_sessions(&self) -> HashMap<ProcessId, Arc<SessionState>> {
         let _sessions_write_guard = self.sessions_write_lock.lock().await;
-        let sessions = self.sessions.load();
-        let drained_sessions = sessions.as_ref().clone();
-        self.sessions.store(Arc::new(HashMap::new()));
-        drained_sessions
+        let empty: Arc<HashMap<ProcessId, Arc<SessionState>>> = Arc::new(HashMap::new());
+        let previous = self.sessions.swap(empty);
+        Arc::try_unwrap(previous)
+            .unwrap_or_else(|arc| arc.as_ref().clone())
     }
 }
 

@@ -192,6 +192,9 @@ impl AnalyticsSink for CompositeSink {
 // ExporterSink
 // ---------------------------------------------------------------------------
 
+/// Maximum number of events buffered in ExporterSink before evicting the oldest.
+const MAX_EXPORTER_BUFFER: usize = 10_000;
+
 /// A sink that delegates to an exporter for actual delivery.
 #[derive(Debug)]
 pub struct ExporterSink {
@@ -212,20 +215,24 @@ impl ExporterSink {
 impl AnalyticsSink for ExporterSink {
     fn log_event(&self, event: AnalyticsEvent) {
         if let Ok(mut buffer) = self.buffer.lock() {
+            if buffer.len() >= MAX_EXPORTER_BUFFER {
+                buffer.remove(0);
+            }
             buffer.push(event);
         }
     }
 
     fn flush(&self) -> Result<()> {
-        let mut buffer = self
-            .buffer
-            .lock()
-            .map_err(|e| anyhow::anyhow!("Lock poisoned: {e}"))?;
-        if buffer.is_empty() {
-            return Ok(());
-        }
-
-        let events: Vec<AnalyticsEvent> = buffer.drain(..).collect();
+        let events: Vec<AnalyticsEvent> = {
+            let mut buffer = self
+                .buffer
+                .lock()
+                .map_err(|e| anyhow::anyhow!("Lock poisoned: {e}"))?;
+            if buffer.is_empty() {
+                return Ok(());
+            }
+            buffer.drain(..).collect()
+        };
         let exporter = self
             .exporter
             .lock()

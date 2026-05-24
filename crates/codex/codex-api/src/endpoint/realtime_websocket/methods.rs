@@ -67,7 +67,7 @@ impl WsStream {
         inner: WebSocketStream<MaybeTlsStream<TcpStream>>,
     ) -> (Self, async_channel::Receiver<Result<Message, WsError>>) {
         let (tx_command, mut rx_command) = mpsc::channel::<WsCommand>(32);
-        let (tx_message, rx_message) = async_channel::unbounded::<Result<Message, WsError>>();
+        let (tx_message, rx_message) = async_channel::bounded::<Result<Message, WsError>>(256);
 
         let pump_task = tokio::spawn(async move {
             let mut inner = inner;

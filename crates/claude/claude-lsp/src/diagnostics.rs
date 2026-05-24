@@ -33,27 +33,16 @@ impl DiagnosticRegistry {
     ///
     /// Replaces any existing diagnostics for the same document.
     pub fn publish(&mut self, uri: &str, diagnostics: Vec<Diagnostic>) {
-        // Subtract old counts
-        if let Some(old) = self.diagnostics.get(uri) {
-            for d in old {
-                if d.is_error() {
-                    self.error_count = self.error_count.saturating_sub(1);
-                } else if d.is_warning() {
-                    self.warning_count = self.warning_count.saturating_sub(1);
-                }
-            }
-        }
-
-        // Add new counts
-        for d in &diagnostics {
-            if d.is_error() {
-                self.error_count += 1;
-            } else if d.is_warning() {
-                self.warning_count += 1;
-            }
-        }
-
         self.diagnostics.insert(uri.to_string(), diagnostics);
+
+        // Recompute counts from scratch to avoid drift.
+        let (errors, warnings) = self.diagnostics.values().flatten().fold((0usize, 0usize), |(e, w), d| {
+            if d.is_error() { (e + 1, w) }
+            else if d.is_warning() { (e, w + 1) }
+            else { (e, w) }
+        });
+        self.error_count = errors;
+        self.warning_count = warnings;
     }
 
     /// Get diagnostics for a specific document.
@@ -70,15 +59,16 @@ impl DiagnosticRegistry {
 
     /// Clear diagnostics for a specific document.
     pub fn clear(&mut self, uri: &str) {
-        if let Some(old) = self.diagnostics.remove(uri) {
-            for d in &old {
-                if d.is_error() {
-                    self.error_count = self.error_count.saturating_sub(1);
-                } else if d.is_warning() {
-                    self.warning_count = self.warning_count.saturating_sub(1);
-                }
-            }
-        }
+        self.diagnostics.remove(uri);
+
+        // Recompute counts from scratch to avoid drift.
+        let (errors, warnings) = self.diagnostics.values().flatten().fold((0usize, 0usize), |(e, w), d| {
+            if d.is_error() { (e + 1, w) }
+            else if d.is_warning() { (e, w + 1) }
+            else { (e, w) }
+        });
+        self.error_count = errors;
+        self.warning_count = warnings;
     }
 
     /// Clear all diagnostics.

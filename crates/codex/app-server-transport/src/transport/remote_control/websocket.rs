@@ -19,6 +19,7 @@ use super::segment::ClientSegmentObservation;
 use super::segment::ClientSegmentReassembler;
 use super::segment::REMOTE_CONTROL_SEGMENT_MAX_BYTES;
 use super::segment::split_server_envelope_for_transport;
+use axum::body::Bytes;
 use axum::http::HeaderValue;
 use base64::Engine;
 use codex_app_server_protocol::RemoteControlConnectionStatus;
@@ -630,7 +631,7 @@ impl RemoteControlWebsocket {
                 _ = shutdown_token.cancelled() => return Ok(()),
                 _ = ping_interval.tick() => {
                     if let Err(err) = websocket_writer
-                        .send(tungstenite::Message::Ping(Vec::new().into()))
+                        .send(tungstenite::Message::Ping(Bytes::from_static(b"")))
                         .await
                     {
                         return Err(io::Error::other(err));
@@ -840,17 +841,17 @@ impl RemoteControlWebsocket {
                 }
             };
 
-            let observation = {
+            // Consolidate observe + cursor/ack updates into a single lock acquisition.
+            let client_envelope = {
                 let mut websocket_state = state.lock().await;
-                websocket_state.observe_client_message(client_envelope, wire_size_bytes)
-            };
-            let client_envelope = match observation {
-                ClientSegmentObservation::Forward(client_envelope) => *client_envelope,
-                ClientSegmentObservation::Pending | ClientSegmentObservation::Dropped => continue,
-            };
-
-            {
-                let mut websocket_state = state.lock().await;
+                let observation =
+                    websocket_state.observe_client_message(client_envelope, wire_size_bytes);
+                let client_envelope = match observation {
+                    ClientSegmentObservation::Forward(ce) => ce,
+                    ClientSegmentObservation::Pending | ClientSegmentObservation::Dropped => {
+                        continue;
+                    }
+                };
                 if let Some(cursor) = client_envelope.cursor.as_deref() {
                     websocket_state.subscribe_cursor = Some(cursor.to_string());
                 }
@@ -865,7 +866,9 @@ impl RemoteControlWebsocket {
                         *segment_id,
                     );
                 }
-            }
+                client_envelope
+            };
+            let client_envelope = *client_envelope;
 
             let closed_client =
                 matches!(&client_envelope.event, ClientEvent::ClientClosed).then(|| {

@@ -8,6 +8,9 @@ use uuid::Uuid;
 
 use claude_server::ws::protocol::{AgentStatus, ClientMessage, ServerMessage};
 
+/// Maximum streaming buffer size (1 MB).  Truncates oldest data when exceeded.
+const MAX_STREAMING_BUFFER: usize = 1 * 1024 * 1024;
+
 type WsSink = futures::stream::SplitSink<
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
     Message,
@@ -68,12 +71,25 @@ impl WsClient {
                     ServerMessage::ContentDelta {
                         text: Some(delta), ..
                     } => {
-                        buf_clone.lock().push_str(&delta);
+                        let mut buf = buf_clone.lock();
+                        let delta_len = delta.len();
+                        if buf.len() + delta_len > MAX_STREAMING_BUFFER {
+                            let excess = buf.len() + delta_len - MAX_STREAMING_BUFFER;
+                            buf.drain(..excess);
+                        }
+                        buf.push_str(&delta);
                     }
                     ServerMessage::ContentDelta { text: None, .. } => {}
                     ServerMessage::Error { message, code } => {
                         tracing::warn!(%session_id, %code, "server error: {message}");
-                        buf_clone.lock().push_str(&format!("\n[Error: {message}]"));
+                        let mut buf = buf_clone.lock();
+                        let err_text = format!("\n[Error: {message}]");
+                        let err_len = err_text.len();
+                        if buf.len() + err_len > MAX_STREAMING_BUFFER {
+                            let excess = buf.len() + err_len - MAX_STREAMING_BUFFER;
+                            buf.drain(..excess);
+                        }
+                        buf.push_str(&err_text);
                     }
                     ServerMessage::Status {
                         state: AgentStatus::Idle,
@@ -91,7 +107,13 @@ impl WsClient {
                         }
                     }
                     ServerMessage::Thinking { text } => {
-                        buf_clone.lock().push_str(&text);
+                        let mut buf = buf_clone.lock();
+                        let text_len = text.len();
+                        if buf.len() + text_len > MAX_STREAMING_BUFFER {
+                            let excess = buf.len() + text_len - MAX_STREAMING_BUFFER;
+                            buf.drain(..excess);
+                        }
+                        buf.push_str(&text);
                     }
                     _ => {}
                 }

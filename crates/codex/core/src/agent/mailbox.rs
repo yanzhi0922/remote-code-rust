@@ -8,20 +8,25 @@ use tokio::sync::watch;
 #[cfg(test)]
 use codex_protocol::AgentPath;
 
+/// Capacity for the bounded inter-agent mailbox channel. 1024 messages is
+/// generous for the expected inter-agent communication rate while providing
+/// backpressure if a consumer stalls.
+const MAILBOX_CHANNEL_CAPACITY: usize = 1024;
+
 pub(crate) struct Mailbox {
-    tx: mpsc::UnboundedSender<InterAgentCommunication>,
+    tx: mpsc::Sender<InterAgentCommunication>,
     next_seq: AtomicU64,
     seq_tx: watch::Sender<u64>,
 }
 
 pub(crate) struct MailboxReceiver {
-    rx: mpsc::UnboundedReceiver<InterAgentCommunication>,
+    rx: mpsc::Receiver<InterAgentCommunication>,
     pending_mails: VecDeque<InterAgentCommunication>,
 }
 
 impl Mailbox {
     pub(crate) fn new() -> (Self, MailboxReceiver) {
-        let (tx, rx) = mpsc::unbounded_channel();
+        let (tx, rx) = mpsc::channel(MAILBOX_CHANNEL_CAPACITY);
         let (seq_tx, _) = watch::channel(0);
         (
             Self {
@@ -42,7 +47,7 @@ impl Mailbox {
 
     pub(crate) fn send(&self, communication: InterAgentCommunication) -> u64 {
         let seq = self.next_seq.fetch_add(1, Ordering::Relaxed) + 1;
-        let _ = self.tx.send(communication);
+        let _ = self.tx.try_send(communication);
         self.seq_tx.send_replace(seq);
         seq
     }

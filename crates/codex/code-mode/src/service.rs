@@ -55,7 +55,7 @@ pub struct CodeModeService {
 
 impl CodeModeService {
     pub fn new() -> Self {
-        let (turn_message_tx, turn_message_rx) = async_channel::unbounded();
+        let (turn_message_tx, turn_message_rx) = async_channel::bounded(1024);
 
         Self {
             inner: Arc::new(Inner {

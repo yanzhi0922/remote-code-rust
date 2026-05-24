@@ -8,7 +8,10 @@ use xcap::Monitor;
 
 pub async fn screenshot(input: &Value) -> Result<String> {
     let monitor_idx = input["monitor"].as_u64().unwrap_or(0) as usize;
+    tokio::task::spawn_blocking(move || screenshot_blocking(monitor_idx)).await?
+}
 
+fn screenshot_blocking(monitor_idx: usize) -> Result<String> {
     let monitors = Monitor::all().context("failed to enumerate monitors")?;
     if monitor_idx >= monitors.len() {
         return Err(anyhow!(

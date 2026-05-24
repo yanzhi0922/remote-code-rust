@@ -398,6 +398,9 @@ pub struct SystemPromptBuilder {
     use_global_cache_scope: bool,
 }
 
+/// Maximum number of cached session section caches before evicting the oldest.
+const MAX_CACHED_SESSIONS: usize = 50;
+
 static SESSION_SECTION_CACHES: Lazy<Mutex<HashMap<uuid::Uuid, SectionCache>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 
@@ -686,6 +689,11 @@ pub fn build_default_system_prompt_for_session(
     let mut caches = SESSION_SECTION_CACHES
         .lock()
         .expect("system prompt section cache poisoned");
+    if caches.len() >= MAX_CACHED_SESSIONS && !caches.contains_key(&session_id) {
+        if let Some(oldest_id) = caches.keys().next().cloned() {
+            caches.remove(&oldest_id);
+        }
+    }
     let cache = caches.entry(session_id).or_default();
     resolve_default_prompt_blocks(cache, ctx, use_global_cache_scope)
 }

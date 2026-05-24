@@ -23,7 +23,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 use supports_color::Stream as SupportStream;
-use tokio::sync::mpsc::UnboundedSender;
+use tokio::sync::mpsc::Sender;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 use util::append_error_log;
@@ -614,8 +614,8 @@ fn level_from_status(status: codex_cloud_tasks_client::ApplyStatus) -> app::Appl
 fn spawn_preflight(
     app: &mut app::App,
     backend: &Arc<dyn codex_cloud_tasks_client::CloudBackend>,
-    tx: &UnboundedSender<app::AppEvent>,
-    frame_tx: &UnboundedSender<Instant>,
+    tx: &Sender<app::AppEvent>,
+    frame_tx: &Sender<Instant>,
     title: String,
     job: ApplyJob,
 ) -> bool {
@@ -676,8 +676,8 @@ fn spawn_preflight(
 fn spawn_apply(
     app: &mut app::App,
     backend: &Arc<dyn codex_cloud_tasks_client::CloudBackend>,
-    tx: &UnboundedSender<app::AppEvent>,
-    frame_tx: &UnboundedSender<Instant>,
+    tx: &Sender<app::AppEvent>,
+    frame_tx: &Sender<Instant>,
     job: ApplyJob,
 ) -> bool {
     if app.apply_inflight {
@@ -819,8 +819,8 @@ pub async fn run_main(cli: Cli, _codex_linux_sandbox_exe: Option<PathBuf>) -> an
     let mut events = EventStream::new();
 
     // Channel for non-blocking background loads
-    use tokio::sync::mpsc::unbounded_channel;
-    let (tx, mut rx) = unbounded_channel::<app::AppEvent>();
+    use tokio::sync::mpsc::channel;
+    let (tx, mut rx) = channel::<app::AppEvent>(256);
     // Kick off the initial load in background
     {
         let backend = Arc::clone(&backend);
@@ -873,8 +873,8 @@ pub async fn run_main(cli: Cli, _codex_linux_sandbox_exe: Option<PathBuf>) -> an
     use std::time::Instant;
     use tokio::time::Instant as TokioInstant;
     use tokio::time::sleep_until;
-    let (frame_tx, mut frame_rx) = tokio::sync::mpsc::unbounded_channel::<Instant>();
-    let (redraw_tx, mut redraw_rx) = tokio::sync::mpsc::unbounded_channel::<()>();
+    let (frame_tx, mut frame_rx) = tokio::sync::mpsc::channel::<Instant>(1);
+    let (redraw_tx, mut redraw_rx) = tokio::sync::mpsc::channel::<()>(1);
 
     // Coalesce frame requests to the earliest deadline; emit a single redraw signal.
     tokio::spawn(async move {

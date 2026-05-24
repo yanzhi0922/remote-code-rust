@@ -13,6 +13,11 @@ use serde_json::Value;
 
 use crate::types::{LspMessage, LspResponse};
 
+/// Maximum number of buffered outgoing messages before evicting the oldest.
+const MAX_OUTGOING_MESSAGES: usize = 1000;
+/// Maximum number of cached responses before evicting the oldest.
+const MAX_RESPONSES: usize = 1000;
+
 // ---------------------------------------------------------------------------
 // LspClient
 // ---------------------------------------------------------------------------
@@ -153,7 +158,15 @@ impl LspClient {
 
         // Simulate receiving a response
         let response = LspResponse::success(id, serde_json::json!({"capabilities": {}}));
-        self.responses.lock().insert(id, response);
+        {
+            let mut responses = self.responses.lock();
+            if responses.len() >= MAX_RESPONSES {
+                if let Some(&oldest_id) = responses.keys().min() {
+                    responses.remove(&oldest_id);
+                }
+            }
+            responses.insert(id, response);
+        }
 
         *self.server_capabilities.write() = Some(serde_json::json!({}));
 
@@ -188,20 +201,34 @@ impl LspClient {
     pub fn send_request(&self, method: &str, params: Option<Value>) -> Result<u64> {
         let id = self.next_request_id();
         let msg = LspMessage::request(id, method, params);
-        self.outgoing.lock().push(msg);
+        let mut outgoing = self.outgoing.lock();
+        if outgoing.len() >= MAX_OUTGOING_MESSAGES {
+            outgoing.remove(0);
+        }
+        outgoing.push(msg);
         Ok(id)
     }
 
     /// Send an LSP notification (no response expected).
     pub fn send_notification(&self, method: &str, params: Option<Value>) -> Result<()> {
         let msg = LspMessage::notification(method, params);
-        self.outgoing.lock().push(msg);
+        let mut outgoing = self.outgoing.lock();
+        if outgoing.len() >= MAX_OUTGOING_MESSAGES {
+            outgoing.remove(0);
+        }
+        outgoing.push(msg);
         Ok(())
     }
 
     /// Inject a response for a given request ID (for testing).
     pub fn inject_response(&self, id: u64, response: LspResponse) {
-        self.responses.lock().insert(id, response);
+        let mut responses = self.responses.lock();
+        if responses.len() >= MAX_RESPONSES {
+            if let Some(&oldest_id) = responses.keys().min() {
+                responses.remove(&oldest_id);
+            }
+        }
+        responses.insert(id, response);
     }
 
     /// Get the response for a request ID, if available.

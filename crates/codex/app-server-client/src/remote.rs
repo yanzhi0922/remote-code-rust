@@ -127,7 +127,7 @@ enum RemoteClientCommand {
 
 pub struct RemoteAppServerClient {
     command_tx: mpsc::Sender<RemoteClientCommand>,
-    event_rx: mpsc::UnboundedReceiver<AppServerEvent>,
+    event_rx: mpsc::Receiver<AppServerEvent>,
     pending_events: VecDeque<AppServerEvent>,
     worker_handle: tokio::task::JoinHandle<()>,
 }
@@ -208,7 +208,7 @@ impl RemoteAppServerClient {
         .await?;
 
         let (command_tx, mut command_rx) = mpsc::channel::<RemoteClientCommand>(channel_capacity);
-        let (event_tx, event_rx) = mpsc::unbounded_channel::<AppServerEvent>();
+        let (event_tx, event_rx) = mpsc::channel::<AppServerEvent>(channel_capacity);
         let worker_handle = tokio::spawn(async move {
             let mut pending_requests =
                 HashMap::<RequestId, oneshot::Sender<IoResult<RequestResult>>>::new();
@@ -866,10 +866,10 @@ fn app_server_event_from_notification(notification: JSONRPCNotification) -> Opti
 }
 
 fn deliver_event(
-    event_tx: &mpsc::UnboundedSender<AppServerEvent>,
+    event_tx: &mpsc::Sender<AppServerEvent>,
     event: AppServerEvent,
 ) -> IoResult<()> {
-    event_tx.send(event).map_err(|_| {
+    event_tx.try_send(event).map_err(|_| {
         IoError::new(
             ErrorKind::BrokenPipe,
             "remote app-server event consumer channel is closed",

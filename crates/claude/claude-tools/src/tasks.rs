@@ -16,6 +16,9 @@ use serde_json::Value;
 
 use crate::task_output;
 
+/// Maximum number of tracked in-memory tasks before evicting the oldest.
+const MAX_TRACKED_TASKS: usize = 1000;
+
 static TASK_STORE: Lazy<Mutex<HashMap<String, BackgroundTask>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 static TASK_OUTPUT_DIR: Lazy<Mutex<Option<PathBuf>>> = Lazy::new(|| Mutex::new(None));
@@ -355,6 +358,15 @@ pub fn create_background_task(title: &str) -> Result<BackgroundTask> {
         updated_at: now_timestamp(),
     };
     let mut store = TASK_STORE.lock();
+    if store.len() >= MAX_TRACKED_TASKS {
+        if let Some(oldest_id) = store
+            .iter()
+            .min_by_key(|(_, t)| &t.updated_at)
+            .map(|(id, _)| id.clone())
+        {
+            store.remove(&oldest_id);
+        }
+    }
     store.insert(task.id.clone(), task.clone());
     drop(store);
     persist_task_if_configured(&task.id)?;
@@ -371,6 +383,15 @@ pub fn start_tracked_task(
 ) -> Result<BackgroundTask> {
     let now = now_timestamp();
     let mut store = TASK_STORE.lock();
+    if store.len() >= MAX_TRACKED_TASKS && !store.contains_key(&task_id) {
+        if let Some(oldest_id) = store
+            .iter()
+            .min_by_key(|(_, t)| &t.updated_at)
+            .map(|(id, _)| id.clone())
+        {
+            store.remove(&oldest_id);
+        }
+    }
     let task = store
         .entry(task_id.clone())
         .or_insert_with(|| BackgroundTask {

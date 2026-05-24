@@ -8,12 +8,21 @@ use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Instant;
 
 use anyhow::{Context, Result, anyhow, bail};
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::oneshot;
+
+/// Maximum number of pending response senders before evicting the oldest.
+const MAX_PENDING_ENTRIES: usize = 1000;
+
+struct PendingEntry {
+    sender: oneshot::Sender<Value>,
+    inserted_at: Instant,
+}
 
 /// A running language server process with stdio transport.
 pub struct StdioTransport {
@@ -24,7 +33,7 @@ pub struct StdioTransport {
     /// Next request ID (monotonically increasing).
     next_id: AtomicU64,
     /// Pending response receivers keyed by request ID.
-    pending: Arc<Mutex<HashMap<u64, oneshot::Sender<Value>>>>,
+    pending: Arc<Mutex<HashMap<u64, PendingEntry>>>,
     /// Reader task JoinHandle.
     reader_handle: Option<tokio::task::JoinHandle<()>>,
 }
@@ -49,7 +58,7 @@ impl StdioTransport {
             .take()
             .context("language server stdout not available")?;
 
-        let pending: Arc<Mutex<HashMap<u64, oneshot::Sender<Value>>>> =
+        let pending: Arc<Mutex<HashMap<u64, PendingEntry>>> =
             Arc::new(Mutex::new(HashMap::new()));
         let pending_clone = Arc::clone(&pending);
 
@@ -75,7 +84,19 @@ impl StdioTransport {
     pub async fn request(&self, method: &str, params: Option<Value>) -> Result<Value> {
         let id = self.next_id();
         let (tx, rx) = oneshot::channel();
-        self.pending.lock().insert(id, tx);
+                {
+            let mut pending = self.pending.lock();
+            if pending.len() >= MAX_PENDING_ENTRIES {
+                if let Some(oldest_id) = pending
+                    .iter()
+                    .min_by_key(|(_, e)| e.inserted_at)
+                    .map(|(&id, _)| id)
+                {
+                    pending.remove(&oldest_id);
+                }
+            }
+            pending.insert(id, PendingEntry { sender: tx, inserted_at: Instant::now() });
+        }
 
         let msg = serde_json::json!({
             "jsonrpc": "2.0",
@@ -140,7 +161,7 @@ impl StdioTransport {
     /// Background reader loop: reads messages from stdout and routes responses.
     async fn read_loop(
         stdout: tokio::process::ChildStdout,
-        pending: Arc<Mutex<HashMap<u64, oneshot::Sender<Value>>>>,
+        pending: Arc<Mutex<HashMap<u64, PendingEntry>>>,
     ) {
         let mut reader = BufReader::new(stdout);
         let mut line = String::new();
@@ -178,8 +199,8 @@ impl StdioTransport {
 
             // Route response to waiting request
             if let Some(id) = value.get("id").and_then(|v| v.as_u64()) {
-                if let Some(tx) = pending.lock().remove(&id) {
-                    let _ = tx.send(value);
+                if let Some(entry) = pending.lock().remove(&id) {
+                    let _ = entry.sender.send(value);
                 }
             }
         }

@@ -399,7 +399,11 @@ impl ProviderClient {
                 tracing::warn!(
                     "SSE buffer exceeded {MAX_SSE_BUFFER_SIZE} bytes, discarding stale data"
                 );
-                sse_buffer.clear();
+                if let Some(last_boundary) = sse_buffer.rfind("\n\n") {
+                    sse_buffer = sse_buffer[last_boundary + 2..].to_owned();
+                } else {
+                    sse_buffer.clear();
+                }
             }
 
             while let Some(event_end) = sse_buffer.find("\n\n") {
@@ -642,7 +646,11 @@ impl ProviderClient {
                 tracing::warn!(
                     "SSE buffer exceeded {MAX_SSE_BUFFER_SIZE} bytes, discarding stale data"
                 );
-                sse_buffer.clear();
+                if let Some(last_boundary) = sse_buffer.rfind("\n\n") {
+                    sse_buffer = sse_buffer[last_boundary + 2..].to_owned();
+                } else {
+                    sse_buffer.clear();
+                }
             }
 
             for event in parse_sse_events_from_buffer(&mut sse_buffer) {
@@ -1041,7 +1049,11 @@ impl ProviderClient {
                 tracing::warn!(
                     "SSE buffer exceeded {MAX_SSE_BUFFER_SIZE} bytes, discarding stale data"
                 );
-                sse_buffer.clear();
+                if let Some(last_boundary) = sse_buffer.rfind("\n\n") {
+                    sse_buffer = sse_buffer[last_boundary + 2..].to_owned();
+                } else {
+                    sse_buffer.clear();
+                }
             }
 
             for event in parse_sse_events_from_buffer(&mut sse_buffer) {
