@@ -11,7 +11,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
-use chrono::Utc;
 use futures::{SinkExt, StreamExt};
 use rc_control_plane::{
     RunnerCommandPullResponse, RunnerQueuedCommandBody, RuntimeEventCreateRequest,
@@ -59,6 +58,9 @@ async fn wait_for_shutdown_or_timeout(
 const MAX_EVENT_BUFFER_PER_SESSION: usize = 500;
 const MAX_ARTIFACT_UPLOAD_BYTES: u64 = 10 * 1024 * 1024;
 const MAX_SESSION_INPUT_QUEUE: usize = 256;
+/// Maximum number of concurrent pending tool input accumulators. Oldest are
+/// evicted when this limit is exceeded.
+const MAX_PENDING_TOOL_INPUTS: usize = 1000;
 
 #[derive(Clone)]
 pub struct HostedSessionManager {
@@ -106,6 +108,37 @@ impl HostedSessionManager {
             event_buffer: Arc::new(Mutex::new(HashMap::new())),
         }
     }
+
+    /// Abort all outstanding task handles for tracked sessions. Called on Drop
+    /// to ensure child processes don't outlive the manager.
+    fn cleanup_all_tasks(&self) {
+        // We cannot hold an async lock across a sync Drop, so use
+        // try_lock in a best-effort fashion. If the mutex is held by
+        // another thread we skip cleanup — the OS will reap the
+        // processes when the parent exits.
+        if let Ok(sessions) = self.sessions.try_lock() {
+            for (_id, handle) in sessions.iter() {
+                if let Ok(mut tasks) = handle.task_handles.try_lock() {
+                    for task in tasks.drain(..) {
+                        task.abort();
+                    }
+                }
+                // Closing the input channel causes the child's stdin to
+                // close, which typically prompts the child process to exit.
+                drop(handle.input_tx.clone());
+            }
+        }
+    }
+}
+
+impl Drop for HostedSessionManager {
+    fn drop(&mut self) {
+        self.cleanup_all_tasks();
+    }
+}
+
+impl HostedSessionManager {
+
 
     pub async fn run(
         self,
@@ -819,11 +852,18 @@ impl HostedSessionManager {
             return;
         }
         if let Some(tool_use_id) = value.get("tool_use_id").and_then(serde_json::Value::as_str) {
-            handle
-                .pending_tool_inputs
-                .lock()
-                .await
-                .insert(tool_use_id.to_owned(), String::new());
+            let mut inputs = handle.pending_tool_inputs.lock().await;
+            // Evict the oldest entry if the map has grown beyond the limit.
+            if inputs.len() >= MAX_PENDING_TOOL_INPUTS {
+                if let Some((evicted_id, _)) = inputs.iter().next().map(|(k, v)| (k.clone(), v.clone())) {
+                    inputs.remove(&evicted_id);
+                    warn!(
+                        "pending_tool_inputs cap ({MAX_PENDING_TOOL_INPUTS}) exceeded; \
+                         evicted oldest entry {evicted_id}"
+                    );
+                }
+            }
+            inputs.insert(tool_use_id.to_owned(), String::new());
         }
     }
 
@@ -1356,7 +1396,7 @@ pub async fn run_outbound_poll_loop(
 pub async fn run_control_plane_command_stream(
     api: RunnerApi,
     config: RunnerConfig,
-    mut shutdown: watch::Receiver<bool>,
+    shutdown: watch::Receiver<bool>,
 ) {
     let cp_url = match &config.control_plane_url {
         Some(url) => url.clone(),
@@ -1428,7 +1468,7 @@ async fn run_ws_command_stream(
     mut ws: WsStream,
 ) {
     let latency_tracker = crate::LatencyTracker::new("ws_command");
-    let mut reconnect_delay = Duration::from_secs(1);
+    let reconnect_delay = Duration::from_secs(1);
 
     loop {
         tokio::select! {
