@@ -399,8 +399,11 @@ impl CodexAuth {
             Self::ChatgptAuthTokens(auth) => &auth.state,
             Self::ApiKey(_) | Self::AgentIdentity(_) => return None,
         };
-        #[expect(clippy::unwrap_used)]
-        state.auth_dot_json.lock().unwrap().clone()
+        state
+            .auth_dot_json
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 
     /// Returns `None` if token-backed ChatGPT auth is unavailable.
@@ -445,8 +448,11 @@ impl CodexAuth {
 
 impl ChatgptAuth {
     fn current_auth_json(&self) -> Option<AuthDotJson> {
-        #[expect(clippy::unwrap_used)]
-        self.state.auth_dot_json.lock().unwrap().clone()
+        self.state
+            .auth_dot_json
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 
     fn current_token_data(&self) -> Option<TokenData> {

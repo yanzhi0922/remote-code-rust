@@ -140,15 +140,22 @@ impl AuthStorageBackend for FileAuthStorage {
             std::fs::create_dir_all(parent)?;
         }
         let json_data = serde_json::to_string_pretty(auth_dot_json)?;
-        let mut options = OpenOptions::new();
-        options.truncate(true).write(true).create(true);
-        #[cfg(unix)]
+
+        // Atomic write: write to temp file then rename to prevent partial writes
+        let temp_path = auth_file.with_extension("tmp");
         {
-            options.mode(0o600);
+            let mut options = OpenOptions::new();
+            options.truncate(true).write(true).create(true);
+            #[cfg(unix)]
+            {
+                options.mode(0o600);
+            }
+            let mut file = options.open(&temp_path)?;
+            file.write_all(json_data.as_bytes())?;
+            file.flush()?;
         }
-        let mut file = options.open(auth_file)?;
-        file.write_all(json_data.as_bytes())?;
-        file.flush()?;
+        std::fs::rename(&temp_path, &auth_file)?;
+
         Ok(())
     }
 

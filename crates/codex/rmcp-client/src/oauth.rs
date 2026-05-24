@@ -36,6 +36,7 @@ use sha2::Sha256;
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::ErrorKind;
+use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -568,8 +569,24 @@ fn write_fallback_file(store: &FallbackFile) -> Result<()> {
     }
 
     let serialized = serde_json::to_string(store)?;
-    fs::write(&path, serialized)?;
 
+    // Atomic write: write to temp file then rename to prevent partial writes
+    let temp_path = path.with_extension("tmp");
+    {
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options.open(&temp_path)?;
+        std::io::Write::write_all(&mut file, serialized.as_bytes())?;
+        file.flush()?;
+    }
+    fs::rename(&temp_path, &path)?;
+
+    // Set permissions on platforms that need it after rename
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
