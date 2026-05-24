@@ -37,7 +37,7 @@ const RemoteApp = lazy(() => import('./remote/RemoteApp'));
 const MobileRemoteApp = lazy(() => import('./remote/MobileRemoteApp'));
 
 type MobileInitPhase = 'loading' | 'biometric' | 'ready' | 'error';
-type WorkbenchDemoScene = 'main' | 'empty' | 'running' | 'permission' | 'settings' | 'mcp' | 'light';
+type WorkbenchDemoScene = 'main' | 'empty' | 'running' | 'permission' | 'settings' | 'mcp' | 'light' | 'dark';
 
 function shouldUseWorkbenchDemo(): boolean {
   if (!import.meta.env.DEV || typeof window === 'undefined') return false;
@@ -60,7 +60,8 @@ function getWorkbenchDemoScene(): WorkbenchDemoScene {
     value === 'permission' ||
     value === 'settings' ||
     value === 'mcp' ||
-    value === 'light'
+    value === 'light' ||
+    value === 'dark'
   ) {
     return value;
   }
@@ -266,6 +267,9 @@ const demoPermission: PermissionRequestInfo = {
 
 function DemoStoreSeeder({ scene }: { scene: WorkbenchDemoScene }) {
   useEffect(() => {
+    // Dev-only: guard against double-initialisation in React StrictMode.
+    if (useAppStore.getState().initialised) return;
+
     const empty = scene === 'empty';
     const running = scene === 'running';
     const activeAgentType: AgentType = scene === 'settings' || scene === 'mcp' ? 'remote_codex' : 'remote_claude';
@@ -383,7 +387,7 @@ function DemoThemeMode({ theme }: { theme: 'light' | 'dark' }) {
 
 function DemoLocalApp() {
   const scene = getWorkbenchDemoScene();
-  const theme = scene === 'light' ? 'light' : 'dark';
+  const theme = scene === 'dark' ? 'dark' : 'light';
   const initialSettingsOpen = scene === 'settings' || scene === 'mcp';
   const initialSettingsTab = scene === 'mcp' ? 'mcp' : 'provider';
 

@@ -305,6 +305,9 @@ export function ChatInput() {
 
   const handleSend = async () => {
     if (!input.trim() || sending) return;
+    if (attachments.length > 0) {
+      console.warn('[ChatInput] file attachments are collected but not yet transmitted. File send is not implemented.');
+    }
     const current = input;
     setInput('');
     setShowSlashPalette(false);
@@ -592,12 +595,14 @@ export function ChatInput() {
 
             <div className="flex-1" />
 
+            {/* TODO: Enable file picker once file transmission is implemented */}
             <button
               type="button"
               aria-label="附加文件"
-              title="附加文件"
+              title="附加文件（暂未实现）"
+              disabled
               onClick={() => fileInputRef.current?.click()}
-              className="flex h-8 w-8 items-center justify-center rounded-md text-rc-text-tertiary transition-colors hover:bg-rc-bg-hover hover:text-rc-text-primary focus-visible:outline-none"
+              className="flex h-8 w-8 items-center justify-center rounded-md text-rc-text-tertiary transition-colors hover:bg-rc-bg-hover hover:text-rc-text-primary disabled:cursor-not-allowed disabled:opacity-45 focus-visible:outline-none"
             >
               <Paperclip size={15} />
             </button>

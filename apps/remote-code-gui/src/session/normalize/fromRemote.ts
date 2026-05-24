@@ -28,7 +28,7 @@ export function appendRemoteTimelineEvent(
       return !sameMessageStream(event.detail, committedDetail);
     });
     seen.add(nextEvent.sequence);
-    return [...filtered, nextEvent].sort((left, right) => left.sequence - right.sequence);
+    return [...filtered, nextEvent];
   }
 
   if (nextEvent.detail.kind === 'message_delta') {
@@ -84,7 +84,7 @@ export function appendRemoteTimelineEvent(
   }
 
   seen.add(nextEvent.sequence);
-  return [...current, nextEvent].sort((left, right) => left.sequence - right.sequence);
+  return [...current, nextEvent];
 }
 
 export function resolveRemoteSessionTitle(session: { metadata: Record<string, string>; workspace_id: string }): string {
