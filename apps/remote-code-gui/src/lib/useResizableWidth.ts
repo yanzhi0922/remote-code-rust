@@ -31,7 +31,7 @@ export function useResizableWidth() {
     e.preventDefault();
     isDragging.current = true;
     startX.current = e.clientX;
-    startWidth.current = width;
+    startWidth.current = latestWidthRef.current;
 
     const handleMouseMove = (ev: MouseEvent) => {
       if (!isDragging.current) return;
@@ -55,7 +55,7 @@ export function useResizableWidth() {
     document.body.style.userSelect = 'none';
     document.addEventListener('mousemove', handleMouseMove);
     document.addEventListener('mouseup', handleMouseUp);
-  }, [width]);
+  }, []);
 
   return { width, handleMouseDown };
 }

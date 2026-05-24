@@ -475,7 +475,7 @@ export function Sidebar() {
     const liveTasks = liveSessionTasks[activeSessionId] ?? [];
     if (liveTasks.length > 0) return liveTasks;
     return deriveAgentTasks(conversation);
-  }, [activeSessionId, conversation, liveSessionTasks]);
+  }, [activeSessionId, conversation.length, liveSessionTasks]);
 
   const normalizedSearch = debouncedSearch.trim().toLowerCase();
   const visibleProjectRows = useMemo(() => {

@@ -239,16 +239,31 @@ export async function requestJson<T>(
         headers: buildRequestHeaders(init),
       });
 
-      const responseText = await response.text();
-
       if (response.status === 401 && attempt === 0) {
+        // Read and discard the body before retrying.
+        try { await response.clone().text(); } catch { /* ignore */ }
         const refreshed = await tryRefreshAccessToken(baseUrl);
         if (refreshed) continue;
       }
 
       if (!response.ok) {
-        throw new Error(extractRemoteError(responseText, response.status));
+        // Read only the first 1KB for error messages.
+        let errorText = '';
+        try {
+          const reader = response.body?.getReader();
+          if (reader) {
+            const { value } = await reader.read();
+            if (value) errorText = new TextDecoder().decode(value).substring(0, 1024);
+          } else {
+            errorText = (await response.text()).substring(0, 1024);
+          }
+        } catch {
+          errorText = '';
+        }
+        throw new Error(extractRemoteError(errorText, response.status));
       }
+
+      const responseText = await response.text();
 
       if (!responseText) {
         if (method !== 'GET') {

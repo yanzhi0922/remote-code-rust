@@ -2,6 +2,7 @@ import {
   lazy,
   memo,
   Suspense,
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -422,15 +423,17 @@ function ConversationTimeline({
 }) {
   const scrollContainerRef = useRef<HTMLElement>(null);
   const shouldVirtualize = conversation.length >= VIRTUALIZATION_THRESHOLD;
+  const getScrollElement = useCallback(() => scrollContainerRef.current, []);
+  const estimateSize = useCallback((index: number) => {
+    const entry = conversation[index];
+    if (entry) return estimateEntryHeight(entry);
+    if (conversation.length > 0) return estimateEntryHeight(conversation[0]);
+    return 80;
+  }, [conversation]);
   const rowVirtualizer = useVirtualizer({
     count: conversation.length,
-    getScrollElement: () => scrollContainerRef.current,
-    estimateSize: (index) => {
-      const entry = conversation[index];
-      if (entry) return estimateEntryHeight(entry);
-      if (conversation.length > 0) return estimateEntryHeight(conversation[0]);
-      return 80;
-    },
+    getScrollElement,
+    estimateSize,
     overscan: VIRTUALIZATION_OVERSCAN,
     getItemKey: (index) => conversationRowKey(conversation[index] ?? conversation[0], index),
   });

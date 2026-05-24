@@ -6,6 +6,16 @@ import { URL } from 'url';
 const LISTEN_PORT = 9999;
 const MAX_BODY_SIZE = 10 * 1024 * 1024; // 10 MB
 
+function isTargetUrlAllowed(url) {
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== 'https:') return false;
+    const blocked = ['127.', '10.', '169.254.', '192.168.', 'localhost', '::1'];
+    if (blocked.some(prefix => parsed.hostname.startsWith(prefix) || parsed.hostname === prefix.replace('.', ''))) return false;
+    return true;
+  } catch { return false; }
+}
+
 const SENSITIVE_HEADERS = new Set([
     'authorization', 'x-api-key', 'cookie', 'set-cookie', 'proxy-authorization',
 ]);
@@ -36,6 +46,12 @@ const server = http.createServer(async (req, res) => {
     }
 
     const target = new URL(req.headers['x-target-url'] || `https://api.anthropic.com${req.url}`);
+
+    if (!isTargetUrlAllowed(target.href)) {
+        res.writeHead(403, { 'Content-Type': 'text/plain' });
+        res.end('Forbidden: target URL not allowed');
+        return;
+    }
 
     console.log('\n=== REQUEST ===');
     console.log(`${req.method} ${target.href}`);

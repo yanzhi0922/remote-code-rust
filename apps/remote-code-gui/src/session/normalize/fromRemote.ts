@@ -15,7 +15,7 @@ export function appendRemoteTimelineEvent(
   nextEvent: RemoteTimelineEvent,
   seen: Set<number> = new Set(),
 ): RemoteTimelineEvent[] {
-  if (seen.has(nextEvent.sequence) || current.some((event) => event.sequence === nextEvent.sequence)) {
+  if (seen.has(nextEvent.sequence)) {
     return current;
   }
 

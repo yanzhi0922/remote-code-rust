@@ -37,6 +37,10 @@ let _unlistenNotificationClicked: (() => void) | null = null;
 export async function initPushNotifications(options: PushNotificationOptions): Promise<void> {
   if (!hasTauriRuntime()) return;
 
+  // Reset stale module state to ensure clean re-initialization.
+  _pushToken = null;
+  _permissionGranted = false;
+
   // Remove previous listeners before registering new ones to avoid duplicates.
   _unlistenNotification?.();
   _unlistenNotification = null;

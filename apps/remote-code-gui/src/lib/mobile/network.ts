@@ -51,11 +51,11 @@ export function initNetworkMonitoring(): void {
       cleanup = unlisten;
     }).catch((err) => {
       console.warn('[network] onNetworkStatusChange listener setup failed:', err);
-      cleanup = () => {};
+      cleanup = null;
     });
   }).catch((err) => {
     console.warn('[network] plugin-network import failed:', err);
-    cleanup = () => {};
+    cleanup = null;
   });
 }
 

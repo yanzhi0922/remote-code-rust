@@ -237,6 +237,11 @@ export class UnifiedTransport implements TransportHandle {
         try {
           await this.executeCommand(target, cmd.command);
         } catch {
+          cmd.retryCount += 1;
+          if (cmd.retryCount >= 3) {
+            console.warn('Dropping command after 3 retries:', cmd.id);
+            continue;
+          }
           failed.push(cmd);
         }
       }
@@ -374,11 +379,7 @@ export class UnifiedTransport implements TransportHandle {
     }
 
     // Periodic health probe for auto-switching.
-    try {
-      if (this._healthTimer !== null) {
-        window.clearInterval(this._healthTimer);
-      }
-    } catch { /* ignore exception between clear and set */ }
+    if (this._healthTimer !== null) { clearInterval(this._healthTimer); this._healthTimer = null; }
     this._healthTimer = window.setInterval(() => {
       void this.autoSwitchIfNeeded().catch((err) => {
         console.warn('[unified-transport] autoSwitchIfNeeded failed:', err);
@@ -387,34 +388,41 @@ export class UnifiedTransport implements TransportHandle {
   }
 
   private _switchGeneration = 0;
+  private _autoSwitchInProgress = false;
 
   private async autoSwitchIfNeeded(): Promise<void> {
     if (this._cancelled) return;
-    const gen = ++this._switchGeneration;
+    if (this._autoSwitchInProgress) return;
+    this._autoSwitchInProgress = true;
+    try {
+      const gen = ++this._switchGeneration;
 
-    const report = await this.probeHealth();
-    if (gen !== this._switchGeneration) return; // stale, another switch happened
+      const report = await this.probeHealth();
+      if (gen !== this._switchGeneration) return; // stale, another switch happened
 
-    const currentIsDirect = this._strategy === 'direct_websocket';
-    const shouldDirect = report.recommendedStrategy === 'direct_websocket';
+      const currentIsDirect = this._strategy === 'direct_websocket';
+      const shouldDirect = report.recommendedStrategy === 'direct_websocket';
 
-    if (currentIsDirect !== shouldDirect) {
-      this._metrics.strategySwitches++;
-      this.notifyMetrics();
-      this._handle?.close();
-      if (gen !== this._switchGeneration) return;
+      if (currentIsDirect !== shouldDirect) {
+        this._metrics.strategySwitches++;
+        this.notifyMetrics();
+        this._handle?.close();
+        if (gen !== this._switchGeneration) return;
 
-      if (shouldDirect && this.canUseDirectRunner()) {
-        this._strategy = 'direct_websocket';
-        this.connectWebSocket(this.directRunnerBaseUrl()!, this._latestSequence).catch((err) => {
-          console.warn('[unified-transport] auto-switch WS failed:', err);
-        });
-      } else {
-        this._strategy = 'server_relay';
-        this.connectWebSocket(this._config.baseUrl, this._latestSequence).catch((err) => {
-          console.warn('[unified-transport] auto-switch WS failed:', err);
-        });
+        if (shouldDirect && this.canUseDirectRunner()) {
+          this._strategy = 'direct_websocket';
+          this.connectWebSocket(this.directRunnerBaseUrl()!, this._latestSequence).catch((err) => {
+            console.warn('[unified-transport] auto-switch WS failed:', err);
+          });
+        } else {
+          this._strategy = 'server_relay';
+          this.connectWebSocket(this._config.baseUrl, this._latestSequence).catch((err) => {
+            console.warn('[unified-transport] auto-switch WS failed:', err);
+          });
+        }
       }
+    } finally {
+      this._autoSwitchInProgress = false;
     }
   }
 

@@ -8,7 +8,7 @@ import type {
   TransportCallbacks,
 } from './unified-transport';
 import { UnifiedTransport, probeEndpointHealth } from './unified-transport';
-import { drainCommands } from './offline-queue';
+import { drainCommands, enqueueCommand } from './offline-queue';
 import { isOnline, onNetworkChange } from '../lib/mobile/network';
 
 export type { TransportConfig, TransportStrategyType, ConnectionState, HealthReport, TransportMetrics };
@@ -118,11 +118,12 @@ class ConnectionManager {
         try {
           const queued = await drainCommands(sessionId);
           for (const cmd of queued) {
+            if (this.transport !== transport) break;
             try {
               await transport.sendCommand(cmd.command);
             } catch {
               // Re-enqueue failed command for next connect attempt.
-              try { await import('./offline-queue').then((m) => m.enqueueCommand(sessionId, cmd.command)); } catch { /* best effort */ }
+              try { await enqueueCommand(sessionId, cmd.command); } catch { /* best effort */ }
               break;
             }
           }

@@ -121,6 +121,7 @@ export function useRemoteSessionController({
   const connectedSessionRef = useRef<string | null>(null);
   const sessionRefreshTimerRef = useRef<number | null>(null);
   const statusTimerRef = useRef<number | null>(null);
+  const refreshInProgressRef = useRef(false);
 
   // Clean up status timer on unmount to prevent stale state updates.
   useEffect(() => {
@@ -406,6 +407,8 @@ export function useRemoteSessionController({
     if (!baseUrl || !health || (authRequired && !accessToken)) {
       return;
     }
+    if (refreshInProgressRef.current) return;
+    refreshInProgressRef.current = true;
     setSessionsLoading((current) => (sessions.length === 0 ? true : current));
     try {
       const response = await listSessions(baseUrl);
@@ -428,6 +431,7 @@ export function useRemoteSessionController({
       reportAsyncError(error);
     } finally {
       setSessionsLoading(false);
+      refreshInProgressRef.current = false;
     }
   });
 
@@ -628,7 +632,7 @@ export function useRemoteSessionController({
       connectedSessionRef.current = null;
       transportDisconnect();
     };
-  }, [accessToken, activeSession, authRequired, baseUrl, health, selectedSessionId]);
+  }, [accessToken, activeSession?.owner_runner_id, authRequired, baseUrl, health, selectedSessionId]);
 
   const handleSendPrompt = async () => {
     if (

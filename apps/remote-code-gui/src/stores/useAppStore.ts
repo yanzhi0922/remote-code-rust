@@ -243,20 +243,26 @@ async function registerEventListeners(): Promise<(() => void)[]> {
       }));
     }),
     tauri.onToolStart((event) => {
-      useAppStore.setState((state) => ({
-        liveToolProgress: [...state.liveToolProgress.slice(-99), event.payload],
-      }));
+      useAppStore.setState((state) => {
+        const arr = [...state.liveToolProgress, event.payload];
+        const next = arr.length > 99 ? arr.slice(-99) : arr;
+        return { liveToolProgress: next };
+      });
       refreshActiveConversation();
     }),
     tauri.onToolProgress((event) => {
-      useAppStore.setState((state) => ({
-        liveToolProgress: [...state.liveToolProgress.slice(-99), event.payload],
-      }));
+      useAppStore.setState((state) => {
+        const arr = [...state.liveToolProgress, event.payload];
+        const next = arr.length > 99 ? arr.slice(-99) : arr;
+        return { liveToolProgress: next };
+      });
     }),
     tauri.onToolResult((event) => {
-      useAppStore.setState((state) => ({
-        liveToolResults: [...state.liveToolResults.slice(-49), event.payload],
-      }));
+      useAppStore.setState((state) => {
+        const arr = [...state.liveToolResults, event.payload];
+        const next = arr.length > 49 ? arr.slice(-49) : arr;
+        return { liveToolResults: next };
+      });
       refreshActiveConversation();
     }),
     tauri.onStreamingDelta((event) => {
