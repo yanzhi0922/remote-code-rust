@@ -45,6 +45,7 @@ import {
   sendPrompt,
 } from './api';
 import type { TransportConfig } from './connection-manager';
+import { extractErrorMessage } from './utils';
 import {
   formatRemoteRelativeTime,
   getRemoteCopy,
@@ -275,7 +276,7 @@ export function useRemoteSessionController({
   }, [accessToken, baseUrl, copy]);
 
   useEffect(() => {
-    void initAppLifecycle({
+    const cleanup = initAppLifecycle({
       onResume: () => {
         void refreshSessions().catch(reportAsyncError);
         if (activeSessionIdRef.current) {
@@ -283,6 +284,7 @@ export function useRemoteSessionController({
         }
       },
     });
+    return cleanup;
   }, []);
 
   const completeAuthentication = useEffectEvent((token: string, message: string, refreshToken?: string) => {
@@ -809,11 +811,4 @@ export function describeRemoteSessionControl(
     canInterrupt: true,
     notice: null,
   };
-}
-
-function extractErrorMessage(error: unknown): string {
-  if (error instanceof Error) {
-    return error.message;
-  }
-  return typeof error === 'string' ? error : String(error);
 }

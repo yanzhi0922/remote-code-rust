@@ -7,6 +7,15 @@ declare global {
   }
 }
 
+// SECURITY NOTE: Access and refresh tokens are stored in sessionStorage as a
+// cross-tab-visible, tab-lifetime-scoped fallback.  sessionStorage survives
+// page reloads but is cleared when the *browser tab* closes — this is
+// acceptable for short-lived access tokens (15 min TTL) but refresh tokens
+// persist longer.  The primary secure storage path is the Tauri native
+// secure-store (iOS Keychain / Android Keystore) which is used when available
+// via secureStoreSet/secureStoreGet.  The sessionStorage path only activates
+// on pure-web (non-Tauri) contexts where no platform secure-store exists.
+// Do NOT move these to localStorage, which persists indefinitely.
 const REMOTE_ACCESS_TOKEN_STORAGE_KEY = 'remote-code-control-plane-access-token';
 const REMOTE_REFRESH_TOKEN_STORAGE_KEY = 'remote-code-control-plane-refresh-token';
 const REMOTE_ACTIVE_SESSION_STORAGE_KEY_PREFIX = 'remote-code-control-plane-active-session:';
@@ -79,6 +88,19 @@ export function clearRemoteAccessToken(): void {
  * Derive a tenant-scoping user key from username and password.
  * The control plane only accepts this key when its sha256(user_key) hash is
  * explicitly configured server-side.
+ *
+ * SECURITY NOTE: This uses a single pass of SHA-256 for password derivation,
+ * which is NOT a proper key derivation function.  SHA-256 is fast by design,
+ * making the derived key vulnerable to brute-force attacks if the hash is ever
+ * compromised.  The correct approach is to use a dedicated KDF such as PBKDF2
+ * (minimum 600 000 iterations), Argon2id, or scrypt.  However, the control
+ * plane protocol currently expects exactly `sha256(username:password)`, so the
+ * algorithm cannot be changed unilaterally here.
+ *
+ * TODO: When the server protocol can be updated, migrate to a proper KDF and
+ * add a pepper stored in the Tauri backend's keychain.  The migration should
+ * support both old (SHA-256) and new (KDF) derivations during a transition
+ * period.
  */
 export async function deriveUserKey(username: string, password: string): Promise<string> {
   const raw = `${username}:${password}`;

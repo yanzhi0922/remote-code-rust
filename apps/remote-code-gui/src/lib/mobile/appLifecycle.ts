@@ -5,14 +5,21 @@ type LifecycleCallbacks = {
   onPause?: () => void;
 };
 
-export async function initAppLifecycle(callbacks: LifecycleCallbacks): Promise<void> {
-  if (!hasTauriRuntime()) return;
+export function initAppLifecycle(callbacks: LifecycleCallbacks): () => void {
+  if (!hasTauriRuntime()) return () => {};
 
-  document.addEventListener('visibilitychange', () => {
+  const handler = () => {
     if (document.visibilityState === 'visible') {
       callbacks.onResume?.();
     } else {
       callbacks.onPause?.();
     }
-  });
+  };
+
+  document.addEventListener('visibilitychange', handler);
+
+  // Return cleanup function to remove the listener.
+  return () => {
+    document.removeEventListener('visibilitychange', handler);
+  };
 }

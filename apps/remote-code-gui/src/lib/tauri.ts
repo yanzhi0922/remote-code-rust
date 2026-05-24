@@ -651,8 +651,16 @@ export function codexFsReadFile(request: CodexFsPathRequest): Promise<CodexJsonV
   });
 }
 
+function uint8ArrayToBase64(bytes: Uint8Array): string {
+  let binary = '';
+  for (let i = 0; i < bytes.length; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return btoa(binary);
+}
+
 export function codexFsWriteFile(request: CodexFsWriteFileRequest): Promise<CodexJsonValue> {
-  const dataBase64 = btoa(Array.from(new TextEncoder().encode(request.contents), b => String.fromCodePoint(b)).join(''));
+  const dataBase64 = uint8ArrayToBase64(new TextEncoder().encode(request.contents));
   return invoke<CodexJsonValue>('codex_fs_write_file', {
     request: { params: { ...(request.params ?? {}), path: request.path, dataBase64 } },
   });
