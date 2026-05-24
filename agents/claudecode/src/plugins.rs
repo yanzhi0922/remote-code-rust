@@ -373,7 +373,7 @@ fn run_plugins_remove(config: &RuntimeConfig, args: PluginsRemoveArgs) -> Result
             config.paths.plugins_dir.display()
         ));
     }
-    fs::remove_dir_all(&destination)?;
+    fs::remove_dir_all(&canonical_destination)?;
     let output = serde_json::json!({
         "status": "removed",
         "plugin": args.plugin,
@@ -512,7 +512,7 @@ fn run_plugins_update(config: &RuntimeConfig, args: PluginsUpdateArgs) -> Result
 
     let marker_path = destination.join(claude_plugins::PLUGIN_DISABLED_MARKER);
     let preserved_disabled = marker_path.exists();
-    fs::remove_dir_all(&destination)?;
+    fs::remove_dir_all(&canonical_destination)?;
     copy_dir_recursive(&plugin.root, &destination)?;
     if preserved_disabled {
         fs::write(&marker_path, b"disabled\n")?;
@@ -953,6 +953,16 @@ fn build_plugins_validate_output(
 }
 
 fn copy_dir_recursive(source: &Path, destination: &Path) -> Result<()> {
+    copy_dir_recursive_inner(source, destination, 64)
+}
+
+fn copy_dir_recursive_inner(source: &Path, destination: &Path, depth: u32) -> Result<()> {
+    if depth == 0 {
+        anyhow::bail!(
+            "maximum directory depth exceeded when copying {}; possible symlink loop or excessive nesting",
+            source.display()
+        );
+    }
     let canonical_source = source
         .canonicalize()
         .map_err(|e| anyhow!("Failed to canonicalize source {}: {e}", source.display()))?;
@@ -996,12 +1006,12 @@ fn copy_dir_recursive(source: &Path, destination: &Path) -> Result<()> {
             // Copy the file the symlink points to (dereference)
             let meta = std::fs::metadata(&source_path)?;
             if meta.is_dir() {
-                copy_dir_recursive(&source_path, &destination_path)?;
+                copy_dir_recursive_inner(&source_path, &destination_path, depth - 1)?;
             } else if meta.is_file() {
                 fs::copy(&source_path, &destination_path)?;
             }
         } else if file_type.is_dir() {
-            copy_dir_recursive(&source_path, &destination_path)?;
+            copy_dir_recursive_inner(&source_path, &destination_path, depth - 1)?;
         } else if file_type.is_file() {
             fs::copy(&source_path, &destination_path)?;
         }

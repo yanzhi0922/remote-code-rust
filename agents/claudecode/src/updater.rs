@@ -158,10 +158,26 @@ pub async fn run_update() -> Result<()> {
         anyhow::bail!("download failed with status {}", response.status());
     }
 
+    const MAX_DOWNLOAD_SIZE: u64 = 500 * 1024 * 1024; // 500 MB
+    if let Some(content_length) = response.content_length() {
+        if content_length > MAX_DOWNLOAD_SIZE {
+            anyhow::bail!(
+                "download size ({content_length} bytes) exceeds maximum allowed ({MAX_DOWNLOAD_SIZE} bytes); aborting"
+            );
+        }
+    }
+
     let bytes = response
         .bytes()
         .await
         .context("failed to read download response")?;
+
+    if bytes.len() as u64 > MAX_DOWNLOAD_SIZE {
+        anyhow::bail!(
+            "downloaded {} bytes which exceeds maximum allowed ({MAX_DOWNLOAD_SIZE} bytes); aborting",
+            bytes.len()
+        );
+    }
 
     // Compute and log the SHA-256 digest of the downloaded binary.
     //
@@ -251,6 +267,7 @@ fn ensure_in_place_update_supported(
 /// Compare version strings. Returns true if `latest` > `current`.
 fn is_newer_version(latest: &str, current: &str) -> bool {
     let parse_parts = |v: &str| -> Vec<u32> {
+        let v = v.split('-').next().unwrap_or(v);
         v.split('.')
             .filter_map(|segment| segment.parse().ok())
             .collect()

@@ -146,7 +146,7 @@ pub struct HooksListOutput {
 
 #[derive(Debug, Default)]
 pub struct HookRunState {
-    consumed_once_hooks: BTreeSet<String>,
+    consumed_once_hooks: Arc<BTreeSet<String>>,
     session_start_completed: bool,
 }
 
@@ -154,7 +154,7 @@ impl HookRunState {
     pub fn load(store: &SessionStore, session_id: Uuid) -> Result<Self> {
         let transcript = store.load_transcript(session_id)?;
         Ok(Self {
-            consumed_once_hooks: transcript.consumed_once_hook_ids(),
+            consumed_once_hooks: Arc::new(transcript.consumed_once_hook_ids()),
             session_start_completed: transcript.has_hook_phase("session_start"),
         })
     }
@@ -165,7 +165,7 @@ impl HookRunState {
 
     fn mark_executed(&mut self, hook: &HookRecord) {
         if hook.once {
-            self.consumed_once_hooks.insert(hook.hook_id.clone());
+            Arc::make_mut(&mut self.consumed_once_hooks).insert(hook.hook_id.clone());
         }
     }
 
@@ -867,7 +867,7 @@ impl PermissionBroker for HookAwarePermissionBroker {
     async fn decide(&self, request: PermissionRequest) -> PermissionDecision {
         let hook_result = {
             let mut state = self.state.lock().await;
-            let consumed_once = state.consumed_once_hooks.clone();
+            let consumed_once = Arc::clone(&state.consumed_once_hooks);
             let session_start_done = state.session_start_completed;
             drop(state);
             let mut local_state = HookRunState {
@@ -898,7 +898,7 @@ impl PermissionBroker for HookAwarePermissionBroker {
     async fn decide_forced_prompt(&self, request: PermissionRequest) -> PermissionDecision {
         let hook_result = {
             let mut state = self.state.lock().await;
-            let consumed_once = state.consumed_once_hooks.clone();
+            let consumed_once = Arc::clone(&state.consumed_once_hooks);
             let session_start_done = state.session_start_completed;
             drop(state);
             let mut local_state = HookRunState {

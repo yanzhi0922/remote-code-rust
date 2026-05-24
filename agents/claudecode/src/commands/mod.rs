@@ -714,7 +714,8 @@ pub fn run_diff_real(
         println!("Diff for session {sid}: {} entries", conversation.len());
         for entry in conversation.iter().rev().take(10).rev() {
             let preview = if entry.text.len() > 80 {
-                format!("{}...", entry.text.chars().take(80).collect::<String>())
+                let end = entry.text.char_indices().take(80).last().map_or(0, |(i, c)| i + c.len_utf8());
+                format!("{}...", &entry.text[..end])
             } else {
                 entry.text.clone()
             };
@@ -868,9 +869,6 @@ pub async fn run_remote_env(args: RemoteEnvArgs) -> Result<()> {
             return Err(anyhow!(
                 "Refusing to modify protected environment variable: {key}"
             ));
-        }
-        if args.get.is_some() || args.unset.is_some() {
-            return Err(anyhow!("cannot use --set with --get or --unset"));
         }
         if let Some(val) = &args.value {
             // SAFETY: This CLI runs in a single-user, interactive context where the

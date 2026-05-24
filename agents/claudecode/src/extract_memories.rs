@@ -8,6 +8,7 @@ use std::sync::{
 use std::time::Duration;
 
 use anyhow::Result;
+use indexmap::IndexMap;
 use chrono::Utc;
 use claude_config::RuntimeConfig;
 use claude_core::{ConversationEntry, ConversationRole, PermissionMode, SystemMemorySavedMessage};
@@ -60,12 +61,12 @@ struct ExtractMemoriesState {
     pending_context: Option<PendingExtractionContext>,
 }
 
-static EXTRACT_MEMORY_STATE: OnceLock<Mutex<HashMap<Uuid, ExtractMemoriesState>>> = OnceLock::new();
+static EXTRACT_MEMORY_STATE: OnceLock<Mutex<IndexMap<Uuid, ExtractMemoriesState>>> = OnceLock::new();
 static IN_FLIGHT_EXTRACTIONS: OnceLock<AtomicUsize> = OnceLock::new();
 static EXTRACTION_NOTIFY: OnceLock<tokio::sync::Notify> = OnceLock::new();
 
-fn extraction_state_map() -> &'static Mutex<HashMap<Uuid, ExtractMemoriesState>> {
-    EXTRACT_MEMORY_STATE.get_or_init(|| Mutex::new(HashMap::new()))
+fn extraction_state_map() -> &'static Mutex<IndexMap<Uuid, ExtractMemoriesState>> {
+    EXTRACT_MEMORY_STATE.get_or_init(|| Mutex::new(IndexMap::new()))
 }
 
 fn in_flight_extractions() -> &'static AtomicUsize {
@@ -78,11 +79,9 @@ fn extraction_notify() -> &'static tokio::sync::Notify {
 
 const MAX_EXTRACTION_STATES: usize = 100;
 
-fn evict_oldest_if_needed(map: &mut HashMap<Uuid, ExtractMemoriesState>) {
+fn evict_oldest_if_needed(map: &mut IndexMap<Uuid, ExtractMemoriesState>) {
     if map.len() >= MAX_EXTRACTION_STATES {
-        if let Some(old_key) = map.keys().next().copied() {
-            map.remove(&old_key);
-        }
+        map.shift_remove_index(0);
     }
 }
 
@@ -656,11 +655,25 @@ fn has_memory_writes_since(
     false
 }
 
+static CANONICALIZED_ROOTS: OnceLock<std::sync::Mutex<HashMap<PathBuf, PathBuf>>> = OnceLock::new();
+
+fn canonicalized_root(root: &Path) -> PathBuf {
+    let cache = CANONICALIZED_ROOTS.get_or_init(|| std::sync::Mutex::new(HashMap::new()));
+    if let Some(cached) = cache.lock().unwrap().get(root) {
+        return cached.clone();
+    }
+    let canonical = root
+        .canonicalize()
+        .unwrap_or_else(|_| root.to_path_buf());
+    cache.lock().unwrap().insert(root.to_path_buf(), canonical.clone());
+    canonical
+}
+
 fn path_within(candidate: &Path, root: &Path) -> bool {
     let candidate = candidate
         .canonicalize()
         .unwrap_or_else(|_| candidate.to_path_buf());
-    let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    let root = canonicalized_root(root);
     if root.as_os_str().is_empty() {
         return false;
     }

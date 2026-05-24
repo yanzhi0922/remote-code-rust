@@ -1,6 +1,7 @@
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
+
+use indexmap::IndexMap;
 
 use anyhow::Result;
 use claude_compact::session_memory::SessionMemoryCompactFileContext;
@@ -30,7 +31,7 @@ use crate::query_engine_compat::{
 };
 
 static SESSION_MEMORY_STATES: OnceLock<
-    Mutex<HashMap<Uuid, Arc<parking_lot::Mutex<SessionMemoryRuntimeState>>>>,
+    Mutex<IndexMap<Uuid, Arc<parking_lot::Mutex<SessionMemoryRuntimeState>>>>,
 > = OnceLock::new();
 static SESSION_MEMORY_GROWTHBOOK: OnceLock<GrowthBookClient> = OnceLock::new();
 
@@ -60,8 +61,8 @@ pub(crate) async fn session_memory_shared_state_for_session(
 }
 
 fn session_memory_states()
--> &'static Mutex<HashMap<Uuid, Arc<parking_lot::Mutex<SessionMemoryRuntimeState>>>> {
-    SESSION_MEMORY_STATES.get_or_init(|| Mutex::new(HashMap::new()))
+-> &'static Mutex<IndexMap<Uuid, Arc<parking_lot::Mutex<SessionMemoryRuntimeState>>>> {
+    SESSION_MEMORY_STATES.get_or_init(|| Mutex::new(IndexMap::new()))
 }
 
 const MAX_SESSION_MEMORY_STATES: usize = 100;
@@ -75,9 +76,7 @@ pub(crate) async fn session_memory_state_for_session(
 ) -> Arc<parking_lot::Mutex<SessionMemoryRuntimeState>> {
     let mut states = session_memory_states().lock().await;
     if !states.contains_key(&session_id) && states.len() >= MAX_SESSION_MEMORY_STATES {
-        if let Some(old_key) = states.keys().next().copied() {
-            states.remove(&old_key);
-        }
+        states.shift_remove_index(0);
     }
     states
         .entry(session_id)
@@ -88,11 +87,15 @@ pub(crate) async fn session_memory_state_for_session(
 #[derive(Clone, Debug)]
 struct SessionMemoryPermissionBroker {
     summary_path: PathBuf,
+    canonical_summary_path: Arc<OnceLock<PathBuf>>,
 }
 
 impl SessionMemoryPermissionBroker {
     fn new(summary_path: PathBuf) -> Self {
-        Self { summary_path }
+        Self {
+            summary_path,
+            canonical_summary_path: Arc::new(OnceLock::new()),
+        }
     }
 
     fn is_exact_summary_path(&self, candidate: &Path) -> bool {
@@ -100,10 +103,13 @@ impl SessionMemoryPermissionBroker {
             .canonicalize()
             .unwrap_or_else(|_| candidate.to_path_buf());
         let summary_path = self
-            .summary_path
-            .canonicalize()
-            .unwrap_or_else(|_| self.summary_path.clone());
-        candidate == summary_path
+            .canonical_summary_path
+            .get_or_init(|| {
+                self.summary_path
+                    .canonicalize()
+                    .unwrap_or_else(|_| self.summary_path.clone())
+            });
+        candidate == *summary_path
     }
 }
 

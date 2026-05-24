@@ -696,7 +696,7 @@ fn emit_prompt_stream_event<W: Write>(
 
 async fn forward_prompt_stream_events<W: Write + Send + 'static>(
     emitter: Arc<Mutex<ProtocolEmitter<W>>>,
-    mut event_rx: mpsc::UnboundedReceiver<PromptStreamEvent>,
+    mut event_rx: mpsc::Receiver<PromptStreamEvent>,
 ) -> Result<()> {
     while let Some(event) = event_rx.recv().await {
         let mut emitter = emitter.lock().await;
@@ -718,11 +718,11 @@ async fn run_headless_prompt_once<W: Write + Send + 'static>(
     conversation: &mut Vec<claude_core::ConversationEntry>,
     prompt: &str,
 ) -> Result<()> {
-    let (event_tx, event_rx) = mpsc::unbounded_channel::<PromptStreamEvent>();
+    let (event_tx, event_rx) = mpsc::channel::<PromptStreamEvent>(256);
     let forwarder = tokio::spawn(forward_prompt_stream_events(Arc::clone(&emitter), event_rx));
     let sink_tx = event_tx.clone();
     let event_sink: PromptEventSink = Arc::new(move |event| {
-        let _ = sink_tx.send(event);
+        let _ = sink_tx.try_send(event);
     });
 
     let started = Instant::now();

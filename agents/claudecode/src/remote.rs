@@ -215,7 +215,13 @@ pub(crate) async fn remote_get_json<T>(base_url: &str, path: &str) -> Result<T>
 where
     T: serde::de::DeserializeOwned,
 {
-    let client = SHARED_CLIENT.get_or_init(Client::new);
+    let client = SHARED_CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .pool_max_idle_per_host(4)
+            .pool_idle_timeout(std::time::Duration::from_secs(90))
+            .build()
+            .unwrap_or_default()
+    });
     let response = authorize_remote_request(client.get(build_remote_http_url(base_url, path)?))
         .send()
         .await?;
@@ -223,7 +229,13 @@ where
 }
 
 pub(crate) async fn remote_get_bytes(base_url: &str, path: &str) -> Result<Vec<u8>> {
-    let client = SHARED_CLIENT.get_or_init(Client::new);
+    let client = SHARED_CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .pool_max_idle_per_host(4)
+            .pool_idle_timeout(std::time::Duration::from_secs(90))
+            .build()
+            .unwrap_or_default()
+    });
     let response = authorize_remote_request(client.get(build_remote_http_url(base_url, path)?))
         .send()
         .await?;
@@ -253,7 +265,13 @@ where
     I: serde::Serialize,
     O: serde::de::DeserializeOwned,
 {
-    let client = SHARED_CLIENT.get_or_init(Client::new);
+    let client = SHARED_CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .pool_max_idle_per_host(4)
+            .pool_idle_timeout(std::time::Duration::from_secs(90))
+            .build()
+            .unwrap_or_default()
+    });
     let response = authorize_remote_request(client.post(build_remote_http_url(base_url, path)?))
         .json(input)
         .send()
