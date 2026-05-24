@@ -729,7 +729,7 @@ pub fn run_branch(_config: &RuntimeConfig, command: BranchCommand) -> Result<()>
             }
         }
         BranchCommand::Create { name, start_point } => {
-            let mut args = vec!["branch", &name];
+            let mut args = vec!["branch", "--", &name];
             if let Some(sp) = &start_point {
                 args.push(sp);
             }
@@ -746,7 +746,7 @@ pub fn run_branch(_config: &RuntimeConfig, command: BranchCommand) -> Result<()>
         }
         BranchCommand::Switch { name } => {
             let output = std::process::Command::new("git")
-                .args(["checkout", &name])
+                .args(["checkout", "--", &name])
                 .output()
                 .map_err(|e| anyhow!("git checkout failed: {e}"))?;
             if output.status.success() {
@@ -763,6 +763,7 @@ pub fn run_branch(_config: &RuntimeConfig, command: BranchCommand) -> Result<()>
             } else {
                 args.push("-d");
             }
+            args.push("--");
             args.push(&name);
             let output = std::process::Command::new("git")
                 .args(&args)

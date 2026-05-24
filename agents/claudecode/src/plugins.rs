@@ -267,6 +267,16 @@ async fn run_plugins_validate(config: &RuntimeConfig, args: PluginsValidateArgs)
     Ok(())
 }
 
+/// Reject plugin/skill names that contain path traversal sequences.
+fn sanitize_plugin_name(name: &str) -> Result<()> {
+    if name.contains("..") || name.contains('/') || name.contains('\\') {
+        return Err(anyhow!(
+            "Plugin name `{name}` contains invalid path characters"
+        ));
+    }
+    Ok(())
+}
+
 fn run_plugins_install(config: &RuntimeConfig, args: PluginsInstallArgs) -> Result<()> {
     let plugin = claude_plugins::load_plugin_from_root(&args.path)?;
     let validation = claude_plugins::validate_plugin_bundle(&plugin);
@@ -277,7 +287,24 @@ fn run_plugins_install(config: &RuntimeConfig, args: PluginsInstallArgs) -> Resu
         ));
     }
 
+    sanitize_plugin_name(&plugin.manifest.name)?;
+
     let destination = config.paths.plugins_dir.join(&plugin.manifest.name);
+    // Canonicalize to prevent path traversal via symlinks or ../ sequences
+    let canonical_plugins_dir = config
+        .paths
+        .plugins_dir
+        .canonicalize()
+        .unwrap_or_else(|_| config.paths.plugins_dir.clone());
+    let canonical_destination = destination
+        .canonicalize()
+        .unwrap_or_else(|_| destination.clone());
+    if !canonical_destination.starts_with(&canonical_plugins_dir) {
+        return Err(anyhow!(
+            "Refusing to install plugin outside {}",
+            config.paths.plugins_dir.display()
+        ));
+    }
     if destination.exists() {
         if !args.force {
             return Err(anyhow!(
@@ -319,6 +346,7 @@ fn run_plugins_install(config: &RuntimeConfig, args: PluginsInstallArgs) -> Resu
 }
 
 fn run_plugins_remove(config: &RuntimeConfig, args: PluginsRemoveArgs) -> Result<()> {
+    sanitize_plugin_name(&args.plugin)?;
     let destination = config.paths.plugins_dir.join(&args.plugin);
     if !destination.exists() {
         if args.if_exists {
@@ -331,7 +359,15 @@ fn run_plugins_remove(config: &RuntimeConfig, args: PluginsRemoveArgs) -> Result
             config.paths.plugins_dir.display()
         ));
     }
-    if !destination.starts_with(&config.paths.plugins_dir) {
+    let canonical_plugins_dir = config
+        .paths
+        .plugins_dir
+        .canonicalize()
+        .unwrap_or_else(|_| config.paths.plugins_dir.clone());
+    let canonical_destination = destination
+        .canonicalize()
+        .unwrap_or_else(|_| destination.clone());
+    if !canonical_destination.starts_with(&canonical_plugins_dir) {
         return Err(anyhow!(
             "Refusing to remove plugin outside {}",
             config.paths.plugins_dir.display()
@@ -359,6 +395,7 @@ fn run_plugins_toggle(
     args: PluginsToggleArgs,
     enabled: bool,
 ) -> Result<()> {
+    sanitize_plugin_name(&args.plugin)?;
     let destination = config.paths.plugins_dir.join(&args.plugin);
     if !destination.exists() {
         if args.if_exists {
@@ -382,7 +419,15 @@ fn run_plugins_toggle(
             config.paths.plugins_dir.display()
         ));
     }
-    if !destination.starts_with(&config.paths.plugins_dir) {
+    let canonical_plugins_dir = config
+        .paths
+        .plugins_dir
+        .canonicalize()
+        .unwrap_or_else(|_| config.paths.plugins_dir.clone());
+    let canonical_destination = destination
+        .canonicalize()
+        .unwrap_or_else(|_| destination.clone());
+    if !canonical_destination.starts_with(&canonical_plugins_dir) {
         return Err(anyhow!(
             "Refusing to mutate plugin outside {}",
             config.paths.plugins_dir.display()
@@ -440,17 +485,27 @@ fn run_plugins_update(config: &RuntimeConfig, args: PluginsUpdateArgs) -> Result
         ));
     }
 
+    sanitize_plugin_name(&plugin.manifest.name)?;
+
     let destination = config.paths.plugins_dir.join(&plugin.manifest.name);
+    let canonical_plugins_dir = config
+        .paths
+        .plugins_dir
+        .canonicalize()
+        .unwrap_or_else(|_| config.paths.plugins_dir.clone());
+    let canonical_destination = destination
+        .canonicalize()
+        .unwrap_or_else(|_| destination.clone());
+    if !canonical_destination.starts_with(&canonical_plugins_dir) {
+        return Err(anyhow!(
+            "Refusing to update plugin outside {}",
+            config.paths.plugins_dir.display()
+        ));
+    }
     if !destination.exists() {
         return Err(anyhow!(
             "Plugin {} is not installed in {}; use `plugins install` first",
             plugin.manifest.name,
-            config.paths.plugins_dir.display()
-        ));
-    }
-    if !destination.starts_with(&config.paths.plugins_dir) {
-        return Err(anyhow!(
-            "Refusing to update plugin outside {}",
             config.paths.plugins_dir.display()
         ));
     }
@@ -898,13 +953,46 @@ fn build_plugins_validate_output(
 }
 
 fn copy_dir_recursive(source: &Path, destination: &Path) -> Result<()> {
+    let canonical_source = source
+        .canonicalize()
+        .map_err(|e| anyhow!("Failed to canonicalize source {}: {e}", source.display()))?;
+
     fs::create_dir_all(destination)?;
     for entry in fs::read_dir(source)? {
         let entry = entry?;
         let source_path = entry.path();
         let destination_path = destination.join(entry.file_name());
         let file_type = entry.file_type()?;
-        if file_type.is_dir() {
+
+        if file_type.is_symlink() {
+            // Validate that symlink target does not escape the source tree
+            let link_target = std::fs::read_link(&source_path)?;
+            let resolved = if link_target.is_absolute() {
+                link_target
+            } else {
+                source_path
+                    .parent()
+                    .map(|p| p.join(&link_target))
+                    .unwrap_or_else(|| link_target.clone())
+            };
+            let canonical_target = resolved
+                .canonicalize()
+                .map_err(|e| anyhow!("Symlink target {resolved:?} cannot be resolved: {e}"))?;
+            if !canonical_target.starts_with(&canonical_source) {
+                return Err(anyhow!(
+                    "Symlink at {} escapes source directory (points to {})",
+                    source_path.display(),
+                    canonical_target.display()
+                ));
+            }
+            // Copy the file the symlink points to (dereference)
+            let meta = std::fs::metadata(&source_path)?;
+            if meta.is_dir() {
+                copy_dir_recursive(&source_path, &destination_path)?;
+            } else if meta.is_file() {
+                fs::copy(&source_path, &destination_path)?;
+            }
+        } else if file_type.is_dir() {
             copy_dir_recursive(&source_path, &destination_path)?;
         } else if file_type.is_file() {
             fs::copy(&source_path, &destination_path)?;

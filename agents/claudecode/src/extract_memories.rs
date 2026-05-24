@@ -247,11 +247,13 @@ async fn maybe_extract_memories_after_prompt_inner(
         let should_continue = match run_result {
             Ok(should_continue) => should_continue,
             Err(error) => {
-                let _ = store.append_named_event(
+                if let Err(e) = store.append_named_event(
                     config.session_id,
                     "tengu_extract_memories_error",
                     json!({ "error": error.to_string() }),
-                );
+                ) {
+                    tracing::warn!("extract_memories: failed to append error event: {e}");
+                }
                 let mut states = extraction_state_map().lock().await;
                 let state = states.entry(session_id).or_default();
                 state.in_progress = false;
