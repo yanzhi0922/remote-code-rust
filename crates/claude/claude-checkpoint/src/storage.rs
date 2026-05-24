@@ -279,7 +279,12 @@ impl CheckpointStore {
                 "created" => FileOperation::Created,
                 "modified" => FileOperation::Modified,
                 "deleted" => FileOperation::Deleted,
-                _ => FileOperation::Modified,
+                other => {
+                    tracing::warn!(
+                        "unknown file operation '{other}' in checkpoint, defaulting to Modified"
+                    );
+                    FileOperation::Modified
+                }
             };
             Ok(FileChange {
                 path: row.get(0)?,

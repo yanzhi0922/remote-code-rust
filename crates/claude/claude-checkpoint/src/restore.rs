@@ -3,6 +3,7 @@
 //! Supports undo (revert last interaction) and restore (jump to any checkpoint).
 
 use anyhow::{Result, bail};
+use std::io::Write;
 use std::path::PathBuf;
 
 use crate::storage::CheckpointStore;
@@ -121,7 +122,7 @@ impl RestoreEngine {
                             if let Some(parent) = file_path.parent() {
                                 std::fs::create_dir_all(parent)?;
                             }
-                            std::fs::write(&file_path, &content)?;
+                            atomic_write(&file_path, &content)?;
                             files_restored.push(FileRestore {
                                 path: change.path.clone(),
                                 operation: RestoreOperation::FileRecreated,
@@ -132,7 +133,7 @@ impl RestoreEngine {
                 FileOperation::Modified => {
                     if let Some(hash) = &change.hash_before {
                         if let Some(content) = self.store.get_cached_content(hash)? {
-                            std::fs::write(&file_path, &content)?;
+                            atomic_write(&file_path, &content)?;
                             files_restored.push(FileRestore {
                                 path: change.path.clone(),
                                 operation: RestoreOperation::ContentRestored,
@@ -174,6 +175,18 @@ impl RestoreEngine {
 
         Ok(preview)
     }
+}
+
+/// Write data to a file atomically: write to a temp file in the same
+/// directory, then rename into place. This avoids leaving a partially-
+/// written file if the process crashes mid-write.
+fn atomic_write(path: &std::path::Path, data: &[u8]) -> Result<()> {
+    let parent = path.parent().unwrap_or(std::path::Path::new("."));
+    let mut tmp = tempfile::NamedTempFile::new_in(parent)?;
+    tmp.write_all(data)?;
+    tmp.flush()?;
+    tmp.persist(path)?;
+    Ok(())
 }
 
 #[cfg(test)]
