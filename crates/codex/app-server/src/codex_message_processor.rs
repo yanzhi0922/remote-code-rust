@@ -4714,7 +4714,7 @@ impl CodexMessageProcessor {
                     include_turns: !params.exclude_turns,
                 }),
             );
-            if listener_command_tx.send(command).is_err() {
+            if listener_command_tx.try_send(command).is_err() {
                 return Err(internal_error(format!(
                     "failed to enqueue running thread resume for thread {existing_thread_id}: thread listener command channel is closed"
                 )));

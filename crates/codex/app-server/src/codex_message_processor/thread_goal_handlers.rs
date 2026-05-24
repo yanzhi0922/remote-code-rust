@@ -376,7 +376,7 @@ impl CodexMessageProcessor {
             let command = crate::thread_state::ThreadListenerCommand::EmitThreadGoalSnapshot {
                 state_db: state_db.clone(),
             };
-            if listener_command_tx.send(command).is_ok() {
+            if listener_command_tx.try_send(command).is_ok() {
                 return;
             }
             warn!(
@@ -390,13 +390,13 @@ impl CodexMessageProcessor {
         &self,
         thread_id: ThreadId,
         goal: ThreadGoal,
-        listener_command_tx: Option<tokio::sync::mpsc::UnboundedSender<ThreadListenerCommand>>,
+        listener_command_tx: Option<tokio::sync::mpsc::Sender<ThreadListenerCommand>>,
     ) {
         if let Some(listener_command_tx) = listener_command_tx {
             let command = crate::thread_state::ThreadListenerCommand::EmitThreadGoalUpdated {
                 goal: goal.clone(),
             };
-            if listener_command_tx.send(command).is_ok() {
+            if listener_command_tx.try_send(command).is_ok() {
                 return;
             }
             warn!(
@@ -417,11 +417,11 @@ impl CodexMessageProcessor {
     async fn emit_thread_goal_cleared_ordered(
         &self,
         thread_id: ThreadId,
-        listener_command_tx: Option<tokio::sync::mpsc::UnboundedSender<ThreadListenerCommand>>,
+        listener_command_tx: Option<tokio::sync::mpsc::Sender<ThreadListenerCommand>>,
     ) {
         if let Some(listener_command_tx) = listener_command_tx {
             let command = crate::thread_state::ThreadListenerCommand::EmitThreadGoalCleared;
-            if listener_command_tx.send(command).is_ok() {
+            if listener_command_tx.try_send(command).is_ok() {
                 return;
             }
             warn!(

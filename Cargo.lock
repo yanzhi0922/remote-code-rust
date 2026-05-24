@@ -2996,6 +2996,7 @@ name = "codex-analytics"
 version = "0.1.0"
 dependencies = [
  "codex-app-server-protocol",
+ "codex-client",
  "codex-git-utils",
  "codex-login",
  "codex-model-provider",
@@ -3342,6 +3343,7 @@ dependencies = [
  "anyhow",
  "clap",
  "codex-app-server-protocol",
+ "codex-client",
  "codex-connectors",
  "codex-core",
  "codex-core-plugins",

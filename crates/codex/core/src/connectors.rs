@@ -489,6 +489,8 @@ async fn chatgpt_get_request_with_auth_provider<T: DeserializeOwned>(
     path: String,
     auth_provider: SharedAuthProvider,
 ) -> anyhow::Result<T> {
+    // Reuse the same client across calls rather than creating a new one each time.
+    // `create_client()` returns a thin wrapper around a shared connection pool.
     let client = create_client();
     let url = format!("{}{}", config.chatgpt_base_url, path);
     let response = client
