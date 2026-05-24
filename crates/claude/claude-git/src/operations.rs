@@ -2,8 +2,26 @@
 
 use anyhow::Result;
 use std::path::{Path, PathBuf};
+use std::process::Stdio;
 
 use crate::*;
+
+/// Run a git subprocess and return its output.
+///
+/// All git commands are spawned with stdin set to `/dev/null` to prevent
+/// credential prompts or interactive prompts from blocking the process.
+///
+/// TODO: Add a wall-clock timeout (e.g. 30 s) using a watchdog thread so
+/// that hung git processes cannot block the agent indefinitely.
+fn git_command(args: &[&str], cwd: &Path) -> std::process::Command {
+    let mut cmd = std::process::Command::new("git");
+    cmd.args(args)
+        .current_dir(cwd)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    cmd
+}
 
 /// High-level Git operations.
 pub struct GitOperations {
@@ -14,9 +32,7 @@ impl GitOperations {
     /// Open a Git repository at the given path.
     pub fn open(repo_path: impl Into<PathBuf>) -> Result<Self> {
         let path = repo_path.into();
-        if let Ok(output) = std::process::Command::new("git")
-            .args(["rev-parse", "--show-toplevel"])
-            .current_dir(&path)
+        if let Ok(output) = git_command(&["rev-parse", "--show-toplevel"], &path)
             .output()
         {
             if output.status.success() {
@@ -71,9 +87,7 @@ impl GitOperations {
         let branch = self.current_branch()?;
 
         // Use git command for reliable status output
-        let output = std::process::Command::new("git")
-            .args(["status", "--porcelain=v1", "--branch"])
-            .current_dir(&self.repo_path)
+        let output = git_command(&["status", "--porcelain=v1", "--branch"], &self.repo_path)
             .output()?;
 
         if !output.status.success() {
@@ -166,8 +180,7 @@ impl GitOperations {
 
     /// Stage files for commit.
     pub fn stage(&self, paths: &[&str]) -> Result<()> {
-        let mut cmd = std::process::Command::new("git");
-        cmd.arg("add").arg("--").current_dir(&self.repo_path);
+        let mut cmd = git_command(&["add", "--"], &self.repo_path);
         for path in paths {
             cmd.arg(path);
         }
@@ -183,11 +196,7 @@ impl GitOperations {
 
     /// Unstage files.
     pub fn unstage(&self, paths: &[&str]) -> Result<()> {
-        let mut cmd = std::process::Command::new("git");
-        cmd.arg("reset")
-            .arg("HEAD")
-            .arg("--")
-            .current_dir(&self.repo_path);
+        let mut cmd = git_command(&["reset", "HEAD", "--"], &self.repo_path);
         for path in paths {
             cmd.arg(path);
         }
@@ -203,9 +212,7 @@ impl GitOperations {
 
     /// Create a commit.
     pub fn commit(&self, message: &str) -> Result<CommitResult> {
-        let output = std::process::Command::new("git")
-            .args(["commit", "-m", message])
-            .current_dir(&self.repo_path)
+        let output = git_command(&["commit", "-m", message], &self.repo_path)
             .output()?;
 
         if !output.status.success() {
@@ -215,9 +222,7 @@ impl GitOperations {
             ));
         }
 
-        let hash_output = std::process::Command::new("git")
-            .args(["rev-parse", "HEAD"])
-            .current_dir(&self.repo_path)
+        let hash_output = git_command(&["rev-parse", "HEAD"], &self.repo_path)
             .output()?;
         if !hash_output.status.success() {
             return Err(anyhow::anyhow!(
@@ -241,9 +246,7 @@ impl GitOperations {
 
     /// List branches.
     pub fn branches(&self) -> Result<Vec<BranchInfo>> {
-        let output = std::process::Command::new("git")
-            .args(["branch", "-a", "--no-color"])
-            .current_dir(&self.repo_path)
+        let output = git_command(&["branch", "-a", "--no-color"], &self.repo_path)
             .output()?;
 
         if !output.status.success() {
@@ -290,9 +293,7 @@ impl GitOperations {
             return Err(anyhow::anyhow!("invalid branch name"));
         }
 
-        let output = std::process::Command::new("git")
-            .args(["checkout", name])
-            .current_dir(&self.repo_path)
+        let output = git_command(&["checkout", name], &self.repo_path)
             .output()?;
 
         if !output.status.success() {
@@ -306,14 +307,15 @@ impl GitOperations {
 
     /// Get commit history.
     pub fn log(&self, max_count: usize) -> Result<Vec<CommitInfo>> {
-        let output = std::process::Command::new("git")
-            .args([
+        let output = git_command(
+            &[
                 "log",
                 &format!("--max-count={max_count}"),
                 "--format=%H|%h|%an|%ae|%s|%ct",
-            ])
-            .current_dir(&self.repo_path)
-            .output()?;
+            ],
+            &self.repo_path,
+        )
+        .output()?;
 
         if !output.status.success() {
             return Err(anyhow::anyhow!(
@@ -360,10 +362,7 @@ impl GitOperations {
     }
 
     fn run_diff(&self, args: &[&str]) -> Result<Vec<GitDiff>> {
-        let output = std::process::Command::new("git")
-            .args(args)
-            .current_dir(&self.repo_path)
-            .output()?;
+        let output = git_command(args, &self.repo_path).output()?;
 
         if !output.status.success() {
             return Ok(vec![]);
