@@ -77,6 +77,10 @@ pub(crate) async fn repl_tool(input: &Value, context: &ToolExecutionContext) -> 
         "python" => ("python", "-c"),
         "node" => ("node", "-e"),
         "rust" => {
+            // WARNING: The Rust REPL compiles and executes native code with no
+            // sandboxing.  This means arbitrary code can access the filesystem,
+            // network, and OS resources.  A future improvement should sandbox
+            // execution (e.g. via WASM, a container, or seccomp).
             let tmp_dir = context.cwd.join(".remote-code-rust").join("tmp");
             std::fs::create_dir_all(&tmp_dir)?;
             let src_path = tmp_dir.join("repl_tmp.rs");
@@ -98,13 +102,29 @@ pub(crate) async fn repl_tool(input: &Value, context: &ToolExecutionContext) -> 
                 ));
             }
 
-            let run_output = Command::new(tmp_dir.join("repl_tmp"))
-                .current_dir(&context.cwd)
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .output()
-                .await?;
-            return Ok(String::from_utf8_lossy(&run_output.stdout).to_string());
+            // Wrap the compiled binary execution in a 60-second timeout so a
+            // long-running or hung program cannot stall the REPL indefinitely.
+            let run_result = tokio::time::timeout(
+                std::time::Duration::from_secs(60),
+                Command::new(tmp_dir.join("repl_tmp"))
+                    .current_dir(&context.cwd)
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped())
+                    .output(),
+            )
+            .await;
+
+            match run_result {
+                Ok(Ok(output)) => {
+                    return Ok(String::from_utf8_lossy(&output.stdout).to_string());
+                }
+                Ok(Err(e)) => {
+                    return Ok(format!("Execution error: {e}"));
+                }
+                Err(_) => {
+                    return Ok("Rust REPL execution timed out after 60 seconds.".to_owned());
+                }
+            }
         }
         _ => {
             return Err(anyhow!(

@@ -373,7 +373,10 @@ fn compute_lcs(old: &[&str], new: &[&str]) -> Vec<(usize, usize)> {
     }
 
     // For very large files, use a simplified approach to avoid excessive memory use.
-    if m > 10000 || n > 10000 {
+    // The full LCS algorithm allocates O(m*n) direction bits which can exhaust
+    // memory for files over ~5000 lines.  The simple greedy fallback produces
+    // a slightly less optimal diff but keeps memory bounded.
+    if m > 5000 || n > 5000 {
         return compute_lcs_simple(old, new);
     }
 

@@ -87,11 +87,22 @@ pub(crate) async fn web_fetch(input: &Value, _context: &ToolExecutionContext) ->
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow!("web_fetch requires a prompt"))?;
 
-    // Build a client that follows up to 10 redirects (the same limit the
-    // default client uses) so we can compare the final URL's host against
-    // the original and report cross-host redirects to the caller.
+    // Build a client with a custom redirect policy that validates every
+    // intermediate redirect URL through the same SSRF checks applied to the
+    // initial request.  This prevents an attacker from bypassing validation
+    // via an open redirect to a private/internal IP.
     let client = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::limited(10))
+        .redirect(reqwest::redirect::Policy::custom(|attempt| {
+            // Validate each redirect URL through the same SSRF protection.
+            if let Err(e) = validate_url(attempt.url().as_str()) {
+                tracing::warn!("Blocking redirect to {}: {e}", attempt.url());
+                return attempt.stop();
+            }
+            if attempt.previous().len() >= 10 {
+                return attempt.stop();
+            }
+            attempt.follow()
+        }))
         .build()
         .context("failed to build HTTP client for web_fetch")?;
 
@@ -226,6 +237,17 @@ pub(crate) async fn web_search(input: &Value, _context: &ToolExecutionContext) -
         .get("query")
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow!("web_search requires a query"))?;
+
+    // Limit query length to prevent excessively long search requests that
+    // could be abused or produce unwieldy results.
+    const MAX_QUERY_LENGTH: usize = 500;
+    if query.len() > MAX_QUERY_LENGTH {
+        return Err(anyhow!(
+            "Search query too long ({} chars, maximum {})",
+            query.len(),
+            MAX_QUERY_LENGTH
+        ));
+    }
     let allowed_domains: Vec<String> = input
         .get("allowed_domains")
         .and_then(Value::as_array)
