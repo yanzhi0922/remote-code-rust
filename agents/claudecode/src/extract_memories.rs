@@ -62,6 +62,7 @@ struct ExtractMemoriesState {
 
 static EXTRACT_MEMORY_STATE: OnceLock<Mutex<HashMap<Uuid, ExtractMemoriesState>>> = OnceLock::new();
 static IN_FLIGHT_EXTRACTIONS: OnceLock<AtomicUsize> = OnceLock::new();
+static EXTRACTION_NOTIFY: OnceLock<tokio::sync::Notify> = OnceLock::new();
 
 fn extraction_state_map() -> &'static Mutex<HashMap<Uuid, ExtractMemoriesState>> {
     EXTRACT_MEMORY_STATE.get_or_init(|| Mutex::new(HashMap::new()))
@@ -69,6 +70,20 @@ fn extraction_state_map() -> &'static Mutex<HashMap<Uuid, ExtractMemoriesState>>
 
 fn in_flight_extractions() -> &'static AtomicUsize {
     IN_FLIGHT_EXTRACTIONS.get_or_init(|| AtomicUsize::new(0))
+}
+
+fn extraction_notify() -> &'static tokio::sync::Notify {
+    EXTRACTION_NOTIFY.get_or_init(tokio::sync::Notify::new)
+}
+
+const MAX_EXTRACTION_STATES: usize = 100;
+
+fn evict_oldest_if_needed(map: &mut HashMap<Uuid, ExtractMemoriesState>) {
+    if map.len() >= MAX_EXTRACTION_STATES {
+        if let Some(old_key) = map.keys().next().copied() {
+            map.remove(&old_key);
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -171,6 +186,7 @@ pub(crate) fn spawn_extract_memories_after_turn(
     tokio::spawn(async move {
         let Ok(store) = SessionStore::open(config.paths.clone()) else {
             in_flight.fetch_sub(1, Ordering::SeqCst);
+            extraction_notify().notify_one();
             return;
         };
         let _ = maybe_extract_memories_after_prompt_inner(
@@ -184,6 +200,7 @@ pub(crate) fn spawn_extract_memories_after_turn(
         )
         .await;
         in_flight.fetch_sub(1, Ordering::SeqCst);
+        extraction_notify().notify_one();
     });
 }
 
@@ -204,6 +221,7 @@ async fn maybe_extract_memories_after_prompt_inner(
 
     {
         let mut states = extraction_state_map().lock().await;
+        evict_oldest_if_needed(&mut states);
         let state = states.entry(session_id).or_default();
         if state.in_progress {
             state.pending_context = Some(PendingExtractionContext {
@@ -285,10 +303,18 @@ pub(crate) async fn drain_pending_extractions(timeout: Duration) {
         if in_flight_extractions().load(Ordering::SeqCst) == 0 {
             break;
         }
-        if started.elapsed() >= timeout {
+        let remaining = timeout.saturating_sub(started.elapsed());
+        if remaining.is_zero() {
             break;
         }
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        tokio::select! {
+            _ = tokio::time::sleep(remaining) => break,
+            _ = extraction_notify().notified() => {
+                if in_flight_extractions().load(Ordering::SeqCst) == 0 {
+                    break;
+                }
+            }
+        }
     }
 }
 

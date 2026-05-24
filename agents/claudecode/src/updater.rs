@@ -1,10 +1,25 @@
 //! Auto-updater that checks GitHub Releases for new versions.
 
+use std::sync::OnceLock;
+
 use anyhow::{Context, Result, anyhow};
 use sha2::{Digest, Sha256};
 use serde::Deserialize;
 
 use crate::doctor::install::{InstallSourceKind, detect_install_source, release_repository_slug};
+
+static UPDATER_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+
+fn shared_client() -> &'static reqwest::Client {
+    UPDATER_CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .user_agent("remote-code-rust-updater")
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .pool_idle_timeout(std::time::Duration::from_secs(90))
+            .build()
+            .unwrap_or_default()
+    })
+}
 
 #[derive(Debug, Deserialize)]
 struct GitHubRelease {
@@ -47,11 +62,7 @@ pub async fn check_for_update() -> Result<UpdateCheckResult> {
     })?;
     let release_url = latest_release_api_url(&repository);
 
-    let client = reqwest::Client::builder()
-        .user_agent("remote-code-rust-updater")
-        .build()?;
-
-    let response = client
+    let response = shared_client()
         .get(&release_url)
         .send()
         .await
@@ -137,11 +148,7 @@ pub async fn run_update() -> Result<()> {
 
     println!("Downloading {}...", result.latest_version);
 
-    let client = reqwest::Client::builder()
-        .user_agent("remote-code-rust-updater")
-        .build()?;
-
-    let response = client
+    let response = shared_client()
         .get(&download_url)
         .send()
         .await

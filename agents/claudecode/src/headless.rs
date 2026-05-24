@@ -885,10 +885,10 @@ impl ChannelPermissionFallbackBroker {
     async fn prompt(&self, request: PermissionRequest) -> PermissionDecision {
         let request_id = Uuid::new_v4().to_string();
         let (tx, rx) = oneshot::channel();
-        self.pending_permissions
-            .lock()
-            .await
-            .insert(request_id.clone(), tx);
+        {
+            let mut pending_guard = self.pending_permissions.lock().await;
+            pending_guard.insert(request_id.clone(), tx);
+        }
         {
             let mut emitter = self.emitter.lock().await;
             if let Err(error) = emitter.emit_state(SessionState::RequiresAction) {

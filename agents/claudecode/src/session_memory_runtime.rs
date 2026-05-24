@@ -64,6 +64,8 @@ fn session_memory_states()
     SESSION_MEMORY_STATES.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+const MAX_SESSION_MEMORY_STATES: usize = 100;
+
 fn growthbook_client() -> &'static GrowthBookClient {
     SESSION_MEMORY_GROWTHBOOK.get_or_init(GrowthBookClient::with_defaults)
 }
@@ -72,6 +74,11 @@ pub(crate) async fn session_memory_state_for_session(
     session_id: Uuid,
 ) -> Arc<parking_lot::Mutex<SessionMemoryRuntimeState>> {
     let mut states = session_memory_states().lock().await;
+    if !states.contains_key(&session_id) && states.len() >= MAX_SESSION_MEMORY_STATES {
+        if let Some(old_key) = states.keys().next().copied() {
+            states.remove(&old_key);
+        }
+    }
     states
         .entry(session_id)
         .or_insert_with(|| Arc::new(parking_lot::Mutex::new(SessionMemoryRuntimeState::default())))

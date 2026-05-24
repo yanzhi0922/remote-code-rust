@@ -41,9 +41,15 @@ pub(crate) fn run_review(config: &RuntimeConfig, args: ReviewArgs) -> Result<()>
 
 fn build_review_output(config: &RuntimeConfig) -> Result<Value> {
     let context = ToolExecutionContext::from_runtime_config(config);
-    let payload = tokio::task::block_in_place(|| {
-        tokio::runtime::Handle::current().block_on(git::suggest_pr_tool(&context))
-    })?;
+    let payload = match tokio::runtime::Handle::try_current() {
+        Ok(handle) => {
+            tokio::task::block_in_place(|| handle.block_on(git::suggest_pr_tool(&context)))?
+        }
+        Err(_) => {
+            let rt = tokio::runtime::Runtime::new()?;
+            rt.block_on(git::suggest_pr_tool(&context))?
+        }
+    };
     Ok(serde_json::from_str(&payload)?)
 }
 

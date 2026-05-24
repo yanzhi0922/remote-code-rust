@@ -845,7 +845,7 @@ pub fn wrap_permission_broker_with_hooks(
     let state = HookRunState::load(&store, config.session_id).unwrap_or_default();
     Arc::new(HookAwarePermissionBroker {
         inner: broker,
-        discovery: discovery.clone(),
+        discovery: Arc::new(discovery.clone()),
         config: config.clone(),
         store,
         state: Mutex::new(state),
@@ -855,7 +855,7 @@ pub fn wrap_permission_broker_with_hooks(
 
 struct HookAwarePermissionBroker {
     inner: Arc<dyn PermissionBroker>,
-    discovery: RuntimeHookDiscovery,
+    discovery: Arc<RuntimeHookDiscovery>,
     config: RuntimeConfig,
     store: SessionStore,
     state: Mutex<HookRunState>,
@@ -864,24 +864,29 @@ struct HookAwarePermissionBroker {
 
 #[async_trait]
 impl PermissionBroker for HookAwarePermissionBroker {
-    // TODO(concurrency): The `state` mutex is held across the entire
-    // `apply_permission_request_hooks` call, which may spawn subprocesses for
-    // hook execution.  Consider cloning the necessary state and releasing the
-    // lock before the subprocess call, then re-acquiring it to write back any
-    // updates.  This would allow concurrent permission decisions to proceed
-    // without waiting for hook subprocess completion.
     async fn decide(&self, request: PermissionRequest) -> PermissionDecision {
         let hook_result = {
             let mut state = self.state.lock().await;
-            apply_permission_request_hooks(
+            let consumed_once = state.consumed_once_hooks.clone();
+            let session_start_done = state.session_start_completed;
+            drop(state);
+            let mut local_state = HookRunState {
+                consumed_once_hooks: consumed_once,
+                session_start_completed: session_start_done,
+            };
+            let result = apply_permission_request_hooks(
                 &self.discovery,
                 &self.config,
                 &self.store,
-                &mut state,
+                &mut local_state,
                 &request,
                 self.options,
             )
-            .await
+            .await;
+            let mut state = self.state.lock().await;
+            state.consumed_once_hooks = local_state.consumed_once_hooks;
+            state.session_start_completed = local_state.session_start_completed;
+            result
         };
         match hook_result {
             Ok(Some(decision)) => decision,
@@ -893,15 +898,26 @@ impl PermissionBroker for HookAwarePermissionBroker {
     async fn decide_forced_prompt(&self, request: PermissionRequest) -> PermissionDecision {
         let hook_result = {
             let mut state = self.state.lock().await;
-            apply_permission_request_hooks(
+            let consumed_once = state.consumed_once_hooks.clone();
+            let session_start_done = state.session_start_completed;
+            drop(state);
+            let mut local_state = HookRunState {
+                consumed_once_hooks: consumed_once,
+                session_start_completed: session_start_done,
+            };
+            let result = apply_permission_request_hooks(
                 &self.discovery,
                 &self.config,
                 &self.store,
-                &mut state,
+                &mut local_state,
                 &request,
                 self.options,
             )
-            .await
+            .await;
+            let mut state = self.state.lock().await;
+            state.consumed_once_hooks = local_state.consumed_once_hooks;
+            state.session_start_completed = local_state.session_start_completed;
+            result
         };
         match hook_result {
             Ok(Some(decision)) => decision,
@@ -1179,6 +1195,11 @@ fn hook_display(hook_type: &str, object: Option<&serde_json::Map<String, Value>>
     }
 }
 
+/// Computes a deterministic hook ID from the given parts.
+///
+/// Note: This uses `DefaultHasher` which is intentionally non-cryptographic.
+/// The hash output may change across Rust versions, but this is acceptable
+/// because hook IDs only need to be consistent within a single session.
 fn stable_hook_id(parts: &[&str]) -> String {
     let mut hasher = DefaultHasher::new();
     for part in parts {
@@ -1203,23 +1224,21 @@ fn matches_hook_subject(matcher: Option<&str>, subject: &str) -> bool {
 fn wildcard_match(pattern: &str, candidate: &str) -> bool {
     let pattern = pattern.as_bytes();
     let candidate = candidate.as_bytes();
-    let mut dp = vec![vec![false; candidate.len() + 1]; pattern.len() + 1];
-    dp[0][0] = true;
+    let mut prev = vec![false; candidate.len() + 1];
+    let mut curr = vec![false; candidate.len() + 1];
+    prev[0] = true;
     for index in 0..pattern.len() {
-        if pattern[index] == b'*' {
-            dp[index + 1][0] = dp[index][0];
-        }
-    }
-    for i in 0..pattern.len() {
+        curr[0] = pattern[index] == b'*' && prev[0];
         for j in 0..candidate.len() {
-            dp[i + 1][j + 1] = match pattern[i] {
-                b'*' => dp[i][j + 1] || dp[i + 1][j],
-                b'?' => dp[i][j],
-                byte => dp[i][j] && byte == candidate[j],
+            curr[j + 1] = match pattern[index] {
+                b'*' => prev[j + 1] || curr[j],
+                b'?' => prev[j],
+                byte => prev[j] && byte == candidate[j],
             };
         }
+        std::mem::swap(&mut prev, &mut curr);
     }
-    dp[pattern.len()][candidate.len()]
+    prev[candidate.len()]
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1447,8 +1466,8 @@ fn parse_hook_response(stdout: &str) -> Option<HookResponse> {
     serde_json::from_str(trimmed).ok().or_else(|| {
         trimmed
             .lines()
-            .last()
-            .and_then(|line| serde_json::from_str(line.trim()).ok())
+            .rev()
+            .find_map(|line| serde_json::from_str(line.trim()).ok())
     })
 }
 

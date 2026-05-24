@@ -1181,6 +1181,13 @@ async fn run_remote_artifacts_download(args: RemoteArtifactDownloadArgs) -> Resu
     let artifact_path = format!("/v1/artifacts/{}", args.artifact_id);
     let artifact: RemoteArtifactRecord =
         remote_get_json(&control_plane_url, &artifact_path).await?;
+    const MAX_ARTIFACT_SIZE: u64 = 100 * 1024 * 1024; // 100 MB
+    if artifact.size_bytes > MAX_ARTIFACT_SIZE {
+        anyhow::bail!(
+            "Artifact download exceeds maximum size ({} bytes)",
+            MAX_ARTIFACT_SIZE
+        );
+    }
     let bytes = remote_get_bytes(
         &control_plane_url,
         &remote_artifact_download_path(args.artifact_id),
@@ -1222,6 +1229,17 @@ async fn run_remote_artifacts_download(args: RemoteArtifactDownloadArgs) -> Resu
 
 async fn run_remote_artifacts_upload(args: RemoteArtifactUploadArgs) -> Result<()> {
     let control_plane_url = require_control_plane_url(&args.target)?;
+    const MAX_ARTIFACT_SIZE: u64 = 100 * 1024 * 1024; // 100 MB
+    let metadata = tokio::fs::metadata(&args.file)
+        .await
+        .map_err(|error| anyhow!("failed to stat {}: {error}", args.file.display()))?;
+    if metadata.len() > MAX_ARTIFACT_SIZE {
+        anyhow::bail!(
+            "Artifact {} exceeds maximum upload size ({} bytes)",
+            args.file.display(),
+            MAX_ARTIFACT_SIZE
+        );
+    }
     let bytes = tokio::fs::read(&args.file)
         .await
         .map_err(|error| anyhow!("failed to read {}: {error}", args.file.display()))?;

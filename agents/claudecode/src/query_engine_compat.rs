@@ -85,6 +85,14 @@ use crate::repl_hook_runtime::{
     ReplHookRuntimeResources, apply_runtime_hook_context, register_repl_runtime_hooks,
 };
 use crate::session_memory_runtime::try_session_memory_compaction;
+/// Shared state for the compat query engine.
+///
+/// # Lock ordering invariant
+///
+/// When both `conversation` and `hook_state` must be locked simultaneously,
+/// `conversation` MUST ALWAYS be acquired before `hook_state` to prevent
+/// deadlock. All call sites in `CompatToolRunContext::run_tool` follow this
+/// order: conversation first, then hook_state.
 struct CompatSharedState {
     config: Mutex<RuntimeConfig>,
     conversation: Mutex<Vec<ConversationEntry>>,

@@ -1,7 +1,20 @@
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use reqwest::{Method, StatusCode};
 use serde::Serialize;
+
+static DOCTOR_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+
+fn shared_probe_client() -> &'static reqwest::Client {
+    DOCTOR_CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .user_agent("remote-code-rust-doctor")
+            .timeout(Duration::from_secs(10))
+            .build()
+            .unwrap_or_default()
+    })
+}
 
 #[derive(Debug, Clone)]
 pub(crate) struct ProbeSpec {
@@ -76,24 +89,7 @@ impl ProbeResult {
 }
 
 pub(crate) async fn run_probe(spec: ProbeSpec) -> ProbeResult {
-    let client = match reqwest::Client::builder()
-        .user_agent("remote-code-rust-doctor")
-        .timeout(Duration::from_secs(10))
-        .build()
-    {
-        Ok(client) => client,
-        Err(error) => {
-            return ProbeResult {
-                label: spec.label,
-                url: spec.url,
-                method: spec.method.as_str().to_owned(),
-                outcome: ProbeOutcomeKind::TransportError,
-                status_code: None,
-                latency_ms: 0,
-                detail: format!("failed to build HTTP client: {error}"),
-            };
-        }
-    };
+    let client = shared_probe_client();
 
     let start = Instant::now();
     let mut request = client.request(spec.method.clone(), &spec.url);
