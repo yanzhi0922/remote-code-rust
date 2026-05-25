@@ -10,6 +10,7 @@ use roo_ignore::RooIgnoreController;
 use roo_types::tool::SearchFilesParams;
 use std::path::Path;
 use std::process::Command;
+use std::sync::OnceLock;
 
 /// Validate search_files parameters.
 pub fn validate_search_files_params(params: &SearchFilesParams) -> Result<(), SearchToolError> {
@@ -62,15 +63,20 @@ fn validate_regex_detailed(pattern: &str) -> Result<regex::Regex, SearchToolErro
     })
 }
 
+static RG_AVAILABLE: OnceLock<bool> = OnceLock::new();
+
 /// Check if ripgrep (`rg`) is available on the system PATH.
+/// Result is cached after the first call.
 pub fn is_ripgrep_available() -> bool {
-    Command::new("rg")
-        .arg("--version")
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
+    *RG_AVAILABLE.get_or_init(|| {
+        Command::new("rg")
+            .arg("--version")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    })
 }
 
 /// Execute a file search, preferring ripgrep when available.
@@ -224,13 +230,9 @@ fn parse_ripgrep_output(output: &str) -> Result<Vec<FileMatch>, SearchToolError>
                     let (_, line_number, line_content, _) = &pending[mi];
 
                     // Context before: up to 2 preceding context lines
-                    let context_before: Vec<String> = (0..mi)
-                        .rev()
-                        .take(DEFAULT_CONTEXT_LINES)
+                    let before_start = mi.saturating_sub(DEFAULT_CONTEXT_LINES);
+                    let context_before: Vec<String> = (before_start..mi)
                         .map(|j| pending[j].2.clone())
-                        .collect::<Vec<_>>()
-                        .into_iter()
-                        .rev()
                         .collect();
 
                     // Context after: up to 2 following context lines
@@ -273,13 +275,9 @@ fn parse_ripgrep_output(output: &str) -> Result<Vec<FileMatch>, SearchToolError>
         for mi in match_indices {
             let (_, line_number, line_content, _) = &pending[mi];
 
-            let context_before: Vec<String> = (0..mi)
-                .rev()
-                .take(DEFAULT_CONTEXT_LINES)
+            let before_start = mi.saturating_sub(DEFAULT_CONTEXT_LINES);
+            let context_before: Vec<String> = (before_start..mi)
                 .map(|j| pending[j].2.clone())
-                .collect::<Vec<_>>()
-                .into_iter()
-                .rev()
                 .collect();
 
             let context_after: Vec<String> = ((mi + 1)..pending.len())
@@ -367,6 +365,13 @@ fn search_in_dir_pure(
                 && !matches_file_pattern(path.to_str().unwrap_or(""), fp)
             {
                 continue;
+            }
+
+            // Skip files larger than 10 MB to avoid OOM
+            if let Ok(metadata) = std::fs::metadata(&path) {
+                if metadata.len() > 10 * 1024 * 1024 {
+                    continue;
+                }
             }
 
             // Try to read and search the file

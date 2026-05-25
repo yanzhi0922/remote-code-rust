@@ -56,7 +56,7 @@ pub fn get_similarity(original: &str, search: &str) -> f64 {
     let dist = levenshtein_distance(&normalized_original, &normalized_search);
 
     // Calculate similarity ratio (0 to 1, where 1 is an exact match)
-    let max_length = normalized_original.len().max(normalized_search.len());
+    let max_length = normalized_original.chars().count().max(normalized_search.chars().count());
     if max_length == 0 {
         return 1.0;
     }
@@ -85,13 +85,9 @@ pub fn fuzzy_search(
     let mut best_score = 0.0;
     let mut best_match_index: i64 = -1;
     let mut best_match_content = String::new();
-    let search_len = search_chunk.split('\n').count();
-    // Handle \r\n as well
-    let search_len = if search_chunk.contains("\r\n") {
-        search_chunk.split("\r\n").count()
-    } else {
-        search_len
-    };
+    // Normalize line endings before splitting
+    let normalized = search_chunk.replace("\r\n", "\n");
+    let search_len = normalized.split('\n').count();
 
     // Middle-out from the midpoint
     let mid_point = (start_index + end_index) / 2;
@@ -103,7 +99,14 @@ pub fn fuzzy_search(
     let search_len_i64 = search_len as i64;
 
     while left_index >= start_index_i64 || right_index <= end_index_i64 - search_len_i64 {
+        if best_score >= 1.0 {
+            break;
+        }
+
         if left_index >= start_index_i64 {
+            if left_index < 0 {
+                break;
+            }
             let left = left_index as usize;
             if left + search_len <= lines.len() {
                 let original_chunk = lines[left..(left + search_len)].join("\n");

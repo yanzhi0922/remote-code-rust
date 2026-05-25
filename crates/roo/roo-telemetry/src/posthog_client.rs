@@ -4,7 +4,7 @@
 //! Mirrors `PostHogTelemetryClient.ts`.
 
 use std::collections::HashMap;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use serde_json::Value;
 
@@ -50,8 +50,8 @@ struct PostHogBatchBody {
 #[allow(dead_code)]
 pub struct PostHogTelemetryClient {
     base: BaseTelemetryClient,
-    api_key: String,
-    host: String,
+    api_key: Arc<str>,
+    host: Arc<str>,
     distinct_id: String,
     http_client: reqwest::Client,
     /// Git repository property names that should be filtered out.
@@ -73,8 +73,8 @@ impl PostHogTelemetryClient {
 
         Self {
             base: BaseTelemetryClient::new(Some(subscription), false),
-            api_key,
-            host: "https://ph.roocode.com".to_string(),
+            api_key: api_key.into(),
+            host: Arc::from("https://ph.roocode.com"),
             distinct_id,
             http_client: SHARED_CLIENT.get_or_init(reqwest::Client::new).clone(),
             git_property_names: vec!["repositoryUrl", "repositoryName", "defaultBranch"],
@@ -84,7 +84,7 @@ impl PostHogTelemetryClient {
 
     /// Create with custom host (for testing).
     pub fn with_host(mut self, host: String) -> Self {
-        self.host = host;
+        self.host = host.into();
         self
     }
 
@@ -159,13 +159,14 @@ impl TelemetryClient for PostHogTelemetryClient {
         let event_name = format!("{:?}", event.event_name);
         let api_key = self.api_key.clone();
         let host = self.host.clone();
+        let api_key_str = api_key.to_string();
         let http_client = self.http_client.clone();
 
         // Fire-and-forget: spawn an async task that POSTs to the PostHog batch endpoint.
         // We never block on the result; failures are silently dropped.
         tokio::spawn(async move {
             let body = PostHogBatchBody {
-                api_key,
+                api_key: api_key_str,
                 batch: vec![PostHogBatchEvent {
                     event: event_name.clone(),
                     properties,
@@ -224,6 +225,7 @@ impl TelemetryClient for PostHogTelemetryClient {
 
         let api_key = self.api_key.clone();
         let host = self.host.clone();
+        let api_key_str = api_key.to_string();
         let distinct_id = self.distinct_id.clone();
         let http_client = self.http_client.clone();
 
@@ -231,7 +233,7 @@ impl TelemetryClient for PostHogTelemetryClient {
         // Failures are silently dropped.
         tokio::spawn(async move {
             let body = PostHogBatchBody {
-                api_key,
+                api_key: api_key_str,
                 batch: vec![PostHogBatchEvent {
                     event: "$exception".to_string(),
                     properties: {

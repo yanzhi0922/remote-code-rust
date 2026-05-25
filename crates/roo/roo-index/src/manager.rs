@@ -1,4 +1,7 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
+
+/// Maximum total size (in bytes) of cached file contents before eviction kicks in.
+const MAX_TOTAL_CONTENT_SIZE: usize = 50 * 1024 * 1024; // 50 MB
 
 use crate::types::{
     CodeIndexConfig, IndexError, IndexStats, IndexingState, VectorStoreSearchResult,
@@ -19,6 +22,10 @@ pub struct CodeIndexManager {
     indexed_files: HashSet<String>,
     /// Cached file contents keyed by relative path.
     file_contents: HashMap<String, String>,
+    /// Insertion order for FIFO eviction of file contents.
+    content_order: VecDeque<String>,
+    /// Total byte size of all cached file contents.
+    total_content_size: usize,
 }
 
 impl CodeIndexManager {
@@ -30,6 +37,8 @@ impl CodeIndexManager {
             stats: IndexStats::default(),
             indexed_files: HashSet::new(),
             file_contents: HashMap::new(),
+            content_order: VecDeque::new(),
+            total_content_size: 0,
         }
     }
 
@@ -208,9 +217,36 @@ impl CodeIndexManager {
 
         self.indexed_files.clear();
         self.file_contents.clear();
+        self.content_order.clear();
+        self.total_content_size = 0;
         self.stats.indexed_files = 0;
         self.stats.total_chunks = 0;
         Ok(())
+    }
+
+    /// Insert file content into the cache, evicting oldest entries when
+    /// `MAX_TOTAL_CONTENT_SIZE` is exceeded.
+    fn insert_content(&mut self, path: &str, content: String) {
+        // If we are replacing an existing entry, subtract its old size first.
+        if let Some(old) = self.file_contents.get(path) {
+            self.total_content_size -= old.len();
+        } else {
+            self.content_order.push_back(path.to_string());
+        }
+
+        self.total_content_size += content.len();
+        self.file_contents.insert(path.to_string(), content);
+
+        // Evict oldest entries until we are under budget.
+        while self.total_content_size > MAX_TOTAL_CONTENT_SIZE {
+            if let Some(oldest_path) = self.content_order.pop_front() {
+                if let Some(removed) = self.file_contents.remove(&oldest_path) {
+                    self.total_content_size -= removed.len();
+                }
+            } else {
+                break;
+            }
+        }
     }
 
     /// Add a file to the index with explicit content.
@@ -232,8 +268,7 @@ impl CodeIndexManager {
         }
 
         self.indexed_files.insert(path.to_string());
-        self.file_contents
-            .insert(path.to_string(), content.to_string());
+        self.insert_content(path, content.to_string());
 
         self.stats.indexed_files = self.indexed_files.len();
         self.stats.total_files = self.stats.total_files.max(self.indexed_files.len());
@@ -277,7 +312,7 @@ impl CodeIndexManager {
                 if let Ok(content) = std::fs::read_to_string(&full_path)
                     && content.len() as u64 <= self.config.max_file_size
                 {
-                    self.file_contents.insert(path.to_string(), content);
+                    self.insert_content(path, content);
                 }
             }
 
@@ -298,7 +333,12 @@ impl CodeIndexManager {
         }
 
         if self.indexed_files.remove(path) {
-            self.file_contents.remove(path);
+            if let Some(removed) = self.file_contents.remove(path) {
+                self.total_content_size -= removed.len();
+            }
+            if let Some(pos) = self.content_order.iter().position(|p| p == path) {
+                self.content_order.remove(pos);
+            }
             self.stats.indexed_files = self.indexed_files.len();
             self.stats.total_chunks = self.stats.total_chunks.saturating_sub(1);
             return Ok(true);
@@ -404,6 +444,8 @@ impl CodeIndexManager {
         self.state = IndexingState::ShuttingDown;
         self.indexed_files.clear();
         self.file_contents.clear();
+        self.content_order.clear();
+        self.total_content_size = 0;
         self.stats = IndexStats::default();
         self.state = IndexingState::NotInitialized;
     }

@@ -39,6 +39,9 @@ function openDb(): Promise<IDBDatabase> {
       db.onerror = () => {
         dbInstance = null;
       };
+      db.addEventListener('close', () => {
+        dbInstance = null;
+      });
       dbInstance = db;
       resolve(db);
     };

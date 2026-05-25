@@ -22,7 +22,10 @@ use tokio::sync::oneshot;
 use tokio::sync::watch;
 use tracing::error;
 
-type PendingInterruptQueue = Vec<ConnectionRequestId>;
+use std::collections::VecDeque;
+
+pub(crate) const MAX_PENDING_INTERRUPTS: usize = 16;
+type PendingInterruptQueue = VecDeque<ConnectionRequestId>;
 
 pub(crate) struct PendingThreadResumeRequest {
     pub(crate) request_id: ConnectionRequestId,

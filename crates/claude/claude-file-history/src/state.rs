@@ -2,7 +2,7 @@
 //!
 //! Corresponds to `src/utils/fileHistory.ts` (FileHistoryState, FileHistorySnapshot).
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -17,7 +17,7 @@ pub const MAX_SNAPSHOTS: usize = 100;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileHistoryState {
     /// All snapshots taken so far.
-    pub snapshots: Vec<FileHistorySnapshot>,
+    pub snapshots: VecDeque<FileHistorySnapshot>,
     /// Set of file paths currently being tracked.
     pub tracked_files: HashSet<String>,
     /// Monotonically-increasing counter incremented on every snapshot.
@@ -35,7 +35,7 @@ impl FileHistoryState {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            snapshots: Vec::new(),
+            snapshots: VecDeque::new(),
             tracked_files: HashSet::new(),
             snapshot_sequence: 0,
         }
@@ -83,12 +83,12 @@ impl FileHistoryState {
             timestamp: Utc::now(),
         };
 
-        self.snapshots.push(snapshot);
+        self.snapshots.push_back(snapshot);
         self.snapshot_sequence += 1;
 
         // Evict oldest snapshots if over limit
         while self.snapshots.len() > MAX_SNAPSHOTS {
-            self.snapshots.remove(0);
+            self.snapshots.pop_front();
         }
     }
 
@@ -112,7 +112,7 @@ impl FileHistoryState {
     /// Get the most recent snapshot.
     #[must_use]
     pub fn latest_snapshot(&self) -> Option<&FileHistorySnapshot> {
-        self.snapshots.last()
+        self.snapshots.back()
     }
 
     /// Get the number of snapshots.

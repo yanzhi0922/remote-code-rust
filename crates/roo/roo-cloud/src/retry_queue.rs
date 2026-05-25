@@ -173,7 +173,9 @@ impl RetryQueue {
     /// Mark a request as successfully retried.
     pub fn mark_success(&mut self, id: &str) {
         self.queue.remove(id);
-        self.order.retain(|k| k != id);
+        if let Some(pos) = self.order.iter().position(|k| k == id) {
+            self.order.remove(pos);
+        }
     }
 
     /// Mark a request as failed, incrementing retry count.
@@ -189,7 +191,9 @@ impl RetryQueue {
             if self.config.max_retries > 0 && request.retry_count >= self.config.max_retries {
                 self.failed_retries += 1;
                 self.queue.remove(id);
-                self.order.retain(|k| k != id);
+                if let Some(pos) = self.order.iter().position(|k| k == id) {
+                    self.order.remove(pos);
+                }
                 return false;
             }
             true

@@ -229,7 +229,10 @@ impl McpOAuthFlow {
             metadata_url.to_owned()
         };
 
-        let response = reqwest::get(&url)
+        let client = oauth_client();
+        let response = client
+            .get(&url)
+            .send()
             .await
             .map_err(|e| McpRuntimeError::OAuth {
                 server: server_url.to_owned(),

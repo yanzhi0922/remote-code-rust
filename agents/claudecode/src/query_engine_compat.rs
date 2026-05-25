@@ -1,7 +1,9 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex as StdMutex, OnceLock};
+use std::sync::{Arc, OnceLock};
+use std::sync::atomic::{AtomicBool, Ordering};
+use parking_lot::Mutex as ParkingLotMutex;
 use std::time::Instant;
 
 use anyhow::{Result, anyhow};
@@ -279,8 +281,14 @@ const AGENT_LISTING_DELTA_MARKER: &str = "__remote_code_meta__:agent_listing_del
 const MCP_INSTRUCTIONS_DELTA_MARKER: &str = "__remote_code_meta__:mcp_instructions_delta:";
 
 static RUNTIME_MCP_SESSION_OBSERVATIONS: OnceLock<
-    StdMutex<HashMap<Uuid, Arc<StdMutex<RuntimeMcpObservation>>>>,
+    ParkingLotMutex<HashMap<Uuid, Arc<ParkingLotMutex<RuntimeMcpObservation>>>>,
 > = OnceLock::new();
+
+/// Maximum number of concurrent MCP session observations retained.
+const MAX_MCP_SESSION_OBSERVATIONS: usize = 256;
+
+/// Dedup guard: only one refresh task may run at a time.
+static MCP_REFRESH_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -390,12 +398,15 @@ impl ConversationBackend for CriticalReminderBackend {
 }
 
 fn runtime_mcp_session_observations()
--> &'static StdMutex<HashMap<Uuid, Arc<StdMutex<RuntimeMcpObservation>>>> {
-    RUNTIME_MCP_SESSION_OBSERVATIONS.get_or_init(|| StdMutex::new(HashMap::new()))
+-> &'static ParkingLotMutex<HashMap<Uuid, Arc<ParkingLotMutex<RuntimeMcpObservation>>>> {
+    RUNTIME_MCP_SESSION_OBSERVATIONS.get_or_init(|| ParkingLotMutex::new(HashMap::new()))
 }
 
 fn runtime_mcp_observation_from_discovery(config: &RuntimeConfig) -> RuntimeMcpObservation {
-    let discovery = discover_runtime_mcp_servers(config, &[]);
+    let config_clone = config.clone();
+    let discovery = tokio::task::block_in_place(|| {
+        discover_runtime_mcp_servers(&config_clone, &[])
+    });
     RuntimeMcpObservation {
         servers: discovery
             .servers
@@ -481,33 +492,48 @@ fn merge_runtime_mcp_observation_with_discovery(
     }
 }
 
-fn runtime_mcp_session_observation(config: &RuntimeConfig) -> Arc<StdMutex<RuntimeMcpObservation>> {
+fn runtime_mcp_session_observation(config: &RuntimeConfig) -> Arc<ParkingLotMutex<RuntimeMcpObservation>> {
     let discovery = runtime_mcp_observation_from_discovery(config);
     let session_id = config.session_id;
     let sessions = runtime_mcp_session_observations();
-    let mut sessions = sessions
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut sessions = sessions.lock();
     if let Some(existing) = sessions.get(&session_id) {
-        if let Ok(mut snapshot) = existing.lock() {
+        if let Some(mut snapshot) = existing.try_lock() {
             *snapshot = merge_runtime_mcp_observation_with_discovery(&snapshot, discovery);
         }
         return Arc::clone(existing);
     }
 
-    let snapshot = Arc::new(StdMutex::new(discovery));
+    // Evict oldest entries when the map exceeds the cap.
+    while sessions.len() >= MAX_MCP_SESSION_OBSERVATIONS {
+        if let Some(oldest_key) = sessions.keys().next().copied() {
+            sessions.remove(&oldest_key);
+        } else {
+            break;
+        }
+    }
+
+    let snapshot = Arc::new(ParkingLotMutex::new(discovery));
     sessions.insert(session_id, Arc::clone(&snapshot));
     snapshot
 }
 
 fn refresh_runtime_mcp_session_observation(
     config: RuntimeConfig,
-    observation: Arc<StdMutex<RuntimeMcpObservation>>,
+    observation: Arc<ParkingLotMutex<RuntimeMcpObservation>>,
 ) {
+    // Dedup: skip if a refresh task is already in progress.
+    if MCP_REFRESH_IN_PROGRESS
+        .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+        .is_err()
+    {
+        return;
+    }
     tokio::spawn(async move {
         let refreshed =
             observe_runtime_mcp_servers(&config, &[], true, &McpClientInfo::default()).await;
-        let changed = observation.lock().ok().map(|snapshot| {
+        let changed = {
+            let snapshot = observation.lock();
             refreshed
                 .servers
                 .iter()
@@ -521,33 +547,34 @@ fn refresh_runtime_mcp_session_observation(
                     changed.then(|| server.entry.server.name.clone())
                 })
                 .collect::<Vec<_>>()
-        });
-        if let Some(changed) = changed {
-            for server_name in changed {
-                handle_runtime_mcp_session_list_changed(
-                    &config,
-                    &observation,
-                    &server_name,
-                    McpListChangedSurface::Tools,
-                )
-                .await;
-            }
+        };
+        for server_name in changed {
+            handle_runtime_mcp_session_list_changed(
+                &config,
+                &observation,
+                &server_name,
+                McpListChangedSurface::Tools,
+            )
+            .await;
         }
-        if let Ok(mut snapshot) = observation.lock() {
+        {
+            let mut snapshot = observation.lock();
             *snapshot = refreshed;
         }
+        MCP_REFRESH_IN_PROGRESS.store(false, Ordering::Release);
     });
 }
 
 async fn refresh_runtime_mcp_session_observation_for_server(
     config: &RuntimeConfig,
-    observation: &Arc<StdMutex<RuntimeMcpObservation>>,
+    observation: &Arc<ParkingLotMutex<RuntimeMcpObservation>>,
     server_name: &str,
     connect: bool,
 ) {
     let refreshed =
         observe_runtime_mcp_servers(config, &[], connect, &McpClientInfo::default()).await;
-    if let Ok(mut snapshot) = observation.lock() {
+    {
+        let mut snapshot = observation.lock();
         let mut merged = snapshot.clone();
         merged.warnings = refreshed.warnings;
         for refreshed_server in refreshed.servers {
@@ -568,7 +595,7 @@ async fn refresh_runtime_mcp_session_observation_for_server(
 
 async fn handle_runtime_mcp_session_list_changed(
     config: &RuntimeConfig,
-    observation: &Arc<StdMutex<RuntimeMcpObservation>>,
+    observation: &Arc<ParkingLotMutex<RuntimeMcpObservation>>,
     server_name: &str,
     surface: McpListChangedSurface,
 ) {
@@ -591,17 +618,13 @@ fn spawn_runtime_mcp_providers(
 
     let observation_for_state = Arc::clone(&observation);
     let state_provider = Arc::new(move || {
-        observation_for_state
-            .lock()
-            .map(|snapshot| runtime_mcp_state_from_observation(&snapshot))
-            .unwrap_or_default()
+        let snapshot = observation_for_state.lock();
+        runtime_mcp_state_from_observation(&snapshot)
     });
 
     let observation_provider = Arc::new(move || {
-        observation
-            .lock()
-            .map(|snapshot| snapshot.clone())
-            .unwrap_or_default()
+        let snapshot = observation.lock();
+        snapshot.clone()
     });
 
     (state_provider, observation_provider)
@@ -609,9 +632,8 @@ fn spawn_runtime_mcp_providers(
 
 #[cfg(test)]
 fn clear_runtime_mcp_session_observation(session_id: Uuid) {
-    if let Some(sessions) = RUNTIME_MCP_SESSION_OBSERVATIONS.get()
-        && let Ok(mut sessions) = sessions.lock()
-    {
+    if let Some(sessions) = RUNTIME_MCP_SESSION_OBSERVATIONS.get() {
+        let mut sessions = sessions.lock();
         sessions.remove(&session_id);
     }
 }

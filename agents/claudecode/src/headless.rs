@@ -239,9 +239,15 @@ async fn cancel_pending_permissions<W: Write + Send>(
     emitter: &Arc<Mutex<ProtocolEmitter<W>>>,
     decision_message: &'static str,
 ) -> Result<()> {
-    let mut pending = pending_permissions.lock().await;
-    for (request_id, sender) in pending.drain() {
-        let _ = sender.send(PermissionDecision::deny(decision_message));
+    let drained: Vec<String> = {
+        let mut pending = pending_permissions.lock().await;
+        let keys: Vec<String> = pending.keys().cloned().collect();
+        for (_, sender) in pending.drain() {
+            let _ = sender.send(PermissionDecision::deny(decision_message));
+        }
+        keys
+    };
+    for request_id in drained {
         let mut emitter = emitter.lock().await;
         let _ = emitter.emit_permission_cancelled(&request_id);
     }

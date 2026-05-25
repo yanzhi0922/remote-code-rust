@@ -933,16 +933,13 @@ pub(crate) async fn update_runner_heartbeat(
     Json(heartbeat): Json<RunnerHeartbeat>,
 ) -> Result<Json<RunnerSnapshot>, ApiError> {
     let user_id = user_id_from_principal(&principal);
-    {
-        let registry = service.registry.read().await;
+    let snapshot = {
+        let mut registry = service.registry.write().await;
         if !registry.runner_visible_to(&runner_id, user_id) {
             return Err(ApiError::not_found(format!(
                 "runner `{runner_id}` was not found"
             )));
         }
-    }
-    let snapshot = {
-        let mut registry = service.registry.write().await;
         registry.apply_heartbeat(&runner_id, heartbeat)?
     };
     let _event = service
@@ -959,7 +956,8 @@ pub(crate) async fn update_runner_heartbeat(
         .await;
 
     // Reap sessions stuck in Assigned whose runner has gone offline (3x TTL without heartbeat)
-    {
+    // and fetch the final snapshot in a single write lock acquisition.
+    let final_snapshot = {
         let mut registry = service.registry.write().await;
         let reaped = registry.reap_orphaned_assigned_sessions(service.runner_lease_ttl_secs);
         if !reaped.is_empty() {
@@ -978,14 +976,12 @@ pub(crate) async fn update_runner_heartbeat(
                     .await;
             }
         }
-    }
+        let snapshot = registry.get_runner_snapshot(&runner_id)?;
+        snapshot
+    };
 
     dispatch_pending_sessions_for_runner(&service, &runner_id).await;
-    let snapshot = {
-        let registry = service.registry.read().await;
-        registry.get_runner_snapshot(&runner_id)?
-    };
-    Ok(Json(snapshot))
+    Ok(Json(final_snapshot))
 }
 
 pub(crate) async fn pull_runner_commands(

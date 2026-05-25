@@ -20,6 +20,14 @@ fn shared_http_client() -> &'static reqwest::Client {
 }
 
 /// Web-based authentication service.
+///
+/// ## Concurrency note
+/// This service uses four separate `RwLock` guards (`state`, `credentials`,
+/// `session_token`, `user_info`).  Operations like `sign_out` are **not atomic**
+/// — between clearing the state and clearing the session token, a concurrent
+/// task may observe a partially-cleared session.  If atomic sign-out is needed
+/// in the future, these four fields should be consolidated into a single
+/// `RwLock<WebAuthState>` struct.
 pub struct WebAuthService {
     state: Arc<RwLock<AuthState>>,
     credentials: Arc<RwLock<Option<AuthCredentials>>>,

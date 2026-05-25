@@ -7,6 +7,7 @@
 //! - Max visible notifications with auto-dismissal
 //! - Priority-based ordering
 
+use std::collections::VecDeque;
 use std::fmt;
 use std::time::{Duration, Instant};
 
@@ -297,9 +298,9 @@ pub struct NotificationManager {
     /// Configuration.
     config: NotificationConfig,
     /// Active notifications.
-    notifications: Vec<Notification>,
+    notifications: VecDeque<Notification>,
     /// History of dismissed notifications.
-    history: Vec<Notification>,
+    history: VecDeque<Notification>,
     /// Maximum history size.
     max_history: usize,
 }
@@ -309,8 +310,8 @@ impl NotificationManager {
     pub fn new(config: NotificationConfig) -> Self {
         NotificationManager {
             config,
-            notifications: Vec::new(),
-            history: Vec::new(),
+            notifications: VecDeque::new(),
+            history: VecDeque::new(),
             max_history: 100,
         }
     }
@@ -332,15 +333,17 @@ impl NotificationManager {
         }
 
         let id = notification.id;
-        self.notifications.push(notification);
+        self.notifications.push_back(notification);
 
         // Enforce max visible.
         while self.notifications.len() > self.config.max_visible {
-            if let Some(oldest) = self.notifications.first_mut() {
+            if let Some(oldest) = self.notifications.front_mut() {
                 oldest.dismiss();
             }
-            let dismissed = self.notifications.remove(0);
-            self.push_history(dismissed);
+            let dismissed = self.notifications.pop_front();
+            if let Some(dismissed) = dismissed {
+                self.push_history(dismissed);
+            }
         }
 
         id
@@ -386,8 +389,9 @@ impl NotificationManager {
             notif.dismiss();
             let idx = self.notifications.iter().position(|n| n.id == id);
             if let Some(idx) = idx {
-                let dismissed = self.notifications.remove(idx);
-                self.push_history(dismissed);
+                if let Some(dismissed) = self.notifications.remove(idx) {
+                    self.push_history(dismissed);
+                }
             }
             return true;
         }
@@ -399,7 +403,7 @@ impl NotificationManager {
         for notif in &mut self.notifications {
             notif.dismiss();
         }
-        while let Some(dismissed) = self.notifications.pop() {
+        while let Some(dismissed) = self.notifications.pop_back() {
             self.push_history(dismissed);
         }
     }
@@ -417,8 +421,9 @@ impl NotificationManager {
         for id in expired {
             let idx = self.notifications.iter().position(|n| n.id == id);
             if let Some(idx) = idx {
-                let dismissed = self.notifications.remove(idx);
-                self.push_history(dismissed);
+                if let Some(dismissed) = self.notifications.remove(idx) {
+                    self.push_history(dismissed);
+                }
             }
         }
         count
@@ -433,12 +438,12 @@ impl NotificationManager {
     }
 
     /// Get all notifications (including expired but not yet cleaned).
-    pub fn all(&self) -> &[Notification] {
+    pub fn all(&self) -> &VecDeque<Notification> {
         &self.notifications
     }
 
     /// Get the notification history.
-    pub fn history(&self) -> &[Notification] {
+    pub fn history(&self) -> &VecDeque<Notification> {
         &self.history
     }
 
@@ -473,9 +478,9 @@ impl NotificationManager {
 
     /// Push a notification into history, respecting max size.
     fn push_history(&mut self, notification: Notification) {
-        self.history.push(notification);
+        self.history.push_back(notification);
         if self.history.len() > self.max_history {
-            self.history.remove(0);
+            self.history.pop_front();
         }
     }
 }

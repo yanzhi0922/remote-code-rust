@@ -112,6 +112,22 @@ pub(crate) struct PersistedControlPlaneState {
     pub(crate) timeline: TimelineSnapshot,
 }
 
+/// Borrowed serialization wrapper — avoids cloning the entire registry.
+#[derive(serde::Serialize)]
+struct PersistedControlPlaneStateRef<'a> {
+    registry: &'a Registry,
+    timeline: &'a TimelineSnapshot,
+}
+
+impl<'a> From<PersistedControlPlaneStateRef<'a>> for PersistedControlPlaneState {
+    fn from(value: PersistedControlPlaneStateRef<'a>) -> Self {
+        Self {
+            registry: value.registry.clone(),
+            timeline: value.timeline.clone(),
+        }
+    }
+}
+
 impl ControlPlaneService {
     /// Create a new `ControlPlaneService` using a pre-configured HTTP client.
     ///
@@ -291,14 +307,21 @@ impl ControlPlaneService {
     }
 
     pub(crate) async fn persist_state(&self) -> Result<()> {
-        let snapshot = PersistedControlPlaneState {
-            registry: self.registry.read().await.clone(),
-            timeline: self.timeline.snapshot().await,
+        // Serialize under the read lock to avoid cloning the entire registry.
+        let payload = {
+            let registry_guard = self.registry.read().await;
+            let timeline = self.timeline.snapshot().await;
+            let snapshot = PersistedControlPlaneStateRef {
+                registry: &*registry_guard,
+                timeline: &timeline,
+            };
+            serde_json::to_string(&snapshot)
+                .context("failed to encode control plane snapshot")?
         };
         let conn = self.db_connection.clone();
         tokio::task::spawn_blocking(move || {
             let conn = conn.blocking_lock();
-            persist_control_plane_state_with_conn(&conn, &snapshot, None)
+            persist_control_plane_state_from_payload(&conn, &payload, None)
         })
         .await
         .context("control-plane snapshot task failed to join")??;
@@ -506,6 +529,7 @@ fn load_persisted_state_with_conn(connection: &Connection, state_db_path: &std::
     ))
 }
 
+#[allow(dead_code)]
 pub(crate) fn persist_control_plane_state_with_conn(
     connection: &Connection,
     snapshot: &PersistedControlPlaneState,
@@ -514,6 +538,28 @@ pub(crate) fn persist_control_plane_state_with_conn(
     let transaction = connection.unchecked_transaction()?;
     let payload = serde_json::to_string(snapshot)
         .context("failed to encode control plane snapshot")?;
+    persist_control_plane_state_from_payload_inner(&transaction, &payload, event)?;
+    transaction.commit()?;
+    Ok(())
+}
+
+/// Persist a pre-serialized control plane snapshot payload to SQLite.
+fn persist_control_plane_state_from_payload(
+    connection: &Connection,
+    payload: &str,
+    event: Option<&crate::types::TimelineEvent>,
+) -> Result<()> {
+    let transaction = connection.unchecked_transaction()?;
+    persist_control_plane_state_from_payload_inner(&transaction, payload, event)?;
+    transaction.commit()?;
+    Ok(())
+}
+
+fn persist_control_plane_state_from_payload_inner(
+    transaction: &Connection,
+    payload: &str,
+    event: Option<&crate::types::TimelineEvent>,
+) -> Result<()> {
     transaction
         .execute(
             "INSERT INTO control_plane_snapshot (id, payload, updated_at)
@@ -530,7 +576,6 @@ pub(crate) fn persist_control_plane_state_with_conn(
             )
         })?;
     }
-    transaction.commit()?;
     Ok(())
 }
 

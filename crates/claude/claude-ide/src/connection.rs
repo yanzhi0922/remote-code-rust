@@ -542,6 +542,9 @@ impl IdeConnection for HttpConnection {
 // LSP-style framed message I/O
 // ---------------------------------------------------------------------------
 
+/// Maximum allowed frame body size (16 MiB).
+const MAX_FRAME_SIZE: usize = 16 * 1024 * 1024;
+
 /// Read a single LSP-style framed message from the reader.
 ///
 /// Expects `Content-Length: N\r\n\r\n` followed by exactly N bytes of body.
@@ -574,6 +577,14 @@ fn read_framed_message<R: BufRead>(reader: &mut R) -> anyhow::Result<String> {
     }
 
     let length = content_length.ok_or_else(|| anyhow::anyhow!("missing Content-Length header"))?;
+
+    if length > MAX_FRAME_SIZE {
+        return Err(anyhow::anyhow!(
+            "Content-Length {} exceeds maximum allowed frame size of {} bytes",
+            length,
+            MAX_FRAME_SIZE
+        ));
+    }
 
     let mut body = vec![0u8; length];
     reader

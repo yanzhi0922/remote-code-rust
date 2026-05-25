@@ -430,6 +430,7 @@ mod token_usage_replay;
 
 use crate::filters::compute_source_filters;
 use crate::filters::source_kind_matches;
+use crate::thread_state::MAX_PENDING_INTERRUPTS;
 use crate::thread_state::ThreadListenerCommand;
 use crate::thread_state::ThreadState;
 use crate::thread_state::ThreadStateManager;
@@ -7467,7 +7468,13 @@ impl CodexMessageProcessor {
                     {
                         return Err(invalid_request("no active turn to interrupt"));
                     }
-                    thread_state.pending_interrupts.push(request_id.clone());
+                    {
+                        let queue = &mut thread_state.pending_interrupts;
+                        while queue.len() >= MAX_PENDING_INTERRUPTS {
+                            queue.pop_front();
+                        }
+                        queue.push_back(request_id.clone());
+                    }
                 }
 
                 self.outgoing

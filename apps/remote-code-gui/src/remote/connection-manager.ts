@@ -121,10 +121,11 @@ class ConnectionManager {
             if (this.transport !== transport) break;
             try {
               await transport.sendCommand(cmd.command);
-            } catch {
-              // Re-enqueue failed command for next connect attempt.
+            } catch (err) {
+              // Re-enqueue failed command for next connect attempt, then continue draining.
+              console.warn('[ConnectionManager] drain command failed:', cmd.id, err);
               try { await enqueueCommand(sessionId, cmd.command); } catch { /* best effort */ }
-              break;
+              continue;
             }
           }
         } catch {

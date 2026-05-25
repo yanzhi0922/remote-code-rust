@@ -323,11 +323,10 @@ impl SingleSearchReplaceDiffStrategy {
                     .collect();
 
                 // Splice the replacement
-                let before: Vec<String> = result_lines[..match_idx].to_vec();
-                let after: Vec<String> = result_lines[match_idx + search_lines.len()..].to_vec();
-                result_lines = before;
-                result_lines.extend(indented_replace_lines);
-                result_lines.extend(after);
+                result_lines.splice(
+                    match_idx..(match_idx + search_lines.len()),
+                    indented_replace_lines,
+                );
 
                 applied_count += 1;
             } else {

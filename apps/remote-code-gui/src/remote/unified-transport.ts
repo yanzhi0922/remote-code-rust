@@ -124,9 +124,11 @@ export class UnifiedTransport implements TransportHandle {
   private _handle: { close(): void } | null = null;
   private _latestSequence = 0;
   private _cancelled = false;
+  private _connectGeneration = 0;
   private _reconnectAttempt = 0;
   private _reconnectTimer: number | null = null;
   private _healthTimer: number | null = null;
+  private _healthCancelled = false;
   private _pollTimer: number | null = null;
 
   constructor(config: TransportConfig, callbacks: TransportCallbacks) {
@@ -159,6 +161,8 @@ export class UnifiedTransport implements TransportHandle {
 
   async connect(afterSequence = 0): Promise<void> {
     this._cancelled = false;
+    this._connectGeneration++;
+    const gen = this._connectGeneration;
     this._latestSequence = afterSequence;
     this.setState('connecting');
 
@@ -168,21 +172,27 @@ export class UnifiedTransport implements TransportHandle {
           if (!this.canUseDirectRunner()) {
             this._strategy = 'server_relay';
             await this.connectWebSocket(this._config.baseUrl, afterSequence);
+            if (gen !== this._connectGeneration) return;
             break;
           }
           await this.connectWebSocket(this.getStreamBaseUrl('direct'), afterSequence);
+          if (gen !== this._connectGeneration) return;
           break;
         case 'server_relay':
           await this.connectWebSocket(this._config.baseUrl, afterSequence);
+          if (gen !== this._connectGeneration) return;
           break;
         case 'outbound_polling':
           await this.startPolling(afterSequence);
+          if (gen !== this._connectGeneration) return;
           break;
         case 'hybrid':
           await this.connectHybrid(afterSequence);
+          if (gen !== this._connectGeneration) return;
           break;
         case 'quic':
           await this.connectQuic(afterSequence);
+          if (gen !== this._connectGeneration) return;
           break;
       }
     } catch (error) {
@@ -193,6 +203,7 @@ export class UnifiedTransport implements TransportHandle {
 
   close(): void {
     this._cancelled = true;
+    this._healthCancelled = true;
     this._handle?.close();
     this._handle = null;
 
@@ -380,7 +391,9 @@ export class UnifiedTransport implements TransportHandle {
 
     // Periodic health probe for auto-switching.
     if (this._healthTimer !== null) { clearInterval(this._healthTimer); this._healthTimer = null; }
+    this._healthCancelled = false;
     this._healthTimer = window.setInterval(() => {
+      if (this._healthCancelled) return;
       void this.autoSwitchIfNeeded().catch((err) => {
         console.warn('[unified-transport] autoSwitchIfNeeded failed:', err);
       });

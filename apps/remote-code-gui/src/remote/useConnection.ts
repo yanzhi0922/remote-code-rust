@@ -61,7 +61,11 @@ export function useConnection(
 
   useEffect(() => {
     const handler = (event: RemoteTimelineEvent) => onEventRef.current?.(event);
-    return onConnectionManagerEvent(handler);
+    const unsubscribe = onConnectionManagerEvent(handler);
+    return () => {
+      unsubscribe();
+      destroyConnectionManager();
+    };
   }, []);
 
   const connect = useCallback(async (config: TransportConfig, afterSequence = 0) => {

@@ -217,6 +217,25 @@ struct TurnState {
 }
 
 impl AnalyticsReducer {
+    /// Remove all state associated with a connection to prevent unbounded map growth.
+    pub(crate) fn connection_closed(&mut self, connection_id: u64) {
+        self.connections.remove(&connection_id);
+        // Remove threads whose connection_id matches.
+        let thread_ids_to_remove: Vec<String> = self
+            .threads
+            .iter()
+            .filter(|(_, state)| state.connection_id == Some(connection_id))
+            .map(|(id, _)| id.clone())
+            .collect();
+        for thread_id in &thread_ids_to_remove {
+            self.threads.remove(thread_id);
+        }
+        // Remove turns associated with this connection.
+        self.turns.retain(|_, state| state.connection_id != Some(connection_id));
+        // Remove in-flight requests for this connection.
+        self.requests.retain(|(cid, _), _| *cid != connection_id);
+    }
+
     pub(crate) async fn ingest(&mut self, input: AnalyticsFact, out: &mut Vec<TrackEventRequest>) {
         match input {
             AnalyticsFact::Initialize {

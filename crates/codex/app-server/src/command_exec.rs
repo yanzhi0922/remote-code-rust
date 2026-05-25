@@ -375,17 +375,15 @@ impl CommandExecManager {
     pub(crate) async fn connection_closed(&self, connection_id: ConnectionId) {
         let controls = {
             let mut sessions = self.sessions.lock().await;
-            let process_ids = sessions
-                .keys()
-                .filter(|process_id| process_id.connection_id == connection_id)
-                .cloned()
-                .collect::<Vec<_>>();
-            let mut controls = Vec::with_capacity(process_ids.len());
-            for process_id in process_ids {
-                if let Some(control) = sessions.remove(&process_id) {
-                    controls.push(control);
+            let mut controls = Vec::new();
+            sessions.retain(|process_id, session| {
+                if process_id.connection_id == connection_id {
+                    controls.push(std::mem::replace(session, CommandExecSession::UnsupportedWindowsSandbox));
+                    false
+                } else {
+                    true
                 }
-            }
+            });
             controls
         };
 

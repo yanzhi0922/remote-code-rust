@@ -184,12 +184,13 @@ export function buildSessionEventsStreamUrl(
   return wsUrl.toString();
 }
 
+const REFRESH_TIMEOUT_MS = 30_000;
 let _refreshPromise: Promise<boolean> | null = null;
 
 async function tryRefreshAccessToken(baseUrl: string): Promise<boolean> {
   if (_refreshPromise) return _refreshPromise;
 
-  const p = (async () => {
+  const refreshPromise = (async () => {
     const refreshToken = resolveRemoteRefreshToken();
     if (!refreshToken) return false;
 
@@ -216,6 +217,14 @@ async function tryRefreshAccessToken(baseUrl: string): Promise<boolean> {
       return false;
     }
   })();
+
+  const p = Promise.race([
+    refreshPromise,
+    new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error('Token refresh timed out')), REFRESH_TIMEOUT_MS),
+    ),
+  ]).catch(() => false as const) as Promise<boolean>;
+
   _refreshPromise = p;
   p.finally(() => { if (_refreshPromise === p) _refreshPromise = null; });
 

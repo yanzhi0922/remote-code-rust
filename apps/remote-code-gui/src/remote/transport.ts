@@ -65,6 +65,7 @@ export function subscribeToRemoteSessionEvents(input: {
   let reconnectTimer: number | null = null;
   let socket: WebSocket | null = null;
   let reconnectAttempt = 0;
+  const MAX_RECONNECT_ATTEMPTS = 20;
 
   const streamBaseUrl = input.runnerBaseUrl ?? input.baseUrl;
 
@@ -148,6 +149,11 @@ export function subscribeToRemoteSessionEvents(input: {
 
   const scheduleReconnect = () => {
     if (cancelled || reconnectTimer !== null) {
+      return;
+    }
+
+    if (reconnectAttempt >= MAX_RECONNECT_ATTEMPTS) {
+      input.onConnectionStateChange('error');
       return;
     }
 

@@ -32,7 +32,7 @@ use codex_app_server_protocol::ServerResponse;
 use codex_login::AuthManager;
 use codex_login::default_client::create_client;
 use codex_plugin::PluginTelemetryMetadata;
-use std::collections::HashSet;
+use indexmap::IndexSet;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
@@ -45,8 +45,8 @@ const ANALYTICS_EVENT_DEDUPE_MAX_KEYS: usize = 4096;
 #[derive(Clone)]
 pub(crate) struct AnalyticsEventsQueue {
     pub(crate) sender: mpsc::Sender<AnalyticsFact>,
-    pub(crate) app_used_emitted_keys: Arc<Mutex<HashSet<(String, String)>>>,
-    pub(crate) plugin_used_emitted_keys: Arc<Mutex<HashSet<(String, String)>>>,
+    pub(crate) app_used_emitted_keys: Arc<Mutex<IndexSet<(String, String)>>>,
+    pub(crate) plugin_used_emitted_keys: Arc<Mutex<IndexSet<(String, String)>>>,
 }
 
 #[derive(Clone)]
@@ -69,8 +69,8 @@ impl AnalyticsEventsQueue {
         });
         Self {
             sender,
-            app_used_emitted_keys: Arc::new(Mutex::new(HashSet::new())),
-            plugin_used_emitted_keys: Arc::new(Mutex::new(HashSet::new())),
+            app_used_emitted_keys: Arc::new(Mutex::new(IndexSet::new())),
+            plugin_used_emitted_keys: Arc::new(Mutex::new(IndexSet::new())),
         }
     }
 
@@ -93,8 +93,8 @@ impl AnalyticsEventsQueue {
             .app_used_emitted_keys
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if emitted.len() >= ANALYTICS_EVENT_DEDUPE_MAX_KEYS {
-            emitted.clear();
+        while emitted.len() >= ANALYTICS_EVENT_DEDUPE_MAX_KEYS {
+            emitted.shift_remove_index(0);
         }
         emitted.insert((tracking.turn_id.clone(), connector_id.clone()))
     }
@@ -108,8 +108,8 @@ impl AnalyticsEventsQueue {
             .plugin_used_emitted_keys
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if emitted.len() >= ANALYTICS_EVENT_DEDUPE_MAX_KEYS {
-            emitted.clear();
+        while emitted.len() >= ANALYTICS_EVENT_DEDUPE_MAX_KEYS {
+            emitted.shift_remove_index(0);
         }
         emitted.insert((tracking.turn_id.clone(), plugin.plugin_id.as_key()))
     }

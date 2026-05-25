@@ -63,14 +63,14 @@ impl ConfigManager {
         self.cli_overrides
             .read()
             .map(|guard| guard.clone())
-            .unwrap_or_default()
+            .unwrap_or_else(|e| e.into_inner().clone())
     }
 
     pub(crate) fn current_cloud_requirements(&self) -> CloudRequirementsLoader {
         self.cloud_requirements
             .read()
             .map(|guard| guard.clone())
-            .unwrap_or_default()
+            .unwrap_or_else(|e| e.into_inner().clone())
     }
 
     pub(crate) fn extend_runtime_feature_enablement<I>(&self, enablement: I) -> Result<(), ()>

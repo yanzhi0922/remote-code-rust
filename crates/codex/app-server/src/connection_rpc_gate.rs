@@ -1,6 +1,7 @@
 use std::future::Future;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 
-use tokio::sync::Mutex;
 use tokio_util::task::TaskTracker;
 
 /// Per-connection gate for initialized RPC handler execution.
@@ -9,15 +10,14 @@ use tokio_util::task::TaskTracker;
 /// handlers that already acquired a token to finish.
 #[derive(Debug)]
 pub(crate) struct ConnectionRpcGate {
-    accepting: Mutex<bool>,
+    accepting: AtomicBool,
     tasks: TaskTracker,
 }
 
 impl ConnectionRpcGate {
     pub(crate) fn new() -> Self {
-        let accepting = true;
         Self {
-            accepting: Mutex::new(accepting),
+            accepting: AtomicBool::new(true),
             tasks: TaskTracker::new(),
         }
     }
@@ -27,8 +27,7 @@ impl ConnectionRpcGate {
         F: Future<Output = ()>,
     {
         let token = {
-            let accepting = self.accepting.lock().await;
-            if !*accepting {
+            if !self.accepting.load(Ordering::Acquire) {
                 return;
             }
             self.tasks.token()
@@ -39,17 +38,14 @@ impl ConnectionRpcGate {
     }
 
     pub(crate) async fn shutdown(&self) {
-        {
-            let mut accepting = self.accepting.lock().await;
-            *accepting = false;
-            self.tasks.close();
-        }
+        self.accepting.store(false, Ordering::Release);
+        self.tasks.close();
         self.tasks.wait().await;
     }
 
     #[cfg(test)]
-    async fn is_accepting(&self) -> bool {
-        *self.accepting.lock().await
+    fn is_accepting(&self) -> bool {
+        self.accepting.load(Ordering::Acquire)
     }
 
     #[cfg(test)]
@@ -102,7 +98,7 @@ mod tests {
         .await;
 
         assert!(!polled.load(Ordering::Acquire));
-        assert!(!gate.is_accepting().await);
+        assert!(!gate.is_accepting());
     }
 
     #[tokio::test]

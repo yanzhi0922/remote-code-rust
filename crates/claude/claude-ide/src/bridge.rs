@@ -6,7 +6,7 @@
 use crate::config::IdeConfig;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tracing::{debug, warn};
@@ -161,6 +161,9 @@ struct JsonRpcResponse {
     error: Option<JsonRpcError>,
 }
 
+/// Maximum number of pending outgoing messages before dropping the oldest.
+const MAX_OUTGOING_MESSAGES: usize = 1024;
+
 /// JSON-RPC error object.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct JsonRpcError {
@@ -184,7 +187,7 @@ pub struct IdeBridge {
     pending_responses: Arc<std::sync::Mutex<HashMap<u64, IdeResponse>>>,
     /// Outgoing message queue — serialized JSON-RPC payloads waiting to be
     /// written to the transport by the caller.
-    outgoing: Arc<std::sync::Mutex<Vec<String>>>,
+    outgoing: Arc<std::sync::Mutex<VecDeque<String>>>,
     /// Next request ID for JSON-RPC.
     next_id: Arc<std::sync::atomic::AtomicU64>,
 }
@@ -197,7 +200,7 @@ impl IdeBridge {
             config,
             connected,
             pending_responses: Arc::new(std::sync::Mutex::new(HashMap::new())),
-            outgoing: Arc::new(std::sync::Mutex::new(Vec::new())),
+            outgoing: Arc::new(std::sync::Mutex::new(VecDeque::new())),
             next_id: Arc::new(std::sync::atomic::AtomicU64::new(1)),
         }
     }
@@ -258,7 +261,10 @@ impl IdeBridge {
         );
 
         if let Ok(mut queue) = self.outgoing.lock() {
-            queue.push(payload);
+            queue.push_back(payload);
+            while queue.len() > MAX_OUTGOING_MESSAGES {
+                queue.pop_front();
+            }
         } else {
             warn!("Failed to acquire outgoing lock — notification dropped");
         }
@@ -316,7 +322,10 @@ impl IdeBridge {
 
         // Enqueue the serialized request for the transport layer.
         if let Ok(mut queue) = self.outgoing.lock() {
-            queue.push(payload);
+            queue.push_back(payload);
+            while queue.len() > MAX_OUTGOING_MESSAGES {
+                queue.pop_front();
+            }
         } else {
             warn!("Failed to acquire outgoing lock — notification dropped");
         }
@@ -399,7 +408,7 @@ impl IdeBridge {
     /// transport (e.g., via LSP-style Content-Length framing over stdio).
     pub fn drain_outgoing(&self) -> Vec<String> {
         match self.outgoing.lock() {
-            Ok(mut queue) => std::mem::take(&mut *queue),
+            Ok(mut queue) => queue.drain(..).collect(),
             Err(e) => {
                 warn!("Failed to acquire outgoing lock: {e} — messages lost");
                 Vec::new()

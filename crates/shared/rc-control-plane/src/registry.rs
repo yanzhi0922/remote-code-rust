@@ -1,6 +1,6 @@
 //! In-memory registry for runners, sessions, approvals, and artifacts.
 
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::sync::Arc;
 
 use chrono::{DateTime, Duration, Utc};
@@ -54,6 +54,14 @@ pub(crate) struct Registry {
     /// Populated when a runner registers via `AuthPrincipal::User`.
     #[serde(default)]
     pub(crate) runner_owners: BTreeMap<String, String>,
+    /// Reverse index: session_id -> runner_id for O(1) lookup.
+    /// Maintained automatically by commit_session / apply_session_state_update /
+    /// commit_pending_session_dispatch / reap_orphaned_assigned_sessions.
+    #[serde(default)]
+    pub(crate) session_runner_index: HashMap<Uuid, String>,
+    /// Reverse index: token_hash -> device_id for O(1) device auth lookup.
+    #[serde(default)]
+    pub(crate) token_hash_to_device: HashMap<String, Uuid>,
 }
 
 /// Stored push notification token for a trusted device.
@@ -296,6 +304,8 @@ impl Registry {
         if removed.owner {
             self.owner_device_id = None;
         }
+        // Clean up token hash index.
+        self.token_hash_to_device.retain(|_, &mut did| did != device_id);
         // Also remove any push tokens for this device
         self.push_tokens.remove(&device_id);
         Ok(removed.public_record())
@@ -326,12 +336,21 @@ impl Registry {
             }
         }
 
-        // Fallback: refresh token.
+        // Fallback: refresh token via reverse index (O(1)).
         let device_id = self
-            .trusted_devices
-            .values()
-            .find(|device| constant_time_value_eq(&hash, &device.token_hash))
-            .map(|device| device.device_id)?;
+            .token_hash_to_device
+            .get(&hash)
+            .copied()
+            .or_else(|| {
+                // Backfill index on miss (handles entries loaded from persistence).
+                let found = self
+                    .trusted_devices
+                    .values()
+                    .find(|device| constant_time_value_eq(&hash, &device.token_hash))
+                    .map(|device| device.device_id)?;
+                self.token_hash_to_device.insert(hash.clone(), found);
+                Some(found)
+            })?;
         let device = self.trusted_devices.get_mut(&device_id)?;
         device.last_seen_at = now;
         Some((device.public_record(), false))
@@ -352,11 +371,21 @@ impl Registry {
         let now = Utc::now();
 
         let device_id = self
-            .trusted_devices
-            .values()
-            .find(|device| constant_time_value_eq(&hash, &device.token_hash))
-            .map(|device| device.device_id)
-            .ok_or_else(|| ApiError::unauthorized("invalid or expired refresh token".to_owned()))?;
+            .token_hash_to_device
+            .get(&hash)
+            .copied()
+            .ok_or_else(|| ApiError::unauthorized("invalid or expired refresh token".to_owned()))
+            .or_else(|err| {
+                // Backfill index on miss.
+                let found = self
+                    .trusted_devices
+                    .values()
+                    .find(|device| constant_time_value_eq(&hash, &device.token_hash))
+                    .map(|device| device.device_id)
+                    .ok_or_else(|| err.clone())?;
+                self.token_hash_to_device.insert(hash.clone(), found);
+                Ok(found)
+            })?;
 
         let new_access_token = mint_secret("rcat");
         let access_hash = sha256_hex(&new_access_token);
@@ -424,6 +453,10 @@ impl Registry {
         };
         self.owner_device_id = Some(device_id);
         self.trusted_devices.insert(device_id, record.clone());
+        self.token_hash_to_device.insert(record.token_hash.clone(), device_id);
+        if let Some(ref at_hash) = record.access_token_hash {
+            self.token_hash_to_device.insert(at_hash.clone(), device_id);
+        }
         Ok(DualTokenResponse {
             device: record.public_record(),
             access_token,
@@ -514,7 +547,13 @@ impl Registry {
         };
         let public_record = record.public_record();
         let device_id = record.device_id;
+        let refresh_hash = record.token_hash.clone();
+        let access_hash = record.access_token_hash.clone();
         self.trusted_devices.insert(device_id, record);
+        self.token_hash_to_device.insert(refresh_hash, device_id);
+        if let Some(at_hash) = access_hash {
+            self.token_hash_to_device.insert(at_hash, device_id);
+        }
         Ok(DualTokenResponse {
             device: public_record,
             access_token,
@@ -746,6 +785,9 @@ impl Registry {
                 record.session_id
             )));
         }
+        if let Some(ref runner_id) = record.owner_runner_id {
+            self.session_runner_index.insert(record.session_id, runner_id.clone());
+        }
         self.sessions.insert(record.session_id, record.clone());
         if let Some(runner_id) = &record.owner_runner_id {
             self.refresh_runner_session_counts(runner_id, record.updated_at);
@@ -812,6 +854,9 @@ impl Registry {
         session.metadata.extend(metadata);
         let updated = session.clone();
         let owner_runner_id = updated.owner_runner_id.clone();
+        if let Some(ref runner_id) = owner_runner_id {
+            self.session_runner_index.insert(session_id, runner_id.clone());
+        }
         if let Some(runner_id) = owner_runner_id.as_deref() {
             self.refresh_runner_session_counts(runner_id, updated_at);
         }
@@ -823,10 +868,13 @@ impl Registry {
         runner_id: &str,
         timestamp: DateTime<Utc>,
     ) {
+        // Use the reverse index to only count sessions belonging to this runner,
+        // rather than scanning all sessions.
         let (active_sessions, queued_sessions) = self
-            .sessions
-            .values()
-            .filter(|session| session.owner_runner_id.as_deref() == Some(runner_id))
+            .session_runner_index
+            .iter()
+            .filter(|(_, rid)| *rid == runner_id)
+            .filter_map(|(sid, _)| self.sessions.get(sid))
             .fold((0usize, 0usize), |(active, queued), session| {
                 let active = if matches!(
                     session.state,
@@ -879,6 +927,7 @@ impl Registry {
                 session.state = SessionState::Pending;
                 session.owner_runner_id = None;
                 session.updated_at = now;
+                self.session_runner_index.remove(&session.session_id);
                 reaped.push((session.session_id, runner_id, previous_state));
                 continue;
             };
@@ -887,6 +936,7 @@ impl Registry {
                 session.state = SessionState::Pending;
                 session.owner_runner_id = None;
                 session.updated_at = now;
+                self.session_runner_index.remove(&session.session_id);
                 runners_needing_refresh.push(runner_id.clone());
                 reaped.push((session.session_id, runner_id, previous_state));
             }
@@ -1268,6 +1318,7 @@ impl Registry {
         session.metadata = dispatched.metadata.clone();
         session.updated_at = dispatched.updated_at;
         let updated = session.clone();
+        self.session_runner_index.insert(session_id, runner_id.to_owned());
         self.refresh_runner_session_counts(runner_id, updated.updated_at);
         Ok((updated, previous_state))
     }
@@ -1314,6 +1365,9 @@ impl Registry {
         Ok(selected)
     }
 
+    /// Maximum number of queued commands per runner.
+    const MAX_COMMANDS_PER_RUNNER: usize = 256;
+
     pub(crate) fn enqueue_runner_command(
         &mut self,
         runner_id: &str,
@@ -1330,10 +1384,21 @@ impl Registry {
             created_at: Utc::now(),
             body,
         };
-        self.queued_runner_commands
+        let queue = self
+            .queued_runner_commands
             .entry(runner_id.to_owned())
-            .or_default()
-            .push_back(command.clone());
+            .or_default();
+        if queue.len() >= Self::MAX_COMMANDS_PER_RUNNER {
+            let dropped = queue.pop_front();
+            if let Some(dropped) = dropped {
+                tracing::warn!(
+                    command_id = %dropped.command_id,
+                    runner_id,
+                    "runner command queue full; dropped oldest command"
+                );
+            }
+        }
+        queue.push_back(command.clone());
         Ok(command)
     }
 

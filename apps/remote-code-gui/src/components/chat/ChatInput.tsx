@@ -439,8 +439,10 @@ export function ChatInput() {
   };
 
   const lastCommittedModel = useRef(modelDraft.trim());
+  const modelDraftRef = useRef(modelDraft);
+  modelDraftRef.current = modelDraft;
   const commitModelDraft = async () => {
-    const trimmed = modelDraft.trim();
+    const trimmed = modelDraftRef.current.trim();
     if (trimmed === lastCommittedModel.current) return;
     lastCommittedModel.current = trimmed;
     await updateSettings({ provider_model: trimmed });

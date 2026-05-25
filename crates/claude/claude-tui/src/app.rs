@@ -3,6 +3,8 @@
 //! [`App`] holds all UI state and processes actions from the Vim state machine
 //! and event handler. It is the single source of truth for what the TUI renders.
 
+use std::collections::VecDeque;
+
 use crate::message::{
     ChatMessage, McpServerStatus, MessageRole, ModelInfo, PermissionRequest, StatusBarInfo,
     ToolCallInfo,
@@ -103,7 +105,7 @@ pub struct App {
     /// Style configuration.
     pub style: StyleConfig,
     /// Input history for up/down navigation.
-    pub input_history: Vec<String>,
+    pub input_history: VecDeque<String>,
     /// Current position in input history.
     pub history_index: usize,
     /// Saved buffer when navigating history.
@@ -132,7 +134,7 @@ impl App {
             mcp_servers: Vec::new(),
             model_info: ModelInfo::default(),
             style: StyleConfig::dark(),
-            input_history: Vec::new(),
+            input_history: VecDeque::new(),
             history_index: 0,
             saved_buffer: String::new(),
             spinner_frame: 0,
@@ -262,10 +264,10 @@ impl App {
 
         // Save to history.
         const MAX_HISTORY: usize = 1000;
-        if self.input_history.last() != Some(&text) {
-            self.input_history.push(text.clone());
+        if self.input_history.back() != Some(&text) {
+            self.input_history.push_back(text.clone());
             if self.input_history.len() > MAX_HISTORY {
-                self.input_history.remove(0);
+                self.input_history.pop_front();
             }
         }
         self.history_index = self.input_history.len();

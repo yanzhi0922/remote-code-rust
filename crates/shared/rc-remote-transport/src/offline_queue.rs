@@ -12,6 +12,8 @@ use crate::transport::TransportCommand;
 const MAX_QUEUE_SIZE: usize = 100;
 /// Commands older than this are considered stale and dropped on replay.
 const STALE_THRESHOLD_SECS: i64 = 300; // 5 minutes
+/// Maximum retry count before a command is permanently dropped.
+const MAX_RETRY_COUNT: u32 = 10;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QueuedCommand {
@@ -62,14 +64,18 @@ impl OfflineQueue {
     }
 
     /// Drain all non-stale commands, ordered oldest first.
+    /// Commands exceeding MAX_RETRY_COUNT are permanently dropped.
     pub async fn drain(&self) -> Vec<QueuedCommand> {
         let now = chrono::Utc::now().timestamp();
         let mut queue = self.inner.write().await;
-        let (valid, stale): (Vec<_>, Vec<_>) = queue
+        let (valid, dropped): (Vec<_>, Vec<_>) = queue
             .drain(..)
-            .partition(|item| now - item.queued_at < self.stale_threshold_secs);
-        if !stale.is_empty() {
-            tracing::info!("dropped {} stale offline commands", stale.len(),);
+            .partition(|item| {
+                now - item.queued_at < self.stale_threshold_secs
+                    && item.retry_count <= MAX_RETRY_COUNT
+            });
+        if !dropped.is_empty() {
+            tracing::info!("dropped {} stale or exceeded-retry offline commands", dropped.len());
         }
         valid
     }

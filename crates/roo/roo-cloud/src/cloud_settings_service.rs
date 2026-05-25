@@ -51,20 +51,15 @@ impl CloudSettingsService {
     /// Fetch settings from the cloud API.
     /// Returns true on success, false on failure.
     pub async fn fetch_settings(&self) -> bool {
-        let token = self.session_token.read().await;
-        let token = match token.as_ref() {
-            Some(t) => t.clone(),
-            None => return false,
-        };
-        drop(token);
-
         let url = format!("{}/api/extension-settings", get_roo_code_api_url());
 
         let client = shared_http_client();
-        let token_guard = self.session_token.read().await;
-        let token_val = match token_guard.as_ref() {
-            Some(t) => t.as_str(),
-            None => return false,
+        let token_val = {
+            let token_guard = self.session_token.read().await;
+            match token_guard.as_ref() {
+                Some(t) => t.clone(),
+                None => return false,
+            }
         };
 
         let response = client
@@ -118,23 +113,29 @@ impl CloudSettingsService {
             features: self.parse_user_features(&user_data["features"]),
         };
 
-        // Check for changes
-        let mut org_guard = self.org_settings.write().await;
-        let mut user_guard = self.user_settings.write().await;
+        // Check for changes — acquire read locks first, then write locks only when needed
+        // to avoid holding both write locks simultaneously (deadlock prevention).
+        let org_changed = {
+            let org_guard = self.org_settings.read().await;
+            org_guard
+                .as_ref()
+                .map_or(true, |existing| existing.version != new_org.version)
+        };
 
-        let org_changed = org_guard
-            .as_ref()
-            .map_or(true, |existing| existing.version != new_org.version);
-
-        let user_changed = user_guard
-            .as_ref()
-            .map_or(true, |existing| existing.version != new_user.version);
+        let user_changed = {
+            let user_guard = self.user_settings.read().await;
+            user_guard
+                .as_ref()
+                .map_or(true, |existing| existing.version != new_user.version)
+        };
 
         if org_changed {
+            let mut org_guard = self.org_settings.write().await;
             *org_guard = Some(new_org);
         }
 
         if user_changed {
+            let mut user_guard = self.user_settings.write().await;
             *user_guard = Some(new_user);
         }
 
