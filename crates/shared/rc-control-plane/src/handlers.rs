@@ -298,8 +298,11 @@ pub(crate) async fn refresh_token(
 ) -> Result<Json<TokenRefreshResponse>, ApiError> {
     let response = {
         let mut registry = service.registry.write().await;
-        let (_device, access_token) = registry.refresh_access_token(&request.refresh_token)?;
-        TokenRefreshResponse { access_token }
+        let (_device, access_token, refresh_token) = registry.refresh_access_token(&request.refresh_token)?;
+        TokenRefreshResponse {
+            access_token,
+            refresh_token: Some(refresh_token),
+        }
     };
     persist_state_logged(&service).await;
     Ok(Json(response))

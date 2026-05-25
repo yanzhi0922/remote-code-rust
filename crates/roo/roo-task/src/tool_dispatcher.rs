@@ -2964,29 +2964,20 @@ impl ToolHandler for CustomToolHandler {
                             obj.remove("_custom_tool_name");
                         }
 
-                        // TODO(M1): This block_in_place/block_on pattern should be replaced with
-                        // native async once the caller (`execute` trait method) is fully async.
-                        // It works correctly in the current multi-threaded runtime but is not
-                        // idiomatic and will panic on a single-threaded runtime.
-                        // The `ToolHandler::execute` trait method is synchronous, so we cannot
-                        // make this truly async without changing the trait.
-                        let response = tokio::task::block_in_place(|| {
-                            tokio::runtime::Handle::current().block_on(async {
-                                client
-                                    .post(&url)
-                                    .header("Content-Type", "application/json")
-                                    .json(&body_params)
-                                    .send()
-                                    .await
-                            })
-                        });
+                        // Direct .await — the enclosing execute() is async fn,
+                        // so block_in_place/block_on is unnecessary and would panic
+                        // on a single-threaded runtime (e.g., current_thread tests).
+                        let response = client
+                            .post(&url)
+                            .header("Content-Type", "application/json")
+                            .json(&body_params)
+                            .send()
+                            .await;
 
                         match response {
                             Ok(resp) => {
                                 let status = resp.status();
-                                match tokio::task::block_in_place(|| {
-                                    tokio::runtime::Handle::current().block_on(resp.text())
-                                }) {
+                                match resp.text().await {
                                     Ok(body) => {
                                         if status.is_success() {
                                             ToolExecutionResult::success(body)
@@ -3485,11 +3476,11 @@ impl AutoApprovalChecker {
             };
         }
 
-        if self.auto_approved_tools.contains(&tool_name.to_string()) {
+        if self.auto_approved_tools.iter().any(|t| t == tool_name) {
             return AutoApprovalResult::Approved;
         }
 
-        if self.require_approval_tools.contains(&tool_name.to_string()) {
+        if self.require_approval_tools.iter().any(|t| t == tool_name) {
             return AutoApprovalResult::RequiresApproval {
                 reason: format!("Tool '{}' requires explicit user approval", tool_name),
             };

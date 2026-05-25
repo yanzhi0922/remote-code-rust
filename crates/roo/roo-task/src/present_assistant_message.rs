@@ -1918,7 +1918,7 @@ mod tests {
             native_args.insert(k.clone(), Value::String(v.clone()));
         }
         AssistantMessageContent::ToolUse(ToolUse {
-            content_type: "tool_use".to_string(),
+            content_type: "tool_use",
             name: name.to_string(),
             params,
             partial,
@@ -1936,7 +1936,7 @@ mod tests {
         partial: bool,
     ) -> AssistantMessageContent {
         AssistantMessageContent::McpToolUse(McpToolUse {
-            content_type: "mcp_tool_use".to_string(),
+            content_type: "mcp_tool_use",
             name: format!("mcp--{}--{}", server_name, tool_name),
             id: id.to_string(),
             server_name: server_name.to_string(),
@@ -2003,7 +2003,7 @@ mod tests {
     fn test_tool_use_missing_id() {
         let mut pam = PresentAssistantMessage::new();
         let tool_block = ToolUse {
-            content_type: "tool_use".to_string(),
+            content_type: "tool_use",
             name: "read_file".to_string(),
             params: HashMap::new(),
             native_args: None,
@@ -2109,7 +2109,7 @@ mod tests {
         let mut params = HashMap::new();
         params.insert("command".to_string(), "ls -la".to_string());
         let tool = ToolUse {
-            content_type: "tool_use".to_string(),
+            content_type: "tool_use",
             name: "execute_command".to_string(),
             params: params.clone(),
             partial: false,
@@ -2126,7 +2126,7 @@ mod tests {
         let mut params2 = HashMap::new();
         params2.insert("path".to_string(), "/test.rs".to_string());
         let tool2 = ToolUse {
-            content_type: "tool_use".to_string(),
+            content_type: "tool_use",
             name: "read_file".to_string(),
             params: params2,
             partial: false,
@@ -2302,7 +2302,7 @@ mod tests {
         let mut native_args = serde_json::Map::new();
         native_args.insert("arg".to_string(), Value::String("value".to_string()));
         pam.set_assistant_message_content(vec![AssistantMessageContent::ToolUse(ToolUse {
-            content_type: "tool_use".to_string(),
+            content_type: "tool_use",
             name: "nonexistent_tool".to_string(),
             params,
             partial: false,
@@ -2325,7 +2325,7 @@ mod tests {
         let mut pam = PresentAssistantMessage::new();
         let params = HashMap::new();
         pam.set_assistant_message_content(vec![AssistantMessageContent::ToolUse(ToolUse {
-            content_type: "tool_use".to_string(),
+            content_type: "tool_use",
             name: "read_file".to_string(),
             params,
             partial: false,
@@ -2505,7 +2505,7 @@ mod tests {
             Value::String("/test.txt".to_string()),
         );
         pam.set_assistant_message_content(vec![AssistantMessageContent::ToolUse(ToolUse {
-            content_type: "tool_use".to_string(),
+            content_type: "tool_use",
             name: "search_replace".to_string(),
             params,
             partial: false,
@@ -2532,7 +2532,7 @@ mod tests {
         params.insert("regex".to_string(), "pattern".to_string());
         params.insert("file_pattern".to_string(), "*.rs".to_string());
         let tool = ToolUse {
-            content_type: "tool_use".to_string(),
+            content_type: "tool_use",
             name: "search_files".to_string(),
             params: params.clone(),
             partial: false,
@@ -2551,7 +2551,7 @@ mod tests {
         params2.insert("mode_slug".to_string(), "architect".to_string());
         params2.insert("reason".to_string(), "need design".to_string());
         let tool2 = ToolUse {
-            content_type: "tool_use".to_string(),
+            content_type: "tool_use",
             name: "switch_mode".to_string(),
             params: params2,
             partial: false,
@@ -2570,7 +2570,7 @@ mod tests {
         params3.insert("mode".to_string(), "code".to_string());
         params3.insert("message".to_string(), "fix bug".to_string());
         let tool3 = ToolUse {
-            content_type: "tool_use".to_string(),
+            content_type: "tool_use",
             name: "new_task".to_string(),
             params: params3,
             partial: false,

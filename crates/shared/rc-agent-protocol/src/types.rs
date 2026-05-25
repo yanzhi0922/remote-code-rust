@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 /// Supported Agent types.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum AgentType {
     /// In-process Agent — directly calls rc-* crates via callbacks.
     #[default]
@@ -43,6 +44,7 @@ impl std::fmt::Display for AgentType {
 /// Runtime status of an Agent instance.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum AgentStatus {
     /// Agent is being initialized.
     Starting,
@@ -75,6 +77,7 @@ impl std::fmt::Display for AgentStatus {
 /// Capabilities that an Agent may support.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum AgentCapability {
     /// Supports streaming text deltas.
     Streaming,

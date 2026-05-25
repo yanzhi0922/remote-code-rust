@@ -1185,19 +1185,8 @@ fn read_control_plane_auth_token_env() -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
-// TODO: extract to shared utility (duplicated in rc-runner-host)
-fn encode_path_segment(raw: &str) -> String {
-    let mut encoded = String::with_capacity(raw.len());
-    for byte in raw.bytes() {
-        match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
-                encoded.push(char::from(byte));
-            }
-            _ => encoded.push_str(&format!("%{byte:02X}")),
-        }
-    }
-    encoded
-}
+// Shared utility re-exported from rc-agent-protocol.
+pub use rc_agent_protocol::encode_path_segment;
 
 fn session_counts(sessions: &BTreeMap<Uuid, RunnerSessionRecord>) -> (usize, usize) {
     let active_sessions = sessions
@@ -1308,7 +1297,7 @@ fn extract_query_auth_token(query: Option<&str>) -> Option<String> {
     None
 }
 
-fn percent_decode_query_value(raw: &str) -> String {
+pub fn percent_decode_query_value(raw: &str) -> String {
     let bytes = raw.as_bytes();
     let mut decoded = Vec::with_capacity(bytes.len());
     let mut index = 0usize;
@@ -1761,18 +1750,18 @@ impl IntoResponse for ApiError {
     }
 }
 
-fn parse_socket_addr(raw: &str) -> Result<SocketAddr> {
+pub fn parse_socket_addr(raw: &str) -> Result<SocketAddr> {
     SocketAddr::from_str(raw).with_context(|| format!("invalid socket address `{raw}`"))
 }
 
-fn parse_env_number<T>(key: &str) -> Option<T>
+pub fn parse_env_number<T>(key: &str) -> Option<T>
 where
     T: FromStr,
 {
     read_env(key).and_then(|value| value.parse::<T>().ok())
 }
 
-fn read_env(key: &str) -> Option<String> {
+pub fn read_env(key: &str) -> Option<String> {
     env::var(key).ok().and_then(|value| {
         let trimmed = value.trim();
         if trimmed.is_empty() {

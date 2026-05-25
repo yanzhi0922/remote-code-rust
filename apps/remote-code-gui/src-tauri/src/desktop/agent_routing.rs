@@ -17,6 +17,7 @@ fn agent_type_dir_name(agent_type: &ProtocolAgentType) -> &'static str {
         ProtocolAgentType::RemoteClaude => "remote_claude",
         ProtocolAgentType::RemoteRoo => "remote_roo",
         ProtocolAgentType::RemoteCodex => "remote_codex",
+        _ => "unknown",
     }
 }
 
@@ -26,6 +27,7 @@ fn agent_binary_name(agent_type: &ProtocolAgentType) -> String {
         ProtocolAgentType::RemoteClaude => "remote-claude",
         ProtocolAgentType::RemoteRoo => "remote-roo",
         ProtocolAgentType::RemoteCodex => "remote-codex",
+        _ => "unknown-agent",
     };
     if cfg!(windows) {
         format!("{name}.exe")

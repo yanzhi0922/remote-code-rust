@@ -89,8 +89,8 @@ impl Provider for VscodeLmHandler {
     async fn create_message(
         &self,
         system_prompt: &str,
-        messages: Vec<roo_types::api::ApiMessage>,
-        tools: Option<Vec<serde_json::Value>>,
+        messages: &[roo_types::api::ApiMessage],
+        tools: Option<&[serde_json::Value]>,
         metadata: CreateMessageMetadata,
     ) -> Result<ApiStream, roo_provider::ProviderError> {
         // In a VS Code extension context, this would forward to the VS Code LM API.

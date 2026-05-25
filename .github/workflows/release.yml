@@ -34,6 +34,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - run: cargo install cargo-audit --locked
       - run: cargo audit --quiet
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: npm ci
         working-directory: apps/remote-code-gui
       - run: npm audit --audit-level=moderate --registry=https://registry.npmjs.org/

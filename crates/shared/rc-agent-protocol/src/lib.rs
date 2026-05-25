@@ -55,6 +55,7 @@ pub use error::{AdapterError, AgentProtocolError};
 pub use events::{AgentResult, ToolCallInfo, UnifiedAgentEvent, UsageInfo};
 pub use permission::{PermissionDecision, PermissionRequest};
 pub use types::{AgentCapability, AgentConfig, AgentInfo, AgentStatus, AgentType};
+pub use util::encode_path_segment;
 
 #[cfg(feature = "test-helpers")]
 pub use adapters::{InProcessAdapter, RemoteClaudeAdapter, RemoteCodexAdapter, RemoteRooAdapter};

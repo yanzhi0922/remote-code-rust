@@ -86,18 +86,19 @@ impl Provider for MiniMaxHandler {
     async fn create_message(
         &self,
         system_prompt: &str,
-        mut messages: Vec<roo_types::api::ApiMessage>,
-        tools: Option<Vec<serde_json::Value>>,
+        messages: &[roo_types::api::ApiMessage],
+        tools: Option<&[serde_json::Value]>,
         metadata: CreateMessageMetadata,
     ) -> Result<ApiStream, roo_provider::ProviderError> {
         // MiniMax thinking models error when they receive standalone user messages
         // after tool_result blocks. Merge environment_details text into the
         // preceding tool_result to preserve reasoning continuity.
         // Source: src/api/providers/minimax.ts line 95
+        let mut messages = messages.to_vec();
         merge_environment_details_for_minimax(&mut messages);
 
         self.inner
-            .create_message(system_prompt, messages, tools, metadata)
+            .create_message(system_prompt, &messages, tools, metadata)
             .await
     }
 

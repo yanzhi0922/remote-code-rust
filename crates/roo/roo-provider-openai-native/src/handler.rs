@@ -242,21 +242,21 @@ impl Provider for OpenAiNativeHandler {
     async fn create_message(
         &self,
         system_prompt: &str,
-        messages: Vec<roo_types::api::ApiMessage>,
-        tools: Option<Vec<serde_json::Value>>,
+        messages: &[roo_types::api::ApiMessage],
+        tools: Option<&[serde_json::Value]>,
         metadata: CreateMessageMetadata,
     ) -> Result<ApiStream> {
         let reasoning_effort = self.get_reasoning_effort();
 
         // Format conversation
-        let formatted_input = responses_api::format_full_conversation(&messages);
+        let formatted_input = responses_api::format_full_conversation(messages);
 
         // Build request body
         let body = responses_api::build_request_body(RequestBodyParams {
             model_id: &self.model_id,
             formatted_input,
             system_prompt,
-            tools: tools.as_deref(),
+            tools,
             tool_choice: metadata.tool_choice.as_ref(),
             parallel_tool_calls: metadata.parallel_tool_calls,
             reasoning_effort: reasoning_effort.as_deref(),

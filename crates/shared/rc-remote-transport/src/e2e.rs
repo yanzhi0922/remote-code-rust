@@ -37,20 +37,31 @@ impl E2eSession {
     /// - Uniform bit distribution even if the DH output is biased.
     /// - Cryptographic domain separation from the raw DH secret.
     /// - Forward-compatibility if the protocol needs additional key material.
-    pub fn from_secret_and_public(secret: EphemeralSecret, peer_public: &PublicKey) -> Self {
+    ///
+    /// When `session_id` is `Some`, it is appended to the HKDF info parameter
+    /// to bind the derived key to a specific session, ensuring key isolation
+    /// per session even if the same DH secret is reused.
+    pub fn from_secret_and_public(
+        secret: EphemeralSecret,
+        peer_public: &PublicKey,
+        session_id: Option<&str>,
+    ) -> Self {
         let shared = secret.diffie_hellman(peer_public);
 
-        // Derive a 256-bit AES key from the raw DH shared secret via HKDF-SHA256.
-        // Security: raw DH output must not be used directly as a symmetric key.
-        //
-        // TODO(security): The HKDF info field (HKDF_INFO) is currently a static
-        // constant, meaning the derived key is not bound to a specific session.
-        // If two sessions share the same DH secret (e.g., due to ephemeral key
-        // reuse), they would derive the same AES key. Bind the session ID into
-        // the HKDF info parameter to ensure key isolation per session.
+        // Build HKDF info: protocol label + optional session binding.
+        let info = match session_id {
+            Some(sid) => {
+                let mut info = HKDF_INFO.to_vec();
+                info.extend_from_slice(b"/session/");
+                info.extend_from_slice(sid.as_bytes());
+                info
+            }
+            None => HKDF_INFO.to_vec(),
+        };
+
         let hkdf = Hkdf::<Sha256>::new(None, shared.as_bytes());
         let mut aes_key_bytes = [0u8; 32];
-        hkdf.expand(HKDF_INFO, &mut aes_key_bytes)
+        hkdf.expand(&info, &mut aes_key_bytes)
             .expect("32 bytes is a valid HKDF-SHA256 output length");
 
         let key = aes_gcm::Key::<Aes256Gcm>::from_slice(&aes_key_bytes);
@@ -101,8 +112,8 @@ mod tests {
         let (secret_a, public_a) = E2eSession::generate_keypair();
         let (secret_b, public_b) = E2eSession::generate_keypair();
 
-        let session_a = E2eSession::from_secret_and_public(secret_a, &public_b);
-        let session_b = E2eSession::from_secret_and_public(secret_b, &public_a);
+        let session_a = E2eSession::from_secret_and_public(secret_a, &public_b, None);
+        let session_b = E2eSession::from_secret_and_public(secret_b, &public_a, None);
 
         let plaintext = b"hello, encrypted world!";
         let encrypted = session_a.encrypt(plaintext).unwrap();
@@ -111,12 +122,26 @@ mod tests {
     }
 
     #[test]
+    fn session_binding_produces_different_keys() {
+        let (secret_a, public_a) = E2eSession::generate_keypair();
+        let (secret_b, public_b) = E2eSession::generate_keypair();
+
+        let session_no_id = E2eSession::from_secret_and_public(secret_a, &public_b, None);
+        let session_with_id = E2eSession::from_secret_and_public(secret_b, &public_a, Some("test-session-123"));
+
+        // These two sessions use different HKDF info, so the derived keys
+        // should differ — encryption from one should NOT decrypt with the other.
+        let encrypted_no_id = session_no_id.encrypt(b"test").unwrap();
+        assert!(session_with_id.decrypt(&encrypted_no_id).is_err());
+    }
+
+    #[test]
     fn tampered_ciphertext_fails() {
         let (secret_a, public_a) = E2eSession::generate_keypair();
         let (secret_b, public_b) = E2eSession::generate_keypair();
 
-        let session_a = E2eSession::from_secret_and_public(secret_a, &public_b);
-        let session_b = E2eSession::from_secret_and_public(secret_b, &public_a);
+        let session_a = E2eSession::from_secret_and_public(secret_a, &public_b, None);
+        let session_b = E2eSession::from_secret_and_public(secret_b, &public_a, None);
 
         let mut encrypted = session_a.encrypt(b"secret data").unwrap();
         // Tamper with ciphertext.
@@ -134,21 +159,21 @@ mod tests {
         let (secret_b, public_b) = E2eSession::generate_keypair();
 
         let raw_shared = secret_a.diffie_hellman(&public_b);
-        let _session = E2eSession::from_secret_and_public(secret_b, &public_a);
+        let _session = E2eSession::from_secret_and_public(secret_b, &public_a, None);
 
         // The raw DH output is 32 bytes; the derived AES key is also 32 bytes.
         // We cannot inspect the key inside E2eSession directly, but we can
         // verify the two sessions still interoperate (proving HKDF is
         // deterministic and symmetric).
         let session_a =
-            E2eSession::from_secret_and_public(EphemeralSecret::random_from_rng(OsRng), &public_b);
+            E2eSession::from_secret_and_public(EphemeralSecret::random_from_rng(OsRng), &public_b, None);
         // Different ephemeral secrets must produce a different shared secret
         // and therefore a different derived key — encryption should fail to
         // decrypt with the wrong session.
         let encrypted = session_a.encrypt(b"test").unwrap();
         // session_a and session_b share no key — this MUST fail.
         let (other_secret, other_public) = E2eSession::generate_keypair();
-        let wrong_session = E2eSession::from_secret_and_public(other_secret, &public_a);
+        let wrong_session = E2eSession::from_secret_and_public(other_secret, &public_a, None);
         assert!(wrong_session.decrypt(&encrypted).is_err());
 
         // Prevent unused variable warning for raw_shared.

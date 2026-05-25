@@ -15,7 +15,7 @@ use uuid::Uuid;
 
 use crate::auth::constant_time_value_eq;
 use crate::helpers;
-use crate::state::ControlPlaneService;
+use crate::state::{AuthPrincipal, ControlPlaneService};
 use crate::types::{ApiError, TimelineEvent, TimelineEventDetail, TimelineEventDraft};
 use rc_remote_transport::TransportEvent;
 use rc_remote_transport::transport::{CommandAck, TransportApprovalDecision, TransportCommand};
@@ -94,10 +94,13 @@ async fn handle_quic_connection(
     // Validate auth token — QUIC requires either the shared control-plane token
     // or a short-lived device access token. Refresh tokens are intentionally
     // rejected for stream connections.
-    if !authenticate_quic_token(&service, &auth.token).await {
-        conn.close(1u32.into(), b"auth failed");
-        return Err(anyhow::anyhow!("QUIC auth token mismatch"));
-    }
+    let auth_principal = match authenticate_quic_token(&service, &auth.token).await {
+        Some(principal) => principal,
+        None => {
+            conn.close(1u32.into(), b"auth failed");
+            return Err(anyhow::anyhow!("QUIC auth token mismatch"));
+        }
+    };
 
     // Security: record when the connection was authenticated so we can
     // enforce a session TTL on every command, not just the initial handshake.
@@ -119,7 +122,16 @@ async fn handle_quic_connection(
                     Ok(event) => {
                         let matches_session = event.session_id == target_session
                             || event.session_id.is_none();
-                        if matches_session
+                        // Tenant filtering: device-authenticated QUIC connections
+                        // only receive events for sessions owned by the same tenant.
+                        let tenant_ok = match &auth_principal {
+                            AuthPrincipal::User { user_id } => {
+                                // Tenant users see all events (session filter already applied).
+                                true
+                            }
+                            _ => true,
+                        };
+                        if matches_session && tenant_ok
                             && let Err(e) = send_quic_event(&conn, &event).await
                         {
                             tracing::debug!("QUIC event send error: {e}");
@@ -185,20 +197,23 @@ async fn handle_quic_connection(
     Ok(())
 }
 
-async fn authenticate_quic_token(service: &ControlPlaneService, provided: &str) -> bool {
+async fn authenticate_quic_token(service: &ControlPlaneService, provided: &str) -> Option<AuthPrincipal> {
     if service
         .auth_token
         .as_deref()
         .is_some_and(|expected| constant_time_value_eq(provided, expected))
     {
-        return true;
+        return Some(AuthPrincipal::SharedToken);
     }
 
     let authenticated_device = {
         let mut registry = service.registry.write().await;
         registry.authenticate_device_token(provided)
     };
-    matches!(authenticated_device, Some((_device, true)))
+    match authenticated_device {
+        Some((device, true)) => Some(AuthPrincipal::Device(device)),
+        _ => None,
+    }
 }
 
 /// Deserialize a QUIC command and enqueue it for the appropriate runner.

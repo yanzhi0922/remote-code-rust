@@ -1181,6 +1181,7 @@ impl InProcessSessionManager {
                     None => Err(anyhow!("Codex adapter not started")),
                 }
             }
+            _ => Err(anyhow!("unsupported agent type for resolve_permission")),
         };
 
         if let Err(error) = result {
@@ -1370,6 +1371,9 @@ impl InProcessSessionManager {
                     adapters.insert(sid.clone(), adapter);
                 }
             }
+            _ => {
+                return Err(anyhow!("unsupported agent type: {:?}", agent_type));
+            }
         }
 
         self.sessions.lock().await.insert(
@@ -1455,6 +1459,7 @@ impl InProcessSessionManager {
                         None => Err(anyhow!("adapter not started")),
                     }
                 }
+                _ => Err(anyhow!("unsupported agent type: {agent_type:?}")),
             };
 
             match result {
@@ -1518,6 +1523,9 @@ impl InProcessSessionManager {
                     .cancel(&sid)
                     .await
                     .map_err(|error| anyhow!("Codex cancel: {error}"))?;
+            }
+            _ => {
+                return Err(anyhow!("unsupported agent type: {agent_type:?}"));
             }
         }
 

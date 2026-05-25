@@ -15,7 +15,7 @@ fn is_mcp_tool(name: &str) -> bool {
 /// Converts an array of tools to be compatible with OpenAI's strict mode.
 ///
 /// Source: `src/api/providers/base-provider.ts` — `convertToolsForOpenAI`
-pub fn convert_tools_for_openai(tools: Option<&Vec<Value>>) -> Option<Vec<Value>> {
+pub fn convert_tools_for_openai(tools: Option<&[Value]>) -> Option<Vec<Value>> {
     let tools = tools?;
 
     Some(

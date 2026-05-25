@@ -1061,8 +1061,8 @@ async fn run_single(
         let stream = handler
             .create_message(
                 system_prompt,
-                messages.clone(),
-                Some(tools_json.to_vec()),
+                &messages,
+                Some(&tools_json),
                 metadata,
             )
             .await
@@ -1198,8 +1198,8 @@ async fn run_interactive(
             let stream = handler
                 .create_message(
                     system_prompt,
-                    conversation.clone(),
-                    Some(tools_json.to_vec()),
+                    &conversation,
+                    Some(&tools_json),
                     metadata,
                 )
                 .await

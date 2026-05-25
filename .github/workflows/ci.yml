@@ -136,6 +136,8 @@ jobs:
         run: python scripts/cargo_workspace_slice.py test ${{ matrix.slice }}
       - name: Test workspace slice
         if: runner.os != 'Windows'
+        env:
+          CARGO_TEST_JOBS: "2"
         run: python scripts/cargo_workspace_slice.py test ${{ matrix.slice }}
 
   frontend:

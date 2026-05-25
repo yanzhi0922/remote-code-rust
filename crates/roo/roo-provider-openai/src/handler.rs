@@ -118,8 +118,8 @@ impl Provider for OpenAiHandler {
     async fn create_message(
         &self,
         system_prompt: &str,
-        messages: Vec<ApiMessage>,
-        tools: Option<Vec<serde_json::Value>>,
+        messages: &[ApiMessage],
+        tools: Option<&[serde_json::Value]>,
         metadata: CreateMessageMetadata,
     ) -> Result<ApiStream> {
         let model_id = self.inner.get_model().0;

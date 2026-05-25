@@ -685,6 +685,52 @@ impl SessionStore {
         Ok(self.conn.lock())
     }
 
+    /// Rewrite the NDJSON transcript file for a session with the given events.
+    ///
+    /// Performs an atomic rewrite: writes to a temporary file first, then
+    /// renames it over the original. This prevents data loss if the process
+    /// crashes mid-write.
+    ///
+    /// # Errors
+    /// Returns an error if the temporary file cannot be created, any event
+    /// cannot be serialized, or the rename fails.
+    pub fn rewrite_events(&self, session_id: Uuid, events: &[StoredEvent]) -> Result<()> {
+        let transcript_path = self.session_transcript_path(session_id);
+        let temp_path = transcript_path.with_extension("ndjson.tmp");
+
+        // Write all events to the temporary file.
+        {
+            let mut file = File::create(&temp_path)
+                .with_context(|| format!("failed to create temp file {}", temp_path.display()))?;
+            for event in events {
+                serde_json::to_writer(&mut file, event)?;
+                file.write_all(b"\n")?;
+            }
+            file.sync_data()?;
+        }
+
+        // Atomic rename (on Windows, use rename_with_replace semantics).
+        #[cfg(windows)]
+        {
+            // Windows does not support atomic rename over existing file without
+            // FILE_FLAG_DELETE_ON_CLOSE semantics. Use std::fs::rename which may
+            // fail if the target exists, then fall back to copy+delete.
+            if std::fs::rename(&temp_path, &transcript_path).is_err() {
+                std::fs::copy(&temp_path, &transcript_path)
+                    .with_context(|| format!("failed to copy temp to {}", transcript_path.display()))?;
+                let _ = std::fs::remove_file(&temp_path);
+            }
+        }
+        #[cfg(not(windows))]
+        {
+            std::fs::rename(&temp_path, &transcript_path)
+                .with_context(|| format!("failed to rename temp to {}", transcript_path.display()))?;
+        }
+
+        self.touch(session_id)?;
+        Ok(())
+    }
+
     fn try_get_session_summary(&self, session_id: Uuid) -> Result<Option<SessionSummary>> {
         let conn = self.conn()?;
         let mut statement = conn.prepare(

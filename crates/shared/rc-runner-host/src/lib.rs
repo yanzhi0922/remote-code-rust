@@ -1220,19 +1220,8 @@ fn authorize_control_plane_request(
     }
 }
 
-// TODO: extract to shared utility (duplicated in rc-runner)
-fn encode_path_segment(raw: &str) -> String {
-    let mut encoded = String::with_capacity(raw.len());
-    for byte in raw.bytes() {
-        match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
-                encoded.push(char::from(byte));
-            }
-            _ => encoded.push_str(&format!("%{byte:02X}")),
-        }
-    }
-    encoded
-}
+// Shared utility re-exported from rc-agent-protocol.
+use rc_agent_protocol::encode_path_segment;
 
 pub async fn pull_runner_commands_from_control_plane(
     client: &reqwest::Client,

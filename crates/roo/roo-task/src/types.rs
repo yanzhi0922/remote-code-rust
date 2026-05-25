@@ -527,7 +527,7 @@ pub enum TaskError {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TextContent {
     #[serde(rename = "type")]
-    pub content_type: String, // always "text"
+    pub content_type: &'static str, // always "text"
     /// The text content.
     pub content: String,
     /// Whether this is a partial (streaming) block.
@@ -542,7 +542,7 @@ pub struct TextContent {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolUse {
     #[serde(skip)]
-    pub content_type: String, // always "tool_use"
+    pub content_type: &'static str, // always "tool_use"
     /// The tool name.
     pub name: String,
     /// Stringified params for display/logging (legacy format).
@@ -577,7 +577,7 @@ pub struct ToolUse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct McpToolUse {
     #[serde(skip)]
-    pub content_type: String, // always "mcp_tool_use"
+    pub content_type: &'static str, // always "mcp_tool_use"
     /// The full MCP tool name (e.g., "mcp--serverName--toolName").
     pub name: String,
     /// The tool call ID assigned by the API.
@@ -1308,7 +1308,7 @@ mod tests {
     #[test]
     fn test_assistant_message_content_tool_use() {
         let content = AssistantMessageContent::ToolUse(ToolUse {
-            content_type: "tool_use".to_string(),
+            content_type: "tool_use",
             name: "read_file".to_string(),
             params: HashMap::new(),
             partial: false,
@@ -1326,7 +1326,7 @@ mod tests {
     #[test]
     fn test_assistant_message_content_mcp_tool_use() {
         let content = AssistantMessageContent::McpToolUse(McpToolUse {
-            content_type: "mcp_tool_use".to_string(),
+            content_type: "mcp_tool_use",
             name: "mcp--server--tool".to_string(),
             id: "call_456".to_string(),
             server_name: "server".to_string(),
@@ -1353,7 +1353,7 @@ mod tests {
 
         // ToolUse variant
         let tool_use = AssistantMessageContent::ToolUse(ToolUse {
-            content_type: "tool_use".to_string(),
+            content_type: "tool_use",
             name: "read_file".to_string(),
             params: HashMap::new(),
             partial: false,
@@ -1368,7 +1368,7 @@ mod tests {
 
         // McpToolUse variant
         let mcp = AssistantMessageContent::McpToolUse(McpToolUse {
-            content_type: "mcp_tool_use".to_string(),
+            content_type: "mcp_tool_use",
             name: "mcp--server--tool".to_string(),
             id: "call_2".to_string(),
             server_name: "server".to_string(),

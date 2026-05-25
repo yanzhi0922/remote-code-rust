@@ -411,7 +411,7 @@ impl StreamParser {
             }
 
             Some(ToolUse {
-                content_type: "tool_use".to_string(),
+                content_type: "tool_use",
                 name: tool_call.name.clone(),
                 params,
                 partial: true,
@@ -517,7 +517,7 @@ impl StreamParser {
         }
 
         Some(AssistantMessageContent::ToolUse(ToolUse {
-            content_type: "tool_use".to_string(),
+            content_type: "tool_use",
             name: normalized_name.clone(),
             params,
             partial: false,
@@ -552,7 +552,7 @@ impl StreamParser {
         let parsed = parse_mcp_tool_name(&normalized_name)?;
 
         Some(AssistantMessageContent::McpToolUse(McpToolUse {
-            content_type: "mcp_tool_use".to_string(),
+            content_type: "mcp_tool_use",
             name: name.to_string(),
             id: id.to_string(),
             server_name: parsed.0,

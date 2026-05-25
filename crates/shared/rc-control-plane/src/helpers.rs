@@ -1,9 +1,6 @@
 //! Helper functions for event matching, runner selection, and approval relay.
 
-use std::env;
-use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
-use std::str::FromStr;
 
 use anyhow::{Context, Result};
 use chrono::{Duration, Utc};
@@ -540,30 +537,10 @@ pub(crate) async fn dispatch_session_command_to_runner(
 }
 
 // ---------------------------------------------------------------------------
-// Environment helpers
+// Environment helpers (re-exported from rc-runner to avoid duplication)
 // ---------------------------------------------------------------------------
 
-pub(crate) fn parse_socket_addr(raw: &str) -> Result<SocketAddr> {
-    SocketAddr::from_str(raw).with_context(|| format!("invalid socket address `{raw}`"))
-}
-
-pub(crate) fn parse_env_number<T>(key: &str) -> Option<T>
-where
-    T: FromStr,
-{
-    read_env(key).and_then(|value| value.parse::<T>().ok())
-}
-
-pub(crate) fn read_env(key: &str) -> Option<String> {
-    env::var(key).ok().and_then(|value| {
-        let trimmed = value.trim();
-        if trimmed.is_empty() {
-            None
-        } else {
-            Some(trimmed.to_owned())
-        }
-    })
-}
+pub(crate) use rc_runner::{parse_socket_addr, parse_env_number, read_env};
 
 #[cfg(test)]
 mod tests {

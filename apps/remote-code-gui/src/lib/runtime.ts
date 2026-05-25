@@ -89,24 +89,32 @@ export function clearRemoteAccessToken(): void {
  * The control plane only accepts this key when its sha256(user_key) hash is
  * explicitly configured server-side.
  *
- * SECURITY NOTE: This uses a single pass of SHA-256 for password derivation,
- * which is NOT a proper key derivation function.  SHA-256 is fast by design,
- * making the derived key vulnerable to brute-force attacks if the hash is ever
- * compromised.  The correct approach is to use a dedicated KDF such as PBKDF2
- * (minimum 600 000 iterations), Argon2id, or scrypt.  However, the control
- * plane protocol currently expects exactly `sha256(username:password)`, so the
- * algorithm cannot be changed unilaterally here.
- *
- * TODO: When the server protocol can be updated, migrate to a proper KDF and
- * add a pepper stored in the Tauri backend's keychain.  The migration should
- * support both old (SHA-256) and new (KDF) derivations during a transition
- * period.
+ * Uses PBKDF2 with 600,000 iterations via the Web Crypto API for proper
+ * password-based key derivation.  The salt is derived from the username so
+ * that the derivation is deterministic (the server must reproduce it).
  */
 export async function deriveUserKey(username: string, password: string): Promise<string> {
-  const raw = `${username}:${password}`;
-  const encoded = new TextEncoder().encode(raw);
-  const digest = await crypto.subtle.digest('SHA-256', encoded);
-  const bytes = new Uint8Array(digest);
+  const encoded = new TextEncoder().encode(`${username}:${password}`);
+  // Use the username as salt input to make derivation deterministic.
+  const salt = new TextEncoder().encode(`remote-code-user-key:${username}`);
+  const keyMaterial = await crypto.subtle.importKey(
+    'raw',
+    encoded,
+    'PBKDF2',
+    false,
+    ['deriveBits'],
+  );
+  const bits = await crypto.subtle.deriveBits(
+    {
+      name: 'PBKDF2',
+      salt,
+      iterations: 600_000,
+      hash: 'SHA-256',
+    },
+    keyMaterial,
+    256,
+  );
+  const bytes = new Uint8Array(bits);
   let hex = '';
   for (const byte of bytes) {
     hex += byte.toString(16).padStart(2, '0');

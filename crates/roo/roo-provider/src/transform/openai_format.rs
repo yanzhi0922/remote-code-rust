@@ -272,8 +272,8 @@ pub fn sanitize_gemini_messages(messages: &[Value], model_id: &str) -> Vec<Value
 fn consolidate_reasoning_details_from_values(details: &[Value]) -> Vec<ReasoningDetail> {
     details
         .iter()
-        .filter_map(|d| serde_json::from_value(d.clone()).ok())
-        .collect::<Vec<ReasoningDetail>>()
+        .filter_map(|d| serde::Deserialize::deserialize(d).ok())
+        .collect()
 }
 
 // ---------------------------------------------------------------------------

@@ -25,6 +25,7 @@ thiserror = { workspace = true }
 tokio = { workspace = true, features = ["fs", "sync", "time"] }
 toml = { workspace = true }
 tracing = { workspace = true }
+getrandom = { workspace = true }
 
 [dev-dependencies]
 codex-agent-identity = { workspace = true }

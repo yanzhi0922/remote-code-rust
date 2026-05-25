@@ -51,6 +51,27 @@ pub fn standard_capabilities(extra: &[AgentCapability]) -> HashSet<AgentCapabili
     caps
 }
 
+/// Percent-encode a path segment for use in URLs.
+///
+/// Encodes all characters that are not unreserved (A-Z, a-z, 0-9, `-`, `.`, `_`, `~`)
+/// or reserved sub-delims (`!`, `$`, `&`, `'`, `(`, `)`, `*`, `+`, `,`, `;`, `=`).
+/// This is suitable for encoding individual path segments between `/` delimiters.
+pub fn encode_path_segment(raw: &str) -> String {
+    const UNRESERVED: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~";
+    const SUB_DELIMS: &[u8] = b"!$&'()*+,;=";
+
+    let mut encoded = String::with_capacity(raw.len());
+    for byte in raw.bytes() {
+        if UNRESERVED.contains(&byte) || SUB_DELIMS.contains(&byte) {
+            encoded.push(byte as char);
+        } else {
+            encoded.push('%');
+            encoded.push_str(&format!("{byte:02X}"));
+        }
+    }
+    encoded
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -105,5 +126,16 @@ mod tests {
     fn standard_capabilities_adds_extras() {
         let caps = standard_capabilities(&[AgentCapability::McpSupport, AgentCapability::Subtasks]);
         assert_eq!(caps.len(), 5);
+    }
+
+    #[test]
+    fn encode_path_segment_escapes_reserved_bytes() {
+        assert_eq!(encode_path_segment("hello world"), "hello%20world");
+        assert_eq!(encode_path_segment("foo/bar"), "foo%2Fbar");
+        assert_eq!(encode_path_segment("a%b"), "a%25b");
+        assert_eq!(encode_path_segment("simple-test_123"), "simple-test_123");
+        assert_eq!(encode_path_segment(""), "");
+        // Sub-delims should NOT be encoded.
+        assert_eq!(encode_path_segment("$&'()+,;="), "$&'()+,;=");
     }
 }

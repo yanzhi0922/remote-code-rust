@@ -24,3 +24,4 @@ tracing.workspace = true
 uuid.workspace = true
 rc-control-plane = { path = "../rc-control-plane" }
 rc-runner = { path = "../rc-runner" }
+rc-agent-protocol = { path = "../rc-agent-protocol" }

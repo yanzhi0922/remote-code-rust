@@ -426,6 +426,9 @@ pub struct OpenAiCompatibleProvider {
     streaming_enabled: bool,
     include_max_tokens: bool,
     extra_body_fields: Option<serde_json::Value>,
+    /// Cache for the OpenAI-converted tool schemas. Tools are static for a
+    /// given session, so converting once avoids repeated schema traversal.
+    converted_tools_cache: std::sync::OnceLock<Vec<serde_json::Value>>,
 }
 
 impl OpenAiCompatibleProvider {
@@ -455,6 +458,7 @@ impl OpenAiCompatibleProvider {
             streaming_enabled: config.streaming_enabled.unwrap_or(true),
             include_max_tokens: config.include_max_tokens.unwrap_or(false),
             extra_body_fields: config.extra_body_fields,
+            converted_tools_cache: std::sync::OnceLock::new(),
         })
     }
 
@@ -463,7 +467,7 @@ impl OpenAiCompatibleProvider {
         &self,
         system_prompt: &str,
         messages: &[ApiMessage],
-        tools: Option<&Vec<serde_json::Value>>,
+        tools: Option<&[serde_json::Value]>,
         metadata: &CreateMessageMetadata,
     ) -> Result<serde_json::Value> {
         let (model, info) = self.base.get_model();
@@ -518,8 +522,13 @@ impl OpenAiCompatibleProvider {
             }
         }
 
-        if let Some(tools) = convert_tools_for_openai(tools) {
-            body["tools"] = serde_json::json!(tools);
+        if let Some(tools) = tools {
+            let converted = self.converted_tools_cache.get_or_init(|| {
+                convert_tools_for_openai(Some(tools)).unwrap_or_default()
+            });
+            if !converted.is_empty() {
+                body["tools"] = serde_json::json!(converted);
+            }
         }
 
         if let Some(ref tool_choice) = metadata.tool_choice {
@@ -550,7 +559,7 @@ impl OpenAiCompatibleProvider {
         &self,
         system_prompt: &str,
         messages: &[ApiMessage],
-        tools: Option<&Vec<serde_json::Value>>,
+        tools: Option<&[serde_json::Value]>,
         metadata: &CreateMessageMetadata,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<OpenAiStreamChunk>> + Send>>> {
         let body = self.build_stream_request_body(system_prompt, messages, tools, metadata)?;
@@ -823,8 +832,8 @@ impl OpenAiCompatibleProvider {
     pub async fn create_message_with_developer_role(
         &self,
         system_prompt: &str,
-        messages: Vec<ApiMessage>,
-        tools: Option<Vec<serde_json::Value>>,
+        messages: &[ApiMessage],
+        tools: Option<&[serde_json::Value]>,
         metadata: CreateMessageMetadata,
     ) -> Result<ApiStream> {
         // Build the base body using the standard method.
@@ -834,7 +843,7 @@ impl OpenAiCompatibleProvider {
         let mut body = self.build_stream_request_body(
             &format!("Formatting re-enabled\n{}", system_prompt),
             &messages,
-            tools.as_ref(),
+            tools,
             &metadata,
         )?;
 
@@ -884,7 +893,7 @@ impl OpenAiCompatibleProvider {
         &self,
         system_prompt: &str,
         messages: &[ApiMessage],
-        tools: Option<&Vec<serde_json::Value>>,
+        tools: Option<&[serde_json::Value]>,
         metadata: &CreateMessageMetadata,
     ) -> Result<ApiStream> {
         let body = self.build_stream_request_body(system_prompt, messages, tools, metadata)?;
@@ -983,9 +992,9 @@ impl OpenAiCompatibleProvider {
             let openai_usage = OpenAiUsage {
                 prompt_tokens: usage.get("prompt_tokens").and_then(|v| v.as_u64()),
                 completion_tokens: usage.get("completion_tokens").and_then(|v| v.as_u64()),
-                prompt_tokens_details: usage.get("prompt_tokens_details").and_then(|d| {
-                    serde_json::from_value::<OpenAiPromptTokensDetails>(d.clone()).ok()
-                }),
+                prompt_tokens_details: usage
+                    .get("prompt_tokens_details")
+                    .and_then(|d| serde::Deserialize::deserialize(d).ok()),
             };
             chunks.push(Ok(process_usage_metrics(&openai_usage, &model_info)));
         }
@@ -999,20 +1008,20 @@ impl Provider for OpenAiCompatibleProvider {
     async fn create_message(
         &self,
         system_prompt: &str,
-        messages: Vec<ApiMessage>,
-        tools: Option<Vec<serde_json::Value>>,
+        messages: &[ApiMessage],
+        tools: Option<&[serde_json::Value]>,
         metadata: CreateMessageMetadata,
     ) -> Result<ApiStream> {
         // When streaming is disabled, fall back to non-streaming chat completion.
         // Source: `src/api/providers/openai.ts` — `openAiStreamingEnabled ?? true`
         if !self.streaming_enabled {
             return self
-                .create_message_non_streaming(system_prompt, &messages, tools.as_ref(), &metadata)
+                .create_message_non_streaming(system_prompt, messages, tools, &metadata)
                 .await;
         }
 
         let stream = self
-            .create_stream(system_prompt, &messages, tools.as_ref(), &metadata)
+            .create_stream(system_prompt, messages, tools, &metadata)
             .await?;
 
         let (_, model_info) = self.base.get_model();

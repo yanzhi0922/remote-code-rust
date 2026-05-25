@@ -235,7 +235,7 @@ impl AnthropicHandler {
         &self,
         system_prompt: &str,
         messages: &[ApiMessage],
-        tools: Option<&Vec<Value>>,
+        tools: Option<&[Value]>,
         metadata: &CreateMessageMetadata,
     ) -> Value {
         let max_tokens = self.model_info.max_tokens.unwrap_or(8192);
@@ -790,11 +790,11 @@ impl Provider for AnthropicHandler {
     async fn create_message(
         &self,
         system_prompt: &str,
-        messages: Vec<ApiMessage>,
-        tools: Option<Vec<Value>>,
+        messages: &[ApiMessage],
+        tools: Option<&[Value]>,
         metadata: CreateMessageMetadata,
     ) -> Result<ApiStream> {
-        let body = self.build_request_body(system_prompt, &messages, tools.as_ref(), &metadata);
+        let body = self.build_request_body(system_prompt, messages, tools, &metadata);
         let url = format!("{}/v1/messages", self.base_url.trim_end_matches('/'));
 
         let mut request = self
@@ -1102,7 +1102,7 @@ impl AnthropicVertexHandler {
         &self,
         system_prompt: &str,
         messages: &[ApiMessage],
-        tools: Option<&Vec<Value>>,
+        tools: Option<&[Value]>,
         metadata: &CreateMessageMetadata,
     ) -> Value {
         let max_tokens = self.model_info.max_tokens.unwrap_or(8192);
@@ -1190,11 +1190,11 @@ impl Provider for AnthropicVertexHandler {
     async fn create_message(
         &self,
         system_prompt: &str,
-        messages: Vec<ApiMessage>,
-        tools: Option<Vec<Value>>,
+        messages: &[ApiMessage],
+        tools: Option<&[Value]>,
         metadata: CreateMessageMetadata,
     ) -> Result<ApiStream> {
-        let body = self.build_request_body(system_prompt, &messages, tools.as_ref(), &metadata);
+        let body = self.build_request_body(system_prompt, messages, tools, &metadata);
         let url = self.config.stream_url(&self.model_id);
         let access_token = self.get_access_token().await?;
 
@@ -2102,7 +2102,7 @@ mod tests {
         let body = handler.build_request_body(
             "system",
             &messages,
-            tools.as_ref(),
+            tools.as_deref(),
             &CreateMessageMetadata::default(),
         );
 

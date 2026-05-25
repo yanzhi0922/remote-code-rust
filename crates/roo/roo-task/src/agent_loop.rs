@@ -25,9 +25,10 @@
 //!   first chunk and handles context-window / rate-limit / generic errors
 //!   before continuing with the rest of the stream.
 
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::path::{Component, Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use std::time::Instant;
 
 use futures::StreamExt;
@@ -89,8 +90,8 @@ impl Provider for ArcProviderWrapper {
     async fn create_message(
         &self,
         system_prompt: &str,
-        messages: Vec<roo_types::api::ApiMessage>,
-        tools: Option<Vec<serde_json::Value>>,
+        messages: &[roo_types::api::ApiMessage],
+        tools: Option<&[serde_json::Value]>,
         metadata: CreateMessageMetadata,
     ) -> Result<roo_provider::handler::ApiStream, roo_provider::ProviderError> {
         self.0
@@ -144,6 +145,13 @@ static LAST_GLOBAL_API_REQUEST_TIME: std::sync::Mutex<Option<Instant>> =
 ///
 /// Source: `src/core/task/Task.ts` line 408 — `TOKEN_USAGE_EMIT_INTERVAL_MS = 2000`
 const TOKEN_USAGE_EMIT_INTERVAL_MS: u64 = 2000;
+
+/// Pre-compiled regex for `format_reasoning_text` — matches sentence-ending
+/// punctuation followed immediately by `**bold text**`, so we can insert a
+/// line break for readability.
+static REASONING_FORMAT_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
+    regex::Regex::new(r"([.!?])\*\*([^\*\n]+)\*\*").unwrap()
+});
 
 // ===========================================================================
 // merge_consecutive_api_messages — TS line 4198
@@ -223,15 +231,14 @@ fn merge_consecutive_api_messages(
 ///
 /// Detects patterns like `...end of sentence.**Title Here**` and adds
 /// line breaks before the `**Title**` to improve readability.
-fn format_reasoning_text(reasoning: &str) -> String {
+///
+/// Returns `Cow::Borrowed` when no `**` is present (zero-allocation fast path),
+/// otherwise applies the pre-compiled regex and returns `Cow::Owned`.
+fn format_reasoning_text(reasoning: &str) -> Cow<'_, str> {
     if !reasoning.contains("**") {
-        return reasoning.to_string();
+        return Cow::Borrowed(reasoning);
     }
-
-    // Add line breaks before **Title** patterns that appear after sentence endings
-    // Regex: ([.!?])\*\*([^\*\n]+)\*\* → $1\n\n**$2**
-    let re = regex::Regex::new(r"([.!?])\*\*([^\*\n]+)\*\*").unwrap(); // SAFE: invariant guaranteed by construction
-    re.replace_all(reasoning, "$1\n\n**$2**").to_string()
+    Cow::Owned(REASONING_FORMAT_RE.replace_all(reasoning, "$1\n\n**$2**").into_owned())
 }
 
 // ===========================================================================
@@ -1987,9 +1994,18 @@ impl AgentLoop {
             user_message_was_removed: false,
         }];
 
+        // Clone once — task_id is immutable for the lifetime of this loop.
+        let task_id = self.engine.config().task_id.clone();
+
+        // Pre-allocate streaming buffers outside the loop to avoid per-iteration
+        // heap allocations. Cleared at the start of each streaming section.
+        let mut assistant_text = String::new();
+        let mut reasoning_message = String::new();
+        let mut tool_calls_from_stream: Vec<ParsedToolCall> = Vec::new();
+        let mut pending_grounding_sources: Vec<roo_types::api::GroundingSource> = Vec::new();
+
         // TS: while (stack.length > 0)
         while let Some(current_item) = stack.pop() {
-            let task_id = self.engine.config().task_id.clone();
 
             // ---------------------------------------------------------------
             // Step 1: Check abort
@@ -2397,14 +2413,16 @@ impl AgentLoop {
             // Consume stream events in real-time
             let mut stream_rx = stream_rx;
             let mut parser = StreamParser::new();
-            let mut assistant_text = String::new();
-            let mut reasoning_message = String::new(); // TS: reasoningMessage accumulator
-            let mut tool_calls_from_stream: Vec<ParsedToolCall> = Vec::new();
+
+            // Clear pre-allocated streaming buffers for this iteration
+            assistant_text.clear();
+            reasoning_message.clear();
+            tool_calls_from_stream.clear();
+            pending_grounding_sources.clear();
+
             let mut stream_error_message: Option<String> = None;
             let mut did_retry_push = false;
             let mut saw_stream_completed = false;
-            // TS L2857-2863: Accumulate grounding sources during streaming
-            let mut pending_grounding_sources: Vec<roo_types::api::GroundingSource> = Vec::new();
 
             while let Some(event) = stream_rx.recv().await {
                 // Check cancellation
@@ -2425,12 +2443,16 @@ impl AgentLoop {
                     // TS L2834-2848: Reasoning with **Title** formatting
                     StreamEvent::ReasoningDelta { text } => {
                         reasoning_message.push_str(&text);
-                        // Apply **Title** formatting: add line breaks before
-                        // **Title** patterns that appear after sentence endings
-                        let formatted_reasoning = format_reasoning_text(&reasoning_message);
+                        // Format only the new delta instead of re-formatting the
+                        // full accumulator on every chunk. This reduces total work
+                        // from O(n^2) to O(n) across the entire reasoning stream.
+                        // Cross-boundary matches (sentence-ending char in previous
+                        // chunk, `**bold**` in this chunk) are rare and only affect
+                        // a cosmetic line break, so they are accepted as a trade-off.
+                        let formatted_delta = format_reasoning_text(&text);
                         self.engine
                             .emitter()
-                            .emit_streaming_reasoning_delta(&task_id, &formatted_reasoning);
+                            .emit_streaming_reasoning_delta(&task_id, &formatted_delta);
                         parser.feed_chunk(&roo_types::api::ApiStreamChunk::Reasoning {
                             text,
                             signature: None,
@@ -2444,7 +2466,7 @@ impl AgentLoop {
                         parser.start_streaming_tool_call(&id, &name);
                         self.engine.add_assistant_message_content(
                             crate::types::AssistantMessageContent::ToolUse(crate::types::ToolUse {
-                                content_type: "tool_use".to_string(),
+                                content_type: "tool_use",
                                 name: name.clone(),
                                 params: Default::default(),
                                 partial: true,
@@ -2565,7 +2587,7 @@ impl AgentLoop {
                                     self.engine.add_assistant_message_content(
                                         crate::types::AssistantMessageContent::ToolUse(
                                             crate::types::ToolUse {
-                                                content_type: "tool_use".to_string(),
+                                                content_type: "tool_use",
                                                 name: name.clone(),
                                                 params: Default::default(),
                                                 partial: true,
@@ -2834,10 +2856,10 @@ impl AgentLoop {
             }
 
             // Get the final parsed content from the parser
-            let parsed = parser.finalize();
+            let mut parsed = parser.finalize();
 
             // Merge streaming tool calls with parser results
-            let mut all_tool_calls = parsed.tool_calls.clone();
+            let mut all_tool_calls = std::mem::take(&mut parsed.tool_calls);
             for tc in &tool_calls_from_stream {
                 if !all_tool_calls.iter().any(|existing| existing.id == tc.id) {
                     all_tool_calls.push(tc.clone());
@@ -3164,7 +3186,7 @@ impl AgentLoop {
                     if !subtask_text.is_empty() {
                         let subtask_id = format!(
                             "{}-sub-{}",
-                            self.engine.config().task_id,
+                            task_id,
                             uuid::Uuid::now_v7()
                         );
                         let mut subtask_config =
@@ -3172,7 +3194,7 @@ impl AgentLoop {
                         subtask_config.mode = subtask_mode.to_string();
                         subtask_config.task_text = Some(subtask_text.to_string());
                         subtask_config =
-                            subtask_config.with_parent_task_id(&self.engine.config().task_id);
+                            subtask_config.with_parent_task_id(&task_id);
 
                         match crate::engine::TaskEngine::new(subtask_config) {
                             Ok(subtask_engine) => {
@@ -3200,8 +3222,8 @@ impl AgentLoop {
                                     async fn create_message(
                                         &self,
                                         system_prompt: &str,
-                                        messages: Vec<roo_types::api::ApiMessage>,
-                                        tools: Option<Vec<serde_json::Value>>,
+                                        messages: &[roo_types::api::ApiMessage],
+                                        tools: Option<&[serde_json::Value]>,
                                         metadata: CreateMessageMetadata,
                                     ) -> std::result::Result<
                                         roo_provider::handler::ApiStream,
@@ -3296,7 +3318,7 @@ impl AgentLoop {
                                     },
                                 );
                                 self.engine.emitter().emit_task_delegation_completed(
-                                    &self.engine.config().task_id,
+                                    &task_id,
                                     &subtask_id,
                                     &delegation_msg,
                                 );
@@ -3364,6 +3386,7 @@ impl AgentLoop {
         mut context_window_retries: usize,
     ) -> AttemptResult {
         let task_id = self.engine.config().task_id.clone();
+        let mode = self.engine.config().mode.clone();
 
         // Update streaming state
         self.engine.streaming_mut().is_streaming = true;
@@ -3371,7 +3394,7 @@ impl AgentLoop {
 
         let metadata = CreateMessageMetadata {
             task_id: Some(task_id.clone()),
-            mode: Some(self.engine.config().mode.clone()),
+            mode: Some(mode),
             tools: Some(tools.to_vec()),
             ..Default::default()
         };
@@ -3383,8 +3406,8 @@ impl AgentLoop {
             .provider
             .create_message(
                 system_prompt,
-                messages.to_vec(),
-                Some(tools.to_vec()),
+                messages,
+                Some(tools),
                 metadata,
             )
             .await
@@ -3512,6 +3535,7 @@ impl AgentLoop {
         _retry_attempt: u32,
     ) -> Result<mpsc::Receiver<StreamEvent>, StreamFirstChunkError> {
         let task_id = self.engine.config().task_id.clone();
+        let mode = self.engine.config().mode.clone();
 
         // Update streaming state
         self.engine.streaming_mut().is_streaming = true;
@@ -3519,21 +3543,18 @@ impl AgentLoop {
 
         let metadata = CreateMessageMetadata {
             task_id: Some(task_id.clone()),
-            mode: Some(self.engine.config().mode.clone()),
+            mode: Some(mode),
             tools: None, // Avoid double-clone; provider already receives tools
             ..Default::default()
         };
-
-        // Clone tools once for the provider call
-        let tools_clone = tools.to_vec();
 
         // Create the API stream
         let stream = match self
             .provider
             .create_message(
                 system_prompt,
-                messages.to_vec(),
-                Some(tools_clone),
+                messages,
+                Some(tools),
                 metadata,
             )
             .await
@@ -3732,6 +3753,8 @@ impl AgentLoop {
         retry_attempt: u32,
         error: Option<&str>,
     ) -> Result<(), String> {
+        let task_id = self.engine.config().task_id.clone();
+
         // TS L4382: const baseDelay = state?.requestDelaySeconds || 5
         // Read from config (which mirrors TS state.requestDelaySeconds)
         let base_delay_secs = self.config.request_delay_seconds;
@@ -3809,7 +3832,7 @@ impl AgentLoop {
                 // TS: throw new Error(`[Task#${this.taskId}] Aborted during retry countdown`)
                 return Err(format!(
                     "[Task#{}] Aborted during retry countdown",
-                    self.engine.config().task_id
+                    task_id
                 ));
             }
 
@@ -3818,7 +3841,7 @@ impl AgentLoop {
             self.engine
                 .emitter()
                 .emit(&crate::events::TaskEvent::ApiRequestRetryDelayed {
-                    task_id: self.engine.config().task_id.clone(),
+                    task_id: task_id.clone(),
                     delay_seconds: i,
                     retry_attempt,
                 });
@@ -3856,6 +3879,8 @@ impl AgentLoop {
     /// `LAST_GLOBAL_API_REQUEST_TIME` to calculate the remaining delay.
     /// Shows countdown UX only on the first attempt (retryAttempt === 0).
     async fn maybe_wait_for_rate_limit(&mut self, retry_attempt: u32) {
+        let task_id = self.engine.config().task_id.clone();
+
         // TS: const rateLimitSeconds = state?.apiConfiguration?.rateLimitSeconds ?? 0
         let rate_limit_seconds = self.config.rate_limit_rpm as u64; // Reuse as rateLimitSeconds
 
@@ -3885,7 +3910,7 @@ impl AgentLoop {
                 self.engine
                     .emitter()
                     .emit(&crate::events::TaskEvent::ApiRateLimitWait {
-                        task_id: self.engine.config().task_id.clone(),
+                        task_id: task_id.clone(),
                         seconds: i,
                     });
                 tokio::time::sleep(std::time::Duration::from_secs(1)).await;
@@ -4737,17 +4762,16 @@ impl AgentLoop {
         message: String,
         todos: Option<&str>,
     ) -> Result<String, String> {
-        let parent_task_id = self.engine.config().task_id.clone();
-        let root_task_id = self
-            .engine
-            .config()
+        let cfg = self.engine.config();
+        let parent_task_id = cfg.task_id.clone();
+        let root_task_id = cfg
             .root_task_id
             .clone()
             .unwrap_or_else(|| parent_task_id.clone());
-        let cwd = self.engine.config().cwd.clone();
-        let storage_path = self.engine.config().storage_path.clone();
-        let max_iterations = self.engine.config().max_iterations;
-        let consecutive_mistake_limit = self.engine.config().consecutive_mistake_limit;
+        let cwd = cfg.cwd.clone();
+        let storage_path = cfg.storage_path.clone();
+        let max_iterations = cfg.max_iterations;
+        let consecutive_mistake_limit = cfg.consecutive_mistake_limit;
 
         let child_task_id = format!(
             "{}-sub-{}",
@@ -4768,18 +4792,18 @@ impl AgentLoop {
             task_number: 0,
             cwd: cwd.clone(),
             mode: mode.clone(),
-            api_config_name: self.engine.config().api_config_name.clone(),
-            workspace: self.engine.config().workspace.clone(),
+            api_config_name: cfg.api_config_name.clone(),
+            workspace: cfg.workspace.clone(),
             max_iterations,
-            auto_approval: self.engine.config().auto_approval,
-            enable_checkpoints: self.engine.config().enable_checkpoints,
-            checkpoint_timeout: self.engine.config().checkpoint_timeout,
+            auto_approval: cfg.auto_approval,
+            enable_checkpoints: cfg.enable_checkpoints,
+            checkpoint_timeout: cfg.checkpoint_timeout,
             consecutive_mistake_limit,
             task_text: Some(initial_text),
             images: Vec::new(),
             history_item_id: None,
             storage_path,
-            custom_condensing_prompt: self.engine.config().custom_condensing_prompt.clone(),
+            custom_condensing_prompt: cfg.custom_condensing_prompt.clone(),
             instance_id: uuid::Uuid::new_v4().as_simple().to_string()[..8].to_string(),
             start_task: false,
         };
@@ -5887,8 +5911,8 @@ mod tests {
         async fn create_message(
             &self,
             _system_prompt: &str,
-            _messages: Vec<roo_types::api::ApiMessage>,
-            _tools: Option<Vec<serde_json::Value>>,
+            _messages: &[roo_types::api::ApiMessage],
+            _tools: Option<&[serde_json::Value]>,
             _metadata: CreateMessageMetadata,
         ) -> Result<roo_provider::handler::ApiStream, roo_provider::ProviderError> {
             use futures::stream;
@@ -6035,8 +6059,8 @@ mod tests {
             async fn create_message(
                 &self,
                 _system_prompt: &str,
-                _messages: Vec<roo_types::api::ApiMessage>,
-                _tools: Option<Vec<serde_json::Value>>,
+                _messages: &[roo_types::api::ApiMessage],
+                _tools: Option<&[serde_json::Value]>,
                 _metadata: CreateMessageMetadata,
             ) -> Result<roo_provider::handler::ApiStream, roo_provider::ProviderError> {
                 use futures::stream;
@@ -6443,8 +6467,8 @@ mod tests {
         async fn create_message(
             &self,
             _system_prompt: &str,
-            _messages: Vec<roo_types::api::ApiMessage>,
-            _tools: Option<Vec<serde_json::Value>>,
+            _messages: &[roo_types::api::ApiMessage],
+            _tools: Option<&[serde_json::Value]>,
             _metadata: CreateMessageMetadata,
         ) -> Result<roo_provider::handler::ApiStream, roo_provider::ProviderError> {
             use futures::stream;
@@ -6516,8 +6540,8 @@ mod tests {
             async fn create_message(
                 &self,
                 _system_prompt: &str,
-                _messages: Vec<roo_types::api::ApiMessage>,
-                _tools: Option<Vec<serde_json::Value>>,
+                _messages: &[roo_types::api::ApiMessage],
+                _tools: Option<&[serde_json::Value]>,
                 _metadata: CreateMessageMetadata,
             ) -> Result<roo_provider::handler::ApiStream, roo_provider::ProviderError> {
                 use futures::stream;
@@ -6691,8 +6715,8 @@ mod tests {
             async fn create_message(
                 &self,
                 _system_prompt: &str,
-                _messages: Vec<roo_types::api::ApiMessage>,
-                _tools: Option<Vec<serde_json::Value>>,
+                _messages: &[roo_types::api::ApiMessage],
+                _tools: Option<&[serde_json::Value]>,
                 _metadata: CreateMessageMetadata,
             ) -> Result<roo_provider::handler::ApiStream, roo_provider::ProviderError> {
                 use futures::stream;

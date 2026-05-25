@@ -3160,13 +3160,15 @@ impl Handler {
                 let engine = lc.engine_mut();
                 let ts_f64 = message_ts as f64;
 
-                let api_truncate_idx = engine
+                let position = engine
                     .cline_messages()
                     .iter()
-                    .position(|m| m.ts == ts_f64)
+                    .position(|m| m.ts == ts_f64);
+
+                let api_truncate_idx = position
                     .and_then(|pos| engine.cline_messages()[pos].conversation_history_index);
 
-                if let Some(pos) = engine.cline_messages().iter().position(|m| m.ts == ts_f64) {
+                if let Some(pos) = position {
                     engine.cline_messages_mut().truncate(pos);
                 }
 

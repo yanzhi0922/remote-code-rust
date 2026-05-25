@@ -677,7 +677,7 @@ impl NativeToolCallParser {
         }
 
         let mut result = ToolUse {
-            content_type: "tool_use".to_string(),
+            content_type: "tool_use",
             name: resolved_name.to_string(),
             params,
             partial: false, // Native tool calls are always complete when yielded
@@ -727,7 +727,7 @@ impl NativeToolCallParser {
         let (server_name, tool_name) = parsed;
 
         Some(AssistantMessageContent::McpToolUse(McpToolUse {
-            content_type: "mcp_tool_use".to_string(),
+            content_type: "mcp_tool_use",
             name: name.to_string(),
             id: id.to_string(),
             server_name,
@@ -1211,7 +1211,7 @@ impl NativeToolCallParser {
         }
 
         let mut result = ToolUse {
-            content_type: "tool_use".to_string(),
+            content_type: "tool_use",
             name: name.to_string(),
             params,
             partial,

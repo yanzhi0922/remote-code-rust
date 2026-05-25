@@ -13,6 +13,9 @@ use crate::AuthPrincipal;
 use crate::state::ControlPlaneService;
 use crate::types::ApiError;
 
+// Re-export percent_decode_query_value from rc-runner (dedup M10).
+pub(crate) use rc_runner::percent_decode_query_value;
+
 // ---------------------------------------------------------------------------
 // CORS
 // ---------------------------------------------------------------------------
@@ -332,12 +335,8 @@ fn request_allows_tenant_user_auth(request: &Request) -> bool {
     if path == "/v1/stream-ticket" && method == Method::POST {
         return true;
     }
-    if path.starts_with("/v1/runners") {
-        // TODO(defense-in-depth): This blanket allow on /v1/runners/* is
-        // intentionally broad for now. Individual runner endpoints should be
-        // audited and scoped to the minimum set of sub-paths and methods
-        // actually needed, so that new runner sub-resources are not
-        // automatically reachable by tenant users.
+    // Runner sub-paths — scoped to the minimum set actually needed.
+    if runner_id_subpath_allows_tenant_user(path, method) {
         return true;
     }
     if path.starts_with("/v1/sessions") {
@@ -353,6 +352,40 @@ fn request_allows_tenant_user_auth(request: &Request) -> bool {
         return true;
     }
 
+    false
+}
+
+/// Explicit allowlist of runner sub-paths accessible to tenant users.
+/// New runner sub-resources are NOT automatically reachable.
+fn runner_id_subpath_allows_tenant_user(path: &str, method: &Method) -> bool {
+    // POST /v1/runners (register)
+    if path == "/v1/runners" && method == Method::POST {
+        return true;
+    }
+    // GET /v1/runners (list)
+    if path == "/v1/runners" && method == Method::GET {
+        return true;
+    }
+    // /v1/runners/{id}/heartbeat
+    if path.ends_with("/heartbeat") && method == &Method::POST {
+        return true;
+    }
+    // /v1/runners/{id}/sessions
+    if path.ends_with("/sessions") && method == &Method::POST {
+        return true;
+    }
+    // /v1/runners/{id}/sessions/{sid}/command
+    if path.ends_with("/command") && method == &Method::POST {
+        return true;
+    }
+    // /v1/runners/{id}/events
+    if path.ends_with("/events") && method == &Method::POST {
+        return true;
+    }
+    // /v1/runners/{id}/poll-commands
+    if path.ends_with("/poll-commands") && method == &Method::POST {
+        return true;
+    }
     false
 }
 
@@ -378,36 +411,6 @@ fn extract_stream_ticket_from_query(query: &str) -> Option<String> {
         }
     }
     None
-}
-
-fn percent_decode_query_value(raw: &str) -> String {
-    let bytes = raw.as_bytes();
-    let mut decoded = Vec::with_capacity(bytes.len());
-    let mut index = 0usize;
-    while index < bytes.len() {
-        match bytes[index] {
-            b'+' => {
-                decoded.push(b' ');
-                index += 1;
-            }
-            b'%' if index + 2 < bytes.len() => {
-                let high = bytes[index + 1] as char;
-                let low = bytes[index + 2] as char;
-                if let (Some(high), Some(low)) = (high.to_digit(16), low.to_digit(16)) {
-                    decoded.push(((high << 4) | low) as u8);
-                    index += 3;
-                } else {
-                    decoded.push(bytes[index]);
-                    index += 1;
-                }
-            }
-            byte => {
-                decoded.push(byte);
-                index += 1;
-            }
-        }
-    }
-    String::from_utf8_lossy(&decoded).into_owned()
 }
 
 /// Strip auth query parameters from the request URI

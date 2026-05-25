@@ -101,6 +101,11 @@ pub(crate) struct StoredTrustedDevice {
     /// When the current access token expires.
     #[serde(default)]
     pub(crate) access_token_expires_at: Option<DateTime<Utc>>,
+    /// Hash of the previous refresh token, used for rotation reuse detection.
+    /// If a refresh is attempted with a token that matches this hash, the
+    /// device is revoked (the token was already rotated and may be stolen).
+    #[serde(default)]
+    pub(crate) previous_token_hash: Option<String>,
 }
 
 impl StoredTrustedDevice {
@@ -357,18 +362,39 @@ impl Registry {
     }
 
     /// Refresh an access token using a valid refresh token.
-    /// Returns `(device_record, new_access_token)` or an error.
     ///
-    /// TODO(security): The refresh token itself is not rotated on each use.
-    /// An attacker who steals a refresh token can mint unlimited access tokens
-    /// until the device is revoked. Consider issuing a new refresh token on
-    /// every refresh call and invalidating the old one (refresh token rotation).
+    /// Implements refresh token rotation: every successful refresh issues a new
+    /// refresh token and invalidates the old one. If a stale (already-rotated)
+    /// token is reused, the device is revoked to prevent token theft.
+    ///
+    /// Returns `(device_record, new_access_token, new_refresh_token)`.
     pub(crate) fn refresh_access_token(
         &mut self,
         refresh_token: &str,
-    ) -> Result<(TrustedDeviceRecord, String), ApiError> {
+    ) -> Result<(TrustedDeviceRecord, String, String), ApiError> {
         let hash = sha256_hex(refresh_token);
         let now = Utc::now();
+
+        // Check for reuse of a previously-rotated token.
+        // This detects token theft: if someone uses an old refresh token,
+        // both the attacker and the legitimate user have valid tokens,
+        // so we revoke the device entirely.
+        for device in self.trusted_devices.values() {
+            if let Some(ref prev_hash) = device.previous_token_hash {
+                if constant_time_value_eq(&hash, prev_hash) {
+                    let device_id = device.device_id;
+                    tracing::warn!(
+                        device_id = %device_id,
+                        "Refresh token reuse detected — revoking device"
+                    );
+                    // Revoke the device to prevent further access.
+                    self.revoke_device(device_id).ok();
+                    return Err(ApiError::unauthorized(
+                        "refresh token reuse detected: device revoked".to_owned(),
+                    ));
+                }
+            }
+        }
 
         let device_id = self
             .token_hash_to_device
@@ -391,14 +417,23 @@ impl Registry {
         let access_hash = sha256_hex(&new_access_token);
         let expires_at = now + Duration::minutes(15);
 
+        // Rotate the refresh token.
+        let new_refresh_token = mint_secret("rcrt");
+        let new_refresh_hash = sha256_hex(&new_refresh_token);
+
+        // Update the token hash reverse index: remove old, add new.
+        self.token_hash_to_device.remove(&hash);
+        self.token_hash_to_device.insert(new_refresh_hash.clone(), device_id);
+
         let device = self.trusted_devices.get_mut(&device_id).ok_or_else(|| {
             ApiError::internal("device disappeared during token refresh".to_owned())
         })?;
+        device.previous_token_hash = Some(std::mem::replace(&mut device.token_hash, new_refresh_hash));
         device.access_token_hash = Some(access_hash);
         device.access_token_expires_at = Some(expires_at);
         device.last_seen_at = now;
 
-        Ok((device.public_record(), new_access_token))
+        Ok((device.public_record(), new_access_token, new_refresh_token))
     }
 }
 
@@ -450,6 +485,7 @@ impl Registry {
             token_hash: sha256_hex(&refresh_token),
             access_token_hash: Some(sha256_hex(&access_token)),
             access_token_expires_at: Some(now + Duration::minutes(15)),
+            previous_token_hash: None,
         };
         self.owner_device_id = Some(device_id);
         self.trusted_devices.insert(device_id, record.clone());
@@ -544,6 +580,7 @@ impl Registry {
             token_hash: sha256_hex(&refresh_token),
             access_token_hash: Some(sha256_hex(&access_token)),
             access_token_expires_at: Some(now + Duration::minutes(15)),
+            previous_token_hash: None,
         };
         let public_record = record.public_record();
         let device_id = record.device_id;

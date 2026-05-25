@@ -201,7 +201,7 @@ pub async fn summarize_conversation(
     let stream_result = api_handler
         .create_message(
             SUMMARY_PROMPT,
-            request_messages,
+            &request_messages,
             None, // No tools needed for condensation
             metadata.clone().unwrap_or_default(),
         )

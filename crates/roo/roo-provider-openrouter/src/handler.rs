@@ -314,7 +314,7 @@ impl OpenRouterHandler {
         &self,
         system_prompt: &str,
         messages: &[ApiMessage],
-        tools: Option<&Vec<serde_json::Value>>,
+        tools: Option<&[serde_json::Value]>,
         metadata: &CreateMessageMetadata,
     ) -> Result<serde_json::Value> {
         let (model_id, mut model_info) = self.resolve_model_info();
@@ -480,12 +480,12 @@ impl Provider for OpenRouterHandler {
     async fn create_message(
         &self,
         system_prompt: &str,
-        messages: Vec<ApiMessage>,
-        tools: Option<Vec<serde_json::Value>>,
+        messages: &[ApiMessage],
+        tools: Option<&[serde_json::Value]>,
         metadata: CreateMessageMetadata,
     ) -> Result<ApiStream> {
         // Build the request body with all OpenRouter-specific transformations
-        let body = self.build_request_body(system_prompt, &messages, tools.as_ref(), &metadata)?;
+        let body = self.build_request_body(system_prompt, messages, tools, &metadata)?;
 
         // Delegate to the reusable inner provider's stream infrastructure.
         // The inner provider handles SSE parsing, reasoning_details display,

@@ -42,8 +42,8 @@ pub trait Provider: Send + Sync {
     async fn create_message(
         &self,
         system_prompt: &str,
-        messages: Vec<ApiMessage>,
-        tools: Option<Vec<serde_json::Value>>,
+        messages: &[ApiMessage],
+        tools: Option<&[serde_json::Value]>,
         metadata: CreateMessageMetadata,
     ) -> Result<ApiStream>;
 

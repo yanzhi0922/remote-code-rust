@@ -51,6 +51,7 @@ use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use serde_json::json;
 use tokio::sync::{Mutex, mpsc, oneshot};
+use std::sync::Mutex as StdMutex;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 use uuid::Uuid;
@@ -82,9 +83,9 @@ use rc_agent_protocol::types::{AgentConfig, AgentInfo, AgentStatus, AgentType};
 use rc_engine_events::EventStream;
 
 /// Maximum time (in seconds) to wait for a permission decision before denying.
-// Kept short (30 s) because the Drop impl cannot call the async drain; pending
-// permissions that are never resolved will block their oneshot sender forever.
-// A shorter timeout ensures stale permissions are denied promptly on cleanup.
+// Kept short (30 s) because the Drop impl uses the sync drain to deny
+// pending permissions. A shorter timeout ensures stale permissions are
+// denied promptly on cleanup.
 const PERMISSION_TIMEOUT_SECS: u64 = 30;
 
 // ─── PendingPermission ─────────────────────────────────────────────────────
@@ -99,17 +100,19 @@ struct PendingPermission {
 /// Permission broker that forwards requests through the event channel
 /// and waits for resolution via [`ClaudeInProcessAdapter::resolve_permission`].
 ///
-/// Includes a timeout to prevent indefinite blocking if the GUI never responds.
+/// Uses `std::sync::Mutex` for `pending_permissions` so the broker can drain
+/// pending requests synchronously from `Drop::drop` without async runtime
+/// access. The lock hold time is negligible (only sends on oneshot channels).
 struct AdapterPermissionBroker {
     event_tx: mpsc::Sender<UnifiedAgentEvent>,
-    pending_permissions: Arc<Mutex<HashMap<String, PendingPermission>>>,
+    pending_permissions: Arc<StdMutex<HashMap<String, PendingPermission>>>,
     session_id: String,
 }
 
 impl AdapterPermissionBroker {
     fn new(
         event_tx: mpsc::Sender<UnifiedAgentEvent>,
-        pending_permissions: Arc<Mutex<HashMap<String, PendingPermission>>>,
+        pending_permissions: Arc<StdMutex<HashMap<String, PendingPermission>>>,
         session_id: String,
     ) -> Self {
         Self {
@@ -131,7 +134,7 @@ impl PermissionBroker for AdapterPermissionBroker {
 
         // Store the pending permission.
         {
-            let mut map = self.pending_permissions.lock().await;
+            let mut map = self.pending_permissions.lock().unwrap();
             map.insert(request_id.clone(), pending);
         }
 
@@ -146,7 +149,7 @@ impl PermissionBroker for AdapterPermissionBroker {
         if let Err(e) = self.event_tx.send(event).await {
             warn!(%request_id, "failed to send permission request event: {e}");
             // Clean up the pending entry.
-            let mut map = self.pending_permissions.lock().await;
+            let mut map = self.pending_permissions.lock().unwrap();
             map.remove(&request_id);
             return PermissionsPermissionDecision::deny("Failed to send permission request");
         }
@@ -162,14 +165,14 @@ impl PermissionBroker for AdapterPermissionBroker {
             Ok(Err(_)) => {
                 warn!(%request_id, "permission response channel dropped");
                 // Clean up the pending entry.
-                let mut map = self.pending_permissions.lock().await;
+                let mut map = self.pending_permissions.lock().unwrap();
                 map.remove(&request_id);
                 PermissionsPermissionDecision::deny("Permission request cancelled")
             }
             Err(_) => {
                 warn!(%request_id, "permission request timed out after {PERMISSION_TIMEOUT_SECS}s");
                 // Clean up the pending entry.
-                let mut map = self.pending_permissions.lock().await;
+                let mut map = self.pending_permissions.lock().unwrap();
                 map.remove(&request_id);
                 PermissionsPermissionDecision::deny("Permission request timed out")
             }
@@ -564,7 +567,7 @@ pub struct ClaudeInProcessAdapter {
     // Runtime state
     cancel_token: CancellationToken,
     worker_handle: Option<tokio::task::JoinHandle<()>>,
-    pending_permissions: Arc<Mutex<HashMap<String, PendingPermission>>>,
+    pending_permissions: Arc<StdMutex<HashMap<String, PendingPermission>>>,
 
     // Session ID (from RuntimeConfig, cached for convenience).
     session_id: Uuid,
@@ -596,7 +599,7 @@ impl ClaudeInProcessAdapter {
             provider_client: None,
             cancel_token: CancellationToken::new(),
             worker_handle: None,
-            pending_permissions: Arc::new(Mutex::new(HashMap::new())),
+            pending_permissions: Arc::new(StdMutex::new(HashMap::new())),
             session_id,
         }
     }
@@ -604,26 +607,32 @@ impl ClaudeInProcessAdapter {
     /// Abort the current worker (if any) and reset the cancel token.
     fn abort_worker(&mut self) {
         if let Some(handle) = self.worker_handle.take() {
-            // We cannot call the async drain_pending_permissions here, so
-            // any pending permission requests will be auto-denied when their
-            // timeout expires (PERMISSION_TIMEOUT_SECS). This is intentional
-            // to avoid blocking the synchronous code path.
-            warn!("Aborting previous worker; pending permissions will be auto-denied after timeout");
+            // Synchronously drain pending permissions before aborting the worker.
+            self.drain_pending_permissions_sync();
+            warn!("Aborting previous worker; pending permissions drained synchronously");
             handle.abort();
         }
         // Recreate the cancel token so future calls get a fresh token.
         self.cancel_token = CancellationToken::new();
     }
 
-    /// Clean up all pending permissions by denying them.
-    async fn drain_pending_permissions(&self) {
-        let mut map = self.pending_permissions.lock().await;
+    /// Synchronously drain and deny all pending permissions.
+    ///
+    /// Uses `std::sync::Mutex` so this can be called from `Drop::drop` and
+    /// other synchronous contexts without needing a tokio runtime handle.
+    fn drain_pending_permissions_sync(&self) {
+        let mut map = self.pending_permissions.lock().unwrap();
         for (id, pending) in map.drain() {
             let _ = pending
                 .response_tx
                 .send(PermissionsPermissionDecision::deny("Adapter shutting down"));
             debug!(%id, "drained pending permission on shutdown");
         }
+    }
+
+    /// Clean up all pending permissions by denying them (async wrapper).
+    async fn drain_pending_permissions(&self) {
+        self.drain_pending_permissions_sync();
     }
 }
 
@@ -845,7 +854,7 @@ impl AgentAdapter for ClaudeInProcessAdapter {
     ) -> Result<()> {
         debug!(%request_id, "Resolving permission request");
 
-        let mut map = self.pending_permissions.lock().await;
+        let mut map = self.pending_permissions.lock().unwrap();
         if let Some(pending) = map.remove(request_id) {
             let permissions_decision = match decision {
                 ProtocolPermissionDecision::Allow => PermissionsPermissionDecision::allow(),
@@ -858,6 +867,9 @@ impl AgentAdapter for ClaudeInProcessAdapter {
                     // via broker.add_session_rule().
                     PermissionsPermissionDecision::allow()
                 }
+                // #[non_exhaustive] on PermissionDecision requires a wildcard arm.
+                // Any future variants are treated as deny-by-default.
+                _ => PermissionsPermissionDecision::deny("Unsupported permission decision variant"),
             };
 
             let _ = pending.response_tx.send(permissions_decision);
@@ -902,8 +914,8 @@ impl Drop for ClaudeInProcessAdapter {
         if let Some(handle) = self.worker_handle.take() {
             handle.abort();
         }
-        // Note: drain_pending_permissions requires async so we cannot call it in
-        // Drop. Pending permissions will time out on their own after
-        // PERMISSION_TIMEOUT_SECS (30 s) and be auto-denied.
+        // Synchronously drain pending permissions so waiting oneshot channels
+        // are unblocked immediately instead of relying on timeout expiry.
+        self.drain_pending_permissions_sync();
     }
 }

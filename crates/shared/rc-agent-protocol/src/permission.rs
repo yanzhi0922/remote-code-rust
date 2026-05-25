@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 /// User's decision in response to a permission request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum PermissionDecision {
     /// Allow this specific operation.
     Allow,

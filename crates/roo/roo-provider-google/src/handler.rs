@@ -134,7 +134,7 @@ impl GoogleHandler {
         &self,
         system_prompt: &str,
         messages: &[ApiMessage],
-        tools: Option<&Vec<Value>>,
+        tools: Option<&[Value]>,
         metadata: &CreateMessageMetadata,
     ) -> Value {
         let tool_id_to_name = build_tool_id_to_name_map(messages);
@@ -457,8 +457,8 @@ impl Provider for GoogleHandler {
     async fn create_message(
         &self,
         system_prompt: &str,
-        messages: Vec<ApiMessage>,
-        tools: Option<Vec<Value>>,
+        messages: &[ApiMessage],
+        tools: Option<&[Value]>,
         metadata: CreateMessageMetadata,
     ) -> Result<ApiStream> {
         // Reset per-request metadata that we persist into apiConversationHistory.
@@ -467,7 +467,7 @@ impl Provider for GoogleHandler {
             *sig = None;
         }
 
-        let body = self.build_request_body(system_prompt, &messages, tools.as_ref(), &metadata);
+        let body = self.build_request_body(system_prompt, messages, tools, &metadata);
         let url = format!(
             "{}/models/{}:streamGenerateContent?alt=sse&key={}",
             self.base_url.trim_end_matches('/'),
@@ -750,7 +750,7 @@ impl VertexHandler {
         &self,
         system_prompt: &str,
         messages: &[ApiMessage],
-        tools: Option<&Vec<Value>>,
+        tools: Option<&[Value]>,
         metadata: &CreateMessageMetadata,
     ) -> Value {
         let tool_id_to_name = build_tool_id_to_name_map(messages);
@@ -854,11 +854,11 @@ impl Provider for VertexHandler {
     async fn create_message(
         &self,
         system_prompt: &str,
-        messages: Vec<ApiMessage>,
-        tools: Option<Vec<Value>>,
+        messages: &[ApiMessage],
+        tools: Option<&[Value]>,
         metadata: CreateMessageMetadata,
     ) -> Result<ApiStream> {
-        let body = self.build_request_body(system_prompt, &messages, tools.as_ref(), &metadata);
+        let body = self.build_request_body(system_prompt, messages, tools, &metadata);
         let url = self.build_stream_url();
         let access_token = self.get_access_token().await?;
 

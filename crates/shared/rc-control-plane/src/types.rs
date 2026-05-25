@@ -269,6 +269,10 @@ pub struct TokenRefreshRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TokenRefreshResponse {
     pub access_token: String,
+    /// New refresh token (refresh token rotation). The old refresh token is
+    /// invalidated after this response; the client must persist this new token.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refresh_token: Option<String>,
 }
 
 // ---------------------------------------------------------------------------

@@ -60,14 +60,27 @@ const CLOUD_REQUIREMENTS_AUTH_RECOVERY_FAILED_MESSAGE: &str = concat!(
     "Your authentication session could not be refreshed automatically. ",
     "Please log out and sign in again."
 );
-// TODO(security): This HMAC key is hardcoded, meaning all installations share
-// the same key. An attacker who discovers this key could forge cache entries on
-// any machine. Derive the key per-installation (e.g., from a machine-specific
-// secret or a random key stored in the user's config directory).
-const CLOUD_REQUIREMENTS_CACHE_WRITE_HMAC_KEY: &[u8] =
+// Per-process random HMAC key for signing cache entries. Generated once at
+// first use via getrandom::fill(). This prevents cross-installation cache
+// forgery since each process uses a different key.
+static PER_PROCESS_HMAC_KEY: OnceLock<[u8; 32]> = OnceLock::new();
+
+fn per_process_hmac_key() -> &'static [u8; 32] {
+    PER_PROCESS_HMAC_KEY.get_or_init(|| {
+        let mut key = [0u8; 32];
+        // getrandom::fill is infallible on supported platforms (Linux, macOS,
+        // Windows, etc.). It panics only on unsupported or deeply broken
+        // environments, which is appropriate for a security-critical key.
+        getrandom::fill(&mut key).expect("failed to generate per-process HMAC key");
+        key
+    })
+}
+
+/// Legacy hardcoded HMAC key — kept for backward-compatible reads only so that
+/// existing cache files from previous versions can still be validated.  New
+/// cache entries are always signed with the per-process key.
+const CLOUD_REQUIREMENTS_CACHE_LEGACY_HMAC_KEY: &[u8] =
     b"codex-cloud-requirements-cache-v3-064f8542-75b4-494c-a294-97d3ce597271";
-const CLOUD_REQUIREMENTS_CACHE_READ_HMAC_KEYS: &[&[u8]] =
-    &[CLOUD_REQUIREMENTS_CACHE_WRITE_HMAC_KEY];
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -149,7 +162,8 @@ impl CloudRequirementsCacheSignedPayload {
     }
 }
 fn sign_cache_payload(payload_bytes: &[u8]) -> Option<String> {
-    let mut mac = HmacSha256::new_from_slice(CLOUD_REQUIREMENTS_CACHE_WRITE_HMAC_KEY).ok()?;
+    let key = per_process_hmac_key();
+    let mut mac = HmacSha256::new_from_slice(key).ok()?;
     mac.update(payload_bytes);
     let signature = mac.finalize().into_bytes();
     Some(BASE64_STANDARD.encode(signature))
@@ -174,9 +188,11 @@ fn verify_cache_signature(payload_bytes: &[u8], signature: &str) -> bool {
         Err(_) => return false,
     };
 
-    CLOUD_REQUIREMENTS_CACHE_READ_HMAC_KEYS
-        .iter()
-        .any(|key| verify_cache_signature_with_key(payload_bytes, &signature_bytes, key))
+    // Try the per-process key first, then fall back to the legacy key for
+    // backward-compatible reads of cache files created by previous versions.
+    let per_process = per_process_hmac_key();
+    verify_cache_signature_with_key(payload_bytes, &signature_bytes, per_process)
+        || verify_cache_signature_with_key(payload_bytes, &signature_bytes, CLOUD_REQUIREMENTS_CACHE_LEGACY_HMAC_KEY)
 }
 
 fn auth_identity(auth: &CodexAuth) -> (Option<String>, Option<String>) {

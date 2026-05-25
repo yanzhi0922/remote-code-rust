@@ -373,7 +373,7 @@ impl AwsBedrockHandler {
         &self,
         system_prompt: &str,
         messages: &[ApiMessage],
-        tools: Option<&Vec<Value>>,
+        tools: Option<&[Value]>,
         tool_choice: Option<&Value>,
     ) -> Value {
         let filtered_messages = filter_non_anthropic_blocks(messages.to_vec());
@@ -527,14 +527,14 @@ impl Provider for AwsBedrockHandler {
     async fn create_message(
         &self,
         system_prompt: &str,
-        messages: Vec<ApiMessage>,
-        tools: Option<Vec<Value>>,
+        messages: &[ApiMessage],
+        tools: Option<&[Value]>,
         _metadata: CreateMessageMetadata,
     ) -> Result<ApiStream> {
         let body = self.build_converse_request(
             system_prompt,
             &messages,
-            tools.as_ref(),
+            tools,
             _metadata.tool_choice.as_ref(),
         );
         let body_bytes = serde_json::to_vec(&body).map_err(ProviderError::Json)?;

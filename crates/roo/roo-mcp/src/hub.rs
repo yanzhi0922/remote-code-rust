@@ -536,37 +536,51 @@ impl McpHub {
         // Corresponds to TS: `this.removeFileWatchersForServer(name)`
         self.remove_file_watchers_for_server(name).await;
 
-        let mut connections = self.connections.write().await;
-        let before_len = connections.len();
+        // Partition under the write lock, then drop it before closing transports
+        // so other connections are not blocked during the close operation.
+        let (to_close, remaining) = {
+            let mut connections = self.connections.write().await;
+            let before_len = connections.len();
+            let (to_delete, remaining): (Vec<_>, Vec<_>) = connections
+                .drain(..)
+                .partition(|conn| conn.name() == name && conn.source() == source);
 
-        // Partition into matching (to delete) and remaining connections
-        let (to_delete, remaining): (Vec<_>, Vec<_>) = connections
-            .drain(..)
-            .partition(|conn| conn.name() == name && conn.source() == source);
+            // Collect transports that need closing.
+            let transports_to_close: Vec<Box<dyn McpTransport>> = to_delete
+                .into_iter()
+                .filter_map(|conn| match conn {
+                    McpConnection::Connected(c) => {
+                        tracing::debug!("Will close transport for '{}' during deletion", name);
+                        Some(c.transport)
+                    }
+                    _ => None,
+                })
+                .collect();
 
-        // Close transports for connected servers being deleted (best-effort)
-        for conn in to_delete {
-            if let McpConnection::Connected(mut c) = conn {
-                tracing::debug!("Closing transport for '{}' during deletion", name);
-                let _ = c.transport.close().await;
+            *connections = remaining;
+            (transports_to_close, connections.len() < before_len)
+        };
+        // Write lock is dropped here.
+
+        // Close transports outside the lock (best-effort).
+        for mut transport in to_close {
+            let _ = transport.close().await;
+        }
+
+        // Clean up sanitized name registry if no more connections with this name.
+        {
+            let connections = self.connections.read().await;
+            let has_remaining = connections.iter().any(|c| c.name() == name);
+            if !has_remaining {
+                let sanitized = sanitize_mcp_name(name);
+                drop(connections);
+                let mut registry = self.sanitized_name_registry.write().await;
+                registry.remove(&sanitized);
             }
         }
 
-        // Restore remaining connections
-        *connections = remaining;
-
-        // Clean up sanitized name registry if no more connections with this name.
-        // Corresponds to TS: registry cleanup in `deleteConnection()`
-        let has_remaining = connections.iter().any(|c| c.name() == name);
-        if !has_remaining {
-            let sanitized = sanitize_mcp_name(name);
-            let mut registry = self.sanitized_name_registry.write().await;
-            registry.remove(&sanitized);
-        }
-
-        if connections.len() < before_len {
+        if remaining {
             tracing::info!("Deleted MCP connection '{}' ({:?})", name, source);
-            drop(connections);
             self.notify_state_change();
         }
 
@@ -845,85 +859,110 @@ impl McpHub {
     ) -> McpResult<McpToolCallResponse> {
         self.check_disposed()?;
 
-        // Find connection and check it's connected and not disabled
-        let connection = {
+        // Phase 1: read-only check to validate the connection exists and extract config.
+        let (source, timeout_duration) = {
             let connections = self.connections.read().await;
-            connections
+            let conn = connections
                 .iter()
                 .find(|c| c.name() == server_name && c.is_connected())
-                .cloned()
-        };
+                .ok_or_else(|| McpError::NotConnected(format!(
+                    "No connection found for server: {}. Please make sure to use MCP servers available under 'Connected MCP Servers'.",
+                    server_name
+                )))?;
 
-        let connection = connection
-            .ok_or_else(|| McpError::NotConnected(format!(
-                "No connection found for server: {}. Please make sure to use MCP servers available under 'Connected MCP Servers'.",
-                server_name
-            )))?;
-
-        if connection.server().disabled {
-            return Err(McpError::ServerDisabled(server_name.to_string()));
-        }
-
-        // Extract timeout from server config
-        let timeout_duration = {
-            let config: serde_json::Value =
-                serde_json::from_str(&connection.server().config).unwrap_or_default();
-            let timeout_secs = config.get("timeout").and_then(|v| v.as_u64()).unwrap_or(60);
-            std::time::Duration::from_secs(timeout_secs)
-        };
-
-        // We need to get mutable access to the connected connection
-        let mut connections = self.connections.write().await;
-        let conn = connections
-            .iter_mut()
-            .find(|c| c.name() == server_name && c.is_connected())
-            .ok_or_else(|| McpError::NotConnected(server_name.to_string()))?;
-
-        match conn {
-            McpConnection::Connected(conn) => {
-                let result = tokio::time::timeout(
-                    timeout_duration,
-                    conn.client
-                        .call_tool(&mut *conn.transport, tool_name, arguments),
-                )
-                .await;
-
-                match result {
-                    Ok(Ok(response)) => {
-                        tracing::info!("Tool call '{}' on '{}' succeeded", tool_name, server_name);
-                        Ok(response)
-                    }
-                    Ok(Err(e)) => {
-                        conn.server.status = McpConnectionStatus::Error;
-                        conn.server.append_error(&e.to_string(), ErrorLevel::Error);
-                        tracing::error!(
-                            "Tool call '{}' on '{}' failed: {}",
-                            tool_name,
-                            server_name,
-                            e
-                        );
-                        Err(e)
-                    }
-                    Err(_) => {
-                        let err_msg = format!(
-                            "Tool call '{}' on '{}' timed out after {}s",
-                            tool_name,
-                            server_name,
-                            timeout_duration.as_secs()
-                        );
-                        conn.server.status = McpConnectionStatus::Error;
-                        conn.server.append_error(&err_msg, ErrorLevel::Error);
-                        tracing::error!("{}", err_msg);
-                        Err(McpError::ToolCallFailed {
-                            server_name: server_name.to_string(),
-                            tool_name: tool_name.to_string(),
-                            error: err_msg,
-                        })
-                    }
-                }
+            if conn.server().disabled {
+                return Err(McpError::ServerDisabled(server_name.to_string()));
             }
-            _ => Err(McpError::NotConnected(server_name.to_string())),
+
+            let config: serde_json::Value =
+                serde_json::from_str(&conn.server().config).unwrap_or_default();
+            let timeout_secs = config.get("timeout").and_then(|v| v.as_u64()).unwrap_or(60);
+
+            (conn.source(), std::time::Duration::from_secs(timeout_secs))
+        };
+
+        // Phase 2: briefly acquire the write lock to swap out the connection
+        // with a placeholder, then drop the lock before the potentially
+        // long-running (up to 60s) tool call so other connections are not blocked.
+        let mut extracted = {
+            let mut connections = self.connections.write().await;
+            let idx = connections
+                .iter()
+                .position(|c| c.name() == server_name && c.is_connected() && c.source() == source)
+                .ok_or_else(|| McpError::NotConnected(server_name.to_string()))?;
+
+            let conn = connections.get_mut(idx).unwrap();
+            let server_state = conn.server().clone();
+            let placeholder = McpConnection::Disconnected(DisconnectedMcpConnection {
+                server: McpServerState {
+                    status: McpConnectionStatus::Connecting,
+                    ..server_state
+                },
+            });
+
+            std::mem::replace(conn, placeholder)
+        };
+        // Write lock is dropped here -- other connections are unblocked.
+
+        let McpConnection::Connected(ref mut conn) = extracted else {
+            // Swap back the non-connected entry (should not happen) and return error.
+            let mut connections = self.connections.write().await;
+            if let Some(entry) = connections.iter_mut().find(|c| c.name() == server_name && c.source() == source) {
+                *entry = extracted;
+            }
+            return Err(McpError::NotConnected(server_name.to_string()));
+        };
+
+        let result = tokio::time::timeout(
+            timeout_duration,
+            conn.client.call_tool(&mut *conn.transport, tool_name, arguments),
+        )
+        .await;
+
+        // Phase 3: update state on the extracted connection, then swap it back.
+        let response = match result {
+            Ok(Ok(response)) => {
+                tracing::info!("Tool call '{}' on '{}' succeeded", tool_name, server_name);
+                Ok(response)
+            }
+            Ok(Err(e)) => {
+                conn.server.status = McpConnectionStatus::Error;
+                conn.server.append_error(&e.to_string(), ErrorLevel::Error);
+                tracing::error!(
+                    "Tool call '{}' on '{}' failed: {}",
+                    tool_name,
+                    server_name,
+                    e
+                );
+                Err(e)
+            }
+            Err(_) => {
+                let err_msg = format!(
+                    "Tool call '{}' on '{}' timed out after {}s",
+                    tool_name,
+                    server_name,
+                    timeout_duration.as_secs()
+                );
+                conn.server.status = McpConnectionStatus::Error;
+                conn.server.append_error(&err_msg, ErrorLevel::Error);
+                tracing::error!("{}", err_msg);
+                Err(McpError::ToolCallFailed {
+                    server_name: server_name.to_string(),
+                    tool_name: tool_name.to_string(),
+                    error: err_msg,
+                })
+            }
+        };
+
+        // Swap the connection back into the Vec.
+        {
+            let mut connections = self.connections.write().await;
+            if let Some(entry) = connections.iter_mut().find(|c| c.name() == server_name && c.source() == source) {
+                *entry = extracted;
+            }
         }
+
+        response
     }
 
     /// Read a resource from a specific server.
@@ -935,37 +974,75 @@ impl McpHub {
     ) -> McpResult<McpResourceResponse> {
         self.check_disposed()?;
 
-        let mut connections = self.connections.write().await;
+        // Phase 1: read-only check to validate the connection exists.
+        let source = {
+            let connections = self.connections.read().await;
+            let conn = connections
+                .iter()
+                .find(|c| c.name() == server_name && c.is_connected())
+                .ok_or_else(|| {
+                    McpError::NotConnected(format!("No connection found for server: {}", server_name))
+                })?;
 
-        let connection = connections
-            .iter_mut()
-            .find(|c| c.name() == server_name && c.is_connected())
-            .ok_or_else(|| {
-                McpError::NotConnected(format!("No connection found for server: {}", server_name))
-            })?;
-
-        if connection.server().disabled {
-            return Err(McpError::ServerDisabled(server_name.to_string()));
-        }
-
-        match connection {
-            McpConnection::Connected(conn) => {
-                let result = conn.client.read_resource(&mut *conn.transport, uri).await;
-
-                match result {
-                    Ok(response) => {
-                        tracing::info!("Resource read '{}' on '{}' succeeded", uri, server_name);
-                        Ok(response)
-                    }
-                    Err(e) => {
-                        conn.server.status = McpConnectionStatus::Error;
-                        conn.server.append_error(&e.to_string(), ErrorLevel::Error);
-                        Err(e)
-                    }
-                }
+            if conn.server().disabled {
+                return Err(McpError::ServerDisabled(server_name.to_string()));
             }
-            _ => Err(McpError::NotConnected(server_name.to_string())),
+
+            conn.source()
+        };
+
+        // Phase 2: briefly acquire the write lock to swap out the connection,
+        // then drop the lock before the potentially long-running resource read.
+        let mut extracted = {
+            let mut connections = self.connections.write().await;
+            let idx = connections
+                .iter()
+                .position(|c| c.name() == server_name && c.is_connected() && c.source() == source)
+                .ok_or_else(|| McpError::NotConnected(server_name.to_string()))?;
+
+            let conn = connections.get_mut(idx).unwrap();
+            let server_state = conn.server().clone();
+            let placeholder = McpConnection::Disconnected(DisconnectedMcpConnection {
+                server: McpServerState {
+                    status: McpConnectionStatus::Connecting,
+                    ..server_state
+                },
+            });
+
+            std::mem::replace(conn, placeholder)
+        };
+
+        let McpConnection::Connected(ref mut conn) = extracted else {
+            let mut connections = self.connections.write().await;
+            if let Some(entry) = connections.iter_mut().find(|c| c.name() == server_name && c.source() == source) {
+                *entry = extracted;
+            }
+            return Err(McpError::NotConnected(server_name.to_string()));
+        };
+
+        let result = conn.client.read_resource(&mut *conn.transport, uri).await;
+
+        // Phase 3: update state and swap back.
+        let response = match result {
+            Ok(response) => {
+                tracing::info!("Resource read '{}' on '{}' succeeded", uri, server_name);
+                Ok(response)
+            }
+            Err(e) => {
+                conn.server.status = McpConnectionStatus::Error;
+                conn.server.append_error(&e.to_string(), ErrorLevel::Error);
+                Err(e)
+            }
+        };
+
+        {
+            let mut connections = self.connections.write().await;
+            if let Some(entry) = connections.iter_mut().find(|c| c.name() == server_name && c.source() == source) {
+                *entry = extracted;
+            }
         }
+
+        response
     }
 
     /// Fetch the tools list from a specific server and update the server state.
@@ -981,24 +1058,33 @@ impl McpHub {
     ) -> McpResult<Vec<McpTool>> {
         self.check_disposed()?;
 
-        let mut connections = self.connections.write().await;
+        // Briefly swap out the connection so the write lock is not held across the await.
+        let mut extracted = {
+            let mut connections = self.connections.write().await;
+            let idx = connections
+                .iter()
+                .position(|c| c.name() == server_name && c.source() == source && c.is_connected())
+                .ok_or_else(|| McpError::NotConnected(server_name.to_string()))?;
 
-        let connection = connections
-            .iter_mut()
-            .find(|c| c.name() == server_name && c.source() == source && c.is_connected());
+            let conn = connections.get_mut(idx).unwrap();
+            let server_state = conn.server().clone();
+            let placeholder = McpConnection::Disconnected(DisconnectedMcpConnection {
+                server: McpServerState {
+                    status: McpConnectionStatus::Connecting,
+                    ..server_state
+                },
+            });
+            std::mem::replace(conn, placeholder)
+        };
 
-        let connection =
-            connection.ok_or_else(|| McpError::NotConnected(server_name.to_string()))?;
-
-        match connection {
-            McpConnection::Connected(conn) => {
+        let result = match extracted {
+            McpConnection::Connected(ref mut conn) => {
                 let raw_tools = conn
                     .client
                     .list_tools(&mut *conn.transport)
                     .await
                     .unwrap_or_default();
 
-                // Read alwaysAllow and disabledTools from config
                 let always_allow_config: Vec<String> = serde_json::from_str(&conn.server.config)
                     .ok()
                     .and_then(|v: serde_json::Value| v.get("alwaysAllow").cloned())
@@ -1011,16 +1097,13 @@ impl McpHub {
                     .and_then(|v| serde_json::from_value(v).ok())
                     .unwrap_or_default();
 
-                // Check if wildcard "*" is in the alwaysAllow config
                 let has_wildcard = always_allow_config.contains(&"*".to_string());
 
-                // Convert to HashSet for O(1) lookups per tool
                 let always_allow_set: std::collections::HashSet<String> =
                     always_allow_config.into_iter().collect();
                 let disabled_tools_set: std::collections::HashSet<String> =
                     disabled_tools_list.into_iter().collect();
 
-                // Annotate tools with always_allow and enabled_for_prompt
                 let tools: Vec<McpTool> = raw_tools
                     .into_iter()
                     .map(|mut tool| {
@@ -1036,7 +1119,17 @@ impl McpHub {
                 Ok(tools)
             }
             _ => Err(McpError::NotConnected(server_name.to_string())),
+        };
+
+        // Swap the connection back.
+        {
+            let mut connections = self.connections.write().await;
+            if let Some(entry) = connections.iter_mut().find(|c| c.name() == server_name && c.source() == source) {
+                *entry = extracted;
+            }
         }
+
+        result
     }
 
     /// Fetch the resources list from a specific server.
@@ -1048,14 +1141,31 @@ impl McpHub {
     ) -> McpResult<Vec<McpResource>> {
         self.check_disposed()?;
 
-        let mut connections = self.connections.write().await;
+        // Briefly swap out so the write lock is not held across the await.
+        let mut extracted = {
+            let mut connections = self.connections.write().await;
+            let idx = connections
+                .iter()
+                .position(|c| c.name() == server_name && c.source() == source && c.is_connected());
 
-        let connection = connections
-            .iter_mut()
-            .find(|c| c.name() == server_name && c.source() == source && c.is_connected());
+            match idx {
+                Some(idx) => {
+                    let conn = connections.get_mut(idx).unwrap();
+                    let server_state = conn.server().clone();
+                    let placeholder = McpConnection::Disconnected(DisconnectedMcpConnection {
+                        server: McpServerState {
+                            status: McpConnectionStatus::Connecting,
+                            ..server_state
+                        },
+                    });
+                    Some(std::mem::replace(conn, placeholder))
+                }
+                None => None,
+            }
+        };
 
-        match connection {
-            Some(McpConnection::Connected(conn)) => {
+        let result = match extracted {
+            Some(McpConnection::Connected(ref mut conn)) => {
                 let resources = conn
                     .client
                     .list_resources(&mut *conn.transport)
@@ -1065,7 +1175,17 @@ impl McpHub {
                 Ok(resources)
             }
             _ => Ok(vec![]),
+        };
+
+        // Swap back.
+        if let Some(conn) = extracted {
+            let mut connections = self.connections.write().await;
+            if let Some(entry) = connections.iter_mut().find(|c| c.name() == server_name && c.source() == source) {
+                *entry = conn;
+            }
         }
+
+        result
     }
 
     /// Fetch the resource templates list from a specific server.
@@ -1077,14 +1197,31 @@ impl McpHub {
     ) -> McpResult<Vec<McpResourceTemplate>> {
         self.check_disposed()?;
 
-        let mut connections = self.connections.write().await;
+        // Briefly swap out so the write lock is not held across the await.
+        let mut extracted = {
+            let mut connections = self.connections.write().await;
+            let idx = connections
+                .iter()
+                .position(|c| c.name() == server_name && c.source() == source && c.is_connected());
 
-        let connection = connections
-            .iter_mut()
-            .find(|c| c.name() == server_name && c.source() == source && c.is_connected());
+            match idx {
+                Some(idx) => {
+                    let conn = connections.get_mut(idx).unwrap();
+                    let server_state = conn.server().clone();
+                    let placeholder = McpConnection::Disconnected(DisconnectedMcpConnection {
+                        server: McpServerState {
+                            status: McpConnectionStatus::Connecting,
+                            ..server_state
+                        },
+                    });
+                    Some(std::mem::replace(conn, placeholder))
+                }
+                None => None,
+            }
+        };
 
-        match connection {
-            Some(McpConnection::Connected(conn)) => {
+        let result = match extracted {
+            Some(McpConnection::Connected(ref mut conn)) => {
                 let templates = conn
                     .client
                     .list_resource_templates(&mut *conn.transport)
@@ -1094,7 +1231,17 @@ impl McpHub {
                 Ok(templates)
             }
             _ => Ok(vec![]),
+        };
+
+        // Swap back.
+        if let Some(conn) = extracted {
+            let mut connections = self.connections.write().await;
+            if let Some(entry) = connections.iter_mut().find(|c| c.name() == server_name && c.source() == source) {
+                *entry = conn;
+            }
         }
+
+        result
     }
 
     // -----------------------------------------------------------------------
@@ -1410,27 +1557,36 @@ impl McpHub {
             // Re-connect all servers
             self.refresh_all_connections().await?;
         } else {
-            // Disconnect all servers: close transports and convert to disconnected placeholders
-            // Corresponds to TS: iterating through connections and calling deleteConnection
-            let mut connections = self.connections.write().await;
-            let drained: Vec<McpConnection> = connections.drain(..).collect();
-            let mut new_connections = Vec::with_capacity(drained.len());
-            for conn in drained {
-                match conn {
-                    McpConnection::Connected(mut c) => {
-                        // Properly close the transport
-                        let _ = c.transport.close().await;
-                        c.server.status = McpConnectionStatus::Disconnected;
-                        new_connections.push(McpConnection::Disconnected(
-                            DisconnectedMcpConnection { server: c.server },
-                        ));
-                    }
-                    other => {
-                        new_connections.push(other);
+            // Disconnect all servers: extract transports under the lock, then
+            // close them outside the lock so other connections are not blocked.
+            let transports_to_close = {
+                let mut connections = self.connections.write().await;
+                let drained: Vec<McpConnection> = connections.drain(..).collect();
+                let mut transports: Vec<Box<dyn McpTransport>> = Vec::new();
+                let mut new_conns = Vec::with_capacity(drained.len());
+                for conn in drained {
+                    match conn {
+                        McpConnection::Connected(mut c) => {
+                            transports.push(c.transport);
+                            c.server.status = McpConnectionStatus::Disconnected;
+                            new_conns.push(McpConnection::Disconnected(
+                                DisconnectedMcpConnection { server: c.server },
+                            ));
+                        }
+                        other => {
+                            new_conns.push(other);
+                        }
                     }
                 }
+                *connections = new_conns;
+                transports
+            };
+            // Write lock is dropped here.
+
+            // Close transports outside the lock (best-effort).
+            for mut transport in transports_to_close {
+                let _ = transport.close().await;
             }
-            *connections = new_connections;
         }
 
         self.notify_state_change();
@@ -1732,11 +1888,22 @@ impl McpHub {
             *pw = None;
         }
 
-        let mut connections = self.connections.write().await;
-        for conn in connections.drain(..) {
-            if let McpConnection::Connected(mut c) = conn {
-                let _ = c.transport.close().await;
-            }
+        // Drain connections under the lock, then close transports outside it
+        // so other operations are not blocked during close.
+        let transports_to_close = {
+            let mut connections = self.connections.write().await;
+            connections
+                .drain(..)
+                .filter_map(|conn| match conn {
+                    McpConnection::Connected(c) => Some(c.transport),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        // Write lock is dropped here.
+
+        for mut transport in transports_to_close {
+            let _ = transport.close().await;
         }
 
         // Clear sanitized name registry

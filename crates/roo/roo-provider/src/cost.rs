@@ -4,6 +4,8 @@
 //! Provides functions for calculating API call costs based on token usage
 //! and model pricing, supporting both Anthropic and OpenAI billing models.
 
+use std::borrow::Cow;
+
 use roo_types::model::{ModelInfo, ServiceTier};
 
 // ---------------------------------------------------------------------------
@@ -32,31 +34,31 @@ pub struct ApiCostResult {
 ///
 /// Source: `src/shared/cost.ts` — `applyLongContextPricing`
 ///
-/// Returns a modified `ModelInfo` with adjusted prices, or the original
-/// if long context pricing does not apply.
-fn apply_long_context_pricing(
-    model_info: &ModelInfo,
+/// Returns a `Cow::Borrowed` reference when no modification is needed,
+/// or a `Cow::Owned` with adjusted prices when long context pricing applies.
+fn apply_long_context_pricing<'a>(
+    model_info: &'a ModelInfo,
     total_input_tokens: u64,
     service_tier: Option<ServiceTier>,
-) -> ModelInfo {
+) -> Cow<'a, ModelInfo> {
     let pricing = match &model_info.long_context_pricing {
         Some(p) => p,
-        None => return model_info.clone(),
+        None => return Cow::Borrowed(model_info),
     };
 
     if total_input_tokens <= pricing.threshold_tokens {
-        return model_info.clone();
+        return Cow::Borrowed(model_info);
     }
 
     // Check if the pricing applies to the given service tier
     if let Some(ref tiers) = pricing.applies_to_service_tiers {
         let effective_tier = service_tier.unwrap_or(ServiceTier::Default);
         if !tiers.contains(&effective_tier) {
-            return model_info.clone();
+            return Cow::Borrowed(model_info);
         }
     }
 
-    // Apply multipliers
+    // Apply multipliers — only clone when we actually need to modify
     let mut adjusted = model_info.clone();
     if let (Some(price), Some(multiplier)) =
         (model_info.input_price, pricing.input_price_multiplier)
@@ -81,7 +83,7 @@ fn apply_long_context_pricing(
         adjusted.cache_reads_price = Some(price * multiplier);
     }
 
-    adjusted
+    Cow::Owned(adjusted)
 }
 
 // ---------------------------------------------------------------------------

@@ -196,8 +196,8 @@ impl Provider for FakeAiHandler {
     async fn create_message(
         &self,
         _system_prompt: &str,
-        _messages: Vec<roo_types::api::ApiMessage>,
-        _tools: Option<Vec<serde_json::Value>>,
+        _messages: &[roo_types::api::ApiMessage],
+        _tools: Option<&[serde_json::Value]>,
         _metadata: CreateMessageMetadata,
     ) -> Result<ApiStream> {
         self.maybe_delay().await;

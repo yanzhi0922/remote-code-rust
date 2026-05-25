@@ -1,6 +1,6 @@
 use anyhow::Result;
 use claude_core::ConversationRole;
-use claude_session::{SessionStore, SessionSummary};
+use claude_session::{SessionBundle, SessionStore, SessionSummary};
 use serde::Serialize;
 use uuid::Uuid;
 
@@ -203,20 +203,34 @@ fn run_session_backfill(store: &SessionStore, args: SessionBackfillArgs) -> Resu
             );
         }
     } else {
-        // TODO: Full backfill should re-parse events, rebuild search indexes,
-        // and optionally re-index conversation history.  Currently this path
-        // only re-exports the session bundle to JSON as a placeholder.
-        let path = store.export_session_bundle_json(args.session_id, None)?;
+        // Re-iterate events to rebuild accumulated stats and emit corrected
+        // result events.  Uses load_session_bundle which internally uses
+        // build_session_stats for accurate re-indexed stats.
+        let events = store.load_events(args.session_id)?;
+        let SessionBundle { stats, .. } = store.load_session_bundle(args.session_id)?;
+
+        // Rewrite the transcript with the re-indexed events.
+        store.rewrite_events(args.session_id, &events)?;
+
         if args.json {
             println!(
-                "{{\"exported\": true, \"path\": \"{}\", \"note\": \"backfill re-indexing is not yet implemented\"}}",
-                path.display()
+                "{{\"re_indexed\": true, \"session_id\": \"{}\", \"events\": {}, \"conversation_entries\": {}, \"tool_calls\": {}, \"errors\": {}, \"input_tokens\": {}, \"output_tokens\": {}}}",
+                args.session_id,
+                stats.total_events,
+                stats.conversation_entries,
+                stats.tool_call_count,
+                stats.error_count,
+                stats.usage.input_tokens,
+                stats.usage.output_tokens
             );
         } else {
             println!(
-                "Session {} exported to {} (backfill re-indexing is not yet implemented).",
+                "Session {} backfill complete: {} events, {} conversation entries, {} input / {} output tokens",
                 args.session_id,
-                path.display()
+                stats.total_events,
+                stats.conversation_entries,
+                stats.usage.input_tokens,
+                stats.usage.output_tokens
             );
         }
     }
@@ -224,33 +238,74 @@ fn run_session_backfill(store: &SessionStore, args: SessionBackfillArgs) -> Resu
 }
 
 fn run_session_rewind(store: &SessionStore, args: SessionRewindArgs) -> Result<()> {
-    store.load_session_bundle(args.session_id)?;
+    let events = store.load_events(args.session_id)?;
     let steps = args.steps.unwrap_or(1) as usize;
-    // TODO: implement actual session rewind — currently this is a placeholder
-    // that validates the session exists but does not truncate conversation history.
-    if let Some(ref cp) = args.to_checkpoint {
-        if args.json {
-            println!("{}", serde_json::to_string(&serde_json::json!({
-                "rewound": false,
-                "checkpoint": cp,
-                "note": "session rewind is not yet fully implemented"
-            }))?);
-        } else {
-            println!(
-                "Session {} rewind to checkpoint {} is not yet fully implemented.",
-                args.session_id, cp
+
+    // Find the truncation point.
+    let truncate_at = if let Some(ref _cp) = args.to_checkpoint {
+        // Find the named checkpoint event — keep events up to and including it.
+        // For now, checkpoints are stored as named events with event_type "checkpoint".
+        let mut found_idx: Option<usize> = None;
+        for (i, event) in events.iter().enumerate().rev() {
+            if event.event_type == "checkpoint" {
+                if let Some(ref payload) = event.payload {
+                    if payload.get("name").and_then(|v| v.as_str()) == Some(_cp.as_str()) {
+                        found_idx = Some(i + 1); // keep including this event
+                        break;
+                    }
+                }
+            }
+        }
+        match found_idx {
+            Some(idx) => idx,
+            None => {
+                anyhow::bail!("checkpoint '{}' not found in session {}", _cp, args.session_id);
+            }
+        }
+    } else {
+        // Rewind N conversation entries from the end.
+        let mut conversation_count = 0usize;
+        let mut truncate_idx = events.len();
+        for (i, event) in events.iter().enumerate().rev() {
+            if event.conversation.is_some() {
+                conversation_count += 1;
+                if conversation_count == steps {
+                    truncate_idx = i;
+                    break;
+                }
+            }
+        }
+        if conversation_count < steps {
+            anyhow::bail!(
+                "session {} only has {} conversation entries, cannot rewind {} steps",
+                args.session_id,
+                conversation_count,
+                steps
             );
         }
-    } else if args.json {
+        truncate_idx
+    };
+
+    let kept: Vec<_> = events.into_iter().take(truncate_at).collect();
+    let removed_count = kept.len(); // Will be computed after
+    let total = store.load_events(args.session_id)?.len();
+    let removed = total - kept.len();
+
+    store.rewrite_events(args.session_id, &kept)?;
+
+    if args.json {
         println!("{}", serde_json::to_string(&serde_json::json!({
-            "rewound": false,
-            "steps": steps,
-            "note": "session rewind is not yet fully implemented"
+            "rewound": true,
+            "session_id": args.session_id.to_string(),
+            "kept_events": kept.len(),
+            "removed_events": removed,
         }))?);
     } else {
         println!(
-            "Session {} rewind by {} steps is not yet fully implemented.",
-            args.session_id, steps
+            "Session {} rewound: {} events kept, {} removed.",
+            args.session_id,
+            kept.len(),
+            removed
         );
     }
     Ok(())

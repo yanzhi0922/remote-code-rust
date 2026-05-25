@@ -19,9 +19,10 @@ use tracing::error;
 use tracing::warn;
 
 /// Size of the bounded channels used to communicate between tasks. The value
-/// is a balance between throughput and memory usage - 128 messages should be
-/// plenty for an interactive CLI.
-pub const CHANNEL_CAPACITY: usize = 128;
+/// is a balance between throughput and memory usage - 512 messages should be
+/// plenty for an interactive CLI while reducing backpressure drops for
+/// ephemeral sessions.
+pub const CHANNEL_CAPACITY: usize = 512;
 
 mod remote_control;
 mod stdio;
