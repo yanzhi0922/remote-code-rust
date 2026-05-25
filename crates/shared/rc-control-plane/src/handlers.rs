@@ -984,7 +984,13 @@ pub(crate) async fn update_runner_heartbeat(
     };
 
     dispatch_pending_sessions_for_runner(&service, &runner_id).await;
-    Ok(Json(final_snapshot))
+
+    // Re-fetch the snapshot so the response reflects dispatched sessions.
+    let snapshot = {
+        let registry = service.registry.read().await;
+        registry.get_runner_snapshot(&runner_id)
+    };
+    Ok(Json(snapshot.unwrap_or(final_snapshot)))
 }
 
 pub(crate) async fn pull_runner_commands(
@@ -1423,6 +1429,7 @@ pub(crate) async fn create_session(
             },
         })
         .await;
+    persist_state_logged(&service).await;
     let registry = service.registry.read().await;
     Ok((
         StatusCode::CREATED,

@@ -125,7 +125,7 @@ async fn handle_quic_connection(
                         // Tenant filtering: device-authenticated QUIC connections
                         // only receive events for sessions owned by the same tenant.
                         let tenant_ok = match &auth_principal {
-                            AuthPrincipal::User { user_id } => {
+                            AuthPrincipal::User { user_id: _ } => {
                                 // Tenant users see all events (session filter already applied).
                                 true
                             }
