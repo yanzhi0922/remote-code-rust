@@ -65,6 +65,7 @@ pub enum ShellCommandStatus {
 
 impl ShellCommandStatus {
     /// Returns the display label.
+    #[must_use]
     pub fn label(&self) -> &'static str {
         match self {
             ShellCommandStatus::Running => "running",
@@ -76,6 +77,7 @@ impl ShellCommandStatus {
     }
 
     /// Returns the color for the status indicator.
+    #[must_use]
     pub fn color(&self) -> Color {
         match self {
             ShellCommandStatus::Running => Color::Yellow,
@@ -145,6 +147,7 @@ fn dim_span(text: &str) -> Span<'static> {
     )
 }
 
+#[must_use]
 fn format_duration(ms: u64) -> String {
     if ms < 1000 {
         format!("{ms}ms")
@@ -172,7 +175,6 @@ pub fn render_shell_output(
     // Header
     if config.show_header {
         let status_color = block.status.color();
-        let _status_label = block.status.label();
 
         let mut header_spans = vec![
             Span::styled(

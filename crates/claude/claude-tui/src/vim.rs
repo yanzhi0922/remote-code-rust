@@ -22,6 +22,7 @@ pub enum VimMode {
 
 impl VimMode {
     /// Short uppercase label for display in the status bar.
+    #[must_use]
     pub fn label(self) -> &'static str {
         match self {
             Self::Normal => "NORMAL",
@@ -154,16 +155,19 @@ impl VimStateMachine {
     }
 
     /// Current mode.
+    #[must_use]
     pub fn mode(&self) -> VimMode {
         self.mode
     }
 
     /// Command buffer content (for rendering the `:` prompt).
+    #[must_use]
     pub fn command_buffer(&self) -> &str {
         &self.command_buffer
     }
 
     /// Search buffer content (for rendering the `/` prompt).
+    #[must_use]
     pub fn search_buffer(&self) -> &str {
         &self.search_buffer
     }

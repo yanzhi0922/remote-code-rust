@@ -74,6 +74,7 @@ impl Keystroke {
     }
 
     /// Format as a human-readable shortcut string.
+    #[must_use]
     pub fn display(&self) -> String {
         let mut parts: Vec<String> = Vec::new();
         if self.ctrl {
@@ -184,6 +185,7 @@ impl KeyBindingContext {
     }
 
     /// Human-readable description of the context.
+    #[must_use]
     pub fn description(self) -> &'static str {
         match self {
             Self::Global => "Active everywhere, regardless of focus",
@@ -421,6 +423,7 @@ impl KeyAction {
     }
 
     /// Human-readable name for the action.
+    #[must_use]
     pub fn name(self) -> &'static str {
         match self {
             Self::AppInterrupt => "app:interrupt",
@@ -647,11 +650,13 @@ impl KeyBindingRegistry {
     }
 
     /// Get the total number of registered bindings.
+    #[must_use]
     pub fn len(&self) -> usize {
         self.lookup.len()
     }
 
     /// Check if the registry is empty.
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.lookup.is_empty()
     }

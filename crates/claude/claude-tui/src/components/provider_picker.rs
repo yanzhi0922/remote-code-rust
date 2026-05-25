@@ -25,6 +25,7 @@ pub enum ProviderStatus {
 
 impl ProviderStatus {
     /// Status icon.
+    #[must_use]
     pub fn icon(self) -> &'static str {
         match self {
             Self::Connected => "●",
@@ -34,6 +35,7 @@ impl ProviderStatus {
     }
 
     /// Status label.
+    #[must_use]
     pub fn label(self) -> &'static str {
         match self {
             Self::Connected => "connected",
@@ -109,6 +111,7 @@ impl ProviderPicker {
     }
 
     /// Get the currently selected provider.
+    #[must_use]
     pub fn selected(&self) -> Option<&ProviderEntry> {
         self.providers.get(self.selected_index)
     }

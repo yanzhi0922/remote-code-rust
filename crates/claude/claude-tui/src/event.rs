@@ -19,6 +19,7 @@ pub enum AppEvent {
 }
 
 /// Convert a crossterm event into an AppEvent.
+#[must_use]
 pub fn convert_event(event: Event) -> Option<AppEvent> {
     match event {
         Event::Key(key) => {

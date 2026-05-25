@@ -21,6 +21,7 @@ pub struct CompactSummaryData {
 
 impl CompactSummaryData {
     /// Compute the token savings percentage.
+    #[must_use]
     pub fn savings_percentage(&self) -> f64 {
         if self.before_tokens == 0 {
             return 0.0;
@@ -30,6 +31,7 @@ impl CompactSummaryData {
     }
 
     /// Total messages before compaction.
+    #[must_use]
     pub fn total_messages(&self) -> usize {
         self.messages_preserved + self.messages_removed
     }
@@ -50,7 +52,7 @@ impl CompactSummaryRenderer {
         vec![
             // Header
             Line::from(vec![Span::styled(
-                "Compact Summary".to_string(),
+                "Compact Summary".to_owned(),
                 Style::default().add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
             )]),
             // Token savings

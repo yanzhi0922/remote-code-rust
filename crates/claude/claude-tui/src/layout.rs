@@ -64,6 +64,7 @@ impl AppLayout {
 }
 
 /// Calculate the input area inner dimensions (accounting for borders).
+#[must_use]
 pub fn input_inner(area: Rect) -> Rect {
     Rect::new(
         area.x.saturating_sub(0),
@@ -74,11 +75,13 @@ pub fn input_inner(area: Rect) -> Rect {
 }
 
 /// Calculate the sidebar tab height.
-pub fn sidebar_tab_height() -> u16 {
+#[must_use]
+pub const fn sidebar_tab_height() -> u16 {
     1
 }
 
 /// Calculate the sidebar content area (below tabs).
+#[must_use]
 pub fn sidebar_content_area(area: Rect) -> Rect {
     Rect::new(
         area.x,
@@ -89,12 +92,14 @@ pub fn sidebar_content_area(area: Rect) -> Rect {
 }
 
 /// Determine if the given panel is focused.
+#[must_use]
 pub fn is_panel_focused(app: &App, panel: ActivePanel) -> bool {
     app.active_panel == panel
 }
 
 /// Get the sidebar tab index.
-pub fn sidebar_tab_index(tab: SidebarTab) -> usize {
+#[must_use]
+pub const fn sidebar_tab_index(tab: SidebarTab) -> usize {
     match tab {
         SidebarTab::Sessions => 0,
         SidebarTab::Tools => 1,

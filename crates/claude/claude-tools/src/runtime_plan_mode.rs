@@ -345,7 +345,9 @@ impl PlanModeRuntime for RuntimePlanModeController {
         state.current_permission_mode = restored_mode;
         state.has_exited_plan_mode = true;
         state.needs_plan_mode_exit_attachment = true;
-        let _ = self.persist_plan_snapshot_for_path(&plan_file_path);
+        if let Err(e) = self.persist_plan_snapshot_for_path(&plan_file_path) {
+            tracing::warn!("failed to persist plan snapshot: {e}");
+        }
         self.persist_locked(&mut state)?;
         Ok(render_exit_plan_mode_result(&ExitPlanModeToolResult {
             plan,

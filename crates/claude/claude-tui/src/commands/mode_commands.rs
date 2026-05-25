@@ -125,35 +125,34 @@ fn read_nonempty_file(path: &Path) -> Option<String> {
         .filter(|content| !content.trim().is_empty())
 }
 
-fn open_plan_in_editor(plan_path: &Path) -> Result<(), String> {
+fn open_plan_in_editor(plan_path: &Path) -> anyhow::Result<()> {
     if let Some(parent) = plan_path.parent() {
-        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+        fs::create_dir_all(parent)?;
     }
     if !plan_path.exists() {
-        fs::write(plan_path, "").map_err(|error| error.to_string())?;
+        fs::write(plan_path, "")?;
     }
 
     if let Some(editor) = external_editor_command() {
         let mut parts = editor.split_whitespace();
         let program = parts
             .next()
-            .ok_or_else(|| "EDITOR is set but empty".to_owned())?;
+            .ok_or_else(|| anyhow::anyhow!("EDITOR is set but empty"))?;
         let mut command = Command::new(program);
         command.args(parts);
         command.arg(plan_path);
-        command.spawn().map_err(|error| error.to_string())?;
+        command.spawn()?;
         return Ok(());
     }
 
     open_with_system_default(plan_path)
 }
 
-fn open_with_system_default(plan_path: &Path) -> Result<(), String> {
+fn open_with_system_default(plan_path: &Path) -> anyhow::Result<()> {
     if cfg!(target_os = "windows") {
         Command::new("cmd")
             .args(["/C", "start", "", &plan_path.display().to_string()])
-            .spawn()
-            .map_err(|error| error.to_string())?;
+            .spawn()?;
         return Ok(());
     }
 
@@ -164,8 +163,7 @@ fn open_with_system_default(plan_path: &Path) -> Result<(), String> {
     };
     Command::new(program)
         .arg(plan_path)
-        .spawn()
-        .map_err(|error| error.to_string())?;
+        .spawn()?;
     Ok(())
 }
 

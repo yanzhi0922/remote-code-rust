@@ -62,6 +62,7 @@ impl Theme {
         }
     }
 
+    #[must_use]
     pub fn by_name(name: &str) -> Option<Self> {
         match name {
             "dark" => Some(Self::dark()),
@@ -72,6 +73,7 @@ impl Theme {
         }
     }
 
+    #[must_use]
     pub fn all_names() -> Vec<&'static str> {
         vec!["dark", "light", "monokai", "solarized"]
     }

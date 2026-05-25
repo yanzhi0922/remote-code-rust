@@ -72,7 +72,7 @@ impl ContextVisualizer {
 
         if total_tokens == 0 {
             lines.push(Line::from(Span::styled(
-                "  (empty)".to_string(),
+                "  (empty)".to_owned(),
                 Style::default().fg(Color::DarkGray),
             )));
             return lines;

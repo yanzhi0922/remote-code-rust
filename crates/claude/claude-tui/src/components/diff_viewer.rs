@@ -98,6 +98,7 @@ pub struct DiffStats {
 
 impl DiffStats {
     /// Format a summary string.
+    #[must_use]
     pub fn summary(&self) -> String {
         format!("+{} -{}", self.added, self.removed)
     }

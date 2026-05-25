@@ -53,6 +53,7 @@ pub enum NotificationType {
 
 impl NotificationType {
     /// Get the icon/emoji for this notification type.
+    #[must_use]
     pub fn icon(self) -> &'static str {
         match self {
             Self::Info => "ℹ",
@@ -63,6 +64,7 @@ impl NotificationType {
     }
 
     /// Get the label for this notification type.
+    #[must_use]
     pub fn label(self) -> &'static str {
         match self {
             Self::Info => "INFO",
@@ -73,6 +75,7 @@ impl NotificationType {
     }
 
     /// Get the default duration for this notification type.
+    #[must_use]
     pub fn default_duration(self) -> Duration {
         match self {
             Self::Info => Duration::from_secs(5),
@@ -83,6 +86,7 @@ impl NotificationType {
     }
 
     /// Get the priority (higher = more important).
+    #[must_use]
     pub fn priority(self) -> u8 {
         match self {
             Self::Info => 0,
@@ -214,6 +218,7 @@ impl Notification {
     }
 
     /// Check if the notification has expired.
+    #[must_use]
     pub fn is_expired(&self) -> bool {
         self.dismissed || self.created_at.elapsed() >= self.duration
     }
@@ -224,11 +229,13 @@ impl Notification {
     }
 
     /// Time remaining before auto-dismiss.
+    #[must_use]
     pub fn time_remaining(&self) -> Duration {
         self.duration.saturating_sub(self.created_at.elapsed())
     }
 
     /// Format for display.
+    #[must_use]
     pub fn display_line(&self) -> String {
         format!(
             "{} [{}] {} — {}",
@@ -448,6 +455,7 @@ impl NotificationManager {
     }
 
     /// Get the number of active notifications.
+    #[must_use]
     pub fn active_count(&self) -> usize {
         self.notifications
             .iter()
@@ -456,11 +464,13 @@ impl NotificationManager {
     }
 
     /// Get the total number of notifications (active + history).
+    #[must_use]
     pub fn total_count(&self) -> usize {
         self.notifications.len() + self.history.len()
     }
 
     /// Check if there are any active notifications.
+    #[must_use]
     pub fn has_active(&self) -> bool {
         self.active_count() > 0
     }

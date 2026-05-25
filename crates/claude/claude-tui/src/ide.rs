@@ -221,37 +221,42 @@ impl IdeClient {
     }
 
     /// Get the IDE type.
+    #[must_use]
     pub fn ide_type(&self) -> IdeType {
         self.ide_type
     }
 
     /// Get the connection status.
+    #[must_use]
     pub fn status(&self) -> IdeConnectionStatus {
         self.status
     }
 
     /// Get the connection URL.
+    #[must_use]
     pub fn url(&self) -> Option<&str> {
         self.url.as_deref()
     }
 
     /// Get the number of actions sent.
+    #[must_use]
     pub fn action_count(&self) -> usize {
         self.action_count
     }
 
     /// Check if the IDE is connected.
+    #[must_use]
     pub fn is_connected(&self) -> bool {
         self.status == IdeConnectionStatus::Connected
     }
 
     /// Attempt to connect to the IDE.
-    pub fn connect(&mut self, url: String, auth_token: Option<String>) -> Result<()> {
+    pub fn connect(&mut self, url: impl Into<String>, auth_token: Option<String>) -> Result<()> {
         if self.status == IdeConnectionStatus::Connected {
             return Err(anyhow::anyhow!("already connected to IDE"));
         }
         self.status = IdeConnectionStatus::Connecting;
-        self.url = Some(url);
+        self.url = Some(url.into());
         self.auth_token = auth_token;
         // Simulate successful connection.
         self.status = IdeConnectionStatus::Connected;
@@ -352,6 +357,7 @@ impl IdeClient {
     }
 
     /// Check if the IDE is running in Windows.
+    #[must_use]
     pub fn is_running_in_windows(&self) -> bool {
         self.ide_running_in_windows
     }

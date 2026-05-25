@@ -39,6 +39,7 @@ pub enum TeammateStatus {
 
 impl TeammateStatus {
     /// Returns the indicator character.
+    #[must_use]
     pub fn indicator(&self) -> &'static str {
         match self {
             TeammateStatus::Idle => "○",
@@ -49,6 +50,7 @@ impl TeammateStatus {
     }
 
     /// Returns the color.
+    #[must_use]
     pub fn color(&self) -> Color {
         match self {
             TeammateStatus::Idle => Color::DarkGray,
@@ -95,6 +97,7 @@ pub struct TeamInfo {
 
 impl TeamInfo {
     /// Count of working teammates.
+    #[must_use]
     pub fn working_count(&self) -> usize {
         self.teammates
             .iter()
@@ -103,6 +106,7 @@ impl TeamInfo {
     }
 
     /// Count of done teammates.
+    #[must_use]
     pub fn done_count(&self) -> usize {
         self.teammates
             .iter()

@@ -33,6 +33,7 @@ pub enum Language {
 
 impl Language {
     /// Parse from a fence info string (e.g. `"rust"`, `"python"`).
+    #[must_use]
     pub fn from_fence(fence: &str) -> Self {
         match fence.trim().to_lowercase().as_str() {
             "rust" | "rs" => Self::Rust,
@@ -82,6 +83,7 @@ impl SyntaxColors {
 }
 
 /// Highlight a single line of code, returning a list of styled spans.
+#[must_use]
 pub fn highlight_line(line: &str, lang: Language, colors: &SyntaxColors) -> Vec<Span<'static>> {
     match lang {
         Language::Rust => highlight_rust(line, colors),
@@ -98,6 +100,7 @@ pub fn highlight_line(line: &str, lang: Language, colors: &SyntaxColors) -> Vec<
 }
 
 /// Highlight multiple lines of code into ratatui `Line` values.
+#[must_use]
 pub fn highlight_code(code: &str, lang: Language, colors: &SyntaxColors) -> Vec<Line<'static>> {
     code.lines()
         .map(|line| Line::from(highlight_line(line, lang, colors)))
@@ -105,6 +108,7 @@ pub fn highlight_code(code: &str, lang: Language, colors: &SyntaxColors) -> Vec<
 }
 
 /// Check if a word is a Rust keyword.
+#[must_use]
 pub fn is_rust_keyword(word: &str) -> bool {
     matches!(
         word,

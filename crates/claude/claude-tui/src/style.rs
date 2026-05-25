@@ -160,6 +160,7 @@ impl StyleConfig {
     }
 
     /// Look up a theme by name.
+    #[must_use]
     pub fn by_name(name: &str) -> Option<Self> {
         match name {
             "dark" => Some(Self::dark()),
@@ -171,11 +172,13 @@ impl StyleConfig {
     }
 
     /// All available theme names.
+    #[must_use]
     pub fn all_names() -> Vec<&'static str> {
         vec!["dark", "light", "monokai", "solarized"]
     }
 
     /// Return the mode indicator color for a given Vim mode label.
+    #[must_use]
     pub fn mode_color(&self, mode_label: &str) -> Color {
         match mode_label {
             "NORMAL" => self.mode_normal,

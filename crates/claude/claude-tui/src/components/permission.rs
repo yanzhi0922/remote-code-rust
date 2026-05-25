@@ -87,6 +87,7 @@ pub fn render(f: &mut Frame, request: &PermissionRequest, area: Rect) {
 }
 
 /// Truncate a string to a maximum character count.
+#[must_use]
 fn truncate_str(s: &str, max_chars: usize) -> String {
     if s.chars().count() <= max_chars {
         s.to_owned()

@@ -54,6 +54,7 @@ impl ScrollItem {
     }
 
     /// Get the effective height (measured or estimated).
+    #[must_use]
     pub fn effective_height(&self) -> usize {
         if self.height == 0 {
             DEFAULT_ESTIMATE
@@ -100,6 +101,7 @@ impl VirtualScrollState {
     }
 
     /// Get the total number of items.
+    #[must_use]
     pub fn item_count(&self) -> usize {
         self.items.len()
     }
@@ -115,11 +117,13 @@ impl VirtualScrollState {
     }
 
     /// Get the viewport height.
+    #[must_use]
     pub fn viewport_height(&self) -> usize {
         self.viewport_height
     }
 
     /// Get the current scroll offset.
+    #[must_use]
     pub fn scroll_offset(&self) -> usize {
         self.scroll_offset
     }
@@ -136,6 +140,7 @@ impl VirtualScrollState {
     }
 
     /// Check if auto-scroll is enabled.
+    #[must_use]
     pub fn is_auto_scroll(&self) -> bool {
         self.auto_scroll
     }
@@ -160,6 +165,7 @@ impl VirtualScrollState {
     }
 
     /// Compute the total height of all items.
+    #[must_use]
     pub fn total_height(&self) -> usize {
         if self.items.is_empty() {
             return 0;
@@ -168,6 +174,7 @@ impl VirtualScrollState {
     }
 
     /// Compute the visible range `[start, end)`.
+    #[must_use]
     pub fn visible_range(&self) -> (usize, usize) {
         if self.items.is_empty() {
             return (0, 0);
@@ -283,6 +290,7 @@ impl VirtualScrollState {
     }
 
     /// Check if the scroll is at the bottom.
+    #[must_use]
     pub fn is_at_bottom(&self) -> bool {
         let total = self.total_height();
         self.scroll_offset + self.viewport_height >= total

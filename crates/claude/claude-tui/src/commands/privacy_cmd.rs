@@ -10,14 +10,12 @@ pub fn render(config: &RuntimeConfig) {
         "Verbose logging:      {}",
         if config.verbose { "Yes" } else { "No" }
     );
-    println!(
-        "Setting sources:      {}",
-        if config.setting_sources.is_empty() {
-            "None".to_owned()
-        } else {
-            config.setting_sources.join(", ")
-        }
-    );
+    let sources_display = if config.setting_sources.is_empty() {
+        "None".to_owned()
+    } else {
+        config.setting_sources.join(", ")
+    };
+    println!("Setting sources:      {sources_display}");
     println!("Allowed tools:        {}", config.allowed_tools.len());
     println!("Disallowed tools:     {}", config.disallowed_tools.len());
     println!(

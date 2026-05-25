@@ -75,7 +75,7 @@ impl AgentListRenderer {
     /// Header line for the agent list.
     fn header() -> Line<'static> {
         Line::from(vec![Span::styled(
-            "Agents".to_string(),
+            "Agents".to_owned(),
             Style::default().add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
         )])
     }

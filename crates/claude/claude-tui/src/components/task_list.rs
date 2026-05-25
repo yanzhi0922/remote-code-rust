@@ -43,6 +43,7 @@ pub enum TaskStatus {
 
 impl TaskStatus {
     /// Returns the display label.
+    #[must_use]
     pub fn label(&self) -> &str {
         match self {
             TaskStatus::Pending => "pending",
@@ -54,6 +55,7 @@ impl TaskStatus {
     }
 
     /// Returns the indicator character.
+    #[must_use]
     pub fn indicator(&self) -> &'static str {
         match self {
             TaskStatus::Pending => "○",
@@ -65,6 +67,7 @@ impl TaskStatus {
     }
 
     /// Returns the color for the status.
+    #[must_use]
     pub fn color(&self) -> Color {
         match self {
             TaskStatus::Pending => Color::DarkGray,
@@ -187,6 +190,7 @@ fn header_span(text: &str, style: &StyleConfig) -> Span<'static> {
     )
 }
 
+#[must_use]
 fn format_duration(ms: u64) -> String {
     if ms < 1000 {
         format!("{ms}ms")

@@ -41,6 +41,7 @@ pub enum ProgressStyle {
 
 impl ProgressStyle {
     /// Get the filled and empty characters for this style.
+    #[must_use]
     pub fn chars(self) -> (&'static str, &'static str) {
         match self {
             Self::Solid => ("█", "░"),
@@ -77,6 +78,7 @@ pub struct ProgressBar {
 
 impl ProgressBar {
     /// Create a new progress bar.
+    #[must_use]
     pub fn new(label: impl Into<String>, current: usize, total: usize) -> Self {
         Self {
             label: label.into(),
@@ -114,6 +116,7 @@ impl ProgressBar {
     }
 
     /// Get the progress ratio (0.0 to 1.0).
+    #[must_use]
     pub fn ratio(&self) -> f64 {
         if self.total == 0 {
             0.0
@@ -123,6 +126,7 @@ impl ProgressBar {
     }
 
     /// Get the percentage (0 to 100).
+    #[must_use]
     pub fn percent(&self) -> u8 {
         (self.ratio() * 100.0).min(100.0) as u8
     }

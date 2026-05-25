@@ -59,11 +59,13 @@ impl TabBar {
     }
 
     /// Get the number of tabs.
+    #[must_use]
     pub fn len(&self) -> usize {
         self.tabs.len()
     }
 
     /// Check if there are no tabs.
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.tabs.is_empty()
     }

@@ -61,6 +61,7 @@ impl VirtualScroll {
     ///
     /// Uses the cached item heights to compute which items fall within
     /// the viewport starting at `scroll_offset`.
+    #[must_use]
     pub fn visible_range(&self) -> (usize, usize) {
         if self.total_items == 0 {
             return (0, 0);
@@ -135,27 +136,32 @@ impl VirtualScroll {
     }
 
     /// Whether the viewport is at the bottom.
+    #[must_use]
     pub fn is_at_bottom(&self) -> bool {
         self.scroll_offset >= self.max_offset()
     }
 
     /// Total height of all items in rows.
+    #[must_use]
     pub fn total_height(&self) -> usize {
         self.item_heights.iter().sum()
     }
 
     /// Maximum valid scroll offset.
+    #[must_use]
     pub fn max_offset(&self) -> usize {
         let total = self.total_height();
         total.saturating_sub(self.viewport_height)
     }
 
     /// Current scroll offset.
+    #[must_use]
     pub fn scroll_offset(&self) -> usize {
         self.scroll_offset
     }
 
     /// Whether auto-scroll is enabled.
+    #[must_use]
     pub fn auto_scroll(&self) -> bool {
         self.auto_scroll
     }

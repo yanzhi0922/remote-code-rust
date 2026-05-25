@@ -491,7 +491,7 @@ pub(crate) fn daemon_tool(input: &Value, context: &ToolExecutionContext) -> Resu
 
             match daemon {
                 Some(d) => {
-                    let command = d["command"].as_str().unwrap_or("").to_string();
+                    let command = d["command"].as_str().unwrap_or("").to_owned();
                     // Stop the old one.
                     if let Some(pid) = d["pid"].as_u64() {
                         let _ = kill_process(pid as u32);
@@ -554,6 +554,7 @@ pub(crate) fn daemon_tool(input: &Value, context: &ToolExecutionContext) -> Resu
 }
 
 /// Try to kill a process by PID (cross-platform best-effort).
+#[must_use]
 pub(crate) fn kill_process(pid: u32) -> std::io::Result<()> {
     #[cfg(windows)]
     {
@@ -572,6 +573,7 @@ pub(crate) fn kill_process(pid: u32) -> std::io::Result<()> {
 }
 
 /// Check if a process is still alive (cross-platform best-effort).
+#[must_use]
 pub(crate) fn is_process_alive(pid: u32) -> bool {
     #[cfg(windows)]
     {
@@ -600,6 +602,7 @@ pub(crate) fn is_process_alive(pid: u32) -> bool {
 }
 
 /// Read the last N lines from a file.
+#[must_use]
 pub(crate) fn read_last_n_lines(path: &str, n: usize) -> String {
     let content = match std::fs::read_to_string(path) {
         Ok(c) => c,

@@ -48,6 +48,7 @@ pub struct FuzzyResult {
 /// assert!(result.is_some());
 /// assert!(result.unwrap().score > 0);
 /// ```
+#[must_use]
 pub fn fuzzy_match(query: &str, candidate: &str) -> Option<FuzzyResult> {
     if query.is_empty() {
         return Some(FuzzyResult {

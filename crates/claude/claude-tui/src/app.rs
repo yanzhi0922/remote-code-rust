@@ -42,7 +42,8 @@ impl SidebarTab {
     }
 
     /// Short display label.
-    pub fn label(self) -> &'static str {
+    #[must_use]
+    pub const fn label(self) -> &'static str {
         match self {
             Self::Sessions => "Sessions",
             Self::Tools => "Tools",
@@ -52,6 +53,7 @@ impl SidebarTab {
     }
 
     /// Cycle to the next tab.
+    #[must_use]
     pub fn next(self) -> Self {
         let all = Self::all();
         let idx = all.iter().position(|&t| t == self).unwrap_or(0);
@@ -143,6 +145,7 @@ impl App {
     }
 
     /// Current Vim mode.
+    #[must_use]
     pub fn mode(&self) -> VimMode {
         self.vim.mode()
     }
@@ -245,6 +248,7 @@ impl App {
     }
 
     /// Get the current input text.
+    #[must_use]
     pub fn input(&self) -> &str {
         &self.input
     }
@@ -387,6 +391,7 @@ impl App {
     }
 
     /// Whether the app should exit.
+    #[must_use]
     pub fn should_quit(&self) -> bool {
         self.should_quit
     }
@@ -412,6 +417,7 @@ impl App {
     }
 
     /// Get the current spinner character.
+    #[must_use]
     pub fn spinner_char(&self) -> &str {
         const SPINNER: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧"];
         SPINNER[self.spinner_frame % SPINNER.len()]

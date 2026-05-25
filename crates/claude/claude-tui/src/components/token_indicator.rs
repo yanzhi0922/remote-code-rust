@@ -20,6 +20,7 @@ pub struct TokenUsageData {
 
 impl TokenUsageData {
     /// Convenience constructor that auto-computes `percentage`.
+    #[must_use]
     pub fn new(used_tokens: u64, max_tokens: u64) -> Self {
         let percentage = if max_tokens == 0 {
             0.0
@@ -34,6 +35,7 @@ impl TokenUsageData {
     }
 
     /// Returns the colour that corresponds to the current usage level.
+    #[must_use]
     pub fn color(&self) -> Color {
         if self.percentage < 50.0 {
             Color::Green

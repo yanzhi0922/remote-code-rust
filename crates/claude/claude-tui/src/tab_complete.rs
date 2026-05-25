@@ -3,6 +3,7 @@
 use crate::commands::command_names;
 
 /// Complete a partial slash command input.
+#[must_use]
 pub fn complete_slash_command(partial: &str) -> Vec<String> {
     command_names()
         .iter()
@@ -12,6 +13,7 @@ pub fn complete_slash_command(partial: &str) -> Vec<String> {
 }
 
 /// Get tool name completions matching a prefix.
+#[must_use]
 pub fn get_tool_completions(prefix: &str) -> Vec<String> {
     let specs = claude_tools::runtime_builtin_tool_specs();
     specs
@@ -23,6 +25,7 @@ pub fn get_tool_completions(prefix: &str) -> Vec<String> {
 
 /// Get file path completions for a partial path.
 #[allow(dead_code)]
+#[must_use]
 pub fn get_file_completions(partial: &str, cwd: &std::path::Path) -> Vec<String> {
     if partial.is_empty() {
         return Vec::new();

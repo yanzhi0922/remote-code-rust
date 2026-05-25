@@ -41,6 +41,7 @@ pub enum WizardStep {
 
 impl WizardStep {
     /// All steps in order.
+    #[must_use]
     pub fn all() -> &'static [WizardStep] {
         &[
             WizardStep::Welcome,
@@ -53,6 +54,7 @@ impl WizardStep {
     }
 
     /// Returns the step title.
+    #[must_use]
     pub fn title(&self) -> &'static str {
         match self {
             WizardStep::Welcome => "Welcome to Remote Code",
@@ -65,11 +67,13 @@ impl WizardStep {
     }
 
     /// Returns the step index (0-based).
+    #[must_use]
     pub fn index(&self) -> usize {
         Self::all().iter().position(|s| s == self).unwrap_or(0)
     }
 
     /// Advance to the next step.
+    #[must_use]
     pub fn next(self) -> Option<WizardStep> {
         let all = Self::all();
         let idx = self.index();
@@ -81,6 +85,7 @@ impl WizardStep {
     }
 
     /// Go back to the previous step.
+    #[must_use]
     pub fn prev(self) -> Option<WizardStep> {
         let idx = self.index();
         if idx > 0 {
@@ -146,6 +151,7 @@ impl WizardState {
     }
 
     /// Whether the wizard is complete.
+    #[must_use]
     pub fn is_complete(&self) -> bool {
         self.current_step == WizardStep::Complete
     }

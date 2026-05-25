@@ -166,7 +166,7 @@ fn add_comment(artifact_id: &str, input: &Value) -> Result<String> {
 
     let comment = ReviewComment {
         id: format!("comment-{}", uuid::Uuid::new_v4().as_simple()),
-        author: author.to_string(),
+        author: author.to_owned(),
         text: text.to_string(),
         timestamp: chrono::Utc::now().timestamp_millis(),
         file_path: input["file_path"].as_str().map(String::from),

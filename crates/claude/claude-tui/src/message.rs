@@ -39,6 +39,7 @@ pub enum MessageRole {
 
 impl MessageRole {
     /// Short label for display.
+    #[must_use]
     pub fn label(self) -> &'static str {
         match self {
             Self::User => "user",
@@ -49,6 +50,7 @@ impl MessageRole {
     }
 
     /// Color from the style config.
+    #[must_use]
     pub fn color(self, style: &StyleConfig) -> Color {
         match self {
             Self::User => style.user_color,
@@ -95,10 +97,10 @@ pub struct ChatMessage {
 
 impl ChatMessage {
     /// Create a new user message.
-    pub fn user(content: String) -> Self {
+    pub fn user(content: impl Into<String>) -> Self {
         ChatMessage {
             role: MessageRole::User,
-            content,
+            content: content.into(),
             timestamp: 0,
             tool_calls: Vec::new(),
             is_collapsed: false,
@@ -107,10 +109,10 @@ impl ChatMessage {
     }
 
     /// Create a new assistant message.
-    pub fn assistant(content: String) -> Self {
+    pub fn assistant(content: impl Into<String>) -> Self {
         ChatMessage {
             role: MessageRole::Assistant,
-            content,
+            content: content.into(),
             timestamp: 0,
             tool_calls: Vec::new(),
             is_collapsed: false,
@@ -119,10 +121,10 @@ impl ChatMessage {
     }
 
     /// Create a new system message.
-    pub fn system(content: String) -> Self {
+    pub fn system(content: impl Into<String>) -> Self {
         ChatMessage {
             role: MessageRole::System,
-            content,
+            content: content.into(),
             timestamp: 0,
             tool_calls: Vec::new(),
             is_collapsed: false,
@@ -152,10 +154,10 @@ impl ChatMessage {
     }
 
     /// Create a new tool result message.
-    pub fn tool(content: String) -> Self {
+    pub fn tool(content: impl Into<String>) -> Self {
         ChatMessage {
             role: MessageRole::Tool,
-            content,
+            content: content.into(),
             timestamp: 0,
             tool_calls: Vec::new(),
             is_collapsed: false,
@@ -164,6 +166,7 @@ impl ChatMessage {
     }
 
     /// Estimate the number of terminal rows this message will occupy.
+    #[must_use]
     pub fn estimated_height(&self, width: usize) -> usize {
         if width == 0 {
             return 1;
@@ -268,6 +271,7 @@ pub struct McpServerStatus {
 }
 
 /// Render a role label as a styled Span.
+#[must_use]
 pub fn role_span(role: MessageRole, style: &StyleConfig) -> Span<'static> {
     let color = role.color(style);
     let label = format!("[{}] ", role.label());
@@ -278,6 +282,7 @@ pub fn role_span(role: MessageRole, style: &StyleConfig) -> Span<'static> {
 }
 
 /// Render a single-line preview of a message (for sidebar / compact view).
+#[must_use]
 pub fn message_preview(msg: &ChatMessage, max_chars: usize) -> String {
     let first_line = msg.content.lines().next().unwrap_or("");
     let truncated: String = first_line.chars().take(max_chars).collect();
@@ -289,6 +294,7 @@ pub fn message_preview(msg: &ChatMessage, max_chars: usize) -> String {
 }
 
 /// Truncate text for display.
+#[must_use]
 pub fn truncate_text(text: &str, max_chars: usize) -> String {
     if text.chars().count() <= max_chars {
         text.to_owned()

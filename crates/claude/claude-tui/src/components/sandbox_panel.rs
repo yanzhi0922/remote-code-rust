@@ -60,6 +60,7 @@ pub enum SandboxStatus {
 
 impl SandboxStatus {
     /// Returns the indicator character.
+    #[must_use]
     pub fn indicator(&self) -> &'static str {
         match self {
             SandboxStatus::NotConfigured => "○",
@@ -70,6 +71,7 @@ impl SandboxStatus {
     }
 
     /// Returns the color.
+    #[must_use]
     pub fn color(&self) -> Color {
         match self {
             SandboxStatus::NotConfigured => Color::DarkGray,

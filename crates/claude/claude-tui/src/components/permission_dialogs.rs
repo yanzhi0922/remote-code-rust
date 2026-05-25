@@ -49,6 +49,7 @@ pub enum PermissionKind {
 
 impl PermissionKind {
     /// Returns the display label.
+    #[must_use]
     pub fn label(&self) -> &str {
         match self {
             PermissionKind::Bash { .. } => "Bash Command",
@@ -64,6 +65,7 @@ impl PermissionKind {
     }
 
     /// Returns the icon for this permission type.
+    #[must_use]
     pub fn icon(&self) -> &'static str {
         match self {
             PermissionKind::Bash { .. } => "⚡",

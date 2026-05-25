@@ -361,10 +361,14 @@ pub(crate) async fn terminal_capture_tool(
         let mut stdout = String::new();
         let mut stderr = String::new();
         if let Some(mut stream) = child.stdout.take() {
-            let _ = stream.read_to_string(&mut stdout).await;
+            if let Err(e) = stream.read_to_string(&mut stdout).await {
+                tracing::warn!("failed to read terminal capture stdout: {e}");
+            }
         }
         if let Some(mut stream) = child.stderr.take() {
-            let _ = stream.read_to_string(&mut stderr).await;
+            if let Err(e) = stream.read_to_string(&mut stderr).await {
+                tracing::warn!("failed to read terminal capture stderr: {e}");
+            }
         }
         let status = child.wait().await?;
         Ok::<_, anyhow::Error>((status.code(), stdout, stderr))

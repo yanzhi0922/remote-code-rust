@@ -37,6 +37,7 @@ impl OutputStyle {
     }
 
     /// Parse from string.
+    #[must_use]
     pub fn from_str_lossy(s: &str) -> Self {
         match s.to_lowercase().as_str() {
             "concise" => OutputStyle::Concise,
@@ -47,6 +48,7 @@ impl OutputStyle {
     }
 
     /// Get the default configuration for this style.
+    #[must_use]
     pub fn default_config(self) -> StyleConfig {
         match self {
             OutputStyle::Default => StyleConfig {
@@ -127,12 +129,13 @@ pub enum BulletStyle {
 
 impl BulletStyle {
     /// Get the prefix for a bullet at the given index.
+    #[must_use]
     pub fn prefix(self, index: usize) -> String {
         match self {
-            Self::Dash => "- ".to_string(),
-            Self::Compact => "• ".to_string(),
+            Self::Dash => "- ".to_owned(),
+            Self::Compact => "• ".to_owned(),
             Self::Numbered => format!("{}. ", index + 1),
-            Self::Asterisk => "* ".to_string(),
+            Self::Asterisk => "* ".to_owned(),
         }
     }
 }
@@ -205,6 +208,7 @@ impl StyleConfig {
     }
 
     /// Truncate text to max_inline_length, adding "..." if truncated.
+    #[must_use]
     pub fn truncate_inline(&self, text: &str) -> String {
         if text.len() <= self.max_inline_length {
             return text.to_string();

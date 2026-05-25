@@ -137,11 +137,13 @@ impl HistorySearchEngine {
     }
 
     /// Get the number of entries.
+    #[must_use]
     pub fn len(&self) -> usize {
         self.entries.len()
     }
 
     /// Check if the engine is empty.
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
@@ -256,6 +258,7 @@ impl HistoryNavigator {
     }
 
     /// Get the current search mode.
+    #[must_use]
     pub fn mode(&self) -> SearchMode {
         self.mode
     }
@@ -269,6 +272,7 @@ impl HistoryNavigator {
     }
 
     /// Get the current match.
+    #[must_use]
     pub fn current(&self) -> Option<&SearchMatch> {
         self.results.get(self.position)
     }
@@ -297,16 +301,19 @@ impl HistoryNavigator {
     }
 
     /// Get the total number of results.
+    #[must_use]
     pub fn result_count(&self) -> usize {
         self.results.len()
     }
 
     /// Get the current position (0-based).
+    #[must_use]
     pub fn position(&self) -> usize {
         self.position
     }
 
     /// Get the current query.
+    #[must_use]
     pub fn query(&self) -> &str {
         &self.query
     }

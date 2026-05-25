@@ -61,7 +61,7 @@ pub(crate) fn which_powershell() -> &'static str {
                 return candidate.to_string();
             }
         }
-        "powershell".to_string()
+        "powershell".to_owned()
     })
 }
 
