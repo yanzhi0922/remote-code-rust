@@ -40,14 +40,22 @@ pub async fn screenshot(input: &Value) -> Result<String> {
         .await
         .context("screenshot capture failed")?;
 
+    let size_bytes = bytes.len();
     let screenshots_dir = env::temp_dir()
         .join("remote-code-rust")
         .join("chrome-mcp-screenshots");
-    std::fs::create_dir_all(&screenshots_dir)?;
-
     let filename = format!("{}.{}", Uuid::new_v4(), format);
     let path = screenshots_dir.join(&filename);
-    std::fs::write(&path, &bytes).context("failed to write screenshot file")?;
+    let path_display = path.to_string_lossy().into_owned();
+
+    // Filesystem operations are blocking — offload to a dedicated thread.
+    tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+        std::fs::create_dir_all(&screenshots_dir)?;
+        std::fs::write(&path, &bytes).context("failed to write screenshot file")?;
+        Ok(())
+    })
+    .await
+    .context("screenshot file write task panicked")??;
 
     let mime = match format {
         "jpeg" => "image/jpeg",
@@ -56,9 +64,9 @@ pub async fn screenshot(input: &Value) -> Result<String> {
 
     Ok(json!({
         "type": "chrome_mcp_screenshot",
-        "path": path.to_string_lossy(),
+        "path": path_display,
         "mime_type": mime,
-        "size_bytes": bytes.len(),
+        "size_bytes": size_bytes,
         "full_page": full_page,
         "selector": selector,
         "format": format,

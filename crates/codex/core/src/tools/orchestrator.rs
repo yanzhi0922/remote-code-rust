@@ -456,7 +456,7 @@ impl ToolOrchestrator {
                 } else {
                     "rejected by user".to_string()
                 };
-                Err(ToolError::Rejected(reason))
+                Err(ToolError::UserDeclined(reason))
             }
             ReviewDecision::TimedOut => Err(ToolError::Rejected(guardian_timeout_message())),
             ReviewDecision::Approved
@@ -467,7 +467,7 @@ impl ToolOrchestrator {
             } => match network_policy_amendment.action {
                 NetworkPolicyRuleAction::Allow => Ok(()),
                 NetworkPolicyRuleAction::Deny => {
-                    Err(ToolError::Rejected("rejected by user".to_string()))
+                    Err(ToolError::UserDeclined("rejected by user".to_string()))
                 }
             },
         }

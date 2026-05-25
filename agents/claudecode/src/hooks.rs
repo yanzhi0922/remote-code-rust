@@ -866,7 +866,7 @@ struct HookAwarePermissionBroker {
 impl PermissionBroker for HookAwarePermissionBroker {
     async fn decide(&self, request: PermissionRequest) -> PermissionDecision {
         let hook_result = {
-            let mut state = self.state.lock().await;
+            let state = self.state.lock().await;
             let consumed_once = Arc::clone(&state.consumed_once_hooks);
             let session_start_done = state.session_start_completed;
             drop(state);
@@ -897,7 +897,7 @@ impl PermissionBroker for HookAwarePermissionBroker {
 
     async fn decide_forced_prompt(&self, request: PermissionRequest) -> PermissionDecision {
         let hook_result = {
-            let mut state = self.state.lock().await;
+            let state = self.state.lock().await;
             let consumed_once = Arc::clone(&state.consumed_once_hooks);
             let session_start_done = state.session_start_completed;
             drop(state);
@@ -1227,10 +1227,10 @@ fn wildcard_match(pattern: &str, candidate: &str) -> bool {
     let mut prev = vec![false; candidate.len() + 1];
     let mut curr = vec![false; candidate.len() + 1];
     prev[0] = true;
-    for index in 0..pattern.len() {
-        curr[0] = pattern[index] == b'*' && prev[0];
+    for pat_byte in pattern.iter() {
+        curr[0] = *pat_byte == b'*' && prev[0];
         for j in 0..candidate.len() {
-            curr[j + 1] = match pattern[index] {
+            curr[j + 1] = match *pat_byte {
                 b'*' => prev[j + 1] || curr[j],
                 b'?' => prev[j],
                 byte => prev[j] && byte == candidate[j],

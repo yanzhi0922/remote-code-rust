@@ -7,6 +7,8 @@ mod auth;
 mod download;
 mod handlers;
 mod helpers;
+#[allow(dead_code)]
+pub mod metrics;
 pub mod quic;
 mod registry;
 mod router;

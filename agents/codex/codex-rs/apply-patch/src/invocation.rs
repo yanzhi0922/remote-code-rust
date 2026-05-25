@@ -101,8 +101,7 @@ fn extract_apply_patch_from_shell(
     }
 }
 
-// TODO: make private once we remove tests in lib.rs
-pub fn maybe_parse_apply_patch(argv: &[String]) -> MaybeApplyPatch {
+pub(crate) fn maybe_parse_apply_patch(argv: &[String]) -> MaybeApplyPatch {
     match argv {
         // Direct invocation: apply_patch <patch>
         [cmd, body] if APPLY_PATCH_COMMANDS.contains(&cmd.as_str()) => match parse_patch(body) {

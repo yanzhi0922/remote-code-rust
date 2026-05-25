@@ -17,8 +17,8 @@ path = "src/bin/setup_main.rs"
 name = "codex-command-runner"
 path = "src/bin/command_runner.rs"
 
-[lints]
-workspace = true
+[lints.rust]
+unsafe_code = "allow"
 
 [dependencies]
 anyhow = "1.0"

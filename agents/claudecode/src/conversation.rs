@@ -1006,6 +1006,12 @@ async fn run_prompt_legacy(
         usage.output_tokens += response.usage.output_tokens;
         usage.cache_read_input_tokens += response.usage.cache_read_input_tokens;
         usage.cache_creation_input_tokens += response.usage.cache_creation_input_tokens;
+        crate::agent_metrics::record_token_usage(
+            response.usage.input_tokens,
+            response.usage.output_tokens,
+            response.usage.cache_read_input_tokens,
+            response.usage.cache_creation_input_tokens,
+        );
         // Handle max_tokens stop reason — log warning and annotate response.
         let lowered_stop = response.stop_reason.to_ascii_lowercase();
         if lowered_stop == "max_tokens"
@@ -1094,6 +1100,7 @@ async fn run_prompt_legacy(
                     "num_turns": outcome.num_turns,
                 }),
             )?;
+            crate::agent_metrics::record_prompt_latency(started.elapsed().as_secs_f64());
             return Ok(outcome);
         }
 
@@ -1135,6 +1142,8 @@ async fn run_prompt_legacy(
                     .ok_or_else(|| anyhow!("unknown tool {}", effective_tool_call.name))?
             };
             let audit_count_before = broker.audit_records().len();
+            let tool_exec_start = std::time::Instant::now();
+            let tool_name_for_metrics = effective_tool_call.name.clone();
             let tool_result = if let Some(blocked_reason) = &prepared.blocked_reason {
                 claude_core::ToolResult {
                     content: blocked_reason.clone(),
@@ -1194,6 +1203,10 @@ async fn run_prompt_legacy(
                     }
                 }
             };
+            crate::agent_metrics::record_tool_call(
+                &tool_name_for_metrics,
+                tool_exec_start.elapsed().as_secs_f64(),
+            );
             let new_audits = broker
                 .audit_records()
                 .into_iter()

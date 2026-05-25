@@ -140,48 +140,66 @@ pub async fn mobile_secure_store_get(
     app: AppHandle<impl Runtime>,
     key: String,
 ) -> Result<Option<String>, String> {
-    let entry = keyring::Entry::new("remote-code-secure-store", &key).map_err(|e| e.to_string())?;
-    match entry.get_password() {
-        Ok(value) => Ok(Some(value)),
-        Err(keyring::Error::NoEntry) => {
-            if let Ok(dir) = app.path().app_config_dir() {
-                let legacy_path = dir.join("secure_store.json");
-                if legacy_path.exists() {
-                    if let Ok(data) = std::fs::read_to_string(&legacy_path) {
-                        if let Ok(map) =
-                            serde_json::from_str::<std::collections::HashMap<String, String>>(&data)
-                        {
-                            if let Some(value) = map.get(&key).cloned() {
-                                if entry.set_password(&value).is_ok() {
-                                    tracing::info!(
-                                        "Migrated key '{key}' from legacy JSON to keyring"
-                                    );
+    let app_config_dir = app.path().app_config_dir().ok();
+    tokio::task::spawn_blocking(move || -> Result<Option<String>, String> {
+        let entry =
+            keyring::Entry::new("remote-code-secure-store", &key).map_err(|e| e.to_string())?;
+        match entry.get_password() {
+            Ok(value) => Ok(Some(value)),
+            Err(keyring::Error::NoEntry) => {
+                if let Some(dir) = app_config_dir {
+                    let legacy_path = dir.join("secure_store.json");
+                    if legacy_path.exists() {
+                        if let Ok(data) = std::fs::read_to_string(&legacy_path) {
+                            if let Ok(map) =
+                                serde_json::from_str::<std::collections::HashMap<String, String>>(
+                                    &data,
+                                )
+                            {
+                                if let Some(value) = map.get(&key).cloned() {
+                                    if entry.set_password(&value).is_ok() {
+                                        tracing::info!(
+                                            "Migrated key '{key}' from legacy JSON to keyring"
+                                        );
+                                    }
+                                    return Ok(Some(value));
                                 }
-                                return Ok(Some(value));
                             }
                         }
                     }
                 }
+                Ok(None)
             }
-            Ok(None)
+            Err(e) => Err(e.to_string()),
         }
-        Err(e) => Err(e.to_string()),
-    }
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
 pub async fn mobile_secure_store_set(key: String, value: String) -> Result<(), String> {
-    let entry = keyring::Entry::new("remote-code-secure-store", &key).map_err(|e| e.to_string())?;
-    entry.set_password(&value).map_err(|e| e.to_string())
+    tokio::task::spawn_blocking(move || -> Result<(), String> {
+        let entry =
+            keyring::Entry::new("remote-code-secure-store", &key).map_err(|e| e.to_string())?;
+        entry.set_password(&value).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
 pub async fn mobile_secure_store_remove(key: String) -> Result<(), String> {
-    let entry = keyring::Entry::new("remote-code-secure-store", &key).map_err(|e| e.to_string())?;
-    match entry.delete_credential() {
-        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-        Err(e) => Err(e.to_string()),
-    }
+    tokio::task::spawn_blocking(move || -> Result<(), String> {
+        let entry =
+            keyring::Entry::new("remote-code-secure-store", &key).map_err(|e| e.to_string())?;
+        match entry.delete_credential() {
+            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+            Err(e) => Err(e.to_string()),
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -272,7 +290,9 @@ pub async fn mobile_delete_downloaded_file(
         .join("remote-code");
     let file_path = download_dir.join(&file_name);
     if file_path.exists() {
-        std::fs::remove_file(&file_path).map_err(|e| e.to_string())?;
+        tokio::task::spawn_blocking(move || std::fs::remove_file(&file_path).map_err(|e| e.to_string()))
+            .await
+            .map_err(|e| e.to_string())??;
     }
     Ok(())
 }
@@ -289,15 +309,19 @@ pub async fn mobile_list_downloaded_files(
     if !download_dir.exists() {
         return Ok(Vec::new());
     }
-    let mut files = Vec::new();
-    if let Ok(entries) = std::fs::read_dir(&download_dir) {
-        for entry in entries.flatten() {
-            if let Some(name) = entry.file_name().to_str() {
-                files.push(name.to_string());
+    tokio::task::spawn_blocking(move || -> std::result::Result<Vec<String>, String> {
+        let mut files = Vec::new();
+        if let Ok(entries) = std::fs::read_dir(&download_dir) {
+            for entry in entries.flatten() {
+                if let Some(name) = entry.file_name().to_str() {
+                    files.push(name.to_string());
+                }
             }
         }
-    }
-    Ok(files)
+        Ok(files)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -311,10 +335,17 @@ pub async fn mobile_share_file(
         .download_dir()
         .unwrap_or_else(|_| std::env::temp_dir())
         .join("remote-code");
-    let canonical_path =
-        std::fs::canonicalize(&file_path).map_err(|e| format!("file not found: {e}"))?;
-    let canonical_dir =
-        std::fs::canonicalize(&download_dir).unwrap_or_else(|_| download_dir.clone());
+    let file_path_for_fs = file_path.clone();
+    let (canonical_path, canonical_dir) =
+        tokio::task::spawn_blocking(move || -> std::result::Result<_, String> {
+            let canonical_path =
+                std::fs::canonicalize(&file_path_for_fs).map_err(|e| format!("file not found: {e}"))?;
+            let canonical_dir =
+                std::fs::canonicalize(&download_dir).unwrap_or_else(|_| download_dir.clone());
+            Ok((canonical_path, canonical_dir))
+        })
+        .await
+        .map_err(|e| e.to_string())??;
     if !canonical_path.starts_with(&canonical_dir) {
         return Err("file is outside the allowed download directory".to_string());
     }

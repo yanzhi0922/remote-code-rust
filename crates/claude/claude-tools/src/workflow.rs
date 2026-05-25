@@ -554,7 +554,6 @@ pub(crate) fn daemon_tool(input: &Value, context: &ToolExecutionContext) -> Resu
 }
 
 /// Try to kill a process by PID (cross-platform best-effort).
-#[must_use]
 pub(crate) fn kill_process(pid: u32) -> std::io::Result<()> {
     #[cfg(windows)]
     {

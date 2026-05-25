@@ -255,7 +255,9 @@ fn install_network_seccomp_filter_on_current_thread(
         } else if cfg!(target_arch = "aarch64") {
             TargetArch::aarch64
         } else {
-            unimplemented!("unsupported architecture for seccomp filter");
+            return Err(SandboxErr::UnsupportedArch(
+                std::env::consts::ARCH.to_owned(),
+            ));
         },
     )?;
 

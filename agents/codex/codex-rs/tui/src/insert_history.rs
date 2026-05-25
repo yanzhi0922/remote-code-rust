@@ -275,7 +275,11 @@ impl Command for SetScrollRegion {
 
     #[cfg(windows)]
     fn is_ansi_code_supported(&self) -> bool {
-        // TODO(nornagon): is this supported on Windows?
+        // DECSTBM (Set Top and Bottom Margins) is supported on Windows 10+
+        // when virtual terminal processing is enabled. Windows Terminal and
+        // ConPTY both pass through DECSTBM correctly. If virtual terminal
+        // processing was successfully enabled during terminal init (which
+        // crossterm handles), ANSI sequences including DECSTBM work.
         true
     }
 }
@@ -295,7 +299,8 @@ impl Command for ResetScrollRegion {
 
     #[cfg(windows)]
     fn is_ansi_code_supported(&self) -> bool {
-        // TODO(nornagon): is this supported on Windows?
+        // DECSTBM reset is supported on Windows 10+ with virtual terminal
+        // processing enabled (same as SetScrollRegion above).
         true
     }
 }

@@ -915,8 +915,8 @@ image({
             /*initial_yield_time_ms*/ 60_000,
         ));
 
-        event_tx.try_send(RuntimeEvent::Started).unwrap();
-        event_tx.try_send(RuntimeEvent::YieldRequested).unwrap();
+        event_tx.send(RuntimeEvent::Started).unwrap();
+        event_tx.send(RuntimeEvent::YieldRequested).unwrap();
         assert_eq!(
             initial_response_rx.await.unwrap(),
             RuntimeResponse::Yielded {
@@ -930,6 +930,7 @@ image({
             .send(SessionControlCommand::Terminate {
                 response_tx: terminate_response_tx,
             })
+            .await
             .unwrap();
         let terminate_response = async { terminate_response_rx.await.unwrap() };
         tokio::pin!(terminate_response);

@@ -18,8 +18,8 @@ path = "src/bin/md-events.rs"
 name = "codex_tui"
 path = "src/lib.rs"
 
-[lints]
-workspace = true
+[lints.rust]
+unsafe_code = "allow"
 
 [dependencies]
 anyhow = { workspace = true }

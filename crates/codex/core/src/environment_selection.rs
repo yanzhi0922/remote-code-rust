@@ -10,6 +10,14 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 
 use crate::session::turn_context::TurnEnvironment;
 
+fn detect_shell() -> String {
+    if cfg!(windows) {
+        "cmd".to_string()
+    } else {
+        std::env::var("SHELL").unwrap_or_else(|_| "bash".to_string())
+    }
+}
+
 pub(crate) fn default_thread_environment_selections(
     environment_manager: &EnvironmentManager,
     cwd: &AbsolutePathBuf,
@@ -75,9 +83,7 @@ pub(crate) fn resolve_environment_selections(
             environment_id,
             environment,
             cwd: selected_environment.cwd.clone(),
-            // TODO(starr): Resolve shell metadata per environment instead of
-            // hardcoding bash.
-            shell: "bash".to_string(),
+            shell: detect_shell(),
         });
     }
 

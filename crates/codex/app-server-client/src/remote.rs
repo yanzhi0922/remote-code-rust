@@ -919,7 +919,7 @@ mod tests {
     #[tokio::test]
     async fn shutdown_tolerates_worker_exit_after_command_is_queued() {
         let (command_tx, mut command_rx) = mpsc::channel(1);
-        let (_event_tx, event_rx) = mpsc::unbounded_channel::<AppServerEvent>();
+        let (_event_tx, event_rx) = mpsc::channel::<AppServerEvent>(64);
         let worker_handle = tokio::spawn(async move {
             let _ = command_rx.recv().await;
         });

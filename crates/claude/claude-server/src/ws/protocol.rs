@@ -22,6 +22,8 @@ pub enum ClientMessage {
     SetRuntimeConfig {
         provider_id: Option<String>,
         model_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        permission_mode: Option<claude_core::PermissionMode>,
     },
     Ping,
 }

@@ -10,13 +10,14 @@ use crate::handlers::{
     accept_pairing_offer, apply_approval_decision, claim_bootstrap_device, create_approval,
     create_artifact, create_pairing_offer, create_session, create_session_runtime_event,
     create_stream_ticket, download_artifact, get_approval, get_artifact, get_health, get_meta,
-    get_runner, get_session, list_approvals, list_artifacts, list_devices, list_recent_events,
-    list_runner_approvals, list_runner_artifacts, list_runner_events, list_runner_sessions,
-    list_runners, list_session_approvals, list_session_artifacts, list_session_events,
-    list_sessions, post_session_command, pull_runner_commands, refresh_token, register_push_token,
-    register_runner, revoke_device, stream_runner_commands, subscribe_approvals, subscribe_events,
-    subscribe_runner_approvals, subscribe_runner_events, subscribe_session_approvals,
-    subscribe_session_events, update_runner_heartbeat, update_session_state,
+    get_metrics, get_runner, get_session, list_approvals, list_artifacts, list_devices,
+    list_recent_events, list_runner_approvals, list_runner_artifacts, list_runner_events,
+    list_runner_sessions, list_runners, list_session_approvals, list_session_artifacts,
+    list_session_events, list_sessions, post_session_command, pull_runner_commands, refresh_token,
+    register_push_token, register_runner, revoke_device, stream_runner_commands,
+    subscribe_approvals, subscribe_events, subscribe_runner_approvals, subscribe_runner_events,
+    subscribe_session_approvals, subscribe_session_events, update_runner_heartbeat,
+    update_session_state,
 };
 use crate::state::ControlPlaneService;
 
@@ -120,6 +121,7 @@ impl ControlPlaneService {
 
         Router::new()
             .route("/healthz", get(get_health))
+            .route("/metrics", get(get_metrics))
             .route("/v1/bootstrap/claim", post(claim_bootstrap_device))
             .route("/v1/pairing/accept", post(accept_pairing_offer))
             .route("/v1/auth/refresh", post(refresh_token))

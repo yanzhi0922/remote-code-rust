@@ -300,11 +300,12 @@ impl OpenAiModelsManager {
 
     async fn fetch_and_update_models(&self) -> CoreResult<()> {
         let client_version = crate::client_version_to_whole();
+        let provider = format!("{:?}", self.endpoint_client);
         let (models, etag) = self.endpoint_client.list_models(&client_version).await?;
         self.apply_remote_models(models.clone()).await;
         *self.etag.write().await = etag.clone();
         self.cache_manager
-            .persist_cache(&models, etag, client_version)
+            .persist_cache(&models, etag, client_version, provider)
             .await;
         Ok(())
     }
@@ -338,10 +339,9 @@ impl OpenAiModelsManager {
         let _timer =
             codex_otel::start_global_timer("codex.remote_models.load_cache.duration_ms", &[]);
         let client_version = crate::client_version_to_whole();
+        let provider = format!("{:?}", self.endpoint_client);
         info!(client_version, "models cache: evaluating cache eligibility");
-        // TODO(celia-oai): Include provider identity in cache eligibility so switching
-        // providers does not reuse a fresh models_cache.json entry from another provider.
-        let cache = match self.cache_manager.load_fresh(&client_version).await {
+        let cache = match self.cache_manager.load_fresh(&client_version, &provider).await {
             Some(cache) => cache,
             None => {
                 info!("models cache: no usable cache entry");

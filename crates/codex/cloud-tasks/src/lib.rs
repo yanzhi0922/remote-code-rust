@@ -160,7 +160,33 @@ async fn run_exec_command(args: crate::cli::ExecCommand) -> anyhow::Result<()> {
         environment,
         branch,
         attempts,
+        model,
+        timeout_ms,
+        approval_policy,
     } = args;
+
+    // Apply env-var overrides for model, timeout, and approval policy.
+    // CLI flags take precedence; env vars serve as fallbacks.
+    let model = model.or_else(|| std::env::var("CODEX_MODEL").ok());
+    if let Some(ref m) = model {
+        tracing::info!("using model override: {m}");
+    }
+
+    let timeout_ms = timeout_ms.or_else(|| {
+        std::env::var("CODEX_TIMEOUT_MS")
+            .ok()
+            .and_then(|s| s.parse::<u64>().ok())
+    });
+    if let Some(ms) = timeout_ms {
+        tracing::info!("using timeout override: {ms}ms");
+    }
+
+    let approval_policy =
+        approval_policy.or_else(|| std::env::var("CODEX_APPROVAL_POLICY").ok());
+    if let Some(ref p) = approval_policy {
+        tracing::info!("using approval policy override: {p}");
+    }
+
     let ctx = init_backend("codex_cloud_tasks_exec").await?;
     let prompt = resolve_query_input(query)?;
     let env_id = resolve_environment_id(&ctx, &environment).await?;
@@ -629,7 +655,7 @@ fn spawn_preflight(
     }
 
     app.apply_preflight_inflight = true;
-    let _ = frame_tx.send(Instant::now() + Duration::from_millis(100));
+    drop(frame_tx.send(Instant::now() + Duration::from_millis(100)));
 
     let backend = backend.clone();
     let tx = tx.clone();
@@ -667,7 +693,7 @@ fn spawn_preflight(
             },
         };
 
-        let _ = tx.send(event);
+        drop(tx.send(event));
     });
 
     true
@@ -690,7 +716,7 @@ fn spawn_apply(
     }
 
     app.apply_inflight = true;
-    let _ = frame_tx.send(Instant::now() + Duration::from_millis(100));
+    drop(frame_tx.send(Instant::now() + Duration::from_millis(100)));
 
     let backend = backend.clone();
     let tx = tx.clone();
@@ -717,7 +743,7 @@ fn spawn_apply(
             },
         };
 
-        let _ = tx.send(event);
+        drop(tx.send(event));
     });
 
     true
@@ -827,10 +853,10 @@ pub async fn run_main(cli: Cli, _codex_linux_sandbox_exe: Option<PathBuf>) -> an
         let tx = tx.clone();
         tokio::spawn(async move {
             let res = app::load_tasks(&*backend, /*env*/ None).await;
-            let _ = tx.send(app::AppEvent::TasksLoaded {
+            drop(tx.send(app::AppEvent::TasksLoaded {
                 env: None,
                 result: res,
-            });
+            }));
         });
     }
     // Fetch environment list in parallel so the header can show friendly names quickly.
@@ -843,7 +869,7 @@ pub async fn run_main(cli: Cli, _codex_linux_sandbox_exe: Option<PathBuf>) -> an
             );
             let headers = util::build_chatgpt_headers().await;
             let res = crate::env_detect::list_environments(&base_url, &headers).await;
-            let _ = tx.send(app::AppEvent::EnvironmentsLoaded(res));
+            drop(tx.send(app::AppEvent::EnvironmentsLoaded(res)));
         });
     }
 
@@ -864,7 +890,7 @@ pub async fn run_main(cli: Cli, _codex_linux_sandbox_exe: Option<PathBuf>) -> an
                 &base_url, &headers, /*desired_label*/ None,
             )
             .await;
-            let _ = tx.send(app::AppEvent::EnvironmentAutodetected(res));
+            drop(tx.send(app::AppEvent::EnvironmentAutodetected(res)));
         });
     }
 
@@ -898,14 +924,14 @@ pub async fn run_main(cli: Cli, _codex_linux_sandbox_exe: Option<PathBuf>) -> an
                 }
                 _ = &mut sleeper => {
                     if next_deadline.take().is_some() {
-                        let _ = redraw_tx.send(());
+                        drop(redraw_tx.send(()));
                     }
                 }
             }
         }
     });
     // Kick an initial draw so the UI appears immediately.
-    let _ = frame_tx.send(Instant::now());
+    drop(frame_tx.send(Instant::now()));
 
     // Render helper to centralize immediate redraws after handling events.
     let render_if_needed = |terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
@@ -927,8 +953,8 @@ pub async fn run_main(cli: Cli, _codex_linux_sandbox_exe: Option<PathBuf>) -> an
                 if let Some(page) = app.new_task.as_mut() {
                     if page.composer.flush_paste_burst_if_due() { needs_redraw = true; }
                     if page.composer.is_in_paste_burst() {
-                        let _ = frame_tx
-                            .send(Instant::now() + codex_tui::ComposerInput::recommended_flush_delay());
+                        drop(frame_tx
+                            .send(Instant::now() + codex_tui::ComposerInput::recommended_flush_delay()));
                     }
                 }
                 // Keep spinner pulsing only while loading.
@@ -942,7 +968,7 @@ pub async fn run_main(cli: Cli, _codex_linux_sandbox_exe: Option<PathBuf>) -> an
                         app.spinner_start = Some(Instant::now());
                     }
                     needs_redraw = true;
-                    let _ = frame_tx.send(Instant::now() + Duration::from_millis(600));
+                    drop(frame_tx.send(Instant::now() + Duration::from_millis(600)));
                 } else {
                     app.spinner_start = None;
                 }
@@ -979,7 +1005,7 @@ pub async fn run_main(cli: Cli, _codex_linux_sandbox_exe: Option<PathBuf>) -> an
                                 }
                             }
                             needs_redraw = true;
-                            let _ = frame_tx.send(Instant::now());
+                            drop(frame_tx.send(Instant::now()));
                         }
                         app::AppEvent::NewTaskSubmitted(result) => {
                             match result {
@@ -997,16 +1023,16 @@ pub async fn run_main(cli: Cli, _codex_linux_sandbox_exe: Option<PathBuf>) -> an
                                     let env_sel = app.env_filter.clone();
                                     tokio::spawn(async move {
                                         let res = app::load_tasks(&*backend, env_sel.as_deref()).await;
-                                        let _ = tx.send(app::AppEvent::TasksLoaded { env: env_sel, result: res });
+                                        drop(tx.send(app::AppEvent::TasksLoaded { env: env_sel, result: res }));
                                     });
-                                    let _ = frame_tx.send(Instant::now());
+                                    drop(frame_tx.send(Instant::now()));
                                 }
                                 Err(msg) => {
                                     append_error_log(format!("new-task: submit failed: {msg}"));
                                     if let Some(page) = app.new_task.as_mut() { page.submitting = false; }
                                     app.status = format!("Submit failed: {msg}. See error.log for details.");
                                     needs_redraw = true;
-                                    let _ = frame_tx.send(Instant::now());
+                                    drop(frame_tx.send(Instant::now()));
                                 }
                             }
                         }
@@ -1023,7 +1049,7 @@ pub async fn run_main(cli: Cli, _codex_linux_sandbox_exe: Option<PathBuf>) -> an
                                     m.conflict_paths = conflicts;
                                     app.apply_preflight_inflight = false;
                                     needs_redraw = true;
-                                    let _ = frame_tx.send(Instant::now());
+                                    drop(frame_tx.send(Instant::now()));
                             }
                         }
                         app::AppEvent::EnvironmentsLoaded(result) => {
@@ -1039,7 +1065,7 @@ pub async fn run_main(cli: Cli, _codex_linux_sandbox_exe: Option<PathBuf>) -> an
                                 }
                             }
                             needs_redraw = true;
-                            let _ = frame_tx.send(Instant::now());
+                            drop(frame_tx.send(Instant::now()));
                         }
                         app::AppEvent::EnvironmentAutodetected(result) => {
                             if let Ok(sel) = result {
@@ -1070,7 +1096,7 @@ pub async fn run_main(cli: Cli, _codex_linux_sandbox_exe: Option<PathBuf>) -> an
                                         let env_sel = app.env_filter.clone();
                                         tokio::spawn(async move {
                                             let res = app::load_tasks(&*backend, env_sel.as_deref()).await;
-                                            let _ = tx.send(app::AppEvent::TasksLoaded { env: env_sel, result: res });
+                                            drop(tx.send(app::AppEvent::TasksLoaded { env: env_sel, result: res }));
                                         });
                                     }
                                     // Proactively fetch environments to resolve a friendly name for the header.
@@ -1084,10 +1110,10 @@ pub async fn run_main(cli: Cli, _codex_linux_sandbox_exe: Option<PathBuf>) -> an
                                             );
                                             let headers = crate::util::build_chatgpt_headers().await;
                                             let res = crate::env_detect::list_environments(&base_url, &headers).await;
-                                            let _ = tx.send(app::AppEvent::EnvironmentsLoaded(res));
+                                            drop(tx.send(app::AppEvent::EnvironmentsLoaded(res)));
                                         });
                                     }
-                                    let _ = frame_tx.send(Instant::now());
+                                    drop(frame_tx.send(Instant::now()));
                                 }
                             }
                             // on Err, silently continue with All
@@ -1169,7 +1195,7 @@ pub async fn run_main(cli: Cli, _codex_linux_sandbox_exe: Option<PathBuf>) -> an
                                             .await
                                             {
                                                 Ok(attempts) => {
-                                                    let _ = tx.send(app::AppEvent::AttemptsLoaded { id: task_id, attempts });
+                                                    drop(tx.send(app::AppEvent::AttemptsLoaded { id: task_id, attempts }));
                                                 }
                                                 Err(e) => {
                                                     crate::util::append_error_log(format!(
@@ -1299,7 +1325,7 @@ pub async fn run_main(cli: Cli, _codex_linux_sandbox_exe: Option<PathBuf>) -> an
                                         let env_sel = app.env_filter.clone();
                                         tokio::spawn(async move {
                                             let res = app::load_tasks(&*backend, env_sel.as_deref()).await;
-                                            let _ = tx.send(app::AppEvent::TasksLoaded { env: env_sel, result: res });
+                                            drop(tx.send(app::AppEvent::TasksLoaded { env: env_sel, result: res }));
                                         });
                                     }
                                 }
@@ -1335,7 +1361,7 @@ pub async fn run_main(cli: Cli, _codex_linux_sandbox_exe: Option<PathBuf>) -> an
                             if page.composer.handle_paste(pasted) {
                                 needs_redraw = true;
                             }
-                            let _ = frame_tx.send(Instant::now());
+                            drop(frame_tx.send(Instant::now()));
                         }
                     }
                     Some(Ok(Event::Key(key))) if matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat) => {
@@ -1458,7 +1484,7 @@ pub async fn run_main(cli: Cli, _codex_linux_sandbox_exe: Option<PathBuf>) -> an
                                 app.env_loading = true;
                                 app.env_error = None;
                                 // Ensure spinner animates while loading environments.
-                                let _ = frame_tx.send(Instant::now() + Duration::from_millis(100));
+                                drop(frame_tx.send(Instant::now() + Duration::from_millis(100)));
                             }
                             needs_redraw = true;
                             if should_fetch {
@@ -1467,7 +1493,7 @@ pub async fn run_main(cli: Cli, _codex_linux_sandbox_exe: Option<PathBuf>) -> an
             let base_url = crate::util::normalize_base_url(&std::env::var("CODEX_CLOUD_TASKS_BASE_URL").unwrap_or_else(|_| "https://chatgpt.com/backend-api".to_string()));
             let headers = crate::util::build_chatgpt_headers().await;
                                         let res = crate::env_detect::list_environments(&base_url, &headers).await;
-                                        let _ = tx.send(app::AppEvent::EnvironmentsLoaded(res));
+                                        drop(tx.send(app::AppEvent::EnvironmentsLoaded(res)));
                                     });
                             }
                             // Render after opening env modal to show it instantly.
@@ -1512,7 +1538,7 @@ pub async fn run_main(cli: Cli, _codex_linux_sandbox_exe: Option<PathBuf>) -> an
                                                         Ok(ok) => app::AppEvent::NewTaskSubmitted(Ok(ok)),
                                                         Err(e) => app::AppEvent::NewTaskSubmitted(Err(format!("{e}"))),
                                                     };
-                                                    let _ = tx.send(evt);
+                                                    drop(tx.send(evt));
                                                 });
                                             } else {
                                                 app.status = "No environment selected".to_string();
@@ -1521,13 +1547,13 @@ pub async fn run_main(cli: Cli, _codex_linux_sandbox_exe: Option<PathBuf>) -> an
                                     needs_redraw = true;
                                     // If paste‑burst is active, schedule a micro‑flush frame.
                                     if page.composer.is_in_paste_burst() {
-                                        let _ = frame_tx.send(
+                                        drop(frame_tx.send(
                                             Instant::now()
                                                 + codex_tui::ComposerInput::recommended_flush_delay(),
-                                        );
+                                        ));
                                     }
                                     // Always schedule an immediate redraw for key edits in the composer.
-                                    let _ = frame_tx.send(Instant::now());
+                                    drop(frame_tx.send(Instant::now()));
                                     // Draw now so non-char edits (e.g., Option+Delete) reflect instantly.
                                     render_if_needed(&mut terminal, &mut app, &mut needs_redraw)?;
                                 }
@@ -1656,7 +1682,7 @@ pub async fn run_main(cli: Cli, _codex_linux_sandbox_exe: Option<PathBuf>) -> an
                                             );
                                             let headers = crate::util::build_chatgpt_headers().await;
                                             let res = crate::env_detect::list_environments(&base_url, &headers).await;
-                                            let _ = tx.send(app::AppEvent::EnvironmentsLoaded(res));
+                                            drop(tx.send(app::AppEvent::EnvironmentsLoaded(res)));
                                         });
                                     }
                                 }
@@ -1778,7 +1804,7 @@ pub async fn run_main(cli: Cli, _codex_linux_sandbox_exe: Option<PathBuf>) -> an
                                         let env_sel = app.env_filter.clone();
                                         tokio::spawn(async move {
                                             let res = app::load_tasks(&*backend, env_sel.as_deref()).await;
-                                            let _ = tx.send(app::AppEvent::TasksLoaded { env: env_sel, result: res });
+                                            drop(tx.send(app::AppEvent::TasksLoaded { env: env_sel, result: res }));
                                         });
                                     }
                                 }
@@ -1817,7 +1843,7 @@ pub async fn run_main(cli: Cli, _codex_linux_sandbox_exe: Option<PathBuf>) -> an
                                     let env_sel = app.env_filter.clone();
                                     tokio::spawn(async move {
                                         let res = app::load_tasks(&*backend, env_sel.as_deref()).await;
-                                        let _ = tx.send(app::AppEvent::TasksLoaded { env: env_sel, result: res });
+                                        drop(tx.send(app::AppEvent::TasksLoaded { env: env_sel, result: res }));
                                     });
                                 }
                                 KeyCode::Char('o') | KeyCode::Char('O') => {
@@ -1832,7 +1858,7 @@ pub async fn run_main(cli: Cli, _codex_linux_sandbox_exe: Option<PathBuf>) -> an
                                         let base_url = crate::util::normalize_base_url(&std::env::var("CODEX_CLOUD_TASKS_BASE_URL").unwrap_or_else(|_| "https://chatgpt.com/backend-api".to_string()));
                                         let headers = crate::util::build_chatgpt_headers().await;
                                         let res = crate::env_detect::list_environments(&base_url, &headers).await;
-                                        let _ = tx.send(app::AppEvent::EnvironmentsLoaded(res));
+                                        drop(tx.send(app::AppEvent::EnvironmentsLoaded(res)));
                                     });
                                     }
                                 }
@@ -1865,7 +1891,7 @@ pub async fn run_main(cli: Cli, _codex_linux_sandbox_exe: Option<PathBuf>) -> an
                                             tokio::spawn(async move {
                                                 match codex_cloud_tasks_client::CloudBackend::get_task_diff(&*backend, diff_id.clone()).await {
                                                     Ok(Some(diff)) => {
-                                                        let _ = tx.send(app::AppEvent::DetailsDiffLoaded { id: diff_id, title: diff_title, diff });
+                                                        drop(tx.send(app::AppEvent::DetailsDiffLoaded { id: diff_id, title: diff_title, diff }));
                                                     }
                                                     Ok(None) => {
                                                         match codex_cloud_tasks_client::CloudBackend::get_task_text(&*backend, diff_id.clone()).await {
@@ -1880,10 +1906,10 @@ pub async fn run_main(cli: Cli, _codex_linux_sandbox_exe: Option<PathBuf>) -> an
                                                                     attempt_placement: text.attempt_placement,
                                                                     attempt_status: text.attempt_status,
                                                                 };
-                                                                let _ = tx.send(evt);
+                                                                drop(tx.send(evt));
                                                             }
                                                             Err(e2) => {
-                                                                let _ = tx.send(app::AppEvent::DetailsFailed { id: diff_id, title: diff_title, error: format!("{e2}") });
+                                                                drop(tx.send(app::AppEvent::DetailsFailed { id: diff_id, title: diff_title, error: format!("{e2}") }));
                                                             }
                                                         }
                                                     }
@@ -1901,10 +1927,10 @@ pub async fn run_main(cli: Cli, _codex_linux_sandbox_exe: Option<PathBuf>) -> an
                                                                     attempt_placement: text.attempt_placement,
                                                                     attempt_status: text.attempt_status,
                                                                 };
-                                                                let _ = tx.send(evt);
+                                                                drop(tx.send(evt));
                                                             }
                                                             Err(e2) => {
-                                                                let _ = tx.send(app::AppEvent::DetailsFailed { id: diff_id, title: diff_title, error: format!("{e2}") });
+                                                                drop(tx.send(app::AppEvent::DetailsFailed { id: diff_id, title: diff_title, error: format!("{e2}") }));
                                                             }
                                                         }
                                                     }
@@ -1929,12 +1955,12 @@ pub async fn run_main(cli: Cli, _codex_linux_sandbox_exe: Option<PathBuf>) -> an
                                                         attempt_placement: text.attempt_placement,
                                                         attempt_status: text.attempt_status,
                                                     };
-                                                    let _ = tx.send(evt);
+                                                    drop(tx.send(evt));
                                                 }
                                             });
                                         }
                                         // Animate spinner while details load.
-                                        let _ = frame_tx.send(Instant::now() + Duration::from_millis(100));
+                                        drop(frame_tx.send(Instant::now() + Duration::from_millis(100)));
                                     }
                                 }
                                 KeyCode::Char('a') => {

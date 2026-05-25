@@ -8,8 +8,8 @@ license.workspace = true
 name = "generate-proto"
 path = "examples/generate-proto.rs"
 
-[lints]
-workspace = true
+[lints.rust]
+unsafe_code = "allow"
 
 [dependencies]
 anyhow = { workspace = true }

@@ -160,7 +160,33 @@ async fn run_exec_command(args: crate::cli::ExecCommand) -> anyhow::Result<()> {
         environment,
         branch,
         attempts,
+        model,
+        timeout_ms,
+        approval_policy,
     } = args;
+
+    // Apply env-var overrides for model, timeout, and approval policy.
+    // CLI flags take precedence; env vars serve as fallbacks.
+    let model = model.or_else(|| std::env::var("CODEX_MODEL").ok());
+    if let Some(ref m) = model {
+        tracing::info!("using model override: {m}");
+    }
+
+    let timeout_ms = timeout_ms.or_else(|| {
+        std::env::var("CODEX_TIMEOUT_MS")
+            .ok()
+            .and_then(|s| s.parse::<u64>().ok())
+    });
+    if let Some(ms) = timeout_ms {
+        tracing::info!("using timeout override: {ms}ms");
+    }
+
+    let approval_policy =
+        approval_policy.or_else(|| std::env::var("CODEX_APPROVAL_POLICY").ok());
+    if let Some(ref p) = approval_policy {
+        tracing::info!("using approval policy override: {p}");
+    }
+
     let ctx = init_backend("codex_cloud_tasks_exec").await?;
     let prompt = resolve_query_input(query)?;
     let env_id = resolve_environment_id(&ctx, &environment).await?;

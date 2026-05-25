@@ -120,6 +120,126 @@ fn ensure_denybin(tools: &[&str], denybin_dir: Option<&Path>) -> Result<PathBuf>
     Ok(base)
 }
 
+// ---------------------------------------------------------------------------
+// Environment variable isolation
+// ---------------------------------------------------------------------------
+
+/// Sensitive environment variable prefixes and exact names that must **never**
+/// leak into a sandboxed child process. Covers:
+///
+/// - Cloud-provider credentials (AWS, Azure, GCP)
+/// - CI/CD tokens (GitHub, GitLab, Buildkite)
+/// - Generic secrets (SECRET_KEY, PRIVATE_KEY)
+/// - Windows credential vault integration
+/// - API keys, bearer tokens, session cookies
+const SENSITIVE_ENV_PREFIXES: &[&str] = &[
+    // AWS
+    "AWS_",
+    // Azure
+    "AZURE_",
+    "ARM_",
+    // GCP
+    "GOOGLE_",
+    "GCLOUD_",
+    "CLOUDSDK_",
+    "GKE_",
+    // GitHub / CI
+    "GITHUB_TOKEN",
+    "GITHUB_PAT",
+    "GH_TOKEN",
+    "GH_ENTERPRISE_TOKEN",
+    "GHES_TOKEN",
+    "GITLAB_TOKEN",
+    "BUILDKITE_",
+    "HEROKU_",
+    "VERCEL_",
+    "NETLIFY_",
+    "DENO_",
+    // Vercel / Supabase
+    "SUPABASE_",
+    "POSTGRES_",
+    "DATABASE_",
+    // Generic secret patterns
+    "SECRET_",
+    "PRIVATE_",
+    "API_KEY",
+    "API_SECRET",
+    "AUTH_TOKEN",
+    "ACCESS_TOKEN",
+    "REFRESH_TOKEN",
+    "BEARER_",
+    "SESSION_",
+    "CSRF_",
+    "XSRF_",
+    // Windows credential / DPAPI
+    "DPAPI_",
+    // Sentry / observability (may contain DSNs with keys)
+    "SENTRY_DSN",
+    "SENTRY_AUTH_TOKEN",
+    // OpenAI / Anthropic / LLM keys
+    "OPENAI_",
+    "ANTHROPIC_",
+    "CODEX_",
+    // SSH / GPG agent sockets (Unix-like env on Windows via Git Bash, WSL)
+    "SSH_AUTH_SOCK",
+    "SSH_PRIVATE_KEY",
+    "GPG_TTY",
+    // Docker / container registry
+    "DOCKER_",
+];
+
+/// Exact env-var names that are always stripped regardless of prefix.
+const SENSITIVE_ENV_EXACT: &[&str] = &[
+    "TOKEN",
+    "PASSWORD",
+    "PASSPHRASE",
+    "CREDENTIAL",
+    "SECRET",
+    "PRIVATE_KEY",
+    "KEY",
+    "AUTH",
+    "COOKIE",
+    "SESSION",
+    "PAT",
+];
+
+/// Return `true` if an environment variable key looks sensitive and should be
+/// stripped from the sandbox child environment.
+fn is_sensitive_env_key(key: &str) -> bool {
+    let upper = key.to_ascii_uppercase();
+
+    // Check exact matches.
+    for exact in SENSITIVE_ENV_EXACT {
+        if upper == *exact {
+            return true;
+        }
+    }
+
+    // Check prefix matches.
+    for prefix in SENSITIVE_ENV_PREFIXES {
+        if upper.starts_with(prefix) {
+            return true;
+        }
+    }
+
+    false
+}
+
+/// Remove sensitive environment variables from the map that will be passed to
+/// the sandboxed child process. This is a **deny-list** approach: we strip
+/// known-sensitive keys while preserving everything else (PATH, HOME, etc.).
+///
+/// Returns the number of keys stripped so callers can log the fact.
+pub fn strip_sensitive_env_vars(env_map: &mut HashMap<String, String>) -> usize {
+    let before = env_map.len();
+    env_map.retain(|k, _| !is_sensitive_env_key(k));
+    before - env_map.len()
+}
+
+// ---------------------------------------------------------------------------
+// Network-offline environment rewrites
+// ---------------------------------------------------------------------------
+
 pub fn apply_no_network_to_env(env_map: &mut HashMap<String, String>) -> Result<()> {
     env_map.insert("SBX_NONET_ACTIVE".into(), "1".into());
     env_map
@@ -171,4 +291,96 @@ pub fn apply_no_network_to_env(env_map: &mut HashMap<String, String>) -> Result<
     prepend_path(env_map, &base.to_string_lossy());
     reorder_pathext_for_stubs(env_map);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    #[test]
+    fn strips_aws_credentials() {
+        let mut env = HashMap::from([
+            ("AWS_ACCESS_KEY_ID".into(), "AKIA...".into()),
+            ("AWS_SECRET_ACCESS_KEY".into(), "wJalr...".into()),
+            ("AWS_SESSION_TOKEN".into(), "FQoG...".into()),
+            ("PATH".into(), "/usr/bin".into()),
+        ]);
+        let stripped = strip_sensitive_env_vars(&mut env);
+        assert_eq!(stripped, 3);
+        assert!(env.contains_key("PATH"));
+        assert!(!env.contains_key("AWS_ACCESS_KEY_ID"));
+        assert!(!env.contains_key("AWS_SECRET_ACCESS_KEY"));
+        assert!(!env.contains_key("AWS_SESSION_TOKEN"));
+    }
+
+    #[test]
+    fn strips_github_token() {
+        let mut env = HashMap::from([
+            ("GITHUB_TOKEN".into(), "ghp_...".into()),
+            ("HOME".into(), "/home/user".into()),
+        ]);
+        let stripped = strip_sensitive_env_vars(&mut env);
+        assert_eq!(stripped, 1);
+        assert!(env.contains_key("HOME"));
+        assert!(!env.contains_key("GITHUB_TOKEN"));
+    }
+
+    #[test]
+    fn strips_exact_password_key() {
+        let mut env = HashMap::from([
+            ("PASSWORD".into(), "hunter2".into()),
+            ("KEY".into(), "secret".into()),
+            ("PAT".into(), "ghp_abc".into()),
+            ("USER".into(), "alice".into()),
+        ]);
+        let stripped = strip_sensitive_env_vars(&mut env);
+        assert_eq!(stripped, 3);
+        assert!(env.contains_key("USER"));
+    }
+
+    #[test]
+    fn preserves_safe_vars() {
+        let mut env = HashMap::from([
+            ("PATH".into(), "/usr/bin".into()),
+            ("HOME".into(), "/home/user".into()),
+            ("TEMP".into(), "/tmp".into()),
+            ("LANG".into(), "en_US.UTF-8".into()),
+            ("GIT_PAGER".into(), "cat".into()),
+            ("EDITOR".into(), "vim".into()),
+        ]);
+        let stripped = strip_sensitive_env_vars(&mut env);
+        assert_eq!(stripped, 0);
+        assert_eq!(env.len(), 6);
+    }
+
+    #[test]
+    fn case_insensitive_matching() {
+        let mut env = HashMap::from([
+            ("password".into(), "lower".into()),
+            ("Password".into(), "mixed".into()),
+            ("aws_secret_access_key".into(), "lower_prefix".into()),
+        ]);
+        let stripped = strip_sensitive_env_vars(&mut env);
+        assert_eq!(stripped, 3);
+    }
+
+    #[test]
+    fn is_sensitive_detects_prefix_matches() {
+        assert!(is_sensitive_env_key("OPENAI_API_KEY"));
+        assert!(is_sensitive_env_key("ANTHROPIC_API_KEY"));
+        assert!(is_sensitive_env_key("AZURE_SUBSCRIPTION_ID"));
+        assert!(is_sensitive_env_key("DOCKER_HOST"));
+    }
+
+    #[test]
+    fn is_sensitive_allows_safe_keys() {
+        assert!(!is_sensitive_env_key("PATH"));
+        assert!(!is_sensitive_env_key("HOME"));
+        assert!(!is_sensitive_env_key("TEMP"));
+        assert!(!is_sensitive_env_key("LANG"));
+        assert!(!is_sensitive_env_key("GIT_PAGER"));
+        assert!(!is_sensitive_env_key("EDITOR"));
+        assert!(!is_sensitive_env_key("SBX_NONET_ACTIVE"));
+    }
 }

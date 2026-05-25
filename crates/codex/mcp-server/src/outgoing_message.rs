@@ -288,7 +288,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_send_event_as_notification() -> Result<()> {
-        let (outgoing_tx, mut outgoing_rx) = mpsc::unbounded_channel::<OutgoingMessage>();
+        let (outgoing_tx, mut outgoing_rx) = mpsc::channel::<OutgoingMessage>(64);
         let outgoing_message_sender = OutgoingMessageSender::new(outgoing_tx);
 
         let thread_id = ThreadId::new();
@@ -335,7 +335,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_send_event_as_notification_with_meta() -> Result<()> {
-        let (outgoing_tx, mut outgoing_rx) = mpsc::unbounded_channel::<OutgoingMessage>();
+        let (outgoing_tx, mut outgoing_rx) = mpsc::channel::<OutgoingMessage>(64);
         let outgoing_message_sender = OutgoingMessageSender::new(outgoing_tx);
 
         let conversation_id = ThreadId::new();
@@ -403,7 +403,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_send_event_as_notification_with_meta_and_thread_id() -> Result<()> {
-        let (outgoing_tx, mut outgoing_rx) = mpsc::unbounded_channel::<OutgoingMessage>();
+        let (outgoing_tx, mut outgoing_rx) = mpsc::channel::<OutgoingMessage>(64);
         let outgoing_message_sender = OutgoingMessageSender::new(outgoing_tx);
 
         let thread_id = ThreadId::new();

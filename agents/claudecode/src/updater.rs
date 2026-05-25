@@ -5,7 +5,7 @@ use std::sync::OnceLock;
 use anyhow::{Context, Result, anyhow};
 use sha2::{Digest, Sha256};
 use serde::Deserialize;
-use tracing::{info, warn};
+use tracing::info;
 
 use crate::doctor::install::{InstallSourceKind, detect_install_source, release_repository_slug};
 
@@ -167,13 +167,12 @@ pub async fn run_update() -> Result<()> {
     }
 
     const MAX_DOWNLOAD_SIZE: u64 = 500 * 1024 * 1024; // 500 MB
-    if let Some(content_length) = response.content_length() {
-        if content_length > MAX_DOWNLOAD_SIZE {
+    if let Some(content_length) = response.content_length()
+        && content_length > MAX_DOWNLOAD_SIZE {
             anyhow::bail!(
                 "download size ({content_length} bytes) exceeds maximum allowed ({MAX_DOWNLOAD_SIZE} bytes); aborting"
             );
         }
-    }
 
     let bytes = response
         .bytes()
@@ -201,28 +200,36 @@ pub async fn run_update() -> Result<()> {
         std::env::current_exe().context("failed to determine current executable path")?;
     let temp_path = current_exe.with_extension("new");
 
-    std::fs::write(&temp_path, &bytes).context("failed to write new binary")?;
+    // Move all blocking filesystem operations onto a dedicated thread so we
+    // don't stall the Tokio runtime while writing a potentially large binary.
+    tokio::task::spawn_blocking(move || -> Result<()> {
+        std::fs::write(&temp_path, &bytes).context("failed to write new binary")?;
 
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = std::fs::metadata(&temp_path)?.permissions();
-        perms.set_mode(0o755);
-        std::fs::set_permissions(&temp_path, perms)?;
-    }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = std::fs::metadata(&temp_path)?.permissions();
+            perms.set_mode(0o755);
+            std::fs::set_permissions(&temp_path, perms)?;
+        }
 
-    #[cfg(windows)]
-    {
-        let old_path = current_exe.with_extension("old");
-        std::fs::rename(&current_exe, &old_path).context("failed to rename current executable")?;
-        std::fs::rename(&temp_path, &current_exe).context("failed to install new version")?;
-        let _ = std::fs::remove_file(&old_path);
-    }
+        #[cfg(windows)]
+        {
+            let old_path = current_exe.with_extension("old");
+            std::fs::rename(&current_exe, &old_path)
+                .context("failed to rename current executable")?;
+            std::fs::rename(&temp_path, &current_exe).context("failed to install new version")?;
+            let _ = std::fs::remove_file(&old_path);
+        }
 
-    #[cfg(not(windows))]
-    {
-        std::fs::rename(&temp_path, &current_exe).context("failed to install new version")?;
-    }
+        #[cfg(not(windows))]
+        {
+            std::fs::rename(&temp_path, &current_exe).context("failed to install new version")?;
+        }
+        Ok(())
+    })
+    .await
+    .context("update install task panicked")??;
 
     println!("✅ Updated to {} successfully!", result.latest_version);
     Ok(())
@@ -256,6 +263,7 @@ async fn verify_binary_integrity(
 }
 
 /// Download a specific release asset by name.
+#[allow(dead_code)]
 async fn download_asset(repository: &str, version: &str, asset_name: &str) -> Result<Vec<u8>> {
     let url = format!(
         "https://github.com/{repository}/releases/download/{version}/{asset_name}"
@@ -273,6 +281,7 @@ async fn download_asset(repository: &str, version: &str, asset_name: &str) -> Re
 }
 
 /// Select a download asset by exact name match (case-insensitive).
+#[allow(dead_code)]
 fn select_download_asset_by_name<'a>(assets: &'a [GitHubAsset], name: &str) -> Option<&'a GitHubAsset> {
     assets.iter().find(|a| a.name.eq_ignore_ascii_case(name))
 }

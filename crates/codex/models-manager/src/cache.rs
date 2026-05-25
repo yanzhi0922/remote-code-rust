@@ -28,10 +28,11 @@ impl ModelsCacheManager {
     }
 
     /// Attempt to load a fresh cache entry. Returns `None` if the cache doesn't exist or is stale.
-    pub(crate) async fn load_fresh(&self, expected_version: &str) -> Option<ModelsCache> {
+    pub(crate) async fn load_fresh(&self, expected_version: &str, expected_provider: &str) -> Option<ModelsCache> {
         info!(
                 cache_path = %self.cache_path.display(),
                 expected_version,
+                expected_provider,
             "models cache: attempting load_fresh"
         );
         let cache = match self.load().await {
@@ -47,6 +48,15 @@ impl ModelsCacheManager {
             fetched_at = %cache.fetched_at,
             "models cache: loaded cache file"
         );
+        if cache.provider.as_deref() != Some(expected_provider) {
+            info!(
+                cache_path = %self.cache_path.display(),
+                expected_provider,
+                cached_provider = ?cache.provider,
+                "models cache: cache provider mismatch"
+            );
+            return None;
+        }
         if cache.client_version.as_deref() != Some(expected_version) {
             info!(
                 cache_path = %self.cache_path.display(),
@@ -79,11 +89,13 @@ impl ModelsCacheManager {
         models: &[ModelInfo],
         etag: Option<String>,
         client_version: String,
+        provider: String,
     ) {
         let cache = ModelsCache {
             fetched_at: Utc::now(),
             etag,
             client_version: Some(client_version),
+            provider: Some(provider),
             models: models.to_vec(),
         };
         if let Err(err) = self.save_internal(&cache).await {
@@ -165,6 +177,8 @@ pub(crate) struct ModelsCache {
     pub(crate) etag: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) client_version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) provider: Option<String>,
     pub(crate) models: Vec<ModelInfo>,
 }
 

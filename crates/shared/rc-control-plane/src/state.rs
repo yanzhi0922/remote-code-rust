@@ -312,7 +312,7 @@ impl ControlPlaneService {
             let registry_guard = self.registry.read().await;
             let timeline = self.timeline.snapshot().await;
             let snapshot = PersistedControlPlaneStateRef {
-                registry: &*registry_guard,
+                registry: &registry_guard,
                 timeline: &timeline,
             };
             serde_json::to_string(&snapshot)
@@ -517,7 +517,7 @@ fn load_persisted_state_with_conn(connection: &Connection, state_db_path: &std::
     };
     let snapshot: PersistedControlPlaneState = serde_json::from_str(&payload)
         .with_context(|| format!("failed to decode {}", state_db_path.display()))?;
-    backfill_persisted_events(&connection, &snapshot.timeline)
+    backfill_persisted_events(connection, &snapshot.timeline)
         .with_context(|| format!("failed to backfill events in {}", state_db_path.display()))?;
     Ok((
         snapshot.registry,
@@ -569,7 +569,7 @@ fn persist_control_plane_state_from_payload_inner(
         )
         .context("failed to persist control plane snapshot")?;
     if let Some(event) = event {
-        persist_timeline_event(&transaction, event).with_context(|| {
+        persist_timeline_event(transaction, event).with_context(|| {
             format!(
                 "failed to persist event {} in control plane state",
                 event.sequence,
@@ -739,4 +739,292 @@ fn load_latest_persisted_event_sequence_with_conn(
         .map(u64::try_from)
         .transpose()
         .context("persisted event sequence overflowed u64")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // -- AuthPrincipal tests --
+
+    #[test]
+    fn auth_principal_shared_token_has_no_device_id() {
+        let principal = AuthPrincipal::SharedToken;
+        assert!(principal.created_by_device_id().is_none());
+        assert!(principal.user_id().is_none());
+    }
+
+    #[test]
+    fn auth_principal_device_exposes_device_id() {
+        let device_id = Uuid::new_v4();
+        let principal = AuthPrincipal::Device(TrustedDeviceRecord {
+            device_id,
+            name: "test-device".into(),
+            kind: crate::types::DeviceKind::Cli,
+            owner: false,
+            created_by_device_id: None,
+            created_at: Utc::now(),
+            last_seen_at: Utc::now(),
+        });
+        assert_eq!(principal.created_by_device_id(), Some(device_id));
+        assert!(principal.user_id().is_none());
+    }
+
+    #[test]
+    fn auth_principal_user_exposes_user_id() {
+        let principal = AuthPrincipal::User {
+            user_id: "user-abc".into(),
+        };
+        assert!(principal.created_by_device_id().is_none());
+        assert_eq!(principal.user_id(), Some("user-abc"));
+    }
+
+    // -- is_sha256_hex tests --
+
+    #[test]
+    fn is_sha256_hex_accepts_valid_hex() {
+        let valid = "a".repeat(64);
+        assert!(is_sha256_hex(&valid));
+    }
+
+    #[test]
+    fn is_sha256_hex_rejects_wrong_length() {
+        assert!(!is_sha256_hex("abc"));
+        assert!(!is_sha256_hex(&"a".repeat(63)));
+        assert!(!is_sha256_hex(&"a".repeat(65)));
+    }
+
+    #[test]
+    fn is_sha256_hex_rejects_non_hex() {
+        assert!(!is_sha256_hex(&"g".repeat(64)));
+        assert!(!is_sha256_hex(&"z".repeat(64)));
+    }
+
+    // -- PersistedEventQuery default tests --
+
+    #[test]
+    fn persisted_event_query_defaults_are_none_or_false() {
+        let query = PersistedEventQuery::default();
+        assert!(query.after.is_none());
+        assert!(query.limit.is_none());
+        assert!(query.kind.is_none());
+        assert!(query.session_id.is_none());
+        assert!(query.runner_id.is_none());
+        assert!(!query.approvals_only);
+    }
+
+    // -- Stream ticket mint/consume tests --
+
+    async fn make_minimal_service() -> ControlPlaneService {
+        let dir = tempfile::tempdir().unwrap();
+        let config = ControlPlaneConfig {
+            bind: "127.0.0.1:0".parse().unwrap(),
+            public_base_url: None,
+            service_name: "test".into(),
+            runner_lease_ttl_secs: 30,
+            profile_dir: dir.path().to_path_buf(),
+            state_db_path: dir.path().join("state.db"),
+            artifact_root_dir: dir.path().join("artifacts"),
+            auth_token: None,
+            bootstrap_secret: None,
+            downloads_dir: None,
+            quic_bind: None,
+            quic_cert_pem: None,
+            quic_key_pem: None,
+        };
+        ControlPlaneService::new(config, "test-version")
+    }
+
+    #[tokio::test]
+    async fn stream_ticket_mint_and_consume_roundtrip() {
+        let service = make_minimal_service().await;
+        let path = "/v1/sessions/abc/events/stream".to_owned();
+
+        let ticket = service
+            .mint_stream_ticket(AuthPrincipal::SharedToken, path.clone(), 45)
+            .await;
+
+        assert!(ticket.starts_with("rcst_"));
+        assert_eq!(ticket.len(), "rcst_".len() + 32 + 32); // "rcst_" + two uuid simples
+
+        let principal = service
+            .consume_stream_ticket(&ticket, &path)
+            .await
+            .expect("ticket should be consumed");
+        assert!(matches!(principal, AuthPrincipal::SharedToken));
+    }
+
+    #[tokio::test]
+    async fn stream_ticket_single_use() {
+        let service = make_minimal_service().await;
+        let path = "/v1/events".to_owned();
+
+        let ticket = service
+            .mint_stream_ticket(AuthPrincipal::SharedToken, path.clone(), 45)
+            .await;
+
+        let first = service.consume_stream_ticket(&ticket, &path).await;
+        assert!(first.is_some());
+
+        let second = service.consume_stream_ticket(&ticket, &path).await;
+        assert!(second.is_none(), "ticket should be single-use");
+    }
+
+    #[tokio::test]
+    async fn stream_ticket_rejects_wrong_path() {
+        let service = make_minimal_service().await;
+
+        let ticket = service
+            .mint_stream_ticket(
+                AuthPrincipal::SharedToken,
+                "/v1/events".to_owned(),
+                45,
+            )
+            .await;
+
+        let result = service
+            .consume_stream_ticket(&ticket, "/v1/sessions/x/events")
+            .await;
+        assert!(result.is_none(), "wrong path should reject ticket");
+    }
+
+    #[tokio::test]
+    async fn stream_ticket_expired_is_rejected() {
+        let service = make_minimal_service().await;
+        let path = "/v1/events".to_owned();
+
+        // TTL of 0 seconds = immediately expired
+        let ticket = service
+            .mint_stream_ticket(AuthPrincipal::SharedToken, path.clone(), 0)
+            .await;
+
+        // Give a tiny window for the clock to tick past expiry
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        let result = service.consume_stream_ticket(&ticket, &path).await;
+        assert!(result.is_none(), "expired ticket should be rejected");
+    }
+
+    #[tokio::test]
+    async fn stream_ticket_preserves_user_principal() {
+        let service = make_minimal_service().await;
+        let path = "/v1/events".to_owned();
+
+        let ticket = service
+            .mint_stream_ticket(
+                AuthPrincipal::User {
+                    user_id: "user-42".into(),
+                },
+                path.clone(),
+                45,
+            )
+            .await;
+
+        let principal = service.consume_stream_ticket(&ticket, &path).await.unwrap();
+        assert!(matches!(
+            principal,
+            AuthPrincipal::User { ref user_id } if user_id == "user-42"
+        ));
+    }
+
+    // -- prune_expired_stream_tickets tests --
+
+    #[test]
+    fn prune_removes_expired_tickets() {
+        let mut tickets = BTreeMap::new();
+
+        tickets.insert(
+            "ticket-expired".into(),
+            StreamTicket {
+                principal: AuthPrincipal::SharedToken,
+                path: "/expired".to_owned(),
+                expires_at: Utc::now() - Duration::seconds(10),
+            },
+        );
+        tickets.insert(
+            "ticket-valid".into(),
+            StreamTicket {
+                principal: AuthPrincipal::SharedToken,
+                path: "/valid".to_owned(),
+                expires_at: Utc::now() + Duration::seconds(60),
+            },
+        );
+
+        prune_expired_stream_tickets(&mut tickets);
+        assert_eq!(tickets.len(), 1);
+        assert!(tickets.contains_key("ticket-valid"));
+    }
+
+    // -- SQLite schema tests --
+
+    #[test]
+    fn open_state_connection_creates_tables() {
+        let conn = open_state_connection(std::path::Path::new(":memory:"))
+            .expect("in-memory SQLite should open");
+
+        let tables: Vec<String> = conn
+            .prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+        assert!(tables.contains(&"control_plane_snapshot".to_owned()));
+        assert!(tables.contains(&"control_plane_events".to_owned()));
+    }
+
+    // -- Validation tests --
+
+    #[test]
+    fn validate_flags_non_loopback_without_auth() {
+        let config = ControlPlaneConfig {
+            bind: "0.0.0.0:8787".parse().unwrap(),
+            public_base_url: None,
+            service_name: "test".into(),
+            runner_lease_ttl_secs: 30,
+            profile_dir: std::path::PathBuf::from("/tmp/profile"),
+            state_db_path: std::path::PathBuf::from("/tmp/state.db"),
+            artifact_root_dir: std::path::PathBuf::from("/tmp/artifacts"),
+            auth_token: None,
+            bootstrap_secret: None,
+            downloads_dir: None,
+            quic_bind: None,
+            quic_cert_pem: None,
+            quic_key_pem: None,
+        };
+        let issues = validate_control_plane_config(&config);
+        assert!(
+            issues.iter().any(|i| i.contains("non-loopback")),
+            "should flag non-loopback bind: {issues:?}"
+        );
+    }
+
+    #[test]
+    fn validate_ok_with_loopback_and_no_auth() {
+        let config = ControlPlaneConfig {
+            bind: "127.0.0.1:8787".parse().unwrap(),
+            public_base_url: None,
+            service_name: "test".into(),
+            runner_lease_ttl_secs: 30,
+            profile_dir: std::path::PathBuf::from("/tmp/profile"),
+            state_db_path: std::path::PathBuf::from("/tmp/state.db"),
+            artifact_root_dir: std::path::PathBuf::from("/tmp/artifacts"),
+            auth_token: None,
+            bootstrap_secret: None,
+            downloads_dir: None,
+            quic_bind: None,
+            quic_cert_pem: None,
+            quic_key_pem: None,
+        };
+        let issues = validate_control_plane_config(&config);
+        assert!(issues.is_empty(), "loopback without auth should be fine: {issues:?}");
+    }
+
+    #[test]
+    fn is_local_control_plane_url_detects_localhost() {
+        assert!(is_local_control_plane_url("http://localhost:8787"));
+        assert!(is_local_control_plane_url("http://127.0.0.1:8787"));
+        assert!(!is_local_control_plane_url("http://192.168.1.1:8787"));
+        assert!(!is_local_control_plane_url("not-a-url"));
+    }
 }

@@ -181,6 +181,7 @@ impl AsyncManagedClient {
                         tx_event,
                         elicitation_requests,
                         codex_apps_tools_cache_context,
+                        cancel_token: cancel_token_for_fut.clone(),
                     },
                 )
                 .await
@@ -456,6 +457,7 @@ async fn start_server_task(
         tx_event,
         elicitation_requests,
         codex_apps_tools_cache_context,
+        cancel_token,
     } = params;
     let elicitation = elicitation_capability_for_server(&server_name);
     let mut capabilities = ClientCapabilities::default();
@@ -467,10 +469,16 @@ async fn start_server_task(
 
     let send_elicitation = elicitation_requests.make_sender(server_name.clone(), tx_event);
 
-    let initialize_result = client
-        .initialize(params, startup_timeout, send_elicitation)
-        .await
-        .map_err(StartupOutcomeError::from)?;
+    let initialize_fut = client.initialize(params, startup_timeout, send_elicitation);
+    let initialize_result = tokio::select! {
+        biased;
+        _ = cancel_token.cancelled() => {
+            return Err(StartupOutcomeError::Cancelled);
+        }
+        result = initialize_fut => {
+            result.map_err(StartupOutcomeError::from)?
+        }
+    };
 
     let server_supports_sandbox_state_meta_capability = initialize_result
         .capabilities
@@ -521,12 +529,13 @@ async fn start_server_task(
 }
 
 struct StartServerTaskParams {
-    startup_timeout: Option<Duration>, // TODO: cancel_token should handle this.
+    startup_timeout: Option<Duration>,
     tool_timeout: Duration,
     tool_filter: ToolFilter,
     tx_event: Sender<Event>,
     elicitation_requests: ElicitationRequestManager,
     codex_apps_tools_cache_context: Option<CodexAppsToolsCacheContext>,
+    cancel_token: CancellationToken,
 }
 
 async fn make_rmcp_client(

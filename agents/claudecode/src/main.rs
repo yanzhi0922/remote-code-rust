@@ -1,3 +1,5 @@
+#[allow(dead_code)]
+mod agent_metrics;
 mod agents;
 mod cli;
 mod commands;

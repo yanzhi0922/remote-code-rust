@@ -47,6 +47,52 @@ pub struct ExecCommand {
     /// Git branch to run in Codex Cloud (defaults to current branch).
     #[arg(long = "branch", value_name = "BRANCH")]
     pub branch: Option<String>,
+
+    /// Model to use for the task.
+    /// Falls back to CODEX_MODEL environment variable if not specified.
+    #[arg(long = "model", short = 'm', value_name = "MODEL", env = "CODEX_MODEL")]
+    pub model: Option<String>,
+
+    /// Per-command timeout in milliseconds.
+    /// Falls back to CODEX_TIMEOUT_MS environment variable if not specified.
+    #[arg(
+        long = "timeout",
+        value_name = "MS",
+        env = "CODEX_TIMEOUT_MS",
+        value_parser = parse_timeout_ms
+    )]
+    pub timeout_ms: Option<u64>,
+
+    /// Approval policy for command execution.
+    /// Falls back to CODEX_APPROVAL_POLICY environment variable if not specified.
+    /// Valid values: "suggest", "auto-edit", "full-auto".
+    #[arg(
+        long = "approval-policy",
+        value_name = "POLICY",
+        env = "CODEX_APPROVAL_POLICY",
+        value_parser = parse_approval_policy
+    )]
+    pub approval_policy: Option<String>,
+}
+
+fn parse_timeout_ms(input: &str) -> Result<u64, String> {
+    let value: u64 = input
+        .parse()
+        .map_err(|_| "timeout must be a positive integer (milliseconds)".to_string())?;
+    if value == 0 {
+        Err("timeout must be greater than 0".to_string())
+    } else {
+        Ok(value)
+    }
+}
+
+fn parse_approval_policy(input: &str) -> Result<String, String> {
+    match input {
+        "suggest" | "auto-edit" | "full-auto" => Ok(input.to_string()),
+        _ => Err(format!(
+            "approval policy must be one of: suggest, auto-edit, full-auto (got: {input})"
+        )),
+    }
 }
 
 fn parse_attempts(input: &str) -> Result<usize, String> {

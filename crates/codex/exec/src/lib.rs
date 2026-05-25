@@ -743,7 +743,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
     tokio::spawn(async move {
         if tokio::signal::ctrl_c().await.is_ok() {
             tracing::debug!("Keyboard interrupt");
-            let _ = interrupt_tx.send(());
+            drop(interrupt_tx.send(()));
         }
     });
 

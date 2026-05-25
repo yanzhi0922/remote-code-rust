@@ -115,7 +115,7 @@ pub fn run_memory(
                         .and_then(|p| p.as_object())
                         .and_then(|m| nested_str(m, &["key"]));
                     key.as_ref()
-                        .map_or(true, |target| k == Some(target.as_str()))
+                        .is_none_or(|target| k == Some(target.as_str()))
                 })
                 .collect();
             if json {
@@ -296,7 +296,7 @@ pub async fn run_summary(config: &mut RuntimeConfig, store: &SessionStore) -> Re
                 && e.payload
                     .as_ref()
                     .and_then(|p| p.as_object())
-                    .map_or(false, |m| {
+                    .is_some_and(|m| {
                         m.get("is_error").and_then(|v| v.as_bool()).unwrap_or(false)
                     })
         })
@@ -537,7 +537,7 @@ pub fn run_debug_tool_call(
                 .and_then(|p| p.as_object())
                 .and_then(|m| m.get("tool_call_id"))
                 .and_then(|v| v.as_str())
-                .map_or(false, |id| id == args.tool_call_id)
+                .is_some_and(|id| id == args.tool_call_id)
         })
         .collect();
 

@@ -13,8 +13,8 @@ path = "src/lib.rs"
 name = "codex-execpolicy"
 path = "src/main.rs"
 
-[lints]
-workspace = true
+[lints.rust]
+unsafe_code = "allow"
 
 [dependencies]
 anyhow = { workspace = true }

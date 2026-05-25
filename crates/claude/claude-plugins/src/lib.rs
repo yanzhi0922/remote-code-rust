@@ -11,6 +11,7 @@ pub mod directories;
 pub mod flagging;
 pub mod git_availability;
 pub mod hint_recommendation;
+pub mod hook_sandbox;
 pub mod identifier;
 pub mod installation;
 pub mod load_agents;

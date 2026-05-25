@@ -257,8 +257,8 @@ pub fn normalize_pasted_path(pasted: &str) -> Option<PathBuf> {
         return url.to_file_path().ok();
     }
 
-    // TODO: We'll improve the implementation/unit tests over time, as appropriate.
-    // Possibly use typed-path: https://github.com/openai/codex/pull/2567/commits/3cc92b78e0a1f94e857cf4674d3a9db918ed352e
+    // Normalize pasted text that may represent a filesystem path.
+    // Handles Windows backslash paths, UNC paths, and POSIX paths.
     //
     // Detect unquoted Windows paths and bypass POSIX shlex which
     // treats backslashes as escapes (e.g., C:\Users\Alice\file.png).
@@ -545,5 +545,124 @@ mod pasted_paths_tests {
             result,
             PathBuf::from("/mnt/c/Users/Alice/Pictures/example image.png")
         );
+    }
+
+    // --- Additional edge-case tests for clipboard paste path handling ---
+
+    #[test]
+    fn normalize_empty_string_returns_none() {
+        assert_eq!(normalize_pasted_path(""), None);
+    }
+
+    #[test]
+    fn normalize_whitespace_only_returns_none() {
+        assert_eq!(normalize_pasted_path("   \t  "), None);
+    }
+
+    #[test]
+    fn normalize_file_url_with_host() {
+        // On Unix, file:// URL with empty host resolves to a local path.
+        // On Windows, file:// URLs with drive letters (file:///C:/...) work.
+        #[cfg(not(windows))]
+        {
+            let input = "file:///tmp/file.txt";
+            let result = normalize_pasted_path(input);
+            assert!(result.is_some(), "file URL should parse on unix");
+            assert_eq!(result.unwrap(), PathBuf::from("/tmp/file.txt"));
+        }
+        #[cfg(windows)]
+        {
+            let input = "file:///C:/Temp/file.txt";
+            let result = normalize_pasted_path(input);
+            assert!(result.is_some(), "file URL with drive letter should parse on windows");
+        }
+    }
+
+    #[test]
+    fn normalize_relative_path_returns_some() {
+        // A single token that is a relative path returns Some (as a PathBuf).
+        let result = normalize_pasted_path("relative/path.txt");
+        assert!(result.is_some(), "relative path should parse as single shell token");
+        assert_eq!(result.unwrap(), PathBuf::from("relative/path.txt"));
+    }
+
+    #[test]
+    fn normalize_http_url_returns_path_buf() {
+        // Non-file URLs parse as a single shell token, producing a PathBuf.
+        // The path normalization does not reject non-file URL schemes.
+        let result = normalize_pasted_path("https://example.com/file.txt");
+        assert!(result.is_some(), "URL parses as single token PathBuf");
+    }
+
+    #[test]
+    fn normalize_multiple_shell_tokens_returns_none() {
+        let result = normalize_pasted_path("first/path second/path");
+        assert!(result.is_none(), "multiple tokens should return None");
+    }
+
+    #[test]
+    fn normalize_path_with_leading_trailing_whitespace() {
+        let input = "  /tmp/example.png  ";
+        let result = normalize_pasted_path(input);
+        assert!(result.is_some(), "whitespace-padded path should parse");
+    }
+
+    #[test]
+    fn normalize_backtick_quoted_returns_none() {
+        // Backtick quotes are not handled, so this should be treated as a shell token
+        let result = normalize_pasted_path("`/tmp/example.png`");
+        // Shlex will not split backticks, treating them as part of the token
+        assert!(result.is_some());
+    }
+
+    #[test]
+    fn normalize_unc_path_with_server() {
+        let input = r"\\server\share\file.txt";
+        let result = normalize_pasted_path(input);
+        assert!(result.is_some(), "UNC path should parse");
+    }
+
+    #[test]
+    fn pasted_image_format_handles_common_extensions() {
+        assert_eq!(
+            pasted_image_format(Path::new("photo.png")),
+            EncodedImageFormat::Png
+        );
+        assert_eq!(
+            pasted_image_format(Path::new("photo.jpg")),
+            EncodedImageFormat::Jpeg
+        );
+        assert_eq!(
+            pasted_image_format(Path::new("photo.JPEG")),
+            EncodedImageFormat::Jpeg
+        );
+        assert_eq!(
+            pasted_image_format(Path::new("photo.gif")),
+            EncodedImageFormat::Other
+        );
+        assert_eq!(
+            pasted_image_format(Path::new("noext")),
+            EncodedImageFormat::Other
+        );
+        assert_eq!(
+            pasted_image_format(Path::new("/path/to/image.PNG")),
+            EncodedImageFormat::Png
+        );
+    }
+
+    #[test]
+    fn normalize_single_dollar_path() {
+        // Shell variable expansion is not performed; the literal string is kept
+        let result = normalize_pasted_path("$HOME/file.txt");
+        assert!(result.is_some());
+        assert_eq!(result.unwrap(), PathBuf::from("$HOME/file.txt"));
+    }
+
+    #[test]
+    fn normalize_tilde_path() {
+        let result = normalize_pasted_path("~/Documents/file.txt");
+        assert!(result.is_some());
+        // Tilde is not expanded; it becomes a literal path
+        assert_eq!(result.unwrap(), PathBuf::from("~/Documents/file.txt"));
     }
 }

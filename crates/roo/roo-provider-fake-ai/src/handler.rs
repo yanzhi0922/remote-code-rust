@@ -247,7 +247,7 @@ mod tests {
     async fn text_response_yields_text_and_usage_chunks() {
         let handler = FakeAiHandler::new(text_config("hello world"));
         let stream = handler
-            .create_message("sys", vec![], None, CreateMessageMetadata::default())
+            .create_message("sys", &[], None, CreateMessageMetadata::default())
             .await
             .expect("create_message should succeed");
 
@@ -276,7 +276,7 @@ mod tests {
         };
         let handler = FakeAiHandler::new(config);
         let stream = handler
-            .create_message("sys", vec![], None, CreateMessageMetadata::default())
+            .create_message("sys", &[], None, CreateMessageMetadata::default())
             .await
             .expect("create_message should succeed");
 
@@ -301,7 +301,7 @@ mod tests {
         };
         let handler = FakeAiHandler::new(config);
         let stream = handler
-            .create_message("sys", vec![], None, CreateMessageMetadata::default())
+            .create_message("sys", &[], None, CreateMessageMetadata::default())
             .await
             .expect("create_message should succeed");
 
@@ -341,7 +341,7 @@ mod tests {
 
         // First call — "first"
         let stream = handler
-            .create_message("sys", vec![], None, CreateMessageMetadata::default())
+            .create_message("sys", &[], None, CreateMessageMetadata::default())
             .await
             .unwrap();
         let chunks: Vec<_> = stream.collect::<Vec<_>>().await;
@@ -352,7 +352,7 @@ mod tests {
 
         // Second call — "second"
         let stream = handler
-            .create_message("sys", vec![], None, CreateMessageMetadata::default())
+            .create_message("sys", &[], None, CreateMessageMetadata::default())
             .await
             .unwrap();
         let chunks: Vec<_> = stream.collect::<Vec<_>>().await;
@@ -363,7 +363,7 @@ mod tests {
 
         // Third call — wraps back to "first"
         let stream = handler
-            .create_message("sys", vec![], None, CreateMessageMetadata::default())
+            .create_message("sys", &[], None, CreateMessageMetadata::default())
             .await
             .unwrap();
         let chunks: Vec<_> = stream.collect::<Vec<_>>().await;
@@ -415,7 +415,7 @@ mod tests {
         };
         let handler = FakeAiHandler::new(config);
         let stream = handler
-            .create_message("sys", vec![], None, CreateMessageMetadata::default())
+            .create_message("sys", &[], None, CreateMessageMetadata::default())
             .await
             .unwrap();
 

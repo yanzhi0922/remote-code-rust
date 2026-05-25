@@ -327,11 +327,15 @@ impl RealtimeAudioPlayer {
         if converted.is_empty() {
             return Ok(());
         }
+        const AUDIO_OUTPUT_QUEUE_CAP: usize = 48_000;
         let mut guard = self
             .queue
             .lock()
             .map_err(|_| "failed to lock output audio queue".to_string())?;
-        // TODO(aibrahim): Cap or trim this queue if we observe producer bursts outrunning playback.
+        if guard.len() + converted.len() > AUDIO_OUTPUT_QUEUE_CAP {
+            let drain = guard.len() + converted.len() - AUDIO_OUTPUT_QUEUE_CAP;
+            guard.drain(..drain.min(guard.len()));
+        }
         guard.extend(converted);
         Ok(())
     }

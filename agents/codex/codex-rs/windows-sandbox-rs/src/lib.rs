@@ -23,6 +23,7 @@ windows_modules!(
     hide_users,
     identity,
     logging,
+    mitigation,
     path_normalization,
     policy,
     process,
@@ -148,6 +149,12 @@ pub use ipc_framed::write_frame;
 pub use logging::LOG_FILE_NAME;
 #[cfg(target_os = "windows")]
 pub use logging::log_note;
+#[cfg(target_os = "windows")]
+pub use mitigation::MitigationAttributeList;
+#[cfg(target_os = "windows")]
+pub use mitigation::assign_process_to_job;
+#[cfg(target_os = "windows")]
+pub use mitigation::create_sandbox_job;
 #[cfg(target_os = "windows")]
 pub use path_normalization::canonicalize_path;
 #[cfg(target_os = "windows")]
@@ -368,6 +375,11 @@ mod windows_impl {
             /*inherit_path*/ false,
             /*add_git_safe_directory*/ false,
         )?;
+
+        // Strip sensitive environment variables (cloud credentials, API keys,
+        // tokens, passwords) before spawning the sandboxed child.
+        super::env::strip_sensitive_env_vars(&mut env_map);
+
         let policy = common.policy;
         let current_dir = common.current_dir;
         let logs_base_dir = common.logs_base_dir.as_deref();
@@ -496,6 +508,16 @@ mod windows_impl {
         let pi = created.process_info;
         let _desktop = created;
 
+        // Assign child to a kill-on-close job so it cannot outlive the parent.
+        // Best-effort: on Windows versions that do not support nested jobs this
+        // will fail silently (the child already has a restricted token).
+        let h_job: Option<HANDLE> = unsafe { super::mitigation::create_sandbox_job().ok() };
+        if let Some(job) = h_job {
+            unsafe {
+                let _ = super::mitigation::assign_process_to_job(job, pi.hProcess);
+            }
+        }
+
         unsafe {
             CloseHandle(in_r);
             // Close the parent's stdin write end so the child sees EOF immediately.
@@ -571,6 +593,9 @@ mod windows_impl {
                 CloseHandle(pi.hProcess);
             }
             CloseHandle(h_token);
+            if let Some(job) = h_job {
+                CloseHandle(job);
+            }
         }
         let _ = t_out.join();
         let _ = t_err.join();

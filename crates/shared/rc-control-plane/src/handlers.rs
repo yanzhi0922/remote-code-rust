@@ -175,6 +175,10 @@ pub(crate) async fn get_health(
         .filter(|snapshot| runner_is_available(snapshot, service.runner_lease_ttl_secs))
         .count();
 
+    // Update Prometheus gauges from current state.
+    crate::metrics::set_runner_connections(registry.runners.len());
+    crate::metrics::set_active_sessions(registry.sessions.len());
+
     Json(ControlPlaneHealth {
         ok: true,
         service: service.meta.service.clone(),
@@ -189,6 +193,18 @@ pub(crate) async fn get_health(
         owner_claimed: registry.owner_claimed(),
         device_count: registry.trusted_device_count(),
     })
+}
+
+/// Prometheus `/metrics` endpoint.
+///
+/// Served without authentication so that infrastructure scrape jobs (Prometheus,
+/// Grafana Agent, Victoria Metrics) can collect metrics without a bearer token.
+pub(crate) async fn get_metrics() -> impl IntoResponse {
+    let body = crate::metrics::encode_metrics();
+    (
+        [(CONTENT_TYPE, "text/plain; version=0.0.4; charset=utf-8")],
+        body,
+    )
 }
 
 pub(crate) async fn get_meta(State(service): State<ControlPlaneService>) -> Json<ControlPlaneMeta> {
@@ -784,6 +800,8 @@ pub(crate) async fn register_runner(
     Extension(principal): Extension<AuthPrincipal>,
     Json(request): Json<RunnerRegistrationRequest>,
 ) -> Result<Json<RunnerRegistrationResponse>, ApiError> {
+    let start = std::time::Instant::now();
+
     validate_runner_registration_public_base_url(
         request.public_base_url.as_deref(),
         service.meta.public_base_url.as_deref(),
@@ -817,6 +835,8 @@ pub(crate) async fn register_runner(
     } {
         response.snapshot = snapshot;
     }
+    crate::metrics::record_command_dispatch("register_runner", start.elapsed().as_secs_f64());
+    tracing::info!(runner_id = %response.runner_id, "Runner registered");
     Ok(Json(response))
 }
 
@@ -979,8 +999,8 @@ pub(crate) async fn update_runner_heartbeat(
                     .await;
             }
         }
-        let snapshot = registry.get_runner_snapshot(&runner_id)?;
-        snapshot
+        
+        registry.get_runner_snapshot(&runner_id)?
     };
 
     dispatch_pending_sessions_for_runner(&service, &runner_id).await;
@@ -1384,6 +1404,8 @@ pub(crate) async fn create_session(
     Extension(principal): Extension<AuthPrincipal>,
     Json(request): Json<CreateSessionRequest>,
 ) -> Result<(StatusCode, Json<SessionView>), ApiError> {
+    let start = std::time::Instant::now();
+
     let user_id = user_id_from_principal(&principal);
     let planned = {
         let registry = service.registry.read().await;
@@ -1431,6 +1453,8 @@ pub(crate) async fn create_session(
         .await;
     persist_state_logged(&service).await;
     let registry = service.registry.read().await;
+    crate::metrics::record_command_dispatch("create_session", start.elapsed().as_secs_f64());
+    tracing::info!(session_id = %record.session_id, "Session created");
     Ok((
         StatusCode::CREATED,
         Json(build_session_view(&service, &registry, record)),

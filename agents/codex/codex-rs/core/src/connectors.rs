@@ -193,19 +193,40 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_options_and_status(
     config: &Config,
     force_refetch: bool,
 ) -> anyhow::Result<AccessibleConnectorsStatus> {
-    // TODO: Wire callers that already own an EnvironmentManager into
-    // list_accessible_connectors_from_mcp_tools_with_environment_manager instead
-    // of constructing a temporary manager here.
-    let local_runtime_paths = ExecServerRuntimePaths::from_optional_paths(
-        config.codex_self_exe.clone(),
-        config.codex_linux_sandbox_exe.clone(),
-    )?;
-    let environment_manager =
-        EnvironmentManager::new(EnvironmentManagerArgs::new(local_runtime_paths)).await;
+    list_accessible_connectors_from_mcp_tools_with_options_status_and_manager(
+        config,
+        force_refetch,
+        None,
+    )
+    .await
+}
+
+pub async fn list_accessible_connectors_from_mcp_tools_with_options_status_and_manager(
+    config: &Config,
+    force_refetch: bool,
+    environment_manager: Option<&EnvironmentManager>,
+) -> anyhow::Result<AccessibleConnectorsStatus> {
+    let environment_manager = match environment_manager {
+        Some(em) => em,
+        None => {
+            let local_runtime_paths = ExecServerRuntimePaths::from_optional_paths(
+                config.codex_self_exe.clone(),
+                config.codex_linux_sandbox_exe.clone(),
+            )?;
+            let em =
+                EnvironmentManager::new(EnvironmentManagerArgs::new(local_runtime_paths)).await;
+            return list_accessible_connectors_from_mcp_tools_with_environment_manager(
+                config,
+                force_refetch,
+                &em,
+            )
+            .await;
+        }
+    };
     list_accessible_connectors_from_mcp_tools_with_environment_manager(
         config,
         force_refetch,
-        &environment_manager,
+        environment_manager,
     )
     .await
 }

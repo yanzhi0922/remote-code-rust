@@ -131,8 +131,17 @@ fn is_executable_file(path: &str) -> bool {
 
         #[cfg(windows)]
         {
-            // TODO(mbolin): Check against PATHEXT environment variable.
-            return metadata.is_file();
+            if !metadata.is_file() {
+                return false;
+            }
+            let ext = file_path.extension().and_then(|e| e.to_str()).unwrap_or("");
+            if ext.is_empty() {
+                return false;
+            }
+            let pathext = std::env::var("PATHEXT").unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC".to_string());
+            pathext
+                .split(';')
+                .any(|pathevt| pathevt.eq_ignore_ascii_case(&format!(".{ext}")))
         }
     }
 

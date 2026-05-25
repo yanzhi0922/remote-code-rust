@@ -110,8 +110,6 @@ pub(super) async fn install_agent(agent_type: String) -> std::result::Result<(),
     let install_dir = agents_base_dir()
         .join(agent_type_dir_name(&parsed))
         .join("bin");
-    std::fs::create_dir_all(&install_dir).map_err(|e| format!("创建安装目录失败: {e}"))?;
-
     let target_path = install_dir.join(agent_binary_name(&parsed));
 
     // Download.
@@ -133,15 +131,20 @@ pub(super) async fn install_agent(agent_type: String) -> std::result::Result<(),
         return Err("下载内容为空".to_owned());
     }
 
-    std::fs::write(&target_path, &bytes).map_err(|e| format!("写入文件失败: {e}"))?;
-
-    // Set executable permissions on Unix.
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&target_path, std::fs::Permissions::from_mode(0o755))
-            .map_err(|e| format!("设置执行权限失败: {e}"))?;
-    }
+    // Blocking filesystem operations — offload to a dedicated thread.
+    tokio::task::spawn_blocking(move || -> std::result::Result<(), String> {
+        std::fs::create_dir_all(&install_dir).map_err(|e| format!("创建安装目录失败: {e}"))?;
+        std::fs::write(&target_path, &bytes).map_err(|e| format!("写入文件失败: {e}"))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&target_path, std::fs::Permissions::from_mode(0o755))
+                .map_err(|e| format!("设置执行权限失败: {e}"))?;
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|e| format!("install task failed: {e}"))??;
 
     Ok(())
 }

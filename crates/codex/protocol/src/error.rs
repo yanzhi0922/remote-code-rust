@@ -61,6 +61,11 @@ pub enum SandboxErr {
     /// Error from linux landlock
     #[error("Landlock was not able to fully enforce all sandbox rules")]
     LandlockRestrict,
+
+    /// Unsupported CPU architecture for seccomp BPF filter generation
+    #[cfg(target_os = "linux")]
+    #[error("unsupported architecture for seccomp filter: {0}")]
+    UnsupportedArch(String),
 }
 
 #[derive(Error, Debug)]

@@ -2495,16 +2495,13 @@ impl InitialHistory {
     }
 
     pub fn get_base_instructions(&self) -> Option<BaseInstructions> {
-        // TODO: SessionMeta should (in theory) always be first in the history, so we can probably only check the first item?
         match self {
             InitialHistory::New | InitialHistory::Cleared => None,
-            InitialHistory::Resumed(resumed) => {
-                resumed.history.iter().find_map(|item| match item {
-                    RolloutItem::SessionMeta(meta_line) => meta_line.meta.base_instructions.clone(),
-                    _ => None,
-                })
-            }
-            InitialHistory::Forked(items) => items.iter().find_map(|item| match item {
+            InitialHistory::Resumed(resumed) => resumed.history.first().and_then(|item| match item {
+                RolloutItem::SessionMeta(meta_line) => meta_line.meta.base_instructions.clone(),
+                _ => None,
+            }),
+            InitialHistory::Forked(items) => items.first().and_then(|item| match item {
                 RolloutItem::SessionMeta(meta_line) => meta_line.meta.base_instructions.clone(),
                 _ => None,
             }),
@@ -2514,13 +2511,11 @@ impl InitialHistory {
     pub fn get_dynamic_tools(&self) -> Option<Vec<DynamicToolSpec>> {
         match self {
             InitialHistory::New | InitialHistory::Cleared => None,
-            InitialHistory::Resumed(resumed) => {
-                resumed.history.iter().find_map(|item| match item {
-                    RolloutItem::SessionMeta(meta_line) => meta_line.meta.dynamic_tools.clone(),
-                    _ => None,
-                })
-            }
-            InitialHistory::Forked(items) => items.iter().find_map(|item| match item {
+            InitialHistory::Resumed(resumed) => resumed.history.first().and_then(|item| match item {
+                RolloutItem::SessionMeta(meta_line) => meta_line.meta.dynamic_tools.clone(),
+                _ => None,
+            }),
+            InitialHistory::Forked(items) => items.first().and_then(|item| match item {
                 RolloutItem::SessionMeta(meta_line) => meta_line.meta.dynamic_tools.clone(),
                 _ => None,
             }),

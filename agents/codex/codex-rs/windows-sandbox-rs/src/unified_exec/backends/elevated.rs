@@ -40,6 +40,11 @@ pub(crate) async fn spawn_windows_sandbox_session_elevated(
         &command,
     )?;
 
+    // Strip sensitive environment variables (cloud credentials, API keys,
+    // tokens, passwords) before sending to the elevated runner. This prevents
+    // the IPC message from ever carrying credential material.
+    crate::env::strip_sensitive_env_vars(&mut env_map);
+
     let spawn_request = SpawnRequest {
         command: command.clone(),
         cwd: cwd.to_path_buf(),

@@ -307,7 +307,7 @@ mod tests {
         let rt = tokio::runtime::Runtime::new().unwrap();
         let result = rt.block_on(handler.create_message(
             "test",
-            vec![],
+            &[],
             None,
             CreateMessageMetadata::default(),
         ));

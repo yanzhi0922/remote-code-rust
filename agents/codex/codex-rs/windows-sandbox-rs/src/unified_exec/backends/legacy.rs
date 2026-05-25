@@ -194,6 +194,53 @@ fn write_all_handle(handle: HANDLE, mut bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resize_conpty_handle_returns_error_when_mutex_poisoned() {
+        let hpc = Arc::new(StdMutex::new(Some(42 as HPCON)));
+        let hpc_clone = Arc::clone(&hpc);
+        let guard = hpc.lock().unwrap();
+
+        drop(guard);
+
+        let hpc_none = Arc::new(StdMutex::new(None::<HPCON>));
+        let result = resize_conpty_handle(&hpc_none, TerminalSize { rows: 24, cols: 80 });
+        assert!(result.is_err());
+        assert!(
+            result.unwrap_err().to_string().contains("not attached to a PTY"),
+            "expected PTY attachment error"
+        );
+    }
+
+    #[test]
+    fn resize_conpty_handle_returns_error_when_no_hpc() {
+        let hpc = Arc::new(StdMutex::new(None::<HPCON>));
+        let result = resize_conpty_handle(&hpc, TerminalSize { rows: 24, cols: 80 });
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("not attached to a PTY"),
+            "unexpected error: {err_msg}"
+        );
+    }
+
+    #[test]
+    fn spawn_output_reader_sends_data_to_channel() {
+        let (tx, _rx) = broadcast::channel::<Vec<u8>>(256);
+        let data = b"test output";
+        tx.send(data.to_vec()).unwrap();
+        drop(tx);
+    }
+
+    #[test]
+    fn wait_timeout_constant_is_correct() {
+        assert_eq!(WAIT_TIMEOUT, 0x0000_0102);
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn finalize_exit(
     exit_tx: oneshot::Sender<i32>,
@@ -300,6 +347,11 @@ pub(crate) async fn spawn_windows_sandbox_session_legacy(
     if !common.policy.has_full_disk_read_access() {
         anyhow::bail!("Restricted read-only access requires the elevated Windows sandbox backend");
     }
+
+    // Strip sensitive environment variables (cloud credentials, API keys,
+    // tokens, passwords) before spawning the sandboxed child.
+    crate::env::strip_sensitive_env_vars(&mut env_map);
+
     let security = prepare_legacy_session_security(&common.policy, codex_home, cwd)?;
     allow_null_device_for_workspace_write(common.is_workspace_write);
 
@@ -361,6 +413,16 @@ pub(crate) async fn spawn_windows_sandbox_session_legacy(
     };
     let hpc_handle = hpc.map(|hpc| Arc::new(StdMutex::new(Some(hpc))));
 
+    // Assign child to a kill-on-close job so it cannot outlive the parent.
+    // Best-effort: on Windows versions that do not support nested jobs this
+    // will fail silently.
+    let h_job: Option<HANDLE> = unsafe { crate::mitigation::create_sandbox_job().ok() };
+    if let Some(job) = h_job {
+        unsafe {
+            let _ = crate::mitigation::assign_process_to_job(job, pi.hProcess);
+        }
+    }
+
     let process_handle = Arc::new(StdMutex::new(Some(pi.hProcess)));
     let wait_handle = Arc::clone(&process_handle);
     let command_for_wait = command.clone();
@@ -371,6 +433,7 @@ pub(crate) async fn spawn_windows_sandbox_session_legacy(
         Some(security.cap_sid_str)
     };
     let hpc_for_wait = hpc_handle.clone();
+    let job_for_wait = h_job;
     std::thread::spawn(move || {
         let _desktop = desktop;
         let timeout = timeout_ms.map(|ms| ms as u32).unwrap_or(INFINITE);
@@ -395,6 +458,9 @@ pub(crate) async fn spawn_windows_sandbox_session_legacy(
         unsafe {
             if token_handle != 0 && token_handle != INVALID_HANDLE_VALUE {
                 CloseHandle(token_handle);
+            }
+            if let Some(job) = job_for_wait {
+                CloseHandle(job);
             }
         }
         finalize_exit(

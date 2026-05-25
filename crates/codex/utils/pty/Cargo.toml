@@ -4,8 +4,8 @@ license.workspace = true
 name = "codex-utils-pty"
 version.workspace = true
 
-[lints]
-workspace = true
+[lints.rust]
+unsafe_code = "allow"
 
 [dependencies]
 anyhow = { workspace = true }

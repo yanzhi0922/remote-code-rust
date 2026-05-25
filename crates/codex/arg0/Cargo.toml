@@ -8,8 +8,8 @@ license.workspace = true
 name = "codex_arg0"
 path = "src/lib.rs"
 
-[lints]
-workspace = true
+[lints.rust]
+unsafe_code = "allow"
 
 [dependencies]
 anyhow = { workspace = true }

@@ -231,6 +231,7 @@ struct ActiveNetworkApprovalCall {
 struct NetworkApprovalCallState {
     active_calls: IndexMap<String, Arc<ActiveNetworkApprovalCall>>,
     call_outcomes: HashMap<String, NetworkApprovalOutcome>,
+    host_attribution: HashMap<HostApprovalKey, String>,
 }
 
 pub(crate) struct NetworkApprovalService {
@@ -289,14 +290,24 @@ impl NetworkApprovalService {
 
     async fn resolve_single_active_call(&self) -> Option<Arc<ActiveNetworkApprovalCall>> {
         let calls = self.calls.lock().await;
-        // Blocked proxy requests are not attributed to a specific tool call. Only pick an owner
-        // when there is exactly one candidate; with concurrent calls, canceling one would be a guess.
-        // TODO: Carry blocked-request attribution so concurrent active calls can be handled safely.
         if calls.active_calls.len() == 1 {
             return calls.active_calls.values().next().cloned();
         }
 
         None
+    }
+
+    async fn resolve_call_by_host(&self, key: &HostApprovalKey) -> Option<Arc<ActiveNetworkApprovalCall>> {
+        let calls = self.calls.lock().await;
+        let registration_id = calls.host_attribution.get(key)?;
+        calls.active_calls.get(registration_id).cloned()
+    }
+
+    async fn record_host_attribution(&self, key: HostApprovalKey, registration_id: String) {
+        let mut calls = self.calls.lock().await;
+        if calls.active_calls.contains_key(&registration_id) {
+            calls.host_attribution.insert(key, registration_id);
+        }
     }
 
     async fn get_or_create_pending_approval(
@@ -319,6 +330,15 @@ impl NetworkApprovalService {
         };
         self.record_call_outcome(&owner_call.registration_id, outcome)
             .await;
+    }
+
+    async fn record_outcome_for_host(&self, key: &HostApprovalKey, outcome: NetworkApprovalOutcome) {
+        if let Some(owner_call) = self.resolve_call_by_host(key).await {
+            self.record_call_outcome(&owner_call.registration_id, outcome)
+                .await;
+            return;
+        }
+        self.record_outcome_for_single_active_call(outcome).await;
     }
 
     #[cfg(test)]
@@ -348,6 +368,7 @@ impl NetworkApprovalService {
 
     async fn remove_call(&self, registration_id: &str) -> Option<NetworkApprovalOutcome> {
         let mut calls = self.calls.lock().await;
+        calls.host_attribution.retain(|_, id| id != registration_id);
         calls.active_calls.shift_remove(registration_id);
         calls.call_outcomes.remove(registration_id)
     }
@@ -364,9 +385,23 @@ impl NetworkApprovalService {
         let Some(message) = denied_network_policy_message(&blocked) else {
             return;
         };
-
-        self.record_outcome_for_single_active_call(NetworkApprovalOutcome::DeniedByPolicy(message))
-            .await;
+        let outcome = NetworkApprovalOutcome::DeniedByPolicy(message);
+        if let Some(port) = blocked.port {
+            let protocol_label = match blocked.protocol.as_str() {
+                p if p.eq_ignore_ascii_case("https") || p.eq_ignore_ascii_case("https-connect") => "https",
+                p if p.eq_ignore_ascii_case("socks5-tcp") => "socks5-tcp",
+                p if p.eq_ignore_ascii_case("socks5-udp") => "socks5-udp",
+                _ => "http",
+            };
+            let key = HostApprovalKey {
+                host: blocked.host.to_ascii_lowercase(),
+                protocol: protocol_label,
+                port,
+            };
+            self.record_outcome_for_host(&key, outcome).await;
+        } else {
+            self.record_outcome_for_single_active_call(outcome).await;
+        }
     }
 
     async fn active_turn_context(
@@ -455,6 +490,10 @@ impl NetworkApprovalService {
         }
 
         let owner_call = self.resolve_single_active_call().await;
+        if let Some(ref call) = owner_call {
+            self.record_host_attribution(key.clone(), call.registration_id.clone())
+                .await;
+        }
         let network_approval_context = NetworkApprovalContext {
             host: request.host.clone(),
             protocol,

@@ -7,8 +7,8 @@ license.workspace = true
 [lib]
 path = "lib.rs"
 
-[lints]
-workspace = true
+[lints.rust]
+unsafe_code = "allow"
 
 [dependencies]
 anyhow = { workspace = true }

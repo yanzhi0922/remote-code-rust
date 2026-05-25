@@ -7231,12 +7231,18 @@ pub struct CommandExecutionRequestApprovalParams {
 
 impl CommandExecutionRequestApprovalParams {
     pub fn strip_experimental_fields(&mut self) {
-        // TODO: Avoid hardcoding individual experimental fields here.
-        // We need a generic outbound compatibility design for stripping or
-        // otherwise handling experimental server->client payloads.
-        self.additional_permissions = None;
+        for field in EXPERIMENTAL_FIELDS {
+            field(self);
+        }
     }
 }
+
+type FieldSetter = fn(&mut CommandExecutionRequestApprovalParams);
+
+const EXPERIMENTAL_FIELDS: &[FieldSetter] = &[
+    |s| s.additional_permissions = None,
+    |s| s.available_decisions = None,
+];
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]

@@ -2,6 +2,8 @@ use std::io;
 use std::os::fd::AsFd;
 use std::os::fd::AsRawFd;
 use std::os::fd::OwnedFd;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 
 use anyhow::Context as _;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -13,11 +15,18 @@ use crate::unix::escalate_protocol::EscalateRequest;
 use crate::unix::escalate_protocol::EscalateResponse;
 use crate::unix::escalate_protocol::SuperExecMessage;
 use crate::unix::escalate_protocol::SuperExecResult;
+use crate::unix::escalate_protocol::SuperExecSignal;
 use crate::unix::socket::AsyncDatagramSocket;
 use crate::unix::socket::AsyncSocket;
 
+static FD_TAKEN: AtomicBool = AtomicBool::new(false);
+
 fn get_escalate_client() -> anyhow::Result<AsyncDatagramSocket> {
-    // TODO: we should defensively require only calling this once, since AsyncSocket will take ownership of the fd.
+    if FD_TAKEN.swap(true, Ordering::SeqCst) {
+        return Err(anyhow::anyhow!(
+            "{ESCALATE_SOCKET_ENV_VAR} has already been taken; get_escalate_client must not be called more than once"
+        ));
+    }
     let client_fd = std::env::var(ESCALATE_SOCKET_ENV_VAR)?.parse::<i32>()?;
     if client_fd < 0 {
         return Err(anyhow::anyhow!(
@@ -76,8 +85,6 @@ pub async fn run_shell_escalation_execve_wrapper(
                 duplicate_fd_for_transfer(io::stderr(), "stderr")?,
             ];
 
-            // TODO: also forward signals over the super-exec socket
-
             client
                 .send_with_fds(
                     SuperExecMessage {
@@ -87,8 +94,39 @@ pub async fn run_shell_escalation_execve_wrapper(
                 )
                 .await
                 .context("failed to send SuperExecMessage")?;
-            let SuperExecResult { exit_code } = client.receive::<SuperExecResult>().await?;
-            Ok(exit_code)
+
+            {
+                use tokio::signal::unix::SignalKind;
+                let mut sigterm =
+                    tokio::signal::unix::signal(SignalKind::terminate()).context("SIGTERM")?;
+                let mut sigint =
+                    tokio::signal::unix::signal(SignalKind::interrupt()).context("SIGINT")?;
+                let mut sighup =
+                    tokio::signal::unix::signal(SignalKind::hangup()).context("SIGHUP")?;
+
+                loop {
+                    tokio::select! {
+                        result = client.receive::<SuperExecResult>() => {
+                            break result.map(|SuperExecResult { exit_code }| exit_code);
+                        }
+                        _ = sigterm.recv() => {
+                            let _ = client
+                                .send(SuperExecSignal { signal: libc::SIGTERM })
+                                .await;
+                        }
+                        _ = sigint.recv() => {
+                            let _ = client
+                                .send(SuperExecSignal { signal: libc::SIGINT })
+                                .await;
+                        }
+                        _ = sighup.recv() => {
+                            let _ = client
+                                .send(SuperExecSignal { signal: libc::SIGHUP })
+                                .await;
+                        }
+                    }
+                }
+            }
         }
         EscalateAction::Run => {
             // We avoid std::process::Command here because we want to be as transparent as

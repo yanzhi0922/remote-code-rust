@@ -84,6 +84,12 @@ async fn main() -> Result<()> {
             if !status.ok {
                 bail!(status.issues.join("; "));
             }
+
+            // Initialise the Prometheus metric registry so all metrics appear
+            // in the /metrics output from the first scrape, even if no
+            // observations have been recorded yet.
+            let _ = rc_control_plane::metrics::encode_metrics();
+
             let bind = config.bind;
             let service = ControlPlaneService::new(config.clone(), env!("CARGO_PKG_VERSION"));
 
@@ -97,11 +103,18 @@ async fn main() -> Result<()> {
                 &config.quic_key_pem,
             ) {
                 if !quic_disabled() {
-                    let cert_pem = std::fs::read(cert_path).with_context(|| {
-                        format!("reading QUIC cert from {}", cert_path.display())
-                    })?;
-                    let key_pem = std::fs::read(key_path)
-                        .with_context(|| format!("reading QUIC key from {}", key_path.display()))?;
+                    let cert_path = cert_path.clone();
+                    let key_path = key_path.clone();
+                    let (cert_pem, key_pem) = tokio::task::spawn_blocking(move || -> Result<_> {
+                        let cert_pem = std::fs::read(&cert_path).with_context(|| {
+                            format!("reading QUIC cert from {}", cert_path.display())
+                        })?;
+                        let key_pem = std::fs::read(&key_path)
+                            .with_context(|| format!("reading QUIC key from {}", key_path.display()))?;
+                        Ok((cert_pem, key_pem))
+                    })
+                    .await
+                    .context("QUIC cert/key read task panicked")??;
                     let quic_config = QuicServerConfig {
                         listen_addr: *quic_bind,
                         cert_pem,

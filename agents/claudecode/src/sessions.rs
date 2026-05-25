@@ -247,14 +247,12 @@ fn run_session_rewind(store: &SessionStore, args: SessionRewindArgs) -> Result<(
         // For now, checkpoints are stored as named events with event_type "checkpoint".
         let mut found_idx: Option<usize> = None;
         for (i, event) in events.iter().enumerate().rev() {
-            if event.event_type == "checkpoint" {
-                if let Some(ref payload) = event.payload {
-                    if payload.get("name").and_then(|v| v.as_str()) == Some(_cp.as_str()) {
+            if event.event_type == "checkpoint"
+                && let Some(ref payload) = event.payload
+                    && payload.get("name").and_then(|v| v.as_str()) == Some(_cp.as_str()) {
                         found_idx = Some(i + 1); // keep including this event
                         break;
                     }
-                }
-            }
         }
         match found_idx {
             Some(idx) => idx,
@@ -287,7 +285,6 @@ fn run_session_rewind(store: &SessionStore, args: SessionRewindArgs) -> Result<(
     };
 
     let kept: Vec<_> = events.into_iter().take(truncate_at).collect();
-    let removed_count = kept.len(); // Will be computed after
     let total = store.load_events(args.session_id)?.len();
     let removed = total - kept.len();
 

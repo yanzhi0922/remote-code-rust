@@ -4,6 +4,7 @@ use axum::extract::ws::{Message, WebSocket};
 use tokio::sync::broadcast;
 use uuid::Uuid;
 
+use crate::metrics;
 use crate::types::{TimelineEvent, TimelineEventKind};
 
 // ---------------------------------------------------------------------------
@@ -17,10 +18,12 @@ pub(crate) async fn serve_session_event_stream(
     session_id: Uuid,
     kind: Option<TimelineEventKind>,
 ) {
+    metrics::ws_connect("session_events");
     serve_filtered_event_stream(socket, subscription, backlog, move |event| {
         event.session_id == Some(session_id) && crate::helpers::event_matches_kind(event, kind)
     })
     .await;
+    metrics::ws_disconnect("session_events");
 }
 
 pub(crate) async fn serve_runner_event_stream(
@@ -30,11 +33,13 @@ pub(crate) async fn serve_runner_event_stream(
     runner_id: String,
     kind: Option<TimelineEventKind>,
 ) {
+    metrics::ws_connect("runner_events");
     serve_filtered_event_stream(socket, subscription, backlog, move |event| {
         event.runner_id.as_deref() == Some(runner_id.as_str())
             && crate::helpers::event_matches_kind(event, kind)
     })
     .await;
+    metrics::ws_disconnect("runner_events");
 }
 
 pub(crate) async fn serve_runner_approval_stream(
@@ -44,11 +49,13 @@ pub(crate) async fn serve_runner_approval_stream(
     runner_id: String,
     kind: Option<TimelineEventKind>,
 ) {
+    metrics::ws_connect("runner_approvals");
     serve_filtered_event_stream(socket, subscription, backlog, move |event| {
         event.runner_id.as_deref() == Some(runner_id.as_str())
             && crate::helpers::approval_event_matches(event, kind)
     })
     .await;
+    metrics::ws_disconnect("runner_approvals");
 }
 
 pub(crate) async fn serve_session_approval_stream(
@@ -58,10 +65,12 @@ pub(crate) async fn serve_session_approval_stream(
     session_id: Uuid,
     kind: Option<TimelineEventKind>,
 ) {
+    metrics::ws_connect("session_approvals");
     serve_filtered_event_stream(socket, subscription, backlog, move |event| {
         event.session_id == Some(session_id) && crate::helpers::approval_event_matches(event, kind)
     })
     .await;
+    metrics::ws_disconnect("session_approvals");
 }
 
 pub(crate) async fn serve_filtered_event_stream<F>(

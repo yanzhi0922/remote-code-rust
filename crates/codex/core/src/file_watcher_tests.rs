@@ -496,7 +496,7 @@ async fn spawn_event_loop_filters_non_mutating_events() {
     let (subscriber, rx) = watcher.add_subscriber();
     let _registration = subscriber.register_path(path("/tmp/skills"), /*recursive*/ true);
     let mut rx = ThrottledWatchReceiver::new(rx, TEST_THROTTLE_INTERVAL);
-    let (raw_tx, raw_rx) = mpsc::unbounded_channel();
+    let (raw_tx, raw_rx) = mpsc::channel(64);
     watcher.spawn_event_loop_for_test(raw_rx);
 
     raw_tx
@@ -504,6 +504,7 @@ async fn spawn_event_loop_filters_non_mutating_events() {
             EventKind::Access(AccessKind::Open(AccessMode::Any)),
             vec![path("/tmp/skills/SKILL.md")],
         )))
+        .await
         .expect("send access event");
     let blocked = timeout(TEST_THROTTLE_INTERVAL, rx.recv()).await;
     assert_eq!(blocked.is_err(), true);
@@ -513,6 +514,7 @@ async fn spawn_event_loop_filters_non_mutating_events() {
             EventKind::Create(CreateKind::File),
             vec![path("/tmp/skills/SKILL.md")],
         )))
+        .await
         .expect("send create event");
     let event = timeout(Duration::from_secs(1), rx.recv())
         .await

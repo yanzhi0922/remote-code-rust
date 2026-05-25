@@ -9,7 +9,7 @@ use uuid::Uuid;
 use claude_server::ws::protocol::{AgentStatus, ClientMessage, ServerMessage};
 
 /// Maximum streaming buffer size (1 MB).  Truncates oldest data when exceeded.
-const MAX_STREAMING_BUFFER: usize = 1 * 1024 * 1024;
+const MAX_STREAMING_BUFFER: usize = 1024 * 1024;
 
 type WsSink = futures::stream::SplitSink<
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,

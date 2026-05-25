@@ -106,6 +106,13 @@ fn prepare_spawn_context_common(
 
     normalize_null_device_env(env_map);
     ensure_non_interactive_pager(env_map);
+
+    // Strip sensitive environment variables (cloud credentials, API keys,
+    // tokens, passwords) as a defense-in-depth measure at the common entry
+    // point. Individual backend paths also call this, so the stripping is
+    // idempotent — calling it twice does not change the result.
+    crate::env::strip_sensitive_env_vars(env_map);
+
     if inherit_path {
         inherit_path_env(env_map);
     }

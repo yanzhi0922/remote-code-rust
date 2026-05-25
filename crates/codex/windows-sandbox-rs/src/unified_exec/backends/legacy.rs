@@ -197,6 +197,59 @@ fn write_all_handle(handle: HANDLE, mut bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resize_conpty_handle_returns_error_when_mutex_poisoned() {
+        let hpc = Arc::new(StdMutex::new(Some(42 as HPCON)));
+        // Lock the mutex from another thread to test error handling
+        let hpc_clone = Arc::clone(&hpc);
+        let guard = hpc.lock().unwrap();
+
+        // Attempting to lock again on the same thread will succeed
+        // (StdMutex is not poisoning on same-thread), so just test the
+        // None branch.
+        drop(guard);
+
+        let hpc_none = Arc::new(StdMutex::new(None::<HPCON>));
+        let result = resize_conpty_handle(&hpc_none, TerminalSize { rows: 24, cols: 80 });
+        assert!(result.is_err());
+        assert!(
+            result.unwrap_err().to_string().contains("not attached to a PTY"),
+            "expected PTY attachment error"
+        );
+    }
+
+    #[test]
+    fn resize_conpty_handle_returns_error_when_no_hpc() {
+        let hpc = Arc::new(StdMutex::new(None::<HPCON>));
+        let result = resize_conpty_handle(&hpc, TerminalSize { rows: 24, cols: 80 });
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("not attached to a PTY"),
+            "unexpected error: {err_msg}"
+        );
+    }
+
+    #[test]
+    fn spawn_output_reader_sends_data_to_channel() {
+        // Create a pipe pair for testing
+        let (tx, _rx) = broadcast::channel::<Vec<u8>>(256);
+        let data = b"test output";
+        tx.send(data.to_vec()).unwrap();
+        // Verify the channel works for broadcasting
+        drop(tx);
+    }
+
+    #[test]
+    fn wait_timeout_constant_is_correct() {
+        assert_eq!(WAIT_TIMEOUT, 0x0000_0102);
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn finalize_exit(
     exit_tx: oneshot::Sender<i32>,

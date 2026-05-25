@@ -82,9 +82,20 @@ pub(crate) async fn repl_tool(input: &Value, context: &ToolExecutionContext) -> 
             // network, and OS resources.  A future improvement should sandbox
             // execution (e.g. via WASM, a container, or seccomp).
             let tmp_dir = context.cwd.join(".remote-code-rust").join("tmp");
-            std::fs::create_dir_all(&tmp_dir)?;
             let src_path = tmp_dir.join("repl_tmp.rs");
-            std::fs::write(&src_path, code)?;
+            {
+                let tmp_dir = tmp_dir.clone();
+                let src_path = src_path.clone();
+                let code = code.to_owned();
+                tokio::task::spawn_blocking(move || -> std::io::Result<()> {
+                    std::fs::create_dir_all(&tmp_dir)?;
+                    std::fs::write(&src_path, &code)?;
+                    Ok(())
+                })
+                .await
+                .map_err(|e| anyhow!("Rust REPL setup task join error: {e}"))?
+                .map_err(|e| anyhow!("Rust REPL setup failed: {e}"))?;
+            }
 
             // Use tokio::process::Command to avoid blocking the runtime
             let compile_output = Command::new("rustc")

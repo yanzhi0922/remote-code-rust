@@ -10,9 +10,6 @@ use crate::*;
 ///
 /// All git commands are spawned with stdin set to `/dev/null` to prevent
 /// credential prompts or interactive prompts from blocking the process.
-///
-/// TODO: Add a wall-clock timeout (e.g. 30 s) using a watchdog thread so
-/// that hung git processes cannot block the agent indefinitely.
 fn git_command(args: &[&str], cwd: &Path) -> std::process::Command {
     let mut cmd = std::process::Command::new("git");
     cmd.args(args)

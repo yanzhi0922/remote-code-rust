@@ -14,6 +14,7 @@ pub use codex_core::connectors::list_accessible_connectors_from_mcp_tools;
 pub use codex_core::connectors::list_accessible_connectors_from_mcp_tools_with_environment_manager;
 pub use codex_core::connectors::list_accessible_connectors_from_mcp_tools_with_options;
 pub use codex_core::connectors::list_accessible_connectors_from_mcp_tools_with_options_and_status;
+pub use codex_core::connectors::list_accessible_connectors_from_mcp_tools_with_options_status_and_manager;
 pub use codex_core::connectors::list_cached_accessible_connectors_from_mcp_tools;
 pub use codex_core::connectors::with_app_enabled_state;
 use codex_core_plugins::PluginsManager;

@@ -2525,6 +2525,12 @@ pub(crate) async fn run_prompt_with_query_engine_compat_overrides(
         },
         shared.latest_streaming_usage.lock().await.clone(),
     );
+    crate::agent_metrics::record_token_usage(
+        usage.input_tokens,
+        usage.output_tokens,
+        usage.cache_read_input_tokens,
+        usage.cache_creation_input_tokens,
+    );
     let total_tool_calls = conversation
         .iter()
         .map(|entry| entry.tool_calls.len())
@@ -2579,6 +2585,7 @@ pub(crate) async fn run_prompt_with_query_engine_compat_overrides(
                     }),
                 )?;
             }
+            crate::agent_metrics::record_prompt_latency(started.elapsed().as_secs_f64());
             Ok(outcome)
         }
         Err(claude_query_engine::EngineError::Stopped(reason))
@@ -2949,7 +2956,7 @@ mod tests {
             .name("query-engine-compat-test".to_owned())
             .stack_size(16 * 1024 * 1024)
             .spawn(move || {
-                let rt = tokio::runtime::Builder::new_current_thread()
+                let rt = tokio::runtime::Builder::new_multi_thread()
                     .enable_all()
                     .build()
                     .expect("tokio runtime");
@@ -3465,7 +3472,7 @@ mod tests {
 
         let first = super::runtime_mcp_session_observation(&config);
         {
-            let mut snapshot = first.lock().expect("snapshot lock");
+            let mut snapshot = first.lock();
             let server = snapshot
                 .servers
                 .first_mut()
@@ -3485,7 +3492,7 @@ mod tests {
 
         let second = super::runtime_mcp_session_observation(&config);
         assert!(Arc::ptr_eq(&first, &second));
-        let second_snapshot = second.lock().expect("snapshot lock").clone();
+        let second_snapshot = second.lock().clone();
         assert_eq!(
             second_snapshot.servers[0].status,
             claude_ui_bridge::UiRuntimeMcpServerStatus::Connected
@@ -3570,7 +3577,7 @@ mod tests {
         assert!(text.contains("Use Context7 for API and library docs."));
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn runtime_mcp_list_changed_updates_session_snapshot_and_catalog_invalidation() {
         let _runtime_policy_guard = RUNTIME_POLICY_TEST_MUTEX
             .get_or_init(|| AsyncMutex::new(()))
@@ -3588,7 +3595,6 @@ mod tests {
         let observation = super::runtime_mcp_session_observation(&config);
         let discovered_entry = observation
             .lock()
-            .expect("snapshot")
             .servers
             .first()
             .expect("server")
@@ -3612,7 +3618,7 @@ mod tests {
         clear_runtime_mcp_catalog_cache().await;
 
         {
-            let mut snapshot = observation.lock().expect("snapshot");
+            let mut snapshot = observation.lock();
             let server = snapshot.servers.first_mut().expect("server");
             server.status = claude_ui_bridge::UiRuntimeMcpServerStatus::Connected;
             server.inspection = Some(McpServerInspection {
@@ -3627,7 +3633,7 @@ mod tests {
             });
         }
 
-        let initial_observation = observation.lock().expect("snapshot").clone();
+        let initial_observation = observation.lock().clone();
         let initial_entry = with_runtime_mcp_observation_provider(
             live_mcp_observation_provider(initial_observation),
             async { build_mcp_instructions_delta_entry(&[]).await },
@@ -3650,7 +3656,7 @@ mod tests {
         )
         .await;
         {
-            let snapshot = observation.lock().expect("snapshot");
+            let snapshot = observation.lock();
             assert_eq!(
                 snapshot.servers[0].status,
                 claude_ui_bridge::UiRuntimeMcpServerStatus::Connected,
@@ -3673,7 +3679,7 @@ mod tests {
         )
         .await;
         {
-            let snapshot = observation.lock().expect("snapshot");
+            let snapshot = observation.lock();
             assert_eq!(
                 snapshot.servers[0].status,
                 claude_ui_bridge::UiRuntimeMcpServerStatus::Failed
@@ -4187,7 +4193,7 @@ while True:
         }
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn compat_run_persists_basic_mock_result() {
         let (_tempdir, config, store) = mock_config_and_store();
         let discovery = RuntimeHookDiscovery::default();
@@ -4261,7 +4267,7 @@ while True:
         );
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn compat_run_reinjects_critical_system_reminder_before_agent_prompt() {
         let (_tempdir, config, store) = mock_config_and_store();
         let discovery = RuntimeHookDiscovery::default();
@@ -4291,7 +4297,7 @@ while True:
         .await
         .expect("compat run");
 
-        let calls = backend.conversations.lock().expect("recording lock");
+        let calls = backend.conversations.lock().unwrap();
         let first_call = calls.first().expect("provider call");
         let reminder_index = first_call
             .iter()
@@ -4307,7 +4313,7 @@ while True:
         assert!(reminder_index < prompt_index);
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn compat_run_reinjects_critical_system_reminder_on_each_provider_turn() {
         let (_tempdir, config, store) = mock_config_and_store();
         let discovery = RuntimeHookDiscovery::default();
@@ -4337,7 +4343,7 @@ while True:
         .await
         .expect("compat run");
 
-        let calls = backend.conversations.lock().expect("recording lock");
+        let calls = backend.conversations.lock().unwrap();
         assert!(calls.len() >= 2, "expected a tool round-trip");
         for call in calls.iter().take(2) {
             let reminder_count = call
@@ -4351,7 +4357,7 @@ while True:
         }
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn compat_run_omits_claude_md_and_git_status_for_child_overrides() {
         let (_tempdir, config, store) = mock_config_and_store();
         fs::write(config.cwd.join("CLAUDE.md"), "Follow project rules.").expect("claude md");
@@ -4384,7 +4390,7 @@ while True:
         .await
         .expect("compat run");
 
-        let calls = backend.conversations.lock().expect("recording lock");
+        let calls = backend.conversations.lock().unwrap();
         let first_call = calls.first().expect("provider call");
         let user_context = first_call
             .iter()
@@ -4404,7 +4410,7 @@ while True:
         assert!(!system_entry.text.contains("gitStatus:"));
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn compat_run_includes_coordinator_worker_tools_context_in_user_reminder() {
         let _coordinator_mode = CoordinatorModeTestGuard::enter(
             claude_agents::coordinator::CoordinatorMode::Coordinator,
@@ -4435,7 +4441,7 @@ while True:
         .await
         .expect("compat run");
 
-        let calls = backend.conversations.lock().expect("recording lock");
+        let calls = backend.conversations.lock().unwrap();
         let first_call = calls.first().expect("provider call");
         let user_context = first_call
             .iter()
@@ -4517,7 +4523,7 @@ while True:
             .expect("thread join");
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn compat_run_ephemeral_execution_skips_session_and_transcript_persistence() {
         let (tempdir, config, store) = mock_config_and_store();
         let discovery = RuntimeHookDiscovery::default();
@@ -4570,7 +4576,7 @@ while True:
         assert_eq!(after_conversation.len(), before_conversation.len());
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn no_persist_forked_query_uses_snapshot_prompt_and_user_context() {
         let (tempdir, config, store) = mock_config_and_store();
         let discovery = RuntimeHookDiscovery::default();
@@ -4610,7 +4616,7 @@ while True:
                 .iter()
                 .any(|entry| entry.role == ConversationRole::Assistant && entry.text == "recorded")
         );
-        let calls = backend.conversations.lock().expect("recording lock");
+        let calls = backend.conversations.lock().unwrap();
         let first_call = calls.first().expect("provider call");
         let system_entry = first_call
             .iter()
@@ -5156,7 +5162,7 @@ while True:
         )));
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn compat_run_reuses_caller_backend_for_streaming_event_sink_path() {
         let (_tempdir, mut config, store) = mock_config_and_store();
         config.include_partial_messages = true;
@@ -5206,7 +5212,7 @@ while True:
         )));
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn compat_run_uses_streaming_backend_for_print_mode_without_event_sink() {
         let (_tempdir, mut config, store) = mock_config_and_store();
         config.print_mode = true;
@@ -5236,7 +5242,7 @@ while True:
         assert_eq!(backend.complete_streaming_calls.load(Ordering::SeqCst), 1);
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn compat_run_persists_latest_streaming_usage_on_error() {
         let (_tempdir, mut config, store) = mock_config_and_store();
         config.include_partial_messages = true;

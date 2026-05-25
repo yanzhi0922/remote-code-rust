@@ -270,7 +270,7 @@ pub(super) fn trim_opt(value: Option<String>) -> Option<String> {
         .filter(|v| !v.is_empty())
 }
 
-fn parse_toml_scalar(raw: &str) -> TomlValue {
+pub(super) fn parse_toml_scalar(raw: &str) -> TomlValue {
     // Security: wrap the raw value as a quoted TOML string to prevent TOML
     // injection. The previous approach of `format!("_x_ = {raw}")` allowed a
     // crafted value like `x = 1\n_y_ = 2` to inject extra TOML keys/values.
@@ -294,7 +294,7 @@ fn toml_string(value: &str) -> String {
     serde_json::to_string(value).unwrap_or_else(|_| "\"\"".to_string())
 }
 
-fn json_to_toml(value: serde_json::Value) -> anyhow::Result<TomlValue> {
+pub(super) fn json_to_toml(value: serde_json::Value) -> anyhow::Result<TomlValue> {
     match value {
         serde_json::Value::Null => Ok(TomlValue::String(String::new())),
         serde_json::Value::Bool(v) => Ok(TomlValue::Boolean(v)),
@@ -324,5 +324,209 @@ fn json_to_toml(value: serde_json::Value) -> anyhow::Result<TomlValue> {
             }
             Ok(TomlValue::Table(table))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    // -- parse_approval_policy tests --
+
+    #[test]
+    fn parse_approval_policy_untrusted_aliases() {
+        assert_eq!(
+            parse_approval_policy("untrusted").unwrap(),
+            AskForApproval::UnlessTrusted
+        );
+        assert_eq!(
+            parse_approval_policy("unless-trusted").unwrap(),
+            AskForApproval::UnlessTrusted
+        );
+        assert_eq!(
+            parse_approval_policy("unless_trusted").unwrap(),
+            AskForApproval::UnlessTrusted
+        );
+    }
+
+    #[test]
+    fn parse_approval_policy_on_failure_aliases() {
+        assert_eq!(
+            parse_approval_policy("on-failure").unwrap(),
+            AskForApproval::OnFailure
+        );
+        assert_eq!(
+            parse_approval_policy("on_failure").unwrap(),
+            AskForApproval::OnFailure
+        );
+    }
+
+    #[test]
+    fn parse_approval_policy_on_request_aliases() {
+        assert_eq!(
+            parse_approval_policy("on-request").unwrap(),
+            AskForApproval::OnRequest
+        );
+    }
+
+    #[test]
+    fn parse_approval_policy_never() {
+        assert_eq!(
+            parse_approval_policy("never").unwrap(),
+            AskForApproval::Never
+        );
+    }
+
+    #[test]
+    fn parse_approval_policy_unsupported_returns_error() {
+        assert!(parse_approval_policy("always").is_err());
+        assert!(parse_approval_policy("").is_err());
+    }
+
+    #[test]
+    fn parse_approval_policy_trims_whitespace() {
+        assert_eq!(
+            parse_approval_policy("  untrusted  ").unwrap(),
+            AskForApproval::UnlessTrusted
+        );
+    }
+
+    // -- parse_sandbox_mode tests --
+
+    #[test]
+    fn parse_sandbox_mode_read_only_aliases() {
+        assert_eq!(
+            parse_sandbox_mode("read-only").unwrap(),
+            codex_app_server_protocol::SandboxMode::ReadOnly
+        );
+        assert_eq!(
+            parse_sandbox_mode("readonly").unwrap(),
+            codex_app_server_protocol::SandboxMode::ReadOnly
+        );
+    }
+
+    #[test]
+    fn parse_sandbox_mode_workspace_write_aliases() {
+        assert_eq!(
+            parse_sandbox_mode("workspace-write").unwrap(),
+            codex_app_server_protocol::SandboxMode::WorkspaceWrite
+        );
+    }
+
+    #[test]
+    fn parse_sandbox_mode_danger_full_access_aliases() {
+        assert_eq!(
+            parse_sandbox_mode("danger-full-access").unwrap(),
+            codex_app_server_protocol::SandboxMode::DangerFullAccess
+        );
+        assert_eq!(
+            parse_sandbox_mode("none").unwrap(),
+            codex_app_server_protocol::SandboxMode::DangerFullAccess
+        );
+    }
+
+    #[test]
+    fn parse_sandbox_mode_unsupported_returns_error() {
+        assert!(parse_sandbox_mode("jail").is_err());
+    }
+
+    // -- trim_opt tests --
+
+    #[test]
+    fn trim_opt_non_empty_after_trim() {
+        assert_eq!(trim_opt(Some("  hello  ".into())), Some("hello".into()));
+    }
+
+    #[test]
+    fn trim_opt_empty_after_trim_returns_none() {
+        assert_eq!(trim_opt(Some("   ".into())), None);
+    }
+
+    #[test]
+    fn trim_opt_empty_string_returns_none() {
+        assert_eq!(trim_opt(Some("".into())), None);
+    }
+
+    #[test]
+    fn trim_opt_none_returns_none() {
+        assert_eq!(trim_opt(None), None);
+    }
+
+    // -- json_to_toml tests --
+
+    #[test]
+    fn json_to_toml_primitives() {
+        assert_eq!(json_to_toml(json!(42)).unwrap(), TomlValue::Integer(42));
+        assert_eq!(json_to_toml(json!(true)).unwrap(), TomlValue::Boolean(true));
+        assert_eq!(json_to_toml(json!("hello")).unwrap(), TomlValue::String("hello".into()));
+        assert_eq!(json_to_toml(json!(3.14)).unwrap(), TomlValue::Float(3.14));
+    }
+
+    #[test]
+    fn json_to_toml_null_becomes_empty_string() {
+        assert_eq!(json_to_toml(json!(null)).unwrap(), TomlValue::String(String::new()));
+    }
+
+    #[test]
+    fn json_to_toml_array() {
+        let result = json_to_toml(json!([1, 2, 3])).unwrap();
+        assert!(matches!(result, TomlValue::Array(arr) if arr.len() == 3));
+    }
+
+    #[test]
+    fn json_to_toml_object_skips_null_values() {
+        let result = json_to_toml(json!({"a": 1, "b": null, "c": "x"})).unwrap();
+        match result {
+            TomlValue::Table(table) => {
+                assert_eq!(table.len(), 2);
+                assert!(table.contains_key("a"));
+                assert!(table.contains_key("c"));
+                assert!(!table.contains_key("b"));
+            }
+            other => panic!("expected table, got {other:?}"),
+        }
+    }
+
+    // -- parse_toml_scalar tests --
+
+    #[test]
+    fn parse_toml_scalar_simple_string() {
+        let result = parse_toml_scalar("hello");
+        assert!(matches!(result, TomlValue::String(s) if s == "hello"));
+    }
+
+    #[test]
+    fn parse_toml_scalar_toml_injection_prevention() {
+        // Attempt to inject an extra key via newline
+        let result = parse_toml_scalar("x = 1\n_y_ = 2");
+        // Should be treated as a simple string, not parsed as TOML
+        assert!(matches!(result, TomlValue::String(_)));
+    }
+
+    // -- CodexAdapterOptions serde tests --
+
+    #[test]
+    fn codex_adapter_options_serde_roundtrip() {
+        let opts = CodexAdapterOptions {
+            cwd: "/tmp".into(),
+            model: Some("gpt-4".into()),
+            approval_policy: Some("on-failure".into()),
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&opts).unwrap();
+        let back: CodexAdapterOptions = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.cwd, PathBuf::from("/tmp"));
+        assert_eq!(back.model.as_deref(), Some("gpt-4"));
+        assert_eq!(back.approval_policy.as_deref(), Some("on-failure"));
+    }
+
+    #[test]
+    fn codex_adapter_options_defaults() {
+        let opts = CodexAdapterOptions::default();
+        assert!(opts.model.is_none());
+        assert!(opts.api_key.is_none());
+        assert!(opts.config_overrides.is_empty());
+        assert!(!opts.feedback_capture_enabled); // Default derive sets bool to false
     }
 }

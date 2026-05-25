@@ -86,3 +86,9 @@ pub struct SuperExecMessage {
 pub struct SuperExecResult {
     pub exit_code: i32,
 }
+
+/// The client sends this to forward a caught signal to the elevated process.
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub struct SuperExecSignal {
+    pub signal: i32,
+}

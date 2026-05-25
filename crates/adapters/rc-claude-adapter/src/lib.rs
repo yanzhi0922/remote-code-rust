@@ -919,3 +919,155 @@ impl Drop for ClaudeInProcessAdapter {
         self.drain_pending_permissions_sync();
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+    use std::sync::Arc;
+    use std::sync::Mutex as StdMutex;
+
+    use tokio::sync::{mpsc, oneshot};
+
+    use claude_permissions::PermissionDecision;
+    use rc_agent_protocol::events::UnifiedAgentEvent;
+
+    use super::{PendingPermission, emit_delegate_progress};
+
+    fn collect_events(
+        _tx: &mpsc::Sender<UnifiedAgentEvent>,
+        rx: &mut mpsc::Receiver<UnifiedAgentEvent>,
+    ) -> Vec<UnifiedAgentEvent> {
+        let mut events = Vec::new();
+        while let Ok(event) = rx.try_recv() {
+            events.push(event);
+        }
+        events
+    }
+
+    #[test]
+    fn emit_delegate_progress_unstructured_message_emits_tool_progress() {
+        let (tx, mut rx) = mpsc::channel(64);
+        emit_delegate_progress(&tx, "session-1", "doing some work");
+
+        let events = collect_events(&tx, &mut rx);
+        assert_eq!(events.len(), 1);
+        assert!(matches!(
+            &events[0],
+            UnifiedAgentEvent::ToolCallProgress { session_id, tool_name, progress }
+                if session_id == "session-1"
+                    && tool_name == "agent"
+                    && progress == "doing some work"
+        ));
+    }
+
+    #[test]
+    fn emit_delegate_progress_subtask_started_event() {
+        let (tx, mut rx) = mpsc::channel(64);
+        let message = r#"{"kind":"subtask_started","task_id":"t-1","description":"refactor auth","depth":0}"#;
+        emit_delegate_progress(&tx, "session-1", message);
+
+        let events = collect_events(&tx, &mut rx);
+        assert_eq!(events.len(), 1);
+        assert!(matches!(
+            &events[0],
+            UnifiedAgentEvent::SubtaskStarted { session_id, task_id, description }
+                if session_id == "session-1"
+                    && task_id == "t-1"
+                    && description == "refactor auth"
+        ));
+    }
+
+    #[test]
+    fn emit_delegate_progress_subtask_progress_event() {
+        let (tx, mut rx) = mpsc::channel(64);
+        let message = r#"{"kind":"subtask_progress","task_id":"t-2","turn":1,"max_turns":10,"summary":"50% done"}"#;
+        emit_delegate_progress(&tx, "session-1", message);
+
+        let events = collect_events(&tx, &mut rx);
+        assert_eq!(events.len(), 1);
+        assert!(matches!(
+            &events[0],
+            UnifiedAgentEvent::SubtaskProgress { session_id, task_id, progress }
+                if session_id == "session-1"
+                    && task_id == "t-2"
+                    && progress == "50% done"
+        ));
+    }
+
+    #[test]
+    fn emit_delegate_progress_subtask_completed_event() {
+        let (tx, mut rx) = mpsc::channel(64);
+        let message = r#"{"kind":"subtask_completed","task_id":"t-3","success":true,"output_preview":"ok","turns_used":1}"#;
+        emit_delegate_progress(&tx, "session-1", message);
+
+        let events = collect_events(&tx, &mut rx);
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            UnifiedAgentEvent::SubtaskCompleted { session_id, task_id, result } => {
+                assert_eq!(session_id, "session-1");
+                assert_eq!(task_id, "t-3");
+                assert_eq!(result["success"], true);
+                assert_eq!(result["output_preview"], "ok");
+            }
+            other => panic!("expected SubtaskCompleted, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn emit_delegate_progress_batch_progress_is_silently_ignored() {
+        let (tx, mut rx) = mpsc::channel(64);
+        let message = r#"{"kind":"batch_progress","total":5,"completed":2,"running":1}"#;
+        emit_delegate_progress(&tx, "session-1", message);
+
+        let events = collect_events(&tx, &mut rx);
+        assert!(events.is_empty(), "batch_progress should not emit a UnifiedAgentEvent");
+    }
+
+    #[test]
+    fn drain_pending_permissions_sends_deny_to_all_waiters() {
+        let pending_permissions: Arc<StdMutex<HashMap<String, PendingPermission>>> =
+            Arc::new(StdMutex::new(HashMap::new()));
+
+        let (response_tx1, response_rx1) = oneshot::channel();
+        let (response_tx2, response_rx2) = oneshot::channel();
+
+        {
+            let mut map = pending_permissions.lock().unwrap();
+            map.insert(
+                "req-1".into(),
+                PendingPermission { response_tx: response_tx1 },
+            );
+            map.insert(
+                "req-2".into(),
+                PendingPermission { response_tx: response_tx2 },
+            );
+        }
+
+        let mut map = pending_permissions.lock().unwrap();
+        for (_id, pending) in map.drain() {
+            let _ = pending
+                .response_tx
+                .send(PermissionDecision::deny("Adapter shutting down"));
+        }
+
+        let decision1 = response_rx1.blocking_recv().expect("should receive decision");
+        assert!(!decision1.allowed);
+
+        let decision2 = response_rx2.blocking_recv().expect("should receive decision");
+        assert!(!decision2.allowed);
+    }
+
+    #[test]
+    fn drain_on_empty_map_is_noop() {
+        let pending_permissions: Arc<StdMutex<HashMap<String, PendingPermission>>> =
+            Arc::new(StdMutex::new(HashMap::new()));
+
+        let mut map = pending_permissions.lock().unwrap();
+        let original_len = map.len();
+        for (_id, pending) in map.drain() {
+            let _ = pending.response_tx.send(PermissionDecision::deny("shutdown"));
+        }
+        assert_eq!(original_len, 0);
+        assert!(map.is_empty());
+    }
+}

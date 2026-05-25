@@ -218,6 +218,7 @@ struct TurnState {
 
 impl AnalyticsReducer {
     /// Remove all state associated with a connection to prevent unbounded map growth.
+    #[allow(dead_code)]
     pub(crate) fn connection_closed(&mut self, connection_id: u64) {
         self.connections.remove(&connection_id);
         // Remove threads whose connection_id matches.

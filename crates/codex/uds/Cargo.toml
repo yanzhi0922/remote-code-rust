@@ -8,8 +8,8 @@ license.workspace = true
 name = "codex_uds"
 path = "src/lib.rs"
 
-[lints]
-workspace = true
+[lints.rust]
+unsafe_code = "allow"
 
 [dependencies]
 tokio = { workspace = true, features = ["fs", "net", "rt"] }

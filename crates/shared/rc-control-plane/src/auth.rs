@@ -10,6 +10,7 @@ use axum::response::IntoResponse;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 
 use crate::AuthPrincipal;
+use crate::metrics;
 use crate::state::ControlPlaneService;
 use crate::types::ApiError;
 
@@ -205,11 +206,13 @@ pub(crate) async fn require_api_auth(
     }
 
     if let Some(principal) = consume_stream_ticket(&service, &mut request).await {
+        metrics::record_auth("stream_ticket", true);
         request.extensions_mut().insert(principal);
         return next.run(request).await;
     }
 
     let Some(provided) = extract_request_auth_token(&mut request) else {
+        metrics::record_auth("none", false);
         return ApiError::unauthorized("missing or invalid control plane bearer token".to_owned())
             .into_response();
     };
@@ -219,6 +222,7 @@ pub(crate) async fn require_api_auth(
         .as_deref()
         .is_some_and(|expected| constant_time_value_eq(&provided, expected))
     {
+        metrics::record_auth("shared_token", true);
         request.extensions_mut().insert(AuthPrincipal::SharedToken);
         return next.run(request).await;
     }
@@ -229,12 +233,14 @@ pub(crate) async fn require_api_auth(
     };
     if let Some((device, is_access_token)) = authenticated_device {
         if !is_access_token {
+            metrics::record_auth("device_refresh_token", false);
             return ApiError::unauthorized(
                 "refresh tokens must be exchanged at /v1/auth/refresh before calling protected APIs"
                     .to_owned(),
             )
             .into_response();
         }
+        metrics::record_auth("device_token", true);
         request
             .extensions_mut()
             .insert(AuthPrincipal::Device(device));
@@ -242,12 +248,14 @@ pub(crate) async fn require_api_auth(
     }
 
     if request_allows_tenant_user_auth(&request) && service.accepts_derived_user_key(&provided) {
+        metrics::record_auth("user_key", true);
         request.extensions_mut().insert(AuthPrincipal::User {
             user_id: derived_user_id_from_key(&provided),
         });
         return next.run(request).await;
     }
 
+    metrics::record_auth("invalid_token", false);
     ApiError::unauthorized("missing or invalid control plane bearer token".to_owned())
         .into_response()
 }
@@ -367,23 +375,23 @@ fn runner_id_subpath_allows_tenant_user(path: &str, method: &Method) -> bool {
         return true;
     }
     // /v1/runners/{id}/heartbeat
-    if path.ends_with("/heartbeat") && method == &Method::POST {
+    if path.ends_with("/heartbeat") && method == Method::POST {
         return true;
     }
     // /v1/runners/{id}/sessions
-    if path.ends_with("/sessions") && method == &Method::POST {
+    if path.ends_with("/sessions") && method == Method::POST {
         return true;
     }
     // /v1/runners/{id}/sessions/{sid}/command
-    if path.ends_with("/command") && method == &Method::POST {
+    if path.ends_with("/command") && method == Method::POST {
         return true;
     }
     // /v1/runners/{id}/events
-    if path.ends_with("/events") && method == &Method::POST {
+    if path.ends_with("/events") && method == Method::POST {
         return true;
     }
     // /v1/runners/{id}/poll-commands
-    if path.ends_with("/poll-commands") && method == &Method::POST {
+    if path.ends_with("/poll-commands") && method == Method::POST {
         return true;
     }
     false

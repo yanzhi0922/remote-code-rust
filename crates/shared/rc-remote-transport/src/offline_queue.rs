@@ -130,14 +130,14 @@ mod tests {
     async fn drops_stale_commands() {
         let queue = OfflineQueue::new();
         let mut q = queue.inner.write().await;
-        q.push(QueuedCommand {
+        q.push_back(QueuedCommand {
             id: "old".into(),
             session_id: "s1".into(),
             command: TransportCommand::Interrupt,
             queued_at: chrono::Utc::now().timestamp() - 600, // 10 min ago
             retry_count: 0,
         });
-        q.push(QueuedCommand {
+        q.push_back(QueuedCommand {
             id: "fresh".into(),
             session_id: "s1".into(),
             command: TransportCommand::Interrupt,

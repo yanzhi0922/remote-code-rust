@@ -124,13 +124,21 @@ async fn dispatch_client_message(state: &ServerState, session_id: Uuid, msg: Cli
         ClientMessage::SetRuntimeConfig {
             provider_id,
             model_id,
+            permission_mode,
         } => {
             tracing::info!(
                 %session_id,
                 ?provider_id,
                 ?model_id,
+                ?permission_mode,
                 "runtime config change requested"
             );
+            if let Some(mode) = permission_mode {
+                let sessions = state.active_sessions.read();
+                if let Some(active) = sessions.get(&session_id) {
+                    *active.permission_mode.write() = mode;
+                }
+            }
         }
         ClientMessage::PermissionResponse {
             request_id,
@@ -168,6 +176,9 @@ fn spawn_query(state: &ServerState, session_id: Uuid, content: String) {
                 event_tx: tx,
                 query_task: None,
                 interrupted: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                permission_mode: parking_lot::RwLock::new(
+                    claude_core::PermissionMode::BypassPermissions,
+                ),
             }
         });
         // Abort any previous query task.
@@ -237,15 +248,19 @@ fn spawn_query(state: &ServerState, session_id: Uuid, content: String) {
 
         // Build user message.
         let user_message = vec![Message::from(ConversationEntry::user(&content))];
-        // Intentional: BypassPermissions is used because the server is a
-        // local-first, headless deployment that is already gated by HTTP bearer
-        // auth. The user explicitly approved operations when they sent the
-        // message via the WS API.
-        // TODO: Make permission mode configurable per-session so remote/CI
-        // deployments can opt into stricter sandboxing.
+        // Read the per-session permission mode. Defaults to BypassPermissions
+        // for local-first deployments gated by HTTP bearer auth. Remote/CI
+        // deployments can opt into stricter sandboxing via SetRuntimeConfig.
+        let permission_mode = {
+            let sessions = state_clone.active_sessions.read();
+            sessions
+                .get(&session_id)
+                .map(|s| *s.permission_mode.read())
+                .unwrap_or(claude_core::PermissionMode::BypassPermissions)
+        };
         let context = ProcessUserInputContext::new(
             SessionId::from(session_id),
-            claude_core::PermissionMode::BypassPermissions,
+            permission_mode,
             &model,
         );
 

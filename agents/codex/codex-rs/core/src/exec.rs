@@ -328,10 +328,7 @@ pub fn build_exec_request(
         network,
         windows_sandbox_level,
         windows_sandbox_private_desktop,
-
-        // TODO: Should arg0 be set on the ExecRequest that is returned?
-        arg0: _,
-        // These fields are related to approvals, so can be ignored here.
+        arg0,
         justification: _,
         sandbox_permissions: _,
     } = params;
@@ -388,6 +385,7 @@ pub fn build_exec_request(
             ExecRequest::from_sandbox_exec_request(request, options, windows_sandbox_policy_cwd)
         })
         .map_err(CodexErr::from)?;
+    exec_req.arg0 = arg0;
     let use_windows_elevated_backend = windows_sandbox_uses_elevated_backend(
         exec_req.windows_sandbox_level,
         exec_req.network.is_some(),

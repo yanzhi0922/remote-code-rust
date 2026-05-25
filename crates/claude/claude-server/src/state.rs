@@ -23,6 +23,9 @@ pub struct ActiveSession {
     pub query_task: Option<tokio::task::JoinHandle<()>>,
     /// Interrupt flag shared with the running query.
     pub interrupted: Arc<AtomicBool>,
+    /// Per-session permission mode. Defaults to BypassPermissions for local-first
+    /// deployments; can be set via SetRuntimeConfig for remote/CI sandboxing.
+    pub permission_mode: parking_lot::RwLock<claude_core::PermissionMode>,
 }
 
 /// Shared server state injected into all handlers via axum State.
@@ -74,6 +77,9 @@ impl ServerState {
                 event_tx: tx,
                 query_task: None,
                 interrupted: Arc::new(AtomicBool::new(false)),
+                permission_mode: parking_lot::RwLock::new(
+                    claude_core::PermissionMode::BypassPermissions,
+                ),
             }
         });
         Ok(active.event_tx.subscribe())
