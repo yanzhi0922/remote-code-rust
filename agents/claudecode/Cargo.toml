@@ -62,4 +62,5 @@ ed25519-dalek.workspace = true
 
 [dev-dependencies]
 axum.workspace = true
+rand.workspace = true
 serial_test.workspace = true

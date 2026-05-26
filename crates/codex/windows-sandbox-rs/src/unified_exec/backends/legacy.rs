@@ -205,7 +205,7 @@ mod tests {
     fn resize_conpty_handle_returns_error_when_mutex_poisoned() {
         let hpc = Arc::new(StdMutex::new(Some(42 as HPCON)));
         // Lock the mutex from another thread to test error handling
-        let hpc_clone = Arc::clone(&hpc);
+        let _hpc_clone = Arc::clone(&hpc);
         let guard = hpc.lock().unwrap();
 
         // Attempting to lock again on the same thread will succeed

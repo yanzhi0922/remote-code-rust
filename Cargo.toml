@@ -304,7 +304,7 @@ gix = { version = "0.83.0", default-features = false, features = ["sha1"] }
 async-channel = "2.3.1"
 chardetng = "0.1.17"
 crypto_box = { version = "0.9.1", features = ["seal"] }
-ed25519-dalek = { version = "2.2.0", features = ["pkcs8"] }
+ed25519-dalek = { version = "2.2.0", features = ["pkcs8", "rand_core"] }
 tokio-test = "0.4"
 tree-sitter = "0.26.8"
 tree-sitter-bash = "0.25"

@@ -2,7 +2,8 @@
 
 use std::sync::OnceLock;
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result, anyhow, bail};
+use ed25519_dalek::{VerifyingKey, Signature, Verifier};
 use sha2::{Digest, Sha256};
 use serde::Deserialize;
 use tracing::info;
@@ -244,26 +245,65 @@ pub async fn run_update() -> Result<()> {
 /// verification is skipped with an informational log, but the SHA-256 digest
 /// is still verified if checksums are available.
 async fn verify_binary_integrity(
-    _repository: &str,
-    _version: &str,
-    _digest: &str,
+    repository: &str,
+    version: &str,
+    digest: &str,
 ) -> Result<()> {
-    match RELEASE_SIGNING_PUBLIC_KEY {
-        Some(_key_bytes) => {
-            // TODO: Implement Ed25519 signature verification once the
-            // signing key is provisioned and the CI pipeline produces
-            // `sha256sums.txt` and `sha256sums.txt.sig` assets.
-            info!("Binary signature verification: signing key configured but not yet implemented");
+    // Attempt to download the checksums file.  If it's not published yet
+    // (e.g. local dev builds), log and return successfully — the digest
+    // was already computed and printed for manual inspection.
+    let checksums = match download_asset(repository, version, "sha256sums.txt").await {
+        Ok(data) => String::from_utf8(data).context("sha256sums.txt is not valid UTF-8")?,
+        Err(e) => {
+            info!("sha256sums.txt not available, skipping checksum verification: {e:#}");
+            return Ok(());
         }
-        None => {
-            info!("Binary signature verification skipped (no signing key configured)");
-        }
+    };
+
+    // If a signing key is configured, verify the checksums file's signature.
+    if let Some(key_bytes) = RELEASE_SIGNING_PUBLIC_KEY {
+        let sig_data = download_asset(repository, version, "sha256sums.txt.sig")
+            .await
+            .context("release signing key is configured but sha256sums.txt.sig asset is missing")?;
+
+        let signature_bytes: [u8; 64] = sig_data
+            .try_into()
+            .map_err(|sig: Vec<u8>| anyhow!("signature asset is {} bytes, expected 64", sig.len()))?;
+
+        let public_key = VerifyingKey::from_bytes(&key_bytes)
+            .context("invalid RELEASE_SIGNING_PUBLIC_KEY")?;
+        let signature = Signature::from_bytes(&signature_bytes);
+
+        public_key
+            .verify(checksums.as_bytes(), &signature)
+            .context("Ed25519 signature verification of sha256sums.txt failed — possible tampering")?;
+
+        info!("sha256sums.txt signature verified successfully (Ed25519)");
+    } else {
+        info!("sha256sums.txt signature verification skipped (no signing key configured)");
     }
+
+    // Parse the checksums file and look for a matching entry.
+    // Format: <sha256_hex>  <filename>  (two spaces, like coreutils sha256sum)
+    let expected_digest = checksums
+        .lines()
+        .find_map(|line| {
+            let (hash, _filename) = line.split_once("  ")?;
+            Some(hash.trim())
+        })
+        .ok_or_else(|| anyhow!("sha256sums.txt contains no valid entries"))?;
+
+    if !expected_digest.eq_ignore_ascii_case(digest) {
+        bail!(
+            "binary digest mismatch: expected {expected_digest}, computed {digest} — possible tampering or corrupted download"
+        );
+    }
+
+    info!("Binary SHA-256 digest verified against sha256sums.txt");
     Ok(())
 }
 
 /// Download a specific release asset by name.
-#[allow(dead_code)]
 async fn download_asset(repository: &str, version: &str, asset_name: &str) -> Result<Vec<u8>> {
     let url = format!(
         "https://github.com/{repository}/releases/download/{version}/{asset_name}"
@@ -274,7 +314,7 @@ async fn download_asset(repository: &str, version: &str, asset_name: &str) -> Re
         .await
         .context("failed to download release asset")?;
     if !response.status().is_success() {
-        anyhow::bail!("failed to download {asset_name}: status {}", response.status());
+        bail!("failed to download {asset_name}: status {}", response.status());
     }
     let bytes = response.bytes().await.context("failed to read asset response")?;
     Ok(bytes.to_vec())
@@ -459,5 +499,39 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    /// Verify that Ed25519 key + signature verification round-trips correctly
+    /// using a deterministic key (no RNG dependency).
+    #[test]
+    fn ed25519_signature_verification_roundtrip() {
+        use ed25519_dalek::{SigningKey, Signer, VerifyingKey, Verifier, SecretKey, Signature};
+
+        // Create a deterministic signing key from a fixed secret.
+        let secret: SecretKey = [0xAB; 32];
+        let signing_key = SigningKey::from_bytes(&secret);
+        let verifying_key: VerifyingKey = signing_key.verifying_key();
+
+        let message = b"abc123def456  remote-code-linux-x86_64.tar.gz\n";
+        let signature: Signature = signing_key.sign(message);
+
+        // Verify with the public key (mirrors verify_binary_integrity logic).
+        assert!(verifying_key.verify(message, &signature).is_ok());
+
+        // Tampered message should fail verification.
+        let tampered = b"abc123def456  remote-code-linux-x86_64.tar.gz\r\n";
+        assert!(verifying_key.verify(tampered, &signature).is_err());
+
+        // Wrong key should also fail.
+        let wrong_secret: SecretKey = [0xCD; 32];
+        let wrong_key = SigningKey::from_bytes(&wrong_secret).verifying_key();
+        assert!(wrong_key.verify(message, &signature).is_err());
+    }
+
+    /// Verify that RELEASE_SIGNING_PUBLIC_KEY being None produces the expected
+    /// log path (no signature verification, just info log).
+    #[test]
+    fn signing_key_constant_is_none_by_default() {
+        assert!(super::RELEASE_SIGNING_PUBLIC_KEY.is_none());
     }
 }

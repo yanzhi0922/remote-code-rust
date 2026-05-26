@@ -25,7 +25,7 @@ use codex_app_server_protocol::TurnSteerResponse;
 use codex_protocol::models::PermissionProfile as CorePermissionProfile;
 use codex_utils_absolute_path::test_support::PathBufExt;
 use codex_utils_absolute_path::test_support::test_path_buf;
-use std::collections::HashSet;
+use indexmap::IndexSet;
 use std::sync::Arc;
 use std::sync::Mutex;
 use tokio::sync::mpsc;
@@ -35,8 +35,8 @@ fn client_with_receiver() -> (AnalyticsEventsClient, mpsc::Receiver<AnalyticsFac
     let (sender, receiver) = mpsc::channel(8);
     let queue = AnalyticsEventsQueue {
         sender,
-        app_used_emitted_keys: Arc::new(Mutex::new(HashSet::new())),
-        plugin_used_emitted_keys: Arc::new(Mutex::new(HashSet::new())),
+        app_used_emitted_keys: Arc::new(Mutex::new(IndexSet::new())),
+        plugin_used_emitted_keys: Arc::new(Mutex::new(IndexSet::new())),
     };
     (AnalyticsEventsClient { queue: Some(queue) }, receiver)
 }

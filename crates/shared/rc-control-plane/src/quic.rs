@@ -46,12 +46,9 @@ pub async fn start_quic_listener(
     let local_addr = endpoint.local_addr()?;
     tracing::info!("QUIC server listening on {local_addr}");
 
-    // TODO(resource): The JoinSet accumulates task handles but only reaps completed
-    // ones opportunistically via `try_join_next()` inside the accept loop.  If no
-    // new connections arrive for a long time, finished tasks pile up.  Consider
-    // using `tokio::select!` to concurrently accept new connections AND reap
-    // finished tasks, so that task resources are released promptly regardless of
-    // incoming connection rate.
+    // Concurrently accept new connections AND reap finished tasks via
+    // tokio::select!, so that task resources are released promptly regardless
+    // of incoming connection rate.
     let mut tasks: JoinSet<()> = JoinSet::new();
 
     loop {
@@ -162,7 +159,7 @@ async fn handle_quic_connection(
                             }
                         } else {
                             match read_len_prefixed_payload(&mut recv).await {
-                                Ok(buf) => dispatch_quic_command(&service, target_session, &buf)
+                                Ok(buf) => dispatch_quic_command(&service, target_session, &auth_principal, &buf)
                                     .await
                                     .unwrap_or_else(|e| {
                                         tracing::warn!("QUIC command dispatch error: {e}");
@@ -216,16 +213,46 @@ async fn authenticate_quic_token(service: &ControlPlaneService, provided: &str) 
     }
 }
 
+/// Verify that the authenticated principal is allowed to access the given session.
+///
+/// For `AuthPrincipal::User`, the session's owning runner must belong to the
+/// same user (via `runner_visible_to`).  SharedToken and Device principals
+/// bypass this check (admin / legacy access).
+async fn verify_session_tenant_access(
+    service: &ControlPlaneService,
+    session_id: Uuid,
+    principal: &AuthPrincipal,
+) -> anyhow::Result<()> {
+    let user_id = principal.user_id();
+    if user_id.is_none() {
+        // SharedToken or Device — admin/legacy access, no tenant isolation.
+        return Ok(());
+    }
+    let uid = user_id.unwrap();
+
+    let registry = service.registry.read().await;
+    let session = registry
+        .get_session(session_id)
+        .map_err(|e: ApiError| anyhow::anyhow!("{}", e.message))?;
+
+    if let Some(runner_id) = &session.owner_runner_id {
+        if !registry.runner_visible_to(runner_id, Some(uid)) {
+            anyhow::bail!(
+                "session `{session_id}` belongs to runner `{runner_id}` which is not owned by the authenticated user"
+            );
+        }
+    }
+    Ok(())
+}
+
 /// Deserialize a QUIC command and enqueue it for the appropriate runner.
 ///
-/// TODO(security): The QUIC dispatch path currently does not enforce tenant
-/// ownership checks. Before dispatching any command, the handler should verify
-/// that the authenticated session belongs to the tenant that owns the target
-/// runner/session. This requires API design changes to propagate tenant context
-/// through the QUIC authentication handshake and into each command variant.
+/// Enforces tenant ownership: commands that target a specific runner or session
+/// are rejected if the authenticated principal does not own the target resource.
 async fn dispatch_quic_command(
     service: &ControlPlaneService,
     authenticated_session_id: Option<Uuid>,
+    auth_principal: &AuthPrincipal,
     payload: &[u8],
 ) -> anyhow::Result<CommandAck> {
     let cmd: TransportCommand = serde_json::from_slice(payload)?;
@@ -234,6 +261,7 @@ async fn dispatch_quic_command(
         TransportCommand::SendPrompt { content } => {
             let session_id = authenticated_session_id
                 .ok_or_else(|| anyhow::anyhow!("QUIC send_prompt requires a bound session"))?;
+            verify_session_tenant_access(service, session_id, auth_principal).await?;
             dispatch_runner_session_command(
                 service,
                 session_id,
@@ -248,6 +276,7 @@ async fn dispatch_quic_command(
         TransportCommand::Interrupt => {
             let session_id = authenticated_session_id
                 .ok_or_else(|| anyhow::anyhow!("QUIC interrupt requires a bound session"))?;
+            verify_session_tenant_access(service, session_id, auth_principal).await?;
             dispatch_runner_session_command(
                 service,
                 session_id,

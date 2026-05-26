@@ -209,20 +209,20 @@ mod tests {
         .expect("config should load")
     }
 
-    #[test]
-    fn commit_shows_preview() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn commit_shows_preview() {
         let config = build_test_config();
         render_commit(&config);
     }
 
-    #[test]
-    fn diff_shows_changes() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn diff_shows_changes() {
         let config = build_test_config();
         render_diff(&config);
     }
 
-    #[test]
-    fn pr_comments_shows_surface() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn pr_comments_shows_surface() {
         let config = build_test_config();
         render_pr_comments(&config);
     }
@@ -269,8 +269,8 @@ mod tests {
         dispatch_branch("/branch foo", &config);
     }
 
-    #[test]
-    fn autofix_pr_shows_surface() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn autofix_pr_shows_surface() {
         let config = build_test_config();
         render_autofix_pr(&config);
     }

@@ -265,12 +265,13 @@ mod tests {
 
     // --- Tests for finish_driver_spawn ---
 
-    #[test]
-    fn finish_driver_spawn_closes_stdin_when_not_open() {
+    #[tokio::test]
+    async fn finish_driver_spawn_closes_stdin_when_not_open() {
         let (writer_tx, _writer_rx) = mpsc::channel::<Vec<u8>>(1);
         let (stdout_tx, stdout_rx) = broadcast::channel::<Vec<u8>>(1);
         let (exit_tx, exit_rx) = oneshot::channel::<i32>();
         drop(stdout_tx); // Drop so the driver can be constructed
+        let _ = exit_tx;
 
         let driver = ProcessDriver {
             writer_tx,
@@ -285,16 +286,16 @@ mod tests {
         let spawned = finish_driver_spawn(driver, /*stdin_open*/ false);
         // After closing stdin, writer_sender returns a disconnected sender.
         let sender = spawned.session.writer_sender();
-        assert!(sender.send(b"test".to_vec()).is_err());
+        assert!(sender.send(b"test".to_vec()).await.is_err());
     }
 
-    #[test]
-    fn finish_driver_spawn_keeps_stdin_when_open() {
+    #[tokio::test]
+    async fn finish_driver_spawn_keeps_stdin_when_open() {
         let (writer_tx, _writer_rx) = mpsc::channel::<Vec<u8>>(1);
         let (stdout_tx, stdout_rx) = broadcast::channel::<Vec<u8>>(1);
         let (exit_tx, exit_rx) = oneshot::channel::<i32>();
         drop(stdout_tx);
-
+        let _ = exit_tx;
         let driver = ProcessDriver {
             writer_tx,
             stdout_rx,
@@ -307,7 +308,7 @@ mod tests {
 
         let spawned = finish_driver_spawn(driver, /*stdin_open*/ true);
         // Stdin is still open; write should succeed (or at least not be closed)
-        let write_result = spawned.session.writer_sender().send(b"test".to_vec());
+        let write_result = spawned.session.writer_sender().send(b"test".to_vec()).await;
         // The write goes to a bounded channel (capacity 1), so it should succeed
         assert!(write_result.is_ok());
     }
@@ -345,7 +346,7 @@ mod tests {
 
     #[test]
     fn send_runner_error_to_stderr_when_available() {
-        let (stdout_tx, _stdout_rx) = broadcast::channel::<Vec<u8>>(1);
+        let (_stdout_tx, _stdout_rx) = broadcast::channel::<Vec<u8>>(1);
         let (stderr_tx, mut stderr_rx) = broadcast::channel::<Vec<u8>>(1);
 
         // Use the internal function behavior by simulating the logic

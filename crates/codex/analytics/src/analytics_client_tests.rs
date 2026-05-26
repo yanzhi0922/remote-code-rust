@@ -106,7 +106,7 @@ use codex_utils_absolute_path::test_support::PathBufExt;
 use codex_utils_absolute_path::test_support::test_path_buf;
 use pretty_assertions::assert_eq;
 use serde_json::json;
-use std::collections::HashSet;
+use indexmap::IndexSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -797,8 +797,8 @@ fn app_used_dedupe_is_keyed_by_turn_and_connector() {
     let (sender, _receiver) = mpsc::channel(1);
     let queue = AnalyticsEventsQueue {
         sender,
-        app_used_emitted_keys: Arc::new(Mutex::new(HashSet::new())),
-        plugin_used_emitted_keys: Arc::new(Mutex::new(HashSet::new())),
+        app_used_emitted_keys: Arc::new(Mutex::new(IndexSet::new())),
+        plugin_used_emitted_keys: Arc::new(Mutex::new(IndexSet::new())),
     };
     let app = AppInvocation {
         connector_id: Some("calendar".to_string()),
@@ -1770,8 +1770,8 @@ fn plugin_used_dedupe_is_keyed_by_turn_and_plugin() {
     let (sender, _receiver) = mpsc::channel(1);
     let queue = AnalyticsEventsQueue {
         sender,
-        app_used_emitted_keys: Arc::new(Mutex::new(HashSet::new())),
-        plugin_used_emitted_keys: Arc::new(Mutex::new(HashSet::new())),
+        app_used_emitted_keys: Arc::new(Mutex::new(IndexSet::new())),
+        plugin_used_emitted_keys: Arc::new(Mutex::new(IndexSet::new())),
     };
     let plugin = sample_plugin_metadata();
 
