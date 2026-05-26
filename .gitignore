@@ -68,3 +68,12 @@ runner-local.env
 
 # Agent source — exclude vendored git internals only
 agents/codex/.git/
+
+# Temporary UI screenshots and browser data
+.tmp-chrome-ui/
+
+# Claude Code worktrees (session-scoped, ephemeral)
+.claude/worktrees/
+
+# SST binary (state store data, not source)
+roots.sst

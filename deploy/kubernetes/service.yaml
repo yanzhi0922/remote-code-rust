@@ -1,0 +1,121 @@
+# =============================================================================
+# Kubernetes Service: remote-code-control-plane
+# =============================================================================
+# Exposes the control-plane deployment inside the cluster (ClusterIP) and
+# optionally to external traffic via an Ingress or LoadBalancer.
+#
+# Apply:
+#   kubectl apply -f deploy/kubernetes/service.yaml
+#
+# Verify:
+#   kubectl get svc remote-code-control-plane
+# =============================================================================
+
+---
+# Internal ClusterIP service for inter-pod and runner communication.
+apiVersion: v1
+kind: Service
+metadata:
+  name: remote-code-control-plane
+  namespace: default
+  labels:
+    app: remote-code-control-plane
+    component: control-plane
+spec:
+  type: ClusterIP
+  selector:
+    app: remote-code-control-plane
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+      protocol: TCP
+    - name: quic
+      port: 4433
+      targetPort: quic
+      protocol: UDP
+  sessionAffinity: None
+  internalTrafficPolicy: Cluster
+
+---
+# Optional: Headless service for direct pod addressing (useful for QUIC
+# affinity or stateful runner-to-control-plane connections).
+apiVersion: v1
+kind: Service
+metadata:
+  name: remote-code-control-plane-headless
+  namespace: default
+  labels:
+    app: remote-code-control-plane
+    component: control-plane
+spec:
+  type: ClusterIP
+  clusterIP: None
+  selector:
+    app: remote-code-control-plane
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+      protocol: TCP
+    - name: quic
+      port: 4433
+      targetPort: quic
+      protocol: UDP
+
+---
+# Optional: Uncomment to expose via a cloud LoadBalancer (e.g. AWS NLB, GCP).
+# apiVersion: v1
+# kind: Service
+# metadata:
+#   name: remote-code-control-plane-lb
+#   namespace: default
+#   annotations:
+#     # AWS NLB example:
+#     # service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
+#     # GCP example:
+#     # cloud.google.com/neg: '{"ingress": true}'
+#   labels:
+#     app: remote-code-control-plane
+# spec:
+#   type: LoadBalancer
+#   selector:
+#     app: remote-code-control-plane
+#   ports:
+#     - name: http
+#       port: 80
+#       targetPort: http
+#       protocol: TCP
+#     - name: quic
+#       port: 4433
+#       targetPort: quic
+#       protocol: UDP
+
+---
+# Optional: Ingress for HTTPS termination with cert-manager.
+# apiVersion: networking.k8s.io/v1
+# kind: Ingress
+# metadata:
+#   name: remote-code-control-plane-ingress
+#   namespace: default
+#   annotations:
+#     cert-manager.io/cluster-issuer: letsencrypt-prod
+#     nginx.ingress.kubernetes.io/proxy-body-size: "0"
+#     nginx.ingress.kubernetes.io/websocket-services: "remote-code-control-plane"
+# spec:
+#   ingressClassName: nginx
+#   tls:
+#     - hosts:
+#         - remote-code.example.com
+#       secretName: remote-code-control-plane-tls
+#   rules:
+#     - host: remote-code.example.com
+#       http:
+#         paths:
+#           - path: /
+#             pathType: Prefix
+#             backend:
+#               service:
+#                 name: remote-code-control-plane
+#                 port:
+#                   number: 8080

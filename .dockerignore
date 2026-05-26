@@ -1,0 +1,47 @@
+# Build artifacts
+target/
+**/target/
+
+# Version control
+.git/
+.gitignore
+
+# IDE / editor
+.claude/
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Documentation and meta (not needed in image)
+*.md
+!apps/*/README.md
+LICENSE
+docs/
+plans/
+fixtures/
+ui-overview-2025.png
+workbench-demo-view.png
+workbench-fresh.png
+
+# GUI / Tauri (not needed for server images)
+apps/remote-code-gui/
+
+# Scripts and CI
+.github/
+scripts/
+deploy/
+
+# Temporary and local config
+.tmp-*/
+*.env
+*.env.local
+runner-local.env
+
+# Test artifacts
+key_for_test.txt.example

@@ -1,0 +1,144 @@
+# =============================================================================
+# Docker Compose for remote-code-rust services
+# =============================================================================
+# Usage:
+#   docker compose up -d                    # Start all services
+#   docker compose up control-plane          # Start control-plane only
+#   docker compose logs -f control-plane     # Follow control-plane logs
+#   docker compose down                      # Stop and remove containers
+#
+# Override files:
+#   docker compose -f docker-compose.yml -f docker-compose.override.yml up
+# =============================================================================
+
+services:
+  # ---------------------------------------------------------------------------
+  # Control Plane — the central coordination service.
+  # Exposes HTTP API (8080) and optional QUIC transport (4433/udp).
+  # ---------------------------------------------------------------------------
+  control-plane:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        BINARY: remote-code-control-plane
+    image: remote-code-control-plane:latest
+    container_name: remote-code-control-plane
+    restart: unless-stopped
+    ports:
+      - "8080:8080/tcp"
+      - "4433:4433/udp"
+    environment:
+      # Bind to all interfaces inside the container.
+      REMOTE_CODE_CONTROL_PLANE_BIND: "0.0.0.0:8080"
+      # Public URL — update to match your domain / load-balancer.
+      REMOTE_CODE_CONTROL_PLANE_PUBLIC_BASE_URL: "http://localhost:8080"
+      # CHANGE THIS before first boot.
+      REMOTE_CODE_CONTROL_PLANE_BOOTSTRAP_SECRET: "change-this-before-first-boot"
+      REMOTE_CODE_PROFILE_DIR: "/var/lib/remote-code/control-plane"
+      # Optional: QUIC transport configuration.
+      # REMOTE_CODE_CONTROL_PLANE_QUIC_BIND: "0.0.0.0:4433"
+      # REMOTE_CODE_CONTROL_PLANE_QUIC_CERT: "/etc/remote-code/tls/cert.pem"
+      # REMOTE_CODE_CONTROL_PLANE_QUIC_KEY: "/etc/remote-code/tls/key.pem"
+    volumes:
+      - cp-data:/var/lib/remote-code
+      - cp-config:/etc/remote-code
+      # Mount TLS certs when enabling QUIC.
+      # - ./tls:/etc/remote-code/tls:ro
+    networks:
+      - remote-code-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "1.0"
+        reservations:
+          memory: 128M
+          cpus: "0.25"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ---------------------------------------------------------------------------
+  # Runner — executes agent sessions, reports back to the control plane.
+  # ---------------------------------------------------------------------------
+  runner:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        BINARY: remote-code-runner
+    image: remote-code-runner:latest
+    container_name: remote-code-runner
+    restart: unless-stopped
+    depends_on:
+      control-plane:
+        condition: service_healthy
+    environment:
+      REMOTE_CODE_RUNNER_ID: "docker-runner-01"
+      REMOTE_CODE_CONTROL_PLANE_URL: "http://control-plane:8080"
+      # Must match REMOTE_CODE_CONTROL_PLANE_AUTH_TOKEN on control-plane, if set.
+      REMOTE_CODE_CONTROL_PLANE_AUTH_TOKEN: ""
+      REMOTE_CODE_RUNNER_BIND: "0.0.0.0:8080"
+      REMOTE_CODE_PROFILE_DIR: "/var/lib/remote-code/runner"
+      REMOTE_CODE_RUNNER_MODE: "auto"
+      REMOTE_CODE_RUNNER_MAX_PARALLEL_SESSIONS: "4"
+    volumes:
+      - runner-data:/var/lib/remote-code
+      - runner-config:/etc/remote-code
+      # Shared workspace for agent sessions.
+      - runner-workspace:/workspace
+    networks:
+      - remote-code-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: "2.0"
+        reservations:
+          memory: 256M
+          cpus: "0.5"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+# =============================================================================
+# Volumes
+# =============================================================================
+volumes:
+  cp-data:
+    driver: local
+  cp-config:
+    driver: local
+  runner-data:
+    driver: local
+  runner-config:
+    driver: local
+  runner-workspace:
+    driver: local
+
+# =============================================================================
+# Networks
+# =============================================================================
+networks:
+  remote-code-net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16

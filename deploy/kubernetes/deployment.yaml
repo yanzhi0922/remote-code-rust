@@ -1,0 +1,161 @@
+# =============================================================================
+# Kubernetes Deployment: remote-code-control-plane
+# =============================================================================
+# Apply:
+#   kubectl apply -f deploy/kubernetes/
+#
+# Verify:
+#   kubectl get pods -l app=remote-code-control-plane
+#   kubectl logs -f deploy/remote-code-control-plane
+# =============================================================================
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: remote-code-control-plane-config
+  namespace: default
+  labels:
+    app: remote-code-control-plane
+data:
+  # Bind to all interfaces inside the container.
+  REMOTE_CODE_CONTROL_PLANE_BIND: "0.0.0.0:8080"
+  # Update to your public-facing domain.
+  REMOTE_CODE_CONTROL_PLANE_PUBLIC_BASE_URL: "http://remote-code-control-plane.default.svc.cluster.local:8080"
+  # Persistent profile directory.
+  REMOTE_CODE_PROFILE_DIR: "/var/lib/remote-code/control-plane"
+  # Runner lease TTL (seconds).  Runners must re-register within this window.
+  REMOTE_CODE_RUNNER_LEASE_TTL_SECS: "30"
+  # QUIC transport (disabled by default; enable by mounting TLS secrets).
+  # REMOTE_CODE_CONTROL_PLANE_QUIC_BIND: "0.0.0.0:4433"
+  # REMOTE_CODE_CONTROL_PLANE_QUIC_CERT: "/etc/remote-code/tls/cert.pem"
+  # REMOTE_CODE_CONTROL_PLANE_QUIC_KEY: "/etc/remote-code/tls/key.pem"
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: remote-code-control-plane
+  namespace: default
+  labels:
+    app: remote-code-control-plane
+    component: control-plane
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: remote-code-control-plane
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app: remote-code-control-plane
+        component: control-plane
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
+    spec:
+      # Run as non-root user.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: control-plane
+          image: remote-code-control-plane:latest
+          imagePullPolicy: IfNotPresent
+          args: ["serve"]
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+            - name: quic
+              containerPort: 4433
+              protocol: UDP
+          envFrom:
+            - configMapRef:
+                name: remote-code-control-plane-config
+          env:
+            # Secrets should come from a dedicated Secret resource, not ConfigMap.
+            - name: REMOTE_CODE_CONTROL_PLANE_BOOTSTRAP_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: remote-code-control-plane-secrets
+                  key: bootstrap-secret
+            # Optional shared auth token.
+            # - name: REMOTE_CODE_CONTROL_PLANE_AUTH_TOKEN
+            #   valueFrom:
+            #     secretKeyRef:
+            #       name: remote-code-control-plane-secrets
+            #       key: auth-token
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "250m"
+            limits:
+              memory: "256Mi"
+              cpu: "500m"
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/remote-code
+            - name: config
+              mountPath: /etc/remote-code
+              readOnly: true
+            # Mount TLS certs when enabling QUIC.
+            # - name: tls
+            #   mountPath: /etc/remote-code/tls
+            #   readOnly: true
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+      volumes:
+        - name: data
+          emptyDir: {}
+          # For production, replace with a PersistentVolumeClaim:
+          # persistentVolumeClaim:
+          #   claimName: remote-code-control-plane-data
+        - name: config
+          configMap:
+            name: remote-code-control-plane-config
+            optional: true
+        # - name: tls
+        #   secret:
+        #     secretName: remote-code-control-plane-tls
+      terminationGracePeriodSeconds: 30
+
+---
+# Secret for bootstrap and auth tokens.
+# In production, seal this with Sealed Secrets, Vault, or external KMS.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: remote-code-control-plane-secrets
+  namespace: default
+  labels:
+    app: remote-code-control-plane
+type: Opaque
+stringData:
+  # CHANGE THIS before applying to any real cluster.
+  bootstrap-secret: "change-this-before-first-deploy"
+  # auth-token: "replace-with-a-long-random-token"
