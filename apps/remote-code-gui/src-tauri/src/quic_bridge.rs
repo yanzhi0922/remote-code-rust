@@ -43,14 +43,11 @@ pub async fn quic_connect(
     };
 
     let mut transport = QuicTransport::new(rc_remote_transport::ReconnectPolicy::default());
-    transport
-        .connect(config)
-        .await
-        .map_err(|e| {
-                let msg = format!("{e:#}");
-                tracing::warn!(error = %msg, "command error");
-                msg
-            })?;
+    transport.connect(config).await.map_err(|e| {
+        let msg = format!("{e:#}");
+        tracing::warn!(error = %msg, "command error");
+        msg
+    })?;
 
     // Take the event receiver and forward events to the Tauri frontend.
     if let Some(mut event_rx) = transport.take_event_receiver() {
@@ -77,39 +74,31 @@ pub async fn quic_send_command(
     let bridge = guard.as_ref().ok_or("QUIC not connected")?;
 
     let cmd: TransportCommand = serde_json::from_str(&command).map_err(|e| {
-                let msg = format!("{e}");
-                tracing::warn!(error = %msg, "command error");
-                msg
-            })?;
-    let ack = bridge
-        .transport
-        .send_command(cmd)
-        .await
-        .map_err(|e| {
-                let msg = format!("{e}");
-                tracing::warn!(error = %msg, "command error");
-                msg
-            })?;
+        let msg = format!("{e}");
+        tracing::warn!(error = %msg, "command error");
+        msg
+    })?;
+    let ack = bridge.transport.send_command(cmd).await.map_err(|e| {
+        let msg = format!("{e}");
+        tracing::warn!(error = %msg, "command error");
+        msg
+    })?;
     serde_json::to_string(&ack).map_err(|e| {
-                let msg = format!("{e}");
-                tracing::warn!(error = %msg, "command error");
-                msg
-            })
+        let msg = format!("{e}");
+        tracing::warn!(error = %msg, "command error");
+        msg
+    })
 }
 
 #[tauri::command]
 pub async fn quic_disconnect(state: State<'_, QuicBridgeState>) -> std::result::Result<(), String> {
     let mut guard = state.0.lock().await;
     if let Some(mut bridge) = guard.take() {
-        bridge
-            .transport
-            .disconnect()
-            .await
-            .map_err(|e| {
-                let msg = format!("{e}");
-                tracing::warn!(error = %msg, "command error");
-                msg
-            })?;
+        bridge.transport.disconnect().await.map_err(|e| {
+            let msg = format!("{e}");
+            tracing::warn!(error = %msg, "command error");
+            msg
+        })?;
     }
     Ok(())
 }

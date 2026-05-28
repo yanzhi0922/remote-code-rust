@@ -20,7 +20,10 @@ fn install_gui_tracing() {
         Some(layout) => {
             let log_dir = layout.logs_dir;
             if let Err(e) = std::fs::create_dir_all(&log_dir) {
-                eprintln!("warning: could not create log directory {}: {e}", log_dir.display());
+                eprintln!(
+                    "warning: could not create log directory {}: {e}",
+                    log_dir.display()
+                );
             }
             let file_appender = tracing_appender::rolling::daily(&log_dir, "remote-code-gui.log");
             let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
@@ -38,7 +41,9 @@ fn install_gui_tracing() {
         .with_writer(std::io::stderr)
         .with_target(false);
 
-    let registry = tracing_subscriber::registry().with(env_filter).with(stderr_layer);
+    let registry = tracing_subscriber::registry()
+        .with(env_filter)
+        .with(stderr_layer);
 
     if let Some(file) = file_layer {
         let _ = registry.with(file).try_init();

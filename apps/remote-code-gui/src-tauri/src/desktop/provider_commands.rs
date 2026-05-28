@@ -34,10 +34,10 @@ pub(super) async fn run_doctor_report(
     )
     .await
     .map_err(|error| {
-                let msg = format!("{error:#}");
-                tracing::warn!(error = %msg, "command error");
-                msg
-            })
+        let msg = format!("{error:#}");
+        tracing::warn!(error = %msg, "command error");
+        msg
+    })
 }
 
 #[tauri::command]
@@ -65,10 +65,10 @@ pub(super) async fn update_provider(
             let stored = runtime.provider_configs.providers[index].clone();
             runtime.config.provider = provider_config_to_runtime(&stored, &runtime.config.provider)
                 .map_err(|error| {
-                let msg = format!("{error:#}");
-                tracing::warn!(error = %msg, "command error");
-                msg
-            })?;
+                    let msg = format!("{error:#}");
+                    tracing::warn!(error = %msg, "command error");
+                    msg
+                })?;
             runtime.provider_configs.active_provider = Some(provider_name.clone());
         } else if !provider_name.is_empty() {
             runtime.config.provider.name = provider_name.clone();
@@ -194,10 +194,10 @@ pub(super) async fn update_provider(
     let selected_provider = runtime.config.provider.clone();
     store_provider_selection(&mut runtime, &selected_provider);
     persist_runtime_files(&runtime).map_err(|error| {
-                let msg = format!("{error:#}");
-                tracing::warn!(error = %msg, "command error");
-                msg
-            })?;
+        let msg = format!("{error:#}");
+        tracing::warn!(error = %msg, "command error");
+        msg
+    })?;
     emit_runtime_status(&app, &runtime.config);
     Ok(())
 }
@@ -228,10 +228,10 @@ pub(super) async fn save_provider_config(
 ) -> std::result::Result<(), String> {
     let mut runtime = state.runtime.lock().await;
     let mut config = normalize_provider_config(config).map_err(|error| {
-                let msg = format!("{error:#}");
-                tracing::warn!(error = %msg, "command error");
-                msg
-            })?;
+        let msg = format!("{error:#}");
+        tracing::warn!(error = %msg, "command error");
+        msg
+    })?;
 
     // Store API key in OS keychain if provided; clear from JSON payload.
     if let Some(ref api_key) = config.api_key {
@@ -269,10 +269,10 @@ pub(super) async fn save_provider_config(
     }
 
     persist_runtime_files(&runtime).map_err(|error| {
-                let msg = format!("{error:#}");
-                tracing::warn!(error = %msg, "command error");
-                msg
-            })?;
+        let msg = format!("{error:#}");
+        tracing::warn!(error = %msg, "command error");
+        msg
+    })?;
     emit_runtime_status(&app, &runtime.config);
     Ok(())
 }
@@ -313,10 +313,10 @@ pub(super) async fn delete_provider_config(
         if let Some(active) = active_provider_config(&runtime.provider_configs).cloned() {
             runtime.config.provider = provider_config_to_runtime(&active, &runtime.config.provider)
                 .map_err(|error| {
-                let msg = format!("{error:#}");
-                tracing::warn!(error = %msg, "command error");
-                msg
-            })?;
+                    let msg = format!("{error:#}");
+                    tracing::warn!(error = %msg, "command error");
+                    msg
+                })?;
             let selected_provider = runtime.config.provider.clone();
             store_provider_selection(&mut runtime, &selected_provider);
         } else {
@@ -324,14 +324,13 @@ pub(super) async fn delete_provider_config(
             runtime.gui_settings.provider_model = None;
             runtime.gui_settings.provider_base_url = None;
             runtime.gui_settings.provider_protocol = None;
-            let mut fresh = load_base_runtime_config(profile_override_from_env())
-                .map_err(|error| {
-                let msg = format!("{error:#}");
-                tracing::warn!(error = %msg, "command error");
-                msg
-            })?;
-            apply_gui_settings_to_runtime(&mut fresh, &runtime.gui_settings)
-                .map_err(|error| {
+            let mut fresh =
+                load_base_runtime_config(profile_override_from_env()).map_err(|error| {
+                    let msg = format!("{error:#}");
+                    tracing::warn!(error = %msg, "command error");
+                    msg
+                })?;
+            apply_gui_settings_to_runtime(&mut fresh, &runtime.gui_settings).map_err(|error| {
                 let msg = format!("{error:#}");
                 tracing::warn!(error = %msg, "command error");
                 msg
@@ -341,10 +340,10 @@ pub(super) async fn delete_provider_config(
     }
 
     persist_runtime_files(&runtime).map_err(|error| {
-                let msg = format!("{error:#}");
-                tracing::warn!(error = %msg, "command error");
-                msg
-            })?;
+        let msg = format!("{error:#}");
+        tracing::warn!(error = %msg, "command error");
+        msg
+    })?;
     emit_runtime_status(&app, &runtime.config);
     Ok(())
 }
@@ -362,10 +361,10 @@ pub(super) async fn set_active_provider(
     runtime.provider_configs.active_provider = Some(config.name.clone());
     runtime.config.provider = provider_config_to_runtime(&config, &runtime.config.provider)
         .map_err(|error| {
-                let msg = format!("{error:#}");
-                tracing::warn!(error = %msg, "command error");
-                msg
-            })?;
+            let msg = format!("{error:#}");
+            tracing::warn!(error = %msg, "command error");
+            msg
+        })?;
     let provider_configs_snapshot = runtime.provider_configs.clone();
     apply_provider_credentials_from_configs(
         &mut runtime.config.provider,
@@ -374,10 +373,10 @@ pub(super) async fn set_active_provider(
     let selected_provider = runtime.config.provider.clone();
     store_provider_selection(&mut runtime, &selected_provider);
     persist_runtime_files(&runtime).map_err(|error| {
-                let msg = format!("{error:#}");
-                tracing::warn!(error = %msg, "command error");
-                msg
-            })?;
+        let msg = format!("{error:#}");
+        tracing::warn!(error = %msg, "command error");
+        msg
+    })?;
     emit_runtime_status(&app, &runtime.config);
     Ok(())
 }
@@ -422,10 +421,10 @@ pub(super) async fn switch_profile(
     }
 
     persist_runtime_files(&runtime).map_err(|error| {
-                let msg = format!("{error:#}");
-                tracing::warn!(error = %msg, "command error");
-                msg
-            })?;
+        let msg = format!("{error:#}");
+        tracing::warn!(error = %msg, "command error");
+        msg
+    })?;
     emit_runtime_status(&app, &runtime.config);
     Ok(())
 }

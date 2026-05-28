@@ -66,10 +66,22 @@ fn desktop_runtime_paths_are_rooted_in_profile_dir() {
     assert_eq!(layout.logs_dir, profile_dir.join("logs"));
     assert_eq!(layout.cache_dir, profile_dir.join("cache"));
     assert_eq!(layout.agents_dir, profile_dir.join("agents"));
-    assert_eq!(layout.remote_control_file, profile_dir.join("remote_control.json"));
-    assert_eq!(layout.gui_projects_file, profile_dir.join(PROJECTS_FILE_NAME));
-    assert_eq!(layout.gui_providers_file, profile_dir.join(PROVIDERS_FILE_NAME));
-    assert_eq!(layout.gui_settings_file, profile_dir.join(SETTINGS_FILE_NAME));
+    assert_eq!(
+        layout.remote_control_file,
+        profile_dir.join("remote_control.json")
+    );
+    assert_eq!(
+        layout.gui_projects_file,
+        profile_dir.join(PROJECTS_FILE_NAME)
+    );
+    assert_eq!(
+        layout.gui_providers_file,
+        profile_dir.join(PROVIDERS_FILE_NAME)
+    );
+    assert_eq!(
+        layout.gui_settings_file,
+        profile_dir.join(SETTINGS_FILE_NAME)
+    );
 }
 
 #[test]

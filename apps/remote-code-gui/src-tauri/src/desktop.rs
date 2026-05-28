@@ -2226,13 +2226,11 @@ where
     let adapter = adapters
         .get_mut(&key)
         .ok_or_else(|| "Codex adapter was not initialized".to_owned())?;
-    operation(adapter)
-        .await
-        .map_err(|error| {
-                let msg = format!("{error:#}");
-                tracing::warn!(error = %msg, "command error");
-                msg
-            })
+    operation(adapter).await.map_err(|error| {
+        let msg = format!("{error:#}");
+        tracing::warn!(error = %msg, "command error");
+        msg
+    })
 }
 
 fn parse_codex_mcp_detail(value: Option<&str>) -> Option<McpServerStatusDetail> {
@@ -2518,10 +2516,10 @@ impl PermissionBroker for GuiRuntimePermissionBroker {
 
 fn as_error<T>(result: Result<T>) -> std::result::Result<T, String> {
     result.map_err(|error| {
-                let msg = format!("{error:#}");
-                tracing::warn!(error = %msg, "command error");
-                msg
-            })
+        let msg = format!("{error:#}");
+        tracing::warn!(error = %msg, "command error");
+        msg
+    })
 }
 
 /// Read the agent_type stored in session metadata.

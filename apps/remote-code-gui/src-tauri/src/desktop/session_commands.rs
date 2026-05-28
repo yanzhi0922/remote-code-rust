@@ -11,10 +11,10 @@ pub(super) async fn init_app(
         .session_store
         .list_active_sessions()
         .map_err(|error| {
-                let msg = format!("{error:#}");
-                tracing::warn!(error = %msg, "command error");
-                msg
-            })?
+            let msg = format!("{error:#}");
+            tracing::warn!(error = %msg, "command error");
+            msg
+        })?
         .len();
     Ok(InitResultDto {
         provider: Some(provider_info_from_runtime(&runtime.config.provider)),
@@ -31,10 +31,10 @@ pub(super) async fn list_sessions(
         .session_store
         .list_active_sessions()
         .map_err(|error| {
-                let msg = format!("{error:#}");
-                tracing::warn!(error = %msg, "command error");
-                msg
-            })?;
+            let msg = format!("{error:#}");
+            tracing::warn!(error = %msg, "command error");
+            msg
+        })?;
     Ok(sessions
         .into_iter()
         .map(|session| {
@@ -53,10 +53,10 @@ pub(super) async fn list_archived_sessions(
         .session_store
         .list_archived_sessions()
         .map_err(|error| {
-                let msg = format!("{error:#}");
-                tracing::warn!(error = %msg, "command error");
-                msg
-            })?;
+            let msg = format!("{error:#}");
+            tracing::warn!(error = %msg, "command error");
+            msg
+        })?;
     Ok(sessions
         .into_iter()
         .map(|session| {
@@ -77,10 +77,10 @@ pub(super) async fn get_session_conversation(
         .session_store
         .load_conversation(session_id)
         .map_err(|error| {
-                let msg = format!("{error:#}");
-                tracing::warn!(error = %msg, "command error");
-                msg
-            })?;
+            let msg = format!("{error:#}");
+            tracing::warn!(error = %msg, "command error");
+            msg
+        })?;
     Ok(conversation.iter().map(conversation_entry_to_dto).collect())
 }
 
@@ -91,12 +91,11 @@ pub(super) async fn get_session_tasks(
 ) -> std::result::Result<Vec<SessionTaskDto>, String> {
     let runtime = state.runtime.lock().await;
     let session_id = Uuid::parse_str(&session_id).map_err(|error| error.to_string())?;
-    load_session_tasks_from_paths(&runtime.config.paths, session_id)
-        .map_err(|error| {
-                let msg = format!("{error:#}");
-                tracing::warn!(error = %msg, "command error");
-                msg
-            })
+    load_session_tasks_from_paths(&runtime.config.paths, session_id).map_err(|error| {
+        let msg = format!("{error:#}");
+        tracing::warn!(error = %msg, "command error");
+        msg
+    })
 }
 
 #[tauri::command]
@@ -123,10 +122,10 @@ pub(super) async fn create_session(
         .ok_or_else(|| "请选择项目文件夹后再新建会话。".to_owned())?;
     let normalized_project_path =
         normalize_existing_path(Path::new(&project_path)).map_err(|error| {
-                let msg = format!("{error:#}");
-                tracing::warn!(error = %msg, "command error");
-                msg
-            })?;
+            let msg = format!("{error:#}");
+            tracing::warn!(error = %msg, "command error");
+            msg
+        })?;
     let path_key = path_identity(&normalized_project_path);
     if !projects
         .iter()
@@ -272,12 +271,11 @@ pub(super) async fn send_prompt(
         let session_id =
             session_id.ok_or_else(|| "请先选择项目文件夹并创建会话，再发送消息。".to_owned())?;
         config.session_id = Uuid::parse_str(&session_id).map_err(|error| error.to_string())?;
-        restore_session_context(&runtime.session_store, &mut config)
-            .map_err(|error| {
-                let msg = format!("{error:#}");
-                tracing::warn!(error = %msg, "command error");
-                msg
-            })?;
+        restore_session_context(&runtime.session_store, &mut config).map_err(|error| {
+            let msg = format!("{error:#}");
+            tracing::warn!(error = %msg, "command error");
+            msg
+        })?;
         let agent_type_str = get_session_agent_type(&runtime.session_store, config.session_id);
         config.provider = selected_provider;
         config.permission_mode = selected_permission_mode;
@@ -294,10 +292,10 @@ pub(super) async fn send_prompt(
 
     apply_provider_credentials_from_configs(&mut config.provider, &provider_configs);
     configure_runtime_policy_for_config(&config).map_err(|error| {
-                let msg = format!("{error:#}");
-                tracing::warn!(error = %msg, "command error");
-                msg
-            })?;
+        let msg = format!("{error:#}");
+        tracing::warn!(error = %msg, "command error");
+        msg
+    })?;
 
     let sid = config.session_id.to_string();
 
@@ -535,12 +533,11 @@ pub(super) async fn export_session_bundle(
 ) -> std::result::Result<SessionExportResultDto, String> {
     let runtime = state.runtime.lock().await;
     let session_id = Uuid::parse_str(&session_id).map_err(|error| error.to_string())?;
-    export_session_bundle_for_store(&runtime.session_store, session_id, format)
-        .map_err(|error| {
-                let msg = format!("{error:#}");
-                tracing::warn!(error = %msg, "command error");
-                msg
-            })
+    export_session_bundle_for_store(&runtime.session_store, session_id, format).map_err(|error| {
+        let msg = format!("{error:#}");
+        tracing::warn!(error = %msg, "command error");
+        msg
+    })
 }
 
 #[tauri::command]
@@ -619,10 +616,10 @@ pub(super) async fn archive_session(
         .session_store
         .set_archived(uuid, true)
         .map_err(|error| {
-                let msg = format!("{error:#}");
-                tracing::warn!(error = %msg, "command error");
-                msg
-            })?;
+            let msg = format!("{error:#}");
+            tracing::warn!(error = %msg, "command error");
+            msg
+        })?;
     Ok(())
 }
 
@@ -637,24 +634,24 @@ pub(super) async fn restore_session(
         .session_store
         .get_session_summary(session_id)
         .map_err(|error| {
-                let msg = format!("{error:#}");
-                tracing::warn!(error = %msg, "command error");
-                msg
-            })?;
+            let msg = format!("{error:#}");
+            tracing::warn!(error = %msg, "command error");
+            msg
+        })?;
     runtime
         .session_store
         .set_archived(session_id, false)
         .map_err(|error| {
-                let msg = format!("{error:#}");
-                tracing::warn!(error = %msg, "command error");
-                msg
-            })?;
+            let msg = format!("{error:#}");
+            tracing::warn!(error = %msg, "command error");
+            msg
+        })?;
     if ensure_project_entry(&mut runtime.projects, &summary.cwd) {
         persist_runtime_files(&runtime).map_err(|error| {
-                let msg = format!("{error:#}");
-                tracing::warn!(error = %msg, "command error");
-                msg
-            })?;
+            let msg = format!("{error:#}");
+            tracing::warn!(error = %msg, "command error");
+            msg
+        })?;
     }
     Ok(())
 }

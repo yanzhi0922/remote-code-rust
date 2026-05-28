@@ -65,12 +65,12 @@ pub(super) async fn list_available_agents(
 
 #[tauri::command]
 pub(super) async fn install_agent(agent_type: String) -> std::result::Result<(), String> {
-    let parsed: ProtocolAgentType = serde_json::from_str(&format!("\"{}\"", agent_type))
-        .map_err(|e| {
-                let msg = format!("无效的 agent_type: {e}");
-                tracing::warn!(error = %msg, "command error");
-                msg
-            })?;
+    let parsed: ProtocolAgentType =
+        serde_json::from_str(&format!("\"{}\"", agent_type)).map_err(|e| {
+            let msg = format!("无效的 agent_type: {e}");
+            tracing::warn!(error = %msg, "command error");
+            msg
+        })?;
 
     // All agents are now in-process — no external binary to install.
     // RemoteClaude was always built-in; RemoteRoo and RemoteCodex are now
@@ -117,26 +117,21 @@ pub(super) async fn install_agent(agent_type: String) -> std::result::Result<(),
     let target_path = install_dir.join(agent_binary_name(&parsed));
 
     // Download.
-    let response = reqwest::get(&url)
-        .await
-        .map_err(|e| {
-                let msg = format!("下载失败: {e}");
-                tracing::warn!(error = %msg, "command error");
-                msg
-            })?;
+    let response = reqwest::get(&url).await.map_err(|e| {
+        let msg = format!("下载失败: {e}");
+        tracing::warn!(error = %msg, "command error");
+        msg
+    })?;
 
     if !response.status().is_success() {
         return Err(format!("下载失败: HTTP {}", response.status()));
     }
 
-    let bytes = response
-        .bytes()
-        .await
-        .map_err(|e| {
-                let msg = format!("读取下载内容失败: {e}");
-                tracing::warn!(error = %msg, "command error");
-                msg
-            })?;
+    let bytes = response.bytes().await.map_err(|e| {
+        let msg = format!("读取下载内容失败: {e}");
+        tracing::warn!(error = %msg, "command error");
+        msg
+    })?;
 
     // Validate: must be non-empty.
     if bytes.is_empty() {
@@ -146,33 +141,33 @@ pub(super) async fn install_agent(agent_type: String) -> std::result::Result<(),
     // Blocking filesystem operations — offload to a dedicated thread.
     tokio::task::spawn_blocking(move || -> std::result::Result<(), String> {
         std::fs::create_dir_all(&install_dir).map_err(|e| {
-                let msg = format!("创建安装目录失败: {e}");
-                tracing::warn!(error = %msg, "command error");
-                msg
-            })?;
+            let msg = format!("创建安装目录失败: {e}");
+            tracing::warn!(error = %msg, "command error");
+            msg
+        })?;
         std::fs::write(&target_path, &bytes).map_err(|e| {
-                let msg = format!("写入文件失败: {e}");
-                tracing::warn!(error = %msg, "command error");
-                msg
-            })?;
+            let msg = format!("写入文件失败: {e}");
+            tracing::warn!(error = %msg, "command error");
+            msg
+        })?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
             std::fs::set_permissions(&target_path, std::fs::Permissions::from_mode(0o755))
                 .map_err(|e| {
-                let msg = format!("设置执行权限失败: {e}");
-                tracing::warn!(error = %msg, "command error");
-                msg
-            })?;
+                    let msg = format!("设置执行权限失败: {e}");
+                    tracing::warn!(error = %msg, "command error");
+                    msg
+                })?;
         }
         Ok(())
     })
     .await
     .map_err(|e| {
-                let msg = format!("install task failed: {e}");
-                tracing::warn!(error = %msg, "command error");
-                msg
-            })??;
+        let msg = format!("install task failed: {e}");
+        tracing::warn!(error = %msg, "command error");
+        msg
+    })??;
 
     Ok(())
 }
@@ -183,12 +178,12 @@ pub(super) async fn uninstall_agent(
     agent_type: String,
 ) -> std::result::Result<(), String> {
     // Validate the agent type string.
-    let _: ProtocolAgentType = serde_json::from_str(&format!("\"{}\"", agent_type))
-        .map_err(|e| {
-                let msg = format!("无效的 agent_type: {e}");
-                tracing::warn!(error = %msg, "command error");
-                msg
-            })?;
+    let _: ProtocolAgentType =
+        serde_json::from_str(&format!("\"{}\"", agent_type)).map_err(|e| {
+            let msg = format!("无效的 agent_type: {e}");
+            tracing::warn!(error = %msg, "command error");
+            msg
+        })?;
 
     // All agents are now built-in (in-process) — cannot uninstall any of them.
     Err("所有 Agent 均为内置进程内适配器，无法卸载".to_owned())

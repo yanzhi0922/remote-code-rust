@@ -75,12 +75,12 @@ pub(super) async fn codex_resume_thread_native(
     state: State<'_, AppState>,
     request: CodexNativeParamsRequest,
 ) -> std::result::Result<serde_json::Value, String> {
-    let params = decode_required_codex_params::<ThreadResumeParams>(request.params)
-        .map_err(|error| {
-                let msg = format!("{error:#}");
-                tracing::warn!(error = %msg, "command error");
-                msg
-            })?;
+    let params =
+        decode_required_codex_params::<ThreadResumeParams>(request.params).map_err(|error| {
+            let msg = format!("{error:#}");
+            tracing::warn!(error = %msg, "command error");
+            msg
+        })?;
     with_codex_adapter_value(&state, request.session_id, |adapter| {
         Box::pin(async move {
             serde_json::to_value(adapter.resume_thread_with_params(params).await?)
@@ -113,12 +113,12 @@ pub(super) async fn codex_fork_thread_native(
     state: State<'_, AppState>,
     request: CodexNativeParamsRequest,
 ) -> std::result::Result<serde_json::Value, String> {
-    let params = decode_required_codex_params::<ThreadForkParams>(request.params)
-        .map_err(|error| {
-                let msg = format!("{error:#}");
-                tracing::warn!(error = %msg, "command error");
-                msg
-            })?;
+    let params =
+        decode_required_codex_params::<ThreadForkParams>(request.params).map_err(|error| {
+            let msg = format!("{error:#}");
+            tracing::warn!(error = %msg, "command error");
+            msg
+        })?;
     with_codex_adapter_value(&state, request.session_id, |adapter| {
         Box::pin(async move {
             serde_json::to_value(adapter.fork_thread_with_params(params).await?)
@@ -469,10 +469,10 @@ pub(super) async fn codex_thread_inject_items(
 ) -> std::result::Result<serde_json::Value, String> {
     let mut params = decode_required_codex_params::<ThreadInjectItemsParams>(request.params)
         .map_err(|error| {
-                let msg = format!("{error:#}");
-                tracing::warn!(error = %msg, "command error");
-                msg
-            })?;
+            let msg = format!("{error:#}");
+            tracing::warn!(error = %msg, "command error");
+            msg
+        })?;
     if params.thread_id.trim().is_empty() {
         params.thread_id = request.thread_id;
     }
@@ -490,12 +490,12 @@ pub(super) async fn codex_turn_start(
     state: State<'_, AppState>,
     request: CodexNativeParamsRequest,
 ) -> std::result::Result<serde_json::Value, String> {
-    let params = decode_required_codex_params::<TurnStartParams>(request.params)
-        .map_err(|error| {
-                let msg = format!("{error:#}");
-                tracing::warn!(error = %msg, "command error");
-                msg
-            })?;
+    let params =
+        decode_required_codex_params::<TurnStartParams>(request.params).map_err(|error| {
+            let msg = format!("{error:#}");
+            tracing::warn!(error = %msg, "command error");
+            msg
+        })?;
     with_codex_adapter_value(&state, request.session_id, |adapter| {
         Box::pin(async move {
             serde_json::to_value(adapter.start_turn(params).await?).map_err(anyhow::Error::from)
@@ -621,12 +621,12 @@ pub(super) async fn codex_account_login(
     state: State<'_, AppState>,
     request: CodexNativeParamsRequest,
 ) -> std::result::Result<serde_json::Value, String> {
-    let params = decode_required_codex_params::<LoginAccountParams>(request.params)
-        .map_err(|error| {
-                let msg = format!("{error:#}");
-                tracing::warn!(error = %msg, "command error");
-                msg
-            })?;
+    let params =
+        decode_required_codex_params::<LoginAccountParams>(request.params).map_err(|error| {
+            let msg = format!("{error:#}");
+            tracing::warn!(error = %msg, "command error");
+            msg
+        })?;
     with_codex_adapter_value(&state, request.session_id, |adapter| {
         Box::pin(async move {
             serde_json::to_value(adapter.login_account(params).await?).map_err(anyhow::Error::from)
@@ -640,12 +640,13 @@ pub(super) async fn codex_account_login_cancel(
     state: State<'_, AppState>,
     request: CodexNativeParamsRequest,
 ) -> std::result::Result<serde_json::Value, String> {
-    let params = decode_required_codex_params::<CancelLoginAccountParams>(request.params)
-        .map_err(|error| {
-                let msg = format!("{error:#}");
-                tracing::warn!(error = %msg, "command error");
-                msg
-            })?;
+    let params = decode_required_codex_params::<CancelLoginAccountParams>(request.params).map_err(
+        |error| {
+            let msg = format!("{error:#}");
+            tracing::warn!(error = %msg, "command error");
+            msg
+        },
+    )?;
     with_codex_adapter_value(&state, request.session_id, |adapter| {
         Box::pin(async move {
             serde_json::to_value(adapter.cancel_login_account(params).await?)
@@ -688,10 +689,10 @@ pub(super) async fn codex_account_add_credits_nudge(
 ) -> std::result::Result<serde_json::Value, String> {
     let params = decode_required_codex_params::<SendAddCreditsNudgeEmailParams>(request.params)
         .map_err(|error| {
-                let msg = format!("{error:#}");
-                tracing::warn!(error = %msg, "command error");
-                msg
-            })?;
+            let msg = format!("{error:#}");
+            tracing::warn!(error = %msg, "command error");
+            msg
+        })?;
     with_codex_adapter_value(&state, request.session_id, |adapter| {
         Box::pin(async move {
             serde_json::to_value(adapter.send_add_credits_nudge_email(params).await?)
@@ -812,10 +813,10 @@ pub(super) async fn codex_windows_sandbox_setup_start(
 ) -> std::result::Result<serde_json::Value, String> {
     let params = decode_required_codex_params::<WindowsSandboxSetupStartParams>(request.params)
         .map_err(|error| {
-                let msg = format!("{error:#}");
-                tracing::warn!(error = %msg, "command error");
-                msg
-            })?;
+            let msg = format!("{error:#}");
+            tracing::warn!(error = %msg, "command error");
+            msg
+        })?;
     with_codex_adapter_value(&state, request.session_id, |adapter| {
         Box::pin(async move {
             serde_json::to_value(adapter.start_windows_sandbox_setup(params).await?)
@@ -1132,10 +1133,10 @@ pub(super) async fn codex_external_agent_config_import(
 ) -> std::result::Result<serde_json::Value, String> {
     let params = decode_required_codex_params::<ExternalAgentConfigImportParams>(request.params)
         .map_err(|error| {
-                let msg = format!("{error:#}");
-                tracing::warn!(error = %msg, "command error");
-                msg
-            })?;
+            let msg = format!("{error:#}");
+            tracing::warn!(error = %msg, "command error");
+            msg
+        })?;
     with_codex_adapter_value(&state, request.session_id, |adapter| {
         Box::pin(async move {
             serde_json::to_value(adapter.import_external_agent_config(params).await?)
@@ -1254,10 +1255,10 @@ pub(super) async fn codex_realtime_start(
 ) -> std::result::Result<serde_json::Value, String> {
     let params = decode_required_codex_params::<ThreadRealtimeStartParams>(request.params)
         .map_err(|error| {
-                let msg = format!("{error:#}");
-                tracing::warn!(error = %msg, "command error");
-                msg
-            })?;
+            let msg = format!("{error:#}");
+            tracing::warn!(error = %msg, "command error");
+            msg
+        })?;
     with_codex_adapter_value(&state, request.session_id, |adapter| {
         Box::pin(async move {
             serde_json::to_value(adapter.start_realtime(params).await?).map_err(anyhow::Error::from)
@@ -1273,10 +1274,10 @@ pub(super) async fn codex_realtime_append_audio(
 ) -> std::result::Result<serde_json::Value, String> {
     let params = decode_required_codex_params::<ThreadRealtimeAppendAudioParams>(request.params)
         .map_err(|error| {
-                let msg = format!("{error:#}");
-                tracing::warn!(error = %msg, "command error");
-                msg
-            })?;
+            let msg = format!("{error:#}");
+            tracing::warn!(error = %msg, "command error");
+            msg
+        })?;
     with_codex_adapter_value(&state, request.session_id, |adapter| {
         Box::pin(async move {
             serde_json::to_value(adapter.append_realtime_audio(params).await?)
@@ -1293,10 +1294,10 @@ pub(super) async fn codex_realtime_append_text(
 ) -> std::result::Result<serde_json::Value, String> {
     let params = decode_required_codex_params::<ThreadRealtimeAppendTextParams>(request.params)
         .map_err(|error| {
-                let msg = format!("{error:#}");
-                tracing::warn!(error = %msg, "command error");
-                msg
-            })?;
+            let msg = format!("{error:#}");
+            tracing::warn!(error = %msg, "command error");
+            msg
+        })?;
     with_codex_adapter_value(&state, request.session_id, |adapter| {
         Box::pin(async move {
             serde_json::to_value(adapter.append_realtime_text(params).await?)
@@ -1311,12 +1312,13 @@ pub(super) async fn codex_realtime_stop(
     state: State<'_, AppState>,
     request: CodexNativeParamsRequest,
 ) -> std::result::Result<serde_json::Value, String> {
-    let params = decode_required_codex_params::<ThreadRealtimeStopParams>(request.params)
-        .map_err(|error| {
-                let msg = format!("{error:#}");
-                tracing::warn!(error = %msg, "command error");
-                msg
-            })?;
+    let params = decode_required_codex_params::<ThreadRealtimeStopParams>(request.params).map_err(
+        |error| {
+            let msg = format!("{error:#}");
+            tracing::warn!(error = %msg, "command error");
+            msg
+        },
+    )?;
     with_codex_adapter_value(&state, request.session_id, |adapter| {
         Box::pin(async move {
             serde_json::to_value(adapter.stop_realtime(params).await?).map_err(anyhow::Error::from)
@@ -1343,12 +1345,12 @@ pub(super) async fn codex_device_key_create(
     state: State<'_, AppState>,
     request: CodexNativeParamsRequest,
 ) -> std::result::Result<serde_json::Value, String> {
-    let params = decode_required_codex_params::<DeviceKeyCreateParams>(request.params)
-        .map_err(|error| {
-                let msg = format!("{error:#}");
-                tracing::warn!(error = %msg, "command error");
-                msg
-            })?;
+    let params =
+        decode_required_codex_params::<DeviceKeyCreateParams>(request.params).map_err(|error| {
+            let msg = format!("{error:#}");
+            tracing::warn!(error = %msg, "command error");
+            msg
+        })?;
     with_codex_adapter_value(&state, request.session_id, |adapter| {
         Box::pin(async move {
             serde_json::to_value(adapter.create_device_key(params).await?)
@@ -1363,12 +1365,12 @@ pub(super) async fn codex_device_key_public(
     state: State<'_, AppState>,
     request: CodexNativeParamsRequest,
 ) -> std::result::Result<serde_json::Value, String> {
-    let params = decode_required_codex_params::<DeviceKeyPublicParams>(request.params)
-        .map_err(|error| {
-                let msg = format!("{error:#}");
-                tracing::warn!(error = %msg, "command error");
-                msg
-            })?;
+    let params =
+        decode_required_codex_params::<DeviceKeyPublicParams>(request.params).map_err(|error| {
+            let msg = format!("{error:#}");
+            tracing::warn!(error = %msg, "command error");
+            msg
+        })?;
     with_codex_adapter_value(&state, request.session_id, |adapter| {
         Box::pin(async move {
             serde_json::to_value(adapter.get_device_key_public(params).await?)
@@ -1383,12 +1385,12 @@ pub(super) async fn codex_device_key_sign(
     state: State<'_, AppState>,
     request: CodexNativeParamsRequest,
 ) -> std::result::Result<serde_json::Value, String> {
-    let params = decode_required_codex_params::<DeviceKeySignParams>(request.params)
-        .map_err(|error| {
-                let msg = format!("{error:#}");
-                tracing::warn!(error = %msg, "command error");
-                msg
-            })?;
+    let params =
+        decode_required_codex_params::<DeviceKeySignParams>(request.params).map_err(|error| {
+            let msg = format!("{error:#}");
+            tracing::warn!(error = %msg, "command error");
+            msg
+        })?;
     with_codex_adapter_value(&state, request.session_id, |adapter| {
         Box::pin(async move {
             serde_json::to_value(adapter.sign_device_key(params).await?)
@@ -1403,12 +1405,12 @@ pub(super) async fn codex_fs_read_file(
     state: State<'_, AppState>,
     request: CodexNativeParamsRequest,
 ) -> std::result::Result<serde_json::Value, String> {
-    let params = decode_required_codex_params::<FsReadFileParams>(request.params)
-        .map_err(|error| {
-                let msg = format!("{error:#}");
-                tracing::warn!(error = %msg, "command error");
-                msg
-            })?;
+    let params =
+        decode_required_codex_params::<FsReadFileParams>(request.params).map_err(|error| {
+            let msg = format!("{error:#}");
+            tracing::warn!(error = %msg, "command error");
+            msg
+        })?;
     with_codex_adapter_value(&state, request.session_id, |adapter| {
         Box::pin(async move {
             serde_json::to_value(adapter.fs_read_file(params).await?).map_err(anyhow::Error::from)
@@ -1422,12 +1424,12 @@ pub(super) async fn codex_fs_write_file(
     state: State<'_, AppState>,
     request: CodexNativeParamsRequest,
 ) -> std::result::Result<serde_json::Value, String> {
-    let params = decode_required_codex_params::<FsWriteFileParams>(request.params)
-        .map_err(|error| {
-                let msg = format!("{error:#}");
-                tracing::warn!(error = %msg, "command error");
-                msg
-            })?;
+    let params =
+        decode_required_codex_params::<FsWriteFileParams>(request.params).map_err(|error| {
+            let msg = format!("{error:#}");
+            tracing::warn!(error = %msg, "command error");
+            msg
+        })?;
     with_codex_adapter_value(&state, request.session_id, |adapter| {
         Box::pin(async move {
             serde_json::to_value(adapter.fs_write_file(params).await?).map_err(anyhow::Error::from)
@@ -1441,12 +1443,13 @@ pub(super) async fn codex_fs_create_directory(
     state: State<'_, AppState>,
     request: CodexNativeParamsRequest,
 ) -> std::result::Result<serde_json::Value, String> {
-    let params = decode_required_codex_params::<FsCreateDirectoryParams>(request.params)
-        .map_err(|error| {
-                let msg = format!("{error:#}");
-                tracing::warn!(error = %msg, "command error");
-                msg
-            })?;
+    let params = decode_required_codex_params::<FsCreateDirectoryParams>(request.params).map_err(
+        |error| {
+            let msg = format!("{error:#}");
+            tracing::warn!(error = %msg, "command error");
+            msg
+        },
+    )?;
     with_codex_adapter_value(&state, request.session_id, |adapter| {
         Box::pin(async move {
             serde_json::to_value(adapter.fs_create_directory(params).await?)
@@ -1461,12 +1464,12 @@ pub(super) async fn codex_fs_get_metadata(
     state: State<'_, AppState>,
     request: CodexNativeParamsRequest,
 ) -> std::result::Result<serde_json::Value, String> {
-    let params = decode_required_codex_params::<FsGetMetadataParams>(request.params)
-        .map_err(|error| {
-                let msg = format!("{error:#}");
-                tracing::warn!(error = %msg, "command error");
-                msg
-            })?;
+    let params =
+        decode_required_codex_params::<FsGetMetadataParams>(request.params).map_err(|error| {
+            let msg = format!("{error:#}");
+            tracing::warn!(error = %msg, "command error");
+            msg
+        })?;
     with_codex_adapter_value(&state, request.session_id, |adapter| {
         Box::pin(async move {
             serde_json::to_value(adapter.fs_get_metadata(params).await?)
@@ -1481,12 +1484,12 @@ pub(super) async fn codex_fs_read_directory(
     state: State<'_, AppState>,
     request: CodexNativeParamsRequest,
 ) -> std::result::Result<serde_json::Value, String> {
-    let params = decode_required_codex_params::<FsReadDirectoryParams>(request.params)
-        .map_err(|error| {
-                let msg = format!("{error:#}");
-                tracing::warn!(error = %msg, "command error");
-                msg
-            })?;
+    let params =
+        decode_required_codex_params::<FsReadDirectoryParams>(request.params).map_err(|error| {
+            let msg = format!("{error:#}");
+            tracing::warn!(error = %msg, "command error");
+            msg
+        })?;
     with_codex_adapter_value(&state, request.session_id, |adapter| {
         Box::pin(async move {
             serde_json::to_value(adapter.fs_read_directory(params).await?)
@@ -1501,12 +1504,12 @@ pub(super) async fn codex_fs_remove(
     state: State<'_, AppState>,
     request: CodexNativeParamsRequest,
 ) -> std::result::Result<serde_json::Value, String> {
-    let params = decode_required_codex_params::<FsRemoveParams>(request.params)
-        .map_err(|error| {
-                let msg = format!("{error:#}");
-                tracing::warn!(error = %msg, "command error");
-                msg
-            })?;
+    let params =
+        decode_required_codex_params::<FsRemoveParams>(request.params).map_err(|error| {
+            let msg = format!("{error:#}");
+            tracing::warn!(error = %msg, "command error");
+            msg
+        })?;
     with_codex_adapter_value(&state, request.session_id, |adapter| {
         Box::pin(async move {
             serde_json::to_value(adapter.fs_remove(params).await?).map_err(anyhow::Error::from)
@@ -1520,12 +1523,11 @@ pub(super) async fn codex_fs_copy(
     state: State<'_, AppState>,
     request: CodexNativeParamsRequest,
 ) -> std::result::Result<serde_json::Value, String> {
-    let params = decode_required_codex_params::<FsCopyParams>(request.params)
-        .map_err(|error| {
-                let msg = format!("{error:#}");
-                tracing::warn!(error = %msg, "command error");
-                msg
-            })?;
+    let params = decode_required_codex_params::<FsCopyParams>(request.params).map_err(|error| {
+        let msg = format!("{error:#}");
+        tracing::warn!(error = %msg, "command error");
+        msg
+    })?;
     with_codex_adapter_value(&state, request.session_id, |adapter| {
         Box::pin(async move {
             serde_json::to_value(adapter.fs_copy(params).await?).map_err(anyhow::Error::from)
@@ -1539,12 +1541,12 @@ pub(super) async fn codex_fs_watch(
     state: State<'_, AppState>,
     request: CodexNativeParamsRequest,
 ) -> std::result::Result<serde_json::Value, String> {
-    let params = decode_required_codex_params::<FsWatchParams>(request.params)
-        .map_err(|error| {
-                let msg = format!("{error:#}");
-                tracing::warn!(error = %msg, "command error");
-                msg
-            })?;
+    let params =
+        decode_required_codex_params::<FsWatchParams>(request.params).map_err(|error| {
+            let msg = format!("{error:#}");
+            tracing::warn!(error = %msg, "command error");
+            msg
+        })?;
     with_codex_adapter_value(&state, request.session_id, |adapter| {
         Box::pin(async move {
             serde_json::to_value(adapter.fs_watch(params).await?).map_err(anyhow::Error::from)
@@ -1558,12 +1560,12 @@ pub(super) async fn codex_fs_unwatch(
     state: State<'_, AppState>,
     request: CodexNativeParamsRequest,
 ) -> std::result::Result<serde_json::Value, String> {
-    let params = decode_required_codex_params::<FsUnwatchParams>(request.params)
-        .map_err(|error| {
-                let msg = format!("{error:#}");
-                tracing::warn!(error = %msg, "command error");
-                msg
-            })?;
+    let params =
+        decode_required_codex_params::<FsUnwatchParams>(request.params).map_err(|error| {
+            let msg = format!("{error:#}");
+            tracing::warn!(error = %msg, "command error");
+            msg
+        })?;
     with_codex_adapter_value(&state, request.session_id, |adapter| {
         Box::pin(async move {
             serde_json::to_value(adapter.fs_unwatch(params).await?).map_err(anyhow::Error::from)
@@ -1577,12 +1579,12 @@ pub(super) async fn codex_fuzzy_file_search(
     state: State<'_, AppState>,
     request: CodexNativeParamsRequest,
 ) -> std::result::Result<serde_json::Value, String> {
-    let params = decode_required_codex_params::<FuzzyFileSearchParams>(request.params)
-        .map_err(|error| {
-                let msg = format!("{error:#}");
-                tracing::warn!(error = %msg, "command error");
-                msg
-            })?;
+    let params =
+        decode_required_codex_params::<FuzzyFileSearchParams>(request.params).map_err(|error| {
+            let msg = format!("{error:#}");
+            tracing::warn!(error = %msg, "command error");
+            msg
+        })?;
     with_codex_adapter_value(&state, request.session_id, |adapter| {
         Box::pin(async move {
             serde_json::to_value(adapter.fuzzy_file_search(params).await?)
@@ -1599,10 +1601,10 @@ pub(super) async fn codex_fuzzy_file_search_session_start(
 ) -> std::result::Result<serde_json::Value, String> {
     let params = decode_required_codex_params::<FuzzyFileSearchSessionStartParams>(request.params)
         .map_err(|error| {
-                let msg = format!("{error:#}");
-                tracing::warn!(error = %msg, "command error");
-                msg
-            })?;
+            let msg = format!("{error:#}");
+            tracing::warn!(error = %msg, "command error");
+            msg
+        })?;
     with_codex_adapter_value(&state, request.session_id, |adapter| {
         Box::pin(async move {
             serde_json::to_value(adapter.start_fuzzy_file_search_session(params).await?)
@@ -1619,10 +1621,10 @@ pub(super) async fn codex_fuzzy_file_search_session_update(
 ) -> std::result::Result<serde_json::Value, String> {
     let params = decode_required_codex_params::<FuzzyFileSearchSessionUpdateParams>(request.params)
         .map_err(|error| {
-                let msg = format!("{error:#}");
-                tracing::warn!(error = %msg, "command error");
-                msg
-            })?;
+            let msg = format!("{error:#}");
+            tracing::warn!(error = %msg, "command error");
+            msg
+        })?;
     with_codex_adapter_value(&state, request.session_id, |adapter| {
         Box::pin(async move {
             serde_json::to_value(adapter.update_fuzzy_file_search_session(params).await?)
@@ -1639,10 +1641,10 @@ pub(super) async fn codex_fuzzy_file_search_session_stop(
 ) -> std::result::Result<serde_json::Value, String> {
     let params = decode_required_codex_params::<FuzzyFileSearchSessionStopParams>(request.params)
         .map_err(|error| {
-                let msg = format!("{error:#}");
-                tracing::warn!(error = %msg, "command error");
-                msg
-            })?;
+        let msg = format!("{error:#}");
+        tracing::warn!(error = %msg, "command error");
+        msg
+    })?;
     with_codex_adapter_value(&state, request.session_id, |adapter| {
         Box::pin(async move {
             serde_json::to_value(adapter.stop_fuzzy_file_search_session(params).await?)
@@ -1661,10 +1663,10 @@ pub(super) async fn codex_adapter_stop(
     let mut adapters = state.active_codex_adapters.lock().await;
     if let Some(mut adapter) = adapters.remove(&key) {
         adapter.stop().await.map_err(|error| {
-                let msg = format!("{error:#}");
-                tracing::warn!(error = %msg, "command error");
-                msg
-            })?;
+            let msg = format!("{error:#}");
+            tracing::warn!(error = %msg, "command error");
+            msg
+        })?;
     }
     Ok(())
 }
