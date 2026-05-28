@@ -2,6 +2,8 @@ export { isMobileSync, isTouchDevice } from './platform';
 
 export {
   performBiometricCheck,
+  getBiometricEnabled,
+  setBiometricEnabled,
 } from './biometric';
 
 export {

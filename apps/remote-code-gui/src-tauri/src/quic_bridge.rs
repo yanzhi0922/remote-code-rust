@@ -130,6 +130,7 @@ pub async fn quic_state(state: State<'_, QuicBridgeState>) -> std::result::Resul
     }
 }
 
+/// Used by the mobile entry point; desktop builds don't reference this directly.
 #[tauri::command]
 #[allow(dead_code)]
 pub async fn quic_health_probe(
@@ -149,6 +150,7 @@ pub async fn quic_health_probe(
     }
 }
 
+/// Used by the mobile entry point; desktop builds don't reference this directly.
 #[tauri::command]
 #[allow(dead_code)]
 pub async fn quic_get_metrics(

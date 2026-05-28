@@ -27,8 +27,23 @@ export async function performBiometricCheck(): Promise<boolean> {
   return authenticateWithBiometrics('请验证身份以访问 Remote Code');
 }
 
-async function getBiometricEnabled(): Promise<boolean> {
+export async function getBiometricEnabled(): Promise<boolean> {
   const { secureStoreGet } = await import('./secureStorage');
   const val = await secureStoreGet('biometric_enabled');
   return val === 'true';
+}
+
+export async function setBiometricEnabled(enabled: boolean): Promise<boolean> {
+  if (!enabled) {
+    const { secureStoreSet } = await import('./secureStorage');
+    await secureStoreSet('biometric_enabled', 'false');
+    return true;
+  }
+  const avail = await checkBiometricAvailability();
+  if (!avail.available) return false;
+  const ok = await authenticateWithBiometrics('启用生物识别需要先验证身份');
+  if (!ok) return false;
+  const { secureStoreSet } = await import('./secureStorage');
+  await secureStoreSet('biometric_enabled', 'true');
+  return true;
 }

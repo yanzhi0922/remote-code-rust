@@ -46,6 +46,11 @@ const mockOfflineQueue = vi.hoisted(() => ({
   enqueueCommand: vi.fn(),
 }));
 
+const mockBiometric = vi.hoisted(() => ({
+  getBiometricEnabled: vi.fn(() => Promise.resolve(false)),
+  setBiometricEnabled: vi.fn(() => Promise.resolve(true)),
+}));
+
 const mockRuntime = vi.hoisted(() => ({
   clearRemoteActiveSessionId: vi.fn(),
   clearRemoteAccessToken: vi.fn(),
@@ -70,6 +75,7 @@ vi.mock('../lib/mobile/pushNotifications', () => mockPush);
 vi.mock('../lib/mobile/deepLink', () => mockDeepLink);
 vi.mock('../lib/mobile/appLifecycle', () => mockLifecycle);
 vi.mock('./offline-queue', () => mockOfflineQueue);
+vi.mock('../lib/mobile/biometric', () => mockBiometric);
 
 const HEALTH_RESPONSE = {
   ok: true,

@@ -399,7 +399,7 @@ unicode-width = "0.2"
 vt100 = "0.16.2"
 http = "1"
 http-body-util = "0.1"
-keyring = { version = "3.6", default-features = false }
+keyring = { version = "3.6", default-features = false, features = ["apple-native", "windows-native", "sync-secret-service"] }
 lazy_static = "1"
 libc = "0.2"
 log = "0.4"

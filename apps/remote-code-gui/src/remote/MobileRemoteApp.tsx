@@ -51,6 +51,7 @@ import {
 } from '../lib/runtime';
 import { downloadRemoteArtifact } from '../lib/fileDownload';
 import { shareFile } from '../lib/mobile/fileDownload';
+import { getBiometricEnabled, setBiometricEnabled } from '../lib/mobile/biometric';
 import {
   initPushNotifications,
   registerPushTokenWithControlPlane,
@@ -173,6 +174,18 @@ export default function MobileRemoteApp() {
   }, []);
 
   const [activeTab, setActiveTab] = useState<MobileTab>('sessions');
+  const [bioEnabled, setBioEnabled] = useState(false);
+
+  // Load biometric enabled state on mount.
+  useEffect(() => {
+    void getBiometricEnabled().then(setBioEnabled);
+  }, []);
+
+  const handleToggleBiometric = useCallback(async () => {
+    const next = !bioEnabled;
+    const ok = await setBiometricEnabled(next);
+    if (ok) setBioEnabled(next);
+  }, [bioEnabled]);
   const approvalActions = useMemo(
     () => APPROVAL_DECISIONS.map((item) => ({ ...item, label: copy.approvalDecisionLabels[item.decision] })),
     [copy],
@@ -265,13 +278,27 @@ export default function MobileRemoteApp() {
             {activeSession && <StatePill state={activeSession.state} copy={copy} />}
           </div>
         </div>
-        <button
-          type="button"
-          onClick={handleClearSavedToken}
-          className="ml-3 shrink-0 rounded-xl border border-rc-border-primary bg-rc-bg-hover px-3 py-2 text-xs font-medium text-rc-text-secondary active:bg-rc-bg-surface"
-        >
-          {copy.signOutAction}
-        </button>
+        <div className="ml-3 flex shrink-0 items-center gap-2">
+          <button
+            type="button"
+            onClick={handleToggleBiometric}
+            className={`rounded-xl border px-3 py-2 text-xs font-medium active:bg-rc-bg-surface ${
+              bioEnabled
+                ? 'border-emerald-600/40 bg-emerald-500/10 text-emerald-400'
+                : 'border-rc-border-primary bg-rc-bg-hover text-rc-text-secondary'
+            }`}
+            title={bioEnabled ? '禁用生物识别' : '启用生物识别'}
+          >
+            {bioEnabled ? '🔒' : '🔓'}
+          </button>
+          <button
+            type="button"
+            onClick={handleClearSavedToken}
+            className="shrink-0 rounded-xl border border-rc-border-primary bg-rc-bg-hover px-3 py-2 text-xs font-medium text-rc-text-secondary active:bg-rc-bg-surface"
+          >
+            {copy.signOutAction}
+          </button>
+        </div>
       </header>
 
       {/* ── Tab content (full screen) ── */}

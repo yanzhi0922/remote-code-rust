@@ -87,8 +87,8 @@ describe('layout SettingsPanel', () => {
 
     expect(screen.getByText('安装和数据目录')).toBeInTheDocument();
     expect(screen.getByText('Remote Code Home')).toBeInTheDocument();
-    expect(screen.getByText('C:\\Users\\Yanzh\\.remote-code-rust')).toBeInTheDocument();
-    expect(screen.getByText('C:\\Users\\Yanzh\\.remote-code-rust\\logs')).toBeInTheDocument();
-    expect(screen.getByText('C:\\Users\\Yanzh\\.remote-code-rust\\remote_control.json')).toBeInTheDocument();
+    expect(screen.getByText('/test/profile')).toBeInTheDocument();
+    expect(screen.getByText('/test/logs')).toBeInTheDocument();
+    expect(screen.getByText('/test/remote_control.json')).toBeInTheDocument();
   });
 });

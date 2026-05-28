@@ -1,0 +1,88 @@
+name: Mobile Build
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/mobile-build.yml"
+      - "apps/remote-code-gui/**"
+      - "crates/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+  pull_request:
+    branches: [main]
+    paths:
+      - "apps/remote-code-gui/**"
+      - "crates/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+  CARGO_NET_RETRY: "10"
+
+jobs:
+  android-check:
+    name: Android Rust Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.93.1
+          targets: aarch64-linux-android
+
+      - name: Install Android NDK dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config \
+            libssl-dev
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: android-aarch64
+
+      - name: Cargo check for Android target
+        run: cargo check --package remote-code-gui --features mobile --target aarch64-linux-android
+
+  ios-check:
+    name: iOS Rust Check
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.93.1
+          targets: aarch64-apple-ios
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ios-aarch64
+
+      - name: Cargo check for iOS target
+        run: cargo check --package remote-code-gui --features mobile --target aarch64-apple-ios
+
+  frontend-check:
+    name: Frontend Check
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/remote-code-gui
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: apps/remote-code-gui/package-lock.json
+
+      - run: npm ci
+      - run: npm test
+      - run: npx tsc --noEmit
+      - run: npx vite build

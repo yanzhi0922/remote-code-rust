@@ -4,6 +4,7 @@ import {
   Blocks,
   Bot,
   Check,
+  Copy,
   Eye,
   EyeOff,
   Gauge,
@@ -78,6 +79,32 @@ function Field({
       <label className="block text-sm font-medium text-rc-text-primary">{label}</label>
       {children}
       {hint && <p className="text-xs leading-5 text-rc-text-tertiary">{hint}</p>}
+    </div>
+  );
+}
+
+function RuntimePathRow({ label, path }: { label: string; path: string }) {
+  const copyPath = () => {
+    if (typeof navigator === 'undefined' || !navigator.clipboard) return;
+    void navigator.clipboard.writeText(path);
+  };
+
+  return (
+    <div className="grid gap-2 border-b border-rc-border-secondary px-3 py-2.5 last:border-b-0 sm:grid-cols-[180px_minmax(0,1fr)_auto] sm:items-center">
+      <div className="text-xs font-medium uppercase tracking-wide text-rc-text-tertiary">
+        {label}
+      </div>
+      <code className="min-w-0 break-all rounded bg-rc-bg-base px-2 py-1 font-mono text-xs text-rc-text-secondary">
+        {path}
+      </code>
+      <button
+        type="button"
+        onClick={copyPath}
+        className="inline-flex h-7 w-fit items-center gap-1 rounded-md border border-rc-border-primary px-2 text-xs font-medium text-rc-text-secondary transition-colors hover:bg-rc-bg-hover hover:text-rc-text-primary"
+      >
+        <Copy size={13} />
+        复制
+      </button>
     </div>
   );
 }
@@ -681,11 +708,34 @@ function RuntimeTab({
   current: FullSettings;
   onChange: (key: keyof FullSettings, value: unknown) => void;
 }) {
+  const runtimePaths = current.runtime_paths;
+
   return (
     <div className="space-y-6">
       <div>
         <h3 className="text-sm font-semibold text-rc-text-primary">运行参数</h3>
       </div>
+
+      <section className="space-y-3">
+        <div className="flex items-end justify-between gap-3">
+          <div>
+            <h4 className="text-sm font-semibold text-rc-text-primary">安装和数据目录</h4>
+          </div>
+        </div>
+
+        <div className="overflow-hidden rounded-md border border-rc-border-secondary bg-rc-bg-secondary">
+          <RuntimePathRow label="Remote Code Home" path={runtimePaths.profile_dir} />
+          <RuntimePathRow label="Sessions" path={runtimePaths.sessions_dir} />
+          <RuntimePathRow label="Artifacts" path={runtimePaths.artifacts_dir} />
+          <RuntimePathRow label="Logs" path={runtimePaths.logs_dir} />
+          <RuntimePathRow label="Cache" path={runtimePaths.cache_dir} />
+          <RuntimePathRow label="Agents" path={runtimePaths.agents_dir} />
+          <RuntimePathRow label="Remote Control" path={runtimePaths.remote_control_file} />
+          <RuntimePathRow label="Projects DB" path={runtimePaths.gui_projects_file} />
+          <RuntimePathRow label="Providers DB" path={runtimePaths.gui_providers_file} />
+          <RuntimePathRow label="Settings DB" path={runtimePaths.gui_settings_file} />
+        </div>
+      </section>
 
       <Field label="权限模式">
         <div className="space-y-2">

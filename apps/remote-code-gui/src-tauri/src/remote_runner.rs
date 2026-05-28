@@ -31,6 +31,7 @@ use tracing::{error, info, warn};
 use uuid::Uuid;
 
 use crate::dto::{GuiSettingsFile, ProjectListFile, ProviderConfig, ProviderConfigList};
+use crate::paths::{REMOTE_CONTROL_FILE_NAME, RuntimePathLayout};
 use crate::state::{KEYRING_SERVICE, PROJECTS_FILE_NAME, PROVIDERS_FILE_NAME, SETTINGS_FILE_NAME};
 
 use rc_control_plane::RunnerCommandPullResponse;
@@ -337,17 +338,43 @@ fn active_profile_model(provider: &ProviderConfig) -> Option<String> {
     })
 }
 
-fn read_json_file<T: for<'de> Deserialize<'de>>(path: PathBuf) -> Option<T> {
+fn read_json_file<T: for<'de> Deserialize<'de>>(path: &Path) -> Option<T> {
     std::fs::read_to_string(path)
         .ok()
         .and_then(|contents| serde_json::from_str::<T>(&contents).ok())
 }
 
+fn write_json_file<T: Serialize>(path: &Path, value: &T) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let contents = serde_json::to_vec_pretty(value)?;
+    std::fs::write(path, contents)?;
+    Ok(())
+}
+
+fn read_json_config_with_legacy_migration<T>(app: &AppHandle, file_name: &str) -> Option<T>
+where
+    T: for<'de> Deserialize<'de> + Serialize,
+{
+    let canonical = app_config_path(app, file_name).ok()?;
+    if let Some(value) = read_json_file(&canonical) {
+        return Some(value);
+    }
+
+    let legacy = legacy_app_config_path(app, file_name)?;
+    let value = read_json_file(&legacy)?;
+    if write_json_file(&canonical, &value).is_ok() {
+        let _ = std::fs::remove_file(legacy);
+    }
+    Some(value)
+}
+
 fn provider_from_configs(app: &AppHandle) -> Option<RemoteProviderSelection> {
     let providers: ProviderConfigList =
-        read_json_file(app_config_path(app, PROVIDERS_FILE_NAME).ok()?)?;
+        read_json_config_with_legacy_migration(app, PROVIDERS_FILE_NAME)?;
     let settings: GuiSettingsFile =
-        read_json_file(app_config_path(app, SETTINGS_FILE_NAME).ok()?).unwrap_or_default();
+        read_json_config_with_legacy_migration(app, SETTINGS_FILE_NAME).unwrap_or_default();
     let selected_name = settings
         .provider_name
         .as_deref()
@@ -436,32 +463,53 @@ fn generate_secret_token() -> String {
 }
 
 fn remote_settings_path(app: &AppHandle) -> Result<PathBuf> {
-    let dir = app
-        .path()
-        .app_config_dir()
-        .context("failed to get app config dir")?;
-    Ok(dir.join("remote_control.json"))
+    app_config_path(app, REMOTE_CONTROL_FILE_NAME)
 }
 
-fn app_config_path(app: &AppHandle, file_name: &str) -> Result<PathBuf> {
-    let dir = app
-        .path()
+fn app_config_path(_app: &AppHandle, file_name: &str) -> Result<PathBuf> {
+    let layout = RuntimePathLayout::discover()
+        .context("failed to locate the Remote Code profile directory")?;
+    Ok(layout.profile_dir.join(file_name))
+}
+
+fn legacy_app_config_path(app: &AppHandle, file_name: &str) -> Option<PathBuf> {
+    app.path()
         .app_config_dir()
-        .context("failed to get app config dir")?;
-    Ok(dir.join(file_name))
+        .ok()
+        .map(|dir| dir.join(file_name))
 }
 
 fn load_remote_settings(app: &AppHandle) -> RemoteControlSettings {
     let Ok(path) = remote_settings_path(app) else {
         return RemoteControlSettings::default();
     };
-    let Ok(contents) = std::fs::read_to_string(path) else {
+    if let Ok(contents) = std::fs::read_to_string(&path) {
+        return match serde_json::from_str::<RemoteControlSettings>(&contents) {
+            Ok(settings) => settings,
+            Err(error) => {
+                warn!("Remote control: ignoring invalid settings file: {error}");
+                RemoteControlSettings::default()
+            }
+        };
+    }
+
+    let Some(legacy_path) = legacy_app_config_path(app, REMOTE_CONTROL_FILE_NAME) else {
+        return RemoteControlSettings::default();
+    };
+    let Ok(contents) = std::fs::read_to_string(&legacy_path) else {
         return RemoteControlSettings::default();
     };
     match serde_json::from_str::<RemoteControlSettings>(&contents) {
-        Ok(settings) => settings,
+        Ok(settings) => {
+            if let Err(error) = save_remote_settings(app, &settings) {
+                warn!("Remote control: failed to migrate settings file: {error}");
+            } else {
+                let _ = std::fs::remove_file(legacy_path);
+            }
+            settings
+        }
         Err(error) => {
-            warn!("Remote control: ignoring invalid settings file: {error}");
+            warn!("Remote control: ignoring invalid legacy settings file: {error}");
             RemoteControlSettings::default()
         }
     }
@@ -586,11 +634,7 @@ fn get_remote_password_hash(app: &AppHandle) -> Option<String> {
 
 /// Get the stored remote control username (if any).
 fn get_remote_username(app: &AppHandle) -> Option<String> {
-    let path = app_config_path(app, REMOTE_USERNAME_FILE).ok()?;
-    std::fs::read_to_string(path)
-        .ok()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
+    read_text_config_with_legacy_migration(app, REMOTE_USERNAME_FILE)
 }
 
 /// Hash a password with SHA-256 for storage.
@@ -691,12 +735,32 @@ fn keyring_set(key: &str, value: &str) -> bool {
         .is_some()
 }
 
-fn read_legacy_secret_file(app: &AppHandle, file_name: &str) -> Option<String> {
-    let path = app_config_path(app, file_name).ok()?;
+fn read_nonempty_text_file(path: &Path) -> Option<String> {
     std::fs::read_to_string(path)
         .ok()
         .map(|value| value.trim().to_owned())
         .filter(|value| !value.is_empty())
+}
+
+fn read_text_config_with_legacy_migration(app: &AppHandle, file_name: &str) -> Option<String> {
+    let canonical = app_config_path(app, file_name).ok()?;
+    if let Some(value) = read_nonempty_text_file(&canonical) {
+        return Some(value);
+    }
+
+    let legacy = legacy_app_config_path(app, file_name)?;
+    let value = read_nonempty_text_file(&legacy)?;
+    if let Some(parent) = canonical.parent()
+        && std::fs::create_dir_all(parent).is_ok()
+        && std::fs::write(&canonical, &value).is_ok()
+    {
+        let _ = std::fs::remove_file(legacy);
+    }
+    Some(value)
+}
+
+fn read_legacy_secret_file(app: &AppHandle, file_name: &str) -> Option<String> {
+    read_text_config_with_legacy_migration(app, file_name)
 }
 
 fn read_secret_with_legacy_file_migration(

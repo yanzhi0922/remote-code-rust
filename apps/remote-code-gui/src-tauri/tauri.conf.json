@@ -25,7 +25,7 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["nsis"],
+    "targets": ["nsis", "app", "dmg"],
     "publisher": "Remote Code",
     "homepage": "https://github.com/yanzhi0922/remote-code-rust",
     "category": "DeveloperTool",
@@ -51,6 +51,32 @@
         "startMenuFolder": "Remote Code",
         "installerHooks": "windows/installer-hooks.nsh"
       }
+    },
+    "iOS": {
+      "frameworks": [],
+      "minimumSystemVersion": "14.0",
+      "developmentTeam": ""
+    },
+    "android": {
+      "minSdkVersion": 24
+    }
+  },
+  "plugins": {
+    "notification": {
+      "all": {
+        "icons": [
+          {
+            "path": "icons/128x128.png"
+          }
+        ]
+      }
+    },
+    "deep-link": {
+      "mobile": [
+        {
+          "schemes": ["remotecode"]
+        }
+      ]
     }
   }
 }

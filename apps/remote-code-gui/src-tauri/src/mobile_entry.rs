@@ -57,6 +57,8 @@ pub fn run() {
             crate::quic_bridge::quic_send_command,
             crate::quic_bridge::quic_disconnect,
             crate::quic_bridge::quic_state,
+            crate::quic_bridge::quic_health_probe,
+            crate::quic_bridge::quic_get_metrics,
         ])
         .run(tauri::generate_context!())
         .unwrap_or_else(|error| panic!("error while running tauri application: {error}"));
