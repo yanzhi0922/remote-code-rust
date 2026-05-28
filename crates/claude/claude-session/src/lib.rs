@@ -135,6 +135,7 @@ impl SessionStore {
     }
 
     /// Return a reference to the application paths.
+    #[inline]
     #[must_use]
     pub fn paths(&self) -> &AppPaths {
         &self.paths
@@ -624,6 +625,11 @@ impl SessionStore {
             .open(&transcript_path)?;
         serde_json::to_writer(&mut file, event)?;
         file.write_all(b"\n")?;
+        // Periodic fsync for durability. sync_data is cheaper than sync_all
+        // (skips metadata sync) and still ensures data reaches disk.
+        if let Err(e) = file.sync_data() {
+            let _ = e; // Periodic fsync — failure is non-critical
+        }
         Ok(())
     }
 
@@ -716,15 +722,17 @@ impl SessionStore {
             // FILE_FLAG_DELETE_ON_CLOSE semantics. Use std::fs::rename which may
             // fail if the target exists, then fall back to copy+delete.
             if std::fs::rename(&temp_path, &transcript_path).is_err() {
-                std::fs::copy(&temp_path, &transcript_path)
-                    .with_context(|| format!("failed to copy temp to {}", transcript_path.display()))?;
+                std::fs::copy(&temp_path, &transcript_path).with_context(|| {
+                    format!("failed to copy temp to {}", transcript_path.display())
+                })?;
                 let _ = std::fs::remove_file(&temp_path);
             }
         }
         #[cfg(not(windows))]
         {
-            std::fs::rename(&temp_path, &transcript_path)
-                .with_context(|| format!("failed to rename temp to {}", transcript_path.display()))?;
+            std::fs::rename(&temp_path, &transcript_path).with_context(|| {
+                format!("failed to rename temp to {}", transcript_path.display())
+            })?;
         }
 
         self.touch(session_id)?;

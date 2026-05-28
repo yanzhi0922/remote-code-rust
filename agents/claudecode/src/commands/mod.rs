@@ -70,6 +70,43 @@ fn app_config_dir() -> PathBuf {
     }
 }
 
+/// Ensure the config directory exists and return it.
+fn ensure_config_dir() -> Result<PathBuf> {
+    let dir = app_config_dir();
+    std::fs::create_dir_all(&dir)
+        .with_context(|| format!("creating config dir {}", dir.display()))?;
+    Ok(dir)
+}
+
+/// Read a JSON config file, returning `Value::Null` if missing or invalid.
+fn read_json_config(name: &str) -> Value {
+    let path = app_config_dir().join(name);
+    if path.exists() {
+        std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or(Value::Null)
+    } else {
+        Value::Null
+    }
+}
+
+/// Write a JSON config file, creating the directory if needed.
+fn write_json_config(name: &str, value: &Value) -> Result<()> {
+    let dir = ensure_config_dir()?;
+    std::fs::write(dir.join(name), serde_json::to_string_pretty(value)?)
+        .with_context(|| format!("writing config file {name}"))
+}
+
+/// Read a string field from a JSON config file, with a default.
+fn read_config_str(name: &str, field: &str, default: &str) -> String {
+    read_json_config(name)
+        .get(field)
+        .and_then(|v| v.as_str())
+        .unwrap_or(default)
+        .to_owned()
+}
+
 // ── cost ───────────────────────────────────────────────────────────────
 
 /// Show current cost tracking and token usage.
@@ -87,21 +124,35 @@ pub fn run_cost(config: &RuntimeConfig, store: &SessionStore, args: CostArgs) ->
     });
 
     if args.reset {
+        // Emit a reset event so the runtime can clear its cost tracking state.
+        // The actual token counters live in the provider layer and are reset
+        // there when they see this event.
+        store.append_named_event(
+            config.session_id,
+            "cost_reset",
+            serde_json::json!({"reset_at": chrono::Utc::now().to_rfc3339()}),
+        )?;
+        if args.json {
+            println!("{}", serde_json::json!({"status": "reset"}));
+        } else {
+            println!("Cost counters reset for session {}.", config.session_id);
+        }
         return Ok(());
     }
     if args.json {
         println!(
             "{}",
             serde_json::json!({
-                "total_cost_usd": 0.0_f64,
                 "input_tokens": inp,
                 "output_tokens": out,
+                "cost_calculation": "not_yet_available",
             })
         );
     } else {
-        println!("Cost: ${:.6}", 0.0_f64);
+        println!("Token usage:");
         println!("  Input tokens:  {inp}");
         println!("  Output tokens: {out}");
+        println!("  (Cost calculation not yet available — requires pricing table integration)");
     }
     Ok(())
 }
@@ -126,8 +177,7 @@ pub fn run_memory(
                         .as_ref()
                         .and_then(|p| p.as_object())
                         .and_then(|m| nested_str(m, &["key"]));
-                    key.as_ref()
-                        .is_none_or(|target| k == Some(target.as_str()))
+                    key.as_ref().is_none_or(|target| k == Some(target.as_str()))
                 })
                 .collect();
             if json {
@@ -271,7 +321,7 @@ pub fn run_provider(config: &mut RuntimeConfig, command: ProviderCommand) -> Res
 
 /// Compact the current session context by summarizing older conversation
 /// entries and keeping only the most recent N messages in full.
-pub async fn run_compact(config: &mut RuntimeConfig, store: &SessionStore) -> Result<()> {
+pub fn run_compact(config: &mut RuntimeConfig, store: &SessionStore) -> Result<()> {
     let conversation = store.load_conversation(config.session_id)?;
     let total = conversation.len();
 
@@ -307,40 +357,27 @@ pub async fn run_compact(config: &mut RuntimeConfig, store: &SessionStore) -> Re
 
 /// Show or set the UI theme.
 pub fn run_theme(_config: &RuntimeConfig, args: ThemeArgs) -> Result<()> {
-    let config_dir = app_config_dir();
-    let theme_file = config_dir.join("theme.json");
+    const AVAILABLE: &[&str] = &["default", "dark", "light", "monokai", "solarized"];
 
     if let Some(name) = &args.name {
-        // Write theme selection to config
-        std::fs::create_dir_all(&config_dir).ok();
         let theme_data = serde_json::json!({"theme": name});
-        std::fs::write(&theme_file, serde_json::to_string_pretty(&theme_data)?)?;
+        write_json_config("theme.json", &theme_data)?;
         if args.json {
             println!("{}", serde_json::json!({"theme": name, "status": "set"}));
         } else {
             println!("Theme set to '{name}'.");
         }
-    } else if args.json {
-        let current = if theme_file.exists() {
-            let data: serde_json::Value =
-                serde_json::from_str(&std::fs::read_to_string(&theme_file).unwrap_or_default())
-                    .unwrap_or_default();
-            data.get("theme").and_then(|v| v.as_str()).unwrap_or("default").to_string()
-        } else {
-            "default".to_string()
-        };
-        println!("{}", serde_json::json!({"current": current, "available": ["default", "dark", "light", "monokai", "solarized"]}));
     } else {
-        let current = if theme_file.exists() {
-            let data: serde_json::Value =
-                serde_json::from_str(&std::fs::read_to_string(&theme_file).unwrap_or_default())
-                    .unwrap_or_default();
-            data.get("theme").and_then(|v| v.as_str()).unwrap_or("default").to_string()
+        let current = read_config_str("theme.json", "theme", "default");
+        if args.json {
+            println!(
+                "{}",
+                serde_json::json!({"current": current, "available": AVAILABLE})
+            );
         } else {
-            "default".to_string()
-        };
-        println!("Current theme: {current}");
-        println!("Available: default, dark, light, monokai, solarized");
+            println!("Current theme: {current}");
+            println!("Available: {}", AVAILABLE.join(", "));
+        }
     }
     Ok(())
 }
@@ -348,9 +385,11 @@ pub fn run_theme(_config: &RuntimeConfig, args: ThemeArgs) -> Result<()> {
 // ── feedback ──────────────────────────────────────────────────────────
 
 /// Send feedback to the developer.
-pub async fn run_feedback(config: &RuntimeConfig, args: FeedbackArgs) -> Result<()> {
+pub fn run_feedback(config: &RuntimeConfig, args: FeedbackArgs) -> Result<()> {
     let message = if args.message.is_empty() {
-        return Err(anyhow!("feedback message is required — usage: feedback <message>"));
+        return Err(anyhow!(
+            "feedback message is required — usage: feedback <message>"
+        ));
     } else {
         args.message.join(" ")
     };
@@ -383,7 +422,7 @@ pub async fn run_feedback(config: &RuntimeConfig, args: FeedbackArgs) -> Result<
 // ── summary ───────────────────────────────────────────────────────────
 
 /// Summarize the current session.
-pub async fn run_summary(config: &mut RuntimeConfig, store: &SessionStore) -> Result<()> {
+pub fn run_summary(config: &mut RuntimeConfig, store: &SessionStore) -> Result<()> {
     let conversation = store.load_conversation(config.session_id)?;
     let events = store.load_events(config.session_id).unwrap_or_default();
     let msg_count = conversation.len();
@@ -398,9 +437,7 @@ pub async fn run_summary(config: &mut RuntimeConfig, store: &SessionStore) -> Re
                 && e.payload
                     .as_ref()
                     .and_then(|p| p.as_object())
-                    .is_some_and(|m| {
-                        m.get("is_error").and_then(|v| v.as_bool()).unwrap_or(false)
-                    })
+                    .is_some_and(|m| m.get("is_error").and_then(|v| v.as_bool()).unwrap_or(false))
         })
         .count();
 
@@ -440,12 +477,11 @@ pub fn run_files(config: &RuntimeConfig, args: FilesArgs) -> Result<()> {
         let files: Vec<Value> = entries
             .iter()
             .map(|e| {
-                let is_dir = e.metadata().map(|m| m.is_dir()).unwrap_or(false);
-                let size = e.metadata().map(|m| m.len()).unwrap_or(0);
+                let meta = e.metadata().ok();
                 serde_json::json!({
                     "name": e.file_name().to_string_lossy(),
-                    "is_dir": is_dir,
-                    "size": size,
+                    "is_dir": meta.as_ref().is_some_and(|m| m.is_dir()),
+                    "size": meta.map_or(0, |m| m.len()),
                 })
             })
             .collect();
@@ -454,8 +490,9 @@ pub fn run_files(config: &RuntimeConfig, args: FilesArgs) -> Result<()> {
         println!("Files in {}:", dir.display());
         for entry in &entries {
             let name = entry.file_name().to_string_lossy().to_string();
-            let is_dir = entry.metadata().map(|m| m.is_dir()).unwrap_or(false);
-            let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
+            let meta = entry.metadata().ok();
+            let is_dir = meta.as_ref().is_some_and(|m| m.is_dir());
+            let size = meta.map_or(0, |m| m.len());
             let kind = if is_dir { "[DIR]" } else { "[FILE]" };
             println!("  {kind} {name} ({size} B)");
         }
@@ -465,24 +502,36 @@ pub fn run_files(config: &RuntimeConfig, args: FilesArgs) -> Result<()> {
 
 // ── ctx ───────────────────────────────────────────────────────────────
 
+/// Approximate context usage estimate.
+///
+/// Token count is estimated from text length (rough heuristic).
+/// For precise counts, use the model's tokenizer.
+fn estimate_tokens(text: &str) -> u64 {
+    // Rough heuristic: 1 token ≈ 4 bytes for English/code,
+    // but round up to avoid under-counting.
+    (text.len() as u64).div_ceil(4)
+}
+
 /// View context usage details.
 pub fn run_ctx(config: &RuntimeConfig, store: &SessionStore, args: CtxArgs) -> Result<()> {
     let conversation = store.load_conversation(config.session_id).ok();
     let msg_count = conversation.as_ref().map(|c| c.len()).unwrap_or(0);
+    let estimated_tokens = conversation
+        .as_ref()
+        .map(|c| c.iter().map(|e| estimate_tokens(&e.text)).sum::<u64>())
+        .unwrap_or(0);
 
     if args.json {
         println!(
             "{}",
             serde_json::json!({
-                "used": msg_count * 500,
-                "total": 200000,
-                "threshold": 160000,
+                "estimated_tokens": estimated_tokens,
                 "messages": msg_count,
+                "note": "estimate based on text length, not model tokenizer",
             })
         );
     } else {
-        let rough_tokens = msg_count * 500;
-        println!("Context usage: ~{rough_tokens} / 200,000 tokens (threshold: 160,000)");
+        println!("Context usage: ~{estimated_tokens} tokens across {msg_count} messages");
         if args.detailed {
             let model = config.provider.model.as_deref().unwrap_or("unknown");
             println!("  Messages:  {msg_count}");
@@ -517,7 +566,7 @@ pub fn run_diff(config: &RuntimeConfig, store: &SessionStore, args: DiffArgs) ->
 // ── copy ──────────────────────────────────────────────────────────────
 
 /// Copy session content to clipboard.
-pub async fn run_copy(config: &RuntimeConfig, store: &SessionStore, args: CopyArgs) -> Result<()> {
+pub fn run_copy(config: &RuntimeConfig, store: &SessionStore, args: CopyArgs) -> Result<()> {
     let session_id = args.session_id.unwrap_or(config.session_id);
     let conversation = store.load_conversation(session_id)?;
     let text: String = conversation
@@ -555,7 +604,7 @@ pub async fn run_copy(config: &RuntimeConfig, store: &SessionStore, args: CopyAr
 // ── P1-A1: Low-complexity commands ────────────────────────────────────
 
 /// Show help for commands.
-pub async fn run_help(args: HelpArgs) -> Result<()> {
+pub fn run_help(args: HelpArgs) -> Result<()> {
     if let Some(cmd) = &args.command {
         println!("Help for `{cmd}`: (detailed help not yet implemented)");
     } else if args.json {
@@ -695,12 +744,11 @@ pub fn run_fast(config: &mut RuntimeConfig, args: FastArgs) -> Result<()> {
 }
 
 /// Mobile device pairing and management.
-pub async fn run_mobile(args: MobileArgs) -> Result<()> {
+pub fn run_mobile(mut args: MobileArgs) -> Result<()> {
     let config_dir = app_config_dir();
     let devices_file = config_dir.join("mobile-devices.json");
 
-    if args.unpair.is_some() {
-        let device_id = args.unpair.as_deref().unwrap();
+    if let Some(device_id) = args.unpair.take() {
         let devices: Vec<serde_json::Value> = if devices_file.exists() {
             let data = std::fs::read_to_string(&devices_file).unwrap_or_default();
             serde_json::from_str(&data).unwrap_or_default()
@@ -709,7 +757,7 @@ pub async fn run_mobile(args: MobileArgs) -> Result<()> {
         };
         let remaining: Vec<_> = devices
             .iter()
-            .filter(|d| d.get("id").and_then(|v| v.as_str()) != Some(device_id))
+            .filter(|d| d.get("id").and_then(|v| v.as_str()) != Some(device_id.as_str()))
             .collect();
         std::fs::write(&devices_file, serde_json::to_string(&remaining)?)?;
         if args.json {
@@ -722,7 +770,10 @@ pub async fn run_mobile(args: MobileArgs) -> Result<()> {
         println!("Pairing code generated.");
         println!("On your mobile device, open the app and enter pairing code: {device_id}");
         if args.json {
-            println!("{}", serde_json::json!({"pairing_code": device_id, "status": "waiting"}));
+            println!(
+                "{}",
+                serde_json::json!({"pairing_code": device_id, "status": "waiting"})
+            );
         }
     } else if args.list {
         let devices: Vec<serde_json::Value> = if devices_file.exists() {
@@ -744,7 +795,10 @@ pub async fn run_mobile(args: MobileArgs) -> Result<()> {
             }
         }
     } else if args.json {
-        println!("{}", serde_json::json!({"status": "ready", "paired_devices": 0}));
+        println!(
+            "{}",
+            serde_json::json!({"status": "ready", "paired_devices": 0})
+        );
     } else {
         println!("Mobile: use --pair, --unpair <id>, or --list");
     }
@@ -752,7 +806,7 @@ pub async fn run_mobile(args: MobileArgs) -> Result<()> {
 }
 
 /// Show or configure desktop pairing.
-pub async fn run_desktop(args: DesktopArgs) -> Result<()> {
+pub fn run_desktop(args: DesktopArgs) -> Result<()> {
     let config_dir = app_config_dir();
     let desktop_file = config_dir.join("desktop-connections.json");
 
@@ -808,21 +862,26 @@ pub fn run_sandbox_toggle(_config: &mut RuntimeConfig) -> Result<()> {
     let current: bool = if sandbox_file.exists() {
         let data: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&sandbox_file)?)?;
-        data.get("enabled").and_then(|v| v.as_bool()).unwrap_or(false)
+        data.get("enabled")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
     } else {
         false
     };
 
     let new_state = !current;
     std::fs::create_dir_all(&config_dir).ok();
-    std::fs::write(&sandbox_file, serde_json::to_string(&serde_json::json!({"enabled": new_state}))?)?;
+    std::fs::write(
+        &sandbox_file,
+        serde_json::to_string(&serde_json::json!({"enabled": new_state}))?,
+    )?;
     let label = if new_state { "enabled" } else { "disabled" };
     println!("Sandbox execution {label}.");
     Ok(())
 }
 
 /// Reload all plugins from disk.
-pub async fn run_reload_plugins(_config: &mut RuntimeConfig) -> Result<()> {
+pub fn run_reload_plugins(_config: &mut RuntimeConfig) -> Result<()> {
     let config_dir = app_config_dir();
     let plugin_dir = config_dir.join("plugins");
 
@@ -876,7 +935,10 @@ pub fn run_add_dir(config: &RuntimeConfig, args: AddDirArgs) -> Result<()> {
     std::fs::write(&dirs_file, serde_json::to_string(&extra_dirs)?)?;
 
     if args.json {
-        println!("{}", serde_json::json!({"added": name, "path": abs.to_string_lossy().to_string()}));
+        println!(
+            "{}",
+            serde_json::json!({"added": name, "path": abs.to_string_lossy().to_string()})
+        );
     } else {
         println!("Added directory '{name}' -> {}.", abs.display());
     }
@@ -919,7 +981,7 @@ pub fn run_mock_limits(_config: &RuntimeConfig, args: MockLimitsArgs) -> Result<
 }
 
 /// Manage GitHub achievement stickers.
-pub async fn run_stickers(_config: &RuntimeConfig, args: StickersArgs) -> Result<()> {
+pub fn run_stickers(_config: &RuntimeConfig, args: StickersArgs) -> Result<()> {
     let config_dir = app_config_dir();
     let stickers_file = config_dir.join("stickers.json");
 
@@ -1023,11 +1085,24 @@ pub fn run_stats(config: &RuntimeConfig, store: &SessionStore, args: StatsArgs) 
 }
 
 /// Send a "good Claude" feedback signal.
-pub async fn run_good_claude(config: &RuntimeConfig) -> Result<()> {
-    eprintln!(
-        "Positive feedback recorded for session {}",
-        config.session_id
-    );
+pub fn run_good_claude(config: &RuntimeConfig) -> Result<()> {
+    let config_dir = ensure_config_dir()?;
+    let feedback_file = config_dir.join("feedback.jsonl");
+    let entry = serde_json::json!({
+        "type": "positive",
+        "message": "good claude",
+        "session_id": config.session_id.to_string(),
+        "version": env!("CARGO_PKG_VERSION"),
+    });
+    std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&feedback_file)
+        .and_then(|mut f| {
+            use std::io::Write;
+            writeln!(f, "{entry}")
+        })?;
+
     println!("Thank you! Glad I could help.");
     Ok(())
 }
@@ -1053,7 +1128,12 @@ pub fn run_diff_real(
         println!("Diff for session {sid}: {} entries", conversation.len());
         for entry in conversation.iter().rev().take(10).rev() {
             let preview = if entry.text.len() > 80 {
-                let end = entry.text.char_indices().take(80).last().map_or(0, |(i, c)| i + c.len_utf8());
+                let end = entry
+                    .text
+                    .char_indices()
+                    .take(80)
+                    .last()
+                    .map_or(0, |(i, c)| i + c.len_utf8());
                 format!("{}...", &entry.text[..end])
             } else {
                 entry.text.clone()
@@ -1149,9 +1229,12 @@ pub fn run_branch(_config: &RuntimeConfig, command: BranchCommand) -> Result<()>
 }
 
 /// View or set remote env vars.
-pub async fn run_remote_env(args: RemoteEnvArgs) -> Result<()> {
+pub fn run_remote_env(args: RemoteEnvArgs) -> Result<()> {
     // Validate that only one of --get, --set, --unset is specified.
-    let op_count = [&args.get, &args.set, &args.unset].iter().filter(|o| o.is_some()).count();
+    let op_count = [&args.get, &args.set, &args.unset]
+        .iter()
+        .filter(|o| o.is_some())
+        .count();
     if op_count > 1 {
         return Err(anyhow!(
             "only one of --get, --set, or --unset may be specified at a time"
@@ -1240,7 +1323,7 @@ pub async fn run_remote_env(args: RemoteEnvArgs) -> Result<()> {
 }
 
 /// Log in with a provider.
-pub async fn run_login(_config: &RuntimeConfig, args: LoginArgs) -> Result<()> {
+pub fn run_login(_config: &RuntimeConfig, args: LoginArgs) -> Result<()> {
     let provider = args.provider.as_deref().unwrap_or("anthropic");
 
     let config_dir = app_config_dir();
@@ -1253,7 +1336,10 @@ pub async fn run_login(_config: &RuntimeConfig, args: LoginArgs) -> Result<()> {
             serde_json::from_str(&std::fs::read_to_string(&auth_file)?)?;
         if existing.get("provider").and_then(|v| v.as_str()) == Some(provider) {
             if args.json {
-                println!("{}", serde_json::json!({"status": "already_logged_in", "provider": provider}));
+                println!(
+                    "{}",
+                    serde_json::json!({"status": "already_logged_in", "provider": provider})
+                );
             } else {
                 println!("Already logged in to '{provider}'.");
             }
@@ -1277,7 +1363,10 @@ pub async fn run_login(_config: &RuntimeConfig, args: LoginArgs) -> Result<()> {
         });
         std::fs::write(&auth_file, serde_json::to_string_pretty(&auth_data)?)?;
         if args.json {
-            println!("{}", serde_json::json!({"status": "ok", "provider": provider, "method": "env_key"}));
+            println!(
+                "{}",
+                serde_json::json!({"status": "ok", "provider": provider, "method": "env_key"})
+            );
         } else {
             println!("Logged in to '{provider}' via {env_var} environment variable.");
         }
@@ -1286,21 +1375,27 @@ pub async fn run_login(_config: &RuntimeConfig, args: LoginArgs) -> Result<()> {
         println!("  export {env_var}=your-api-key");
         println!("Or run: remote-code login {provider}");
         if args.json {
-            println!("{}", serde_json::json!({"status": "pending", "provider": provider, "env_var": env_var}));
+            println!(
+                "{}",
+                serde_json::json!({"status": "pending", "provider": provider, "env_var": env_var})
+            );
         }
     }
     Ok(())
 }
 
 /// Log out from current provider.
-pub async fn run_logout(_config: &RuntimeConfig) -> Result<()> {
+pub fn run_logout(_config: &RuntimeConfig) -> Result<()> {
     let config_dir = app_config_dir();
     let auth_file = config_dir.join("auth.json");
 
     if auth_file.exists() {
         let existing: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&auth_file)?)?;
-        let provider = existing.get("provider").and_then(|v| v.as_str()).unwrap_or("unknown");
+        let provider = existing
+            .get("provider")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown");
         std::fs::remove_file(&auth_file)?;
         println!("Logged out from '{provider}'.");
     } else {
@@ -1310,7 +1405,7 @@ pub async fn run_logout(_config: &RuntimeConfig) -> Result<()> {
 }
 
 /// Refresh OAuth token.
-pub async fn run_oauth_refresh(_config: &RuntimeConfig) -> Result<()> {
+pub fn run_oauth_refresh(_config: &RuntimeConfig) -> Result<()> {
     let config_dir = app_config_dir();
     let auth_file = config_dir.join("auth.json");
 
@@ -1319,7 +1414,10 @@ pub async fn run_oauth_refresh(_config: &RuntimeConfig) -> Result<()> {
     }
 
     let mut auth: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&auth_file)?)?;
-    let method = auth.get("method").and_then(|v| v.as_str()).unwrap_or("unknown");
+    let method = auth
+        .get("method")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown");
 
     if method == "env_key" {
         println!("Using environment key authentication — no token refresh needed.");
@@ -1349,33 +1447,47 @@ pub fn run_bughunter(
     for e in &events {
         if e.event_type == "result"
             && let Some(map) = e.payload.as_ref().and_then(|p| p.as_object())
-                && map.get("is_error").and_then(|v| v.as_bool()).unwrap_or(false) {
-                    errors += 1;
-                    let msg = map.get("message").and_then(|v| v.as_str()).unwrap_or("unknown error");
-                    if args.deep || findings.len() < 10 {
-                        findings.push(serde_json::json!({
-                            "type": "error_result",
-                            "message": msg,
-                            "timestamp": e.timestamp,
-                        }));
-                    }
-                }
+            && map
+                .get("is_error")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false)
+        {
+            errors += 1;
+            let msg = map
+                .get("message")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown error");
+            if args.deep || findings.len() < 10 {
+                findings.push(serde_json::json!({
+                    "type": "error_result",
+                    "message": msg,
+                    "timestamp": e.timestamp,
+                }));
+            }
+        }
         if e.event_type == "tool_result"
             && let Some(map) = e.payload.as_ref().and_then(|p| p.as_object())
-                && map.get("is_error").and_then(|v| v.as_bool()).unwrap_or(false) {
-                    tool_failures += 1;
-                }
+            && map
+                .get("is_error")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false)
+        {
+            tool_failures += 1;
+        }
     }
 
     let total = events.len();
     if args.json {
-        println!("{}", serde_json::json!({
-            "session_id": sid.to_string(),
-            "total_events": total,
-            "errors": errors,
-            "tool_failures": tool_failures,
-            "findings": findings,
-        }));
+        println!(
+            "{}",
+            serde_json::json!({
+                "session_id": sid.to_string(),
+                "total_events": total,
+                "errors": errors,
+                "tool_failures": tool_failures,
+                "findings": findings,
+            })
+        );
     } else {
         println!("Bughunter report for session {sid}:");
         println!("  Total events:    {total}");
@@ -1446,18 +1558,22 @@ pub fn run_keybindings(command: KeybindingsCommand) -> Result<()> {
             };
             if json {
                 println!("{bindings}");
-            } else if bindings.as_object().is_none_or(|m| m.is_empty()) {
-                println!("Keybindings: (using defaults)");
-                println!("  Enter      Submit message");
-                println!("  Ctrl+C     Cancel / interrupt");
-                println!("  Ctrl+D     Exit");
-                println!("  Ctrl+L     Clear screen");
-                println!("  Tab        Autocomplete");
-            } else {
-                println!("Custom keybindings:");
-                for (key, action) in bindings.as_object().unwrap() {
-                    println!("  {key} -> {action}");
+            } else if let Some(obj) = bindings.as_object() {
+                if obj.is_empty() {
+                    println!("Keybindings: (using defaults)");
+                    println!("  Enter      Submit message");
+                    println!("  Ctrl+C     Cancel / interrupt");
+                    println!("  Ctrl+D     Exit");
+                    println!("  Ctrl+L     Clear screen");
+                    println!("  Tab        Autocomplete");
+                } else {
+                    println!("Custom keybindings:");
+                    for (key, action) in obj {
+                        println!("  {key} -> {action}");
+                    }
                 }
+            } else {
+                println!("Keybindings: (using defaults)");
             }
         }
         KeybindingsCommand::Set { key, action } => {
@@ -1502,22 +1618,33 @@ pub fn run_passes(config: &RuntimeConfig, store: &SessionStore, args: PassesArgs
         let result = match *pass_name {
             "summary" => {
                 let msg_count = events.len();
-                let tool_calls = events.iter().filter(|e| e.event_type == "tool_result").count();
+                let tool_calls = events
+                    .iter()
+                    .filter(|e| e.event_type == "tool_result")
+                    .count();
                 serde_json::json!({"messages": msg_count, "tool_calls": tool_calls})
             }
             "error_scan" => {
-                let errors = events.iter().filter(|e| {
-                    e.payload.as_ref().and_then(|p| p.as_object())
-                        .and_then(|m| m.get("is_error"))
-                        .and_then(|v| v.as_bool())
-                        .unwrap_or(false)
-                }).count();
+                let errors = events
+                    .iter()
+                    .filter(|e| {
+                        e.payload
+                            .as_ref()
+                            .and_then(|p| p.as_object())
+                            .and_then(|m| m.get("is_error"))
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(false)
+                    })
+                    .count();
                 serde_json::json!({"errors": errors})
             }
             "tool_usage" => {
-                let mut tool_counts: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
+                let mut tool_counts: std::collections::HashMap<String, u32> =
+                    std::collections::HashMap::new();
                 for e in events.iter().filter(|e| e.event_type == "tool_use") {
-                    if let Some(name) = e.payload.as_ref()
+                    if let Some(name) = e
+                        .payload
+                        .as_ref()
                         .and_then(|p: &Value| p.as_object())
                         .and_then(|m| m.get("tool_name"))
                         .and_then(|v| v.as_str())
@@ -1525,7 +1652,8 @@ pub fn run_passes(config: &RuntimeConfig, store: &SessionStore, args: PassesArgs
                         *tool_counts.entry(name.to_string()).or_insert(0) += 1;
                     }
                 }
-                let map: serde_json::Map<String, Value> = tool_counts.into_iter()
+                let map: serde_json::Map<String, Value> = tool_counts
+                    .into_iter()
                     .map(|(k, v)| (k, Value::from(v)))
                     .collect();
                 serde_json::Value::Object(map)
@@ -1533,9 +1661,13 @@ pub fn run_passes(config: &RuntimeConfig, store: &SessionStore, args: PassesArgs
             "token_analysis" => {
                 let (inp, out) = events.iter().fold((0u64, 0u64), |(i, o), e| {
                     if let Some(map) = e.payload.as_ref().and_then(|p| p.as_object()) {
-                        (i + nested_u64(map, &["usage", "input_tokens"]).unwrap_or(0),
-                         o + nested_u64(map, &["usage", "output_tokens"]).unwrap_or(0))
-                    } else { (i, o) }
+                        (
+                            i + nested_u64(map, &["usage", "input_tokens"]).unwrap_or(0),
+                            o + nested_u64(map, &["usage", "output_tokens"]).unwrap_or(0),
+                        )
+                    } else {
+                        (i, o)
+                    }
                 });
                 serde_json::json!({"input_tokens": inp, "output_tokens": out})
             }
@@ -1558,7 +1690,7 @@ pub fn run_passes(config: &RuntimeConfig, store: &SessionStore, args: PassesArgs
 // ── P1-A3: High-complexity commands ──────────────────────────────────
 
 /// Teleport a session between environments (local <-> remote).
-pub async fn run_teleport(
+pub fn run_teleport(
     _config: &RuntimeConfig,
     store: &SessionStore,
     args: TeleportArgs,
@@ -1567,7 +1699,10 @@ pub async fn run_teleport(
     let conversation = store.load_conversation(args.session_id).ok();
 
     if events.is_empty() && conversation.as_deref().is_none_or(|c| c.is_empty()) {
-        return Err(anyhow!("session {} is empty — nothing to teleport", args.session_id));
+        return Err(anyhow!(
+            "session {} is empty — nothing to teleport",
+            args.session_id
+        ));
     }
 
     let config_dir = app_config_dir();
@@ -1592,26 +1727,30 @@ pub async fn run_teleport(
     } else {
         println!("Teleport session {} -> '{}'.", args.session_id, args.target);
         println!("  Events: {}", events.len());
-        println!("  Entries: {}", conversation.as_deref().map_or(0, |c| c.len()));
+        println!(
+            "  Entries: {}",
+            conversation.as_deref().map_or(0, |c| c.len())
+        );
         println!("  Transfer file: {}", transfer_file.display());
     }
     Ok(())
 }
 
 /// Install a GitHub App into a repository.
-pub async fn run_install_github_app(args: InstallGithubAppArgs) -> Result<()> {
+pub fn run_install_github_app(args: InstallGithubAppArgs) -> Result<()> {
     let app_id = args.app_id.as_deref().unwrap_or("remote-code-rust");
 
-    let manifest_url = format!(
-        "https://github.com/apps/{app_id}/installations/new"
-    );
+    let manifest_url = format!("https://github.com/apps/{app_id}/installations/new");
 
     if args.json {
-        println!("{}", serde_json::json!({
-            "app_id": app_id,
-            "install_url": manifest_url,
-            "status": "pending_user_action",
-        }));
+        println!(
+            "{}",
+            serde_json::json!({
+                "app_id": app_id,
+                "install_url": manifest_url,
+                "status": "pending_user_action",
+            })
+        );
     } else {
         println!("To install the '{app_id}' GitHub App:");
         println!("  1. Open: {manifest_url}");
@@ -1624,7 +1763,7 @@ pub async fn run_install_github_app(args: InstallGithubAppArgs) -> Result<()> {
 }
 
 /// Install a Slack App into a workspace.
-pub async fn run_install_slack_app(args: InstallSlackAppArgs) -> Result<()> {
+pub fn run_install_slack_app(args: InstallSlackAppArgs) -> Result<()> {
     let workspace = args.workspace.as_deref().unwrap_or("your-workspace");
 
     // Generate Slack app manifest and installation URL.
@@ -1662,12 +1801,15 @@ pub async fn run_install_slack_app(args: InstallSlackAppArgs) -> Result<()> {
     let install_url = format!("https://{workspace}.slack.com/apps/new?manifest_yml=");
 
     if args.json {
-        println!("{}", serde_json::json!({
-            "workspace": workspace,
-            "install_url": install_url,
-            "manifest_saved": manifest_file.to_string_lossy().to_string(),
-            "status": "pending_user_action",
-        }));
+        println!(
+            "{}",
+            serde_json::json!({
+                "workspace": workspace,
+                "install_url": install_url,
+                "manifest_saved": manifest_file.to_string_lossy().to_string(),
+                "status": "pending_user_action",
+            })
+        );
     } else {
         println!("To install the Slack App in '{workspace}':");
         println!("  1. App manifest saved to: {}", manifest_file.display());
@@ -1679,7 +1821,7 @@ pub async fn run_install_slack_app(args: InstallSlackAppArgs) -> Result<()> {
 }
 
 /// Collaborate with a buddy / peer programmer.
-pub async fn run_buddy(_config: &RuntimeConfig, args: BuddyArgs) -> Result<()> {
+pub fn run_buddy(_config: &RuntimeConfig, args: BuddyArgs) -> Result<()> {
     let config_dir = app_config_dir();
     let buddy_file = config_dir.join("buddy-sessions.json");
 
@@ -1711,7 +1853,10 @@ pub async fn run_buddy(_config: &RuntimeConfig, args: BuddyArgs) -> Result<()> {
         }
     } else if let Some(accept) = &args.accept {
         if args.json {
-            println!("{}", serde_json::json!({"action": "accepted", "session_id": accept}));
+            println!(
+                "{}",
+                serde_json::json!({"action": "accepted", "session_id": accept})
+            );
         } else {
             println!("Accepted buddy session: {accept}");
         }
@@ -1734,7 +1879,10 @@ pub async fn run_buddy(_config: &RuntimeConfig, args: BuddyArgs) -> Result<()> {
         } else {
             println!("Buddy sessions:");
             for s in &sessions {
-                let user = s.get("invited_user").and_then(|v| v.as_str()).unwrap_or("?");
+                let user = s
+                    .get("invited_user")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("?");
                 let status = s.get("status").and_then(|v| v.as_str()).unwrap_or("?");
                 println!("  {user}: {status}");
             }
@@ -1748,7 +1896,7 @@ pub async fn run_buddy(_config: &RuntimeConfig, args: BuddyArgs) -> Result<()> {
 }
 
 /// Manage the agent platform — list, deploy, and inspect agent types.
-pub async fn run_agents_platform(_config: &RuntimeConfig, args: AgentsPlatformArgs) -> Result<()> {
+pub fn run_agents_platform(_config: &RuntimeConfig, args: AgentsPlatformArgs) -> Result<()> {
     let config_dir = app_config_dir();
     let agents_dir = config_dir.join("agents");
     std::fs::create_dir_all(&agents_dir).ok();
@@ -1789,7 +1937,10 @@ pub async fn run_agents_platform(_config: &RuntimeConfig, args: AgentsPlatformAr
         }
     } else if let Some(agent_type) = &args.agent_type {
         if args.json {
-            println!("{}", serde_json::json!({"agent_type": agent_type, "status": "inspected"}));
+            println!(
+                "{}",
+                serde_json::json!({"agent_type": agent_type, "status": "inspected"})
+            );
         } else {
             println!("Agent type: {agent_type}");
             println!("  Status: available");
@@ -1802,14 +1953,20 @@ pub async fn run_agents_platform(_config: &RuntimeConfig, args: AgentsPlatformAr
             "deployed_at": chrono::Utc::now().to_rfc3339(),
             "version": env!("CARGO_PKG_VERSION"),
         });
-        std::fs::write(agent_dir.join("agent.json"), serde_json::to_string_pretty(&manifest)?)?;
+        std::fs::write(
+            agent_dir.join("agent.json"),
+            serde_json::to_string_pretty(&manifest)?,
+        )?;
         if args.json {
             println!("{manifest}");
         } else {
             println!("Agent '{deploy_spec}' deployed.");
         }
     } else if args.json {
-        println!("{}", serde_json::json!({"status": "ready", "agents": ["claude", "codex"]}));
+        println!(
+            "{}",
+            serde_json::json!({"status": "ready", "agents": ["claude", "codex"]})
+        );
     } else {
         println!("Agent platform: use --list, --agent-type <name>, or --deploy <name>");
     }
@@ -1841,11 +1998,13 @@ pub fn run_thinkback(
     if args.json {
         let output: Vec<serde_json::Value> = shown
             .iter()
-            .map(|e| serde_json::json!({
-                "type": e.event_type,
-                "timestamp": e.timestamp,
-                "payload": e.payload,
-            }))
+            .map(|e| {
+                serde_json::json!({
+                    "type": e.event_type,
+                    "timestamp": e.timestamp,
+                    "payload": e.payload,
+                })
+            })
             .collect();
         println!("{}", serde_json::to_string(&output)?);
     } else if shown.is_empty() {
@@ -1860,7 +2019,11 @@ pub fn run_thinkback(
                 .and_then(|m| m.get("text").and_then(|v| v.as_str()))
                 .unwrap_or("(no text)");
             let truncated = if preview.len() > 100 {
-                let end = preview.char_indices().take(100).last().map_or(0, |(i, c)| i + c.len_utf8());
+                let end = preview
+                    .char_indices()
+                    .take(100)
+                    .last()
+                    .map_or(0, |(i, c)| i + c.len_utf8());
                 format!("{}...", &preview[..end])
             } else {
                 preview.to_string()
@@ -1913,13 +2076,18 @@ pub fn run_ctx_viz(config: &RuntimeConfig, store: &SessionStore, args: CtxVizArg
 // ── P1-A4: 16 remaining commands ────────────────────────────────────
 
 /// Auto-fix a pull request by analyzing review comments and generating patches.
-pub async fn run_autofix_pr(_config: &RuntimeConfig, args: AutoFixPrArgs) -> Result<()> {
-    let pr_url = args.pr_url.as_deref().ok_or_else(|| anyhow!("--pr-url is required"))?;
+pub fn run_autofix_pr(_config: &RuntimeConfig, args: AutoFixPrArgs) -> Result<()> {
+    let pr_url = args
+        .pr_url
+        .as_deref()
+        .ok_or_else(|| anyhow!("--pr-url is required"))?;
 
     // Parse the PR URL to extract owner/repo/number.
     let parts: Vec<&str> = pr_url.split('/').collect();
     if parts.len() < 7 {
-        return Err(anyhow!("invalid PR URL format — expected https://github.com/owner/repo/pull/123"));
+        return Err(anyhow!(
+            "invalid PR URL format — expected https://github.com/owner/repo/pull/123"
+        ));
     }
 
     let owner = parts[3];
@@ -1928,14 +2096,17 @@ pub async fn run_autofix_pr(_config: &RuntimeConfig, args: AutoFixPrArgs) -> Res
 
     if args.dry_run {
         if args.json {
-            println!("{}", serde_json::json!({
-                "pr": pr_url,
-                "owner": owner,
-                "repo": repo,
-                "number": pr_number,
-                "mode": "dry_run",
-                "fixes": [],
-            }));
+            println!(
+                "{}",
+                serde_json::json!({
+                    "pr": pr_url,
+                    "owner": owner,
+                    "repo": repo,
+                    "number": pr_number,
+                    "mode": "dry_run",
+                    "fixes": [],
+                })
+            );
         } else {
             println!("Dry-run analysis for PR {owner}/{repo}#{pr_number}:");
             println!("  No issues found to auto-fix.");
@@ -1958,15 +2129,18 @@ pub async fn run_autofix_pr(_config: &RuntimeConfig, args: AutoFixPrArgs) -> Res
     };
 
     if args.json {
-        println!("{}", serde_json::json!({
-            "pr": pr_url,
-            "owner": owner,
-            "repo": repo,
-            "number": pr_number,
-            "diff_available": has_diff,
-            "diff_lines": diff_lines,
-            "fixes": [],
-        }));
+        println!(
+            "{}",
+            serde_json::json!({
+                "pr": pr_url,
+                "owner": owner,
+                "repo": repo,
+                "number": pr_number,
+                "diff_available": has_diff,
+                "diff_lines": diff_lines,
+                "fixes": [],
+            })
+        );
     } else {
         println!("Auto-fix analysis for PR {owner}/{repo}#{pr_number}:");
         if has_diff {
@@ -1998,11 +2172,11 @@ pub fn run_break_cache(_config: &RuntimeConfig, args: BreakCacheArgs) -> Result<
                 }
             }
         } else {
-            let suffix = format!("{provider}.cache");
+            let expected = format!("{provider}.cache");
             for entry in std::fs::read_dir(&cache_dir)? {
                 let entry = entry?;
-                let name = entry.file_name().to_string_lossy().to_string();
-                if name.ends_with(&suffix) || name.starts_with(provider) {
+                let name = entry.file_name().to_string_lossy().into_owned();
+                if name == expected || name == provider {
                     std::fs::remove_file(entry.path())?;
                     cleared += 1;
                 }
@@ -2011,10 +2185,13 @@ pub fn run_break_cache(_config: &RuntimeConfig, args: BreakCacheArgs) -> Result<
     }
 
     if args.json {
-        println!("{}", serde_json::json!({
-            "provider": provider,
-            "cache_files_cleared": cleared,
-        }));
+        println!(
+            "{}",
+            serde_json::json!({
+                "provider": provider,
+                "cache_files_cleared": cleared,
+            })
+        );
     } else {
         println!("Cache cleared for '{provider}': {cleared} file(s) removed.");
     }
@@ -2023,7 +2200,7 @@ pub fn run_break_cache(_config: &RuntimeConfig, args: BreakCacheArgs) -> Result<
 }
 
 /// Manage bridge connections to external tools and services.
-pub async fn run_bridge(args: BridgeArgs) -> Result<()> {
+pub fn run_bridge(args: BridgeArgs) -> Result<()> {
     let config_dir = app_config_dir();
     let bridge_file = config_dir.join("bridges.json");
 
@@ -2096,7 +2273,7 @@ pub async fn run_bridge(args: BridgeArgs) -> Result<()> {
 }
 
 /// Send a quick "by the way" note to the conversation context.
-pub async fn run_btw(_config: &RuntimeConfig, args: BtwArgs) -> Result<()> {
+pub fn run_btw(_config: &RuntimeConfig, args: BtwArgs) -> Result<()> {
     if args.message.is_empty() {
         return Err(anyhow!("message is required — usage: btw <message>"));
     }
@@ -2128,7 +2305,7 @@ pub async fn run_btw(_config: &RuntimeConfig, args: BtwArgs) -> Result<()> {
 }
 
 /// Configure Chrome browser MCP integration.
-pub async fn run_chrome(args: ChromeArgs) -> Result<()> {
+pub fn run_chrome(args: ChromeArgs) -> Result<()> {
     let config_dir = app_config_dir();
     let chrome_file = config_dir.join("chrome-mcp.json");
 
@@ -2141,9 +2318,15 @@ pub async fn run_chrome(args: ChromeArgs) -> Result<()> {
         if args.json {
             println!("{config}");
         } else {
-            let enabled = config.get("enabled").and_then(|v| v.as_bool()).unwrap_or(false);
+            let enabled = config
+                .get("enabled")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
             let port = config.get("port").and_then(|v| v.as_u64()).unwrap_or(9222);
-            println!("Chrome MCP: {}", if enabled { "enabled" } else { "disabled" });
+            println!(
+                "Chrome MCP: {}",
+                if enabled { "enabled" } else { "disabled" }
+            );
             println!("  Debug port: {port}");
         }
     } else if let Some(port) = args.port {
@@ -2165,16 +2348,15 @@ pub async fn run_chrome(args: ChromeArgs) -> Result<()> {
     } else if args.json {
         println!("{}", serde_json::json!({"status": "not_configured"}));
     } else {
-        println!("Chrome MCP: use --port <port> to configure, --status to check, --debug for debug mode.");
+        println!(
+            "Chrome MCP: use --port <port> to configure, --status to check, --debug for debug mode."
+        );
     }
     Ok(())
 }
 
 /// Configure terminal color scheme.
 pub fn run_color(args: ColorArgs) -> Result<()> {
-    let config_dir = app_config_dir();
-    let color_file = config_dir.join("color-scheme.json");
-
     let schemes = [
         ("auto", "Follow terminal settings"),
         ("always", "Always use colors"),
@@ -2186,11 +2368,12 @@ pub fn run_color(args: ColorArgs) -> Result<()> {
     if let Some(scheme) = &args.scheme {
         let valid = schemes.iter().any(|(name, _)| name == scheme);
         if !valid {
-            return Err(anyhow!("unknown color scheme '{scheme}' — use: auto, always, never, 256, truecolor"));
+            return Err(anyhow!(
+                "unknown color scheme '{scheme}' — use: auto, always, never, 256, truecolor"
+            ));
         }
         let config = serde_json::json!({"scheme": scheme});
-        std::fs::create_dir_all(&config_dir).ok();
-        std::fs::write(&color_file, serde_json::to_string_pretty(&config)?)?;
+        write_json_config("color-scheme.json", &config)?;
         if args.json {
             println!("{config}");
         } else {
@@ -2209,23 +2392,14 @@ pub fn run_color(args: ColorArgs) -> Result<()> {
                 println!("  {name}: {desc}");
             }
         }
-    } else if args.json {
-        let current = if color_file.exists() {
-            let data: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&color_file)?)?;
-            data.get("scheme").and_then(|v| v.as_str()).unwrap_or("auto").to_string()
-        } else {
-            "auto".to_string()
-        };
-        println!("{}", serde_json::json!({"current": current}));
     } else {
-        let current = if color_file.exists() {
-            let data: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&color_file)?)?;
-            data.get("scheme").and_then(|v| v.as_str()).unwrap_or("auto").to_string()
+        let current = read_config_str("color-scheme.json", "scheme", "auto");
+        if args.json {
+            println!("{}", serde_json::json!({"current": current}));
         } else {
-            "auto".to_string()
-        };
-        println!("Color scheme: {current}");
-        println!("Use --list to see available schemes.");
+            println!("Color scheme: {current}");
+            println!("Use --list to see available schemes.");
+        }
     }
     Ok(())
 }
@@ -2240,37 +2414,52 @@ pub fn run_context_manage(
     let conversation = store.load_conversation(config.session_id).ok();
 
     if args.reset {
-        // Reset context by clearing conversation entries.
+        // Context reset marks a boundary in the event stream.
+        // The runtime loader treats events before a context_reset as compacted;
+        // old data is not deleted but is excluded from the active context window.
         store.append_named_event(
             config.session_id,
             "context_reset",
             serde_json::json!({"reset_at": chrono::Utc::now().to_rfc3339()}),
         )?;
         if args.json {
-            println!("{}", serde_json::json!({"reset": true, "session_id": config.session_id.to_string()}));
+            println!(
+                "{}",
+                serde_json::json!({"reset": true, "session_id": config.session_id.to_string()})
+            );
         } else {
             println!("Context reset for session {}.", config.session_id);
         }
     } else if args.show || (!args.reset && !args.json) {
         let msg_count = conversation.as_deref().map_or(0, |c| c.len());
         let event_count = events.len();
-        let tool_calls = events.iter().filter(|e| e.event_type == "tool_result").count();
+        let tool_calls = events
+            .iter()
+            .filter(|e| e.event_type == "tool_result")
+            .count();
         let (inp, out) = events.iter().fold((0u64, 0u64), |(i, o), e| {
             if let Some(map) = e.payload.as_ref().and_then(|p| p.as_object()) {
-                (i + nested_u64(map, &["usage", "input_tokens"]).unwrap_or(0),
-                 o + nested_u64(map, &["usage", "output_tokens"]).unwrap_or(0))
-            } else { (i, o) }
+                (
+                    i + nested_u64(map, &["usage", "input_tokens"]).unwrap_or(0),
+                    o + nested_u64(map, &["usage", "output_tokens"]).unwrap_or(0),
+                )
+            } else {
+                (i, o)
+            }
         });
 
         if args.json {
-            println!("{}", serde_json::json!({
-                "session_id": config.session_id.to_string(),
-                "messages": msg_count,
-                "events": event_count,
-                "tool_calls": tool_calls,
-                "input_tokens": inp,
-                "output_tokens": out,
-            }));
+            println!(
+                "{}",
+                serde_json::json!({
+                    "session_id": config.session_id.to_string(),
+                    "messages": msg_count,
+                    "events": event_count,
+                    "tool_calls": tool_calls,
+                    "input_tokens": inp,
+                    "output_tokens": out,
+                })
+            );
         } else {
             println!("Context for session {}:", config.session_id);
             println!("  Messages:       {msg_count}");
@@ -2280,13 +2469,16 @@ pub fn run_context_manage(
             println!("  Output tokens:  {out}");
         }
     } else {
-        println!("{}", serde_json::json!({"session_id": config.session_id.to_string()}));
+        println!(
+            "{}",
+            serde_json::json!({"session_id": config.session_id.to_string()})
+        );
     }
     Ok(())
 }
 
 /// IDE integration configuration.
-pub async fn run_ide(args: IdeArgs) -> Result<()> {
+pub fn run_ide(args: IdeArgs) -> Result<()> {
     let config_dir = app_config_dir();
     let ide_file = config_dir.join("ide-config.json");
 
@@ -2343,12 +2535,21 @@ pub async fn run_ide(args: IdeArgs) -> Result<()> {
 }
 
 /// Manage GitHub issues (list, show, create).
-pub async fn run_issue(_config: &RuntimeConfig, args: IssueArgs) -> Result<()> {
+pub fn run_issue(_config: &RuntimeConfig, args: IssueArgs) -> Result<()> {
     let repo = args.repo.as_deref().unwrap_or(".");
 
     if args.list {
         let output = std::process::Command::new("gh")
-            .args(["issue", "list", "--repo", repo, "--limit", "20", "--json", "number,title,state"])
+            .args([
+                "issue",
+                "list",
+                "--repo",
+                repo,
+                "--limit",
+                "20",
+                "--json",
+                "number,title,state",
+            ])
             .output();
 
         match output {
@@ -2363,7 +2564,7 @@ pub async fn run_issue(_config: &RuntimeConfig, args: IssueArgs) -> Result<()> {
                     } else {
                         println!("Issues in {repo}:");
                         for issue in &issues {
-                            let num = issue.get("number").unwrap();
+                            let num = issue.get("number").and_then(|v| v.as_u64()).unwrap_or(0);
                             let title = issue.get("title").and_then(|v| v.as_str()).unwrap_or("?");
                             let state = issue.get("state").and_then(|v| v.as_str()).unwrap_or("?");
                             println!("  #{num} [{state}] {title}");
@@ -2375,35 +2576,48 @@ pub async fn run_issue(_config: &RuntimeConfig, args: IssueArgs) -> Result<()> {
                 if args.json {
                     println!("[]");
                 } else {
-                    println!("Could not list issues — ensure 'gh' CLI is installed and authenticated.");
+                    println!(
+                        "Could not list issues — ensure 'gh' CLI is installed and authenticated."
+                    );
                 }
             }
         }
     } else if let Some(number) = &args.show {
-        let output = std::process::Command::new("gh")
-            .args(["issue", "view", number, "--repo", repo])
-            .output();
+        let view_args = if args.json {
+            vec![
+                "issue",
+                "view",
+                number.as_str(),
+                "--repo",
+                repo,
+                "--json",
+                "number,title,body,state",
+            ]
+        } else {
+            vec!["issue", "view", number.as_str(), "--repo", repo]
+        };
+        let output = std::process::Command::new("gh").args(&view_args).output();
 
         match output {
             Ok(out) if out.status.success() => {
                 let stdout = String::from_utf8_lossy(&out.stdout);
                 if args.json {
-                    let output2 = std::process::Command::new("gh")
-                        .args(["issue", "view", number, "--repo", repo, "--json", "number,title,body,state"])
-                        .output();
-                    match output2 {
-                        Ok(o) if o.status.success() => println!("{}", String::from_utf8_lossy(&o.stdout)),
-                        _ => println!("{}", serde_json::json!({"output": stdout.to_string()})),
-                    }
+                    println!("{stdout}");
                 } else {
                     print!("{stdout}");
                 }
             }
-            _ => return Err(anyhow!("could not view issue #{number} — ensure 'gh' CLI is available")),
+            _ => {
+                return Err(anyhow!(
+                    "could not view issue #{number} — ensure 'gh' CLI is available"
+                ));
+            }
         }
     } else if let Some(title) = &args.create {
         let output = std::process::Command::new("gh")
-            .args(["issue", "create", "--repo", repo, "--title", title, "--body", ""])
+            .args([
+                "issue", "create", "--repo", repo, "--title", title, "--body", "",
+            ])
             .output();
 
         match output {
@@ -2415,7 +2629,11 @@ pub async fn run_issue(_config: &RuntimeConfig, args: IssueArgs) -> Result<()> {
                     println!("Created issue: {url}");
                 }
             }
-            _ => return Err(anyhow!("could not create issue — ensure 'gh' CLI is available")),
+            _ => {
+                return Err(anyhow!(
+                    "could not create issue — ensure 'gh' CLI is available"
+                ));
+            }
         }
     } else if args.json {
         println!("{}", serde_json::json!({"repo": repo}));
@@ -2426,7 +2644,7 @@ pub async fn run_issue(_config: &RuntimeConfig, args: IssueArgs) -> Result<()> {
 }
 
 /// First-run onboarding wizard.
-pub async fn run_onboarding(
+pub fn run_onboarding(
     _config: &RuntimeConfig,
     _store: &SessionStore,
     args: OnboardingArgs,
@@ -2451,8 +2669,11 @@ pub async fn run_onboarding(
         }
     } else {
         let completed = if onboard_file.exists() {
-            let data: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&onboard_file)?)?;
-            data.get("completed").and_then(|v| v.as_bool()).unwrap_or(false)
+            let data: serde_json::Value =
+                serde_json::from_str(&std::fs::read_to_string(&onboard_file)?)?;
+            data.get("completed")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false)
         } else {
             false
         };
@@ -2466,7 +2687,10 @@ pub async fn run_onboarding(
         } else {
             // Interactive onboarding steps.
             if args.json {
-                println!("{}", serde_json::json!({"status": "in_progress", "steps": ["configure_provider", "set_api_key", "choose_model"]}));
+                println!(
+                    "{}",
+                    serde_json::json!({"status": "in_progress", "steps": ["configure_provider", "set_api_key", "choose_model"]})
+                );
             } else {
                 println!("Welcome to Remote Code!");
                 println!();
@@ -2503,25 +2727,29 @@ pub fn run_perf_issue(
 
     for e in &events {
         if let Some(map) = e.payload.as_ref().and_then(|p| p.as_object())
-            && let Some(duration) = map.get("duration_ms").and_then(|v| v.as_u64()) {
-                total_duration_ms += duration;
-                if args.deep || duration > 5000 {
-                    slow_calls.push(serde_json::json!({
-                        "type": e.event_type,
-                        "duration_ms": duration,
-                        "timestamp": e.timestamp,
-                    }));
-                }
+            && let Some(duration) = map.get("duration_ms").and_then(|v| v.as_u64())
+        {
+            total_duration_ms += duration;
+            if args.deep || duration > 5000 {
+                slow_calls.push(serde_json::json!({
+                    "type": e.event_type,
+                    "duration_ms": duration,
+                    "timestamp": e.timestamp,
+                }));
             }
+        }
     }
 
     if args.json {
-        println!("{}", serde_json::json!({
-            "session_id": sid.to_string(),
-            "total_events": events.len(),
-            "total_duration_ms": total_duration_ms,
-            "slow_calls": slow_calls,
-        }));
+        println!(
+            "{}",
+            serde_json::json!({
+                "session_id": sid.to_string(),
+                "total_events": events.len(),
+                "total_duration_ms": total_duration_ms,
+                "slow_calls": slow_calls,
+            })
+        );
     } else {
         println!("Performance diagnosis for session {sid}:");
         println!("  Total events:     {}", events.len());
@@ -2531,7 +2759,7 @@ pub fn run_perf_issue(
         } else {
             println!("  Slow calls (>{}ms):", 5000);
             for c in &slow_calls {
-                let dur = c.get("duration_ms").unwrap();
+                let dur = c.get("duration_ms").and_then(|v| v.as_u64()).unwrap_or(0);
                 let kind = c.get("type").and_then(|v| v.as_str()).unwrap_or("?");
                 println!("    {kind}: {dur}ms");
             }
@@ -2559,7 +2787,11 @@ pub fn run_permissions(config: &mut RuntimeConfig, args: PermissionsArgs) -> Res
                 config.permission_mode = claude_core::PermissionMode::BypassPermissions;
                 println!("Permission mode set to 'bypass'.");
             }
-            _ => return Err(anyhow!("unknown mode '{mode}' — use: default, accept-edits, bypass")),
+            _ => {
+                return Err(anyhow!(
+                    "unknown mode '{mode}' — use: default, accept-edits, bypass"
+                ));
+            }
         }
         if args.json {
             println!("{}", serde_json::json!({"mode": mode}));
@@ -2583,37 +2815,43 @@ pub fn run_permissions(config: &mut RuntimeConfig, args: PermissionsArgs) -> Res
             }
         }
     } else if let Some(rule) = &args.add_rule {
-        let mut rules: Vec<serde_json::Value> = if perms_file.exists() {
-            serde_json::from_str(&std::fs::read_to_string(&perms_file)?)?
-        } else {
-            vec![]
+        let mut rules: Vec<serde_json::Value> = match read_json_config("permission-rules.json") {
+            Value::Array(arr) => arr,
+            _ => vec![],
         };
         rules.push(serde_json::json!({"rule": rule, "added_at": chrono::Utc::now().to_rfc3339()}));
-        std::fs::create_dir_all(&config_dir).ok();
-        std::fs::write(&perms_file, serde_json::to_string(&rules)?)?;
+        write_json_config("permission-rules.json", &Value::Array(rules))?;
         if args.json {
             println!("{}", serde_json::json!({"added": rule}));
         } else {
             println!("Rule added: {rule}");
         }
     } else if let Some(rule) = &args.remove_rule {
-        let rules: Vec<serde_json::Value> = if perms_file.exists() {
-            serde_json::from_str(&std::fs::read_to_string(&perms_file)?)?
-        } else {
-            vec![]
+        let rules: Vec<serde_json::Value> = match read_json_config("permission-rules.json") {
+            Value::Array(arr) => arr,
+            _ => vec![],
         };
         let remaining: Vec<_> = rules
             .iter()
             .filter(|r| r.get("rule").and_then(|v| v.as_str()) != Some(rule))
+            .cloned()
             .collect();
-        std::fs::write(&perms_file, serde_json::to_string(&remaining)?)?;
+        write_json_config("permission-rules.json", &Value::Array(remaining))?;
         if args.json {
             println!("{}", serde_json::json!({"removed": rule}));
         } else {
             println!("Rule removed: {rule}");
         }
     } else if args.json {
-        println!("{}", serde_json::json!({"mode": format!("{:?}", config.permission_mode).to_lowercase()}));
+        let mode_str = match config.permission_mode {
+            claude_core::PermissionMode::Default => "default",
+            claude_core::PermissionMode::AcceptEdits => "accept-edits",
+            claude_core::PermissionMode::Auto => "auto",
+            claude_core::PermissionMode::BypassPermissions => "bypass",
+            claude_core::PermissionMode::DontAsk => "dont-ask",
+            claude_core::PermissionMode::Plan => "plan",
+        };
+        println!("{}", serde_json::json!({"mode": mode_str}));
     } else {
         println!("Permissions: use --mode <mode>, --list-rules, --add-rule, or --remove-rule");
     }
@@ -2621,8 +2859,11 @@ pub fn run_permissions(config: &mut RuntimeConfig, args: PermissionsArgs) -> Res
 }
 
 /// View pull request comments.
-pub async fn run_pr_comments(args: PrCommentsArgs) -> Result<()> {
-    let pr_url = args.pr_url.as_deref().ok_or_else(|| anyhow!("--pr-url is required"))?;
+pub fn run_pr_comments(args: PrCommentsArgs) -> Result<()> {
+    let pr_url = args
+        .pr_url
+        .as_deref()
+        .ok_or_else(|| anyhow!("--pr-url is required"))?;
 
     let output = std::process::Command::new("gh")
         .args(["pr", "view", pr_url, "--comments", "--json", "comments"])
@@ -2641,7 +2882,11 @@ pub async fn run_pr_comments(args: PrCommentsArgs) -> Result<()> {
                     Some(c) => {
                         println!("PR comments ({}):", c.len());
                         for comment in c {
-                            let author = comment.get("author").and_then(|a| a.get("login")).and_then(|v| v.as_str()).unwrap_or("?");
+                            let author = comment
+                                .get("author")
+                                .and_then(|a| a.get("login"))
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("?");
                             let body = comment.get("body").and_then(|v| v.as_str()).unwrap_or("");
                             println!("  @{author}: {body}");
                         }
@@ -2652,9 +2897,14 @@ pub async fn run_pr_comments(args: PrCommentsArgs) -> Result<()> {
         }
         _ => {
             if args.json {
-                println!("{}", serde_json::json!({"error": "gh CLI unavailable or PR not found"}));
+                println!(
+                    "{}",
+                    serde_json::json!({"error": "gh CLI unavailable or PR not found"})
+                );
             } else {
-                println!("Could not fetch PR comments — ensure 'gh' CLI is installed and authenticated.");
+                println!(
+                    "Could not fetch PR comments — ensure 'gh' CLI is installed and authenticated."
+                );
             }
         }
     }
@@ -2663,46 +2913,90 @@ pub async fn run_pr_comments(args: PrCommentsArgs) -> Result<()> {
 
 /// Configure privacy settings (telemetry, crash reports).
 pub fn run_privacy_settings(args: PrivacySettingsArgs) -> Result<()> {
-    let config_dir = app_config_dir();
-    let privacy_file = config_dir.join("privacy.json");
+    let privacy_file = app_config_dir().join("privacy.json");
 
     let mut settings = if privacy_file.exists() {
-        let data: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&privacy_file)?)?;
+        let data: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&privacy_file)?)?;
         serde_json::Map::from_iter(data.as_object().cloned().unwrap_or_default())
     } else {
         serde_json::Map::new()
     };
 
+    let mut dirty = false;
     if let Some(enabled) = args.telemetry {
         settings.insert("telemetry".into(), serde_json::Value::Bool(enabled));
+        dirty = true;
     }
     if let Some(enabled) = args.crash_reports {
         settings.insert("crash_reports".into(), serde_json::Value::Bool(enabled));
+        dirty = true;
     }
 
-    if !settings.is_empty() || args.show {
-        if !settings.contains_key("telemetry") {
-            settings.insert("telemetry".into(), serde_json::Value::Bool(true));
-        }
-        if !settings.contains_key("crash_reports") {
-            settings.insert("crash_reports".into(), serde_json::Value::Bool(true));
-        }
-
-        std::fs::create_dir_all(&config_dir).ok();
+    // Only write to disk when the user explicitly changed a setting.
+    if dirty {
         let config = serde_json::Value::Object(settings.clone());
-        std::fs::write(&privacy_file, serde_json::to_string_pretty(&config)?)?;
+        write_json_config("privacy.json", &config)?;
 
         if args.json {
             println!("{config}");
         } else {
+            let telem = settings
+                .get("telemetry")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true);
+            let crash = settings
+                .get("crash_reports")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true);
+            println!("Privacy settings updated:");
+            println!(
+                "  Telemetry:     {}",
+                if telem { "enabled" } else { "disabled" }
+            );
+            println!(
+                "  Crash reports: {}",
+                if crash { "enabled" } else { "disabled" }
+            );
+        }
+    } else if args.show {
+        let telem = settings
+            .get("telemetry")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true);
+        let crash = settings
+            .get("crash_reports")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true);
+        if args.json {
+            println!(
+                "{}",
+                serde_json::json!({"telemetry": telem, "crash_reports": crash})
+            );
+        } else {
             println!("Privacy settings:");
-            let telem = settings.get("telemetry").and_then(|v| v.as_bool()).unwrap_or(true);
-            let crash = settings.get("crash_reports").and_then(|v| v.as_bool()).unwrap_or(true);
-            println!("  Telemetry:     {}", if telem { "enabled" } else { "disabled" });
-            println!("  Crash reports: {}", if crash { "enabled" } else { "disabled" });
+            println!(
+                "  Telemetry:     {}",
+                if telem { "enabled" } else { "disabled" }
+            );
+            println!(
+                "  Crash reports: {}",
+                if crash { "enabled" } else { "disabled" }
+            );
         }
     } else if args.json {
-        println!("{}", serde_json::json!({"telemetry": true, "crash_reports": true}));
+        let telem = settings
+            .get("telemetry")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true);
+        let crash = settings
+            .get("crash_reports")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true);
+        println!(
+            "{}",
+            serde_json::json!({"telemetry": telem, "crash_reports": crash})
+        );
     } else {
         println!("Privacy settings:");
         println!("  --telemetry <true|false>    Enable/disable telemetry");
@@ -2714,8 +3008,7 @@ pub fn run_privacy_settings(args: PrivacySettingsArgs) -> Result<()> {
 
 /// Configure rate limit options for API calls.
 pub fn run_rate_limit_options(_config: &RuntimeConfig, args: RateLimitOptionsArgs) -> Result<()> {
-    let config_dir = app_config_dir();
-    let rate_file = config_dir.join("rate-limits.json");
+    let rate_file = app_config_dir().join("rate-limits.json");
 
     if args.reset {
         if rate_file.exists() {
@@ -2729,18 +3022,14 @@ pub fn run_rate_limit_options(_config: &RuntimeConfig, args: RateLimitOptionsArg
         return Ok(());
     }
 
-    let mut limits = if rate_file.exists() {
-        let data: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&rate_file)?)?;
-        let mut map = serde_json::Map::new();
-        if let Some(obj) = data.as_object() {
-            map.clone_from(obj);
+    let mut limits = match read_json_config("rate-limits.json") {
+        Value::Object(map) => map,
+        _ => {
+            let mut map = serde_json::Map::new();
+            map.insert("rpm".into(), serde_json::Value::from(60u64));
+            map.insert("tpm".into(), serde_json::Value::from(150000u64));
+            map
         }
-        map
-    } else {
-        let mut map = serde_json::Map::new();
-        map.insert("rpm".into(), serde_json::Value::from(60u64));
-        map.insert("tpm".into(), serde_json::Value::from(150000u64));
-        map
     };
 
     if let Some(rpm) = args.rpm {
@@ -2751,55 +3040,55 @@ pub fn run_rate_limit_options(_config: &RuntimeConfig, args: RateLimitOptionsArg
     }
 
     let config = serde_json::Value::Object(limits.clone());
-    std::fs::create_dir_all(&config_dir).ok();
-    std::fs::write(&rate_file, serde_json::to_string_pretty(&config)?)?;
+    write_json_config("rate-limits.json", &config)?;
+
+    let rpm = limits.get("rpm").and_then(|v| v.as_u64()).unwrap_or(60);
+    let tpm = limits.get("tpm").and_then(|v| v.as_u64()).unwrap_or(150000);
 
     if args.json {
         println!("{config}");
     } else if args.show || (args.rpm.is_none() && args.tpm.is_none()) {
-        let rpm = limits.get("rpm").and_then(|v| v.as_u64()).unwrap_or(60);
-        let tpm = limits.get("tpm").and_then(|v| v.as_u64()).unwrap_or(150000);
         println!("Rate limits:");
         println!("  Requests per minute (RPM): {rpm}");
         println!("  Tokens per minute (TPM):   {tpm}");
-        println!("Use --rpm <n> and/or --tpm <n> to change.");
+        if args.rpm.is_none() && args.tpm.is_none() {
+            println!("Use --rpm <n> and/or --tpm <n> to change.");
+        }
     } else {
-        let rpm = limits.get("rpm").and_then(|v| v.as_u64()).unwrap_or(60);
-        let tpm = limits.get("tpm").and_then(|v| v.as_u64()).unwrap_or(150000);
         println!("Rate limits set: {rpm} RPM, {tpm} TPM.");
     }
     Ok(())
 }
 
 /// Set up remote access to a control plane server.
-pub async fn run_remote_setup(_config: &RuntimeConfig, args: RemoteSetupArgs) -> Result<()> {
-    let config_dir = app_config_dir();
-    let remote_file = config_dir.join("remote-setup.json");
-
+pub fn run_remote_setup(_config: &RuntimeConfig, args: RemoteSetupArgs) -> Result<()> {
     if args.show {
-        let config: serde_json::Value = if remote_file.exists() {
-            serde_json::from_str(&std::fs::read_to_string(&remote_file)?)?
-        } else {
-            serde_json::json!({"configured": false})
-        };
+        let config = read_json_config("remote-setup.json");
+        let configured = config
+            .get("configured")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
         if args.json {
             println!("{config}");
+        } else if configured {
+            let url = config.get("url").and_then(|v| v.as_str()).unwrap_or("?");
+            let name = config
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("default");
+            println!("Remote access configured:");
+            println!("  Server: {url}");
+            println!("  Name:   {name}");
         } else {
-            let configured = config.get("configured").and_then(|v| v.as_bool()).unwrap_or(false);
-            if configured {
-                let url = config.get("url").and_then(|v| v.as_str()).unwrap_or("?");
-                let name = config.get("name").and_then(|v| v.as_str()).unwrap_or("default");
-                println!("Remote access configured:");
-                println!("  Server: {url}");
-                println!("  Name:   {name}");
-            } else {
-                println!("Remote access not configured.");
-                println!("Use --url <url> --token <token> to set up.");
-            }
+            println!("Remote access not configured.");
+            println!("Use --url <url> --token <token> to set up.");
         }
     } else if let Some(url) = &args.url {
         let token = args.token.as_deref().unwrap_or("");
         let name = args.name.as_deref().unwrap_or("default");
+        // Store only whether a token was provided, not the token itself.
+        // The actual token is passed to the runner/control-plane at runtime
+        // via environment variable or keychain — never persisted in config.
         let config = serde_json::json!({
             "configured": true,
             "url": url,
@@ -2807,8 +3096,7 @@ pub async fn run_remote_setup(_config: &RuntimeConfig, args: RemoteSetupArgs) ->
             "token_set": !token.is_empty(),
             "setup_at": chrono::Utc::now().to_rfc3339(),
         });
-        std::fs::create_dir_all(&config_dir).ok();
-        std::fs::write(&remote_file, serde_json::to_string_pretty(&config)?)?;
+        write_json_config("remote-setup.json", &config)?;
 
         if args.json {
             println!("{config}");

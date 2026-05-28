@@ -29,6 +29,9 @@ const DEFAULT_MODEL_CACHE_TTL: Duration = Duration::from_secs(300);
 /// this endpoint only when it decides a remote refresh should happen.
 #[async_trait]
 pub trait ModelsEndpointClient: fmt::Debug + Send + Sync {
+    /// Stable cache namespace for this endpoint.
+    fn cache_key(&self) -> String;
+
     /// Returns whether this provider can authenticate command-scoped requests.
     fn has_command_auth(&self) -> bool;
 
@@ -300,7 +303,7 @@ impl OpenAiModelsManager {
 
     async fn fetch_and_update_models(&self) -> CoreResult<()> {
         let client_version = crate::client_version_to_whole();
-        let provider = format!("{:?}", self.endpoint_client);
+        let provider = self.endpoint_client.cache_key();
         let (models, etag) = self.endpoint_client.list_models(&client_version).await?;
         self.apply_remote_models(models.clone()).await;
         *self.etag.write().await = etag.clone();
@@ -339,9 +342,13 @@ impl OpenAiModelsManager {
         let _timer =
             codex_otel::start_global_timer("codex.remote_models.load_cache.duration_ms", &[]);
         let client_version = crate::client_version_to_whole();
-        let provider = format!("{:?}", self.endpoint_client);
+        let provider = self.endpoint_client.cache_key();
         info!(client_version, "models cache: evaluating cache eligibility");
-        let cache = match self.cache_manager.load_fresh(&client_version, &provider).await {
+        let cache = match self
+            .cache_manager
+            .load_fresh(&client_version, &provider)
+            .await
+        {
             Some(cache) => cache,
             None => {
                 info!("models cache: no usable cache entry");

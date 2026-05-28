@@ -32,16 +32,23 @@ pub(crate) const APP_EVENT_CONTEXT_OVERFLOW: &str = "gui://context-overflow";
 pub(crate) const APP_EVENT_CONTEXT_COMPACTED: &str = "gui://context-compacted";
 pub(crate) const APP_EVENT_RUNTIME_STATUS: &str = "gui://runtime-status";
 pub(crate) const APP_EVENT_CODEX_RECOVERABLE_ERROR: &str = "gui://codex-recoverable-error";
-pub(crate) const PROJECTS_FILE_NAME: &str = "gui-projects.json";
-pub(crate) const PROVIDERS_FILE_NAME: &str = "gui-providers.json";
-pub(crate) const SETTINGS_FILE_NAME: &str = "gui-settings.json";
+pub(crate) const PROJECTS_FILE_NAME: &str = crate::paths::GUI_PROJECTS_FILE_NAME;
+pub(crate) const PROVIDERS_FILE_NAME: &str = crate::paths::GUI_PROVIDERS_FILE_NAME;
+pub(crate) const SETTINGS_FILE_NAME: &str = crate::paths::GUI_SETTINGS_FILE_NAME;
 pub(crate) const DEFAULT_MAX_TURNS: usize = 128;
 pub(crate) const PERMISSION_WAIT_SECS: u64 = 60 * 30;
 pub(crate) const KEYRING_SERVICE: &str = "remote-code-gui";
 
 pub(crate) fn keyring_store(provider_name: &str, api_key: &str) {
-    if let Ok(entry) = keyring::Entry::new(KEYRING_SERVICE, provider_name) {
-        let _ = entry.set_password(api_key);
+    match keyring::Entry::new(KEYRING_SERVICE, provider_name) {
+        Ok(entry) => {
+            if let Err(e) = entry.set_password(api_key) {
+                tracing::warn!(provider = provider_name, error = %e, "failed to store API key in OS keyring");
+            }
+        }
+        Err(e) => {
+            tracing::warn!(provider = provider_name, error = %e, "failed to create keyring entry");
+        }
     }
 }
 
@@ -52,8 +59,15 @@ pub(crate) fn keyring_retrieve(provider_name: &str) -> Option<String> {
 }
 
 pub(crate) fn keyring_delete(provider_name: &str) {
-    if let Ok(entry) = keyring::Entry::new(KEYRING_SERVICE, provider_name) {
-        let _ = entry.delete_credential();
+    match keyring::Entry::new(KEYRING_SERVICE, provider_name) {
+        Ok(entry) => {
+            if let Err(e) = entry.delete_credential() {
+                tracing::warn!(provider = provider_name, error = %e, "failed to delete API key from OS keyring");
+            }
+        }
+        Err(e) => {
+            tracing::warn!(provider = provider_name, error = %e, "failed to create keyring entry for deletion");
+        }
     }
 }
 

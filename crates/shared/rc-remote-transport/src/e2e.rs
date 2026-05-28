@@ -127,7 +127,8 @@ mod tests {
         let (secret_b, public_b) = E2eSession::generate_keypair();
 
         let session_no_id = E2eSession::from_secret_and_public(secret_a, &public_b, None);
-        let session_with_id = E2eSession::from_secret_and_public(secret_b, &public_a, Some("test-session-123"));
+        let session_with_id =
+            E2eSession::from_secret_and_public(secret_b, &public_a, Some("test-session-123"));
 
         // These two sessions use different HKDF info, so the derived keys
         // should differ — encryption from one should NOT decrypt with the other.
@@ -165,8 +166,11 @@ mod tests {
         // We cannot inspect the key inside E2eSession directly, but we can
         // verify the two sessions still interoperate (proving HKDF is
         // deterministic and symmetric).
-        let session_a =
-            E2eSession::from_secret_and_public(EphemeralSecret::random_from_rng(OsRng), &public_b, None);
+        let session_a = E2eSession::from_secret_and_public(
+            EphemeralSecret::random_from_rng(OsRng),
+            &public_b,
+            None,
+        );
         // Different ephemeral secrets must produce a different shared secret
         // and therefore a different derived key — encryption should fail to
         // decrypt with the wrong session.
@@ -178,5 +182,51 @@ mod tests {
 
         // Prevent unused variable warning for raw_shared.
         let _ = raw_shared;
+    }
+
+    #[test]
+    fn encrypt_same_plaintext_produces_different_ciphertext() {
+        let (secret_a, public_a) = E2eSession::generate_keypair();
+        let (secret_b, public_b) = E2eSession::generate_keypair();
+        let session_a = E2eSession::from_secret_and_public(secret_a, &public_b, None);
+
+        let plaintext = b"deterministic message";
+        let encrypted1 = session_a.encrypt(plaintext).unwrap();
+        let encrypted2 = session_a.encrypt(plaintext).unwrap();
+        // Random nonces must make each encryption unique
+        assert_ne!(
+            encrypted1, encrypted2,
+            "nonce reuse detected: ciphertexts must differ"
+        );
+    }
+
+    #[test]
+    fn encrypt_empty_plaintext_roundtrip() {
+        let (secret_a, public_a) = E2eSession::generate_keypair();
+        let (secret_b, public_b) = E2eSession::generate_keypair();
+        let session_a = E2eSession::from_secret_and_public(secret_a, &public_b, None);
+        let session_b = E2eSession::from_secret_and_public(secret_b, &public_a, None);
+
+        let encrypted = session_a.encrypt(b"").unwrap();
+        // 12-byte nonce + 16-byte GCM tag, zero ciphertext bytes
+        assert_eq!(encrypted.len(), 28);
+        let decrypted = session_b.decrypt(&encrypted).unwrap();
+        assert!(decrypted.is_empty());
+    }
+
+    #[test]
+    fn decrypt_rejects_nonce_only_payload() {
+        let (secret_a, _public_a) = E2eSession::generate_keypair();
+        let session = E2eSession::from_secret_and_public(
+            secret_a,
+            &x25519_dalek::PublicKey::from(x25519_dalek::EphemeralSecret::random_from_rng(
+                rand::rngs::OsRng,
+            )),
+            None,
+        );
+
+        // 12 bytes = nonce only, no ciphertext or tag
+        let payload = vec![0u8; 12];
+        assert!(session.decrypt(&payload).is_err());
     }
 }

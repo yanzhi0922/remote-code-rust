@@ -4,6 +4,7 @@ import { useMemo } from 'react';
 import { useAppStore } from '../../stores/useAppStore';
 import { useAgentStore } from '../../stores/useAgentStore';
 import { formatSensitivePath } from '../../lib/utils';
+import type { AgentType, FullSettings } from '../../lib/types';
 
 function InspectorRow({
   label,
@@ -62,7 +63,26 @@ function formatAgentStatus(status: string) {
   return status;
 }
 
-function formatPermissionMode(mode: string | undefined) {
+function formatPermissionMode(agentType: AgentType, settings: FullSettings | null) {
+  if (agentType === 'remote_codex') {
+    const approval = settings?.codex_approval_policy ?? 'on-request';
+    const sandbox = settings?.codex_sandbox_mode ?? 'workspace-write';
+    if (approval === 'never' && sandbox === 'danger-full-access') return '全自动访问';
+    if (approval === 'on-request' && sandbox === 'danger-full-access') return '完全访问';
+    if (approval === 'on-request' && sandbox === 'read-only') return '只读沙盒';
+    if (approval === 'never') return '沙盒自动';
+    return '请求批准';
+  }
+
+  const mode = settings?.permission_mode;
+  if (agentType === 'remote_roo') {
+    if (mode === 'acceptEdits') return '自动批准编辑';
+    if (mode === 'bypassPermissions') return '自动批准全部';
+    if (mode === 'dontAsk') return '自动批准读取';
+    if (mode === 'plan') return '仅规划';
+    return '每次询问';
+  }
+
   if (mode === 'acceptEdits') return '自动编辑';
   if (mode === 'bypassPermissions') return '全自动';
   if (mode === 'dontAsk') return '不询问';
@@ -78,6 +98,7 @@ export function SessionInspector() {
   const activeProjectPath = useAppStore((state) => state.activeProjectPath);
   const sessions = useAppStore((state) => state.sessions);
   const settings = useAppStore((state) => state.settings);
+  const providerConfigs = useAppStore((state) => state.providerConfigs);
   const pendingPermission = useAppStore((state) => state.pendingPermission);
   const liveToolProgress = useAppStore((state) => state.liveToolProgress);
   const liveToolResults = useAppStore((state) => state.liveToolResults);
@@ -93,8 +114,12 @@ export function SessionInspector() {
 
   const mcpSummary = runtimeStatus?.mcp ?? null;
   const contextUsage = activeSessionId ? contextUsageBySession[activeSessionId] : null;
-  const agentType = activeAgentType ?? 'remote_claude';
+  const agentType = activeSession?.agent_type ?? activeAgentType ?? 'remote_claude';
   const agentStatus = agentStatuses[agentType] ?? (runtimeStatus ? 'ready' : 'offline');
+  const effectiveProviderName =
+    providerConfigs?.active_provider ?? settings?.provider_name ?? provider?.name ?? activeSession?.provider_name ?? 'Provider';
+  const effectiveModel =
+    settings?.provider_model ?? provider?.model ?? activeSession?.model ?? runtimeStatus?.provider.model ?? '—';
 
   return (
     <aside
@@ -115,16 +140,16 @@ export function SessionInspector() {
 
         <InspectorSection icon={Cpu} title="Agent">
           <InspectorRow label="类型" value={formatAgentName(agentType)} />
-          <InspectorRow label="模型" value={activeSession?.model ?? runtimeStatus?.provider.model ?? provider?.model ?? '—'} />
+          <InspectorRow label="模型" value={effectiveModel} />
           <InspectorRow
-            label={runtimeStatus?.provider.name ?? provider?.name ?? 'Provider'}
+            label={effectiveProviderName}
             value={formatAgentStatus(agentStatus)}
             tone={agentStatus === 'ready' ? 'success' : runtimeStatus ? 'default' : 'warning'}
           />
         </InspectorSection>
 
         <InspectorSection icon={Shield} title="权限">
-          <InspectorRow label="模式" value={formatPermissionMode(settings?.permission_mode)} />
+          <InspectorRow label="模式" value={formatPermissionMode(agentType, settings)} />
           <InspectorRow
             label="待确认"
             value={pendingPermission ? pendingPermission.tool_name : '无'}

@@ -25,7 +25,12 @@ pub(crate) fn validate_url(url: &str) -> Result<()> {
 
     match parsed.scheme() {
         "http" | "https" => {}
-        _ => return Err(anyhow!("URL scheme must be http or https, got '{}'", parsed.scheme())),
+        _ => {
+            return Err(anyhow!(
+                "URL scheme must be http or https, got '{}'",
+                parsed.scheme()
+            ));
+        }
     }
 
     let host = parsed
@@ -35,7 +40,9 @@ pub(crate) fn validate_url(url: &str) -> Result<()> {
 
     // Block localhost
     if host.eq_ignore_ascii_case("localhost") {
-        return Err(anyhow!("URL resolves to localhost, which is blocked for security"));
+        return Err(anyhow!(
+            "URL resolves to localhost, which is blocked for security"
+        ));
     }
 
     // Block IP addresses in private/reserved ranges
@@ -228,8 +235,7 @@ fn html_to_readable_text(html: &str) -> String {
         Regex::new(r"(?i)</?(p|div|br|h[1-6]|li|tr|hr|blockquote|pre|section|article|header|footer|nav|aside|main|figure|figcaption|details|summary)[^>]*>")
             .expect("valid block regex")
     });
-    static RE_TAG: Lazy<Regex> =
-        Lazy::new(|| Regex::new(r"<[^>]+>").expect("valid tag regex"));
+    static RE_TAG: Lazy<Regex> = Lazy::new(|| Regex::new(r"<[^>]+>").expect("valid tag regex"));
 
     // Remove script and style blocks entirely
     let no_scripts = RE_SCRIPT.replace_all(html, "");
@@ -658,7 +664,11 @@ pub(crate) async fn web_browser_tool(
 
     match action {
         "fetch" => {
-            let response = client.get(url).send().await.context("failed to fetch URL")?;
+            let response = client
+                .get(url)
+                .send()
+                .await
+                .context("failed to fetch URL")?;
             let status = response.status();
 
             // Manually handle redirects with URL validation to prevent SSRF bypass.
@@ -668,21 +678,33 @@ pub(crate) async fn web_browser_tool(
                     .get(reqwest::header::LOCATION)
                     .and_then(|v| v.to_str().ok())
                     .unwrap_or("");
-                let redirect_url = if location.starts_with("http://") || location.starts_with("https://") {
-                    location.to_owned()
-                } else {
-                    // Relative redirect — resolve against original URL.
-                    let base = url::Url::parse(url)?;
-                    base.join(location)?.to_string()
-                };
+                let redirect_url =
+                    if location.starts_with("http://") || location.starts_with("https://") {
+                        location.to_owned()
+                    } else {
+                        // Relative redirect — resolve against original URL.
+                        let base = url::Url::parse(url)?;
+                        base.join(location)?.to_string()
+                    };
                 validate_url(&redirect_url)?;
-                let redirect_resp = client.get(&redirect_url).send().await
+                let redirect_resp = client
+                    .get(&redirect_url)
+                    .send()
+                    .await
                     .context("failed to follow redirect")?;
                 let r_status = redirect_resp.status();
                 if !r_status.is_success() {
-                    return Err(anyhow!("HTTP {} for {} (redirect from {})", r_status, redirect_url, url));
+                    return Err(anyhow!(
+                        "HTTP {} for {} (redirect from {})",
+                        r_status,
+                        redirect_url,
+                        url
+                    ));
                 }
-                let text = redirect_resp.text().await.context("failed to read response body")?;
+                let text = redirect_resp
+                    .text()
+                    .await
+                    .context("failed to read response body")?;
                 let truncated: String = text.chars().take(50_000).collect();
                 return Ok(truncated);
             }

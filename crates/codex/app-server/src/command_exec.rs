@@ -378,7 +378,10 @@ impl CommandExecManager {
             let mut controls = Vec::new();
             sessions.retain(|process_id, session| {
                 if process_id.connection_id == connection_id {
-                    controls.push(std::mem::replace(session, CommandExecSession::UnsupportedWindowsSandbox));
+                    controls.push(std::mem::replace(
+                        session,
+                        CommandExecSession::UnsupportedWindowsSandbox,
+                    ));
                     false
                 } else {
                     true

@@ -118,9 +118,7 @@ impl ThreadState {
         self.experimental_raw_events = enabled;
     }
 
-    pub(crate) fn listener_command_tx(
-        &self,
-    ) -> Option<mpsc::Sender<ThreadListenerCommand>> {
+    pub(crate) fn listener_command_tx(&self) -> Option<mpsc::Sender<ThreadListenerCommand>> {
         self.listener_command_tx.clone()
     }
 

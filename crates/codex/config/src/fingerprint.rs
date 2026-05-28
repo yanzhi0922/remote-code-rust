@@ -3,6 +3,7 @@ use serde_json::Value as JsonValue;
 use sha2::Digest;
 use sha2::Sha256;
 use std::collections::HashMap;
+use std::fmt::Write;
 use toml::Value as TomlValue;
 
 pub(super) fn record_origins(
@@ -41,10 +42,10 @@ pub fn version_for_toml(value: &TomlValue) -> String {
     let mut hasher = Sha256::new();
     hasher.update(serialized);
     let hash = hasher.finalize();
-    let hex = hash
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>();
+    let mut hex = String::with_capacity(hash.len() * 2);
+    for &byte in &hash {
+        let _ = write!(hex, "{byte:02x}");
+    }
     format!("sha256:{hex}")
 }
 

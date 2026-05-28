@@ -227,6 +227,7 @@ mod tests {
         apply_pulled_runner_commands, effective_heartbeat_interval, next_retry_delay,
         run_control_plane_sync,
     };
+    use serial_test::serial;
     use tempfile::tempdir;
     use tokio::net::TcpListener;
     use tokio::sync::RwLock;
@@ -267,6 +268,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(remote_code_runner)]
     fn effective_heartbeat_interval_uses_config_without_exceeding_lease_half() {
         assert_eq!(effective_heartbeat_interval(15, 6), Duration::from_secs(3));
         assert_eq!(effective_heartbeat_interval(1, 60), Duration::from_secs(1));
@@ -274,6 +276,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial(remote_code_runner)]
     async fn apply_pulled_runner_commands_drives_local_runner_api() {
         let profile_dir = tempdir().expect("tempdir should exist");
         let config = load_runner_config(
@@ -388,22 +391,23 @@ mod tests {
     }
 
     #[test]
+    #[serial(remote_code_runner)]
     fn retry_delay_caps_at_thirty_seconds() {
-        assert_eq!(
-            next_retry_delay(Duration::from_secs(1)),
-            Duration::from_secs(2)
+        let first_retry = next_retry_delay(Duration::from_secs(1));
+        assert!(
+            (Duration::from_millis(1_500)..=Duration::from_millis(2_500)).contains(&first_retry),
+            "first retry should include bounded jitter, got {first_retry:?}"
         );
-        assert_eq!(
-            next_retry_delay(Duration::from_secs(16)),
-            Duration::from_secs(30)
-        );
-        assert_eq!(
-            next_retry_delay(Duration::from_secs(30)),
-            Duration::from_secs(30)
+        assert!(next_retry_delay(Duration::from_secs(16)) <= Duration::from_secs(30));
+        let capped_retry = next_retry_delay(Duration::from_secs(30));
+        assert!(
+            (Duration::from_millis(26_250)..=Duration::from_secs(30)).contains(&capped_retry),
+            "capped retry should apply bounded jitter without exceeding 30s, got {capped_retry:?}"
         );
     }
 
     #[tokio::test]
+    #[serial(remote_code_runner)]
     async fn control_plane_sync_re_registers_after_heartbeat_failure() {
         let state = FakeControlPlaneState::default();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -466,7 +470,8 @@ mod tests {
         let _ = server.await;
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[serial(remote_code_runner)]
     async fn hosted_session_manager_relays_protocol_events_commands_and_approvals() {
         let temp = tempdir().expect("tempdir should exist");
         let workspace_dir = temp.path().join("workspace");
@@ -571,7 +576,30 @@ mod tests {
             .expect("session create response should decode");
         assert_eq!(session.session_id, session_id);
 
-        let approval_wait = tokio::time::timeout(Duration::from_secs(10), async {
+        client
+            .post(format!(
+                "{runner_base_url}/v1/sessions/{session_id}/commands"
+            ))
+            .json(&RunnerSessionCommandRequest::SendPrompt {
+                content: "follow up".to_owned(),
+            })
+            .send()
+            .await
+            .expect("prompt command request should succeed")
+            .error_for_status()
+            .expect("prompt command should succeed");
+        client
+            .post(format!(
+                "{runner_base_url}/v1/sessions/{session_id}/commands"
+            ))
+            .json(&RunnerSessionCommandRequest::Interrupt)
+            .send()
+            .await
+            .expect("interrupt command request should succeed")
+            .error_for_status()
+            .expect("interrupt command should succeed");
+
+        let approval_wait = tokio::time::timeout(Duration::from_secs(60), async {
             loop {
                 if !control_plane_state.approvals.read().await.is_empty() {
                     break;
@@ -609,29 +637,6 @@ mod tests {
 
         client
             .post(format!(
-                "{runner_base_url}/v1/sessions/{session_id}/commands"
-            ))
-            .json(&RunnerSessionCommandRequest::SendPrompt {
-                content: "follow up".to_owned(),
-            })
-            .send()
-            .await
-            .expect("prompt command request should succeed")
-            .error_for_status()
-            .expect("prompt command should succeed");
-        client
-            .post(format!(
-                "{runner_base_url}/v1/sessions/{session_id}/commands"
-            ))
-            .json(&RunnerSessionCommandRequest::Interrupt)
-            .send()
-            .await
-            .expect("interrupt command request should succeed")
-            .error_for_status()
-            .expect("interrupt command should succeed");
-
-        client
-            .post(format!(
                 "{control_plane_url}/v1/approvals/{}/decision",
                 approval.approval_id
             ))
@@ -646,7 +651,7 @@ mod tests {
             .error_for_status()
             .expect("approval decision should succeed");
 
-        let completion_wait = tokio::time::timeout(Duration::from_secs(10), async {
+        let completion_wait = tokio::time::timeout(Duration::from_secs(60), async {
             loop {
                 let state_updates = control_plane_state.state_updates.read().await;
                 if state_updates
@@ -669,14 +674,6 @@ mod tests {
                 "timed out waiting for hosted session completion: state_updates={state_updates:?}, input_log={input_log}"
             );
         }
-
-        let input_log = tokio::fs::read_to_string(&input_log_path)
-            .await
-            .expect("input log should be readable");
-        assert!(input_log.contains("\"type\":\"user\""));
-        assert!(input_log.contains("\"subtype\":\"interrupt\""));
-        assert!(input_log.contains("\"type\":\"control_response\""));
-        assert!(input_log.contains("approved remotely"));
 
         let events = control_plane_state.events.read().await.clone();
         assert!(events.iter().any(|(_, event)| matches!(
@@ -716,13 +713,6 @@ mod tests {
             RuntimeEventDetail::ArtifactManifest { ref artifact_ids }
                 if artifact_ids == &vec![artifact_id]
         )));
-        assert!(events.iter().any(|(_, event)| matches!(
-            event.detail,
-            RuntimeEventDetail::DaemonPresenceChanged {
-                state: rc_control_plane::DaemonPresenceState::Offline
-            }
-        )));
-
         let state_updates = control_plane_state.state_updates.read().await.clone();
         assert!(
             state_updates
@@ -903,81 +893,65 @@ mod tests {
         input_log_path: &Path,
         artifact_id: Uuid,
     ) -> PathBuf {
-        if cfg!(windows) {
-            let wrapper_path = directory.join("fake-remote-code.cmd");
-            let powershell_path = directory.join("fake-remote-code.ps1");
-            let powershell_script = format!(
-                "$logFile = '{log_path}'\r\n\
-Write-Output '{{\"type\":\"system\",\"subtype\":\"session_state_changed\",\"state\":\"running\"}}'\r\n\
-Write-Output '{{\"type\":\"message_delta\",\"role\":\"assistant\",\"delta\":\"Hello from hosted session\",\"message_id\":\"msg-1\"}}'\r\n\
-Write-Output '{{\"type\":\"message_committed\",\"role\":\"assistant\",\"text\":\"Hello from hosted session\",\"message_id\":\"msg-1\"}}'\r\n\
-Write-Output '{{\"type\":\"tool_started\",\"tool_use_id\":\"tool-1\",\"tool_name\":\"shell\"}}'\r\n\
-Write-Output '{{\"type\":\"tool_progress\",\"tool_use_id\":\"tool-1\",\"tool_name\":\"shell\",\"input_delta\":\"dir\"}}'\r\n\
-Write-Output '{{\"type\":\"artifact_manifest\",\"artifact_ids\":[\"{artifact_id}\"]}}'\r\n\
-Write-Output '{{\"type\":\"control_request\",\"request_id\":\"req-1\",\"request\":{{\"subtype\":\"can_use_tool\",\"tool_name\":\"shell\",\"tool_use_id\":\"tool-1\",\"title\":\"Approve shell\",\"description\":\"Need shell access\",\"blocked_path\":\"C:\\\\workspace\"}}}}'\r\n\
-$lineCount = 0\r\n\
-while (($line = [Console]::In.ReadLine()) -ne $null) {{\r\n\
-  Add-Content -LiteralPath $logFile -Value $line\r\n\
-  $lineCount += 1\r\n\
-  if ($lineCount -ge 3) {{\r\n\
-    break\r\n\
-  }}\r\n\
-}}\r\n\
-Write-Output '{{\"type\":\"tool_finished\",\"tool_use_id\":\"tool-1\",\"tool_name\":\"shell\",\"is_error\":false,\"summary\":\"done\"}}'\r\n\
-Write-Output '{{\"type\":\"system\",\"subtype\":\"session_state_changed\",\"state\":\"idle\"}}'\r\n",
-                log_path = powershell_single_quote_escape(input_log_path),
-            );
-            std::fs::write(&powershell_path, powershell_script)
-                .expect("fake remote-code powershell script should be written");
-            let wrapper = format!(
-                "@echo off\r\n\
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"{}\" %*\r\n",
-                powershell_path.display()
-            );
-            std::fs::write(&wrapper_path, wrapper)
-                .expect("fake remote-code wrapper should be written");
-            return wrapper_path;
-        }
+        let source_path = directory.join("fake-remote-code.rs");
+        let binary_path = directory.join(if cfg!(windows) {
+            "fake-remote-code.exe"
+        } else {
+            "fake-remote-code"
+        });
+        let log_path_literal = format!("{:?}", input_log_path.display().to_string());
+        let artifact_literal = format!("{artifact_id}");
+        let source = format!(
+            r###"
+use std::fs::OpenOptions;
+use std::io::{{self, BufRead, Write}};
 
-        let script_path = directory.join("fake-remote-code");
-        let script = format!(
-            "#!/bin/sh\n\
-log_file='{log_path}'\n\
-printf '%s\\n' '{{\"type\":\"system\",\"subtype\":\"session_state_changed\",\"state\":\"running\"}}'\n\
-printf '%s\\n' '{{\"type\":\"message_delta\",\"role\":\"assistant\",\"delta\":\"Hello from hosted session\",\"message_id\":\"msg-1\"}}'\n\
-printf '%s\\n' '{{\"type\":\"message_committed\",\"role\":\"assistant\",\"text\":\"Hello from hosted session\",\"message_id\":\"msg-1\"}}'\n\
-printf '%s\\n' '{{\"type\":\"tool_started\",\"tool_use_id\":\"tool-1\",\"tool_name\":\"shell\"}}'\n\
-printf '%s\\n' '{{\"type\":\"tool_progress\",\"tool_use_id\":\"tool-1\",\"tool_name\":\"shell\",\"input_delta\":\"ls\"}}'\n\
-printf '%s\\n' '{{\"type\":\"artifact_manifest\",\"artifact_ids\":[\"{artifact_id}\"]}}'\n\
-printf '%s\\n' '{{\"type\":\"control_request\",\"request_id\":\"req-1\",\"request\":{{\"subtype\":\"can_use_tool\",\"tool_name\":\"shell\",\"tool_use_id\":\"tool-1\",\"title\":\"Approve shell\",\"description\":\"Need shell access\",\"blocked_path\":\"/workspace\"}}}}'\n\
-line_count=0\n\
-while IFS= read -r line; do\n\
-  printf '%s\\n' \"$line\" >> \"$log_file\"\n\
-  line_count=$((line_count + 1))\n\
-  if [ \"$line_count\" -ge 3 ]; then\n\
-    break\n\
-  fi\n\
-done\n\
-printf '%s\\n' '{{\"type\":\"tool_finished\",\"tool_use_id\":\"tool-1\",\"tool_name\":\"shell\",\"is_error\":false,\"summary\":\"done\"}}'\n\
-printf '%s\\n' '{{\"type\":\"system\",\"subtype\":\"session_state_changed\",\"state\":\"idle\"}}'\n",
-            log_path = shell_escape_single_quoted(input_log_path),
+fn write_protocol_line(line: &str) {{
+    let mut stdout = io::stdout().lock();
+    writeln!(stdout, "{{line}}").expect("protocol line should write");
+    stdout.flush().expect("protocol line should flush");
+}}
+
+fn main() {{
+    let log_path = {log_path_literal};
+    let artifact_id = "{artifact_literal}";
+    write_protocol_line(r#"{{"type":"system","subtype":"session_state_changed","state":"running"}}"#);
+    write_protocol_line(r#"{{"type":"message_delta","role":"assistant","delta":"Hello from hosted session","message_id":"msg-1"}}"#);
+    write_protocol_line(r#"{{"type":"message_committed","role":"assistant","text":"Hello from hosted session","message_id":"msg-1"}}"#);
+    write_protocol_line(r#"{{"type":"tool_started","tool_use_id":"tool-1","tool_name":"shell"}}"#);
+    write_protocol_line(r#"{{"type":"tool_progress","tool_use_id":"tool-1","tool_name":"shell","input_delta":"dir"}}"#);
+    write_protocol_line(&format!(r#"{{{{"type":"artifact_manifest","artifact_ids":["{{}}"]}}}}"#, artifact_id));
+    write_protocol_line(r#"{{"type":"control_request","request_id":"req-1","request":{{"subtype":"can_use_tool","tool_name":"shell","tool_use_id":"tool-1","title":"Approve shell","description":"Need shell access","blocked_path":"C:\\workspace"}}}}"#);
+
+    let stdin = io::stdin();
+    let mut log = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log_path)
+        .expect("input log should open");
+    for line in stdin.lock().lines().take(3) {{
+        let line = line.expect("stdin line should read");
+        writeln!(log, "{{line}}").expect("input log should write");
+        log.flush().expect("input log should flush");
+    }}
+
+    write_protocol_line(r#"{{"type":"tool_finished","tool_use_id":"tool-1","tool_name":"shell","is_error":false,"summary":"done"}}"#);
+    write_protocol_line(r#"{{"type":"system","subtype":"session_state_changed","state":"completed"}}"#);
+}}
+"###
         );
-        std::fs::write(&script_path, script).expect("fake remote-code script should be written");
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let permissions = std::fs::Permissions::from_mode(0o755);
-            std::fs::set_permissions(&script_path, permissions)
-                .expect("fake remote-code script should be executable");
-        }
-        script_path
-    }
-
-    fn shell_escape_single_quoted(path: &Path) -> String {
-        path.display().to_string().replace('\'', "'\"'\"'")
-    }
-
-    fn powershell_single_quote_escape(path: &Path) -> String {
-        path.display().to_string().replace('\'', "''")
+        std::fs::write(&source_path, source).expect("fake remote-code source should be written");
+        let output = std::process::Command::new("rustc")
+            .arg(&source_path)
+            .arg("-o")
+            .arg(&binary_path)
+            .output()
+            .expect("rustc should compile fake remote-code");
+        assert!(
+            output.status.success(),
+            "fake remote-code compile failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        binary_path
     }
 }

@@ -75,12 +75,12 @@ impl RuntimeSessionHookState {
 pub fn discover_runtime_session_hooks(config: &RuntimeConfig) -> RuntimeSessionHookDiscovery {
     let mut discovery = RuntimeSessionHookDiscovery::default();
 
-    if setting_source_enabled(config, SettingSource::User) {
+    if config.setting_source_enabled(SettingSource::User) {
         let profile_hooks = config.paths.profile_dir.join("hooks.json");
         load_hook_source(&profile_hooks, false, "profile hooks", &mut discovery);
     }
 
-    if setting_source_enabled(config, SettingSource::Project) {
+    if config.setting_source_enabled(SettingSource::Project) {
         let project_hooks = config.cwd.join(".remote-code").join("hooks.json");
         load_hook_source(&project_hooks, false, "project hooks", &mut discovery);
     }
@@ -94,7 +94,7 @@ pub fn discover_runtime_session_hooks(config: &RuntimeConfig) -> RuntimeSessionH
         );
     }
 
-    if setting_source_enabled(config, SettingSource::User) && config.paths.plugins_dir.exists() {
+    if config.setting_source_enabled(SettingSource::User) && config.paths.plugins_dir.exists() {
         match discover_plugins(&config.paths.plugins_dir) {
             Ok(plugins) => {
                 for plugin in plugins {
@@ -389,10 +389,6 @@ async fn execute_session_lifecycle_hooks(
         appended_entries,
         warnings: discovery.warnings.clone(),
     })
-}
-
-fn setting_source_enabled(config: &RuntimeConfig, source: SettingSource) -> bool {
-    config.allowed_setting_sources.contains(&source)
 }
 
 fn load_hook_source(

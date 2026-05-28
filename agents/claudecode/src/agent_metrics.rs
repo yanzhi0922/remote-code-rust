@@ -25,13 +25,19 @@ impl LabeledCounter {
         }
     }
     fn inc_by(&self, labels: &str, delta: u64) {
-        let mut map = self.counters.lock().unwrap();
+        let mut map = self.counters.lock().unwrap_or_else(|e| {
+            tracing::warn!("metrics counter mutex poisoned, recovering: {e}");
+            e.into_inner()
+        });
         map.entry(labels.to_owned())
             .or_insert_with(|| AtomicU64::new(0))
             .fetch_add(delta, Ordering::Relaxed);
     }
     fn snapshot(&self) -> Vec<(String, u64)> {
-        let map = self.counters.lock().unwrap();
+        let map = self.counters.lock().unwrap_or_else(|e| {
+            tracing::warn!("metrics counter mutex poisoned, recovering: {e}");
+            e.into_inner()
+        });
         map.iter()
             .map(|(k, v)| (k.clone(), v.load(Ordering::Relaxed)))
             .collect()
@@ -68,7 +74,10 @@ impl SimpleHistogram {
         }
     }
     fn observe(&self, value: f64) {
-        let data = self.data.lock().unwrap();
+        let data = self.data.lock().unwrap_or_else(|e| {
+            tracing::warn!("histogram mutex poisoned, recovering: {e}");
+            e.into_inner()
+        });
         for (i, &bound) in self.buckets.iter().enumerate() {
             if value <= bound {
                 data.bucket_counts[i].fetch_add(1, Ordering::Relaxed);
@@ -145,7 +154,10 @@ pub fn encode_metrics() -> String {
 
     let mut out = String::with_capacity(2048);
 
-    let _ = writeln!(out, "# HELP rc_agent_sessions Number of active agent sessions");
+    let _ = writeln!(
+        out,
+        "# HELP rc_agent_sessions Number of active agent sessions"
+    );
     let _ = writeln!(out, "# TYPE rc_agent_sessions gauge");
     let _ = writeln!(
         out,
@@ -194,7 +206,11 @@ pub fn encode_metrics() -> String {
     let _ = writeln!(out, "# HELP rc_agent_tool_calls_total Tool calls by name");
     let _ = writeln!(out, "# TYPE rc_agent_tool_calls_total counter");
     for (tool_name, count) in TOOL_CALL_COUNTER.snapshot() {
-        let _ = writeln!(out, "rc_agent_tool_calls_total{{tool=\"{}\"}} {}", tool_name, count);
+        let _ = writeln!(
+            out,
+            "rc_agent_tool_calls_total{{tool=\"{}\"}} {}",
+            tool_name, count
+        );
     }
 
     out
@@ -214,7 +230,10 @@ fn write_histogram_section(
     let _ = writeln!(out, "# HELP {name} {help}");
     let _ = writeln!(out, "# TYPE {name} histogram");
 
-    let data = hist.data.lock().unwrap();
+    let data = hist.data.lock().unwrap_or_else(|e| {
+        tracing::warn!("histogram mutex poisoned, recovering: {e}");
+        e.into_inner()
+    });
     let counts: Vec<u64> = data
         .bucket_counts
         .iter()
@@ -292,9 +311,6 @@ mod tests {
     fn token_usage_accumulates() {
         let before = TOKEN_INPUT_TOTAL.load(Ordering::Relaxed);
         record_token_usage(100, 50, 200, 30);
-        assert_eq!(
-            TOKEN_INPUT_TOTAL.load(Ordering::Relaxed),
-            before + 100
-        );
+        assert_eq!(TOKEN_INPUT_TOTAL.load(Ordering::Relaxed), before + 100);
     }
 }

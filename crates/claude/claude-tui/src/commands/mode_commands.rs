@@ -161,9 +161,7 @@ fn open_with_system_default(plan_path: &Path) -> anyhow::Result<()> {
     } else {
         "xdg-open"
     };
-    Command::new(program)
-        .arg(plan_path)
-        .spawn()?;
+    Command::new(program).arg(plan_path).spawn()?;
     Ok(())
 }
 

@@ -67,6 +67,28 @@ impl OpenAiModelsEndpoint {
 
 #[async_trait]
 impl ModelsEndpointClient for OpenAiModelsEndpoint {
+    fn cache_key(&self) -> String {
+        let auth_kind = if self.provider_info.aws.is_some() {
+            "aws"
+        } else if self.provider_info.auth.is_some() {
+            "command"
+        } else if self.provider_info.env_key.is_some() {
+            "env"
+        } else if self.provider_info.requires_openai_auth {
+            "openai-auth"
+        } else {
+            "none"
+        };
+        format!(
+            "openai-compatible|name={}|base_url={}|wire_api={}|auth={}|env_key={}",
+            self.provider_info.name,
+            self.provider_info.base_url.as_deref().unwrap_or_default(),
+            self.provider_info.wire_api,
+            auth_kind,
+            self.provider_info.env_key.as_deref().unwrap_or_default()
+        )
+    }
+
     fn has_command_auth(&self) -> bool {
         self.provider_info.has_command_auth()
     }

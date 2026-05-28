@@ -250,19 +250,15 @@ fn dispatch_command<'a>(
         Some(Commands::Provider { command }) => {
             Box::pin(async move { commands::run_provider(config, command) })
         }
-        Some(Commands::Compact) => {
-            Box::pin(async move { commands::run_compact(config, store).await })
-        }
+        Some(Commands::Compact) => Box::pin(async move { commands::run_compact(config, store) }),
         Some(Commands::Theme(args)) => Box::pin(async move { commands::run_theme(config, args) }),
         Some(Commands::Feedback(args)) => {
-            Box::pin(async move { commands::run_feedback(config, args).await })
+            Box::pin(async move { commands::run_feedback(config, args) })
         }
-        Some(Commands::Summary) => {
-            Box::pin(async move { commands::run_summary(config, store).await })
-        }
+        Some(Commands::Summary) => Box::pin(async move { commands::run_summary(config, store) }),
         Some(Commands::Files(args)) => Box::pin(async move { commands::run_files(config, args) }),
         Some(Commands::Copy(args)) => {
-            Box::pin(async move { commands::run_copy(config, store, args).await })
+            Box::pin(async move { commands::run_copy(config, store, args) })
         }
         Some(Commands::Ctx(args)) => {
             Box::pin(async move { commands::run_ctx(config, store, args) })
@@ -270,7 +266,7 @@ fn dispatch_command<'a>(
         Some(Commands::Diff(args)) => {
             Box::pin(async move { commands::run_diff(config, store, args) })
         }
-        Some(Commands::Help(args)) => Box::pin(async move { commands::run_help(args).await }),
+        Some(Commands::Help(args)) => Box::pin(async move { commands::run_help(args) }),
         Some(Commands::Clear) => Box::pin(async move { commands::run_clear() }),
         Some(Commands::Exit) => Box::pin(async move { commands::run_exit() }),
         Some(Commands::Heapdump(args)) => {
@@ -280,13 +276,13 @@ fn dispatch_command<'a>(
             Box::pin(async move { commands::run_debug_tool_call(config, store, args) })
         }
         Some(Commands::Fast(args)) => Box::pin(async move { commands::run_fast(config, args) }),
-        Some(Commands::Mobile(args)) => Box::pin(async move { commands::run_mobile(args).await }),
-        Some(Commands::Desktop(args)) => Box::pin(async move { commands::run_desktop(args).await }),
+        Some(Commands::Mobile(args)) => Box::pin(async move { commands::run_mobile(args) }),
+        Some(Commands::Desktop(args)) => Box::pin(async move { commands::run_desktop(args) }),
         Some(Commands::SandboxToggle) => {
             Box::pin(async move { commands::run_sandbox_toggle(config) })
         }
         Some(Commands::ReloadPlugins) => {
-            Box::pin(async move { commands::run_reload_plugins(config).await })
+            Box::pin(async move { commands::run_reload_plugins(config) })
         }
         Some(Commands::AddDir(args)) => {
             Box::pin(async move { commands::run_add_dir(config, args) })
@@ -295,7 +291,7 @@ fn dispatch_command<'a>(
             Box::pin(async move { commands::run_mock_limits(config, args) })
         }
         Some(Commands::Stickers(args)) => {
-            Box::pin(async move { commands::run_stickers(config, args).await })
+            Box::pin(async move { commands::run_stickers(config, args) })
         }
         Some(Commands::ReleaseNotes(args)) => {
             Box::pin(async move { commands::run_release_notes(args) })
@@ -303,24 +299,18 @@ fn dispatch_command<'a>(
         Some(Commands::Stats(args)) => {
             Box::pin(async move { commands::run_stats(config, store, args) })
         }
-        Some(Commands::GoodClaude) => {
-            Box::pin(async move { commands::run_good_claude(config).await })
-        }
+        Some(Commands::GoodClaude) => Box::pin(async move { commands::run_good_claude(config) }),
         Some(Commands::DiffReal(args)) => {
             Box::pin(async move { commands::run_diff_real(config, store, args) })
         }
         Some(Commands::Branch { command }) => {
             Box::pin(async move { commands::run_branch(config, command) })
         }
-        Some(Commands::RemoteEnv(args)) => {
-            Box::pin(async move { commands::run_remote_env(args).await })
-        }
-        Some(Commands::Login(args)) => {
-            Box::pin(async move { commands::run_login(config, args).await })
-        }
-        Some(Commands::Logout) => Box::pin(async move { commands::run_logout(config).await }),
+        Some(Commands::RemoteEnv(args)) => Box::pin(async move { commands::run_remote_env(args) }),
+        Some(Commands::Login(args)) => Box::pin(async move { commands::run_login(config, args) }),
+        Some(Commands::Logout) => Box::pin(async move { commands::run_logout(config) }),
         Some(Commands::OauthRefresh) => {
-            Box::pin(async move { commands::run_oauth_refresh(config).await })
+            Box::pin(async move { commands::run_oauth_refresh(config) })
         }
         Some(Commands::Bughunter(args)) => {
             Box::pin(async move { commands::run_bughunter(config, store, args) })
@@ -335,19 +325,17 @@ fn dispatch_command<'a>(
             Box::pin(async move { commands::run_passes(config, store, args) })
         }
         Some(Commands::Teleport(args)) => {
-            Box::pin(async move { commands::run_teleport(config, store, args).await })
+            Box::pin(async move { commands::run_teleport(config, store, args) })
         }
         Some(Commands::InstallGithubApp(args)) => {
-            Box::pin(async move { commands::run_install_github_app(args).await })
+            Box::pin(async move { commands::run_install_github_app(args) })
         }
         Some(Commands::InstallSlackApp(args)) => {
-            Box::pin(async move { commands::run_install_slack_app(args).await })
+            Box::pin(async move { commands::run_install_slack_app(args) })
         }
-        Some(Commands::Buddy(args)) => {
-            Box::pin(async move { commands::run_buddy(config, args).await })
-        }
+        Some(Commands::Buddy(args)) => Box::pin(async move { commands::run_buddy(config, args) }),
         Some(Commands::AgentsPlatform(args)) => {
-            Box::pin(async move { commands::run_agents_platform(config, args).await })
+            Box::pin(async move { commands::run_agents_platform(config, args) })
         }
         Some(Commands::Thinkback(args)) => {
             Box::pin(async move { commands::run_thinkback(config, store, args) })
@@ -356,24 +344,22 @@ fn dispatch_command<'a>(
             Box::pin(async move { commands::run_ctx_viz(config, store, args) })
         }
         Some(Commands::AutoFixPr(args)) => {
-            Box::pin(async move { commands::run_autofix_pr(config, args).await })
+            Box::pin(async move { commands::run_autofix_pr(config, args) })
         }
         Some(Commands::BreakCache(args)) => {
             Box::pin(async move { commands::run_break_cache(config, args) })
         }
-        Some(Commands::Bridge(args)) => Box::pin(async move { commands::run_bridge(args).await }),
-        Some(Commands::Btw(args)) => Box::pin(async move { commands::run_btw(config, args).await }),
-        Some(Commands::Chrome(args)) => Box::pin(async move { commands::run_chrome(args).await }),
+        Some(Commands::Bridge(args)) => Box::pin(async move { commands::run_bridge(args) }),
+        Some(Commands::Btw(args)) => Box::pin(async move { commands::run_btw(config, args) }),
+        Some(Commands::Chrome(args)) => Box::pin(async move { commands::run_chrome(args) }),
         Some(Commands::Color(args)) => Box::pin(async move { commands::run_color(args) }),
         Some(Commands::ContextManage(args)) => {
             Box::pin(async move { commands::run_context_manage(config, store, args) })
         }
-        Some(Commands::Ide(args)) => Box::pin(async move { commands::run_ide(args).await }),
-        Some(Commands::Issue(args)) => {
-            Box::pin(async move { commands::run_issue(config, args).await })
-        }
+        Some(Commands::Ide(args)) => Box::pin(async move { commands::run_ide(args) }),
+        Some(Commands::Issue(args)) => Box::pin(async move { commands::run_issue(config, args) }),
         Some(Commands::Onboarding(args)) => {
-            Box::pin(async move { commands::run_onboarding(config, store, args).await })
+            Box::pin(async move { commands::run_onboarding(config, store, args) })
         }
         Some(Commands::PerfIssue(args)) => {
             Box::pin(async move { commands::run_perf_issue(config, store, args) })
@@ -382,7 +368,7 @@ fn dispatch_command<'a>(
             Box::pin(async move { commands::run_permissions(config, args) })
         }
         Some(Commands::PrComments(args)) => {
-            Box::pin(async move { commands::run_pr_comments(args).await })
+            Box::pin(async move { commands::run_pr_comments(args) })
         }
         Some(Commands::PrivacySettings(args)) => {
             Box::pin(async move { commands::run_privacy_settings(args) })
@@ -391,7 +377,7 @@ fn dispatch_command<'a>(
             Box::pin(async move { commands::run_rate_limit_options(config, args) })
         }
         Some(Commands::RemoteSetup(args)) => {
-            Box::pin(async move { commands::run_remote_setup(config, args).await })
+            Box::pin(async move { commands::run_remote_setup(config, args) })
         }
         Some(Commands::Update { command }) => Box::pin(async move {
             use cli::UpdateCommand;

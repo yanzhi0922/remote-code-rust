@@ -70,13 +70,16 @@ pub(super) async fn resolve_permission_request(
                         } else {
                             AgentPermissionDecision::Deny
                         };
-                        let _ = adapter
+                        if let Err(error) = adapter
                             .resolve_permission(
                                 &pending_claude.session_id,
                                 &pending_claude.request_id,
                                 decision,
                             )
-                            .await;
+                            .await
+                        {
+                            tracing::warn!(error = %error, "failed to resolve Claude permission");
+                        }
                     }
                 }
 
@@ -112,14 +115,17 @@ pub(super) async fn resolve_permission_request(
                         AgentPermissionDecision::Deny
                     };
                     let response = feedback.clone().or_else(|| message.clone());
-                    let _ = adapter
+                    if let Err(error) = adapter
                         .resolve_roo_permission(
                             &pending_roo.request_id,
                             decision,
                             response,
                             Some(&pending_roo.request_kind),
                         )
-                        .await;
+                        .await
+                    {
+                        tracing::warn!(error = %error, "failed to resolve Roo permission");
+                    }
                 }
             }
 
@@ -167,7 +173,9 @@ pub(super) async fn resolve_permission_request(
                 )
                 .await
                 .map_err(|error| {
-                    format!("Failed to resolve Codex permission request: {error:#}")
+                    let msg = format!("Failed to resolve Codex permission request: {error:#}");
+                    tracing::warn!(error = %msg, "command error");
+                    msg
                 })?;
         }
 
@@ -232,7 +240,11 @@ pub(super) async fn resolve_roo_permission_request(
                 Some(&pending_roo.request_kind),
             )
             .await
-            .map_err(|error| format!("Failed to resolve Roo permission request: {error:#}"))?;
+            .map_err(|error| {
+                let msg = format!("Failed to resolve Roo permission request: {error:#}");
+                tracing::warn!(error = %msg, "command error");
+                msg
+            })?;
     }
 
     {
@@ -291,7 +303,11 @@ pub(super) async fn resolve_claude_permission_request(
                 decision,
             )
             .await
-            .map_err(|error| format!("Failed to resolve Claude permission request: {error:#}"))?;
+            .map_err(|error| {
+                let msg = format!("Failed to resolve Claude permission request: {error:#}");
+                tracing::warn!(error = %msg, "command error");
+                msg
+            })?;
     }
 
     {

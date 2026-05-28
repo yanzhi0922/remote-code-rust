@@ -154,8 +154,8 @@ impl BaseProvider {
     ///
     /// Source: `src/utils/tiktoken.ts` — `tiktoken`
     pub async fn count_tokens(&self, content: &[ContentBlock]) -> u64 {
-        use std::sync::LazyLock;
         use roo_types::api::{ImageSource, ToolResultContent};
+        use std::sync::LazyLock;
 
         const TOKEN_FUDGE_FACTOR: f64 = 1.5;
         const DEFAULT_IMAGE_TOKENS: u64 = 300;
@@ -213,16 +213,12 @@ impl BaseProvider {
                     count_text(&parts.join("\n"))
                 }
                 ContentBlock::Image { source } => match source {
-                    ImageSource::Base64 { data, .. } => {
-                        (data.len() as f64).sqrt().ceil() as u64
-                    }
+                    ImageSource::Base64 { data, .. } => (data.len() as f64).sqrt().ceil() as u64,
                     ImageSource::Url { .. } => DEFAULT_IMAGE_TOKENS,
                 },
                 ContentBlock::Thinking { thinking, .. } if thinking.is_empty() => 0,
                 ContentBlock::Thinking { thinking, .. } => count_text(thinking),
-                ContentBlock::RedactedThinking { data } => {
-                    (data.len() as f64 / 4.0).ceil() as u64
-                }
+                ContentBlock::RedactedThinking { data } => (data.len() as f64 / 4.0).ceil() as u64,
             };
             total_tokens += block_tokens;
         }

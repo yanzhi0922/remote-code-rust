@@ -270,14 +270,10 @@ fn resolve_plugin(
 fn discover_visible_plugins(
     config: &RuntimeConfig,
 ) -> Result<Vec<claude_plugins::PluginBundle>, claude_plugins::PluginError> {
-    if !setting_source_enabled(config, SettingSource::User) {
+    if !config.setting_source_enabled(SettingSource::User) {
         return Ok(Vec::new());
     }
     claude_plugins::discover_plugins_including_disabled(&config.paths.plugins_dir)
-}
-
-fn setting_source_enabled(config: &RuntimeConfig, source: SettingSource) -> bool {
-    config.allowed_setting_sources.contains(&source)
 }
 
 fn yes_no(value: bool) -> &'static str {

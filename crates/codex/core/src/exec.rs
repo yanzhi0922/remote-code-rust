@@ -213,11 +213,13 @@ impl ExecExpiration {
     /// If ExecExpiration is a timeout, returns the timeout in milliseconds.
     pub(crate) fn timeout_ms(&self) -> Option<u64> {
         match self {
-            ExecExpiration::Timeout(duration) => Some(duration.as_millis() as u64),
+            ExecExpiration::Timeout(duration) => {
+                Some(u64::try_from(duration.as_millis()).unwrap_or(u64::MAX))
+            }
             ExecExpiration::DefaultTimeout => Some(DEFAULT_EXEC_COMMAND_TIMEOUT_MS),
             ExecExpiration::Cancellation(_) => None,
             ExecExpiration::TimeoutOrCancellation { timeout, .. } => {
-                Some(timeout.as_millis() as u64)
+                Some(u64::try_from(timeout.as_millis()).unwrap_or(u64::MAX))
             }
         }
     }

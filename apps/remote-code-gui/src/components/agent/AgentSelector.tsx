@@ -12,10 +12,18 @@ const AGENT_DEFAULTS: Record<AgentType, { displayName: string; description: stri
 interface AgentSelectorProps {
   availableAgents: AgentTypeInfo[];
   activeAgentType: AgentType | null;
+  lockedAgentType?: AgentType | null;
+  lockedReason?: string;
   onSelect: (agentType: AgentType | null) => void;
 }
 
-export function AgentSelector({ availableAgents, activeAgentType, onSelect }: AgentSelectorProps) {
+export function AgentSelector({
+  availableAgents,
+  activeAgentType,
+  lockedAgentType,
+  lockedReason,
+  onSelect,
+}: AgentSelectorProps) {
   const [open, setOpen] = useState(false);
 
   const agentEntries: Array<{
@@ -36,10 +44,8 @@ export function AgentSelector({ availableAgents, activeAgentType, onSelect }: Ag
     };
   });
 
-  const activeLabel =
-    activeAgentType === null
-      ? 'Claude'
-      : agentEntries.find((entry) => entry.agentType === activeAgentType)?.displayName ?? 'Claude';
+  const activeType = activeAgentType ?? 'remote_claude';
+  const activeLabel = agentEntries.find((entry) => entry.agentType === activeType)?.displayName ?? 'Claude';
 
   const renderStatusDot = (installed: boolean, available: boolean) => {
     const colorClass = !installed
@@ -75,44 +81,26 @@ export function AgentSelector({ availableAgents, activeAgentType, onSelect }: Ag
           />
           <div role="menu" className="absolute bottom-full left-0 z-20 mb-2 min-w-[280px] overflow-hidden rounded-xl border border-rc-border-primary bg-rc-bg-surface shadow-xl">
             <div className="max-h-72 overflow-y-auto p-1.5">
-              <button
-                type="button"
-                role="menuitemradio"
-                aria-checked={activeAgentType === null}
-                className={`flex w-full items-start gap-2 rounded-md px-3 py-2 text-left transition-colors ${
-                  activeAgentType === null
-                    ? 'bg-rc-bg-selected text-rc-text-primary'
-                    : 'text-rc-text-primary hover:bg-rc-bg-hover'
-                }`}
-                onClick={() => {
-                  onSelect(null);
-                  setOpen(false);
-                }}
-              >
-                {renderStatusDot(true, true)}
-                <div className="min-w-0">
-                  <div className="truncate text-sm font-medium">Claude（默认）</div>
-                  <div className="mt-0.5 text-xs text-rc-text-tertiary">内置 Agent，直接调用 provider API</div>
-                </div>
-              </button>
-
-              {agentEntries
-                .filter((entry) => entry.agentType !== 'remote_claude')
-                .map((entry) => (
+              {agentEntries.map((entry) => {
+                const lockedOut = !!lockedAgentType && entry.agentType !== lockedAgentType;
+                const disabled = lockedOut || !entry.installed;
+                return (
                   <button
                     key={entry.agentType}
                     type="button"
                     role="menuitemradio"
-                    aria-checked={activeAgentType === entry.agentType}
+                    aria-checked={activeType === entry.agentType}
+                    aria-disabled={disabled}
+                    title={lockedOut ? lockedReason : undefined}
                     className={`flex w-full items-start gap-2 rounded-md px-3 py-2 text-left transition-colors ${
-                      activeAgentType === entry.agentType
+                      activeType === entry.agentType
                         ? 'bg-rc-bg-selected text-rc-text-primary'
-                        : entry.installed
+                        : !disabled
                           ? 'text-rc-text-primary hover:bg-rc-bg-hover'
                           : 'cursor-not-allowed text-rc-text-tertiary'
                     }`}
                     onClick={() => {
-                      if (!entry.installed) return;
+                      if (disabled) return;
                       onSelect(entry.agentType);
                       setOpen(false);
                     }}
@@ -124,11 +112,15 @@ export function AgentSelector({ availableAgents, activeAgentType, onSelect }: Ag
                         {!entry.installed && (
                           <span className="ml-2 text-xs text-rc-text-tertiary">未安装</span>
                         )}
+                        {lockedOut && (
+                          <span className="ml-2 text-xs text-rc-text-tertiary">已锁定</span>
+                        )}
                       </div>
                       <div className="mt-0.5 text-xs text-rc-text-tertiary">{entry.description}</div>
                     </div>
                   </button>
-                ))}
+                );
+              })}
             </div>
           </div>
         </>

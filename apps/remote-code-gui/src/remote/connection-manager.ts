@@ -110,28 +110,26 @@ class ConnectionManager {
     this.transport = new UnifiedTransport(config, callbacks);
     await this.transport.connect(afterSequence);
 
-    // Drain queued commands from offline period (fire-and-forget so connect() resolves immediately).
+    // Drain queued commands from offline periods after the transport is open.
     if (this._config) {
       const sessionId = this._config.sessionId;
       const transport = this.transport;
-      Promise.resolve().then(async () => {
-        try {
-          const queued = await drainCommands(sessionId);
-          for (const cmd of queued) {
-            if (this.transport !== transport) break;
-            try {
-              await transport.sendCommand(cmd.command);
-            } catch (err) {
-              // Re-enqueue failed command for next connect attempt, then continue draining.
-              console.warn('[ConnectionManager] drain command failed:', cmd.id, err);
-              try { await enqueueCommand(sessionId, cmd.command); } catch { /* best effort */ }
-              continue;
-            }
+      try {
+        const queued = await drainCommands(sessionId);
+        for (const cmd of queued) {
+          if (this.transport !== transport) break;
+          try {
+            await transport.sendCommand(cmd.command);
+          } catch (err) {
+            // Re-enqueue the first failed command and stop to preserve command order.
+            console.warn('[ConnectionManager] drain command failed:', cmd.id, err);
+            try { await enqueueCommand(sessionId, cmd.command); } catch { /* best effort */ }
+            break;
           }
-        } catch {
-          // Drain failed; commands remain queued for next attempt.
         }
-      });
+      } catch {
+        // Drain failed; commands remain queued for next attempt.
+      }
     }
 
     // Subscribe to network changes for auto-reconnect.

@@ -147,24 +147,6 @@
 }
 
 /* ═══════════════════════════════════════════════════════════════
-   Glass Morphism (from cc-switch pattern)
-   ═══════════════════════════════════════════════════════════════ */
-
-.glass {
-  background: var(--glass-bg);
-  backdrop-filter: blur(var(--glass-blur));
-  -webkit-backdrop-filter: blur(var(--glass-blur));
-  border: 1px solid var(--glass-border);
-}
-
-.glass-heavy {
-  background: var(--glass-bg-heavy);
-  backdrop-filter: blur(var(--glass-blur-heavy));
-  -webkit-backdrop-filter: blur(var(--glass-blur-heavy));
-  border: 1px solid var(--glass-border);
-}
-
-/* ═══════════════════════════════════════════════════════════════
    CSS Grid Collapse (from CodexMonitor pattern)
    GPU-accelerated expand/collapse without JS measurement.
    ═══════════════════════════════════════════════════════════════ */

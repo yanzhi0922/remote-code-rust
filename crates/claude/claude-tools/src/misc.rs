@@ -678,7 +678,9 @@ pub(crate) async fn tungsten_tool(input: &Value, context: &ToolExecutionContext)
     }
     let target_path = std::path::Path::new(target);
     if target_path.is_absolute() {
-        return Err(anyhow!("target must be a relative path within the workspace"));
+        return Err(anyhow!(
+            "target must be a relative path within the workspace"
+        ));
     }
 
     // Detect project type by checking for marker files.

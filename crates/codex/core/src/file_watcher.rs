@@ -695,10 +695,7 @@ impl FileWatcher {
     }
 
     #[cfg(test)]
-    pub(crate) fn spawn_event_loop_for_test(
-        &self,
-        raw_rx: mpsc::Receiver<notify::Result<Event>>,
-    ) {
+    pub(crate) fn spawn_event_loop_for_test(&self, raw_rx: mpsc::Receiver<notify::Result<Event>>) {
         self.spawn_event_loop(raw_rx);
     }
 

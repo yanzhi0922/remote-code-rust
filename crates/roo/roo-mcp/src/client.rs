@@ -429,7 +429,8 @@ impl McpClient {
                     // Not our response, skip it (could be a notification)
                     tracing::warn!(
                         "MCP client skipping message with unexpected ID {:?} (expected {})",
-                        msg.id, expected_id
+                        msg.id,
+                        expected_id
                     );
                 }
                 Ok(Ok(None)) => {

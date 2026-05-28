@@ -100,7 +100,8 @@ impl CloudService {
         if user_id.is_empty() && user_email.is_empty() {
             self.auth_state = AuthState::LoggedOut;
             return Err(CloudError::AuthenticationFailed(
-                "Authentication endpoint returned an empty session (no user id or email)".to_string(),
+                "Authentication endpoint returned an empty session (no user id or email)"
+                    .to_string(),
             ));
         }
 

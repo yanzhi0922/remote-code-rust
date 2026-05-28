@@ -26,6 +26,9 @@ use crate::types::{
     SessionStateTransition, TimelineEvent, TimelineEventDraft, TrustedDeviceRecord,
 };
 
+/// Maximum number of concurrent sessions across all runners.
+const MAX_TOTAL_SESSIONS: usize = 10_000;
+
 // ---------------------------------------------------------------------------
 // Registry
 // ---------------------------------------------------------------------------
@@ -182,6 +185,7 @@ pub(crate) struct TimelineSnapshot {
 
 impl TimelineSnapshot {
     /// Return an iterator over the historical timeline events.
+    #[inline]
     pub(crate) fn history(&self) -> impl Iterator<Item = &TimelineEvent> {
         self.history.iter()
     }
@@ -283,10 +287,12 @@ fn normalize_device_name(raw: &str) -> Result<String, ApiError> {
 // ---------------------------------------------------------------------------
 
 impl Registry {
+    #[inline]
     pub(crate) fn owner_claimed(&self) -> bool {
         self.owner_device_id.is_some()
     }
 
+    #[inline]
     pub(crate) fn trusted_device_count(&self) -> usize {
         self.trusted_devices.len()
     }
@@ -310,7 +316,8 @@ impl Registry {
             self.owner_device_id = None;
         }
         // Clean up token hash index.
-        self.token_hash_to_device.retain(|_, &mut did| did != device_id);
+        self.token_hash_to_device
+            .retain(|_, &mut did| did != device_id);
         // Also remove any push tokens for this device
         self.push_tokens.remove(&device_id);
         Ok(removed.public_record())
@@ -326,36 +333,49 @@ impl Registry {
         let hash = sha256_hex(token);
         let now = Utc::now();
 
-        // Try access token first.
-        for device in self.trusted_devices.values() {
-            if let Some(ref at_hash) = device.access_token_hash
-                && constant_time_value_eq(&hash, at_hash)
-            {
-                let expired = device.access_token_expires_at.is_none_or(|exp| now >= exp);
-                if !expired {
-                    let device_id = device.device_id;
-                    let dev = self.trusted_devices.get_mut(&device_id)?;
-                    dev.last_seen_at = now;
-                    return Some((dev.public_record(), true));
+        // Try access token first via reverse index (O(1)).
+        if let Some(device_id) = self.token_hash_to_device.get(&hash).copied() {
+            if let Some(device) = self.trusted_devices.get(&device_id) {
+                if let Some(ref at_hash) = device.access_token_hash {
+                    if constant_time_value_eq(&hash, at_hash) {
+                        let expired = device.access_token_expires_at.is_none_or(|exp| now >= exp);
+                        if !expired {
+                            let dev = self.trusted_devices.get_mut(&device_id)?;
+                            dev.last_seen_at = now;
+                            return Some((dev.public_record(), true));
+                        }
+                    }
+                }
+            }
+        } else {
+            // Backfill: scan devices for access token hash and populate index.
+            for device in self.trusted_devices.values() {
+                if let Some(ref at_hash) = device.access_token_hash {
+                    if constant_time_value_eq(&hash, at_hash) {
+                        let expired = device.access_token_expires_at.is_none_or(|exp| now >= exp);
+                        if !expired {
+                            let device_id = device.device_id;
+                            self.token_hash_to_device.insert(hash.clone(), device_id);
+                            let dev = self.trusted_devices.get_mut(&device_id)?;
+                            dev.last_seen_at = now;
+                            return Some((dev.public_record(), true));
+                        }
+                    }
                 }
             }
         }
 
         // Fallback: refresh token via reverse index (O(1)).
-        let device_id = self
-            .token_hash_to_device
-            .get(&hash)
-            .copied()
-            .or_else(|| {
-                // Backfill index on miss (handles entries loaded from persistence).
-                let found = self
-                    .trusted_devices
-                    .values()
-                    .find(|device| constant_time_value_eq(&hash, &device.token_hash))
-                    .map(|device| device.device_id)?;
-                self.token_hash_to_device.insert(hash.clone(), found);
-                Some(found)
-            })?;
+        let device_id = self.token_hash_to_device.get(&hash).copied().or_else(|| {
+            // Backfill index on miss (handles entries loaded from persistence).
+            let found = self
+                .trusted_devices
+                .values()
+                .find(|device| constant_time_value_eq(&hash, &device.token_hash))
+                .map(|device| device.device_id)?;
+            self.token_hash_to_device.insert(hash.clone(), found);
+            Some(found)
+        })?;
         let device = self.trusted_devices.get_mut(&device_id)?;
         device.last_seen_at = now;
         Some((device.public_record(), false))
@@ -388,7 +408,12 @@ impl Registry {
                         "Refresh token reuse detected — revoking device"
                     );
                     // Revoke the device to prevent further access.
-                    self.revoke_device(device_id).ok();
+                    if let Err(e) = self.revoke_device(device_id) {
+                        tracing::error!(
+                            device_id = %device_id,
+                            "CRITICAL: Failed to revoke device after token reuse detection: {e:?}"
+                        );
+                    }
                     return Err(ApiError::unauthorized(
                         "refresh token reuse detected: device revoked".to_owned(),
                     ));
@@ -421,14 +446,23 @@ impl Registry {
         let new_refresh_token = mint_secret("rcrt");
         let new_refresh_hash = sha256_hex(&new_refresh_token);
 
-        // Update the token hash reverse index: remove old, add new.
+        // Update the token hash reverse index: remove old refresh + old access, add new.
         self.token_hash_to_device.remove(&hash);
-        self.token_hash_to_device.insert(new_refresh_hash.clone(), device_id);
+        if let Some(device) = self.trusted_devices.get(&device_id) {
+            if let Some(ref old_at_hash) = device.access_token_hash {
+                self.token_hash_to_device.remove(old_at_hash);
+            }
+        }
+        self.token_hash_to_device
+            .insert(new_refresh_hash.clone(), device_id);
+        self.token_hash_to_device
+            .insert(access_hash.clone(), device_id);
 
         let device = self.trusted_devices.get_mut(&device_id).ok_or_else(|| {
             ApiError::internal("device disappeared during token refresh".to_owned())
         })?;
-        device.previous_token_hash = Some(std::mem::replace(&mut device.token_hash, new_refresh_hash));
+        device.previous_token_hash =
+            Some(std::mem::replace(&mut device.token_hash, new_refresh_hash));
         device.access_token_hash = Some(access_hash);
         device.access_token_expires_at = Some(expires_at);
         device.last_seen_at = now;
@@ -489,7 +523,8 @@ impl Registry {
         };
         self.owner_device_id = Some(device_id);
         self.trusted_devices.insert(device_id, record.clone());
-        self.token_hash_to_device.insert(record.token_hash.clone(), device_id);
+        self.token_hash_to_device
+            .insert(record.token_hash.clone(), device_id);
         if let Some(ref at_hash) = record.access_token_hash {
             self.token_hash_to_device.insert(at_hash.clone(), device_id);
         }
@@ -780,6 +815,11 @@ impl Registry {
                 "session `{session_id}` already exists"
             )));
         }
+        if self.sessions.len() >= MAX_TOTAL_SESSIONS {
+            return Err(ApiError::service_unavailable(
+                "session limit reached".to_owned(),
+            ));
+        }
         let now = Utc::now();
         let owner_runner_id = self.select_runner(
             &request.workspace_id,
@@ -823,7 +863,8 @@ impl Registry {
             )));
         }
         if let Some(ref runner_id) = record.owner_runner_id {
-            self.session_runner_index.insert(record.session_id, runner_id.clone());
+            self.session_runner_index
+                .insert(record.session_id, runner_id.clone());
         }
         self.sessions.insert(record.session_id, record.clone());
         if let Some(runner_id) = &record.owner_runner_id {
@@ -886,13 +927,19 @@ impl Registry {
             .get_mut(&session_id)
             .ok_or_else(|| ApiError::not_found(format!("session `{session_id}` was not found")))?;
         let previous_state = session.state;
+        if !is_valid_session_transition(previous_state, state) {
+            return Err(ApiError::conflict(format!(
+                "invalid session state transition from {previous_state:?} to {state:?}"
+            )));
+        }
         session.state = state;
         session.updated_at = updated_at;
         session.metadata.extend(metadata);
         let updated = session.clone();
         let owner_runner_id = updated.owner_runner_id.clone();
         if let Some(ref runner_id) = owner_runner_id {
-            self.session_runner_index.insert(session_id, runner_id.clone());
+            self.session_runner_index
+                .insert(session_id, runner_id.clone());
         }
         if let Some(runner_id) = owner_runner_id.as_deref() {
             self.refresh_runner_session_counts(runner_id, updated_at);
@@ -1139,10 +1186,19 @@ impl Registry {
         let now = Utc::now();
         let next_session_state = SessionState::WaitingApproval;
         let owner_runner_id = session.owner_runner_id.clone();
+        let runner_id = match owner_runner_id.clone() {
+            Some(id) => id,
+            None => {
+                tracing::warn!(
+                    "Creating approval for session with no owner runner, using empty string"
+                );
+                String::new()
+            }
+        };
         let approval = ApprovalRequestRecord {
             approval_id: request.approval_id.unwrap_or_else(Uuid::new_v4),
             session_id,
-            runner_id: owner_runner_id.clone().unwrap_or_default(),
+            runner_id,
             state: ApprovalState::Pending,
             title: request.title,
             description: request.description,
@@ -1355,7 +1411,8 @@ impl Registry {
         session.metadata = dispatched.metadata.clone();
         session.updated_at = dispatched.updated_at;
         let updated = session.clone();
-        self.session_runner_index.insert(session_id, runner_id.to_owned());
+        self.session_runner_index
+            .insert(session_id, runner_id.to_owned());
         self.refresh_runner_session_counts(runner_id, updated.updated_at);
         Ok((updated, previous_state))
     }
@@ -1466,12 +1523,6 @@ impl Registry {
         Ok(commands)
     }
 
-    /// Remove push token for a device (cascade on device removal).
-    #[allow(dead_code)]
-    pub(crate) fn remove_push_token(&mut self, device_id: Uuid) {
-        self.push_tokens.remove(&device_id);
-    }
-
     /// Register or update a push notification token for a trusted device.
     pub(crate) fn register_push_token(
         &mut self,
@@ -1525,5 +1576,51 @@ impl Registry {
             },
         );
         is_new
+    }
+}
+
+/// Validate that a session state transition is allowed.
+///
+/// Terminal states (Completed, Failed, Cancelled) cannot be left.
+/// All other transitions follow the state machine:
+/// - Pending -> Assigned, Cancelled, Failed
+/// - Assigned -> Running, Pending (reap), Cancelled, Failed
+/// - Running -> WaitingApproval, Completed, Failed, Cancelled
+/// - WaitingApproval -> Running, Failed, Cancelled, WaitingApproval (has_pending)
+pub(crate) fn is_valid_session_transition(from: SessionState, to: SessionState) -> bool {
+    if from == to {
+        return true; // idempotent no-op is always valid
+    }
+    match from {
+        SessionState::Pending => matches!(
+            to,
+            SessionState::Assigned
+                | SessionState::Cancelled
+                | SessionState::Failed
+                | SessionState::Completed
+        ),
+        SessionState::Assigned => matches!(
+            to,
+            SessionState::Running
+                | SessionState::Pending
+                | SessionState::Cancelled
+                | SessionState::Failed
+                | SessionState::Completed
+        ),
+        SessionState::Running => matches!(
+            to,
+            SessionState::WaitingApproval
+                | SessionState::Completed
+                | SessionState::Failed
+                | SessionState::Cancelled
+        ),
+        SessionState::WaitingApproval => matches!(
+            to,
+            SessionState::Running
+                | SessionState::Failed
+                | SessionState::Cancelled
+                | SessionState::WaitingApproval
+        ),
+        SessionState::Completed | SessionState::Failed | SessionState::Cancelled => false,
     }
 }

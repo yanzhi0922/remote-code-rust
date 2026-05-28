@@ -47,11 +47,15 @@ pub async fn run_plan(
         )?;
 
         if args.json {
-            println!("{}", serde_json::to_string(&serde_json::json!({
-                "status": "ok",
-                "mode": "plan",
-                "objective": objective,
-            })).unwrap_or_else(|_| "{{\"status\": \"ok\", \"mode\": \"plan\"}}".to_owned()));
+            println!(
+                "{}",
+                serde_json::to_string(&serde_json::json!({
+                    "status": "ok",
+                    "mode": "plan",
+                    "objective": objective,
+                }))
+                .unwrap_or_else(|_| "{{\"status\": \"ok\", \"mode\": \"plan\"}}".to_owned())
+            );
         } else {
             println!("Plan mode entered.");
             println!("  Objective: {objective}");

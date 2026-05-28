@@ -144,6 +144,8 @@ mod tests {
         let (_temp, config) = test_config();
         let features = RuntimePromptSettings::from_config(&config).memory_prompt_features;
         if !features.team_memory_enabled {
+            // Team memory is not available in this environment; skip rather than silently pass.
+            eprintln!("note: skipping memory_scope_prefers_team — team_memory_enabled is false");
             return;
         }
         let team_dir = claude_runtime_prompt::team_memory_path_with_features(&config, &features)

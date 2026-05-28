@@ -21,6 +21,7 @@ use rcgen::KeyUsagePurpose;
 use rcgen::PKCS_ECDSA_P256_SHA256;
 use rustls_pki_types::CertificateDer;
 use rustls_pki_types::PrivateKeyDer;
+use serial_test::serial;
 use std::fs;
 use std::io;
 use std::io::Read;
@@ -396,6 +397,7 @@ fn assert_token_exchange_request(request: &str) {
 }
 
 #[test]
+#[serial(codex_client_ca_env)]
 fn uses_codex_ca_cert_env() {
     let temp_dir = TempDir::new().expect("tempdir");
     let cert_path = write_cert_file(&temp_dir, "ca.pem", TEST_CERT_1);
@@ -406,6 +408,7 @@ fn uses_codex_ca_cert_env() {
 }
 
 #[test]
+#[serial(codex_client_ca_env)]
 fn falls_back_to_ssl_cert_file() {
     let temp_dir = TempDir::new().expect("tempdir");
     let cert_path = write_cert_file(&temp_dir, "ssl.pem", TEST_CERT_1);
@@ -416,6 +419,7 @@ fn falls_back_to_ssl_cert_file() {
 }
 
 #[test]
+#[serial(codex_client_ca_env)]
 fn prefers_codex_ca_cert_over_ssl_cert_file() {
     let temp_dir = TempDir::new().expect("tempdir");
     let cert_path = write_cert_file(&temp_dir, "ca.pem", TEST_CERT_1);
@@ -430,6 +434,7 @@ fn prefers_codex_ca_cert_over_ssl_cert_file() {
 }
 
 #[test]
+#[serial(codex_client_ca_env)]
 fn handles_multi_certificate_bundle() {
     let temp_dir = TempDir::new().expect("tempdir");
     let bundle = format!("{TEST_CERT_1}\n{TEST_CERT_2}");
@@ -441,6 +446,7 @@ fn handles_multi_certificate_bundle() {
 }
 
 #[test]
+#[serial(codex_client_ca_env)]
 fn posts_to_tls13_server_using_custom_ca_bundle() {
     let temp_dir = TempDir::new().expect("tempdir");
     let server = spawn_tls13_test_server();
@@ -463,6 +469,7 @@ fn posts_to_tls13_server_using_custom_ca_bundle() {
 }
 
 #[test]
+#[serial(codex_client_ca_env)]
 fn posts_to_token_origin_through_tls_intercepting_proxy_with_custom_ca_bundle() {
     let temp_dir = TempDir::new().expect("tempdir");
     let origin = spawn_plain_http_origin();
@@ -494,6 +501,7 @@ fn posts_to_token_origin_through_tls_intercepting_proxy_with_custom_ca_bundle() 
 }
 
 #[test]
+#[serial(codex_client_ca_env)]
 fn rejects_empty_pem_file_with_hint() {
     let temp_dir = TempDir::new().expect("tempdir");
     let cert_path = write_cert_file(&temp_dir, "empty.pem", "");
@@ -508,6 +516,7 @@ fn rejects_empty_pem_file_with_hint() {
 }
 
 #[test]
+#[serial(codex_client_ca_env)]
 fn rejects_malformed_pem_with_hint() {
     let temp_dir = TempDir::new().expect("tempdir");
     let cert_path = write_cert_file(
@@ -526,6 +535,7 @@ fn rejects_malformed_pem_with_hint() {
 }
 
 #[test]
+#[serial(codex_client_ca_env)]
 fn accepts_openssl_trusted_certificate() {
     let temp_dir = TempDir::new().expect("tempdir");
     let cert_path = write_cert_file(&temp_dir, "trusted.pem", TRUSTED_TEST_CERT);
@@ -536,6 +546,7 @@ fn accepts_openssl_trusted_certificate() {
 }
 
 #[test]
+#[serial(codex_client_ca_env)]
 fn accepts_bundle_with_crl() {
     let temp_dir = TempDir::new().expect("tempdir");
     let crl = "-----BEGIN X509 CRL-----\nMIIC\n-----END X509 CRL-----";

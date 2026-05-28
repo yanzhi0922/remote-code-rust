@@ -37,6 +37,10 @@ quinn = { version = "0.11", optional = true }
 x25519-dalek = { version = "2", features = ["static_secrets"], optional = true }
 aes-gcm = { version = "0.10", optional = true }
 hkdf = { workspace = true, optional = true }
+x509-parser = "0.16"
+
+[dev-dependencies]
+rcgen = { workspace = true }
 
 [lints]
 workspace = true

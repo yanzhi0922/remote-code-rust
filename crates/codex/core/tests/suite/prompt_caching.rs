@@ -53,8 +53,9 @@ fn assert_default_env_context(text: &str, cwd: &str) {
         text.contains(&format!("<cwd>{cwd}</cwd>")),
         "expected cwd in environment context: {text}"
     );
+    let expected_shell = if cfg!(windows) { "cmd" } else { "bash" };
     assert!(
-        text.contains("<shell>bash</shell>"),
+        text.contains(&format!("<shell>{expected_shell}</shell>")),
         "expected shell in environment context: {text}"
     );
     assert!(

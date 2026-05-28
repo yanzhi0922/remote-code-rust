@@ -105,8 +105,7 @@ pub(crate) fn config_read(input: &Value, context: &ToolExecutionContext) -> Resu
             let content = serde_json::to_string_pretty(&config)?;
             // Write atomically: write to temp file then rename.
             let tmp_path = config_path.with_extension("tmp");
-            std::fs::write(&tmp_path, &content)
-                .context("failed to write config temp file")?;
+            std::fs::write(&tmp_path, &content).context("failed to write config temp file")?;
             std::fs::rename(&tmp_path, &config_path)
                 .context("failed to rename config temp file")?;
             Ok(format!("Set {} in config.", key))

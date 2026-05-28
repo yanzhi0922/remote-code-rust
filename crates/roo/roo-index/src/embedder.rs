@@ -9,6 +9,7 @@ use async_trait::async_trait;
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
+use std::fmt::Write;
 use std::sync::OnceLock;
 
 use crate::types::IndexError;
@@ -628,7 +629,11 @@ fn get_signature_key(secret_key: &str, date_stamp: &str, region: &str, service: 
 }
 
 fn hex_encode(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
+    let mut s = String::with_capacity(bytes.len() * 2);
+    for &b in bytes {
+        let _ = write!(s, "{b:02x}");
+    }
+    s
 }
 
 // ---------------------------------------------------------------------------

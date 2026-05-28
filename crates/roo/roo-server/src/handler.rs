@@ -738,9 +738,7 @@ impl Handler {
         lifecycle.engine().emitter().on(move |event| {
             let notification = task_event_to_notification(event, &task_id);
             if let Some(msg) = notification {
-                let mut guard = notifications
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner());
+                let mut guard = notifications.lock().unwrap_or_else(|e| e.into_inner());
                 guard.push(msg);
                 if guard.len() > MAX_PENDING_NOTIFICATIONS {
                     let drain_count = guard.len() / 10;
@@ -1229,7 +1227,8 @@ impl Handler {
             let fs = roo_task_persistence::storage::OsFileSystem;
             let storage_path = Path::new(&global_storage_path);
 
-            match roo_task_persistence::history::get_history_item(&fs, storage_path, &task_id_owned) {
+            match roo_task_persistence::history::get_history_item(&fs, storage_path, &task_id_owned)
+            {
                 Ok(Some(item)) => {
                     let own_cost = item.total_cost;
                     let mut children_cost = 0.0;
@@ -1257,7 +1256,8 @@ impl Handler {
                 Ok(None) => Ok(json!({"taskId": task_id_owned, "error": "task not found"})),
                 Err(e) => Ok(json!({"taskId": task_id_owned, "error": e.to_string()})),
             }
-        }).await;
+        })
+        .await;
 
         match result {
             Ok(inner) => inner,
@@ -1404,7 +1404,8 @@ impl Handler {
                 Path::new(&global_storage_path),
                 &task_id_owned,
             )
-        }).await;
+        })
+        .await;
 
         match result {
             Ok(Ok(())) => {
@@ -1472,7 +1473,8 @@ impl Handler {
             }
 
             (deleted, errors)
-        }).await;
+        })
+        .await;
 
         match result {
             Ok((deleted, errors)) => {
@@ -1521,7 +1523,8 @@ impl Handler {
                 .join(&task_id_owned)
                 .join("messages.json");
             roo_task_persistence::messages::read_task_messages(&fs, &messages_path)
-        }).await;
+        })
+        .await;
 
         match result {
             Ok(Ok(messages)) => Ok(json!({"taskId": task_id, "data": messages})),
@@ -3160,10 +3163,7 @@ impl Handler {
                 let engine = lc.engine_mut();
                 let ts_f64 = message_ts as f64;
 
-                let position = engine
-                    .cline_messages()
-                    .iter()
-                    .position(|m| m.ts == ts_f64);
+                let position = engine.cline_messages().iter().position(|m| m.ts == ts_f64);
 
                 let api_truncate_idx = position
                     .and_then(|pos| engine.cline_messages()[pos].conversation_history_index);
@@ -5142,11 +5142,15 @@ impl Handler {
         };
         let canonical_target = match resolved.canonicalize() {
             Ok(p) => p,
-            Err(e) => return Ok(json!({"status": "error", "error": format!("path does not exist: {e}")})),
+            Err(e) => {
+                return Ok(json!({"status": "error", "error": format!("path does not exist: {e}")}));
+            }
         };
         if let Some(ref cwd_canonical) = canonical_cwd {
             if !canonical_target.starts_with(cwd_canonical) {
-                return Ok(json!({"status": "error", "error": "path is outside the workspace directory"}));
+                return Ok(
+                    json!({"status": "error", "error": "path is outside the workspace directory"}),
+                );
             }
         }
         match tokio::task::spawn_blocking(move || opener::open(&canonical_target)).await {
@@ -5170,7 +5174,9 @@ impl Handler {
         }
         // Validate URL scheme to prevent arbitrary command execution.
         if !url.starts_with("http://") && !url.starts_with("https://") {
-            return Ok(json!({"status": "error", "error": "only http:// and https:// URLs are allowed"}));
+            return Ok(
+                json!({"status": "error", "error": "only http:// and https:// URLs are allowed"}),
+            );
         }
         let url_owned = url.to_string();
         match tokio::task::spawn_blocking(move || opener::open(&url_owned)).await {

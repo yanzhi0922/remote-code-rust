@@ -192,7 +192,11 @@ fn verify_cache_signature(payload_bytes: &[u8], signature: &str) -> bool {
     // backward-compatible reads of cache files created by previous versions.
     let per_process = per_process_hmac_key();
     verify_cache_signature_with_key(payload_bytes, &signature_bytes, per_process)
-        || verify_cache_signature_with_key(payload_bytes, &signature_bytes, CLOUD_REQUIREMENTS_CACHE_LEGACY_HMAC_KEY)
+        || verify_cache_signature_with_key(
+            payload_bytes,
+            &signature_bytes,
+            CLOUD_REQUIREMENTS_CACHE_LEGACY_HMAC_KEY,
+        )
 }
 
 fn auth_identity(auth: &CodexAuth) -> (Option<String>, Option<String>) {

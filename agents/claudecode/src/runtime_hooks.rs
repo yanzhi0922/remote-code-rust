@@ -121,8 +121,8 @@ impl HookRuntime {
     pub(crate) fn discover(config: &RuntimeConfig) -> Self {
         let mut runtime = Self::default();
         let mut seen_paths = BTreeSet::new();
-        let user_sources_enabled = setting_source_enabled(config, SettingSource::User);
-        let project_sources_enabled = setting_source_enabled(config, SettingSource::Project);
+        let user_sources_enabled = config.setting_source_enabled(SettingSource::User);
+        let project_sources_enabled = config.setting_source_enabled(SettingSource::Project);
 
         if user_sources_enabled {
             runtime.load_hook_file_source(
@@ -457,10 +457,6 @@ impl HookRuntime {
 
         batch
     }
-}
-
-fn setting_source_enabled(config: &RuntimeConfig, source: SettingSource) -> bool {
-    config.allowed_setting_sources.contains(&source)
 }
 
 fn classify_settings_source(config: &RuntimeConfig, path: &Path) -> (&'static str, String) {

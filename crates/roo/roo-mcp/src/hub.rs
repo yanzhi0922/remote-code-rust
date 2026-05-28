@@ -80,49 +80,51 @@ pub fn get_default_environment() -> HashMap<String, String> {
     use std::sync::OnceLock;
     static CACHED_ENV: OnceLock<HashMap<String, String>> = OnceLock::new();
 
-    CACHED_ENV.get_or_init(|| {
-        let mut env = HashMap::new();
+    CACHED_ENV
+        .get_or_init(|| {
+            let mut env = HashMap::new();
 
-        // Essential environment variables that child processes typically need
-        const ESSENTIAL_VARS: &[&str] = &[
-            "PATH",
-            "HOME",
-            "USER",
-            "TMPDIR",
-            "TEMP",
-            "TMP",
-            "SHELL",
-            "LANG",
-            "LC_ALL",
-            "LC_CTYPE",
-            "TERM",
-            "NODE_PATH",
-            "NPM_CONFIG_PREFIX",
-            "APPDATA",
-            "LOCALAPPDATA",
-            "PROGRAMFILES",
-            "PROGRAMFILES(X86)",
-            "SYSTEMROOT",
-            "COMSPEC",
-            "PROCESSOR_ARCHITECTURE",
-            "PROGRAMDATA",
-            "ALLUSERSPROFILE",
-            "HOMEDRIVE",
-            "HOMEPATH",
-            "LOGNAME",
-            "XDG_CONFIG_HOME",
-            "XDG_DATA_HOME",
-            "XDG_CACHE_HOME",
-        ];
+            // Essential environment variables that child processes typically need
+            const ESSENTIAL_VARS: &[&str] = &[
+                "PATH",
+                "HOME",
+                "USER",
+                "TMPDIR",
+                "TEMP",
+                "TMP",
+                "SHELL",
+                "LANG",
+                "LC_ALL",
+                "LC_CTYPE",
+                "TERM",
+                "NODE_PATH",
+                "NPM_CONFIG_PREFIX",
+                "APPDATA",
+                "LOCALAPPDATA",
+                "PROGRAMFILES",
+                "PROGRAMFILES(X86)",
+                "SYSTEMROOT",
+                "COMSPEC",
+                "PROCESSOR_ARCHITECTURE",
+                "PROGRAMDATA",
+                "ALLUSERSPROFILE",
+                "HOMEDRIVE",
+                "HOMEPATH",
+                "LOGNAME",
+                "XDG_CONFIG_HOME",
+                "XDG_DATA_HOME",
+                "XDG_CACHE_HOME",
+            ];
 
-        for var_name in ESSENTIAL_VARS {
-            if let Ok(value) = std::env::var(var_name) {
-                env.insert(var_name.to_string(), value);
+            for var_name in ESSENTIAL_VARS {
+                if let Ok(value) = std::env::var(var_name) {
+                    env.insert(var_name.to_string(), value);
+                }
             }
-        }
 
-        env
-    }).clone()
+            env
+        })
+        .clone()
 }
 
 /// Deep-compare two `serde_json::Value`s for structural equality.
@@ -907,7 +909,10 @@ impl McpHub {
         let McpConnection::Connected(ref mut conn) = extracted else {
             // Swap back the non-connected entry (should not happen) and return error.
             let mut connections = self.connections.write().await;
-            if let Some(entry) = connections.iter_mut().find(|c| c.name() == server_name && c.source() == source) {
+            if let Some(entry) = connections
+                .iter_mut()
+                .find(|c| c.name() == server_name && c.source() == source)
+            {
                 *entry = extracted;
             }
             return Err(McpError::NotConnected(server_name.to_string()));
@@ -915,7 +920,8 @@ impl McpHub {
 
         let result = tokio::time::timeout(
             timeout_duration,
-            conn.client.call_tool(&mut *conn.transport, tool_name, arguments),
+            conn.client
+                .call_tool(&mut *conn.transport, tool_name, arguments),
         )
         .await;
 
@@ -957,7 +963,10 @@ impl McpHub {
         // Swap the connection back into the Vec.
         {
             let mut connections = self.connections.write().await;
-            if let Some(entry) = connections.iter_mut().find(|c| c.name() == server_name && c.source() == source) {
+            if let Some(entry) = connections
+                .iter_mut()
+                .find(|c| c.name() == server_name && c.source() == source)
+            {
                 *entry = extracted;
             }
         }
@@ -981,7 +990,10 @@ impl McpHub {
                 .iter()
                 .find(|c| c.name() == server_name && c.is_connected())
                 .ok_or_else(|| {
-                    McpError::NotConnected(format!("No connection found for server: {}", server_name))
+                    McpError::NotConnected(format!(
+                        "No connection found for server: {}",
+                        server_name
+                    ))
                 })?;
 
             if conn.server().disabled {
@@ -1014,7 +1026,10 @@ impl McpHub {
 
         let McpConnection::Connected(ref mut conn) = extracted else {
             let mut connections = self.connections.write().await;
-            if let Some(entry) = connections.iter_mut().find(|c| c.name() == server_name && c.source() == source) {
+            if let Some(entry) = connections
+                .iter_mut()
+                .find(|c| c.name() == server_name && c.source() == source)
+            {
                 *entry = extracted;
             }
             return Err(McpError::NotConnected(server_name.to_string()));
@@ -1037,7 +1052,10 @@ impl McpHub {
 
         {
             let mut connections = self.connections.write().await;
-            if let Some(entry) = connections.iter_mut().find(|c| c.name() == server_name && c.source() == source) {
+            if let Some(entry) = connections
+                .iter_mut()
+                .find(|c| c.name() == server_name && c.source() == source)
+            {
                 *entry = extracted;
             }
         }
@@ -1107,8 +1125,7 @@ impl McpHub {
                 let tools: Vec<McpTool> = raw_tools
                     .into_iter()
                     .map(|mut tool| {
-                        tool.always_allow =
-                            has_wildcard || always_allow_set.contains(&tool.name);
+                        tool.always_allow = has_wildcard || always_allow_set.contains(&tool.name);
                         tool.enabled_for_prompt = !disabled_tools_set.contains(&tool.name);
                         tool
                     })
@@ -1124,7 +1141,10 @@ impl McpHub {
         // Swap the connection back.
         {
             let mut connections = self.connections.write().await;
-            if let Some(entry) = connections.iter_mut().find(|c| c.name() == server_name && c.source() == source) {
+            if let Some(entry) = connections
+                .iter_mut()
+                .find(|c| c.name() == server_name && c.source() == source)
+            {
                 *entry = extracted;
             }
         }
@@ -1180,7 +1200,10 @@ impl McpHub {
         // Swap back.
         if let Some(conn) = extracted {
             let mut connections = self.connections.write().await;
-            if let Some(entry) = connections.iter_mut().find(|c| c.name() == server_name && c.source() == source) {
+            if let Some(entry) = connections
+                .iter_mut()
+                .find(|c| c.name() == server_name && c.source() == source)
+            {
                 *entry = conn;
             }
         }
@@ -1236,7 +1259,10 @@ impl McpHub {
         // Swap back.
         if let Some(conn) = extracted {
             let mut connections = self.connections.write().await;
-            if let Some(entry) = connections.iter_mut().find(|c| c.name() == server_name && c.source() == source) {
+            if let Some(entry) = connections
+                .iter_mut()
+                .find(|c| c.name() == server_name && c.source() == source)
+            {
                 *entry = conn;
             }
         }
@@ -1833,10 +1859,7 @@ impl McpHub {
             }
             connections
                 .iter()
-                .find(|conn| {
-                    conn.name() == server_name
-                        && conn.source() == McpSource::Global
-                })
+                .find(|conn| conn.name() == server_name && conn.source() == McpSource::Global)
                 .cloned()
         }
     }

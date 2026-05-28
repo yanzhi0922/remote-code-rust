@@ -24,13 +24,16 @@ impl Default for ReconnectPolicy {
             max_delay: Duration::from_secs(15),
             multiplier: 2.0,
             jitter_fraction: 0.25,
-            max_attempts: None,
+            // Default to 100 attempts (not unlimited) to prevent infinite reconnect loops.
+            // At the default max_delay of 15s, this caps out around 25 minutes of retrying.
+            max_attempts: Some(100),
         }
     }
 }
 
 impl ReconnectPolicy {
     /// Calculate the delay for the given attempt number (0-based).
+    #[must_use]
     pub fn delay_for_attempt(&self, attempt: u32) -> Duration {
         let base_secs = self.initial_delay.as_secs_f64()
             * self
@@ -39,8 +42,7 @@ impl ReconnectPolicy {
         let capped = base_secs.min(self.max_delay.as_secs_f64());
         let jitter = if self.jitter_fraction > 0.0 {
             let rand_val: f64 = rand::Rng::random_range(&mut rand::rng(), 0.0..1.0);
-            let rand_factor = 1.0 - self.jitter_fraction
-                + (2.0 * self.jitter_fraction * rand_val);
+            let rand_factor = 1.0 - self.jitter_fraction + (2.0 * self.jitter_fraction * rand_val);
             capped * rand_factor
         } else {
             capped
@@ -49,6 +51,7 @@ impl ReconnectPolicy {
     }
 
     /// Whether we should retry after the given number of attempts.
+    #[must_use]
     pub fn should_retry(&self, attempt: u32) -> bool {
         self.max_attempts.is_none_or(|max| attempt < max)
     }

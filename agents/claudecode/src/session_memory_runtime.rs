@@ -102,13 +102,11 @@ impl SessionMemoryPermissionBroker {
         let candidate = candidate
             .canonicalize()
             .unwrap_or_else(|_| candidate.to_path_buf());
-        let summary_path = self
-            .canonical_summary_path
-            .get_or_init(|| {
-                self.summary_path
-                    .canonicalize()
-                    .unwrap_or_else(|_| self.summary_path.clone())
-            });
+        let summary_path = self.canonical_summary_path.get_or_init(|| {
+            self.summary_path
+                .canonicalize()
+                .unwrap_or_else(|_| self.summary_path.clone())
+        });
         candidate == *summary_path
     }
 }
@@ -291,10 +289,16 @@ fn should_extract_memory(
     }
 
     let has_met_token_threshold = shared.has_met_update_threshold(current_token_count);
-    let last_memory_uuid = state
-        .last_memory_message_id
-        .as_deref()
-        .and_then(|value| Uuid::parse_str(value).ok());
+    let last_memory_uuid = state.last_memory_message_id.as_deref().and_then(|value| {
+        Uuid::parse_str(value)
+            .map_err(|e| {
+                tracing::warn!(
+                    "session_memory: failed to parse last_memory_message_id '{value}': {e}"
+                );
+                e
+            })
+            .ok()
+    });
     let has_met_tool_call_threshold = count_tool_calls_since(conversation, last_memory_uuid)
         >= shared.config.tool_calls_between_updates;
     let has_tool_calls_in_last_turn = has_tool_calls_in_last_assistant_turn(conversation);

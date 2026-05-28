@@ -10,9 +10,14 @@ use rc_agent_protocol::events::{AgentResult, UnifiedAgentEvent, UsageInfo};
 ///
 /// Returns `None` for internal events that should not be surfaced to consumers
 /// (e.g. `AssistantMessageCommitted`, `MessagesAppended`, `CheckpointCreated`).
+///
+/// `cached_max_tokens` is the last-known context window size from a
+/// `ContextBudgetEvaluated` event, used to populate the `total` field in
+/// `StreamingUsageUpdated` mappings.
 pub fn map_observer_event(
     event: QueryObserverEvent,
     session_id: &str,
+    cached_max_tokens: &mut usize,
 ) -> Option<UnifiedAgentEvent> {
     match event {
         // ── Lifecycle ──────────────────────────────────────────────
@@ -48,7 +53,7 @@ pub fn map_observer_event(
             Some(UnifiedAgentEvent::ContextUsage {
                 session_id: session_id.to_owned(),
                 used: usage.total_tokens as usize,
-                total: 0, // total context window size unknown at this layer
+                total: *cached_max_tokens,
             })
         }
 
@@ -91,6 +96,7 @@ pub fn map_observer_event(
         }
 
         QueryObserverEvent::ContextBudgetEvaluated { context, .. } => {
+            *cached_max_tokens = context.max_input_tokens as usize;
             Some(UnifiedAgentEvent::ContextUsage {
                 session_id: session_id.to_owned(),
                 used: context.estimated_tokens as usize,
@@ -189,6 +195,15 @@ mod tests {
         }
     }
 
+    fn map_event(event: QueryObserverEvent) -> Option<UnifiedAgentEvent> {
+        let mut max_tokens = 0usize;
+        map_observer_event(event, SID, &mut max_tokens)
+    }
+
+    fn map_event_with_max(max: &mut usize, event: QueryObserverEvent) -> Option<UnifiedAgentEvent> {
+        map_observer_event(event, SID, max)
+    }
+
     fn make_tool_call(id: &str, name: &str, input: serde_json::Value) -> ToolCall {
         ToolCall {
             id: id.to_string(),
@@ -206,7 +221,7 @@ mod tests {
             delta: "Hello".into(),
             accumulated_text: "Hello".into(),
         };
-        let result = map_observer_event(event, SID);
+        let result = map_event(event);
         match result {
             Some(UnifiedAgentEvent::MessageDelta { session_id, delta }) => {
                 assert_eq!(session_id, SID);
@@ -223,7 +238,7 @@ mod tests {
             delta: "reasoning".into(),
             accumulated_thinking: "reasoning".into(),
         };
-        let result = map_observer_event(event, SID).expect("should map");
+        let result = map_event(event).expect("should map");
         if let UnifiedAgentEvent::MessageDelta { delta, .. } = &result {
             assert!(delta.starts_with("[thinking] "), "got: {delta}");
         } else {
@@ -238,7 +253,7 @@ mod tests {
             tool_call_id: "tc-1".into(),
             tool_name: "read_file".into(),
         };
-        assert!(map_observer_event(event, SID).is_none());
+        assert!(map_event(event).is_none());
     }
 
     #[test]
@@ -248,7 +263,7 @@ mod tests {
             tool_call_id: "tc-1".into(),
             delta: "partial".into(),
         };
-        let result = map_observer_event(event, SID).expect("should map");
+        let result = map_event(event).expect("should map");
         if let UnifiedAgentEvent::ToolCallProgress { progress, .. } = &result {
             assert!(progress.contains("tc-1"));
         } else {
@@ -262,10 +277,46 @@ mod tests {
             turn: 1,
             usage: make_usage(100, 50, 150),
         };
-        let result = map_observer_event(event, SID).expect("should map");
+        let result = map_event(event).expect("should map");
         if let UnifiedAgentEvent::ContextUsage { used, total, .. } = &result {
             assert_eq!(*used, 150);
-            assert_eq!(*total, 0);
+            assert_eq!(
+                *total, 0,
+                "without prior ContextBudgetEvaluated, total should be 0"
+            );
+        } else {
+            panic!("expected ContextUsage");
+        }
+    }
+
+    #[test]
+    fn streaming_usage_uses_cached_max_from_context_budget() {
+        let mut max_tokens = 0usize;
+
+        // First: send ContextBudgetEvaluated to prime the cache.
+        let budget_event = QueryObserverEvent::ContextBudgetEvaluated {
+            turn: 1,
+            context: QueryContextBudgetState {
+                estimated_tokens: 80_000,
+                max_input_tokens: 200_000,
+                threshold_tokens: 160_000,
+                usage_ratio: 0.4,
+                needs_compaction: false,
+            },
+            message_count: 5,
+        };
+        let _ = map_event_with_max(&mut max_tokens, budget_event);
+        assert_eq!(max_tokens, 200_000);
+
+        // Now: StreamingUsageUpdated should use the cached max.
+        let usage_event = QueryObserverEvent::StreamingUsageUpdated {
+            turn: 2,
+            usage: make_usage(100, 50, 150),
+        };
+        let result = map_event_with_max(&mut max_tokens, usage_event).expect("should map");
+        if let UnifiedAgentEvent::ContextUsage { used, total, .. } = &result {
+            assert_eq!(*used, 150);
+            assert_eq!(*total, 200_000, "should use cached max_input_tokens");
         } else {
             panic!("expected ContextUsage");
         }
@@ -282,7 +333,7 @@ mod tests {
             batch_size: 1,
             batch_index: 0,
         };
-        let result = map_observer_event(event, SID).expect("should map");
+        let result = map_event(event).expect("should map");
         match result {
             UnifiedAgentEvent::ToolCallStarted {
                 tool_name,
@@ -314,7 +365,7 @@ mod tests {
             turn: 1,
             total_messages: 5,
         };
-        let result = map_observer_event(event, SID).expect("should map");
+        let result = map_event(event).expect("should map");
         if let UnifiedAgentEvent::ToolCallCompleted {
             result, tool_name, ..
         } = &result
@@ -341,7 +392,7 @@ mod tests {
             turn: 1,
             total_messages: 5,
         };
-        let result = map_observer_event(event, SID).expect("should map");
+        let result = map_event(event).expect("should map");
         if let UnifiedAgentEvent::ToolCallCompleted { result, .. } = &result {
             assert_eq!(result["is_error"], true);
         } else {
@@ -365,7 +416,7 @@ mod tests {
             estimated_tokens_before: 170_000,
             estimated_tokens_after: 70_000,
         };
-        let result = map_observer_event(event, SID).expect("should map");
+        let result = map_event(event).expect("should map");
         if let UnifiedAgentEvent::ContextCompacted {
             entries_removed,
             usage_ratio,
@@ -392,7 +443,7 @@ mod tests {
             },
             message_count: 30,
         };
-        let result = map_observer_event(event, SID).expect("should map");
+        let result = map_event(event).expect("should map");
         if let UnifiedAgentEvent::ContextUsage { used, total, .. } = &result {
             assert_eq!(*used, 80_000);
             assert_eq!(*total, 200_000);
@@ -411,7 +462,7 @@ mod tests {
             final_text: Some("Done!".into()),
             usage: make_usage(500, 200, 700),
         };
-        let result = map_observer_event(event, SID).expect("should map");
+        let result = map_event(event).expect("should map");
         match result {
             UnifiedAgentEvent::Completed { result, .. } => {
                 assert_eq!(result.response_text, "Done!");
@@ -430,7 +481,7 @@ mod tests {
             final_text: None,
             usage: make_usage(100, 50, 150),
         };
-        let result = map_observer_event(event, SID).expect("should map");
+        let result = map_event(event).expect("should map");
         if let UnifiedAgentEvent::Completed { result, .. } = &result {
             assert!(result.response_text.is_empty());
         } else {
@@ -446,7 +497,7 @@ mod tests {
             consecutive_failures: 1,
             usage: make_usage(100, 0, 100),
         };
-        let result = map_observer_event(event, SID).expect("should map");
+        let result = map_event(event).expect("should map");
         if let UnifiedAgentEvent::Error {
             message,
             recoverable,
@@ -471,7 +522,7 @@ mod tests {
             },
             reason: "max turns".into(),
         };
-        let result = map_observer_event(event, SID).expect("should map");
+        let result = map_event(event).expect("should map");
         if let UnifiedAgentEvent::Error {
             message,
             recoverable,
@@ -494,7 +545,7 @@ mod tests {
             existing_messages: 0,
             new_messages: 0,
         };
-        assert!(map_observer_event(event, SID).is_none());
+        assert!(map_event(event).is_none());
     }
 
     #[test]
@@ -509,7 +560,7 @@ mod tests {
                 5,
             ),
         };
-        assert!(map_observer_event(event, SID).is_none());
+        assert!(map_event(event).is_none());
     }
 
     #[test]
@@ -519,6 +570,6 @@ mod tests {
             from_max_tokens: 4096,
             to_max_tokens: 16384,
         };
-        assert!(map_observer_event(event, SID).is_none());
+        assert!(map_event(event).is_none());
     }
 }

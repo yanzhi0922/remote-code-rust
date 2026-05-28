@@ -1,4 +1,4 @@
-import { cleanup, render } from '@testing-library/react';
+import { cleanup, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { resetAppStore } from '../../test/appStoreTestUtils';
 
@@ -11,11 +11,24 @@ vi.mock('../../lib/tauri', () => ({
 afterEach(() => { cleanup(); });
 
 describe('OperationsTab', () => {
-  it('renders without crashing', async () => {
+  it('renders Doctor section heading', async () => {
     resetAppStore();
     const { OperationsTab } = await import('./OperationsTab');
     render(<OperationsTab />);
-    // Component renders operation controls
-    expect(document.querySelector('[data-testid="operations-tab"]') || document.body).toBeInTheDocument();
+    expect(screen.getByText('Doctor')).toBeInTheDocument();
+  });
+
+  it('renders session export section', async () => {
+    resetAppStore();
+    const { OperationsTab } = await import('./OperationsTab');
+    render(<OperationsTab />);
+    expect(screen.getByText('Session Export')).toBeInTheDocument();
+  });
+
+  it('renders doctor run button', async () => {
+    resetAppStore();
+    const { OperationsTab } = await import('./OperationsTab');
+    render(<OperationsTab />);
+    expect(screen.getByRole('button', { name: /重新诊断|诊断中/ })).toBeInTheDocument();
   });
 });

@@ -198,11 +198,10 @@ mod tests {
         let file_path = dir.path().join("new_file.txt");
 
         let params = WriteToFileParams {
-            path: file_path.to_str().unwrap().to_string(),
+            path: "new_file.txt".to_string(),
             content: "hello\nworld".to_string(),
         };
-        let result =
-            process_write_to_file(&params, std::path::Path::new("."), None, None, None).unwrap();
+        let result = process_write_to_file(&params, dir.path(), None, None, None).unwrap();
         assert!(result.is_new_file);
         assert_eq!(result.lines_written, 2);
 
@@ -217,11 +216,10 @@ mod tests {
         std::fs::write(&file_path, "old content").unwrap();
 
         let params = WriteToFileParams {
-            path: file_path.to_str().unwrap().to_string(),
+            path: "existing.txt".to_string(),
             content: "new content".to_string(),
         };
-        let result =
-            process_write_to_file(&params, std::path::Path::new("."), None, None, None).unwrap();
+        let result = process_write_to_file(&params, dir.path(), None, None, None).unwrap();
         assert!(!result.is_new_file);
 
         let written = std::fs::read_to_string(&file_path).unwrap();
@@ -234,11 +232,10 @@ mod tests {
         let file_path = dir.path().join("a").join("b").join("c").join("deep.txt");
 
         let params = WriteToFileParams {
-            path: file_path.to_str().unwrap().to_string(),
+            path: "a/b/c/deep.txt".to_string(),
             content: "deep content".to_string(),
         };
-        let result =
-            process_write_to_file(&params, std::path::Path::new("."), None, None, None).unwrap();
+        let result = process_write_to_file(&params, dir.path(), None, None, None).unwrap();
         assert!(result.is_new_file);
         assert!(file_path.exists());
     }
@@ -249,10 +246,10 @@ mod tests {
         let file_path = dir.path().join("fenced.txt");
 
         let params = WriteToFileParams {
-            path: file_path.to_str().unwrap().to_string(),
+            path: "fenced.txt".to_string(),
             content: "```javascript\nconsole.log(\"hello\");\n```".to_string(),
         };
-        process_write_to_file(&params, std::path::Path::new("."), None, None, None).unwrap();
+        process_write_to_file(&params, dir.path(), None, None, None).unwrap();
 
         let written = std::fs::read_to_string(&file_path).unwrap();
         assert_eq!(written, "console.log(\"hello\");\n");
@@ -292,10 +289,10 @@ mod tests {
         std::fs::write(&file_path, "old content").unwrap();
 
         let params = WriteToFileParams {
-            path: file_path.to_str().unwrap().to_string(),
+            path: "existing.txt".to_string(),
             content: "new content".to_string(),
         };
-        process_write_to_file(&params, std::path::Path::new("."), None, None, None).unwrap();
+        process_write_to_file(&params, dir.path(), None, None, None).unwrap();
 
         // Original should have new content
         assert_eq!(std::fs::read_to_string(&file_path).unwrap(), "new content");
@@ -308,13 +305,12 @@ mod tests {
     #[test]
     fn test_write_no_backup_for_new_file() {
         let dir = tempfile::tempdir().unwrap();
-        let file_path = dir.path().join("new_file.txt");
 
         let params = WriteToFileParams {
-            path: file_path.to_str().unwrap().to_string(),
+            path: "new_file.txt".to_string(),
             content: "fresh content".to_string(),
         };
-        process_write_to_file(&params, std::path::Path::new("."), None, None, None).unwrap();
+        process_write_to_file(&params, dir.path(), None, None, None).unwrap();
 
         // No backup should exist
         let backup_path = dir.path().join("new_file.txt.bak");
@@ -351,10 +347,10 @@ mod tests {
         // Build HTML entity string at runtime to avoid tool unescaping
         let content = format!("if (x {}lt; 10 {}amp;{}amp; y {}gt; 5)", '&', '&', '&', '&');
         let params = WriteToFileParams {
-            path: file_path.to_str().unwrap().to_string(),
+            path: "test.txt".to_string(),
             content,
         };
-        process_write_to_file(&params, std::path::Path::new("."), None, None, None).unwrap();
+        process_write_to_file(&params, dir.path(), None, None, None).unwrap();
 
         let written = std::fs::read_to_string(&file_path).unwrap();
         assert_eq!(written, "if (x < 10 && y > 5)");
@@ -381,10 +377,10 @@ mod tests {
         let file_path = dir.path().join("test.rs");
 
         let params = WriteToFileParams {
-            path: file_path.to_str().unwrap().to_string(),
+            path: "test.rs".to_string(),
             content: "  1 | fn main() {\n  2 |     println!(\"hello\");\n  3 | }\n".to_string(),
         };
-        process_write_to_file(&params, std::path::Path::new("."), None, None, None).unwrap();
+        process_write_to_file(&params, dir.path(), None, None, None).unwrap();
 
         let written = std::fs::read_to_string(&file_path).unwrap();
         assert_eq!(written, "fn main() {\n    println!(\"hello\");\n}\n");
@@ -397,10 +393,10 @@ mod tests {
 
         // Content with markdown fence, HTML entities, AND line numbers
         let params = WriteToFileParams {
-            path: file_path.to_str().unwrap().to_string(),
+            path: "test.txt".to_string(),
             content: "```\n  1 | x < 10\n  2 | y > 5\n```".to_string(),
         };
-        process_write_to_file(&params, std::path::Path::new("."), None, None, None).unwrap();
+        process_write_to_file(&params, dir.path(), None, None, None).unwrap();
 
         let written = std::fs::read_to_string(&file_path).unwrap();
         assert_eq!(written, "x < 10\ny > 5\n");
@@ -430,13 +426,13 @@ mod tests {
 
         let entity_content = format!("if (x {}lt; 10)", '&');
         let params = WriteToFileParams {
-            path: file_path.to_str().unwrap().to_string(),
+            path: "test.txt".to_string(),
             content: entity_content.clone(),
         };
         // With Claude model → entities preserved
         process_write_to_file(
             &params,
-            std::path::Path::new("."),
+            dir.path(),
             None,
             None,
             Some("claude-3.5-sonnet"),

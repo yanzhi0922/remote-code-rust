@@ -487,7 +487,10 @@ impl SseTransport {
             if url::Url::parse(endpoint_data).is_ok() {
                 return Ok(endpoint_data.to_string());
             }
-            return Err(format!("endpoint URL '{}' is not a valid URL", endpoint_data));
+            return Err(format!(
+                "endpoint URL '{}' is not a valid URL",
+                endpoint_data
+            ));
         }
 
         // Parse the base URL and join the relative path
@@ -495,10 +498,12 @@ impl SseTransport {
             .map_err(|e| format!("failed to parse base URL '{}': {}", base_url, e))?;
         base.join(endpoint_data)
             .map(|resolved| resolved.to_string())
-            .map_err(|e| format!(
-                "failed to resolve relative endpoint '{}' against '{}': {}",
-                endpoint_data, base_url, e
-            ))
+            .map_err(|e| {
+                format!(
+                    "failed to resolve relative endpoint '{}' against '{}': {}",
+                    endpoint_data, base_url, e
+                )
+            })
     }
 }
 

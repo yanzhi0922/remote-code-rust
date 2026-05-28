@@ -4,7 +4,7 @@
 //! shared access. The browser instance persists between tool calls for session
 //! continuity (cookies, localStorage, tabs).
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{Context, Result, anyhow};
@@ -84,7 +84,7 @@ impl ChromeBrowserPool {
     }
 
     /// The detected browser executable path.
-    pub fn executable(&self) -> &PathBuf {
+    pub fn executable(&self) -> &Path {
         &self.executable
     }
 }

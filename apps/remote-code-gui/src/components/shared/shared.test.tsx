@@ -1,4 +1,5 @@
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ApprovalPanel, PanelHint } from './ApprovalPanel';
 import { ArtifactPanel } from './ArtifactPanel';
@@ -27,11 +28,20 @@ describe('TimelineMessageCard', () => {
         Response text
       </TimelineMessageCard>,
     );
-    // The outer flex container has justify-start for assistant messages
     const textElement = screen.getByText('Response text');
     const flexContainer = textElement.closest('.flex');
     expect(flexContainer!.className).toContain('justify-start');
     expect(screen.getByText('Assistant')).toBeInTheDocument();
+  });
+
+  it('renders system role messages', () => {
+    render(
+      <TimelineMessageCard role="system" header="System">
+        System notification
+      </TimelineMessageCard>,
+    );
+    expect(screen.getByText('System notification')).toBeInTheDocument();
+    expect(screen.getByText('System')).toBeInTheDocument();
   });
 });
 
@@ -69,7 +79,7 @@ describe('ApprovalPanel', () => {
     { decision: 'denied', label: 'Deny', className: 'bg-red-600 text-white' },
   ];
 
-  it('renders approval items with action buttons', () => {
+  it('renders approval items with action buttons', async () => {
     const onDecision = vi.fn();
     render(
       <ApprovalPanel
@@ -88,7 +98,7 @@ describe('ApprovalPanel', () => {
     expect(screen.getByText('Delete file')).toBeInTheDocument();
     expect(screen.getByText('/tmp/test.log')).toBeInTheDocument();
 
-    fireEvent.click(screen.getByText('Allow'));
+    await userEvent.click(screen.getByText('Allow'));
     expect(onDecision).toHaveBeenCalledWith('apr-1', 'approved');
   });
 
@@ -133,7 +143,7 @@ describe('ArtifactPanel', () => {
     { artifact_id: 'art-2', name: 'Data', file_name: 'data.csv', size_bytes: 1536 },
   ];
 
-  it('renders artifact items with download actions', () => {
+  it('renders artifact items with download actions', async () => {
     const onDownload = vi.fn();
     render(
       <ArtifactPanel
@@ -150,7 +160,7 @@ describe('ArtifactPanel', () => {
     expect(screen.getByText('Data')).toBeInTheDocument();
     expect(screen.getByText(/data\.csv/)).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: /Report/i }));
+    await userEvent.click(screen.getByRole('button', { name: /Report/i }));
     expect(onDownload).toHaveBeenCalledWith(items[0]);
   });
 

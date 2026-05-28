@@ -1059,12 +1059,7 @@ async fn run_single(
         let metadata = CreateMessageMetadata::default();
 
         let stream = handler
-            .create_message(
-                system_prompt,
-                &messages,
-                Some(&tools_json),
-                metadata,
-            )
+            .create_message(system_prompt, &messages, Some(&tools_json), metadata)
             .await
             .context("Failed to create message")?;
 
@@ -1196,12 +1191,7 @@ async fn run_interactive(
             let metadata = CreateMessageMetadata::default();
 
             let stream = handler
-                .create_message(
-                    system_prompt,
-                    &conversation,
-                    Some(&tools_json),
-                    metadata,
-                )
+                .create_message(system_prompt, &conversation, Some(&tools_json), metadata)
                 .await
                 .context("Failed to create message")?;
 

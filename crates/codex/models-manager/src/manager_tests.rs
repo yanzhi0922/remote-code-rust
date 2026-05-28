@@ -146,6 +146,10 @@ impl ExternalAuth for TestUnresolvedExternalApiKeyAuth {
 
 #[async_trait]
 impl ModelsEndpointClient for TestModelsEndpoint {
+    fn cache_key(&self) -> String {
+        "test-models-endpoint".to_string()
+    }
+
     fn has_command_auth(&self) -> bool {
         self.has_command_auth
     }
@@ -546,6 +550,10 @@ impl TestAuthAwareModelsEndpoint {
 
 #[async_trait]
 impl ModelsEndpointClient for TestAuthAwareModelsEndpoint {
+    fn cache_key(&self) -> String {
+        "test-auth-aware-models-endpoint".to_string()
+    }
+
     fn has_command_auth(&self) -> bool {
         false
     }

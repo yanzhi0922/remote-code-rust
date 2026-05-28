@@ -860,7 +860,7 @@ fn run_git_command(cwd: &Path, args: &[&str]) -> Option<String> {
 /// Generate the git status context text matching the TS `getGitStatus()` format exactly.
 ///
 /// The output matches:
-/// ```
+/// ```text
 /// This is the git status at the start of the conversation. Note that this status
 /// is a snapshot in time, and will not update during the conversation.
 ///
@@ -916,18 +916,18 @@ fn get_git_status_context(cwd: &Path) -> Option<String> {
 
     let mut lines = vec![
         "This is the git status at the start of the conversation. Note that this status is a snapshot in time, and will not update during the conversation.".to_owned(),
-        "".to_owned(),
+        String::new(),
         format!("Current branch: {}", branch.as_deref().unwrap_or("(unknown)")),
-        "".to_owned(),
+        String::new(),
         format!("Main branch (you will usually use this for PRs): {main_branch}"),
     ];
 
     if let Some(ref user) = git_user {
-        lines.push("".to_owned());
+        lines.push(String::new());
         lines.push(format!("Git user: {user}"));
     }
 
-    lines.push("".to_owned());
+    lines.push(String::new());
     lines.push(format!(
         "Status:\n{}",
         if truncated_status.is_empty() {
@@ -937,7 +937,7 @@ fn get_git_status_context(cwd: &Path) -> Option<String> {
         }
     ));
 
-    lines.push("".to_owned());
+    lines.push(String::new());
     lines.push(format!("Recent commits:\n{recent_log}"));
 
     Some(lines.join("\n"))

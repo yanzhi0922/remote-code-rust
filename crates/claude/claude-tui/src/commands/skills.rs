@@ -241,7 +241,7 @@ struct SkillView {
 fn discover_skills(config: &RuntimeConfig) -> (Vec<String>, Vec<SkillView>) {
     let mut warnings = Vec::new();
     let mut skills = Vec::new();
-    let user_sources_enabled = setting_source_enabled(config, SettingSource::User);
+    let user_sources_enabled = config.setting_source_enabled(SettingSource::User);
 
     if user_sources_enabled && config.paths.skills_dir.exists() {
         match claude_skills::discover_skills(&config.paths.skills_dir) {
@@ -290,10 +290,6 @@ fn discover_skills(config: &RuntimeConfig) -> (Vec<String>, Vec<SkillView>) {
     }
 
     (warnings, skills)
-}
-
-fn setting_source_enabled(config: &RuntimeConfig, source: SettingSource) -> bool {
-    config.allowed_setting_sources.contains(&source)
 }
 
 pub(crate) fn discovered_skill_count(config: &RuntimeConfig) -> usize {

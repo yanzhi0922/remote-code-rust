@@ -109,7 +109,9 @@ pub(crate) fn register_repl_runtime_hooks(
                                 })
                                 .flatten();
                             if let Err(err) = store.append_conversation_entry(session_id, &entry) {
-                                tracing::warn!("repl_hook_runtime: failed to append conversation entry: {err}");
+                                tracing::warn!(
+                                    "repl_hook_runtime: failed to append conversation entry: {err}"
+                                );
                             }
                             if let (Some(event_sink), Some(payload)) =
                                 (event_sink.as_ref(), memory_saved)

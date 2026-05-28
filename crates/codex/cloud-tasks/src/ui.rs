@@ -199,7 +199,8 @@ fn draw_list(frame: &mut Frame, area: Rect, app: &mut App) {
     let percent_span = if app.tasks.len() <= 1 {
         "  • 0%".dim()
     } else {
-        let p = ((app.selected as f32) / ((app.tasks.len() - 1) as f32) * 100.0).round() as i32;
+        let p = ((app.selected as f32) / (app.tasks.len().saturating_sub(1).max(1) as f32) * 100.0)
+            .round() as i32;
         format!("  • {}%", p.clamp(0, 100)).dim()
     };
     let title_line = {

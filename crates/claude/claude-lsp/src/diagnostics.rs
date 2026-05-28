@@ -36,11 +36,19 @@ impl DiagnosticRegistry {
         self.diagnostics.insert(uri.to_string(), diagnostics);
 
         // Recompute counts from scratch to avoid drift.
-        let (errors, warnings) = self.diagnostics.values().flatten().fold((0usize, 0usize), |(e, w), d| {
-            if d.is_error() { (e + 1, w) }
-            else if d.is_warning() { (e, w + 1) }
-            else { (e, w) }
-        });
+        let (errors, warnings) =
+            self.diagnostics
+                .values()
+                .flatten()
+                .fold((0usize, 0usize), |(e, w), d| {
+                    if d.is_error() {
+                        (e + 1, w)
+                    } else if d.is_warning() {
+                        (e, w + 1)
+                    } else {
+                        (e, w)
+                    }
+                });
         self.error_count = errors;
         self.warning_count = warnings;
     }
@@ -62,11 +70,19 @@ impl DiagnosticRegistry {
         self.diagnostics.remove(uri);
 
         // Recompute counts from scratch to avoid drift.
-        let (errors, warnings) = self.diagnostics.values().flatten().fold((0usize, 0usize), |(e, w), d| {
-            if d.is_error() { (e + 1, w) }
-            else if d.is_warning() { (e, w + 1) }
-            else { (e, w) }
-        });
+        let (errors, warnings) =
+            self.diagnostics
+                .values()
+                .flatten()
+                .fold((0usize, 0usize), |(e, w), d| {
+                    if d.is_error() {
+                        (e + 1, w)
+                    } else if d.is_warning() {
+                        (e, w + 1)
+                    } else {
+                        (e, w)
+                    }
+                });
         self.error_count = errors;
         self.warning_count = warnings;
     }

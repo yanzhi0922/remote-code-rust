@@ -27,9 +27,12 @@ const mockRuntime = vi.hoisted(() => ({
 }));
 
 vi.mock('./transport', () => ({
-  subscribeToRemoteSessionEvents: vi.fn(() => ({
-    close: mockTransport.close,
-  })),
+  subscribeToRemoteSessionEvents: vi.fn((input: { onConnectionStateChange: (state: string) => void }) => {
+    queueMicrotask(() => input.onConnectionStateChange('open'));
+    return {
+      close: mockTransport.close,
+    };
+  }),
 }));
 
 vi.mock('./api', () => mockApi);
@@ -299,8 +302,12 @@ describe('UnifiedTransport', () => {
     const { subscribeToRemoteSessionEvents } = await import('./transport');
     let onEventCb: ((event: RemoteTimelineEvent) => void) | null = null;
     (subscribeToRemoteSessionEvents as ReturnType<typeof vi.fn>).mockImplementationOnce(
-      (input: { onEvent: (e: RemoteTimelineEvent) => void }) => {
+      (input: {
+        onConnectionStateChange: (state: string) => void;
+        onEvent: (e: RemoteTimelineEvent) => void;
+      }) => {
         onEventCb = input.onEvent;
+        queueMicrotask(() => input.onConnectionStateChange('open'));
         return { close: mockTransport.close };
       },
     );

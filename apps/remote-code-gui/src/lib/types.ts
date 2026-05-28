@@ -271,6 +271,7 @@ export interface SessionSummary {
   cwd: string;
   provider_name: string;
   model: string | null;
+  agent_type: AgentType;
   created_at: string;
   updated_at: string;
   archived: boolean;
@@ -340,6 +341,20 @@ export interface FullSettings {
   codex_permission_profile: unknown | null;
   codex_service_tier: string | null;
   codex_ephemeral: boolean | null;
+  runtime_paths: RuntimePathsInfo;
+}
+
+export interface RuntimePathsInfo {
+  profile_dir: string;
+  sessions_dir: string;
+  artifacts_dir: string;
+  logs_dir: string;
+  cache_dir: string;
+  agents_dir: string;
+  remote_control_file: string;
+  gui_projects_file: string;
+  gui_providers_file: string;
+  gui_settings_file: string;
 }
 
 export interface UpdateProviderRequest {

@@ -31,9 +31,7 @@ pub fn validate_edit_file_params(params: &EditFileParams) -> Result<(), FsToolEr
 
     // Reject absolute paths to prevent editing outside the workspace root.
     if params.file_path.starts_with('/')
-        || (cfg!(windows)
-            && params.file_path.len() >= 2
-            && params.file_path.as_bytes()[1] == b':')
+        || (cfg!(windows) && params.file_path.len() >= 2 && params.file_path.as_bytes()[1] == b':')
     {
         return Err(FsToolError::InvalidPath(
             "file_path must be relative (absolute paths are not allowed)".to_string(),
@@ -603,13 +601,13 @@ mod tests {
         let file_path = dir.path().join("new_file.txt");
 
         let params = EditFileParams {
-            file_path: file_path.to_str().unwrap().to_string(),
+            file_path: "new_file.txt".to_string(),
             old_string: "".to_string(),
             new_string: "hello world\n".to_string(),
             expected_replacements: None,
             replace_all: None,
         };
-        let result = process_edit_file(&params, std::path::Path::new("."), None).unwrap();
+        let result = process_edit_file(&params, dir.path(), None).unwrap();
         assert!(result.success);
         assert!(result.message.unwrap().contains("Created new file"));
 
@@ -624,13 +622,13 @@ mod tests {
         std::fs::write(&file_path, "existing content").unwrap();
 
         let params = EditFileParams {
-            file_path: file_path.to_str().unwrap().to_string(),
+            file_path: "existing.txt".to_string(),
             old_string: "".to_string(),
             new_string: "new content".to_string(),
             expected_replacements: None,
             replace_all: None,
         };
-        let result = process_edit_file(&params, std::path::Path::new("."), None);
+        let result = process_edit_file(&params, dir.path(), None);
         assert!(result.is_err());
     }
 
@@ -641,13 +639,13 @@ mod tests {
         std::fs::write(&file_path, "hello world\nfoo bar\n").unwrap();
 
         let params = EditFileParams {
-            file_path: file_path.to_str().unwrap().to_string(),
+            file_path: "test.txt".to_string(),
             old_string: "hello world".to_string(),
             new_string: "HELLO WORLD".to_string(),
             expected_replacements: None,
             replace_all: None,
         };
-        let result = process_edit_file(&params, std::path::Path::new("."), None).unwrap();
+        let result = process_edit_file(&params, dir.path(), None).unwrap();
         assert!(result.success);
         assert!(result.message.unwrap().contains("exact match"));
 
@@ -663,13 +661,13 @@ mod tests {
         std::fs::write(&file_path, "hello world\n").unwrap();
 
         let params = EditFileParams {
-            file_path: file_path.to_str().unwrap().to_string(),
+            file_path: "test.txt".to_string(),
             old_string: "nonexistent string".to_string(),
             new_string: "replacement".to_string(),
             expected_replacements: None,
             replace_all: None,
         };
-        let result = process_edit_file(&params, std::path::Path::new("."), None);
+        let result = process_edit_file(&params, dir.path(), None);
         assert!(result.is_err());
         // Verify detailed error message
         let err_msg = result.unwrap_err().to_string();
@@ -684,13 +682,13 @@ mod tests {
         std::fs::write(&file_path, "foo foo foo\n").unwrap();
 
         let params = EditFileParams {
-            file_path: file_path.to_str().unwrap().to_string(),
+            file_path: "test.txt".to_string(),
             old_string: "foo".to_string(),
             new_string: "bar".to_string(),
             expected_replacements: Some(1),
             replace_all: None,
         };
-        let result = process_edit_file(&params, std::path::Path::new("."), None);
+        let result = process_edit_file(&params, dir.path(), None);
         assert!(result.is_err());
     }
 
@@ -701,13 +699,13 @@ mod tests {
         std::fs::write(&file_path, "foo and foo and foo\n").unwrap();
 
         let params = EditFileParams {
-            file_path: file_path.to_str().unwrap().to_string(),
+            file_path: "test.txt".to_string(),
             old_string: "foo".to_string(),
             new_string: "bar".to_string(),
             expected_replacements: Some(3),
             replace_all: None,
         };
-        let result = process_edit_file(&params, std::path::Path::new("."), None).unwrap();
+        let result = process_edit_file(&params, dir.path(), None).unwrap();
         assert!(result.success);
 
         let content = std::fs::read_to_string(&file_path).unwrap();
@@ -721,13 +719,13 @@ mod tests {
         std::fs::write(&file_path, "hello\n").unwrap();
 
         let params = EditFileParams {
-            file_path: file_path.to_str().unwrap().to_string(),
+            file_path: "test.txt".to_string(),
             old_string: "hello".to_string(),
             new_string: "hello".to_string(),
             expected_replacements: None,
             replace_all: None,
         };
-        let result = process_edit_file(&params, std::path::Path::new("."), None);
+        let result = process_edit_file(&params, dir.path(), None);
         assert!(result.is_err());
     }
 
@@ -746,13 +744,13 @@ mod tests {
         std::fs::write(&file_path, "hello\r\nworld\r\n").unwrap();
 
         let params = EditFileParams {
-            file_path: file_path.to_str().unwrap().to_string(),
+            file_path: "crlf.txt".to_string(),
             old_string: "hello\nworld".to_string(),
             new_string: "HELLO\nWORLD".to_string(),
             expected_replacements: None,
             replace_all: None,
         };
-        let result = process_edit_file(&params, std::path::Path::new("."), None).unwrap();
+        let result = process_edit_file(&params, dir.path(), None).unwrap();
         assert!(result.success);
 
         let content = std::fs::read_to_string(&file_path).unwrap();
@@ -765,13 +763,13 @@ mod tests {
         let file_path = dir.path().join("a").join("b").join("deep.txt");
 
         let params = EditFileParams {
-            file_path: file_path.to_str().unwrap().to_string(),
+            file_path: "a/b/deep.txt".to_string(),
             old_string: "".to_string(),
             new_string: "deep content".to_string(),
             expected_replacements: None,
             replace_all: None,
         };
-        let result = process_edit_file(&params, std::path::Path::new("."), None).unwrap();
+        let result = process_edit_file(&params, dir.path(), None).unwrap();
         assert!(result.success);
         assert!(file_path.exists());
     }
@@ -787,13 +785,13 @@ mod tests {
         std::fs::write(&file_path, "hello world\n").unwrap();
 
         let params = EditFileParams {
-            file_path: file_path.to_str().unwrap().to_string(),
+            file_path: "test.txt".to_string(),
             old_string: "hello world".to_string(),
             new_string: "HELLO WORLD".to_string(),
             expected_replacements: None,
             replace_all: None,
         };
-        let result = process_edit_file(&params, std::path::Path::new("."), None).unwrap();
+        let result = process_edit_file(&params, dir.path(), None).unwrap();
         assert!(result.success);
         assert!(result.message.unwrap().contains("exact match"));
     }
@@ -806,14 +804,14 @@ mod tests {
         std::fs::write(&file_path, "hello    world\n").unwrap();
 
         let params = EditFileParams {
-            file_path: file_path.to_str().unwrap().to_string(),
+            file_path: "test.txt".to_string(),
             // old_string has single space
             old_string: "hello world".to_string(),
             new_string: "HELLO WORLD".to_string(),
             expected_replacements: None,
             replace_all: None,
         };
-        let result = process_edit_file(&params, std::path::Path::new("."), None).unwrap();
+        let result = process_edit_file(&params, dir.path(), None).unwrap();
         assert!(result.success);
         assert!(
             result
@@ -834,14 +832,14 @@ mod tests {
         std::fs::write(&file_path, "hello\tworld\n").unwrap();
 
         let params = EditFileParams {
-            file_path: file_path.to_str().unwrap().to_string(),
+            file_path: "test.txt".to_string(),
             // old_string has spaces
             old_string: "hello world".to_string(),
             new_string: "HELLO WORLD".to_string(),
             expected_replacements: None,
             replace_all: None,
         };
-        let result = process_edit_file(&params, std::path::Path::new("."), None).unwrap();
+        let result = process_edit_file(&params, dir.path(), None).unwrap();
         assert!(result.success);
 
         let content = std::fs::read_to_string(&file_path).unwrap();
@@ -860,13 +858,13 @@ mod tests {
         std::fs::write(&file_path, "function\n  myFunc\n").unwrap();
 
         let params = EditFileParams {
-            file_path: file_path.to_str().unwrap().to_string(),
+            file_path: "test.txt".to_string(),
             old_string: "function myFunc".to_string(),
             new_string: "def myFunc".to_string(),
             expected_replacements: None,
             replace_all: None,
         };
-        let result = process_edit_file(&params, std::path::Path::new("."), None).unwrap();
+        let result = process_edit_file(&params, dir.path(), None).unwrap();
         assert!(result.success);
         assert!(result.message.unwrap().contains("match"));
 
@@ -881,13 +879,13 @@ mod tests {
         std::fs::write(&file_path, "completely different content\n").unwrap();
 
         let params = EditFileParams {
-            file_path: file_path.to_str().unwrap().to_string(),
+            file_path: "test.txt".to_string(),
             old_string: "fn foo() { bar }".to_string(),
             new_string: "fn baz() { qux }".to_string(),
             expected_replacements: None,
             replace_all: None,
         };
-        let result = process_edit_file(&params, std::path::Path::new("."), None);
+        let result = process_edit_file(&params, dir.path(), None);
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();
         assert!(err_msg.contains("<error_details>"));
@@ -990,13 +988,13 @@ mod tests {
         std::fs::write(&file_path, "some content here\n").unwrap();
 
         let params = EditFileParams {
-            file_path: file_path.to_str().unwrap().to_string(),
+            file_path: "test.txt".to_string(),
             old_string: "fn foo() { bar }".to_string(),
             new_string: "fn baz() { qux }".to_string(),
             expected_replacements: None,
             replace_all: None,
         };
-        let result = process_edit_file(&params, std::path::Path::new("."), None);
+        let result = process_edit_file(&params, dir.path(), None);
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(err.contains("read_file"));

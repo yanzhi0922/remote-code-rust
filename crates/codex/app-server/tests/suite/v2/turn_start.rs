@@ -263,25 +263,23 @@ async fn turn_start_emits_thread_scoped_warning_notification_for_trimmed_skills(
     )?;
     write_models_cache(codex_home.path())?;
     let cache_path = codex_home.path().join("models_cache.json");
-    let mut cache: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(&cache_path)?)?;
+    let cache: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&cache_path)?)?;
     let models = cache["models"]
-        .as_array_mut()
+        .as_array()
         .expect("models_cache.json models should be an array");
-    let entry = models
-        .first_mut()
-        .expect("models cache should not be empty");
+    let entry = models.first().expect("models cache should not be empty");
     let model = entry["slug"]
         .as_str()
         .expect("model slug should be present")
         .to_string();
-    entry["context_window"] = serde_json::Value::from(100);
-    std::fs::write(&cache_path, serde_json::to_string_pretty(&cache)?)?;
     let config_path = codex_home.path().join("config.toml");
     let config = std::fs::read_to_string(&config_path)?;
     std::fs::write(
         &config_path,
-        config.replace("model = \"mock-model\"", &format!("model = \"{model}\"")),
+        config.replace(
+            "model = \"mock-model\"",
+            &format!("model = \"{model}\"\nmodel_context_window = 100"),
+        ),
     )?;
     write_test_skill(codex_home.path(), "alpha-skill")?;
     write_test_skill(codex_home.path(), "beta-skill")?;

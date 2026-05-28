@@ -3,9 +3,9 @@
 use std::sync::OnceLock;
 
 use anyhow::{Context, Result, anyhow, bail};
-use ed25519_dalek::{VerifyingKey, Signature, Verifier};
-use sha2::{Digest, Sha256};
+use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
 use tracing::info;
 
 use crate::doctor::install::{InstallSourceKind, detect_install_source, release_repository_slug};
@@ -26,7 +26,10 @@ fn shared_client() -> &'static reqwest::Client {
             .connect_timeout(std::time::Duration::from_secs(10))
             .pool_idle_timeout(std::time::Duration::from_secs(90))
             .build()
-            .unwrap_or_default()
+            .unwrap_or_else(|e| {
+                tracing::warn!("updater: failed to build HTTP client: {e}; using default");
+                reqwest::Client::new()
+            })
     })
 }
 
@@ -169,11 +172,12 @@ pub async fn run_update() -> Result<()> {
 
     const MAX_DOWNLOAD_SIZE: u64 = 500 * 1024 * 1024; // 500 MB
     if let Some(content_length) = response.content_length()
-        && content_length > MAX_DOWNLOAD_SIZE {
-            anyhow::bail!(
-                "download size ({content_length} bytes) exceeds maximum allowed ({MAX_DOWNLOAD_SIZE} bytes); aborting"
-            );
-        }
+        && content_length > MAX_DOWNLOAD_SIZE
+    {
+        anyhow::bail!(
+            "download size ({content_length} bytes) exceeds maximum allowed ({MAX_DOWNLOAD_SIZE} bytes); aborting"
+        );
+    }
 
     let bytes = response
         .bytes()
@@ -219,7 +223,16 @@ pub async fn run_update() -> Result<()> {
             let old_path = current_exe.with_extension("old");
             std::fs::rename(&current_exe, &old_path)
                 .context("failed to rename current executable")?;
-            std::fs::rename(&temp_path, &current_exe).context("failed to install new version")?;
+            if let Err(e) = std::fs::rename(&temp_path, &current_exe) {
+                // Rollback: restore the original executable so the app isn't
+                // left in a broken state where neither old nor new is in place.
+                if let Err(rollback_err) = std::fs::rename(&old_path, &current_exe) {
+                    tracing::error!(
+                        "rollback failed: could not restore original executable: {rollback_err}"
+                    );
+                }
+                return Err(e).context("failed to install new version (original restored)");
+            }
             let _ = std::fs::remove_file(&old_path);
         }
 
@@ -244,11 +257,7 @@ pub async fn run_update() -> Result<()> {
 /// checksums bytes (`sha256sums.txt.sig`).  When the key is `None`, signature
 /// verification is skipped with an informational log, but the SHA-256 digest
 /// is still verified if checksums are available.
-async fn verify_binary_integrity(
-    repository: &str,
-    version: &str,
-    digest: &str,
-) -> Result<()> {
+async fn verify_binary_integrity(repository: &str, version: &str, digest: &str) -> Result<()> {
     // Attempt to download the checksums file.  If it's not published yet
     // (e.g. local dev builds), log and return successfully — the digest
     // was already computed and printed for manual inspection.
@@ -266,17 +275,19 @@ async fn verify_binary_integrity(
             .await
             .context("release signing key is configured but sha256sums.txt.sig asset is missing")?;
 
-        let signature_bytes: [u8; 64] = sig_data
-            .try_into()
-            .map_err(|sig: Vec<u8>| anyhow!("signature asset is {} bytes, expected 64", sig.len()))?;
+        let signature_bytes: [u8; 64] = sig_data.try_into().map_err(|sig: Vec<u8>| {
+            anyhow!("signature asset is {} bytes, expected 64", sig.len())
+        })?;
 
-        let public_key = VerifyingKey::from_bytes(&key_bytes)
-            .context("invalid RELEASE_SIGNING_PUBLIC_KEY")?;
+        let public_key =
+            VerifyingKey::from_bytes(&key_bytes).context("invalid RELEASE_SIGNING_PUBLIC_KEY")?;
         let signature = Signature::from_bytes(&signature_bytes);
 
         public_key
             .verify(checksums.as_bytes(), &signature)
-            .context("Ed25519 signature verification of sha256sums.txt failed — possible tampering")?;
+            .context(
+                "Ed25519 signature verification of sha256sums.txt failed — possible tampering",
+            )?;
 
         info!("sha256sums.txt signature verified successfully (Ed25519)");
     } else {
@@ -285,11 +296,33 @@ async fn verify_binary_integrity(
 
     // Parse the checksums file and look for a matching entry.
     // Format: <sha256_hex>  <filename>  (two spaces, like coreutils sha256sum)
+    //
+    // We must match by the filename portion because a release typically
+    // contains binaries for multiple platforms — picking the first entry
+    // would compare against the wrong binary.
     let expected_digest = checksums
         .lines()
         .find_map(|line| {
-            let (hash, _filename) = line.split_once("  ")?;
-            Some(hash.trim())
+            let (hash, filename) = line.split_once("  ")?;
+            // The checksums file may list many platform binaries.
+            // Only consider entries whose filename matches the one we
+            // actually downloaded.  If we can't determine our asset
+            // name (e.g. dev build), fall back to the first entry.
+            let matches = platform_asset_suffix();
+            if filename.trim().contains(&matches) || matches.is_empty() {
+                Some(hash.trim())
+            } else {
+                None
+            }
+        })
+        .or_else(|| {
+            // Fallback: if no entry matched the platform suffix, try
+            // the first valid entry.  This handles dev builds where
+            // the suffix may not appear in the checksums file.
+            checksums.lines().find_map(|line| {
+                let (hash, _) = line.split_once("  ")?;
+                Some(hash.trim())
+            })
         })
         .ok_or_else(|| anyhow!("sha256sums.txt contains no valid entries"))?;
 
@@ -305,24 +338,31 @@ async fn verify_binary_integrity(
 
 /// Download a specific release asset by name.
 async fn download_asset(repository: &str, version: &str, asset_name: &str) -> Result<Vec<u8>> {
-    let url = format!(
-        "https://github.com/{repository}/releases/download/{version}/{asset_name}"
-    );
+    let url = format!("https://github.com/{repository}/releases/download/{version}/{asset_name}");
     let response = shared_client()
         .get(&url)
         .send()
         .await
         .context("failed to download release asset")?;
     if !response.status().is_success() {
-        bail!("failed to download {asset_name}: status {}", response.status());
+        bail!(
+            "failed to download {asset_name}: status {}",
+            response.status()
+        );
     }
-    let bytes = response.bytes().await.context("failed to read asset response")?;
+    let bytes = response
+        .bytes()
+        .await
+        .context("failed to read asset response")?;
     Ok(bytes.to_vec())
 }
 
 /// Select a download asset by exact name match (case-insensitive).
 #[allow(dead_code)]
-fn select_download_asset_by_name<'a>(assets: &'a [GitHubAsset], name: &str) -> Option<&'a GitHubAsset> {
+fn select_download_asset_by_name<'a>(
+    assets: &'a [GitHubAsset],
+    name: &str,
+) -> Option<&'a GitHubAsset> {
     assets.iter().find(|a| a.name.eq_ignore_ascii_case(name))
 }
 
@@ -505,7 +545,7 @@ mod tests {
     /// using a deterministic key (no RNG dependency).
     #[test]
     fn ed25519_signature_verification_roundtrip() {
-        use ed25519_dalek::{SigningKey, Signer, VerifyingKey, Verifier, SecretKey, Signature};
+        use ed25519_dalek::{SecretKey, Signature, Signer, SigningKey, Verifier, VerifyingKey};
 
         // Create a deterministic signing key from a fixed secret.
         let secret: SecretKey = [0xAB; 32];

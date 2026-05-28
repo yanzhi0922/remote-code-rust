@@ -232,7 +232,8 @@ impl AnalyticsReducer {
             self.threads.remove(thread_id);
         }
         // Remove turns associated with this connection.
-        self.turns.retain(|_, state| state.connection_id != Some(connection_id));
+        self.turns
+            .retain(|_, state| state.connection_id != Some(connection_id));
         // Remove in-flight requests for this connection.
         self.requests.retain(|(cid, _), _| *cid != connection_id);
     }

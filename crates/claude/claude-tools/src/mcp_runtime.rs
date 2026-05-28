@@ -54,6 +54,7 @@ pub struct RuntimeMcpObservation {
 }
 
 impl RuntimeMcpDiscovery {
+    #[must_use]
     pub fn enabled_server_names(&self) -> Vec<String> {
         self.servers
             .iter()
@@ -64,6 +65,7 @@ impl RuntimeMcpDiscovery {
             .collect()
     }
 
+    #[must_use]
     pub fn disabled_server_names(&self) -> Vec<String> {
         self.servers
             .iter()
@@ -74,6 +76,7 @@ impl RuntimeMcpDiscovery {
             .collect()
     }
 
+    #[must_use]
     pub fn into_policy_entries(self) -> Vec<RuntimeMcpServerPolicyEntry> {
         self.servers
             .into_iter()
@@ -315,7 +318,7 @@ fn collect_runtime_mcp_candidates(
     let load_only_explicit = config.strict_mcp_config;
 
     if !load_only_explicit
-        && setting_source_enabled(config, SettingSource::User)
+        && config.setting_source_enabled(SettingSource::User)
         && config.paths.plugins_dir.exists()
     {
         match claude_plugins::discover_plugins(&config.paths.plugins_dir) {
@@ -347,7 +350,7 @@ fn collect_runtime_mcp_candidates(
         }
     }
 
-    if !load_only_explicit && setting_source_enabled(config, SettingSource::User) {
+    if !load_only_explicit && config.setting_source_enabled(SettingSource::User) {
         load_runtime_mcp_candidates_in_dir(
             &mut servers,
             &mut warnings,
@@ -357,7 +360,7 @@ fn collect_runtime_mcp_candidates(
             &config.paths.profile_dir,
         );
     }
-    if !load_only_explicit && setting_source_enabled(config, SettingSource::Project) {
+    if !load_only_explicit && config.setting_source_enabled(SettingSource::Project) {
         load_runtime_project_mcp_hierarchy(
             &mut servers,
             &mut warnings,
@@ -389,7 +392,7 @@ fn collect_runtime_mcp_candidates(
 
     // ── Built-in: chrome-mcp (browser automation) ─────────────────────────────
     if !load_only_explicit
-        && setting_source_enabled(config, SettingSource::User)
+        && config.setting_source_enabled(SettingSource::User)
         && builtin_mcp_auto_discovery_enabled()
     {
         if let Some(entry) = discover_builtin_chrome_mcp() {
@@ -402,7 +405,7 @@ fn collect_runtime_mcp_candidates(
 
     // ── Built-in: computer-use (desktop automation) ──────────────────────────
     if !load_only_explicit
-        && setting_source_enabled(config, SettingSource::User)
+        && config.setting_source_enabled(SettingSource::User)
         && builtin_mcp_auto_discovery_enabled()
     {
         if let Some(entry) = discover_builtin_computer_use() {
@@ -534,10 +537,6 @@ fn load_runtime_mcp_candidates_in_dir(
             &candidate,
         );
     }
-}
-
-fn setting_source_enabled(config: &RuntimeConfig, source: SettingSource) -> bool {
-    config.allowed_setting_sources.contains(&source)
 }
 
 fn base_runtime_mcp_status(server: &claude_mcp::McpServerConfig) -> UiRuntimeMcpServerStatus {

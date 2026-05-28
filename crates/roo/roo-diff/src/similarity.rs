@@ -56,7 +56,10 @@ pub fn get_similarity(original: &str, search: &str) -> f64 {
     let dist = levenshtein_distance(&normalized_original, &normalized_search);
 
     // Calculate similarity ratio (0 to 1, where 1 is an exact match)
-    let max_length = normalized_original.chars().count().max(normalized_search.chars().count());
+    let max_length = normalized_original
+        .chars()
+        .count()
+        .max(normalized_search.chars().count());
     if max_length == 0 {
         return 1.0;
     }

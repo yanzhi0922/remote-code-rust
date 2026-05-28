@@ -8,7 +8,6 @@ use std::sync::{
 use std::time::Duration;
 
 use anyhow::Result;
-use indexmap::IndexMap;
 use chrono::Utc;
 use claude_config::RuntimeConfig;
 use claude_core::{ConversationEntry, ConversationRole, PermissionMode, SystemMemorySavedMessage};
@@ -23,6 +22,7 @@ use claude_runtime_prompt::{
 };
 use claude_session::SessionStore;
 use claude_tools::shell::readonly::{ShellKind, is_read_only_command};
+use indexmap::IndexMap;
 use serde_json::{Value, json};
 use tokio::sync::Mutex;
 use uuid::Uuid;
@@ -61,7 +61,8 @@ struct ExtractMemoriesState {
     pending_context: Option<PendingExtractionContext>,
 }
 
-static EXTRACT_MEMORY_STATE: OnceLock<Mutex<IndexMap<Uuid, ExtractMemoriesState>>> = OnceLock::new();
+static EXTRACT_MEMORY_STATE: OnceLock<Mutex<IndexMap<Uuid, ExtractMemoriesState>>> =
+    OnceLock::new();
 static IN_FLIGHT_EXTRACTIONS: OnceLock<AtomicUsize> = OnceLock::new();
 static EXTRACTION_NOTIFY: OnceLock<tokio::sync::Notify> = OnceLock::new();
 
@@ -659,25 +660,38 @@ static CANONICALIZED_ROOTS: OnceLock<std::sync::Mutex<HashMap<PathBuf, PathBuf>>
 
 fn canonicalized_root(root: &Path) -> PathBuf {
     let cache = CANONICALIZED_ROOTS.get_or_init(|| std::sync::Mutex::new(HashMap::new()));
-    if let Some(cached) = cache.lock().unwrap().get(root) {
+    if let Some(cached) = cache.lock().unwrap_or_else(|e| e.into_inner()).get(root) {
         return cached.clone();
     }
-    let canonical = root
-        .canonicalize()
-        .unwrap_or_else(|_| root.to_path_buf());
-    cache.lock().unwrap().insert(root.to_path_buf(), canonical.clone());
+    let canonical = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    cache
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(root.to_path_buf(), canonical.clone());
     canonical
 }
 
 fn path_within(candidate: &Path, root: &Path) -> bool {
-    let candidate = candidate
-        .canonicalize()
-        .unwrap_or_else(|_| candidate.to_path_buf());
+    // For an existing path, canonicalize resolves symlinks and .. components.
+    // For a non-existent path, canonicalize the parent and append the leaf.
+    let resolved = if candidate.exists() {
+        candidate
+            .canonicalize()
+            .unwrap_or_else(|_| candidate.to_path_buf())
+    } else {
+        match (candidate.parent(), candidate.file_name()) {
+            (Some(parent), Some(leaf)) if parent.exists() => parent
+                .canonicalize()
+                .map(|p| p.join(leaf))
+                .unwrap_or_else(|_| candidate.to_path_buf()),
+            _ => candidate.to_path_buf(),
+        }
+    };
     let root = canonicalized_root(root);
     if root.as_os_str().is_empty() {
         return false;
     }
-    candidate == root || candidate.starts_with(root)
+    resolved == root || resolved.starts_with(root)
 }
 
 async fn update_last_visible_cursor(session_id: Uuid, message_uuid: Option<Uuid>) {

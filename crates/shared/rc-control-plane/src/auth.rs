@@ -143,9 +143,12 @@ fn is_allowed_loopback_origin(raw_origin: &str, allow_http: bool, allow_https: b
 
     match parsed.host_str() {
         Some("localhost") => true,
-        Some(host) => host
-            .parse::<std::net::IpAddr>()
-            .is_ok_and(|ip| ip.is_loopback()),
+        Some(host) => {
+            // reqwest::Url may return IPv6 addresses with or without brackets.
+            let host = host.trim_start_matches('[').trim_end_matches(']');
+            host.parse::<std::net::IpAddr>()
+                .is_ok_and(|ip| ip.is_loopback())
+        }
         None => false,
     }
 }
@@ -262,7 +265,19 @@ pub(crate) async fn require_api_auth(
 
 #[cfg(test)]
 mod tests {
-    use super::derived_user_id_from_key;
+    use super::{
+        constant_time_value_eq, derived_user_id_from_key, extract_auth_token_from_query,
+        extract_request_auth_token, extract_stream_ticket_from_query, hash_secret_value,
+        is_allowed_loopback_origin, origin_from_url, request_allows_query_auth,
+        strip_auth_from_request_uri,
+    };
+    use axum::body::Body;
+    use axum::http::{Method, Request, Uri, header::AUTHORIZATION};
+    use std::env;
+
+    // -----------------------------------------------------------------------
+    // hash_secret_value / derived_user_id_from_key
+    // -----------------------------------------------------------------------
 
     #[test]
     fn derived_user_id_does_not_store_raw_user_key() {
@@ -272,6 +287,459 @@ mod tests {
         assert_ne!(derived, raw_key);
         assert!(derived.starts_with("sha256:"));
         assert_eq!(derived, derived_user_id_from_key(raw_key));
+    }
+
+    #[test]
+    fn hash_secret_value_is_deterministic() {
+        let a = hash_secret_value("hello");
+        let b = hash_secret_value("hello");
+        assert_eq!(a, b);
+        // Different inputs must produce different hashes.
+        assert_ne!(a, hash_secret_value("world"));
+    }
+
+    #[test]
+    fn hash_secret_value_returns_hex_sha256() {
+        // SHA-256 of empty string is well-known.
+        let empty_hash = hash_secret_value("");
+        assert_eq!(
+            empty_hash,
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+        assert_eq!(empty_hash.len(), 64);
+    }
+
+    // -----------------------------------------------------------------------
+    // constant_time_value_eq
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn constant_time_eq_same_value() {
+        assert!(constant_time_value_eq("secret", "secret"));
+    }
+
+    #[test]
+    fn constant_time_eq_different_values() {
+        assert!(!constant_time_value_eq("secret", "different"));
+    }
+
+    #[test]
+    fn constant_time_eq_empty_strings() {
+        assert!(constant_time_value_eq("", ""));
+    }
+
+    #[test]
+    fn constant_time_eq_one_empty_one_not() {
+        assert!(!constant_time_value_eq("", "non-empty"));
+        assert!(!constant_time_value_eq("non-empty", ""));
+    }
+
+    #[test]
+    fn constant_time_eq_different_lengths() {
+        // Timing-safe: different lengths must still return false.
+        assert!(!constant_time_value_eq("short", "a-much-longer-value"));
+        assert!(!constant_time_value_eq("a-much-longer-value", "short"));
+    }
+
+    #[test]
+    fn constant_time_eq_case_sensitive() {
+        assert!(!constant_time_value_eq("Secret", "secret"));
+        assert!(!constant_time_value_eq("SECRET", "secret"));
+    }
+
+    #[test]
+    fn constant_time_eq_unicode_values() {
+        let s = "ünïcödé-tökën-🔐";
+        assert!(constant_time_value_eq(s, s));
+        assert!(!constant_time_value_eq(s, "ünïcödé-tökën-🔒"));
+    }
+
+    // -----------------------------------------------------------------------
+    // extract_auth_token_from_query
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn extract_token_from_query_token_key() {
+        assert_eq!(
+            extract_auth_token_from_query("token=abc123"),
+            Some("abc123".to_owned())
+        );
+    }
+
+    #[test]
+    fn extract_token_from_query_access_token_key() {
+        assert_eq!(
+            extract_auth_token_from_query("access_token=abc123"),
+            Some("abc123".to_owned())
+        );
+    }
+
+    #[test]
+    fn extract_token_from_query_no_token_param() {
+        assert_eq!(extract_auth_token_from_query("foo=bar&baz=qux"), None);
+    }
+
+    #[test]
+    fn extract_token_from_query_empty_value() {
+        // Empty value should be ignored.
+        assert_eq!(extract_auth_token_from_query("token="), None);
+        assert_eq!(extract_auth_token_from_query("token"), None);
+    }
+
+    #[test]
+    fn extract_token_from_query_multiple_params() {
+        assert_eq!(
+            extract_auth_token_from_query("foo=bar&token=secret123&baz=qux"),
+            Some("secret123".to_owned())
+        );
+    }
+
+    #[test]
+    fn extract_token_from_query_first_match_wins() {
+        // When both token and access_token appear, first match wins.
+        let result = extract_auth_token_from_query("token=first&access_token=second");
+        assert_eq!(result, Some("first".to_owned()));
+    }
+
+    #[test]
+    fn extract_token_from_query_percent_encoded() {
+        // The function delegates to percent_decode_query_value.
+        assert_eq!(
+            extract_auth_token_from_query("token=abc%20def"),
+            Some("abc def".to_owned())
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // extract_stream_ticket_from_query
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn extract_stream_ticket_present() {
+        assert_eq!(
+            extract_stream_ticket_from_query("stream_ticket=ticket-123"),
+            Some("ticket-123".to_owned())
+        );
+    }
+
+    #[test]
+    fn extract_stream_ticket_missing() {
+        assert_eq!(extract_stream_ticket_from_query("token=abc"), None);
+    }
+
+    #[test]
+    fn extract_stream_ticket_empty_value() {
+        assert_eq!(extract_stream_ticket_from_query("stream_ticket="), None);
+    }
+
+    #[test]
+    fn extract_stream_ticket_with_other_params() {
+        assert_eq!(
+            extract_stream_ticket_from_query("foo=bar&stream_ticket=tk-42&baz=qux"),
+            Some("tk-42".to_owned())
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // strip_auth_from_request_uri
+    // -----------------------------------------------------------------------
+
+    fn request_with_uri(uri: &str) -> axum::extract::Request {
+        let parsed: Uri = uri.parse().expect("valid URI");
+        Request::builder().uri(parsed).body(Body::empty()).unwrap()
+    }
+
+    #[test]
+    fn strip_auth_removes_token_param() {
+        let mut req = request_with_uri("/v1/stream?token=secret123");
+        strip_auth_from_request_uri(&mut req);
+        assert_eq!(req.uri().to_string(), "/v1/stream");
+    }
+
+    #[test]
+    fn strip_auth_removes_access_token_param() {
+        let mut req = request_with_uri("/v1/stream?access_token=secret");
+        strip_auth_from_request_uri(&mut req);
+        assert_eq!(req.uri().to_string(), "/v1/stream");
+    }
+
+    #[test]
+    fn strip_auth_removes_stream_ticket_param() {
+        let mut req = request_with_uri("/v1/stream?stream_ticket=tk-1");
+        strip_auth_from_request_uri(&mut req);
+        assert_eq!(req.uri().to_string(), "/v1/stream");
+    }
+
+    #[test]
+    fn strip_auth_preserves_non_auth_params() {
+        let mut req = request_with_uri("/v1/stream?foo=bar&token=secret&baz=qux");
+        strip_auth_from_request_uri(&mut req);
+        assert_eq!(req.uri().to_string(), "/v1/stream?foo=bar&baz=qux");
+    }
+
+    #[test]
+    fn strip_auth_no_query_string() {
+        let mut req = request_with_uri("/v1/stream");
+        strip_auth_from_request_uri(&mut req);
+        assert_eq!(req.uri().to_string(), "/v1/stream");
+    }
+
+    #[test]
+    fn strip_auth_only_auth_params() {
+        // When all params are auth params, query is removed entirely.
+        let mut req = request_with_uri("/v1/stream?token=secret&access_token=other");
+        strip_auth_from_request_uri(&mut req);
+        assert_eq!(req.uri().to_string(), "/v1/stream");
+    }
+
+    // -----------------------------------------------------------------------
+    // extract_request_auth_token
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn extract_request_auth_token_bearer_header() {
+        let mut req = Request::builder()
+            .header(AUTHORIZATION, "Bearer my-token-123")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            extract_request_auth_token(&mut req),
+            Some("my-token-123".to_owned())
+        );
+    }
+
+    #[test]
+    fn extract_request_auth_token_bearer_with_whitespace() {
+        let mut req = Request::builder()
+            .header(AUTHORIZATION, "Bearer   spaced-token   ")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            extract_request_auth_token(&mut req),
+            Some("spaced-token".to_owned())
+        );
+    }
+
+    #[test]
+    fn extract_request_auth_token_no_header() {
+        let mut req = Request::builder().body(Body::empty()).unwrap();
+        // Without REMOTE_CODE_ALLOW_QUERY_ACCESS_TOKEN and no Authorization
+        // header, result is None.
+        assert_eq!(extract_request_auth_token(&mut req), None);
+    }
+
+    #[test]
+    fn extract_request_auth_token_empty_bearer() {
+        let mut req = Request::builder()
+            .header(AUTHORIZATION, "Bearer ")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(extract_request_auth_token(&mut req), None);
+    }
+
+    #[test]
+    fn extract_request_auth_token_wrong_scheme() {
+        let mut req = Request::builder()
+            .header(AUTHORIZATION, "Basic dXNlcjpwYXNz")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(extract_request_auth_token(&mut req), None);
+    }
+
+    #[test]
+    fn extract_request_auth_token_query_fallback() {
+        // Set the env var to enable legacy query auth, build a GET request
+        // to a /stream path, and verify token is extracted from query.
+        // SAFETY: test-only, single-threaded env mutation. Guard restores on drop.
+        struct EnvVarGuard(&'static str, Option<std::ffi::OsString>);
+        impl Drop for EnvVarGuard {
+            fn drop(&mut self) {
+                match &self.1 {
+                    Some(v) => unsafe { env::set_var(self.0, v) },
+                    None => unsafe { env::remove_var(self.0) },
+                }
+            }
+        }
+        let prev = env::var_os("REMOTE_CODE_ALLOW_QUERY_ACCESS_TOKEN");
+        unsafe { env::set_var("REMOTE_CODE_ALLOW_QUERY_ACCESS_TOKEN", "true") };
+        let _guard = EnvVarGuard("REMOTE_CODE_ALLOW_QUERY_ACCESS_TOKEN", prev);
+
+        let mut req = Request::builder()
+            .method(Method::GET)
+            .uri("/v1/sessions/abc/stream?token=query-token")
+            .body(Body::empty())
+            .unwrap();
+        let result = extract_request_auth_token(&mut req);
+        assert_eq!(result, Some("query-token".to_owned()));
+        // After extraction, auth param should be stripped from the URI.
+        assert_eq!(req.uri().to_string(), "/v1/sessions/abc/stream");
+    }
+
+    // -----------------------------------------------------------------------
+    // request_allows_query_auth
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn query_auth_allows_get_to_stream() {
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("/v1/sessions/abc/stream")
+            .body(Body::empty())
+            .unwrap();
+        assert!(request_allows_query_auth(&req));
+    }
+
+    #[test]
+    fn query_auth_allows_ws_upgrade_to_stream() {
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("/v1/sessions/abc/stream")
+            .header("upgrade", "websocket")
+            .body(Body::empty())
+            .unwrap();
+        assert!(request_allows_query_auth(&req));
+    }
+
+    #[test]
+    fn query_auth_rejects_non_stream_path() {
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("/v1/devices")
+            .body(Body::empty())
+            .unwrap();
+        assert!(!request_allows_query_auth(&req));
+    }
+
+    #[test]
+    fn query_auth_rejects_post_to_stream() {
+        // POST without upgrade header is not allowed for query auth.
+        let req = Request::builder()
+            .method(Method::POST)
+            .uri("/v1/sessions/abc/stream")
+            .body(Body::empty())
+            .unwrap();
+        assert!(!request_allows_query_auth(&req));
+    }
+
+    #[test]
+    fn query_auth_rejects_non_ws_upgrade() {
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("/v1/sessions/abc/stream")
+            .header("upgrade", "h2c")
+            .body(Body::empty())
+            .unwrap();
+        // Non-websocket upgrade on GET is still OK (GET is allowed).
+        assert!(request_allows_query_auth(&req));
+    }
+
+    #[test]
+    fn query_auth_rejects_post_with_non_ws_upgrade() {
+        let req = Request::builder()
+            .method(Method::POST)
+            .uri("/v1/sessions/abc/stream")
+            .header("upgrade", "h2c")
+            .body(Body::empty())
+            .unwrap();
+        // POST + non-ws upgrade = not allowed.
+        assert!(!request_allows_query_auth(&req));
+    }
+
+    // -----------------------------------------------------------------------
+    // origin_from_url
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn origin_from_simple_url() {
+        assert_eq!(
+            origin_from_url("https://example.com/path"),
+            Some("https://example.com".to_owned())
+        );
+    }
+
+    #[test]
+    fn origin_from_url_with_port() {
+        assert_eq!(
+            origin_from_url("http://localhost:3000/api"),
+            Some("http://localhost:3000".to_owned())
+        );
+    }
+
+    #[test]
+    fn origin_from_url_with_ipv6() {
+        assert_eq!(
+            origin_from_url("http://[::1]:8080/path"),
+            Some("http://[::1]:8080".to_owned())
+        );
+    }
+
+    #[test]
+    fn origin_from_url_invalid() {
+        assert_eq!(origin_from_url("not-a-url"), None);
+    }
+
+    // -----------------------------------------------------------------------
+    // is_allowed_loopback_origin
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn loopback_allows_http_localhost() {
+        assert!(is_allowed_loopback_origin(
+            "http://localhost:3000",
+            true,
+            false
+        ));
+    }
+
+    #[test]
+    fn loopback_rejects_http_localhost_when_disabled() {
+        assert!(!is_allowed_loopback_origin(
+            "http://localhost:3000",
+            false,
+            false
+        ));
+    }
+
+    #[test]
+    fn loopback_allows_https_localhost() {
+        assert!(is_allowed_loopback_origin(
+            "https://localhost:443",
+            false,
+            true
+        ));
+    }
+
+    #[test]
+    fn loopback_allows_ipv4_loopback() {
+        assert!(is_allowed_loopback_origin(
+            "http://127.0.0.1:8080",
+            true,
+            false
+        ));
+    }
+
+    #[test]
+    fn loopback_allows_ipv6_loopback() {
+        assert!(is_allowed_loopback_origin("http://[::1]:8080", true, false));
+    }
+
+    #[test]
+    fn loopback_rejects_non_loopback_ip() {
+        assert!(!is_allowed_loopback_origin(
+            "http://192.168.1.1:8080",
+            true,
+            false
+        ));
+    }
+
+    #[test]
+    fn loopback_rejects_external_host() {
+        assert!(!is_allowed_loopback_origin("http://evil.com", true, false));
+    }
+
+    #[test]
+    fn loopback_rejects_invalid_url() {
+        assert!(!is_allowed_loopback_origin("not-a-url", true, true));
     }
 }
 

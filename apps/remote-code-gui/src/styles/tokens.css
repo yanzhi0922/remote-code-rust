@@ -155,13 +155,6 @@
   --z-toast: 60;
   --z-tooltip: 70;
 
-  /* ═══ Glass Morphism ═══ */
-  --glass-bg: color-mix(in srgb, var(--color-bg-surface) 72%, transparent);
-  --glass-bg-heavy: color-mix(in srgb, var(--color-bg-surface) 85%, transparent);
-  --glass-blur: 12px;
-  --glass-blur-heavy: 20px;
-  --glass-border: color-mix(in srgb, var(--color-border-primary) 40%, transparent);
-
   /* ═══ Motion (from CodexMonitor pattern) ═══ */
   --motion-duration-short: 100ms;
   --motion-duration-normal: 200ms;

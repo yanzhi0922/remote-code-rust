@@ -3,6 +3,8 @@
 //! Simplified SigV4 implementation for signing requests to AWS Bedrock.
 //! Uses HMAC-SHA256 for signing.
 
+use std::fmt::Write;
+
 use hmac::{Hmac, Mac};
 use sha2::{Digest, Sha256};
 
@@ -50,11 +52,23 @@ impl SigV4Signer {
 
         // Step 1: Create canonical request
         let payload_hash = hex_encode(&Sha256::digest(body));
-        let canonical_headers = format!(
-            "content-type:application/json\nhost:{}\nx-amz-content-sha256:{}\nx-amz-date:{}\n",
-            host, payload_hash, amz_date
-        );
-        let signed_headers = "content-type;host;x-amz-content-sha256;x-amz-date".to_string();
+
+        let (canonical_headers, signed_headers) = match self.session_token {
+            Some(ref token) => (
+                format!(
+                    "content-type:application/json\nhost:{}\nx-amz-content-sha256:{}\nx-amz-date:{}\nx-amz-security-token:{}\n",
+                    host, payload_hash, amz_date, token
+                ),
+                "content-type;host;x-amz-content-sha256;x-amz-date;x-amz-security-token".to_string(),
+            ),
+            None => (
+                format!(
+                    "content-type:application/json\nhost:{}\nx-amz-content-sha256:{}\nx-amz-date:{}\n",
+                    host, payload_hash, amz_date
+                ),
+                "content-type;host;x-amz-content-sha256;x-amz-date".to_string(),
+            ),
+        };
 
         let canonical_querystring = query.as_deref().unwrap_or("");
 
@@ -143,7 +157,11 @@ fn get_signature_key(secret_key: &str, date_stamp: &str, region: &str, service: 
 }
 
 fn hex_encode(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{:02x}", b)).collect()
+    let mut s = String::with_capacity(bytes.len() * 2);
+    for &b in bytes {
+        let _ = write!(s, "{b:02x}");
+    }
+    s
 }
 
 #[cfg(test)]

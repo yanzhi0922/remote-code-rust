@@ -388,7 +388,18 @@ async fn capture_process_output(
             Ok(status) => (Some(status?), false),
             Err(_) => {
                 let _ = child.kill().await;
-                let status = child.wait().await.ok();
+                let status = match tokio::time::timeout(Duration::from_secs(5), child.wait()).await
+                {
+                    Ok(Ok(s)) => Some(s),
+                    Ok(Err(e)) => {
+                        tracing::warn!("process wait after SIGKILL failed: {e}");
+                        None
+                    }
+                    Err(_) => {
+                        tracing::warn!("process did not exit after SIGKILL within 5s");
+                        None
+                    }
+                };
                 (status, true)
             }
         };

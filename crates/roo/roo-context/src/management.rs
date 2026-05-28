@@ -174,8 +174,7 @@ pub async fn manage_context(
 
     // Estimate tokens for the last message (which is always a user message)
     let last_message = messages.last().expect("messages should not be empty");
-    let last_message_tokens =
-        estimate_token_count(&last_message.content).await as usize;
+    let last_message_tokens = estimate_token_count(&last_message.content).await as usize;
 
     // Calculate total effective tokens (totalTokens never includes the last message)
     let prev_context_tokens = total_tokens + last_message_tokens;
@@ -263,12 +262,10 @@ pub async fn manage_context(
         let system_prompt_blocks = vec![ContentBlock::Text {
             text: system_prompt.clone(),
         }];
-        let mut new_context_tokens =
-            estimate_token_count(&system_prompt_blocks).await as usize;
+        let mut new_context_tokens = estimate_token_count(&system_prompt_blocks).await as usize;
 
         for msg in &effective_messages {
-            let msg_tokens =
-                estimate_token_count(&msg.content).await as usize;
+            let msg_tokens = estimate_token_count(&msg.content).await as usize;
             new_context_tokens += msg_tokens;
         }
 

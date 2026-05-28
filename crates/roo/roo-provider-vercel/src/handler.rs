@@ -123,7 +123,12 @@ impl VercelHandler {
 
         let url = format!("{}/models", self.base_url.trim_end_matches('/'));
 
-        let response = SHARED_CLIENT.get_or_init(reqwest::Client::new).get(&url).bearer_auth(&self.api_key).send().await?;
+        let response = SHARED_CLIENT
+            .get_or_init(reqwest::Client::new)
+            .get(&url)
+            .bearer_auth(&self.api_key)
+            .send()
+            .await?;
 
         if !response.status().is_success() {
             let status = response.status().as_u16();

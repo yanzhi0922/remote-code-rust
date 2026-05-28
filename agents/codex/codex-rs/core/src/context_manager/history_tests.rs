@@ -1490,7 +1490,7 @@ fn normalize_adds_missing_output_for_tool_search_call() {
 
 #[cfg(debug_assertions)]
 #[test]
-#[should_panic]
+#[should_panic(expected = "Custom tool call output is missing for call id: tool-x")]
 fn normalize_adds_missing_output_for_custom_tool_call_panics_in_debug() {
     let items = vec![ResponseItem::CustomToolCall {
         id: None,
@@ -1505,7 +1505,7 @@ fn normalize_adds_missing_output_for_custom_tool_call_panics_in_debug() {
 
 #[cfg(debug_assertions)]
 #[test]
-#[should_panic]
+#[should_panic(expected = "Local shell call output is missing for call id: shell-1")]
 fn normalize_adds_missing_output_for_local_shell_call_with_id_panics_in_debug() {
     let items = vec![ResponseItem::LocalShellCall {
         id: None,
@@ -1525,7 +1525,7 @@ fn normalize_adds_missing_output_for_local_shell_call_with_id_panics_in_debug() 
 
 #[cfg(debug_assertions)]
 #[test]
-#[should_panic]
+#[should_panic(expected = "Orphan function call output for call id: orphan-1")]
 fn normalize_removes_orphan_function_call_output_panics_in_debug() {
     let items = vec![ResponseItem::FunctionCallOutput {
         call_id: "orphan-1".to_string(),
@@ -1537,7 +1537,7 @@ fn normalize_removes_orphan_function_call_output_panics_in_debug() {
 
 #[cfg(debug_assertions)]
 #[test]
-#[should_panic]
+#[should_panic(expected = "Orphan custom tool call output for call id: orphan-2")]
 fn normalize_removes_orphan_custom_tool_call_output_panics_in_debug() {
     let items = vec![ResponseItem::CustomToolCallOutput {
         call_id: "orphan-2".to_string(),
@@ -1566,7 +1566,7 @@ fn normalize_removes_orphan_client_tool_search_output() {
 
 #[cfg(debug_assertions)]
 #[test]
-#[should_panic]
+#[should_panic(expected = "Orphan tool search output for call id: orphan-search")]
 fn normalize_removes_orphan_client_tool_search_output_panics_in_debug() {
     let items = vec![ResponseItem::ToolSearchOutput {
         call_id: Some("orphan-search".to_string()),
@@ -1603,7 +1603,7 @@ fn normalize_keeps_server_tool_search_output_without_matching_call() {
 
 #[cfg(debug_assertions)]
 #[test]
-#[should_panic]
+#[should_panic(expected = "Custom tool call output is missing for call id: t1")]
 fn normalize_mixed_inserts_and_removals_panics_in_debug() {
     let items = vec![
         ResponseItem::FunctionCall {

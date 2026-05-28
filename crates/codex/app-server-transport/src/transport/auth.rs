@@ -748,4 +748,102 @@ mod tests {
             "unexpected error: {err}"
         );
     }
+
+    #[test]
+    fn expired_jwt_is_rejected() {
+        let shared_secret = b"0123456789abcdef0123456789abcdef";
+        let now = OffsetDateTime::now_utc().unix_timestamp();
+        let token = signed_token(
+            shared_secret,
+            json!({
+                "exp": now - 3600, // expired 1 hour ago
+            }),
+        );
+        let err = verify_signed_bearer_token(
+            &token,
+            shared_secret,
+            /*issuer*/ None,
+            /*audience*/ None,
+            /*max_clock_skew_seconds*/ 30,
+        )
+        .expect_err("expired jwt should be rejected");
+        assert_eq!(err.status_code(), StatusCode::UNAUTHORIZED);
+        assert!(
+            err.message().contains("expired"),
+            "expected 'expired' in error message, got: {}",
+            err.message()
+        );
+    }
+
+    #[test]
+    fn future_nbf_jwt_is_rejected() {
+        let shared_secret = b"0123456789abcdef0123456789abcdef";
+        let now = OffsetDateTime::now_utc().unix_timestamp();
+        let token = signed_token(
+            shared_secret,
+            json!({
+                "exp": now + 3600,
+                "nbf": now + 3600, // not valid for another hour
+            }),
+        );
+        let err = verify_signed_bearer_token(
+            &token,
+            shared_secret,
+            /*issuer*/ None,
+            /*audience*/ None,
+            /*max_clock_skew_seconds*/ 30,
+        )
+        .expect_err("future nbf jwt should be rejected");
+        assert_eq!(err.status_code(), StatusCode::UNAUTHORIZED);
+        assert!(
+            err.message().contains("not valid yet"),
+            "expected 'not valid yet' in error message, got: {}",
+            err.message()
+        );
+    }
+
+    #[test]
+    fn clock_skew_boundary_jwt() {
+        let shared_secret = b"0123456789abcdef0123456789abcdef";
+        let now = OffsetDateTime::now_utc().unix_timestamp();
+        let max_clock_skew: i64 = 30;
+
+        // Token expiring 29 seconds ago should be accepted (within 30s clock skew).
+        let token_within_skew = signed_token(
+            shared_secret,
+            json!({
+                "exp": now - 29,
+            }),
+        );
+        verify_signed_bearer_token(
+            &token_within_skew,
+            shared_secret,
+            /*issuer*/ None,
+            /*audience*/ None,
+            max_clock_skew,
+        )
+        .expect("jwt expiring 29s ago should be accepted within clock skew");
+
+        // Token expiring 31 seconds ago should be rejected (exceeds 30s clock skew).
+        let token_outside_skew = signed_token(
+            shared_secret,
+            json!({
+                "exp": now - 31,
+            }),
+        );
+        let err = verify_signed_bearer_token(
+            &token_outside_skew,
+            shared_secret,
+            /*issuer*/ None,
+            /*audience*/ None,
+            max_clock_skew,
+        )
+        .expect_err("jwt expiring 31s ago should be rejected outside clock skew");
+        assert_eq!(err.status_code(), StatusCode::UNAUTHORIZED);
+        assert!(
+            err.message().contains("expired"),
+            "expected 'expired' in error message, got: {}",
+            err.message()
+        );
+    }
 }

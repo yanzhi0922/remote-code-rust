@@ -523,9 +523,9 @@ impl OpenAiCompatibleProvider {
         }
 
         if let Some(tools) = tools {
-            let converted = self.converted_tools_cache.get_or_init(|| {
-                convert_tools_for_openai(Some(tools)).unwrap_or_default()
-            });
+            let converted = self
+                .converted_tools_cache
+                .get_or_init(|| convert_tools_for_openai(Some(tools)).unwrap_or_default());
             if !converted.is_empty() {
                 body["tools"] = serde_json::json!(converted);
             }

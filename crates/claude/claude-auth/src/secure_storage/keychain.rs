@@ -432,5 +432,8 @@ fn safe_filename(service: &str, account: &str) -> String {
     let input = format!("{service}:{account}");
     let hash = Sha256::digest(input.as_bytes());
     // Use the first 16 bytes (128 bits) for a reasonably short filename.
-    format!("{:032x}.secret", u128::from_be_bytes(hash[..16].try_into().expect("16 bytes")))
+    format!(
+        "{:032x}.secret",
+        u128::from_be_bytes(hash[..16].try_into().expect("16 bytes"))
+    )
 }

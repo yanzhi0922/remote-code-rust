@@ -181,8 +181,7 @@ async fn run_exec_command(args: crate::cli::ExecCommand) -> anyhow::Result<()> {
         tracing::info!("using timeout override: {ms}ms");
     }
 
-    let approval_policy =
-        approval_policy.or_else(|| std::env::var("CODEX_APPROVAL_POLICY").ok());
+    let approval_policy = approval_policy.or_else(|| std::env::var("CODEX_APPROVAL_POLICY").ok());
     if let Some(ref p) = approval_policy {
         tracing::info!("using approval policy override: {p}");
     }

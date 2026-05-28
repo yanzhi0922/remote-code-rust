@@ -28,7 +28,11 @@ impl ModelsCacheManager {
     }
 
     /// Attempt to load a fresh cache entry. Returns `None` if the cache doesn't exist or is stale.
-    pub(crate) async fn load_fresh(&self, expected_version: &str, expected_provider: &str) -> Option<ModelsCache> {
+    pub(crate) async fn load_fresh(
+        &self,
+        expected_version: &str,
+        expected_provider: &str,
+    ) -> Option<ModelsCache> {
         info!(
                 cache_path = %self.cache_path.display(),
                 expected_version,
@@ -48,7 +52,11 @@ impl ModelsCacheManager {
             fetched_at = %cache.fetched_at,
             "models cache: loaded cache file"
         );
-        if cache.provider.as_deref() != Some(expected_provider) {
+        if cache
+            .provider
+            .as_deref()
+            .is_some_and(|provider| provider != expected_provider)
+        {
             info!(
                 cache_path = %self.cache_path.display(),
                 expected_provider,
@@ -56,6 +64,13 @@ impl ModelsCacheManager {
                 "models cache: cache provider mismatch"
             );
             return None;
+        }
+        if cache.provider.is_none() {
+            info!(
+                cache_path = %self.cache_path.display(),
+                expected_provider,
+                "models cache: provider missing; accepting legacy cache entry"
+            );
         }
         if cache.client_version.as_deref() != Some(expected_version) {
             info!(

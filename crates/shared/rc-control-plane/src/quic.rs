@@ -40,7 +40,13 @@ pub async fn start_quic_listener(
     config: QuicServerConfig,
 ) -> anyhow::Result<()> {
     let tls_config = build_quic_server_tls(&config.cert_pem, &config.key_pem)?;
-    let server_config = quinn::ServerConfig::with_crypto(Arc::new(tls_config));
+    let mut transport = quinn::TransportConfig::default();
+    // Explicit idle timeout to prevent connection leaks from ungraceful disconnects.
+    transport.max_idle_timeout(Some(
+        quinn::IdleTimeout::try_from(Duration::from_secs(60)).expect("valid idle timeout"),
+    ));
+    let mut server_config = quinn::ServerConfig::with_crypto(Arc::new(tls_config));
+    server_config.transport_config(Arc::new(transport));
 
     let endpoint = quinn::Endpoint::server(server_config, config.listen_addr)?;
     let local_addr = endpoint.local_addr()?;
@@ -103,11 +109,32 @@ async fn handle_quic_connection(
     // enforce a session TTL on every command, not just the initial handshake.
     let auth_at = Instant::now();
 
-    let target_session: Option<Uuid> = auth.session_id.parse().ok();
+    let target_session: Option<Uuid> = if auth.session_id.is_empty() {
+        None
+    } else {
+        match auth.session_id.parse() {
+            Ok(id) => Some(id),
+            Err(_) => {
+                conn.close(1u32.into(), b"invalid session_id");
+                return Err(anyhow::anyhow!(
+                    "QUIC auth session_id is non-empty but not a valid UUID: {:?}",
+                    auth.session_id
+                ));
+            }
+        }
+    };
     tracing::debug!(
         "QUIC client authenticated for session {}",
         target_session.map_or("all".to_owned(), |s| s.to_string())
     );
+
+    // Build tenant filter for user-scoped event visibility (same pattern as
+    // the HTTP/WebSocket handlers in handlers.rs).
+    let tenant_filter = {
+        let user_id = auth_principal.user_id();
+        let registry = service.registry.read().await;
+        crate::handlers::TenantFilter::from_registry(&registry, user_id)
+    };
 
     // Subscribe to events via the shared timeline broadcast channel.
     let mut event_rx = service.timeline.subscribe();
@@ -119,14 +146,11 @@ async fn handle_quic_connection(
                     Ok(event) => {
                         let matches_session = event.session_id == target_session
                             || event.session_id.is_none();
-                        // Tenant filtering: device-authenticated QUIC connections
+                        // Tenant filtering: user-authenticated QUIC connections
                         // only receive events for sessions owned by the same tenant.
-                        let tenant_ok = match &auth_principal {
-                            AuthPrincipal::User { user_id: _ } => {
-                                // Tenant users see all events (session filter already applied).
-                                true
-                            }
-                            _ => true,
+                        let tenant_ok = match &tenant_filter {
+                            Some(f) => f.event_visible(&event),
+                            None => true,
                         };
                         if matches_session && tenant_ok
                             && let Err(e) = send_quic_event(&conn, &event).await
@@ -194,7 +218,10 @@ async fn handle_quic_connection(
     Ok(())
 }
 
-async fn authenticate_quic_token(service: &ControlPlaneService, provided: &str) -> Option<AuthPrincipal> {
+async fn authenticate_quic_token(
+    service: &ControlPlaneService,
+    provided: &str,
+) -> Option<AuthPrincipal> {
     if service
         .auth_token
         .as_deref()
@@ -223,12 +250,10 @@ async fn verify_session_tenant_access(
     session_id: Uuid,
     principal: &AuthPrincipal,
 ) -> anyhow::Result<()> {
-    let user_id = principal.user_id();
-    if user_id.is_none() {
+    let Some(uid) = principal.user_id() else {
         // SharedToken or Device — admin/legacy access, no tenant isolation.
         return Ok(());
-    }
-    let uid = user_id.unwrap();
+    };
 
     let registry = service.registry.read().await;
     let session = registry
@@ -573,4 +598,3 @@ struct QuicAuthMessage {
     token: String,
     session_id: String,
 }
-

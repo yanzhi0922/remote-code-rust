@@ -117,7 +117,11 @@ impl TokenManager {
 
     /// Perform a token refresh using the provided credentials.
     /// The caller is responsible for not holding any lock when calling this.
-    async fn try_refresh_with(&self, refresh_token: Option<String>, cp_url: Option<String>) -> Option<String> {
+    async fn try_refresh_with(
+        &self,
+        refresh_token: Option<String>,
+        cp_url: Option<String>,
+    ) -> Option<String> {
         let refresh_token = refresh_token?;
         let cp_url = cp_url?;
 
@@ -135,12 +139,20 @@ impl TokenManager {
                 #[derive(serde::Deserialize)]
                 struct RefreshResponse {
                     access_token: String,
+                    refresh_token: Option<String>,
+                    expires_at: Option<chrono::DateTime<chrono::Utc>>,
                 }
                 match response.json::<RefreshResponse>().await {
                     Ok(body) => {
                         let mut state = self.inner.write().await;
                         if let TokenState::Valid(pair) = &mut *state {
                             pair.access_token = body.access_token.clone();
+                            if let Some(rt) = body.refresh_token {
+                                pair.refresh_token = Some(rt);
+                            }
+                            if let Some(exp) = body.expires_at {
+                                pair.expires_at = exp;
+                            }
                         }
                         Some(body.access_token)
                     }
@@ -171,5 +183,60 @@ impl TokenManager {
 impl Default for TokenManager {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn future_token_pair() -> TokenPair {
+        TokenPair {
+            access_token: "test-access-token".to_string(),
+            refresh_token: Some("test-refresh-token".to_string()),
+            expires_at: chrono::Utc::now() + chrono::Duration::hours(1),
+        }
+    }
+
+    #[tokio::test]
+    async fn set_and_get_token() {
+        let mgr = TokenManager::new();
+        let pair = future_token_pair();
+
+        mgr.set_token(pair).await;
+        let token = mgr.access_token().await;
+
+        assert_eq!(token.as_deref(), Some("test-access-token"));
+    }
+
+    #[tokio::test]
+    async fn access_token_returns_none_when_no_token() {
+        let mgr = TokenManager::new();
+
+        let token = mgr.access_token().await;
+
+        assert!(token.is_none());
+    }
+
+    #[tokio::test]
+    async fn mark_expired_returns_none() {
+        let mgr = TokenManager::new();
+        mgr.set_token(future_token_pair()).await;
+
+        mgr.mark_expired().await;
+        let token = mgr.access_token().await;
+
+        assert!(token.is_none());
+    }
+
+    #[tokio::test]
+    async fn clear_returns_none() {
+        let mgr = TokenManager::new();
+        mgr.set_token(future_token_pair()).await;
+
+        mgr.clear().await;
+        let token = mgr.access_token().await;
+
+        assert!(token.is_none());
     }
 }

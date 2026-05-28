@@ -68,14 +68,14 @@ impl OfflineQueue {
     pub async fn drain(&self) -> Vec<QueuedCommand> {
         let now = chrono::Utc::now().timestamp();
         let mut queue = self.inner.write().await;
-        let (valid, dropped): (Vec<_>, Vec<_>) = queue
-            .drain(..)
-            .partition(|item| {
-                now - item.queued_at < self.stale_threshold_secs
-                    && item.retry_count <= MAX_RETRY_COUNT
-            });
+        let (valid, dropped): (Vec<_>, Vec<_>) = queue.drain(..).partition(|item| {
+            now - item.queued_at < self.stale_threshold_secs && item.retry_count <= MAX_RETRY_COUNT
+        });
         if !dropped.is_empty() {
-            tracing::info!("dropped {} stale or exceeded-retry offline commands", dropped.len());
+            tracing::info!(
+                "dropped {} stale or exceeded-retry offline commands",
+                dropped.len()
+            );
         }
         valid
     }

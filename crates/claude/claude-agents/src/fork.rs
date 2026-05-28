@@ -140,6 +140,7 @@ pub fn fork_agent_definition() -> AgentDefinition {
 /// Fork children keep the Agent tool in their tool pool for cache-identical
 /// tool definitions, so we reject fork attempts at call time by detecting
 /// the boilerplate tag.
+#[must_use]
 pub fn is_fork_child(messages: &[ForkMessage]) -> bool {
     messages.iter().any(|msg| {
         if msg.role != "user" {
@@ -161,6 +162,7 @@ pub fn is_fork_child(messages: &[ForkMessage]) -> bool {
 ///    using an identical placeholder, then appends the per-child directive
 ///
 /// Result: `[...history, assistant(all_tool_uses), user(placeholder_results..., directive)]`
+#[must_use]
 pub fn build_fork_messages(parent_messages: &[ForkMessage], directive: &str) -> Vec<ForkMessage> {
     // Find the last assistant message with tool_use blocks
     let last_assistant = parent_messages

@@ -36,6 +36,7 @@ use crate::tool_filters::merge_tool_filters;
 ///
 /// Can be overridden at runtime via the `CLAUDE_CODE_CLI_VERSION` environment
 /// variable to match the official Claude Code CLI version (e.g. "2.1.39").
+#[must_use]
 pub fn runtime_version() -> &'static str {
     static VERSION: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     VERSION.get_or_init(|| {
@@ -377,6 +378,16 @@ pub struct DoctorReport {
     pub ok: bool,
     /// List of issues found.
     pub issues: Vec<String>,
+}
+
+impl RuntimeConfig {
+    /// Returns `true` when the given setting source is included in the runtime's
+    /// `allowed_setting_sources` list.
+    #[inline]
+    #[must_use]
+    pub fn setting_source_enabled(&self, source: SettingSource) -> bool {
+        self.allowed_setting_sources.contains(&source)
+    }
 }
 
 #[allow(clippy::fn_params_excessive_bools)]
@@ -933,7 +944,10 @@ fn get_or_create_device_id() -> String {
 
     if let Some(ref path) = config_path {
         if let Err(e) = fs::write(path, id) {
-            eprintln!("warning: failed to persist device ID to {}: {e}", path.display());
+            eprintln!(
+                "warning: failed to persist device ID to {}: {e}",
+                path.display()
+            );
         }
     }
 

@@ -223,6 +223,7 @@ describe('remote transport', () => {
       value: true,
     });
     window.dispatchEvent(new Event('online'));
+    await vi.advanceTimersByTimeAsync(1000);
     await Promise.resolve();
     await Promise.resolve();
     expect(MockWebSocket.instances).toHaveLength(3);

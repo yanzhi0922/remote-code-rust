@@ -14,6 +14,7 @@ use crate::events::UnifiedAgentEvent;
 /// Convert a [`UnifiedAgentEvent`] into a [`RuntimeEventDetail`] suitable for
 /// posting to the control plane timeline. Returns `None` for lifecycle events
 /// that have no timeline representation (Started, Ready, Stopped, Completed).
+#[must_use = "the conversion result must be used"]
 pub fn unified_event_to_runtime_detail(event: &UnifiedAgentEvent) -> Option<RuntimeEventDetail> {
     match event {
         UnifiedAgentEvent::MessageDelta { delta, .. } => Some(RuntimeEventDetail::MessageDelta {
@@ -139,10 +140,30 @@ pub fn unified_event_to_runtime_detail(event: &UnifiedAgentEvent) -> Option<Runt
         }),
 
         // Lifecycle events with no timeline representation
-        UnifiedAgentEvent::Started(_)
-        | UnifiedAgentEvent::Ready
-        | UnifiedAgentEvent::Stopped
-        | UnifiedAgentEvent::Completed { .. } => None,
+        UnifiedAgentEvent::Started(_) | UnifiedAgentEvent::Ready | UnifiedAgentEvent::Stopped => {
+            None
+        }
+
+        // Completed carries final result/usage/cost — surface as a RuntimeError
+        // summary so timeline consumers can observe session completion.
+        UnifiedAgentEvent::Completed {
+            session_id: _,
+            result,
+        } => {
+            let mut message = String::with_capacity(64);
+            if !result.response_text.is_empty() {
+                let _ = std::fmt::Write::write_fmt(
+                    &mut message,
+                    format_args!(
+                        "{}",
+                        &result.response_text[..result.response_text.len().min(200)]
+                    ),
+                );
+            } else {
+                message.push_str("session completed");
+            }
+            Some(RuntimeEventDetail::RuntimeError { message })
+        }
 
         // Codex-specific notifications are handled directly by the GUI
         // (desktop.rs emits a dedicated Tauri event). Mapping them to
@@ -211,9 +232,12 @@ fn extract_tool_call_id_recursive(value: &Value, depth: usize, max_depth: usize)
                     return Some(id.to_owned());
                 }
             }
-            map.values().find_map(|v| extract_tool_call_id_recursive(v, depth + 1, max_depth))
+            map.values()
+                .find_map(|v| extract_tool_call_id_recursive(v, depth + 1, max_depth))
         }
-        Value::Array(values) => values.iter().find_map(|v| extract_tool_call_id_recursive(v, depth + 1, max_depth)),
+        Value::Array(values) => values
+            .iter()
+            .find_map(|v| extract_tool_call_id_recursive(v, depth + 1, max_depth)),
         _ => None,
     }
 }

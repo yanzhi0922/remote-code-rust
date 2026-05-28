@@ -297,7 +297,10 @@ impl NetworkApprovalService {
         None
     }
 
-    async fn resolve_call_by_host(&self, key: &HostApprovalKey) -> Option<Arc<ActiveNetworkApprovalCall>> {
+    async fn resolve_call_by_host(
+        &self,
+        key: &HostApprovalKey,
+    ) -> Option<Arc<ActiveNetworkApprovalCall>> {
         let calls = self.calls.lock().await;
         let registration_id = calls.host_attribution.get(key)?;
         calls.active_calls.get(registration_id).cloned()
@@ -332,7 +335,11 @@ impl NetworkApprovalService {
             .await;
     }
 
-    async fn record_outcome_for_host(&self, key: &HostApprovalKey, outcome: NetworkApprovalOutcome) {
+    async fn record_outcome_for_host(
+        &self,
+        key: &HostApprovalKey,
+        outcome: NetworkApprovalOutcome,
+    ) {
         if let Some(owner_call) = self.resolve_call_by_host(key).await {
             self.record_call_outcome(&owner_call.registration_id, outcome)
                 .await;
@@ -388,7 +395,9 @@ impl NetworkApprovalService {
         let outcome = NetworkApprovalOutcome::DeniedByPolicy(message);
         if let Some(port) = blocked.port {
             let protocol_label = match blocked.protocol.as_str() {
-                p if p.eq_ignore_ascii_case("https") || p.eq_ignore_ascii_case("https-connect") => "https",
+                p if p.eq_ignore_ascii_case("https") || p.eq_ignore_ascii_case("https-connect") => {
+                    "https"
+                }
                 p if p.eq_ignore_ascii_case("socks5-tcp") => "socks5-tcp",
                 p if p.eq_ignore_ascii_case("socks5-udp") => "socks5-udp",
                 _ => "http",

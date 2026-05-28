@@ -258,11 +258,8 @@ fn spawn_query(state: &ServerState, session_id: Uuid, content: String) {
                 .map(|s| *s.permission_mode.read())
                 .unwrap_or(claude_core::PermissionMode::BypassPermissions)
         };
-        let context = ProcessUserInputContext::new(
-            SessionId::from(session_id),
-            permission_mode,
-            &model,
-        );
+        let context =
+            ProcessUserInputContext::new(SessionId::from(session_id), permission_mode, &model);
 
         // Run query.
         match engine.submit_message(user_message, context).await {

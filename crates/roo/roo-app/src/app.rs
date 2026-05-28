@@ -233,8 +233,7 @@ impl App {
         if let Some(content) = global_mcp_content {
             match serde_json::from_str::<serde_json::Value>(&content) {
                 Ok(config) => {
-                    if let Some(servers) = config.get("mcpServers").and_then(|v| v.as_object())
-                    {
+                    if let Some(servers) = config.get("mcpServers").and_then(|v| v.as_object()) {
                         let server_map: std::collections::HashMap<String, serde_json::Value> =
                             servers
                                 .into_iter()
@@ -259,10 +258,7 @@ impl App {
                     }
                 }
                 Err(e) => {
-                    tracing::warn!(
-                        "Failed to parse global MCP config: {}",
-                        e
-                    );
+                    tracing::warn!("Failed to parse global MCP config: {}", e);
                 }
             }
         }

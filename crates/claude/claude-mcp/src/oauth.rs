@@ -551,11 +551,12 @@ impl OAuthTokenStore {
         {
             use std::os::unix::fs::PermissionsExt;
             let perms = std::fs::Permissions::from_mode(0o600);
-            std::fs::set_permissions(&self.store_path, perms)
-                .map_err(|e| McpRuntimeError::TokenStoreIo {
+            std::fs::set_permissions(&self.store_path, perms).map_err(|e| {
+                McpRuntimeError::TokenStoreIo {
                     path: self.store_path.clone(),
                     source: e,
-                })?;
+                }
+            })?;
         }
 
         Ok(())

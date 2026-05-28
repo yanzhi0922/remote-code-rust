@@ -74,7 +74,9 @@ impl RestartTracker {
 
         // Compute the next backoff, capped at `max_backoff` and 1 hour absolute max.
         let next_secs = self.next_backoff.as_secs_f64() * self.policy.backoff_multiplier;
-        let capped_secs = next_secs.min(self.policy.max_backoff.as_secs_f64()).min(3600.0);
+        let capped_secs = next_secs
+            .min(self.policy.max_backoff.as_secs_f64())
+            .min(3600.0);
         self.next_backoff = Duration::from_secs_f64(capped_secs);
 
         Some(backoff)
@@ -87,16 +89,19 @@ impl RestartTracker {
     }
 
     /// Returns the number of restarts attempted so far.
+    #[must_use]
     pub fn restart_count(&self) -> u32 {
         self.restart_count
     }
 
     /// Returns `true` if more restarts are allowed.
+    #[must_use]
     pub fn can_restart(&self) -> bool {
         self.restart_count < self.policy.max_restarts
     }
 
     /// Returns a reference to the underlying policy.
+    #[must_use]
     pub fn policy(&self) -> &RestartPolicy {
         &self.policy
     }

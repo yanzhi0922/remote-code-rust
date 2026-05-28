@@ -665,7 +665,7 @@ pub(crate) fn discover_runtime_extensions(config: &RuntimeConfig) -> RuntimeExte
     let mut plugins = BTreeSet::new();
     let mut plugin_runtimes = BTreeSet::new();
     let mut warnings = Vec::new();
-    let user_sources_enabled = setting_source_enabled(config, SettingSource::User);
+    let user_sources_enabled = config.setting_source_enabled(SettingSource::User);
 
     if user_sources_enabled && config.paths.skills_dir.exists() {
         collect_skill_names(
@@ -709,10 +709,6 @@ pub(crate) fn discover_runtime_extensions(config: &RuntimeConfig) -> RuntimeExte
         disabled_mcp_servers,
         warnings,
     }
-}
-
-fn setting_source_enabled(config: &RuntimeConfig, source: SettingSource) -> bool {
-    config.allowed_setting_sources.contains(&source)
 }
 
 fn collect_skill_names(

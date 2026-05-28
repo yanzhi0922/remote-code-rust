@@ -184,7 +184,7 @@ pub(super) async fn try_run_zsh_fork(
     let exec_params = ExecParams {
         command: script,
         workdir: req.cwd.to_string_lossy().to_string(),
-        timeout_ms: Some(effective_timeout.as_millis() as u64),
+        timeout_ms: Some(u64::try_from(effective_timeout.as_millis()).unwrap_or(u64::MAX)),
         login: Some(login),
     };
 

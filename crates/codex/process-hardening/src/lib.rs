@@ -168,9 +168,7 @@ pub(crate) fn pre_main_hardening_windows() {
         flags: u32,
     }
 
-    let aslr = AslrPolicy {
-        flags: 0x00000002,
-    };
+    let aslr = AslrPolicy { flags: 0x00000002 };
     let result = unsafe {
         SetProcessMitigationPolicy(
             PROCESS_ASLR_POLICY,

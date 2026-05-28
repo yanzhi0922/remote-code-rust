@@ -7,6 +7,17 @@
     tauri::mobile_entry_point
 )]
 pub fn run() {
+    // Initialize tracing for mobile — stderr only (no file appender on mobile).
+    {
+        use tracing_subscriber::EnvFilter;
+        let env_filter = EnvFilter::try_from_default_env()
+            .unwrap_or_else(|_| EnvFilter::new("remote_code_gui=info"));
+        let _ = tracing_subscriber::fmt()
+            .with_env_filter(env_filter)
+            .with_target(false)
+            .try_init();
+    }
+
     let default_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         tracing::error!("Unhandled panic in GUI (mobile): {info}");

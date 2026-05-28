@@ -1,29 +1,33 @@
 import {
   ChevronDown,
   Cpu,
-  Image as ImageIcon,
-  Paperclip,
   Send,
   Shield,
   Slash,
   Sparkles,
   Square,
-  X,
 } from 'lucide-react';
 import {
-  useCallback,
   useEffect,
   useMemo,
   useRef,
   useState,
-  type DragEvent,
   type KeyboardEvent,
 } from 'react';
 import { AgentSelector } from '../agent/AgentSelector';
 import { useAppStore } from '../../stores/useAppStore';
 import { useAgentStore } from '../../stores/useAgentStore';
+import type { AgentType, FullSettings } from '../../lib/types';
 
-const PERMISSION_MODES = [
+type PermissionOption = {
+  key: string;
+  label: string;
+  desc: string;
+  active: boolean;
+  updates: Record<string, unknown>;
+};
+
+const CLAUDE_PERMISSION_MODES = [
   { value: 'default', label: '默认', desc: '读取自动执行，写入和命令需确认' },
   { value: 'acceptEdits', label: '自动编辑', desc: '文件编辑自动执行，命令仍需确认' },
   { value: 'dontAsk', label: '不询问', desc: '仅自动放行低风险读取工具' },
@@ -31,12 +35,111 @@ const PERMISSION_MODES = [
   { value: 'plan', label: '规划', desc: '只规划，不执行工具' },
 ] as const;
 
-interface AttachedFile {
-  id: string;
-  name: string;
-  type: string;
-  size: number;
-  preview?: string;
+const ROO_PERMISSION_MODES = [
+  { value: 'default', label: '每次询问', desc: '工具执行前确认，保留 Roo Code 的手动审批节奏' },
+  { value: 'dontAsk', label: '自动批准读取', desc: '低风险读取工具自动执行，写入和命令仍确认' },
+  { value: 'acceptEdits', label: '自动批准编辑', desc: '文件读写自动执行，命令和外部访问仍确认' },
+  { value: 'bypassPermissions', label: '自动批准全部', desc: '自动放行工具调用，仅用于可信工作区' },
+  { value: 'plan', label: '仅规划', desc: '只生成计划，不执行工具' },
+] as const;
+
+const CODEX_PERMISSION_MODES = [
+  {
+    key: 'codex-on-request-workspace',
+    label: '请求批准',
+    desc: 'workspace-write 沙盒，越界写入或高风险命令时请求确认',
+    approval: 'on-request',
+    sandbox: 'workspace-write',
+  },
+  {
+    key: 'codex-never-workspace',
+    label: '沙盒自动',
+    desc: 'workspace-write 沙盒内自动执行，不弹权限确认',
+    approval: 'never',
+    sandbox: 'workspace-write',
+  },
+  {
+    key: 'codex-on-request-readonly',
+    label: '只读沙盒',
+    desc: 'read-only 沙盒，写入和命令需要显式批准',
+    approval: 'on-request',
+    sandbox: 'read-only',
+  },
+  {
+    key: 'codex-on-request-full',
+    label: '完全访问',
+    desc: 'danger-full-access，无沙盒；危险操作仍请求批准',
+    approval: 'on-request',
+    sandbox: 'danger-full-access',
+  },
+  {
+    key: 'codex-never-full',
+    label: '全自动访问',
+    desc: 'danger-full-access 且不请求确认，仅用于完全可信环境',
+    approval: 'never',
+    sandbox: 'danger-full-access',
+  },
+] as const;
+
+const MODEL_CONTEXT_WINDOWS: Array<[RegExp, number]> = [
+  [/gpt-4\.1/i, 1_000_000],
+  [/gpt-5/i, 400_000],
+  [/gpt-4o/i, 128_000],
+  [/\bo[34]\b/i, 200_000],
+  [/claude.*(sonnet|opus|haiku|3\.5|3-5|3\.7|3-7|4)/i, 200_000],
+  [/gemini/i, 1_000_000],
+  [/deepseek/i, 128_000],
+  [/qwen/i, 128_000],
+  [/glm-(5\.1|4\.5|4)/i, 128_000],
+  [/minimax|m2\.7/i, 200_000],
+];
+
+function permissionOptionsForAgent(
+  agentType: AgentType,
+  settings: FullSettings | null,
+): PermissionOption[] {
+  if (agentType === 'remote_codex') {
+    const approval = settings?.codex_approval_policy ?? 'on-request';
+    const sandbox = settings?.codex_sandbox_mode ?? 'workspace-write';
+    return CODEX_PERMISSION_MODES.map((mode) => ({
+      key: mode.key,
+      label: mode.label,
+      desc: mode.desc,
+      active: approval === mode.approval && sandbox === mode.sandbox,
+      updates: {
+        codex_approval_policy: mode.approval,
+        codex_sandbox_mode: mode.sandbox,
+      },
+    }));
+  }
+
+  const modes = agentType === 'remote_roo' ? ROO_PERMISSION_MODES : CLAUDE_PERMISSION_MODES;
+  return modes.map((mode) => ({
+    key: mode.value,
+    label: mode.label,
+    desc: mode.desc,
+    active: (settings?.permission_mode ?? 'default') === mode.value,
+    updates: { permission_mode: mode.value },
+  }));
+}
+
+function inferModelContextWindow(model: string): number | null {
+  const trimmed = model.trim();
+  if (!trimmed) return null;
+  const explicit = trimmed.match(/(?:^|[^a-z0-9])(\d+(?:\.\d+)?)(k|m)(?:[^a-z0-9]|$)/i);
+  if (explicit) {
+    const amount = Number(explicit[1]);
+    if (Number.isFinite(amount)) {
+      return Math.round(amount * (explicit[2].toLowerCase() === 'm' ? 1_000_000 : 1_000));
+    }
+  }
+  return MODEL_CONTEXT_WINDOWS.find(([pattern]) => pattern.test(trimmed))?.[1] ?? null;
+}
+
+function formatTokenCount(tokens: number): string {
+  if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(tokens % 1_000_000 === 0 ? 0 : 1)}M`;
+  if (tokens >= 1_000) return `${(tokens / 1_000).toFixed(tokens % 1_000 === 0 ? 0 : 1)}K`;
+  return String(tokens);
 }
 
 interface SlashCommand {
@@ -46,12 +149,12 @@ interface SlashCommand {
 }
 
 const SLASH_COMMANDS: SlashCommand[] = [
-  { name: '/goal', description: 'Set a goal for the current session', icon: '◎' },
-  { name: '/compact', description: 'Compact conversation context', icon: '⊞' },
-  { name: '/clear', description: 'Clear the current conversation', icon: '⊘' },
-  { name: '/plan', description: 'Switch to plan-only mode', icon: '▶' },
-  { name: '/review', description: 'Start a code review', icon: '⊡' },
-  { name: '/doctor', description: 'Run diagnostics check', icon: '⊕' },
+  { name: '/goal', description: '设置当前会话目标', icon: '◎' },
+  { name: '/compact', description: '压缩当前上下文', icon: '⊞' },
+  { name: '/clear', description: '清空当前会话内容', icon: '⊘' },
+  { name: '/plan', description: '切换到只规划模式', icon: '▶' },
+  { name: '/review', description: '开始代码审查', icon: '⊡' },
+  { name: '/doctor', description: '运行诊断检查', icon: '⊕' },
 ];
 
 function Dropdown({
@@ -143,33 +246,6 @@ function Chip({
   );
 }
 
-function FileChip({
-  file,
-  onRemove,
-}: {
-  file: AttachedFile;
-  onRemove: () => void;
-}) {
-  return (
-    <div className="inline-flex h-7 items-center gap-1.5 rounded-md border border-rc-border-primary bg-rc-bg-tertiary pl-2 pr-1 text-xs text-rc-text-secondary">
-      {file.type.startsWith('image/') ? (
-        <ImageIcon size={12} className="text-rc-accent-info" />
-      ) : (
-        <Paperclip size={12} className="text-rc-text-tertiary" />
-      )}
-      <span className="max-w-[120px] truncate font-medium">{file.name}</span>
-      <button
-        type="button"
-        onClick={onRemove}
-        className="flex h-5 w-5 items-center justify-center rounded hover:bg-rc-bg-hover hover:text-rc-accent-error"
-        aria-label={`移除 ${file.name}`}
-      >
-        <X size={10} />
-      </button>
-    </div>
-  );
-}
-
 function SlashCommandPalette({
   commands,
   filter,
@@ -192,7 +268,7 @@ function SlashCommandPalette({
   return (
     <div className="absolute bottom-full left-0 right-0 z-20 mb-2 overflow-hidden rounded-md border border-rc-border-primary bg-rc-bg-surface shadow-lg animate-fade-in-up">
       <div className="px-3 py-2 text-[10px] font-semibold uppercase tracking-wider text-rc-text-tertiary">
-        Commands
+        命令
       </div>
       <div className="max-h-60 overflow-y-auto pb-1">
         {filtered.map((cmd, index) => (
@@ -217,37 +293,25 @@ function SlashCommandPalette({
   );
 }
 
-function AttachmentPreview({ file }: { file: AttachedFile }) {
-  if (!file.type.startsWith('image/') || !file.preview) return null;
-  return (
-    <div className="relative inline-block">
-      <img
-        src={file.preview}
-        alt={file.name}
-        className="h-20 max-w-[160px] rounded-md border border-rc-border-secondary object-cover"
-      />
-    </div>
-  );
-}
-
 export function ChatInput() {
   const [input, setInput] = useState('');
   const [modelDraft, setModelDraft] = useState('');
   const [openMenu, setOpenMenu] = useState<'provider' | 'permission' | null>(null);
-  const [attachments, setAttachments] = useState<AttachedFile[]>([]);
   const [showSlashPalette, setShowSlashPalette] = useState(false);
   const [slashFilter, setSlashFilter] = useState('');
   const [highlightedSlashIndex, setHighlightedSlashIndex] = useState(0);
-  const [isDragOver, setIsDragOver] = useState(false);
+  const [modelError, setModelError] = useState<string | null>(null);
   const textAreaRef = useRef<HTMLTextAreaElement>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const pendingFileReadersRef = useRef<FileReader[]>([]);
+  const lastCommittedModel = useRef('');
+  const modelDraftRef = useRef(modelDraft);
 
   const sending = useAppStore((state) => state.sending);
   const activeSessionId = useAppStore((state) => state.activeSessionId);
+  const sessions = useAppStore((state) => state.sessions);
   const settings = useAppStore((state) => state.settings);
   const provider = useAppStore((state) => state.provider);
   const providerConfigs = useAppStore((state) => state.providerConfigs);
+  const contextUsageBySession = useAppStore((state) => state.contextUsageBySession);
   const availableAgents = useAgentStore((state) => state.availableAgents);
   const activeAgentType = useAgentStore((state) => state.activeAgentType);
   const sendMessage = useAppStore((state) => state.sendMessage);
@@ -256,17 +320,6 @@ export function ChatInput() {
   const setActiveProvider = useAppStore((state) => state.setActiveProvider);
   const selectAgent = useAgentStore((state) => state.selectAgent);
 
-  // Abort any pending FileReader operations on unmount to prevent
-  // state updates after the component is gone.
-  useEffect(() => {
-    return () => {
-      for (const reader of pendingFileReadersRef.current) {
-        try { reader.abort(); } catch { /* already completed */ }
-      }
-      pendingFileReadersRef.current = [];
-    };
-  }, []);
-
   useEffect(() => {
     const element = textAreaRef.current;
     if (!element) return;
@@ -274,60 +327,47 @@ export function ChatInput() {
     element.style.height = `${Math.min(element.scrollHeight, 240)}px`;
   }, [input]);
 
-  const permissionLabel = useMemo(
-    () =>
-      PERMISSION_MODES.find((mode) => mode.value === settings?.permission_mode)?.label ?? '默认',
-    [settings?.permission_mode],
+  const activeSession = useMemo(
+    () => sessions.find((session) => session.id === activeSessionId) ?? null,
+    [activeSessionId, sessions],
   );
+  const lockedAgentType = activeSession?.agent_type ?? null;
+  const effectiveAgentType = lockedAgentType ?? activeAgentType ?? 'remote_claude';
+  const contextUsage = activeSessionId ? contextUsageBySession[activeSessionId] : null;
+
+  const permissionOptions = useMemo(
+    () => permissionOptionsForAgent(effectiveAgentType, settings ?? null),
+    [effectiveAgentType, settings],
+  );
+  const permissionLabel = permissionOptions.find((mode) => mode.active)?.label ?? permissionOptions[0]?.label ?? '权限';
 
   const activeProviderName = providerConfigs?.active_provider ?? provider?.name ?? '未配置';
   const providerOptions = providerConfigs?.providers ?? [];
   useEffect(() => {
-    setModelDraft(settings?.provider_model ?? provider?.model ?? '');
+    const nextModel = settings?.provider_model ?? provider?.model ?? '';
+    setModelDraft(nextModel);
+    lastCommittedModel.current = nextModel.trim();
+    setModelError(null);
   }, [provider?.model, settings?.provider_model]);
 
-  const addFiles = useCallback((files: FileList | File[]) => {
-    const newFiles: AttachedFile[] = Array.from(files).map((file) => ({
-      id: `${file.name}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-      name: file.name,
-      type: file.type || 'application/octet-stream',
-      size: file.size,
-    }));
-    setAttachments((prev) => [...prev, ...newFiles]);
-
-    Array.from(files).forEach((file, i) => {
-      if (file.type.startsWith('image/')) {
-        // Skip preview generation for large files to avoid bloating memory
-        if (file.size > 500 * 1024) return;
-        const targetId = newFiles[i].id;
-        const reader = new FileReader();
-        pendingFileReadersRef.current.push(reader);
-        reader.onload = (e) => {
-          const preview = e.target?.result as string;
-          setAttachments((prev) =>
-            prev.map((a) =>
-              a.id === targetId && !a.preview ? { ...a, preview } : a,
-            ),
-          );
-        };
-        reader.readAsDataURL(file);
-      }
-    });
-  }, []);
-
-  const removeAttachment = useCallback((id: string) => {
-    setAttachments((prev) => prev.filter((a) => a.id !== id));
-  }, []);
+  const ensureModelFitsContext = (model: string): boolean => {
+    const usedTokens = contextUsage?.estimated_tokens ?? 0;
+    const nextWindow = inferModelContextWindow(model);
+    if (usedTokens > 0 && nextWindow !== null && nextWindow < usedTokens) {
+      setModelError(
+        `当前会话已使用 ${formatTokenCount(usedTokens)} tokens，${model} 约 ${formatTokenCount(nextWindow)}，不能切换到更小上下文。`,
+      );
+      return false;
+    }
+    setModelError(null);
+    return true;
+  };
 
   const handleSend = async () => {
     if (!input.trim() || sending) return;
-    if (attachments.length > 0) {
-      console.warn('[ChatInput] file attachments are collected but not yet transmitted. File send is not implemented.');
-    }
     const current = input;
     setInput('');
     setShowSlashPalette(false);
-    setAttachments([]);
     await sendMessage(current);
   };
 
@@ -400,79 +440,24 @@ export function ChatInput() {
     textAreaRef.current?.focus();
   };
 
-  const handleDragOver = (event: DragEvent) => {
-    event.preventDefault();
-    event.stopPropagation();
-    setIsDragOver(true);
-  };
-
-  const handleDragLeave = (event: DragEvent) => {
-    event.preventDefault();
-    event.stopPropagation();
-    setIsDragOver(false);
-  };
-
-  const handleDrop = (event: DragEvent) => {
-    event.preventDefault();
-    event.stopPropagation();
-    setIsDragOver(false);
-    if (event.dataTransfer.files.length > 0) {
-      addFiles(event.dataTransfer.files);
-    }
-  };
-
-  const handlePaste = (event: React.ClipboardEvent) => {
-    const items = event.clipboardData?.items;
-    if (!items) return;
-
-    const imageFiles: File[] = [];
-    for (const item of Array.from(items)) {
-      if (item.type.startsWith('image/')) {
-        const file = item.getAsFile();
-        if (file) imageFiles.push(file);
-      }
-    }
-    if (imageFiles.length > 0) {
-      event.preventDefault();
-      addFiles(imageFiles);
-    }
-  };
-
-  const lastCommittedModel = useRef(modelDraft.trim());
-  const modelDraftRef = useRef(modelDraft);
   modelDraftRef.current = modelDraft;
   const commitModelDraft = async () => {
     const trimmed = modelDraftRef.current.trim();
     if (trimmed === lastCommittedModel.current) return;
+    if (!ensureModelFitsContext(trimmed)) {
+      setModelDraft(lastCommittedModel.current);
+      return;
+    }
     lastCommittedModel.current = trimmed;
     await updateSettings({ provider_model: trimmed });
   };
 
-  const hasAttachments = attachments.length > 0;
-  const imageAttachments = attachments.filter((a) => a.type.startsWith('image/'));
-
   return (
-    <div role="form" aria-label="Prompt composer" className="bg-rc-bg-chat px-5 pb-5 pt-3">
+    <div role="form" aria-label="Prompt composer" className="bg-rc-bg-chat px-4 pb-4 pt-3">
       <div className="mx-auto w-full max-w-input">
         <div
-          className={`relative overflow-visible rounded-[18px] border shadow-lg transition-colors ${
-            isDragOver
-              ? 'border-rc-accent-primary bg-rc-bg-selected'
-              : 'border-rc-border-primary bg-rc-bg-surface focus-within:border-rc-border-focus'
-          }`}
-          onDragOver={handleDragOver}
-          onDragLeave={handleDragLeave}
-          onDrop={handleDrop}
+          className="relative overflow-visible rounded-lg border border-rc-border-primary bg-rc-bg-surface shadow-sm transition-colors focus-within:border-rc-border-focus"
         >
-          {isDragOver && (
-            <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-[18px] bg-rc-accent-primary-light">
-              <div className="flex items-center gap-2 text-sm font-medium text-rc-accent-primary">
-                <Paperclip size={16} />
-                拖放文件到此处
-              </div>
-            </div>
-          )}
-
           {showSlashPalette && (
             <SlashCommandPalette
               commands={SLASH_COMMANDS}
@@ -480,14 +465,6 @@ export function ChatInput() {
               onSelect={handleSlashSelect}
               highlightedIndex={highlightedSlashIndex}
             />
-          )}
-
-          {imageAttachments.length > 0 && (
-            <div className="flex flex-wrap gap-2 border-b border-rc-border-secondary px-3 py-2">
-              {imageAttachments.map((file) => (
-                <AttachmentPreview key={file.id} file={file} />
-              ))}
-            </div>
           )}
 
           <div className="px-4 pb-2 pt-3">
@@ -498,26 +475,13 @@ export function ChatInput() {
               onKeyDown={(event) => {
                 void handleKeyDown(event);
               }}
-              onPaste={handlePaste}
               disabled={sending}
               rows={1}
               aria-label="Prompt input"
-              placeholder="向 agent 发送指令或代码片段"
-              className="min-h-[58px] max-h-[180px] w-full resize-none border-0 bg-transparent px-1 py-1 text-sm leading-6 text-rc-text-primary outline-none placeholder:text-rc-text-tertiary disabled:cursor-not-allowed focus-visible:outline-none"
+              placeholder="给 agent 发送任务、补充约束或后续修改"
+              className="min-h-[64px] max-h-[180px] w-full resize-none border-0 bg-transparent px-1 py-1 text-sm leading-6 text-rc-text-primary outline-none placeholder:text-rc-text-tertiary disabled:cursor-not-allowed focus-visible:outline-none"
             />
           </div>
-
-          {hasAttachments && (
-            <div className="flex flex-wrap gap-1.5 border-t border-rc-border-secondary px-3 py-2">
-              {attachments.map((file) => (
-                <FileChip
-                  key={file.id}
-                  file={file}
-                  onRemove={() => removeAttachment(file.id)}
-                />
-              ))}
-            </div>
-          )}
 
           <div
             role="group"
@@ -526,8 +490,13 @@ export function ChatInput() {
           >
             <AgentSelector
               availableAgents={availableAgents}
-              activeAgentType={activeAgentType}
-              onSelect={selectAgent}
+              activeAgentType={effectiveAgentType}
+              lockedAgentType={lockedAgentType}
+              lockedReason="该会话已经绑定 Agent，不能切换到其他 Agent"
+              onSelect={(agentType) => {
+                if (lockedAgentType && agentType !== lockedAgentType) return;
+                selectAgent(agentType);
+              }}
             />
 
             <Dropdown
@@ -554,6 +523,7 @@ export function ChatInput() {
                       .join(' · ')}
                     active={providerConfigs?.active_provider === providerOption.name}
                     onClick={async () => {
+                      if (providerOption.model && !ensureModelFitsContext(providerOption.model)) return;
                       setOpenMenu(null);
                       await setActiveProvider(providerOption.name);
                     }}
@@ -601,43 +571,21 @@ export function ChatInput() {
                 />
               }
             >
-              {PERMISSION_MODES.map((mode) => (
+              {permissionOptions.map((mode) => (
                 <DropdownItem
-                  key={mode.value}
+                  key={mode.key}
                   title={mode.label}
                   subtitle={mode.desc}
-                  active={settings?.permission_mode === mode.value}
+                  active={mode.active}
                   onClick={async () => {
                     setOpenMenu(null);
-                    await updateSettings({ permission_mode: mode.value });
+                    await updateSettings(mode.updates);
                   }}
                 />
               ))}
             </Dropdown>
 
             <div className="flex-1" />
-
-            {/* TODO: Enable file picker once file transmission is implemented */}
-            <button
-              type="button"
-              aria-label="附加文件"
-              title="附加文件（暂未实现）"
-              disabled
-              onClick={() => fileInputRef.current?.click()}
-              className="flex h-8 w-8 items-center justify-center rounded-full text-rc-text-tertiary transition-colors hover:bg-rc-bg-hover hover:text-rc-text-primary disabled:cursor-not-allowed disabled:opacity-45 focus-visible:outline-none"
-            >
-              <Paperclip size={15} />
-            </button>
-            <input
-              ref={fileInputRef}
-              type="file"
-              multiple
-              className="hidden"
-              onChange={(event) => {
-                if (event.target.files) addFiles(event.target.files);
-                event.target.value = '';
-              }}
-            />
 
             {sending && activeSessionId && (
               <button
@@ -647,7 +595,7 @@ export function ChatInput() {
                 onClick={() => {
                   void handleCancel();
                 }}
-                className="flex h-8 w-8 items-center justify-center rounded-full border border-rc-accent-warning-border bg-rc-accent-warning-bg text-rc-accent-warning transition-colors hover:bg-rc-bg-hover focus-visible:outline-none"
+                className="flex h-8 w-8 items-center justify-center rounded-lg border border-rc-accent-warning-border bg-rc-accent-warning-bg text-rc-accent-warning transition-colors hover:bg-rc-bg-hover focus-visible:outline-none"
               >
                 <Square size={15} />
               </button>
@@ -660,7 +608,7 @@ export function ChatInput() {
                 void handleSend();
               }}
               disabled={sending || !input.trim()}
-              className="flex h-8 w-8 items-center justify-center rounded-full bg-rc-text-primary text-rc-bg-base shadow-sm transition-colors hover:bg-rc-accent-primary hover:text-white disabled:cursor-not-allowed disabled:opacity-45 focus-visible:outline-none"
+              className="flex h-8 w-8 items-center justify-center rounded-lg bg-rc-accent-primary text-white shadow-sm transition-colors hover:bg-rc-accent-primary-hover disabled:cursor-not-allowed disabled:opacity-45 focus-visible:outline-none"
             >
               {sending ? (
                 <div className="h-4 w-4 animate-spin rounded-full border-2 border-white/25 border-t-white" />
@@ -669,6 +617,12 @@ export function ChatInput() {
               )}
             </button>
           </div>
+
+          {modelError && (
+            <div className="border-t border-rc-border-secondary bg-rc-accent-warning-bg px-4 py-2 text-xs text-rc-accent-warning">
+              {modelError}
+            </div>
+          )}
         </div>
 
         {showSlashPalette && input.startsWith('/') && (

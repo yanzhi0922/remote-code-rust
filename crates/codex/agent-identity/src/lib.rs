@@ -203,7 +203,7 @@ pub async fn register_agent_task(
         signature: sign_task_registration_payload(key, &timestamp)?,
         timestamp,
     };
-    let url = agent_task_registration_url(chatgpt_base_url, key.agent_runtime_id);
+    let url = agent_task_registration_url(chatgpt_base_url, key.agent_runtime_id)?;
 
     let response = client
         .post(url)
@@ -301,19 +301,22 @@ pub fn agent_registration_url(chatgpt_base_url: &str) -> String {
     format!("{trimmed}/v1/agent/register")
 }
 
-pub fn agent_task_registration_url(chatgpt_base_url: &str, agent_runtime_id: &str) -> String {
+pub fn agent_task_registration_url(
+    chatgpt_base_url: &str,
+    agent_runtime_id: &str,
+) -> Result<String> {
     // Validate that agent_runtime_id contains only URL-safe characters to prevent
     // path injection (e.g., "../../" or query string tricks).
     let is_safe = agent_runtime_id
         .bytes()
         .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_');
     if !is_safe {
-        panic!(
-            "agent_runtime_id contains unsafe URL characters: {agent_runtime_id}"
-        );
+        anyhow::bail!("agent_runtime_id contains unsafe URL characters: {agent_runtime_id}");
     }
     let trimmed = chatgpt_base_url.trim_end_matches('/');
-    format!("{trimmed}/v1/agent/{agent_runtime_id}/task/register")
+    Ok(format!(
+        "{trimmed}/v1/agent/{agent_runtime_id}/task/register"
+    ))
 }
 
 pub fn agent_identity_biscuit_url(chatgpt_base_url: &str) -> String {

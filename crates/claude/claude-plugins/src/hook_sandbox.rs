@@ -48,34 +48,19 @@ pub const MAX_HOOK_OUTPUT_BYTES: usize = 1024 * 1024;
 pub enum SandboxError {
     /// The hook execution exceeded the configured timeout.
     #[error("hook '{hook}' timed out after {timeout_secs}s")]
-    Timeout {
-        hook: String,
-        timeout_secs: u64,
-    },
+    Timeout { hook: String, timeout_secs: u64 },
     /// The hook process was killed because it exceeded resource limits.
     #[error("hook '{hook}' exceeded resource limit: {message}")]
-    ResourceLimit {
-        hook: String,
-        message: String,
-    },
+    ResourceLimit { hook: String, message: String },
     /// The hook output exceeded the maximum allowed size.
     #[error("hook '{hook}' output exceeded {max_bytes} bytes")]
-    OutputTooLarge {
-        hook: String,
-        max_bytes: usize,
-    },
+    OutputTooLarge { hook: String, max_bytes: usize },
     /// The hook output failed schema validation.
     #[error("hook '{hook}' produced invalid output: {message}")]
-    ValidationFailed {
-        hook: String,
-        message: String,
-    },
+    ValidationFailed { hook: String, message: String },
     /// The hook was denied by the permission policy.
     #[error("hook '{hook}' permission denied: {message}")]
-    PermissionDenied {
-        hook: String,
-        message: String,
-    },
+    PermissionDenied { hook: String, message: String },
     /// The hook process could not be spawned.
     #[error("failed to spawn hook '{hook}': {source}")]
     SpawnFailed {
@@ -92,10 +77,7 @@ pub enum SandboxError {
     },
     /// The hook process exited with a non-zero exit code.
     #[error("hook '{hook}' exited with code {code}")]
-    ExitCode {
-        hook: String,
-        code: i32,
-    },
+    ExitCode { hook: String, code: i32 },
 }
 
 // ---------------------------------------------------------------------------
@@ -633,7 +615,10 @@ impl HookSandbox {
 
     /// Creates a sandbox with default configuration and policy.
     pub fn default_sandbox() -> Self {
-        Self::new(HookSandboxConfig::default(), HookPermissionPolicy::default())
+        Self::new(
+            HookSandboxConfig::default(),
+            HookPermissionPolicy::default(),
+        )
     }
 
     /// Registers an output schema for a specific hook command.
@@ -688,31 +673,32 @@ impl HookSandbox {
 
         // Step 3: Execute with timeout
         let timeout_duration = Duration::from_secs(self.config.timeout_secs);
-        let result = match timeout(timeout_duration, self.run_process(&mut cmd, &command_label)).await {
-            Ok(inner) => inner,
-            Err(_) => {
-                let entry = HookAuditEntry {
-                    id: generate_audit_id(),
-                    plugin_name: plugin_name.to_owned(),
-                    event,
-                    command: hook.command.clone(),
-                    started_at,
-                    finished_at: Some(Utc::now()),
-                    duration_ms: Some(self.config.timeout_secs * 1000),
-                    success: false,
-                    error: Some("timeout".to_owned()),
-                    exit_code: None,
-                    permissions_granted: permissions.clone(),
-                    permission_denied: false,
-                    output_size_bytes: None,
-                };
-                self.audit_log.record(entry).await;
-                return Err(SandboxError::Timeout {
-                    hook: command_label,
-                    timeout_secs: self.config.timeout_secs,
-                });
-            }
-        };
+        let result =
+            match timeout(timeout_duration, self.run_process(&mut cmd, &command_label)).await {
+                Ok(inner) => inner,
+                Err(_) => {
+                    let entry = HookAuditEntry {
+                        id: generate_audit_id(),
+                        plugin_name: plugin_name.to_owned(),
+                        event,
+                        command: hook.command.clone(),
+                        started_at,
+                        finished_at: Some(Utc::now()),
+                        duration_ms: Some(self.config.timeout_secs * 1000),
+                        success: false,
+                        error: Some("timeout".to_owned()),
+                        exit_code: None,
+                        permissions_granted: permissions.clone(),
+                        permission_denied: false,
+                        output_size_bytes: None,
+                    };
+                    self.audit_log.record(entry).await;
+                    return Err(SandboxError::Timeout {
+                        hook: command_label,
+                        timeout_secs: self.config.timeout_secs,
+                    });
+                }
+            };
 
         let output = result?;
         let finished_at = Utc::now();
@@ -743,7 +729,10 @@ impl HookSandbox {
                 }),
                 None => Err(SandboxError::Io {
                     hook: command_label,
-                    source: io::Error::new(io::ErrorKind::BrokenPipe, "process terminated unexpectedly"),
+                    source: io::Error::new(
+                        io::ErrorKind::BrokenPipe,
+                        "process terminated unexpectedly",
+                    ),
                 }),
             };
         }
@@ -873,7 +862,10 @@ impl HookSandbox {
 
         // Set resource limit hints via environment
         cmd.env("HOOK_TIMEOUT_SECS", self.config.timeout_secs.to_string());
-        cmd.env("HOOK_MEMORY_LIMIT_MB", self.config.memory_limit_mb.to_string());
+        cmd.env(
+            "HOOK_MEMORY_LIMIT_MB",
+            self.config.memory_limit_mb.to_string(),
+        );
 
         #[cfg(unix)]
         {
@@ -1464,10 +1456,7 @@ mod tests {
         } else {
             "echo '{\"status\":\"ok\"}'".to_owned()
         };
-        sandbox.register_schema(
-            &command,
-            HookOutputSchema::object(vec!["status"]),
-        );
+        sandbox.register_schema(&command, HookOutputSchema::object(vec!["status"]));
 
         let hook = HookDefinition {
             command: command.clone(),
@@ -1524,27 +1513,33 @@ mod tests {
     fn validate_file_access_read_allowed() {
         let sandbox = HookSandbox::default_sandbox();
         let perms = HookPermissions::read_only();
-        assert!(sandbox
-            .validate_file_access(&perms, Path::new("/some/file"), FileAccessType::Read)
-            .is_ok());
+        assert!(
+            sandbox
+                .validate_file_access(&perms, Path::new("/some/file"), FileAccessType::Read)
+                .is_ok()
+        );
     }
 
     #[test]
     fn validate_file_access_write_denied_for_read_only() {
         let sandbox = HookSandbox::default_sandbox();
         let perms = HookPermissions::read_only();
-        assert!(sandbox
-            .validate_file_access(&perms, Path::new("/some/file"), FileAccessType::Write)
-            .is_err());
+        assert!(
+            sandbox
+                .validate_file_access(&perms, Path::new("/some/file"), FileAccessType::Write)
+                .is_err()
+        );
     }
 
     #[test]
     fn validate_file_access_denied_when_no_perms() {
         let sandbox = HookSandbox::default_sandbox();
         let perms = HookPermissions::none();
-        assert!(sandbox
-            .validate_file_access(&perms, Path::new("/some/file"), FileAccessType::Read)
-            .is_err());
+        assert!(
+            sandbox
+                .validate_file_access(&perms, Path::new("/some/file"), FileAccessType::Read)
+                .is_err()
+        );
     }
 
     #[test]
@@ -1561,13 +1556,17 @@ mod tests {
         };
 
         let inside = scope_dir.join("file.txt");
-        assert!(sandbox
-            .validate_file_access(&perms, &inside, FileAccessType::Read)
-            .is_ok());
+        assert!(
+            sandbox
+                .validate_file_access(&perms, &inside, FileAccessType::Read)
+                .is_ok()
+        );
 
-        assert!(sandbox
-            .validate_file_access(&perms, Path::new("/outside/scope"), FileAccessType::Read)
-            .is_err());
+        assert!(
+            sandbox
+                .validate_file_access(&perms, Path::new("/outside/scope"), FileAccessType::Read)
+                .is_err()
+        );
     }
 
     // -- Serialization round-trip tests --

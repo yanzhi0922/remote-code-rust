@@ -42,8 +42,12 @@ fn assume_init_vec<T>(mut buf: Vec<MaybeUninit<T>>) -> Vec<T> {
 }
 
 fn control_space_for_fds(count: usize) -> usize {
-    let fd_size = count.checked_mul(size_of::<RawFd>()).expect("fd count overflow in control_space_for_fds");
-    unsafe { libc::CMSG_SPACE(fd_size.try_into().expect("fd size overflow in CMSG_SPACE")) as usize }
+    let fd_size = count
+        .checked_mul(size_of::<RawFd>())
+        .expect("fd count overflow in control_space_for_fds");
+    unsafe {
+        libc::CMSG_SPACE(fd_size.try_into().expect("fd size overflow in CMSG_SPACE")) as usize
+    }
 }
 
 /// Extracts the FDs from a SCM_RIGHTS control message.

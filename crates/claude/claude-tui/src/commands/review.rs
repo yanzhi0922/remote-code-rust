@@ -8,9 +8,7 @@ pub fn render(config: &RuntimeConfig) {
     let result = tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(git::suggest_pr_tool(&context))
     });
-    match result
-        .and_then(|payload| serde_json::from_str::<Value>(&payload).map_err(Into::into))
-    {
+    match result.and_then(|payload| serde_json::from_str::<Value>(&payload).map_err(Into::into)) {
         Ok(value) => {
             println!("Review surface:");
             println!(

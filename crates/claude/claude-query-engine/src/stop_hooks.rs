@@ -906,7 +906,7 @@ impl StopHookPhaseHandler for UserConfiguredStopHooksHandler {
             "stop_reason": input.stop_reason,
             "final_text": input.final_text,
             "agent_id": input.agent_id.as_ref().map(|id| id.to_string()),
-            "query_source": format!("{:?}", input.query_source),
+            "query_source": serde_json::to_value(input.query_source).unwrap_or_else(|_| serde_json::json!("unknown")),
         });
         let input_str = serde_json::to_string(&input_json).unwrap_or_else(|_| "{}".to_owned());
 
@@ -1002,7 +1002,7 @@ impl StopHookPhaseHandler for TeammateHooksHandler {
             "turn": input.turn,
             "stop_reason": input.stop_reason,
             "agent_id": agent_id.to_string(),
-            "query_source": format!("{:?}", input.query_source),
+            "query_source": serde_json::to_value(input.query_source).unwrap_or_else(|_| serde_json::json!("unknown")),
         });
         let input_str = serde_json::to_string(&input_json).unwrap_or_else(|_| "{}".to_owned());
 

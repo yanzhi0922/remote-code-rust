@@ -261,7 +261,7 @@ fn build_skills_list_output(config: &RuntimeConfig, include_plugins: bool) -> Sk
     let mut warnings = Vec::new();
     let mut skills = Vec::new();
     let mut seen = BTreeSet::new();
-    let user_sources_enabled = setting_source_enabled(config, SettingSource::User);
+    let user_sources_enabled = config.setting_source_enabled(SettingSource::User);
 
     if user_sources_enabled && config.paths.skills_dir.exists() {
         match claude_skills::discover_skills(&config.paths.skills_dir) {
@@ -416,7 +416,7 @@ fn build_skill_show_output(
 ) -> Result<SkillShowOutput> {
     let mut warnings = Vec::new();
     let mut matches = Vec::new();
-    let user_sources_enabled = setting_source_enabled(config, SettingSource::User);
+    let user_sources_enabled = config.setting_source_enabled(SettingSource::User);
 
     if user_sources_enabled && config.paths.skills_dir.exists() {
         match claude_skills::discover_skills(&config.paths.skills_dir) {
@@ -503,10 +503,6 @@ fn skill_record(
         scripts: metadata.scripts.clone(),
         assets: metadata.assets.clone(),
     }
-}
-
-fn setting_source_enabled(config: &RuntimeConfig, source: SettingSource) -> bool {
-    config.allowed_setting_sources.contains(&source)
 }
 
 #[cfg(test)]

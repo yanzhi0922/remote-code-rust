@@ -6229,7 +6229,9 @@ impl CodexMessageProcessor {
                 .await
                 .map(|status| status.connectors)
                 .map_err(|err| format!("failed to load accessible apps: {err}"));
-            let _ = accessible_tx.send(AppListLoadResult::Accessible(result)).await;
+            let _ = accessible_tx
+                .send(AppListLoadResult::Accessible(result))
+                .await;
         });
 
         let all_config = config.clone();

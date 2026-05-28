@@ -231,9 +231,8 @@ fn parse_ripgrep_output(output: &str) -> Result<Vec<FileMatch>, SearchToolError>
 
                     // Context before: up to 2 preceding context lines
                     let before_start = mi.saturating_sub(DEFAULT_CONTEXT_LINES);
-                    let context_before: Vec<String> = (before_start..mi)
-                        .map(|j| pending[j].2.clone())
-                        .collect();
+                    let context_before: Vec<String> =
+                        (before_start..mi).map(|j| pending[j].2.clone()).collect();
 
                     // Context after: up to 2 following context lines
                     let context_after: Vec<String> = ((mi + 1)..pending.len())
@@ -276,9 +275,8 @@ fn parse_ripgrep_output(output: &str) -> Result<Vec<FileMatch>, SearchToolError>
             let (_, line_number, line_content, _) = &pending[mi];
 
             let before_start = mi.saturating_sub(DEFAULT_CONTEXT_LINES);
-            let context_before: Vec<String> = (before_start..mi)
-                .map(|j| pending[j].2.clone())
-                .collect();
+            let context_before: Vec<String> =
+                (before_start..mi).map(|j| pending[j].2.clone()).collect();
 
             let context_after: Vec<String> = ((mi + 1)..pending.len())
                 .take(DEFAULT_CONTEXT_LINES)

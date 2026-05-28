@@ -521,23 +521,27 @@ async fn run_background_agent_execution(
                 } else {
                     TaskStatus::Failed
                 };
-                let _ = finish_tracked_task(
+                if let Err(e) = finish_tracked_task(
                     &task_id_for_spawn,
                     status,
                     Some(&truncate_str(&output, 200)),
                     &output,
                     Some(result.turns),
-                );
+                ) {
+                    tracing::warn!("failed to finish tracked task: {e:#}");
+                }
             }
             Err(error) => {
                 let output = error.to_string();
-                let _ = finish_tracked_task(
+                if let Err(e) = finish_tracked_task(
                     &task_id_for_spawn,
                     TaskStatus::Failed,
                     Some(&truncate_str(&output, 200)),
                     &output,
                     None,
-                );
+                ) {
+                    tracing::warn!("failed to finish tracked task: {e:#}");
+                }
             }
         }
     });

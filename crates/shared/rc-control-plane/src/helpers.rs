@@ -1,5 +1,6 @@
 //! Helper functions for event matching, runner selection, and approval relay.
 
+use std::fmt::Write;
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
@@ -163,7 +164,10 @@ fn encode_header_value(value: &str) -> String {
                 encoded.push(char::from(byte));
             }
             b' ' => encoded.push_str("%20"),
-            _ => encoded.push_str(&format!("%{byte:02X}")),
+            _ => {
+                encoded.push('%');
+                let _ = write!(encoded, "{byte:02X}");
+            }
         }
     }
     encoded
@@ -241,8 +245,7 @@ pub(crate) fn runner_is_available(snapshot: &RunnerSnapshot, lease_ttl_secs: u64
         snapshot.state,
         RunnerState::Draining | RunnerState::Offline | RunnerState::Unhealthy
     ) && snapshot.last_seen_at
-        >= Utc::now()
-            - Duration::seconds(lease_ttl_secs.try_into().unwrap_or(i64::MAX))
+        >= Utc::now() - Duration::seconds(lease_ttl_secs.try_into().unwrap_or(i64::MAX))
 }
 
 pub(crate) fn runner_rank(state: RunnerState) -> u8 {
@@ -540,7 +543,7 @@ pub(crate) async fn dispatch_session_command_to_runner(
 // Environment helpers (re-exported from rc-runner to avoid duplication)
 // ---------------------------------------------------------------------------
 
-pub(crate) use rc_runner::{parse_socket_addr, parse_env_number, read_env};
+pub(crate) use rc_runner::{parse_env_number, parse_socket_addr, read_env};
 
 #[cfg(test)]
 mod tests {

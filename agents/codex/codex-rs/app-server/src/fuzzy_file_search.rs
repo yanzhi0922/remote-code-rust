@@ -101,8 +101,7 @@ impl FuzzyFileSearchSession {
             return;
         }
         {
-            #[expect(clippy::unwrap_used)]
-            let mut latest_query = self.shared.latest_query.lock().unwrap();
+            let mut latest_query = self.shared.latest_query.lock().unwrap_or_else(|e| e.into_inner());
             *latest_query = query.clone();
         }
         self.session.update_query(&query);
@@ -176,8 +175,7 @@ impl SessionReporterImpl {
         }
 
         let query = {
-            #[expect(clippy::unwrap_used)]
-            self.shared.latest_query.lock().unwrap().clone()
+            self.shared.latest_query.lock().unwrap_or_else(|e| e.into_inner()).clone()
         };
         if snapshot.query != query {
             return;

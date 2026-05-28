@@ -2890,8 +2890,8 @@ pub fn get_ssl_error_message(error: &str) -> Option<String> {
     if lower.contains("self_signed_certificate") || lower.contains("depth_zero_self_signed_cert") {
         return Some(
             "The server uses a self-signed SSL certificate. \
-             If you trust this server, you can set NODE_TLS_REJECT_UNAUTHORIZED=0 \
-             or add the certificate to your trusted CA bundle."
+             Add the certificate to your trusted CA bundle \
+             (e.g. export SSL_CERT_FILE=/path/to/ca.pem)."
                 .to_owned(),
         );
     }

@@ -43,7 +43,12 @@ fn validate_custom_tool_url(url: &str) -> Result<(), String> {
 
     match parsed.scheme() {
         "http" | "https" => {}
-        _ => return Err(format!("URL scheme must be http or https, got '{}'", parsed.scheme())),
+        _ => {
+            return Err(format!(
+                "URL scheme must be http or https, got '{}'",
+                parsed.scheme()
+            ));
+        }
     }
 
     let host = parsed

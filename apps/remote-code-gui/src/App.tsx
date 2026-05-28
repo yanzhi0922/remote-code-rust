@@ -104,6 +104,18 @@ const demoSettings: FullSettings = {
   codex_permission_profile: null,
   codex_service_tier: null,
   codex_ephemeral: null,
+  runtime_paths: {
+    profile_dir: '/test/profile',
+    sessions_dir: '/test/sessions',
+    artifacts_dir: '/test/artifacts',
+    logs_dir: '/test/logs',
+    cache_dir: '/test/cache',
+    agents_dir: '/test/agents',
+    remote_control_file: '/test/remote_control.json',
+    gui_projects_file: '/test/gui-projects.json',
+    gui_providers_file: '/test/gui-providers.json',
+    gui_settings_file: '/test/gui-settings.json',
+  },
 };
 
 const demoRuntimeStatus: RuntimeStatusInfo = {
@@ -160,6 +172,7 @@ const demoSessions: SessionSummary[] = [
     cwd: demoProjectPath,
     provider_name: demoProvider.name,
     model: demoProvider.model,
+    agent_type: 'remote_codex',
     created_at: '2026-05-23T08:00:00.000Z',
     updated_at: demoIsoNow,
     archived: false,
@@ -170,6 +183,7 @@ const demoSessions: SessionSummary[] = [
     cwd: demoProjectPath,
     provider_name: 'claude',
     model: 'claude-sonnet-4.5',
+    agent_type: 'remote_claude',
     created_at: '2026-05-22T10:00:00.000Z',
     updated_at: '2026-05-23T07:38:00.000Z',
     archived: false,
@@ -180,6 +194,7 @@ const demoSessions: SessionSummary[] = [
     cwd: 'D:\\remote-code-rust\\apps\\remote-code-gui',
     provider_name: 'codex',
     model: 'gpt-5-codex',
+    agent_type: 'remote_codex',
     created_at: '2026-05-21T12:00:00.000Z',
     updated_at: '2026-05-22T16:18:00.000Z',
     archived: false,
@@ -272,7 +287,7 @@ function DemoStoreSeeder({ scene }: { scene: WorkbenchDemoScene }) {
 
     const empty = scene === 'empty';
     const running = scene === 'running';
-    const activeAgentType: AgentType = scene === 'settings' || scene === 'mcp' ? 'remote_codex' : 'remote_claude';
+    const activeAgentType: AgentType = 'remote_codex';
 
     useAppStore.setState({
       initialised: true,

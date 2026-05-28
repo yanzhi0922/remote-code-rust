@@ -78,7 +78,7 @@ impl AuthPrincipal {
 pub struct ControlPlaneService {
     pub(crate) meta: ControlPlaneMeta,
     pub(crate) runner_lease_ttl_secs: u64,
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Kept for debugging and future state re-opening.
     pub(crate) state_db_path: PathBuf,
     pub(crate) artifact_root_dir: PathBuf,
     pub(crate) auth_token: Option<String>,
@@ -97,6 +97,10 @@ pub struct ControlPlaneService {
     pub(crate) downloads_dir: Option<PathBuf>,
     /// Shared SQLite connection, opened once and reused across queries.
     db_connection: Arc<Mutex<Connection>>,
+    /// Whether state was successfully loaded from persistent storage.
+    /// `false` means the DB was missing, corrupt, or unreadable — the service
+    /// is running with an empty registry and callers should check [`Self::state_healthy`].
+    state_loaded_from_persistence: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -145,18 +149,30 @@ impl ControlPlaneService {
         let auth_token = config.auth_token.clone();
         let bootstrap_secret_hash = config.bootstrap_secret.as_deref().map(hash_secret_value);
         let db_connection = open_state_connection(&state_db_path)
-            .map_err(|e| tracing::error!("Failed to open state DB connection: {e:#}"))
-            .ok();
-        let (registry, timeline) = if let Some(ref conn) = db_connection {
-            load_persisted_state_with_conn(conn, &state_db_path).unwrap_or_else(|e| {
-                tracing::error!("Failed to load persisted state, starting fresh: {e:#}");
-                (
-                    Registry::default(),
-                    TimelineStore::new(DEFAULT_EVENT_HISTORY_LIMIT, EVENT_STREAM_BUFFER),
-                )
+            .map_err(|e| {
+                tracing::error!("control-plane: failed to open state DB connection: {e:#}");
+                e
             })
+            .ok();
+        let mut state_loaded_from_persistence = false;
+        let (registry, timeline) = if let Some(ref conn) = db_connection {
+            match load_persisted_state_with_conn(conn, &state_db_path) {
+                Ok(loaded) => {
+                    state_loaded_from_persistence = true;
+                    loaded
+                }
+                Err(e) => {
+                    tracing::error!(
+                        "control-plane: failed to load persisted state, starting fresh: {e:#}"
+                    );
+                    (
+                        Registry::default(),
+                        TimelineStore::new(DEFAULT_EVENT_HISTORY_LIMIT, EVENT_STREAM_BUFFER),
+                    )
+                }
+            }
         } else {
-            tracing::warn!("No DB connection available, starting fresh");
+            tracing::error!("control-plane: no DB connection available, starting fresh");
             (
                 Registry::default(),
                 TimelineStore::new(DEFAULT_EVENT_HISTORY_LIMIT, EVENT_STREAM_BUFFER),
@@ -189,12 +205,11 @@ impl ControlPlaneService {
             allowed_user_key_hashes: load_allowed_user_key_hashes_from_env(),
             http_client,
             downloads_dir: config.downloads_dir,
-            db_connection: Arc::new(Mutex::new(
-                db_connection.unwrap_or_else(||
-                    open_state_connection(std::path::Path::new(":memory:"))
-                        .expect("in-memory SQLite should always open")
-                ),
-            )),
+            db_connection: Arc::new(Mutex::new(db_connection.unwrap_or_else(|| {
+                open_state_connection(std::path::Path::new(":memory:"))
+                    .expect("in-memory SQLite should always open")
+            }))),
+            state_loaded_from_persistence,
         }
     }
 
@@ -205,6 +220,14 @@ impl ControlPlaneService {
     #[must_use]
     pub fn meta(&self) -> &ControlPlaneMeta {
         &self.meta
+    }
+
+    /// Returns `true` when persisted state was loaded successfully from the
+    /// backing SQLite database.  Returns `false` when the DB was missing,
+    /// corrupt, or unreadable — the service is running with an empty registry.
+    #[must_use]
+    pub fn state_healthy(&self) -> bool {
+        self.state_loaded_from_persistence
     }
 
     pub(crate) async fn auth_required(&self) -> bool {
@@ -315,8 +338,7 @@ impl ControlPlaneService {
                 registry: &registry_guard,
                 timeline: &timeline,
             };
-            serde_json::to_string(&snapshot)
-                .context("failed to encode control plane snapshot")?
+            serde_json::to_string(&snapshot).context("failed to encode control plane snapshot")?
         };
         let conn = self.db_connection.clone();
         tokio::task::spawn_blocking(move || {
@@ -500,7 +522,10 @@ fn is_local_control_plane_url(raw: &str) -> bool {
 // State persistence (SQLite)
 // ---------------------------------------------------------------------------
 
-fn load_persisted_state_with_conn(connection: &Connection, state_db_path: &std::path::Path) -> Result<(Registry, TimelineStore)> {
+fn load_persisted_state_with_conn(
+    connection: &Connection,
+    state_db_path: &std::path::Path,
+) -> Result<(Registry, TimelineStore)> {
     let payload = connection
         .query_row(
             "SELECT payload FROM control_plane_snapshot WHERE id = 1",
@@ -527,20 +552,6 @@ fn load_persisted_state_with_conn(connection: &Connection, state_db_path: &std::
             snapshot.timeline,
         ),
     ))
-}
-
-#[allow(dead_code)]
-pub(crate) fn persist_control_plane_state_with_conn(
-    connection: &Connection,
-    snapshot: &PersistedControlPlaneState,
-    event: Option<&crate::types::TimelineEvent>,
-) -> Result<()> {
-    let transaction = connection.unchecked_transaction()?;
-    let payload = serde_json::to_string(snapshot)
-        .context("failed to encode control plane snapshot")?;
-    persist_control_plane_state_from_payload_inner(&transaction, &payload, event)?;
-    transaction.commit()?;
-    Ok(())
 }
 
 /// Persist a pre-serialized control plane snapshot payload to SQLite.
@@ -875,11 +886,7 @@ mod tests {
         let service = make_minimal_service().await;
 
         let ticket = service
-            .mint_stream_ticket(
-                AuthPrincipal::SharedToken,
-                "/v1/events".to_owned(),
-                45,
-            )
+            .mint_stream_ticket(AuthPrincipal::SharedToken, "/v1/events".to_owned(), 45)
             .await;
 
         let result = service
@@ -1017,7 +1024,10 @@ mod tests {
             quic_key_pem: None,
         };
         let issues = validate_control_plane_config(&config);
-        assert!(issues.is_empty(), "loopback without auth should be fine: {issues:?}");
+        assert!(
+            issues.is_empty(),
+            "loopback without auth should be fine: {issues:?}"
+        );
     }
 
     #[test]

@@ -72,12 +72,11 @@ pub fn analyze_command(
 }
 
 fn contains_dangerous_pattern(command: &str) -> bool {
-    use std::sync::LazyLock;
     use regex::Regex;
+    use std::sync::LazyLock;
 
-    static WS_NORMALIZER: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r"\s+").expect("whitespace regex is valid")
-    });
+    static WS_NORMALIZER: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"\s+").expect("whitespace regex is valid"));
 
     // Collapse runs of whitespace so patterns like "rm  -rf  /" are still caught.
     let collapsed = WS_NORMALIZER.replace_all(command, " ");

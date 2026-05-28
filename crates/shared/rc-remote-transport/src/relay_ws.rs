@@ -60,12 +60,16 @@ impl RemoteTransport for RelayWsTransport {
         let request =
             super::direct_ws::build_authenticated_ws_request(&ws_url, &config.auth_token)?;
 
-        let (stream, _response) = tokio_tungstenite::connect_async(request)
-            .await
-            .map_err(|e| {
-                self.state = ConnectionState::Error(e.to_string());
-                anyhow::anyhow!("WebSocket connect to control plane failed: {e}")
-            })?;
+        let tls_config = crate::tls::build_client_tls_config(&config.tls)?;
+        let connector = Some(tokio_tungstenite::Connector::Rustls(tls_config));
+
+        let (stream, _response) =
+            tokio_tungstenite::connect_async_tls_with_config(request, None, false, connector)
+                .await
+                .map_err(|e| {
+                    self.state = ConnectionState::Error(e.to_string());
+                    anyhow::anyhow!("WebSocket connect to control plane failed: {e}")
+                })?;
 
         let (tx, rx) = mpsc::channel(256);
         self.event_rx = Some(rx);

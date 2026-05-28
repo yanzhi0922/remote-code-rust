@@ -16,7 +16,9 @@ fn validate_strict_schema(strict: bool, parameters: &JsonSchema) -> Result<(), S
         return Err("strict mode requires 'required' to be set in the JSON schema".to_string());
     }
     if parameters.additional_properties.is_none() {
-        return Err("strict mode requires 'additionalProperties' to be set in the JSON schema".to_string());
+        return Err(
+            "strict mode requires 'additionalProperties' to be set in the JSON schema".to_string(),
+        );
     }
     if let Some(properties) = &parameters.properties {
         let required = parameters.required.as_ref().unwrap();

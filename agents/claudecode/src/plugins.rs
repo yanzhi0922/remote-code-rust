@@ -290,15 +290,36 @@ fn run_plugins_install(config: &RuntimeConfig, args: PluginsInstallArgs) -> Resu
     sanitize_plugin_name(&plugin.manifest.name)?;
 
     let destination = config.paths.plugins_dir.join(&plugin.manifest.name);
-    // Canonicalize to prevent path traversal via symlinks or ../ sequences
+    // Canonicalize the plugins directory to prevent path traversal via
+    // symlinks or ../ sequences.  For the destination, we can't
+    // canonicalize a non-existent path, so we canonicalize the parent
+    // and append the file name.
     let canonical_plugins_dir = config
         .paths
         .plugins_dir
         .canonicalize()
         .unwrap_or_else(|_| config.paths.plugins_dir.clone());
-    let canonical_destination = destination
-        .canonicalize()
-        .unwrap_or_else(|_| destination.clone());
+    let canonical_destination = if destination.exists() {
+        destination
+            .canonicalize()
+            .unwrap_or_else(|_| destination.clone())
+    } else {
+        // New install — canonicalize parent dir and append the leaf name.
+        let leaf = destination.file_name().ok_or_else(|| {
+            anyhow!(
+                "plugin destination path has no file name: {}",
+                destination.display()
+            )
+        })?;
+        let parent = destination.parent();
+        match parent {
+            Some(p) if p.exists() => p
+                .canonicalize()
+                .map(|cp| cp.join(leaf))
+                .unwrap_or_else(|_| destination.clone()),
+            _ => destination.clone(),
+        }
+    };
     if !canonical_destination.starts_with(&canonical_plugins_dir) {
         return Err(anyhow!(
             "Refusing to install plugin outside {}",
@@ -772,7 +793,7 @@ pub(crate) fn discover_runtime_plugins(
 ) -> RuntimePluginDiscovery {
     let mut discovery = RuntimePluginDiscovery::default();
     let mut seen_manifest_paths = BTreeSet::new();
-    if setting_source_enabled(config, SettingSource::User) {
+    if config.setting_source_enabled(SettingSource::User) {
         load_runtime_plugins_root(
             &mut discovery,
             &mut seen_manifest_paths,
@@ -800,10 +821,6 @@ pub(crate) fn discover_runtime_plugins(
             .then_with(|| left.origin_name.cmp(&right.origin_name))
     });
     discovery
-}
-
-fn setting_source_enabled(config: &RuntimeConfig, source: SettingSource) -> bool {
-    config.allowed_setting_sources.contains(&source)
 }
 
 fn load_runtime_plugins_root(

@@ -136,8 +136,8 @@ fn render_get(config: &RuntimeConfig, key: &str) {
         "permission_mode" => config.permission_mode.as_legacy_str().to_owned(),
         "verbose" => config.verbose.to_string(),
         "max_turns" => config.max_turns.to_string(),
-        "input_format" => format!("{:?}", config.input_format),
-        "output_format" => format!("{:?}", config.output_format),
+        "input_format" => config.input_format.to_string(),
+        "output_format" => config.output_format.to_string(),
         _ => {
             println!("Unknown config key '{key}'.");
             return;

@@ -1,6 +1,7 @@
 //! Shared utilities used by all adapter implementations.
 
 use std::collections::HashSet;
+use std::fmt::Write;
 
 use crate::events::UnifiedAgentEvent;
 use crate::types::AgentCapability;
@@ -9,6 +10,7 @@ use crate::types::AgentCapability;
 ///
 /// Panics in Rust can carry `&str`, `String`, or arbitrary types. This function
 /// attempts to extract the most common cases and falls back to a generic message.
+#[must_use]
 pub fn extract_panic_message(payload: &Box<dyn std::any::Any + Send>) -> String {
     if let Some(s) = payload.downcast_ref::<&str>() {
         s.to_string()
@@ -23,6 +25,7 @@ pub fn extract_panic_message(payload: &Box<dyn std::any::Any + Send>) -> String 
 ///
 /// Convenience wrapper that combines [`extract_panic_message`] with
 /// [`UnifiedAgentEvent::Error`] construction.
+#[must_use]
 pub fn panic_to_error_event(
     session_id: &str,
     prefix: &str,
@@ -40,11 +43,13 @@ pub fn panic_to_error_event(
 ///
 /// Includes `Streaming`, `ToolUse`, and `Permissions`. Additional capabilities
 /// can be appended via `extra`.
+#[must_use]
 pub fn standard_capabilities(extra: &[AgentCapability]) -> HashSet<AgentCapability> {
-    let mut caps = HashSet::new();
-    caps.insert(AgentCapability::Streaming);
-    caps.insert(AgentCapability::ToolUse);
-    caps.insert(AgentCapability::Permissions);
+    let mut caps = HashSet::from([
+        AgentCapability::Streaming,
+        AgentCapability::ToolUse,
+        AgentCapability::Permissions,
+    ]);
     for cap in extra {
         caps.insert(*cap);
     }
@@ -56,6 +61,7 @@ pub fn standard_capabilities(extra: &[AgentCapability]) -> HashSet<AgentCapabili
 /// Encodes all characters that are not unreserved (A-Z, a-z, 0-9, `-`, `.`, `_`, `~`)
 /// or reserved sub-delims (`!`, `$`, `&`, `'`, `(`, `)`, `*`, `+`, `,`, `;`, `=`).
 /// This is suitable for encoding individual path segments between `/` delimiters.
+#[must_use]
 pub fn encode_path_segment(raw: &str) -> String {
     const UNRESERVED: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~";
     const SUB_DELIMS: &[u8] = b"!$&'()*+,;=";
@@ -66,7 +72,7 @@ pub fn encode_path_segment(raw: &str) -> String {
             encoded.push(byte as char);
         } else {
             encoded.push('%');
-            encoded.push_str(&format!("{byte:02X}"));
+            let _ = write!(encoded, "{byte:02X}");
         }
     }
     encoded

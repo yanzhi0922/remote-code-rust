@@ -13,7 +13,10 @@ pub struct ProxyState {
 }
 
 impl ProxyState {
-    pub fn new(settings: ProxySettings, model_index: Arc<HashMap<String, ProviderEntry>>) -> Result<Self> {
+    pub fn new(
+        settings: ProxySettings,
+        model_index: Arc<HashMap<String, ProviderEntry>>,
+    ) -> Result<Self> {
         Ok(Self {
             settings,
             http: reqwest::Client::builder()

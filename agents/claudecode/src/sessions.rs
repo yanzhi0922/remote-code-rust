@@ -249,15 +249,20 @@ fn run_session_rewind(store: &SessionStore, args: SessionRewindArgs) -> Result<(
         for (i, event) in events.iter().enumerate().rev() {
             if event.event_type == "checkpoint"
                 && let Some(ref payload) = event.payload
-                    && payload.get("name").and_then(|v| v.as_str()) == Some(_cp.as_str()) {
-                        found_idx = Some(i + 1); // keep including this event
-                        break;
-                    }
+                && payload.get("name").and_then(|v| v.as_str()) == Some(_cp.as_str())
+            {
+                found_idx = Some(i + 1); // keep including this event
+                break;
+            }
         }
         match found_idx {
             Some(idx) => idx,
             None => {
-                anyhow::bail!("checkpoint '{}' not found in session {}", _cp, args.session_id);
+                anyhow::bail!(
+                    "checkpoint '{}' not found in session {}",
+                    _cp,
+                    args.session_id
+                );
             }
         }
     } else {
@@ -291,12 +296,15 @@ fn run_session_rewind(store: &SessionStore, args: SessionRewindArgs) -> Result<(
     store.rewrite_events(args.session_id, &kept)?;
 
     if args.json {
-        println!("{}", serde_json::to_string(&serde_json::json!({
-            "rewound": true,
-            "session_id": args.session_id.to_string(),
-            "kept_events": kept.len(),
-            "removed_events": removed,
-        }))?);
+        println!(
+            "{}",
+            serde_json::to_string(&serde_json::json!({
+                "rewound": true,
+                "session_id": args.session_id.to_string(),
+                "kept_events": kept.len(),
+                "removed_events": removed,
+            }))?
+        );
     } else {
         println!(
             "Session {} rewound: {} events kept, {} removed.",

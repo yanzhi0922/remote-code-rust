@@ -38,8 +38,8 @@ fn parse_key(name: &str) -> Key {
         "shift" => Key::Shift,
         "meta" | "super" | "win" | "cmd" | "command" => Key::Meta,
         "capslock" => Key::CapsLock,
-        s if s.len() == 1 => Key::Unicode(s.chars().next().unwrap()),
-        _ => Key::Unicode(name.chars().next().unwrap()),
+        s if s.len() == 1 => Key::Unicode(s.chars().next().unwrap_or('\0')),
+        _ => Key::Unicode(name.chars().next().unwrap_or('\0')),
     }
 }
 
@@ -69,7 +69,12 @@ pub async fn key_press(input: &Value) -> Result<String> {
             .iter()
             .map(|p| parse_key(p.trim()))
             .collect();
-        let main_key = parse_key(parts.last().unwrap().trim());
+        let main_key = parse_key(
+            parts
+                .last()
+                .expect("len > 1 guarantees last element")
+                .trim(),
+        );
 
         for _ in 0..count {
             for m in &modifiers {

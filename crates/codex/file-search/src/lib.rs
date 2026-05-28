@@ -630,7 +630,10 @@ impl RunReporter {
         while !*completed {
             completed = cv.wait(completed).unwrap_or_else(|e| e.into_inner());
         }
-        self.snapshot.read().unwrap_or_else(|e| e.into_inner()).clone()
+        self.snapshot
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 }
 

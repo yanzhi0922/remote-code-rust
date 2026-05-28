@@ -603,8 +603,8 @@ async fn build_gui_doctor_report(
 
     let mut warnings = Vec::new();
     let mut issues = validation.issues.clone();
-    let user_sources_enabled = setting_source_enabled(config, SettingSource::User);
-    let project_sources_enabled = setting_source_enabled(config, SettingSource::Project);
+    let user_sources_enabled = config.setting_source_enabled(SettingSource::User);
+    let project_sources_enabled = config.setting_source_enabled(SettingSource::Project);
 
     let skills = if user_sources_enabled {
         match discover_skills(&config.paths.skills_dir) {
@@ -860,14 +860,10 @@ fn mcp_config_path_for_scope(
     }
 }
 
-fn setting_source_enabled(config: &RuntimeConfig, source: SettingSource) -> bool {
-    config.allowed_setting_sources.contains(&source)
-}
-
 fn mcp_scope_enabled(config: &RuntimeConfig, scope: ConfigScopeDto) -> bool {
     match scope {
-        ConfigScopeDto::Profile => setting_source_enabled(config, SettingSource::User),
-        ConfigScopeDto::Project => setting_source_enabled(config, SettingSource::Project),
+        ConfigScopeDto::Profile => config.setting_source_enabled(SettingSource::User),
+        ConfigScopeDto::Project => config.setting_source_enabled(SettingSource::Project),
     }
 }
 
@@ -1482,13 +1478,14 @@ fn conversation_entry_to_dto(entry: &ConversationEntry) -> ConversationEntryDto 
     }
 }
 
-fn session_summary_to_dto(summary: SessionSummary) -> SessionSummaryDto {
+fn session_summary_to_dto(summary: SessionSummary, agent_type: String) -> SessionSummaryDto {
     SessionSummaryDto {
         id: summary.session_id.to_string(),
         title: summary.title,
         cwd: summary.cwd.display().to_string(),
         provider_name: summary.provider_name,
         model: summary.model,
+        agent_type,
         created_at: summary.created_at.to_rfc3339(),
         updated_at: summary.updated_at.to_rfc3339(),
         archived: summary.archived,
@@ -1499,6 +1496,7 @@ fn full_settings_from_runtime(
     config: &RuntimeConfig,
     gui_settings: &GuiSettingsFile,
 ) -> FullSettingsDto {
+    let path_layout = crate::paths::RuntimePathLayout::from_app_paths(&config.paths);
     FullSettingsDto {
         provider_name: config.provider.name.clone(),
         provider_model: config.provider.model.clone(),
@@ -1525,6 +1523,22 @@ fn full_settings_from_runtime(
         codex_permission_profile: gui_settings.codex_permission_profile.clone(),
         codex_service_tier: gui_settings.codex_service_tier.clone(),
         codex_ephemeral: gui_settings.codex_ephemeral,
+        runtime_paths: runtime_paths_to_dto(&path_layout),
+    }
+}
+
+fn runtime_paths_to_dto(layout: &crate::paths::RuntimePathLayout) -> RuntimePathsDto {
+    RuntimePathsDto {
+        profile_dir: layout.profile_dir.display().to_string(),
+        sessions_dir: layout.sessions_dir.display().to_string(),
+        artifacts_dir: layout.artifacts_dir.display().to_string(),
+        logs_dir: layout.logs_dir.display().to_string(),
+        cache_dir: layout.cache_dir.display().to_string(),
+        agents_dir: layout.agents_dir.display().to_string(),
+        remote_control_file: layout.remote_control_file.display().to_string(),
+        gui_projects_file: layout.gui_projects_file.display().to_string(),
+        gui_providers_file: layout.gui_providers_file.display().to_string(),
+        gui_settings_file: layout.gui_settings_file.display().to_string(),
     }
 }
 
@@ -1668,6 +1682,14 @@ fn load_base_runtime_config(profile_override: Option<PathBuf>) -> Result<Runtime
 fn build_runtime_state() -> Result<RuntimeState> {
     let profile_override = profile_override_from_env();
     let mut config = load_base_runtime_config(profile_override)?;
+    crate::paths::RuntimePathLayout::from_app_paths(&config.paths)
+        .ensure_exists()
+        .with_context(|| {
+            format!(
+                "failed to create runtime directories under {}",
+                config.paths.profile_dir.display()
+            )
+        })?;
     let mut provider_configs = load_provider_configs(&config.paths)?;
     let gui_settings = load_gui_settings(&config.paths)?;
 
@@ -2206,7 +2228,11 @@ where
         .ok_or_else(|| "Codex adapter was not initialized".to_owned())?;
     operation(adapter)
         .await
-        .map_err(|error| format!("{error:#}"))
+        .map_err(|error| {
+                let msg = format!("{error:#}");
+                tracing::warn!(error = %msg, "command error");
+                msg
+            })
 }
 
 fn parse_codex_mcp_detail(value: Option<&str>) -> Option<McpServerStatusDetail> {
@@ -2491,7 +2517,11 @@ impl PermissionBroker for GuiRuntimePermissionBroker {
 }
 
 fn as_error<T>(result: Result<T>) -> std::result::Result<T, String> {
-    result.map_err(|error| format!("{error:#}"))
+    result.map_err(|error| {
+                let msg = format!("{error:#}");
+                tracing::warn!(error = %msg, "command error");
+                msg
+            })
 }
 
 /// Read the agent_type stored in session metadata.

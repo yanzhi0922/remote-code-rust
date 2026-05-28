@@ -100,8 +100,14 @@ pub fn cargo_bin(name: &str) -> Result<PathBuf, CargoBinError> {
 
 fn legacy_target_bin(name: &str) -> Result<Option<PathBuf>, CargoBinError> {
     let target_dir = target_profile_dir()?;
-    let path = target_dir.join(format!("{name}{}", std::env::consts::EXE_SUFFIX));
-    Ok(path.exists().then_some(path))
+    let bin_name = format!("{name}{}", std::env::consts::EXE_SUFFIX);
+    for dir in [&target_dir, &target_dir.join("deps")] {
+        let path = dir.join(&bin_name);
+        if path.exists() {
+            return Ok(Some(path));
+        }
+    }
+    Ok(None)
 }
 
 fn target_profile_dir() -> Result<PathBuf, CargoBinError> {
@@ -155,6 +161,7 @@ fn build_helper_bin(name: &str) -> Result<Option<PathBuf>, CargoBinError> {
 
 fn helper_bin_package(name: &str) -> Option<&'static str> {
     match name {
+        "codex" => Some("codex-cli"),
         "test_stdio_server" | "test_streamable_http_server" => Some("codex-rmcp-client"),
         _ => None,
     }

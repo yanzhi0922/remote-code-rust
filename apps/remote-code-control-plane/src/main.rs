@@ -109,8 +109,9 @@ async fn main() -> Result<()> {
                         let cert_pem = std::fs::read(&cert_path).with_context(|| {
                             format!("reading QUIC cert from {}", cert_path.display())
                         })?;
-                        let key_pem = std::fs::read(&key_path)
-                            .with_context(|| format!("reading QUIC key from {}", key_path.display()))?;
+                        let key_pem = std::fs::read(&key_path).with_context(|| {
+                            format!("reading QUIC key from {}", key_path.display())
+                        })?;
                         Ok((cert_pem, key_pem))
                     })
                     .await

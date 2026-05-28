@@ -185,13 +185,16 @@ fn forward_request(
     let mut buf = [0u8; 8192];
     loop {
         let n = reader.read(&mut buf)?;
-        if n == 0 { break; }
+        if n == 0 {
+            break;
+        }
         body.extend_from_slice(&buf[..n]);
         if body.len() > max_body_size {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 "request body exceeds maximum allowed size (64 MiB)",
-            ).into());
+            )
+            .into());
         }
     }
 

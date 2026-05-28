@@ -29,9 +29,7 @@ impl GitOperations {
     /// Open a Git repository at the given path.
     pub fn open(repo_path: impl Into<PathBuf>) -> Result<Self> {
         let path = repo_path.into();
-        if let Ok(output) = git_command(&["rev-parse", "--show-toplevel"], &path)
-            .output()
-        {
+        if let Ok(output) = git_command(&["rev-parse", "--show-toplevel"], &path).output() {
             if output.status.success() {
                 let top_level = String::from_utf8_lossy(&output.stdout).trim().to_owned();
                 if !top_level.is_empty() {
@@ -84,8 +82,8 @@ impl GitOperations {
         let branch = self.current_branch()?;
 
         // Use git command for reliable status output
-        let output = git_command(&["status", "--porcelain=v1", "--branch"], &self.repo_path)
-            .output()?;
+        let output =
+            git_command(&["status", "--porcelain=v1", "--branch"], &self.repo_path).output()?;
 
         if !output.status.success() {
             return Err(anyhow::anyhow!(
@@ -209,8 +207,7 @@ impl GitOperations {
 
     /// Create a commit.
     pub fn commit(&self, message: &str) -> Result<CommitResult> {
-        let output = git_command(&["commit", "-m", message], &self.repo_path)
-            .output()?;
+        let output = git_command(&["commit", "-m", message], &self.repo_path).output()?;
 
         if !output.status.success() {
             return Err(anyhow::anyhow!(
@@ -219,8 +216,7 @@ impl GitOperations {
             ));
         }
 
-        let hash_output = git_command(&["rev-parse", "HEAD"], &self.repo_path)
-            .output()?;
+        let hash_output = git_command(&["rev-parse", "HEAD"], &self.repo_path).output()?;
         if !hash_output.status.success() {
             return Err(anyhow::anyhow!(
                 "git rev-parse failed after commit: {}",
@@ -243,8 +239,7 @@ impl GitOperations {
 
     /// List branches.
     pub fn branches(&self) -> Result<Vec<BranchInfo>> {
-        let output = git_command(&["branch", "-a", "--no-color"], &self.repo_path)
-            .output()?;
+        let output = git_command(&["branch", "-a", "--no-color"], &self.repo_path).output()?;
 
         if !output.status.success() {
             return Err(anyhow::anyhow!(
@@ -290,8 +285,7 @@ impl GitOperations {
             return Err(anyhow::anyhow!("invalid branch name"));
         }
 
-        let output = git_command(&["checkout", name], &self.repo_path)
-            .output()?;
+        let output = git_command(&["checkout", name], &self.repo_path).output()?;
 
         if !output.status.success() {
             return Err(anyhow::anyhow!(

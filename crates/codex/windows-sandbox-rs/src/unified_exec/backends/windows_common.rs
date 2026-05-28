@@ -320,7 +320,11 @@ mod tests {
         let (tx, rx) = std::sync::mpsc::channel::<FramedMessage>();
         let mut resizer = make_runner_resizer(tx);
 
-        resizer(TerminalSize { rows: 40, cols: 120 }).unwrap();
+        resizer(TerminalSize {
+            rows: 40,
+            cols: 120,
+        })
+        .unwrap();
 
         let msg = rx.recv().unwrap();
         match msg.message {

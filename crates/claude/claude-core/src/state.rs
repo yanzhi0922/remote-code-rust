@@ -1,5 +1,5 @@
 use std::collections::BTreeSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -243,7 +243,9 @@ impl AppState {
     }
 
     /// Check if a memory file has been loaded.
-    pub fn is_memory_loaded(&self, path: &PathBuf) -> bool {
+    #[inline]
+    #[must_use]
+    pub fn is_memory_loaded(&self, path: &Path) -> bool {
         self.loaded_memory_paths.contains(path)
     }
 
@@ -253,6 +255,8 @@ impl AppState {
     }
 
     /// Check if a feature flag is enabled.
+    #[inline]
+    #[must_use]
     pub fn is_feature_enabled(&self, flag: &str) -> bool {
         self.feature_flags.contains(flag)
     }
@@ -261,6 +265,7 @@ impl AppState {
     ///
     /// This must be kept in sync with the number of fields defined in
     /// [`AppState`]. When adding or removing a field, update this constant.
+    #[must_use]
     pub fn field_count() -> usize {
         35 // session_id, active_agent_id, permission_mode, messages,
         // discovered_skills, active_tools, model, queued_task_count,

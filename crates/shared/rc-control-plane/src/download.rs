@@ -125,7 +125,8 @@ pub(crate) async fn download_file(
             return Err(StatusCode::PAYLOAD_TOO_LARGE);
         }
 
-        let bytes = std::fs::read(&canonical_path).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        let bytes =
+            std::fs::read(&canonical_path).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
         Ok((bytes, filename_for_header))
     })
     .await;

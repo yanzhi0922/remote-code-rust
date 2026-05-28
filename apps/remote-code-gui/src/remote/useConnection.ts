@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useMemo, useSyncExternalStore } from 'react';
 import type { RemoteTimelineEvent } from './types';
 import {
   getConnectionManager,
@@ -54,16 +54,10 @@ export function useConnection(
 ): UseConnectionReturn {
   const state = useSyncExternalStore(subscribeToState, getSnapshot, getServerSnapshot);
 
-  // Keep the latest onEvent in a ref so we subscribe only once and avoid
-  // listener churn on every render when the caller's callback identity changes.
-  const onEventRef = useRef(onEvent);
-  onEventRef.current = onEvent;
-
   useEffect(() => {
-    const handler = (event: RemoteTimelineEvent) => onEventRef.current?.(event);
-    const unsubscribe = onConnectionManagerEvent(handler);
+    const unsubscribe = onEvent ? onConnectionManagerEvent(onEvent) : undefined;
     return () => {
-      unsubscribe();
+      unsubscribe?.();
       destroyConnectionManager();
     };
   }, []);

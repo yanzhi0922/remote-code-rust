@@ -76,7 +76,11 @@ pub async fn mobile_haptic_notification(
         };
         app.haptics()
             .notification_feedback(notif_type)
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| {
+                let msg = e.to_string();
+                tracing::warn!(error = %msg, "command error");
+                msg
+            })?;
     }
     let _ = kind;
     let _ = &app;
@@ -90,7 +94,11 @@ pub async fn mobile_biometric_check_availability(
     #[cfg(any(target_os = "android", target_os = "ios"))]
     {
         use tauri_plugin_biometric::BiometricExt;
-        let status = app.biometric().status().map_err(|e| e.to_string())?;
+        let status = app.biometric().status().map_err(|e| {
+                let msg = e.to_string();
+                tracing::warn!(error = %msg, "command error");
+                msg
+            })?;
         let biometry_type = match status.biometry_type {
             tauri_plugin_biometric::BiometryType::TouchID => "touchid",
             tauri_plugin_biometric::BiometryType::FaceID => "faceid",
@@ -126,7 +134,11 @@ pub async fn mobile_biometric_authenticate(
         app.biometric()
             .authenticate(reason, options)
             .map(|_| true)
-            .map_err(|e| e.to_string())
+            .map_err(|e| {
+                let msg = e.to_string();
+                tracing::warn!(error = %msg, "command error");
+                msg
+            })
     }
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     {
@@ -143,7 +155,11 @@ pub async fn mobile_secure_store_get(
     let app_config_dir = app.path().app_config_dir().ok();
     tokio::task::spawn_blocking(move || -> Result<Option<String>, String> {
         let entry =
-            keyring::Entry::new("remote-code-secure-store", &key).map_err(|e| e.to_string())?;
+            keyring::Entry::new("remote-code-secure-store", &key).map_err(|e| {
+                let msg = e.to_string();
+                tracing::warn!(error = %msg, "command error");
+                msg
+            })?;
         match entry.get_password() {
             Ok(value) => Ok(Some(value)),
             Err(keyring::Error::NoEntry) => {
@@ -151,10 +167,9 @@ pub async fn mobile_secure_store_get(
                     let legacy_path = dir.join("secure_store.json");
                     if legacy_path.exists() {
                         if let Ok(data) = std::fs::read_to_string(&legacy_path) {
-                            if let Ok(map) =
-                                serde_json::from_str::<std::collections::HashMap<String, String>>(
-                                    &data,
-                                )
+                            if let Ok(map) = serde_json::from_str::<
+                                std::collections::HashMap<String, String>,
+                            >(&data)
                             {
                                 if let Some(value) = map.get(&key).cloned() {
                                     if entry.set_password(&value).is_ok() {
@@ -174,32 +189,56 @@ pub async fn mobile_secure_store_get(
         }
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| {
+                let msg = e.to_string();
+                tracing::warn!(error = %msg, "command error");
+                msg
+            })?
 }
 
 #[tauri::command]
 pub async fn mobile_secure_store_set(key: String, value: String) -> Result<(), String> {
     tokio::task::spawn_blocking(move || -> Result<(), String> {
         let entry =
-            keyring::Entry::new("remote-code-secure-store", &key).map_err(|e| e.to_string())?;
-        entry.set_password(&value).map_err(|e| e.to_string())
+            keyring::Entry::new("remote-code-secure-store", &key).map_err(|e| {
+                let msg = e.to_string();
+                tracing::warn!(error = %msg, "command error");
+                msg
+            })?;
+        entry.set_password(&value).map_err(|e| {
+                let msg = e.to_string();
+                tracing::warn!(error = %msg, "command error");
+                msg
+            })
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| {
+                let msg = e.to_string();
+                tracing::warn!(error = %msg, "command error");
+                msg
+            })?
 }
 
 #[tauri::command]
 pub async fn mobile_secure_store_remove(key: String) -> Result<(), String> {
     tokio::task::spawn_blocking(move || -> Result<(), String> {
         let entry =
-            keyring::Entry::new("remote-code-secure-store", &key).map_err(|e| e.to_string())?;
+            keyring::Entry::new("remote-code-secure-store", &key).map_err(|e| {
+                let msg = e.to_string();
+                tracing::warn!(error = %msg, "command error");
+                msg
+            })?;
         match entry.delete_credential() {
             Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
             Err(e) => Err(e.to_string()),
         }
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| {
+                let msg = e.to_string();
+                tracing::warn!(error = %msg, "command error");
+                msg
+            })?
 }
 
 #[tauri::command]
@@ -215,16 +254,28 @@ pub async fn mobile_download_artifact(
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(60))
         .build()
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| {
+                let msg = e.to_string();
+                tracing::warn!(error = %msg, "command error");
+                msg
+            })?;
     let mut request = client.get(&url);
     if let Some(t) = token {
         request = request.header("Authorization", format!("Bearer {t}"));
     }
-    let response = request.send().await.map_err(|e| e.to_string())?;
+    let response = request.send().await.map_err(|e| {
+                let msg = e.to_string();
+                tracing::warn!(error = %msg, "command error");
+                msg
+            })?;
     if !response.status().is_success() {
         return Err(format!("HTTP {}", response.status()));
     }
-    let bytes = response.bytes().await.map_err(|e| e.to_string())?;
+    let bytes = response.bytes().await.map_err(|e| {
+                let msg = e.to_string();
+                tracing::warn!(error = %msg, "command error");
+                msg
+            })?;
     if bytes.len() > MAX_DOWNLOAD_SIZE {
         return Err(format!(
             "download too large ({} bytes, max {} bytes)",
@@ -237,9 +288,17 @@ pub async fn mobile_download_artifact(
         .download_dir()
         .unwrap_or_else(|_| std::env::temp_dir())
         .join("remote-code");
-    std::fs::create_dir_all(&download_dir).map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(&download_dir).map_err(|e| {
+                let msg = e.to_string();
+                tracing::warn!(error = %msg, "command error");
+                msg
+            })?;
     let file_path = download_dir.join(&file_name);
-    std::fs::write(&file_path, &bytes).map_err(|e| e.to_string())?;
+    std::fs::write(&file_path, &bytes).map_err(|e| {
+                let msg = e.to_string();
+                tracing::warn!(error = %msg, "command error");
+                msg
+            })?;
     Ok(file_path.to_string_lossy().to_string())
 }
 
@@ -273,7 +332,11 @@ pub async fn mobile_read_downloaded_text(
     if !file_path.exists() {
         return Ok(None);
     }
-    let content = std::fs::read_to_string(&file_path).map_err(|e| e.to_string())?;
+    let content = std::fs::read_to_string(&file_path).map_err(|e| {
+                let msg = e.to_string();
+                tracing::warn!(error = %msg, "command error");
+                msg
+            })?;
     Ok(Some(content))
 }
 
@@ -290,9 +353,19 @@ pub async fn mobile_delete_downloaded_file(
         .join("remote-code");
     let file_path = download_dir.join(&file_name);
     if file_path.exists() {
-        tokio::task::spawn_blocking(move || std::fs::remove_file(&file_path).map_err(|e| e.to_string()))
-            .await
-            .map_err(|e| e.to_string())??;
+        tokio::task::spawn_blocking(move || {
+            std::fs::remove_file(&file_path).map_err(|e| {
+                let msg = e.to_string();
+                tracing::warn!(error = %msg, "command error");
+                msg
+            })
+        })
+        .await
+        .map_err(|e| {
+                let msg = e.to_string();
+                tracing::warn!(error = %msg, "command error");
+                msg
+            })??;
     }
     Ok(())
 }
@@ -321,7 +394,11 @@ pub async fn mobile_list_downloaded_files(
         Ok(files)
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| {
+                let msg = e.to_string();
+                tracing::warn!(error = %msg, "command error");
+                msg
+            })?
 }
 
 #[tauri::command]
@@ -338,14 +415,22 @@ pub async fn mobile_share_file(
     let file_path_for_fs = file_path.clone();
     let (canonical_path, canonical_dir) =
         tokio::task::spawn_blocking(move || -> std::result::Result<_, String> {
-            let canonical_path =
-                std::fs::canonicalize(&file_path_for_fs).map_err(|e| format!("file not found: {e}"))?;
+            let canonical_path = std::fs::canonicalize(&file_path_for_fs)
+                .map_err(|e| {
+                let msg = format!("file not found: {e}");
+                tracing::warn!(error = %msg, "command error");
+                msg
+            })?;
             let canonical_dir =
                 std::fs::canonicalize(&download_dir).unwrap_or_else(|_| download_dir.clone());
             Ok((canonical_path, canonical_dir))
         })
         .await
-        .map_err(|e| e.to_string())??;
+        .map_err(|e| {
+                let msg = e.to_string();
+                tracing::warn!(error = %msg, "command error");
+                msg
+            })??;
     if !canonical_path.starts_with(&canonical_dir) {
         return Err("file is outside the allowed download directory".to_string());
     }
@@ -377,7 +462,11 @@ pub async fn mobile_push_request_permission(app: AppHandle<impl Runtime>) -> Res
         let permission = app
             .notification()
             .permission_state()
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| {
+                let msg = e.to_string();
+                tracing::warn!(error = %msg, "command error");
+                msg
+            })?;
         if permission == tauri_plugin_notification::PermissionState::Denied {
             return Ok(false);
         }
@@ -387,7 +476,11 @@ pub async fn mobile_push_request_permission(app: AppHandle<impl Runtime>) -> Res
         let result = app
             .notification()
             .request_permission()
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| {
+                let msg = e.to_string();
+                tracing::warn!(error = %msg, "command error");
+                msg
+            })?;
         Ok(result == tauri_plugin_notification::PermissionState::Granted)
     }
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -411,7 +504,11 @@ pub async fn mobile_push_show(
         if let Some(ref d) = data {
             builder = builder.extra("data", d);
         }
-        builder.show().map_err(|e| e.to_string())?;
+        builder.show().map_err(|e| {
+                let msg = e.to_string();
+                tracing::warn!(error = %msg, "command error");
+                msg
+            })?;
     }
     let _ = (app, title, body, data);
     Ok(())
@@ -449,7 +546,11 @@ pub async fn mobile_push_register_token(
         }))
         .send()
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| {
+                let msg = e.to_string();
+                tracing::warn!(error = %msg, "command error");
+                msg
+            })?;
     if response.status().is_success() {
         Ok(true)
     } else {
@@ -481,7 +582,11 @@ pub async fn mobile_quic_status(
     match guard.as_ref() {
         Some(bridge) => {
             let s = bridge.transport.state();
-            serde_json::to_string(&s).map_err(|e| format!("{e}"))
+            serde_json::to_string(&s).map_err(|e| {
+                let msg = format!("{e}");
+                tracing::warn!(error = %msg, "command error");
+                msg
+            })
         }
         None => Ok("\"disconnected\"".to_owned()),
     }

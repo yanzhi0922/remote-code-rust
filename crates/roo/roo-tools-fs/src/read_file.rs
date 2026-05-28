@@ -836,8 +836,8 @@ mod tests {
     #[test]
     fn test_process_read_file_directory() {
         let dir = tempfile::tempdir().unwrap();
-        let params = slice_params(dir.path().to_str().unwrap(), None, None);
-        let result = process_read_file(&params, std::path::Path::new("."), None);
+        let params = slice_params(".", None, None);
+        let result = process_read_file(&params, dir.path(), None);
         assert!(result.is_err());
     }
 
@@ -847,8 +847,8 @@ mod tests {
         let file_path = dir.path().join("test.txt");
         std::fs::write(&file_path, "hello\nworld\nfoo\nbar\n").unwrap();
 
-        let params = slice_params(file_path.to_str().unwrap(), None, None);
-        let result = process_read_file(&params, std::path::Path::new("."), None).unwrap();
+        let params = slice_params("test.txt", None, None);
+        let result = process_read_file(&params, dir.path(), None).unwrap();
         assert_eq!(result.total_lines, 4);
         assert!(!result.is_binary);
         assert!(result.content.contains("hello"));
@@ -860,8 +860,8 @@ mod tests {
         let file_path = dir.path().join("binary.bin");
         std::fs::write(&file_path, b"hello\x00world").unwrap();
 
-        let params = slice_params(file_path.to_str().unwrap(), None, None);
-        let result = process_read_file(&params, std::path::Path::new("."), None).unwrap();
+        let params = slice_params("binary.bin", None, None);
+        let result = process_read_file(&params, dir.path(), None).unwrap();
         assert!(result.is_binary);
     }
 
@@ -871,8 +871,8 @@ mod tests {
         let file_path = dir.path().join("test.txt");
         std::fs::write(&file_path, "line1\nline2\nline3\nline4\nline5\n").unwrap();
 
-        let params = slice_params(file_path.to_str().unwrap(), Some(3), Some(2));
-        let result = process_read_file(&params, std::path::Path::new("."), None).unwrap();
+        let params = slice_params("test.txt", Some(3), Some(2));
+        let result = process_read_file(&params, dir.path(), None).unwrap();
         assert_eq!(result.total_lines, 5);
         assert!(result.truncated);
         assert!(result.content.contains("3 | line3"));
@@ -1015,8 +1015,8 @@ struct Foo {
         )
         .unwrap();
 
-        let params = indent_params(file_path.to_str().unwrap(), 5, Some(0), false);
-        let result = process_read_file(&params, std::path::Path::new("."), None).unwrap();
+        let params = indent_params("test.rs", 5, Some(0), false);
+        let result = process_read_file(&params, dir.path(), None).unwrap();
         assert!(!result.is_binary);
         assert!(result.content.contains("println!"));
     }

@@ -18,7 +18,7 @@ pub(super) const REMOTE_CODE_PROJECT_APPLICATION: &str = "remote-code";
 ///
 /// The adapter treats these as in-memory overrides and delegates final
 /// validation to Codex's native `ConfigBuilder` and app-server request handlers.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct CodexAdapterOptions {
     pub cwd: PathBuf,
@@ -55,6 +55,37 @@ pub struct CodexAdapterOptions {
 
 fn default_true() -> bool {
     true
+}
+
+impl Default for CodexAdapterOptions {
+    fn default() -> Self {
+        Self {
+            cwd: Default::default(),
+            model: Default::default(),
+            model_provider: Default::default(),
+            api_key: Default::default(),
+            base_url: Default::default(),
+            wire_api: Default::default(),
+            upstream_url: Default::default(),
+            approval_policy: Default::default(),
+            sandbox_mode: Default::default(),
+            permission_profile: Default::default(),
+            service_tier: Default::default(),
+            persist_extended_history: Default::default(),
+            ephemeral: Default::default(),
+            memories_enabled: Default::default(),
+            thread_store_endpoint: Default::default(),
+            config_overrides: Default::default(),
+            cli_overrides: Default::default(),
+            mcp_servers: Default::default(),
+            enable_codex_api_key_env: Default::default(),
+            client_name: Default::default(),
+            client_version: Default::default(),
+            exec_server_url: Default::default(),
+            channel_capacity: Default::default(),
+            feedback_capture_enabled: default_true(),
+        }
+    }
 }
 
 /// Resolve the Codex home used by Remote Code's embedded Codex runtime.
@@ -519,6 +550,7 @@ mod tests {
         assert_eq!(back.cwd, PathBuf::from("/tmp"));
         assert_eq!(back.model.as_deref(), Some("gpt-4"));
         assert_eq!(back.approval_policy.as_deref(), Some("on-failure"));
+        assert!(back.feedback_capture_enabled);
     }
 
     #[test]
@@ -527,6 +559,20 @@ mod tests {
         assert!(opts.model.is_none());
         assert!(opts.api_key.is_none());
         assert!(opts.config_overrides.is_empty());
-        assert!(!opts.feedback_capture_enabled); // Default derive sets bool to false
+        assert!(opts.feedback_capture_enabled);
+    }
+
+    #[test]
+    fn codex_adapter_options_serde_default_matches_programmatic_default() {
+        // Serialize minimal JSON (no feedback_capture_enabled field) and verify
+        // serde default matches programmatic default.
+        let json = r#"{"cwd":"/tmp"}"#;
+        let from_json: CodexAdapterOptions = serde_json::from_str(json).unwrap();
+        let from_default = CodexAdapterOptions::default();
+        assert_eq!(
+            from_json.feedback_capture_enabled,
+            from_default.feedback_capture_enabled,
+            "serde default and programmatic default must agree"
+        );
     }
 }

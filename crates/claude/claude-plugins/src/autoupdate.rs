@@ -115,7 +115,15 @@ pub fn check_for_updates(
         result.checked_count += 1;
 
         let update_result = if let Some(latest) = version_map.get(plugin_id.as_str()) {
-            if latest > &current_version.as_str() {
+            let outdated = match (
+                crate::versioning::parse_version(current_version),
+                crate::versioning::parse_version(latest),
+            ) {
+                (Ok(cur), Ok(lat)) => lat > cur,
+                // Fall back to lexicographic comparison if either version is unparseable.
+                _ => *latest > current_version.as_str(),
+            };
+            if outdated {
                 result.updates_available += 1;
                 AutoUpdateResult {
                     plugin_id: plugin_id.clone(),

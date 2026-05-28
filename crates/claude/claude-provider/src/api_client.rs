@@ -457,11 +457,15 @@ impl ApiClient {
                     // 4xx = key invalid or bad request
                     Ok(false)
                 } else {
-                    // 5xx = server error, cannot verify key validity
-                    Ok(false)
+                    // 5xx = server error, cannot determine key validity.
+                    // Treat as transient rather than declaring the key invalid.
+                    Err(anyhow::anyhow!(
+                        "provider returned HTTP {}, cannot verify key",
+                        status
+                    ))
                 }
             }
-            Err(_) => Ok(false),
+            Err(e) => Err(anyhow::anyhow!("request failed: {e}")),
         }
     }
 

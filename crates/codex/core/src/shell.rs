@@ -52,10 +52,8 @@ impl Shell {
             }
             ShellType::PowerShell => {
                 let mut args = vec![self.shell_path.to_string_lossy().to_string()];
-                if !use_login_shell {
-                    args.push("-NoProfile".to_string());
-                }
-
+                // PowerShell has no login-shell equivalent; profiles make command execution host-dependent.
+                args.push("-NoProfile".to_string());
                 args.push("-Command".to_string());
                 args.push(command.to_string());
                 args

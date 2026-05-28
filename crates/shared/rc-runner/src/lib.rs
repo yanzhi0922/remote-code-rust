@@ -440,15 +440,7 @@ impl LatencyTracker {
         let ms = elapsed.as_millis() as u64;
         self.commands_processed.fetch_add(1, Ordering::Relaxed);
         self.total_latency_ms.fetch_add(ms, Ordering::Relaxed);
-        let prev_max = self.max_latency_ms.load(Ordering::Relaxed);
-        if ms > prev_max {
-            let _ = self.max_latency_ms.compare_exchange(
-                prev_max,
-                ms,
-                Ordering::Relaxed,
-                Ordering::Relaxed,
-            );
-        }
+        self.max_latency_ms.fetch_max(ms, Ordering::Relaxed);
     }
 
     fn metrics(&self) -> CommandLatencyMetrics {
@@ -490,22 +482,26 @@ impl RunnerApi {
     }
 
     /// Return current command latency metrics.
+    #[inline]
     #[must_use]
     pub fn latency_metrics(&self) -> CommandLatencyMetrics {
         self.latency.metrics()
     }
 
     /// Record a command's processing latency for observability.
+    #[inline]
     pub fn record_command_latency(&self, elapsed: Duration) {
         self.latency.record(elapsed);
     }
 
+    #[inline]
     #[must_use]
     pub fn with_event_channel(mut self, event_tx: mpsc::Sender<RunnerApiEvent>) -> Self {
         self.event_tx = Some(event_tx);
         self
     }
 
+    #[inline]
     #[must_use]
     pub fn meta(&self) -> &RunnerMeta {
         &self.meta
@@ -782,6 +778,7 @@ impl RunnerApi {
     }
 
     /// Subscribe to broadcast events for direct-connect streaming.
+    #[inline]
     pub fn subscribe_stream_events(&self) -> broadcast::Receiver<(Uuid, String)> {
         self.stream_tx.subscribe()
     }
@@ -804,7 +801,9 @@ impl RunnerApi {
         let json_line = match serde_json::to_string(&detail) {
             Ok(s) => s,
             Err(e) => {
-                tracing::warn!("failed to serialize runtime event detail for session {session_id}: {e}");
+                tracing::warn!(
+                    "failed to serialize runtime event detail for session {session_id}: {e}"
+                );
                 return true;
             }
         };
@@ -979,6 +978,7 @@ pub fn describe_status(config: &RunnerConfig) -> Result<RunnerStatus> {
     })
 }
 
+#[must_use]
 pub fn validate_runner_config(config: &RunnerConfig) -> Vec<String> {
     let mut issues = Vec::new();
     let auth_configured = config.auth_token.is_some();
@@ -1076,6 +1076,7 @@ pub fn parse_runner_workspaces(raw: &str) -> Result<Vec<RunnerWorkspace>> {
     Ok(workspaces)
 }
 
+#[must_use]
 pub fn parse_key_value_map(raw: &str) -> BTreeMap<String, String> {
     let mut values = BTreeMap::new();
     for entry in raw
@@ -1117,6 +1118,7 @@ pub async fn register_with_control_plane(
         )?),
         control_plane_auth_token,
     )
+    .timeout(std::time::Duration::from_secs(10))
     .json(&payload)
     .send()
     .await
@@ -1143,6 +1145,7 @@ pub async fn send_heartbeat(
         client.post(control_plane_endpoint(control_plane_url, &path)?),
         auth_token,
     )
+    .timeout(std::time::Duration::from_secs(10))
     .json(heartbeat)
     .send()
     .await
@@ -1297,6 +1300,7 @@ fn extract_query_auth_token(query: Option<&str>) -> Option<String> {
     None
 }
 
+#[must_use]
 pub fn percent_decode_query_value(raw: &str) -> String {
     let bytes = raw.as_bytes();
     let mut decoded = Vec::with_capacity(bytes.len());

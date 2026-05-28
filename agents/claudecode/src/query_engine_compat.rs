@@ -1,9 +1,9 @@
+use parking_lot::Mutex as ParkingLotMutex;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::path::PathBuf;
-use std::sync::{Arc, OnceLock};
 use std::sync::atomic::{AtomicBool, Ordering};
-use parking_lot::Mutex as ParkingLotMutex;
+use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 
 use anyhow::{Result, anyhow};
@@ -404,9 +404,8 @@ fn runtime_mcp_session_observations()
 
 fn runtime_mcp_observation_from_discovery(config: &RuntimeConfig) -> RuntimeMcpObservation {
     let config_clone = config.clone();
-    let discovery = tokio::task::block_in_place(|| {
-        discover_runtime_mcp_servers(&config_clone, &[])
-    });
+    let discovery =
+        tokio::task::block_in_place(|| discover_runtime_mcp_servers(&config_clone, &[]));
     RuntimeMcpObservation {
         servers: discovery
             .servers
@@ -492,7 +491,9 @@ fn merge_runtime_mcp_observation_with_discovery(
     }
 }
 
-fn runtime_mcp_session_observation(config: &RuntimeConfig) -> Arc<ParkingLotMutex<RuntimeMcpObservation>> {
+fn runtime_mcp_session_observation(
+    config: &RuntimeConfig,
+) -> Arc<ParkingLotMutex<RuntimeMcpObservation>> {
     let discovery = runtime_mcp_observation_from_discovery(config);
     let session_id = config.session_id;
     let sessions = runtime_mcp_session_observations();
@@ -4972,7 +4973,7 @@ while True:
         );
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn compat_run_accepts_dynamic_mcp_tools() {
         let _runtime_policy_guard = RUNTIME_POLICY_TEST_MUTEX
             .get_or_init(|| AsyncMutex::new(()))

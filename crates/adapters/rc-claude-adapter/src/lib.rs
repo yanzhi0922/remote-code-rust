@@ -50,8 +50,8 @@ use futures::FutureExt;
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use serde_json::json;
-use tokio::sync::{Mutex, mpsc, oneshot};
 use std::sync::Mutex as StdMutex;
+use tokio::sync::{Mutex, mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 use uuid::Uuid;
@@ -134,7 +134,10 @@ impl PermissionBroker for AdapterPermissionBroker {
 
         // Store the pending permission.
         {
-            let mut map = self.pending_permissions.lock().unwrap();
+            let mut map = self.pending_permissions.lock().unwrap_or_else(|e| {
+                tracing::warn!("Permission mutex poisoned, recovering: {e}");
+                e.into_inner()
+            });
             map.insert(request_id.clone(), pending);
         }
 
@@ -149,7 +152,10 @@ impl PermissionBroker for AdapterPermissionBroker {
         if let Err(e) = self.event_tx.send(event).await {
             warn!(%request_id, "failed to send permission request event: {e}");
             // Clean up the pending entry.
-            let mut map = self.pending_permissions.lock().unwrap();
+            let mut map = self.pending_permissions.lock().unwrap_or_else(|e| {
+                tracing::warn!("Permission mutex poisoned, recovering: {e}");
+                e.into_inner()
+            });
             map.remove(&request_id);
             return PermissionsPermissionDecision::deny("Failed to send permission request");
         }
@@ -165,14 +171,20 @@ impl PermissionBroker for AdapterPermissionBroker {
             Ok(Err(_)) => {
                 warn!(%request_id, "permission response channel dropped");
                 // Clean up the pending entry.
-                let mut map = self.pending_permissions.lock().unwrap();
+                let mut map = self.pending_permissions.lock().unwrap_or_else(|e| {
+                    tracing::warn!("Permission mutex poisoned, recovering: {e}");
+                    e.into_inner()
+                });
                 map.remove(&request_id);
                 PermissionsPermissionDecision::deny("Permission request cancelled")
             }
             Err(_) => {
                 warn!(%request_id, "permission request timed out after {PERMISSION_TIMEOUT_SECS}s");
                 // Clean up the pending entry.
-                let mut map = self.pending_permissions.lock().unwrap();
+                let mut map = self.pending_permissions.lock().unwrap_or_else(|e| {
+                    tracing::warn!("Permission mutex poisoned, recovering: {e}");
+                    e.into_inner()
+                });
                 map.remove(&request_id);
                 PermissionsPermissionDecision::deny("Permission request timed out")
             }
@@ -360,11 +372,13 @@ fn emit_delegate_progress(
 ) {
     let Some(event) = parse_delegate_progress_event(message) else {
         // Unstructured progress — emit as tool progress.
-        let _ = event_tx.try_send(UnifiedAgentEvent::ToolCallProgress {
+        if let Err(e) = event_tx.try_send(UnifiedAgentEvent::ToolCallProgress {
             session_id: session_id.to_owned(),
             tool_name: "agent".to_owned(),
             progress: message.to_owned(),
-        });
+        }) {
+            tracing::debug!("event channel full, dropping event: {e}");
+        }
         return;
     };
 
@@ -374,20 +388,24 @@ fn emit_delegate_progress(
             description,
             ..
         } => {
-            let _ = event_tx.try_send(UnifiedAgentEvent::SubtaskStarted {
+            if let Err(e) = event_tx.try_send(UnifiedAgentEvent::SubtaskStarted {
                 session_id: session_id.to_owned(),
                 task_id,
                 description,
-            });
+            }) {
+                tracing::debug!("event channel full, dropping event: {e}");
+            }
         }
         claude_tools::agent::DelegateProgressEvent::SubtaskProgress {
             task_id, summary, ..
         } => {
-            let _ = event_tx.try_send(UnifiedAgentEvent::SubtaskProgress {
+            if let Err(e) = event_tx.try_send(UnifiedAgentEvent::SubtaskProgress {
                 session_id: session_id.to_owned(),
                 task_id,
                 progress: summary,
-            });
+            }) {
+                tracing::debug!("event channel full, dropping event: {e}");
+            }
         }
         claude_tools::agent::DelegateProgressEvent::SubtaskCompleted {
             task_id,
@@ -395,14 +413,16 @@ fn emit_delegate_progress(
             output_preview,
             ..
         } => {
-            let _ = event_tx.try_send(UnifiedAgentEvent::SubtaskCompleted {
+            if let Err(e) = event_tx.try_send(UnifiedAgentEvent::SubtaskCompleted {
                 session_id: session_id.to_owned(),
                 task_id,
                 result: json!({
                     "success": success,
                     "output_preview": output_preview,
                 }),
-            });
+            }) {
+                tracing::debug!("event channel full, dropping event: {e}");
+            }
         }
         claude_tools::agent::DelegateProgressEvent::BatchProgress { .. } => {
             // BatchProgress doesn't have a direct UnifiedAgentEvent mapping.
@@ -423,6 +443,9 @@ struct AdapterQueryObserver {
     session_id: String,
     store: Arc<SessionStore>,
     session_uuid: Uuid,
+    /// Cached context window size from the last ContextBudgetEvaluated event.
+    /// Used to populate the `total` field in StreamingUsageUpdated mappings.
+    cached_max_tokens: std::sync::atomic::AtomicUsize,
 }
 
 impl AdapterQueryObserver {
@@ -437,6 +460,7 @@ impl AdapterQueryObserver {
             session_id,
             store,
             session_uuid,
+            cached_max_tokens: std::sync::atomic::AtomicUsize::new(0),
         }
     }
 }
@@ -536,7 +560,14 @@ impl QueryObserver for AdapterQueryObserver {
         }
 
         // 2. Map to UnifiedAgentEvent and forward through the event channel.
-        if let Some(unified) = event_mapper::map_observer_event(event, &self.session_id) {
+        let mut max_tokens = self
+            .cached_max_tokens
+            .load(std::sync::atomic::Ordering::Relaxed);
+        if let Some(unified) =
+            event_mapper::map_observer_event(event, &self.session_id, &mut max_tokens)
+        {
+            self.cached_max_tokens
+                .store(max_tokens, std::sync::atomic::Ordering::Relaxed);
             // Use a tolerant send — if the receiver is dropped (e.g. consumer
             // disconnected), we silently drop the event rather than erroring.
             let _ = self.event_tx.send(unified).await;
@@ -621,7 +652,10 @@ impl ClaudeInProcessAdapter {
     /// Uses `std::sync::Mutex` so this can be called from `Drop::drop` and
     /// other synchronous contexts without needing a tokio runtime handle.
     fn drain_pending_permissions_sync(&self) {
-        let mut map = self.pending_permissions.lock().unwrap();
+        let mut map = self.pending_permissions.lock().unwrap_or_else(|e| {
+            tracing::warn!("Permission mutex poisoned, recovering: {e}");
+            e.into_inner()
+        });
         for (id, pending) in map.drain() {
             let _ = pending
                 .response_tx
@@ -854,7 +888,10 @@ impl AgentAdapter for ClaudeInProcessAdapter {
     ) -> Result<()> {
         debug!(%request_id, "Resolving permission request");
 
-        let mut map = self.pending_permissions.lock().unwrap();
+        let mut map = self.pending_permissions.lock().unwrap_or_else(|e| {
+            tracing::warn!("Permission mutex poisoned, recovering: {e}");
+            e.into_inner()
+        });
         if let Some(pending) = map.remove(request_id) {
             let permissions_decision = match decision {
                 ProtocolPermissionDecision::Allow => PermissionsPermissionDecision::allow(),
@@ -963,7 +1000,8 @@ mod tests {
     #[test]
     fn emit_delegate_progress_subtask_started_event() {
         let (tx, mut rx) = mpsc::channel(64);
-        let message = r#"{"kind":"subtask_started","task_id":"t-1","description":"refactor auth","depth":0}"#;
+        let message =
+            r#"{"kind":"subtask_started","task_id":"t-1","description":"refactor auth","depth":0}"#;
         emit_delegate_progress(&tx, "session-1", message);
 
         let events = collect_events(&tx, &mut rx);
@@ -1003,7 +1041,11 @@ mod tests {
         let events = collect_events(&tx, &mut rx);
         assert_eq!(events.len(), 1);
         match &events[0] {
-            UnifiedAgentEvent::SubtaskCompleted { session_id, task_id, result } => {
+            UnifiedAgentEvent::SubtaskCompleted {
+                session_id,
+                task_id,
+                result,
+            } => {
                 assert_eq!(session_id, "session-1");
                 assert_eq!(task_id, "t-3");
                 assert_eq!(result["success"], true);
@@ -1020,7 +1062,10 @@ mod tests {
         emit_delegate_progress(&tx, "session-1", message);
 
         let events = collect_events(&tx, &mut rx);
-        assert!(events.is_empty(), "batch_progress should not emit a UnifiedAgentEvent");
+        assert!(
+            events.is_empty(),
+            "batch_progress should not emit a UnifiedAgentEvent"
+        );
     }
 
     #[test]
@@ -1035,11 +1080,15 @@ mod tests {
             let mut map = pending_permissions.lock().unwrap();
             map.insert(
                 "req-1".into(),
-                PendingPermission { response_tx: response_tx1 },
+                PendingPermission {
+                    response_tx: response_tx1,
+                },
             );
             map.insert(
                 "req-2".into(),
-                PendingPermission { response_tx: response_tx2 },
+                PendingPermission {
+                    response_tx: response_tx2,
+                },
             );
         }
 
@@ -1050,10 +1099,14 @@ mod tests {
                 .send(PermissionDecision::deny("Adapter shutting down"));
         }
 
-        let decision1 = response_rx1.blocking_recv().expect("should receive decision");
+        let decision1 = response_rx1
+            .blocking_recv()
+            .expect("should receive decision");
         assert!(!decision1.allowed);
 
-        let decision2 = response_rx2.blocking_recv().expect("should receive decision");
+        let decision2 = response_rx2
+            .blocking_recv()
+            .expect("should receive decision");
         assert!(!decision2.allowed);
     }
 
@@ -1065,7 +1118,9 @@ mod tests {
         let mut map = pending_permissions.lock().unwrap();
         let original_len = map.len();
         for (_id, pending) in map.drain() {
-            let _ = pending.response_tx.send(PermissionDecision::deny("shutdown"));
+            let _ = pending
+                .response_tx
+                .send(PermissionDecision::deny("shutdown"));
         }
         assert_eq!(original_len, 0);
         assert!(map.is_empty());

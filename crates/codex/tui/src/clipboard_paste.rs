@@ -574,7 +574,10 @@ mod pasted_paths_tests {
         {
             let input = "file:///C:/Temp/file.txt";
             let result = normalize_pasted_path(input);
-            assert!(result.is_some(), "file URL with drive letter should parse on windows");
+            assert!(
+                result.is_some(),
+                "file URL with drive letter should parse on windows"
+            );
         }
     }
 
@@ -582,7 +585,10 @@ mod pasted_paths_tests {
     fn normalize_relative_path_returns_some() {
         // A single token that is a relative path returns Some (as a PathBuf).
         let result = normalize_pasted_path("relative/path.txt");
-        assert!(result.is_some(), "relative path should parse as single shell token");
+        assert!(
+            result.is_some(),
+            "relative path should parse as single shell token"
+        );
         assert_eq!(result.unwrap(), PathBuf::from("relative/path.txt"));
     }
 

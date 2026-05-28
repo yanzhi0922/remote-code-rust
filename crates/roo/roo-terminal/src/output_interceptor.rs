@@ -102,10 +102,7 @@ impl OutputInterceptor {
         let lines: Vec<&str> = buffer.lines().collect();
         let total = lines.len();
         let start = total.saturating_sub(n);
-        lines[start..]
-            .iter()
-            .map(|s| s.to_string())
-            .collect()
+        lines[start..].iter().map(|s| s.to_string()).collect()
     }
 }
 

@@ -481,9 +481,7 @@ fn check_env_var_manipulation(command: &str) -> PowerShellSecurityResult {
     static ENV_WRITE_REGEXES: Lazy<Vec<Regex>> = Lazy::new(|| {
         ENV_WRITE_CMDLETS
             .iter()
-            .map(|cmdlet| {
-                Regex::new(&format!(r"(?i)\b{cmdlet}\b")).expect("valid cmdlet regex")
-            })
+            .map(|cmdlet| Regex::new(&format!(r"(?i)\b{cmdlet}\b")).expect("valid cmdlet regex"))
             .collect()
     });
 

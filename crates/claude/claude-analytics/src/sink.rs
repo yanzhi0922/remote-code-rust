@@ -6,6 +6,7 @@
 //! - `CompositeSink` — Routes events to multiple backends
 
 use anyhow::Result;
+use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
 use crate::exporter::EventExporter;
@@ -199,7 +200,7 @@ const MAX_EXPORTER_BUFFER: usize = 10_000;
 #[derive(Debug)]
 pub struct ExporterSink {
     exporter: Arc<Mutex<Box<dyn EventExporter>>>,
-    buffer: Arc<Mutex<Vec<AnalyticsEvent>>>,
+    buffer: Arc<Mutex<VecDeque<AnalyticsEvent>>>,
 }
 
 impl ExporterSink {
@@ -207,7 +208,7 @@ impl ExporterSink {
     pub fn new(exporter: Box<dyn EventExporter>) -> Self {
         Self {
             exporter: Arc::new(Mutex::new(exporter)),
-            buffer: Arc::new(Mutex::new(Vec::new())),
+            buffer: Arc::new(Mutex::new(VecDeque::new())),
         }
     }
 }
@@ -216,9 +217,9 @@ impl AnalyticsSink for ExporterSink {
     fn log_event(&self, event: AnalyticsEvent) {
         if let Ok(mut buffer) = self.buffer.lock() {
             if buffer.len() >= MAX_EXPORTER_BUFFER {
-                buffer.remove(0);
+                buffer.pop_front();
             }
-            buffer.push(event);
+            buffer.push_back(event);
         }
     }
 
@@ -233,11 +234,26 @@ impl AnalyticsSink for ExporterSink {
             }
             buffer.drain(..).collect()
         };
-        let exporter = self
-            .exporter
-            .lock()
-            .map_err(|e| anyhow::anyhow!("Lock poisoned: {e}"))?;
-        exporter.export(&events)
+        let result = {
+            let exporter = self
+                .exporter
+                .lock()
+                .map_err(|e| anyhow::anyhow!("Lock poisoned: {e}"))?;
+            exporter.export(&events)
+        };
+        if result.is_err() {
+            // Re-insert events at the front so they can be retried on next flush.
+            if let Ok(mut buffer) = self.buffer.lock() {
+                for event in events.into_iter().rev() {
+                    buffer.push_front(event);
+                }
+                // Re-enforce the cap after re-insertion.
+                while buffer.len() > MAX_EXPORTER_BUFFER {
+                    buffer.pop_front();
+                }
+            }
+        }
+        result
     }
 }
 

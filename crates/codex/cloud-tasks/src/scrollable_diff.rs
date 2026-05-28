@@ -171,6 +171,6 @@ impl ScrollableDiff {
         }
         self.wrapped = out;
         self.wrapped_src_idx = out_idx;
-        self.state.content_h = self.wrapped.len() as u16;
+        self.state.content_h = self.wrapped.len().min(u16::MAX as usize) as u16;
     }
 }

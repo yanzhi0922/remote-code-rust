@@ -131,21 +131,25 @@ impl HealthChecker {
     }
 
     /// Returns a reference to the current [`HealthStatus`].
+    #[must_use]
     pub fn status(&self) -> &HealthStatus {
         &self.status
     }
 
     /// Returns the number of consecutive failures.
+    #[must_use]
     pub fn consecutive_failures(&self) -> u32 {
         self.consecutive_failures
     }
 
     /// Returns the time of the last check, if any.
+    #[must_use]
     pub fn last_check(&self) -> Option<Instant> {
         self.last_check
     }
 
     /// Returns a reference to the configuration.
+    #[must_use]
     pub fn config(&self) -> &HealthCheckConfig {
         &self.config
     }

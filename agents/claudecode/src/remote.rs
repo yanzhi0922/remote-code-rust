@@ -431,7 +431,10 @@ fn print_remote_pairing_offer(offer: &RemotePairingOfferCreateResponse) {
     // exposure in shell history / logs. Use --json for the full value.
     let secret = &offer.pairing_secret;
     if secret.len() > 8 {
-        println!("- pairing secret: {}...[REDACTED] (use --json for full value)", &secret[..8]);
+        println!(
+            "- pairing secret: {}...[REDACTED] (use --json for full value)",
+            &secret[..8]
+        );
     } else {
         println!("- pairing secret: [REDACTED] (use --json for full value)");
     }

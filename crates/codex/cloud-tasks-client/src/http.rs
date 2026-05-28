@@ -708,7 +708,9 @@ mod api {
     fn parse_timestamp_value(v: Option<&Value>) -> Option<DateTime<Utc>> {
         let ts = v?.as_f64()?;
         let secs = ts as i64;
-        let nanos = ((ts - secs as f64) * 1_000_000_000.0) as u32;
+        let nanos = ((ts - secs as f64) * 1_000_000_000.0)
+            .round()
+            .clamp(0.0, 999_999_999.0) as u32;
         Some(DateTime::<Utc>::from(
             std::time::UNIX_EPOCH + std::time::Duration::new(secs.max(0) as u64, nanos),
         ))
@@ -768,7 +770,9 @@ mod api {
                 return Utc::now();
             }
             let secs = *v as i64;
-            let nanos = ((*v - secs as f64) * 1_000_000_000.0) as u32;
+            let nanos = ((*v - secs as f64) * 1_000_000_000.0)
+                .round()
+                .clamp(0.0, 999_999_999.0) as u32;
             return DateTime::<Utc>::from(
                 std::time::UNIX_EPOCH + std::time::Duration::new(secs.max(0) as u64, nanos),
             );

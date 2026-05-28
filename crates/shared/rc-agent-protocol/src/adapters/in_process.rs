@@ -14,6 +14,7 @@ use crate::adapter::AgentAdapter;
 use crate::events::UnifiedAgentEvent;
 use crate::permission::PermissionDecision;
 use crate::types::{AgentCapability, AgentConfig, AgentInfo, AgentStatus, AgentType};
+use crate::util::standard_capabilities;
 
 // ---------------------------------------------------------------------------
 // Callback type aliases
@@ -83,24 +84,14 @@ impl InProcessAdapter {
     /// Create a new **Remote Claude** adapter with the standard capability set.
     #[must_use]
     pub fn new_claude() -> Self {
-        let mut caps = HashSet::new();
-        caps.insert(AgentCapability::Streaming);
-        caps.insert(AgentCapability::ToolUse);
-        caps.insert(AgentCapability::McpSupport);
-        caps.insert(AgentCapability::Subtasks);
-        caps.insert(AgentCapability::Permissions);
+        let caps = standard_capabilities(&[AgentCapability::McpSupport, AgentCapability::Subtasks]);
         Self::new("Remote Claude", AgentType::RemoteClaude, caps)
     }
 
     /// Create a new **Remote Roo** adapter with the standard capability set.
     #[must_use]
     pub fn new_roo() -> Self {
-        let mut caps = HashSet::new();
-        caps.insert(AgentCapability::Streaming);
-        caps.insert(AgentCapability::ToolUse);
-        caps.insert(AgentCapability::McpSupport);
-        caps.insert(AgentCapability::Subtasks);
-        caps.insert(AgentCapability::Permissions);
+        let caps = standard_capabilities(&[AgentCapability::McpSupport, AgentCapability::Subtasks]);
         Self::new("Remote Roo", AgentType::RemoteRoo, caps)
     }
 
@@ -109,11 +100,7 @@ impl InProcessAdapter {
     /// Note: Codex does not advertise `McpSupport`.
     #[must_use]
     pub fn new_codex() -> Self {
-        let mut caps = HashSet::new();
-        caps.insert(AgentCapability::Streaming);
-        caps.insert(AgentCapability::ToolUse);
-        caps.insert(AgentCapability::Subtasks);
-        caps.insert(AgentCapability::Permissions);
+        let caps = standard_capabilities(&[AgentCapability::Subtasks]);
         Self::new("Remote Codex", AgentType::RemoteCodex, caps)
     }
 

@@ -26,12 +26,11 @@ impl ConnectionRpcGate {
     where
         F: Future<Output = ()>,
     {
-        let token = {
-            if !self.accepting.load(Ordering::Acquire) {
-                return;
-            }
-            self.tasks.token()
-        };
+        let token = self.tasks.token();
+        if !self.accepting.load(Ordering::Acquire) {
+            drop(token);
+            return;
+        }
 
         future.await;
         drop(token);

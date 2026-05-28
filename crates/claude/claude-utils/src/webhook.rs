@@ -4,6 +4,8 @@
 //! Provides structured validation for webhook payloads from GitHub, Slack, and
 //! generic JSON sources.
 
+use std::fmt::Write;
+
 use anyhow::{Result, anyhow};
 use serde_json::Value;
 
@@ -150,7 +152,11 @@ fn hex_encode_hmac_sha256(body: &[u8], secret: &str) -> String {
     mac.update(body);
     let result = mac.finalize();
     let bytes = result.into_bytes();
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
+    let mut s = String::with_capacity(bytes.len() * 2);
+    for &b in &bytes {
+        let _ = write!(s, "{b:02x}");
+    }
+    s
 }
 
 // Constant-time comparison to prevent timing attacks

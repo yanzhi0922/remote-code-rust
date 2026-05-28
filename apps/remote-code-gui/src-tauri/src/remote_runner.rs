@@ -793,11 +793,19 @@ pub fn remote_set_password(app: AppHandle, password: String) -> Result<(), Strin
             "Password must be at least {MIN_REMOTE_PASSWORD_LEN} characters"
         ));
     }
-    set_remote_password(&app, &password).map_err(|e| e.to_string())?;
+    set_remote_password(&app, &password).map_err(|e| {
+                let msg = e.to_string();
+                tracing::warn!(error = %msg, "command error");
+                msg
+            })?;
     // If username is already set, derive and save the user_key.
     if let Some(username) = get_remote_username(&app) {
         let user_key = derive_user_key(&username, &password);
-        save_remote_user_key(&app, &user_key).map_err(|e| e.to_string())?;
+        save_remote_user_key(&app, &user_key).map_err(|e| {
+                let msg = e.to_string();
+                tracing::warn!(error = %msg, "command error");
+                msg
+            })?;
     }
     Ok(())
 }
@@ -808,7 +816,11 @@ pub fn remote_set_username(app: AppHandle, username: String) -> Result<(), Strin
     if username.is_empty() {
         return Err("Username cannot be empty".to_string());
     }
-    set_remote_username(&app, &username).map_err(|e| e.to_string())?;
+    set_remote_username(&app, &username).map_err(|e| {
+                let msg = e.to_string();
+                tracing::warn!(error = %msg, "command error");
+                msg
+            })?;
     // If password is already set, derive and save the user_key.
     // We need the plaintext password to derive the key, but we only have the hash.
     // The user_key will be derived when both username and password are set together.
@@ -831,10 +843,22 @@ pub fn remote_set_credentials(
             "Password must be at least {MIN_REMOTE_PASSWORD_LEN} characters"
         ));
     }
-    set_remote_username(&app, &username).map_err(|e| e.to_string())?;
-    set_remote_password(&app, &password).map_err(|e| e.to_string())?;
+    set_remote_username(&app, &username).map_err(|e| {
+                let msg = e.to_string();
+                tracing::warn!(error = %msg, "command error");
+                msg
+            })?;
+    set_remote_password(&app, &password).map_err(|e| {
+                let msg = e.to_string();
+                tracing::warn!(error = %msg, "command error");
+                msg
+            })?;
     let user_key = derive_user_key(&username, &password);
-    save_remote_user_key(&app, &user_key).map_err(|e| e.to_string())?;
+    save_remote_user_key(&app, &user_key).map_err(|e| {
+                let msg = e.to_string();
+                tracing::warn!(error = %msg, "command error");
+                msg
+            })?;
     Ok(())
 }
 
@@ -857,7 +881,11 @@ pub fn remote_set_connection(
     auto_start: Option<bool>,
 ) -> Result<serde_json::Value, String> {
     let control_plane_url =
-        normalize_control_plane_url(&control_plane_url).map_err(|e| e.to_string())?;
+        normalize_control_plane_url(&control_plane_url).map_err(|e| {
+                let msg = e.to_string();
+                tracing::warn!(error = %msg, "command error");
+                msg
+            })?;
     let mut settings = load_remote_settings(&app);
 
     let runner_id = normalize_runner_id(runner_id)
@@ -867,7 +895,11 @@ pub fn remote_set_connection(
     settings.control_plane_url = Some(control_plane_url);
     settings.runner_id = Some(runner_id);
     settings.auto_start = auto_start.unwrap_or(settings.auto_start);
-    save_remote_settings(&app, &settings).map_err(|e| e.to_string())?;
+    save_remote_settings(&app, &settings).map_err(|e| {
+                let msg = e.to_string();
+                tracing::warn!(error = %msg, "command error");
+                msg
+            })?;
 
     let was_running = REMOTE_SERVICE_STARTED.load(Ordering::SeqCst);
     if was_running {
@@ -1731,7 +1763,9 @@ async fn apply_pulled_commands(api: &RunnerApi, response: RunnerCommandPullRespo
                 api.apply_approval_decision_direct(approval_id, request)
                     .await?;
             }
-            _ => {}
+            _ => {
+                tracing::debug!("received unknown command type from control plane, skipping");
+            }
         }
     }
     Ok(())

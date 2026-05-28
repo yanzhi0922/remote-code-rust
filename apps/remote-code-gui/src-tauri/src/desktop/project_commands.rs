@@ -8,7 +8,11 @@ pub(super) async fn list_projects(
     let sessions = runtime
         .session_store
         .list_active_sessions()
-        .map_err(|error| format!("{error:#}"))?;
+        .map_err(|error| {
+                let msg = format!("{error:#}");
+                tracing::warn!(error = %msg, "command error");
+                msg
+            })?;
     Ok(build_project_infos(&runtime.projects, &sessions))
 }
 
@@ -18,7 +22,11 @@ pub(super) async fn add_project(
     path: String,
 ) -> std::result::Result<ProjectInfoDto, String> {
     let mut runtime = state.runtime.lock().await;
-    let path = normalize_existing_path(Path::new(&path)).map_err(|error| format!("{error:#}"))?;
+    let path = normalize_existing_path(Path::new(&path)).map_err(|error| {
+                let msg = format!("{error:#}");
+                tracing::warn!(error = %msg, "command error");
+                msg
+            })?;
     if !path.exists() || !path.is_dir() {
         return Err(format!("project path does not exist: {}", path.display()));
     }
@@ -39,7 +47,11 @@ pub(super) async fn add_project(
         runtime
             .projects
             .sort_by(|left, right| left.name.to_lowercase().cmp(&right.name.to_lowercase()));
-        persist_runtime_files(&runtime).map_err(|error| format!("{error:#}"))?;
+        persist_runtime_files(&runtime).map_err(|error| {
+                let msg = format!("{error:#}");
+                tracing::warn!(error = %msg, "command error");
+                msg
+            })?;
         return Ok(ProjectInfoDto {
             path: path.display().to_string(),
             name,
@@ -48,7 +60,11 @@ pub(super) async fn add_project(
                 &runtime
                     .session_store
                     .list_active_sessions()
-                    .map_err(|error| format!("{error:#}"))?,
+                    .map_err(|error| {
+                let msg = format!("{error:#}");
+                tracing::warn!(error = %msg, "command error");
+                msg
+            })?,
             ),
             is_auto_detected: false,
         });
@@ -76,7 +92,11 @@ pub(super) async fn remove_project(
     let sessions = runtime
         .session_store
         .list_active_sessions()
-        .map_err(|error| format!("{error:#}"))?;
+        .map_err(|error| {
+                let msg = format!("{error:#}");
+                tracing::warn!(error = %msg, "command error");
+                msg
+            })?;
     if project_session_count(&path, &sessions) > 0 {
         return Err("该项目下仍有会话，不能移除项目文件夹。".to_owned());
     }
@@ -84,7 +104,11 @@ pub(super) async fn remove_project(
     runtime
         .projects
         .retain(|project| path_identity(&project.path) != path_key);
-    persist_runtime_files(&runtime).map_err(|error| format!("{error:#}"))?;
+    persist_runtime_files(&runtime).map_err(|error| {
+                let msg = format!("{error:#}");
+                tracing::warn!(error = %msg, "command error");
+                msg
+            })?;
     Ok(())
 }
 

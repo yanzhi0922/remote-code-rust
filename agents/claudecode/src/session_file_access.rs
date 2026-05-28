@@ -340,12 +340,16 @@ mod tests {
             .expect("auto memory")
             .and_then(|entrypoint| entrypoint.parent().map(std::path::Path::to_path_buf))
         else {
+            // Auto memory path unavailable in this environment; skip explicitly.
+            eprintln!("note: skipping records_auto_and_team_memory_access_and_scope — no auto_dir");
             return;
         };
         let Some(team_dir) =
             claude_runtime_prompt::team_memory_path_with_features(&config, &features)
                 .expect("team memory")
         else {
+            // Team memory not enabled in this environment; skip explicitly.
+            eprintln!("note: skipping records_auto_and_team_memory_access_and_scope — no team_dir");
             return;
         };
         fs::create_dir_all(&team_dir).expect("team dir");

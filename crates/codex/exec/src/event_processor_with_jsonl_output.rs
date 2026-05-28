@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
@@ -65,18 +64,7 @@ pub struct EventProcessorWithJsonOutput {
     last_critical_error: Option<ThreadErrorEvent>,
     final_message: Option<String>,
     emit_final_message_on_shutdown: bool,
-    /// Ring buffer capturing the last N events for ephemeral session reconciliation.
-    /// When an ephemeral session's TurnCompleted has empty items (because
-    /// `thread/read` doesn't work for ephemeral sessions), we drain this buffer
-    /// to reconstruct the items that may have been dropped under backpressure.
-    ephemeral_ring_buffer: VecDeque<ThreadEvent>,
 }
-
-/// Maximum number of recent events kept in the ring buffer for ephemeral
-/// session reconciliation. When a TurnCompleted event arrives with empty
-/// items (ephemeral sessions cannot use thread/read), the buffer is drained
-/// to reconstruct missing items.
-const EPHEMERAL_RING_BUFFER_CAPACITY: usize = 128;
 
 #[derive(Debug, Clone)]
 struct RunningTodoList {
@@ -101,7 +89,6 @@ impl EventProcessorWithJsonOutput {
             last_critical_error: None,
             final_message: None,
             emit_final_message_on_shutdown: false,
-            ephemeral_ring_buffer: VecDeque::with_capacity(EPHEMERAL_RING_BUFFER_CAPACITY),
         }
     }
 
@@ -409,22 +396,6 @@ impl EventProcessorWithJsonOutput {
         })
     }
 
-    /// Push an event into the ephemeral ring buffer, evicting the oldest entry
-    /// if the buffer is at capacity.
-    fn push_to_ring_buffer(&mut self, event: ThreadEvent) {
-        if self.ephemeral_ring_buffer.len() >= EPHEMERAL_RING_BUFFER_CAPACITY {
-            self.ephemeral_ring_buffer.pop_front();
-        }
-        self.ephemeral_ring_buffer.push_back(event);
-    }
-
-    /// Drain the ephemeral ring buffer, returning buffered events.
-    /// Used when TurnCompleted has empty items and thread/read is unavailable
-    /// (ephemeral sessions) to reconstruct items from the ring buffer.
-    fn drain_ring_buffer(&mut self) -> Vec<ThreadEvent> {
-        self.ephemeral_ring_buffer.drain(..).collect()
-    }
-
     pub fn collect_warning(&mut self, message: String) -> CollectedThreadEvents {
         CollectedThreadEvents {
             events: vec![ThreadEvent::ItemCompleted(ItemCompletedEvent {
@@ -491,7 +462,6 @@ impl EventProcessorWithJsonOutput {
             ServerNotification::ItemStarted(notification) => {
                 if let Some(item) = self.map_started_item(notification.item) {
                     let event = ThreadEvent::ItemStarted(ItemStartedEvent { item });
-                    self.push_to_ring_buffer(event.clone());
                     events.push(event);
                 }
                 CodexStatus::Running
@@ -504,7 +474,6 @@ impl EventProcessorWithJsonOutput {
                         self.final_message = Some(text.clone());
                     }
                     let event = ThreadEvent::ItemCompleted(ItemCompletedEvent { item });
-                    self.push_to_ring_buffer(event.clone());
                     events.push(event);
                 }
                 CodexStatus::Running
@@ -540,12 +509,6 @@ impl EventProcessorWithJsonOutput {
                     }));
                 }
                 events.extend(self.reconcile_unfinished_started_items(&notification.turn.items));
-                // For ephemeral sessions where thread/read is unavailable,
-                // drain the ring buffer to reconstruct any items that may have
-                // been dropped under backpressure.
-                if notification.turn.items.is_empty() {
-                    events.extend(self.drain_ring_buffer());
-                }
                 match notification.turn.status {
                     TurnStatus::Completed => {
                         if let Some(final_message) =

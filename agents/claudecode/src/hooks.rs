@@ -355,8 +355,8 @@ pub fn discover_runtime_hooks(
 ) -> RuntimeHookDiscovery {
     let mut discovery = RuntimeHookDiscovery::default();
     let mut sources = Vec::new();
-    let user_sources_enabled = setting_source_enabled(config, SettingSource::User);
-    let project_sources_enabled = setting_source_enabled(config, SettingSource::Project);
+    let user_sources_enabled = config.setting_source_enabled(SettingSource::User);
+    let project_sources_enabled = config.setting_source_enabled(SettingSource::Project);
 
     if user_sources_enabled {
         push_source_if_exists(
@@ -427,10 +427,6 @@ pub fn discover_runtime_hooks(
         }
     }
     discovery
-}
-
-fn setting_source_enabled(config: &RuntimeConfig, source: SettingSource) -> bool {
-    config.allowed_setting_sources.contains(&source)
 }
 
 fn push_settings_source(
@@ -865,6 +861,13 @@ struct HookAwarePermissionBroker {
 #[async_trait]
 impl PermissionBroker for HookAwarePermissionBroker {
     async fn decide(&self, request: PermissionRequest) -> PermissionDecision {
+        // NOTE: There is a deliberate TOCTOU gap here — we snapshot state
+        // under the lock, release it, run hooks (which may await), then
+        // write back under a new lock.  Because `consumed_once_hooks` is
+        // an `Arc<HashSet>`, each snapshot is immutable and the write-back
+        // is an Arc swap (last-writer-wins).  For sequential permission
+        // requests this is safe; concurrent requests may lose a consumed
+        // entry, which at worst causes a once-hook to fire twice.
         let hook_result = {
             let state = self.state.lock().await;
             let consumed_once = Arc::clone(&state.consumed_once_hooks);

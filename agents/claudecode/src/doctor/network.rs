@@ -12,7 +12,12 @@ fn shared_probe_client() -> &'static reqwest::Client {
             .user_agent("remote-code-rust-doctor")
             .timeout(Duration::from_secs(10))
             .build()
-            .unwrap_or_default()
+            .unwrap_or_else(|e| {
+                tracing::warn!(
+                    "doctor: failed to build HTTP client with timeout: {e}; using default"
+                );
+                reqwest::Client::new()
+            })
     })
 }
 

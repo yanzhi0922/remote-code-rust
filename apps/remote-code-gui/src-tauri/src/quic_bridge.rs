@@ -46,7 +46,11 @@ pub async fn quic_connect(
     transport
         .connect(config)
         .await
-        .map_err(|e| format!("{e:#}"))?;
+        .map_err(|e| {
+                let msg = format!("{e:#}");
+                tracing::warn!(error = %msg, "command error");
+                msg
+            })?;
 
     // Take the event receiver and forward events to the Tauri frontend.
     if let Some(mut event_rx) = transport.take_event_receiver() {
@@ -72,13 +76,25 @@ pub async fn quic_send_command(
     let guard = state.0.lock().await;
     let bridge = guard.as_ref().ok_or("QUIC not connected")?;
 
-    let cmd: TransportCommand = serde_json::from_str(&command).map_err(|e| format!("{e}"))?;
+    let cmd: TransportCommand = serde_json::from_str(&command).map_err(|e| {
+                let msg = format!("{e}");
+                tracing::warn!(error = %msg, "command error");
+                msg
+            })?;
     let ack = bridge
         .transport
         .send_command(cmd)
         .await
-        .map_err(|e| format!("{e}"))?;
-    serde_json::to_string(&ack).map_err(|e| format!("{e}"))
+        .map_err(|e| {
+                let msg = format!("{e}");
+                tracing::warn!(error = %msg, "command error");
+                msg
+            })?;
+    serde_json::to_string(&ack).map_err(|e| {
+                let msg = format!("{e}");
+                tracing::warn!(error = %msg, "command error");
+                msg
+            })
 }
 
 #[tauri::command]
@@ -89,7 +105,11 @@ pub async fn quic_disconnect(state: State<'_, QuicBridgeState>) -> std::result::
             .transport
             .disconnect()
             .await
-            .map_err(|e| format!("{e}"))?;
+            .map_err(|e| {
+                let msg = format!("{e}");
+                tracing::warn!(error = %msg, "command error");
+                msg
+            })?;
     }
     Ok(())
 }
@@ -100,7 +120,11 @@ pub async fn quic_state(state: State<'_, QuicBridgeState>) -> std::result::Resul
     match guard.as_ref() {
         Some(bridge) => {
             let s = bridge.transport.state();
-            serde_json::to_string(&s).map_err(|e| format!("{e}"))
+            serde_json::to_string(&s).map_err(|e| {
+                let msg = format!("{e}");
+                tracing::warn!(error = %msg, "command error");
+                msg
+            })
         }
         None => Ok("\"disconnected\"".to_owned()),
     }
@@ -115,7 +139,11 @@ pub async fn quic_health_probe(
     match guard.as_ref() {
         Some(bridge) => {
             let health = bridge.transport.health_probe().await;
-            serde_json::to_string(&health).map_err(|e| format!("{e}"))
+            serde_json::to_string(&health).map_err(|e| {
+                let msg = format!("{e}");
+                tracing::warn!(error = %msg, "command error");
+                msg
+            })
         }
         None => Ok("null".to_owned()),
     }
@@ -130,7 +158,11 @@ pub async fn quic_get_metrics(
     match guard.as_ref() {
         Some(bridge) => {
             let metrics = bridge.transport.metrics();
-            serde_json::to_string(&metrics).map_err(|e| format!("{e}"))
+            serde_json::to_string(&metrics).map_err(|e| {
+                let msg = format!("{e}");
+                tracing::warn!(error = %msg, "command error");
+                msg
+            })
         }
         None => Ok("null".to_owned()),
     }

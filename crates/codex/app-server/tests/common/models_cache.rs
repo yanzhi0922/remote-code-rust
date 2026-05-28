@@ -5,6 +5,8 @@ use codex_models_manager::client_version_to_whole;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::ModelInfo;
+use codex_protocol::openai_models::ModelInstructionsVariables;
+use codex_protocol::openai_models::ModelMessages;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelVisibility;
 use codex_protocol::openai_models::TruncationPolicyConfig;
@@ -31,7 +33,7 @@ fn preset_to_info(preset: &ModelPreset, priority: i32) -> ModelInfo {
         additional_speed_tiers: preset.additional_speed_tiers.clone(),
         upgrade: preset.upgrade.as_ref().map(Into::into),
         base_instructions: "base instructions".to_string(),
-        model_messages: None,
+        model_messages: model_messages_for_preset(preset),
         supports_reasoning_summaries: false,
         default_reasoning_summary: ReasoningSummary::Auto,
         support_verbosity: false,
@@ -51,6 +53,17 @@ fn preset_to_info(preset: &ModelPreset, priority: i32) -> ModelInfo {
         used_fallback_model_metadata: false,
         supports_search_tool: false,
     }
+}
+
+fn model_messages_for_preset(preset: &ModelPreset) -> Option<ModelMessages> {
+    preset.supports_personality.then(|| ModelMessages {
+        instructions_template: Some("{{ personality }}\n\nbase instructions".to_string()),
+        instructions_variables: Some(ModelInstructionsVariables {
+            personality_default: Some(String::new()),
+            personality_friendly: Some("friendly".to_string()),
+            personality_pragmatic: Some("pragmatic".to_string()),
+        }),
+    })
 }
 
 /// Write a models_cache.json file to the codex home directory.

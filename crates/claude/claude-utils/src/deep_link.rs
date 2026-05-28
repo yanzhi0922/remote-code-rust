@@ -3,6 +3,7 @@
 //! Corresponds to `.research/cc-haha/src/utils/desktopDeepLink.ts`.
 //! Provides URL-based deep linking to resume sessions, open files, etc.
 
+use std::fmt::Write;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 use std::path::Path;
 
@@ -175,7 +176,8 @@ fn url_encode(s: &str) -> String {
                 result.push(byte as char);
             }
             _ => {
-                result.push_str(&format!("%{byte:02X}"));
+                result.push('%');
+                let _ = write!(result, "{byte:02X}");
             }
         }
     }

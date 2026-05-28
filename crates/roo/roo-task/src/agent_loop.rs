@@ -149,9 +149,8 @@ const TOKEN_USAGE_EMIT_INTERVAL_MS: u64 = 2000;
 /// Pre-compiled regex for `format_reasoning_text` — matches sentence-ending
 /// punctuation followed immediately by `**bold text**`, so we can insert a
 /// line break for readability.
-static REASONING_FORMAT_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
-    regex::Regex::new(r"([.!?])\*\*([^\*\n]+)\*\*").unwrap()
-});
+static REASONING_FORMAT_RE: LazyLock<regex::Regex> =
+    LazyLock::new(|| regex::Regex::new(r"([.!?])\*\*([^\*\n]+)\*\*").unwrap());
 
 // ===========================================================================
 // merge_consecutive_api_messages — TS line 4198
@@ -238,7 +237,11 @@ fn format_reasoning_text(reasoning: &str) -> Cow<'_, str> {
     if !reasoning.contains("**") {
         return Cow::Borrowed(reasoning);
     }
-    Cow::Owned(REASONING_FORMAT_RE.replace_all(reasoning, "$1\n\n**$2**").into_owned())
+    Cow::Owned(
+        REASONING_FORMAT_RE
+            .replace_all(reasoning, "$1\n\n**$2**")
+            .into_owned(),
+    )
 }
 
 // ===========================================================================
@@ -2006,7 +2009,6 @@ impl AgentLoop {
 
         // TS: while (stack.length > 0)
         while let Some(current_item) = stack.pop() {
-
             // ---------------------------------------------------------------
             // Step 1: Check abort
             // TS: if (this.abort) { break; }
@@ -3184,17 +3186,12 @@ impl AgentLoop {
                         .unwrap_or(&self.engine.config().mode);
 
                     if !subtask_text.is_empty() {
-                        let subtask_id = format!(
-                            "{}-sub-{}",
-                            task_id,
-                            uuid::Uuid::now_v7()
-                        );
+                        let subtask_id = format!("{}-sub-{}", task_id, uuid::Uuid::now_v7());
                         let mut subtask_config =
                             crate::types::TaskConfig::new(&subtask_id, &self.engine.config().cwd);
                         subtask_config.mode = subtask_mode.to_string();
                         subtask_config.task_text = Some(subtask_text.to_string());
-                        subtask_config =
-                            subtask_config.with_parent_task_id(&task_id);
+                        subtask_config = subtask_config.with_parent_task_id(&task_id);
 
                         match crate::engine::TaskEngine::new(subtask_config) {
                             Ok(subtask_engine) => {
@@ -3404,12 +3401,7 @@ impl AgentLoop {
         // ---------------------------------------------------------------
         let stream = match self
             .provider
-            .create_message(
-                system_prompt,
-                messages,
-                Some(tools),
-                metadata,
-            )
+            .create_message(system_prompt, messages, Some(tools), metadata)
             .await
         {
             Ok(s) => s,
@@ -3551,12 +3543,7 @@ impl AgentLoop {
         // Create the API stream
         let stream = match self
             .provider
-            .create_message(
-                system_prompt,
-                messages,
-                Some(tools),
-                metadata,
-            )
+            .create_message(system_prompt, messages, Some(tools), metadata)
             .await
         {
             Ok(s) => s,
@@ -3830,10 +3817,7 @@ impl AgentLoop {
             // TS L4432-4434: Check abort flag during countdown to allow early exit
             if !self.engine.should_continue() {
                 // TS: throw new Error(`[Task#${this.taskId}] Aborted during retry countdown`)
-                return Err(format!(
-                    "[Task#{}] Aborted during retry countdown",
-                    task_id
-                ));
+                return Err(format!("[Task#{}] Aborted during retry countdown", task_id));
             }
 
             // TS L4436: await this.say("api_req_retry_delayed",

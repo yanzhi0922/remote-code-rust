@@ -136,22 +136,25 @@ impl OnboardingManager {
     }
 
     pub fn state(&self) -> OnboardingState {
-        self.state.lock().unwrap().clone()
+        self.state.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
     pub fn complete_current_step(&self) -> OnboardingStep {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         state.complete_step();
         state.current_step
     }
 
     pub fn reset(&self) {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         *state = OnboardingState::new();
     }
 
     pub fn is_completed(&self) -> bool {
-        self.state.lock().unwrap().completed
+        self.state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .completed
     }
 }
 

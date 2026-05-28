@@ -108,16 +108,19 @@ impl AgentRouter {
     }
 
     /// Returns the number of active sessions.
+    #[must_use]
     pub fn session_count(&self) -> usize {
         self.adapters.len()
     }
 
     /// Returns `true` if the router has an adapter for the given session.
+    #[must_use]
     pub fn has_session(&self, session_id: &str) -> bool {
         self.adapters.contains_key(session_id)
     }
 
     /// Returns `true` if the adapter for the given session is alive and responsive.
+    #[must_use]
     pub fn is_adapter_alive(&self, session_id: &str) -> bool {
         self.adapters
             .get(session_id)
@@ -126,6 +129,7 @@ impl AgentRouter {
     }
 
     /// Returns all session IDs whose adapter matches the given agent type.
+    #[must_use]
     pub fn session_ids_by_type(&self, agent_type: AgentType) -> Vec<String> {
         let mut session_ids = self
             .adapters

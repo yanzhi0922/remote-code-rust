@@ -13,9 +13,11 @@ export function hydrateRemoteTimeline(events: RemoteTimelineEvent[]): RemoteTime
 export function appendRemoteTimelineEvent(
   current: RemoteTimelineEvent[],
   nextEvent: RemoteTimelineEvent,
-  seen: Set<number> = new Set(),
+  seen?: Set<number>,
 ): RemoteTimelineEvent[] {
-  if (seen.has(nextEvent.sequence)) {
+  const seenSequences = seen ?? new Set(current.map((event) => event.sequence));
+
+  if (seenSequences.has(nextEvent.sequence)) {
     return current;
   }
 
@@ -27,7 +29,7 @@ export function appendRemoteTimelineEvent(
       }
       return !sameMessageStream(event.detail, committedDetail);
     });
-    seen.add(nextEvent.sequence);
+    seenSequences.add(nextEvent.sequence);
     return [...filtered, nextEvent];
   }
 
@@ -42,7 +44,7 @@ export function appendRemoteTimelineEvent(
           delta: `${last.detail.delta}${deltaDetail.delta}`,
         },
       };
-      seen.add(nextEvent.sequence);
+      seenSequences.add(nextEvent.sequence);
       return [...current.slice(0, -1), merged];
     }
   }
@@ -61,7 +63,7 @@ export function appendRemoteTimelineEvent(
             progressDetail.elapsed_time_seconds ?? last.detail.elapsed_time_seconds,
         },
       };
-      seen.add(nextEvent.sequence);
+      seenSequences.add(nextEvent.sequence);
       return [...current.slice(0, -1), merged];
     }
   }
@@ -83,7 +85,7 @@ export function appendRemoteTimelineEvent(
     }
   }
 
-  seen.add(nextEvent.sequence);
+  seenSequences.add(nextEvent.sequence);
   return [...current, nextEvent];
 }
 

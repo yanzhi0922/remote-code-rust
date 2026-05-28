@@ -27,4 +27,44 @@ mod tests {
         assert!(is_destructive_git_command("git clean -fdx"));
         assert!(!is_destructive_git_command("git status"));
     }
+
+    #[test]
+    fn git_clean_fx_is_destructive() {
+        assert!(is_destructive_git_command("git clean -fx"));
+    }
+
+    #[test]
+    fn git_push_force_is_destructive() {
+        assert!(is_destructive_git_command("git push --force"));
+    }
+
+    #[test]
+    fn git_push_f_is_destructive() {
+        assert!(is_destructive_git_command("git push -f"));
+    }
+
+    #[test]
+    fn git_checkout_dash_dash_dot_is_destructive() {
+        assert!(is_destructive_git_command("git checkout -- ."));
+    }
+
+    #[test]
+    fn git_restore_source_is_destructive() {
+        assert!(is_destructive_git_command("git restore --source=HEAD~1"));
+    }
+
+    #[test]
+    fn case_insensitive_detection() {
+        assert!(is_destructive_git_command("GIT RESET --HARD"));
+    }
+
+    #[test]
+    fn git_push_force_with_lease_is_destructive() {
+        assert!(is_destructive_git_command("git push --force-with-lease"));
+    }
+
+    #[test]
+    fn git_reset_soft_is_not_destructive() {
+        assert!(!is_destructive_git_command("git reset --soft HEAD~1"));
+    }
 }

@@ -249,7 +249,7 @@ async fn test_root_read() {
 }
 
 #[tokio::test]
-#[should_panic]
+#[should_panic(expected = "exit code:")]
 async fn test_root_write() {
     let tmpfile = NamedTempFile::new().unwrap();
     let tmpfile_path = tmpfile.path().to_string_lossy();

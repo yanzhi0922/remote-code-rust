@@ -312,7 +312,9 @@ impl DelegationEngine {
                             success: !result.is_error,
                             duration_ms,
                         });
-                        let _ = update_task_progress(&task_id, &summary_preview);
+                        if let Err(e) = update_task_progress(&task_id, &summary_preview) {
+                            tracing::debug!("task progress update failed: {e:#}");
+                        }
                         // Emit progress.
                         if let Some(ref cb) = progress_cb {
                             cb(UiEvent::SubtaskProgress {
@@ -337,7 +339,9 @@ impl DelegationEngine {
                             duration_ms,
                         });
                         let summary = format!("{tool_name}: error");
-                        let _ = update_task_progress(&task_id, &summary);
+                        if let Err(e) = update_task_progress(&task_id, &summary) {
+                            tracing::debug!("task progress update failed: {e:#}");
+                        }
                         if let Some(ref cb) = progress_cb {
                             cb(UiEvent::SubtaskProgress {
                                 task_id: task_id.clone(),

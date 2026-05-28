@@ -764,8 +764,7 @@ impl Inner {
         let _sessions_write_guard = self.sessions_write_lock.lock().await;
         let empty: Arc<HashMap<ProcessId, Arc<SessionState>>> = Arc::new(HashMap::new());
         let previous = self.sessions.swap(empty);
-        Arc::try_unwrap(previous)
-            .unwrap_or_else(|arc| arc.as_ref().clone())
+        Arc::try_unwrap(previous).unwrap_or_else(|arc| arc.as_ref().clone())
     }
 }
 

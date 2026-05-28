@@ -31,6 +31,8 @@ const mockUnifiedTransport = vi.hoisted(() => ({
   metrics: null as unknown,
 }));
 
+let transportCallbacks: { onEvent: (e: any) => void; onConnectionStateChange: (s: any) => void } | null = null;
+
 const mockOfflineQueue = vi.hoisted(() => ({
   drainCommands: vi.fn<() => Promise<any[]>>(() => Promise.resolve([])),
   enqueueCommand: vi.fn(),
@@ -42,7 +44,11 @@ const mockNetwork = vi.hoisted(() => ({
 }));
 
 vi.mock('./unified-transport', () => ({
-  UnifiedTransport: vi.fn(function UnifiedTransportMock() {
+  UnifiedTransport: vi.fn(function UnifiedTransportMock(
+    _config: any,
+    callbacks: { onEvent: (e: any) => void; onConnectionStateChange: (s: any) => void },
+  ) {
+    transportCallbacks = callbacks;
     return mockUnifiedTransport;
   }),
   probeEndpointHealth: vi.fn(),
@@ -68,6 +74,7 @@ function makeConfig(overrides?: Partial<TransportConfig>): TransportConfig {
 
 describe('ConnectionManager', () => {
   beforeEach(() => {
+    transportCallbacks = null;
     destroyConnectionManager();
     vi.clearAllMocks();
     mockUnifiedTransport.connect.mockResolvedValue(undefined);
@@ -152,10 +159,12 @@ describe('ConnectionManager', () => {
     const events: RemoteTimelineEvent[] = [];
     onConnectionManagerEvent((event) => events.push(event));
 
-    // Simulate the transport emitting an event through the callbacks
-    // The UnifiedTransport mock doesn't actually invoke callbacks, so we
-    // test the plumbing by checking eventListeners are registered.
-    expect(events).toEqual([]);
+    // Simulate the transport emitting an event through the captured callbacks
+    const fakeEvent = { type: 'message_delta', sequence: 1 } as unknown as RemoteTimelineEvent;
+    transportCallbacks?.onEvent(fakeEvent);
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toBe(fakeEvent);
 
     mgr.disconnect();
   });

@@ -8,6 +8,7 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
+use tracing::warn;
 
 use crate::hook_types::{
     AggregatedHookResult, HookDefinition, HookInput, HookOutput, HookResponse, HookShell,
@@ -33,8 +34,8 @@ pub fn is_url_safe_for_hook(url: &str) -> bool {
         None => return false,
     };
 
-    // Block obvious dangerous hosts
-    if host == "localhost" || host == "metadata.google.internal" {
+    // Block known dangerous hostnames
+    if is_hostname_blocked(host) {
         return false;
     }
 
@@ -43,8 +44,52 @@ pub fn is_url_safe_for_hook(url: &str) -> bool {
         return !is_ip_private_or_reserved(&ip);
     }
 
-    // Non-IP hostname: allow (DNS resolution would be needed for full check)
-    true
+    // The url crate returns IPv6 addresses without brackets from host_str(),
+    // but some representations (e.g. "::ffff:127.0.0.1") may not parse directly
+    // as IpAddr. Try stripping brackets as a fallback.
+    let trimmed = host.trim_start_matches('[').trim_end_matches(']');
+    if trimmed != host {
+        if let Ok(ip) = trimmed.parse::<IpAddr>() {
+            return !is_ip_private_or_reserved(&ip);
+        }
+    }
+
+    // Non-IP hostname: block common internal naming patterns
+    // Note: .localhost, .internal, .local suffixes are already handled by
+    // is_hostname_blocked above, so they are not repeated here.
+    let lower = host.to_ascii_lowercase();
+    let is_internal_pattern = lower.ends_with(".intranet")
+        || lower.ends_with(".corp")
+        || lower.ends_with(".lan")
+        || lower.ends_with(".home")
+        || lower.ends_with(".localdomain")
+        || lower.ends_with(".test")
+        || lower.ends_with(".example")
+        || lower.ends_with(".invalid")
+        || lower.ends_with(".onion")
+        || lower.starts_with("metadata.")
+        || lower.starts_with("internal.")
+        || lower.contains(".internal.")
+        || lower.contains(".local.");
+
+    !is_internal_pattern
+}
+
+/// Check if a hostname matches known dangerous patterns that should always be blocked.
+fn is_hostname_blocked(host: &str) -> bool {
+    let lower = host.to_ascii_lowercase();
+    matches!(
+        lower.as_str(),
+        "localhost"
+            | "metadata.google.internal"
+            | "metadata.goog"
+            | "metadata.internal"
+            | "metadata"
+            | "host.docker.internal"
+            | "gateway.docker.internal"
+    ) || lower.ends_with(".localhost")
+        || lower.ends_with(".internal")
+        || lower.ends_with(".local")
 }
 
 /// Check if an IP address is private, loopback, link-local, or reserved.
@@ -63,8 +108,20 @@ fn is_ip_private_or_reserved(ip: &IpAddr) -> bool {
         IpAddr::V6(v6) => {
             v6.is_loopback()
                 || v6.is_unspecified()
+                // RFC 4193 unique local (fc00::/7) — first 7 bits = 0xfc = 1111111_0
+                || (v6.segments()[0] & 0xfe00) == 0xfc00
                 // Link-local
                 || matches!(v6.segments(), [0xfe80, ..])
+                // IPv4-mapped IPv6 (e.g. ::ffff:127.0.0.1) — check the embedded IPv4
+                || v6.to_ipv4().map_or(false, |v4| {
+                    v4.is_loopback()
+                        || v4.is_private()
+                        || v4.is_link_local()
+                        || v4.is_broadcast()
+                        || v4.is_documentation()
+                        || v4.is_unspecified()
+                        || v4.octets() == [169, 254, 169, 254]
+                })
         }
     }
 }
@@ -479,21 +536,37 @@ pub async fn run_shell_command(
         let data = stdin_data.to_string();
         tokio::spawn(async move {
             use tokio::io::AsyncWriteExt;
-            let _ = stdin.write_all(data.as_bytes()).await;
+            if let Err(e) = stdin.write_all(data.as_bytes()).await {
+                warn!("hook stdin write failed: {e:#}");
+                // Continue — hook will run with partial input, which is safer than blocking
+            }
         });
     }
 
     // Collect output with timeout
     let future = async {
         use tokio::io::AsyncReadExt;
-        let mut stdout = String::new();
-        let mut stderr = String::new();
-        if let Some(mut stream) = spawned.stdout.take() {
-            let _ = stream.read_to_string(&mut stdout).await;
-        }
-        if let Some(mut stream) = spawned.stderr.take() {
-            let _ = stream.read_to_string(&mut stderr).await;
-        }
+        let (stdout, stderr) = {
+            let mut stdout_stream = spawned.stdout.take();
+            let mut stderr_stream = spawned.stderr.take();
+            let (stdout_res, stderr_res) = tokio::join!(
+                async {
+                    let mut buf = String::new();
+                    if let Some(ref mut stream) = stdout_stream {
+                        let _ = stream.read_to_string(&mut buf).await;
+                    }
+                    buf
+                },
+                async {
+                    let mut buf = String::new();
+                    if let Some(ref mut stream) = stderr_stream {
+                        let _ = stream.read_to_string(&mut buf).await;
+                    }
+                    buf
+                },
+            );
+            (stdout_res, stderr_res)
+        };
         let status = spawned.wait().await?;
         Ok::<_, std::io::Error>((status.code(), stdout, stderr))
     };
@@ -771,6 +844,69 @@ mod tests {
     #[test]
     fn ssrf_rejects_no_host() {
         assert!(!is_url_safe_for_hook("file:///etc/passwd"));
+    }
+
+    #[test]
+    fn ssrf_blocks_internal_hostname_patterns() {
+        assert!(!is_url_safe_for_hook("http://metadata.internal/hook"));
+        assert!(!is_url_safe_for_hook("http://metadata.goog/hook"));
+        assert!(!is_url_safe_for_hook("http://host.docker.internal/hook"));
+        assert!(!is_url_safe_for_hook("http://gateway.docker.internal/hook"));
+    }
+
+    #[test]
+    fn ssrf_blocks_internal_tld_suffixes() {
+        assert!(!is_url_safe_for_hook("http://service.internal/hook"));
+        assert!(!is_url_safe_for_hook("http://my.service.local/hook"));
+        assert!(!is_url_safe_for_hook("http://corp.intranet/hook"));
+        assert!(!is_url_safe_for_hook("http://server.corp/hook"));
+        assert!(!is_url_safe_for_hook("http://device.lan/hook"));
+        assert!(!is_url_safe_for_hook("http://router.home/hook"));
+        assert!(!is_url_safe_for_hook("http://svc.localdomain/hook"));
+        assert!(!is_url_safe_for_hook("http://app.test/hook"));
+        assert!(!is_url_safe_for_hook("http://site.onion/hook"));
+    }
+
+    #[test]
+    fn ssrf_allows_legitimate_public_domains() {
+        assert!(is_url_safe_for_hook("https://api.example.com/webhook"));
+        assert!(is_url_safe_for_hook("https://hooks.slack.com/services/xxx"));
+        assert!(is_url_safe_for_hook("https://my-app.vercel.app/api/hook"));
+        assert!(is_url_safe_for_hook("https://github.com/webhook"));
+    }
+
+    #[test]
+    fn ssrf_blocks_ipv4_mapped_ipv6_loopback() {
+        assert!(!is_url_safe_for_hook("http://[::ffff:127.0.0.1]/hook"));
+    }
+
+    #[test]
+    fn ssrf_blocks_ipv4_mapped_ipv6_private() {
+        assert!(!is_url_safe_for_hook("http://[::ffff:10.0.0.1]/hook"));
+        assert!(!is_url_safe_for_hook("http://[::ffff:192.168.1.1]/hook"));
+    }
+
+    #[test]
+    fn ssrf_blocks_ipv4_mapped_ipv6_aws_metadata() {
+        assert!(!is_url_safe_for_hook(
+            "http://[::ffff:169.254.169.254]/hook"
+        ));
+    }
+
+    #[test]
+    fn ssrf_blocks_ipv6_unique_local() {
+        assert!(!is_url_safe_for_hook("http://[fc00::1]/hook"));
+        assert!(!is_url_safe_for_hook("http://[fd12:3456:789a::1]/hook"));
+    }
+
+    #[test]
+    fn ssrf_blocks_ipv6_unspecified() {
+        assert!(!is_url_safe_for_hook("http://[::]/hook"));
+    }
+
+    #[test]
+    fn ssrf_blocks_unspecified_ipv4() {
+        assert!(!is_url_safe_for_hook("http://0.0.0.0/hook"));
     }
 
     // ── HookOutcome tests ────────────────────────────────────────────────

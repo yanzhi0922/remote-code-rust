@@ -88,7 +88,7 @@ pub async fn probe_endpoints(
 
 fn endpoint_score(h: &EndpointHealth) -> i32 {
     if h.reachable && h.auth_valid {
-        1000 - h.latency_ms.unwrap_or(999) as i32
+        1000i32.saturating_sub(h.latency_ms.unwrap_or(999) as i32)
     } else if h.reachable {
         500
     } else {

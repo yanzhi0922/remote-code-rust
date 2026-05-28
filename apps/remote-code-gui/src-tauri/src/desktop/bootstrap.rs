@@ -1,7 +1,64 @@
 use super::*;
 
+/// Initialize the tracing subscriber with daily-rotating file output and stderr.
+///
+/// Log files are written under the canonical Remote Code profile directory:
+/// - default: `~/.remote-code-rust/logs/`
+/// - override: `$REMOTE_CODE_PROFILE_DIR/logs/`
+///
+/// The file layer writes structured JSON for machine parsing.
+/// The stderr layer writes human-readable output for the dev console.
+fn install_gui_tracing() {
+    use tracing_subscriber::EnvFilter;
+    use tracing_subscriber::layer::SubscriberExt;
+    use tracing_subscriber::util::SubscriberInitExt;
+
+    let env_filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new("remote_code_gui=info"));
+
+    let (file_layer, _guard) = match crate::paths::RuntimePathLayout::discover() {
+        Some(layout) => {
+            let log_dir = layout.logs_dir;
+            if let Err(e) = std::fs::create_dir_all(&log_dir) {
+                eprintln!("warning: could not create log directory {}: {e}", log_dir.display());
+            }
+            let file_appender = tracing_appender::rolling::daily(&log_dir, "remote-code-gui.log");
+            let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
+            let layer = tracing_subscriber::fmt::layer()
+                .with_writer(non_blocking)
+                .with_ansi(false)
+                .with_target(true)
+                .json();
+            (Some(layer), Some(guard))
+        }
+        None => (None, None),
+    };
+
+    let stderr_layer = tracing_subscriber::fmt::layer()
+        .with_writer(std::io::stderr)
+        .with_target(false);
+
+    let registry = tracing_subscriber::registry().with(env_filter).with(stderr_layer);
+
+    if let Some(file) = file_layer {
+        let _ = registry.with(file).try_init();
+    } else {
+        let _ = registry.try_init();
+    }
+
+    // Leak the guard to keep the non-blocking writer alive for the entire process lifetime.
+    // This is acceptable because the guard only needs to be flushed on clean shutdown,
+    // and the OS will flush/close the file handle on process exit anyway.
+    if let Some(guard) = _guard {
+        std::mem::forget(guard);
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Initialize tracing FIRST so that the panic hook below can actually log.
+    install_gui_tracing();
+
     // Install a panic hook that logs panics before delegating to the default handler.
     // This ensures panics are captured in the log even if they don't propagate to the UI.
     let default_hook = std::panic::take_hook();

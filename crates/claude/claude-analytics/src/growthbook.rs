@@ -164,13 +164,15 @@ impl FeatureFlags {
             Ok(r) if r.status().is_success() => match r.json::<serde_json::Value>().await {
                 Ok(body) => {
                     if let Some(flags_map) = body.get("features").and_then(|f| f.as_object()) {
-                        let mut flags = recover_lock(&self.flags);
-                        flags.clear();
+                        let mut new_flags = std::collections::HashMap::new();
                         for (key, value) in flags_map {
                             if let Ok(flag) = serde_json::from_value::<FeatureFlag>(value.clone()) {
-                                flags.insert(key.clone(), flag);
+                                new_flags.insert(key.clone(), flag);
                             }
                         }
+                        let mut flags = recover_lock(&self.flags);
+                        flags.clear();
+                        flags.extend(new_flags);
                     }
                     Ok(())
                 }

@@ -206,6 +206,7 @@ static WS_GAUGE: LazyLock<LabeledGauge> = LazyLock::new(LabeledGauge::new);
 // Public API
 // ---------------------------------------------------------------------------
 
+#[must_use]
 pub fn encode_metrics() -> String {
     let mut out = String::with_capacity(4096);
 
@@ -228,10 +229,7 @@ pub fn encode_metrics() -> String {
             out,
             "# HELP rc_control_plane_ws_connections Number of currently open WebSocket connections"
         );
-        let _ = writeln!(
-            out,
-            "# TYPE rc_control_plane_ws_connections gauge"
-        );
+        let _ = writeln!(out, "# TYPE rc_control_plane_ws_connections gauge");
         let _ = writeln!(
             out,
             "rc_control_plane_ws_connections{{stream_type=\"{}\"}} {}",
@@ -334,7 +332,8 @@ pub fn ws_disconnect(stream_type: &str) {
 // ---------------------------------------------------------------------------
 
 // SAFETY: All writeln! calls below write to a String, which is infallible
-// (String's fmt::Write impl never errors). The .unwrap() is safe.
+// (String's fmt::Write impl never errors). The `let _ =` discards the
+// infallible Result safely.
 
 fn write_gauge(out: &mut String, name: &str, help: &str, value: i64) {
     let _ = writeln!(out, "# HELP {name} {help}");

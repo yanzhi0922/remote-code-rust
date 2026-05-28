@@ -249,7 +249,7 @@ async fn run_guardian_review(
         target_item_id.clone(),
         approval_request_source,
         guardian_reviewed_action(&request),
-        GUARDIAN_REVIEW_TIMEOUT.as_millis() as u64,
+        u64::try_from(GUARDIAN_REVIEW_TIMEOUT.as_millis()).unwrap_or(u64::MAX),
     );
     session
         .send_event(

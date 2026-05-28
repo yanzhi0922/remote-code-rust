@@ -133,8 +133,7 @@ impl Bm25SkillSearchEngine {
         }
 
         // Compute document frequency for each query term in a single pass.
-        let query_token_set: std::collections::HashSet<&String> =
-            query_tokens.iter().collect();
+        let query_token_set: std::collections::HashSet<&String> = query_tokens.iter().collect();
         let df: std::collections::HashMap<String, usize> = {
             let mut map = std::collections::HashMap::new();
             for doc in &self.documents {

@@ -1,6 +1,7 @@
 mod mobile;
 
 // Shared modules always compiled.
+pub(crate) mod paths;
 mod quic_bridge;
 
 // Desktop-only code (codex, deno, v8, claude-core, claude-provider, etc.).

@@ -28,4 +28,5 @@ claude-telemetry = { path = "../../crates/claude/claude-telemetry" }
 
 [dev-dependencies]
 chrono.workspace = true
+serial_test.workspace = true
 tempfile.workspace = true

@@ -72,6 +72,7 @@ fn raw_server_notification(
     }
 }
 
+#[inline]
 fn non_negative_i64_to_usize(value: i64) -> usize {
     usize::try_from(value).unwrap_or(0)
 }
@@ -464,16 +465,15 @@ fn map_server_notification(
         }
 
         ServerNotification::TurnCompleted(notification) => {
-            let response_text = notification
+            let response_text: String = notification
                 .turn
                 .items
                 .iter()
                 .filter_map(|item| match item {
-                    ThreadItem::AgentMessage { text, .. } => Some(text.clone()),
+                    ThreadItem::AgentMessage { text, .. } => Some(text.as_str()),
                     _ => None,
                 })
-                .collect::<Vec<_>>()
-                .join("");
+                .collect();
             let tool_calls: Vec<_> = notification
                 .turn
                 .items

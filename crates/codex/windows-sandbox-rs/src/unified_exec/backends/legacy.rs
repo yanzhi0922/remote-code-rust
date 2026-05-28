@@ -217,7 +217,10 @@ mod tests {
         let result = resize_conpty_handle(&hpc_none, TerminalSize { rows: 24, cols: 80 });
         assert!(result.is_err());
         assert!(
-            result.unwrap_err().to_string().contains("not attached to a PTY"),
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("not attached to a PTY"),
             "expected PTY attachment error"
         );
     }

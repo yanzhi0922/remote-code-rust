@@ -150,7 +150,7 @@ impl StdioConnection {
         self.outbox
             .lock()
             .ok()
-            .map(|o| o.clone())
+            .map(|guard| guard.clone())
             .unwrap_or_default()
     }
 
@@ -353,7 +353,7 @@ impl HttpConnection {
         self.outbox
             .lock()
             .ok()
-            .map(|o| o.clone())
+            .map(|guard| guard.clone())
             .unwrap_or_default()
     }
 

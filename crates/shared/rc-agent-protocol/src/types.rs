@@ -16,7 +16,6 @@ use serde::{Deserialize, Serialize};
 pub enum AgentType {
     /// In-process Agent — directly calls rc-* crates via callbacks.
     #[default]
-    /// In-process Agent — directly calls rc-* crates via callbacks.
     RemoteClaude,
     /// In-process Agent — callback-based adapter (formerly subprocess JSON-RPC).
     RemoteRoo,
@@ -26,6 +25,8 @@ pub enum AgentType {
 
 impl AgentType {
     /// Returns a human-readable display name.
+    #[must_use]
+    #[inline]
     pub fn display_name(&self) -> &str {
         match self {
             Self::RemoteClaude => "Remote Claude",
@@ -261,5 +262,30 @@ mod tests {
         assert_eq!(AgentStatus::Idle.to_string(), "idle");
         assert_eq!(AgentStatus::Stopped.to_string(), "stopped");
         assert_eq!(AgentStatus::Error.to_string(), "error");
+    }
+
+    #[test]
+    fn agent_config_api_key_not_in_serialized_json() {
+        let config = AgentConfig {
+            agent_type: AgentType::RemoteClaude,
+            binary_path: Some("/usr/bin/claude".into()),
+            args: vec![],
+            env: vec![("KEY".into(), "value".into())],
+            working_dir: None,
+            model: Some("sonnet".into()),
+            provider: None,
+            api_key: Some("sk-super-secret-key-12345".into()),
+            base_url: None,
+        };
+        let json = serde_json::to_string(&config).expect("serialize");
+        // api_key has #[serde(skip_serializing)] — it MUST NOT appear in output
+        assert!(
+            !json.contains("api_key"),
+            "api_key leaked into JSON: {json}"
+        );
+        assert!(
+            !json.contains("sk-super-secret-key"),
+            "secret value leaked: {json}"
+        );
     }
 }

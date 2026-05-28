@@ -370,4 +370,325 @@ mod tests {
     fn single_quoted_substitution_is_safe() {
         assert!(check_bash_security("echo '$(whoami)'").safe);
     }
+
+    // ── check_obfuscated_flags ────────────────────────────────────────
+
+    #[test]
+    fn detects_ansi_c_quoting() {
+        let r = check_bash_security("echo $'\\x2D\\x2Dverbose'");
+        assert!(!r.safe);
+        assert!(r.reasons.iter().any(|r| r.contains("ANSI-C quoting")));
+    }
+
+    #[test]
+    fn detects_locale_quoting() {
+        let r = check_bash_security("echo $\"hello\"");
+        assert!(!r.safe);
+        assert!(r.reasons.iter().any(|r| r.contains("Locale quoting")));
+    }
+
+    #[test]
+    fn detects_empty_quote_concatenation_double() {
+        let r = check_bash_security("echo \"\"-flag");
+        assert!(!r.safe);
+        assert!(
+            r.reasons
+                .iter()
+                .any(|r| r.contains("Empty quote concatenation"))
+        );
+    }
+
+    #[test]
+    fn detects_empty_quote_concatenation_single() {
+        let r = check_bash_security("echo ''-flag");
+        assert!(!r.safe);
+        assert!(
+            r.reasons
+                .iter()
+                .any(|r| r.contains("Empty quote concatenation"))
+        );
+    }
+
+    #[test]
+    fn ansi_c_quoting_inside_single_quotes_is_safe() {
+        // The $' outside single quotes triggers ANSI-C quoting which is valid bash
+        // but inside single quotes it's literal text. Test that bare $' is detected.
+        let r = check_bash_security("echo $'hello'");
+        // $' outside quotes is ANSI-C quoting — should be flagged as obfuscation
+        assert!(!r.safe);
+    }
+
+    // ── check_brace_expansion ─────────────────────────────────────────
+
+    #[test]
+    fn detects_comma_brace_expansion() {
+        let r = check_bash_security("echo {a,b,c}");
+        assert!(!r.safe);
+        assert!(r.reasons.iter().any(|r| r.contains("Brace expansion")));
+    }
+
+    #[test]
+    fn detects_range_brace_expansion() {
+        let r = check_bash_security("echo {1..10}");
+        assert!(!r.safe);
+        assert!(r.reasons.iter().any(|r| r.contains("Brace expansion")));
+    }
+
+    #[test]
+    fn brace_expansion_with_space_is_not_flagged() {
+        // {a, b} has a space after the comma, so it's not brace expansion
+        assert!(check_bash_security("echo {a, b}").safe);
+    }
+
+    #[test]
+    fn variable_brace_expansion_is_safe() {
+        // ${VAR} starts with $ so it should not trigger brace expansion
+        assert!(check_bash_security("echo ${HOME}").safe);
+    }
+
+    // ── check_control_characters ──────────────────────────────────────
+
+    #[test]
+    fn detects_null_control_char() {
+        let r = check_bash_security("echo \x00hello");
+        assert!(!r.safe);
+        assert!(r.reasons.iter().any(|r| r.contains("Control character")));
+    }
+
+    #[test]
+    fn detects_bel_control_char() {
+        let r = check_bash_security("echo \x07ring");
+        assert!(!r.safe);
+        assert!(r.reasons.iter().any(|r| r.contains("Control character")));
+    }
+
+    #[test]
+    fn detects_ansi_escape_sequence() {
+        let r = check_bash_security("echo \x1b[31mred\x1b[0m");
+        assert!(!r.safe);
+        assert!(r.reasons.iter().any(|r| r.contains("ANSI escape sequence")));
+    }
+
+    #[test]
+    fn newline_and_tab_are_allowed() {
+        // Newlines and tabs should not trigger control character detection
+        assert!(check_bash_security("echo 'hello\tworld'\necho done").safe);
+    }
+
+    // ── check_unicode_whitespace ──────────────────────────────────────
+
+    #[test]
+    fn detects_nbsp_whitespace() {
+        // U+00A0 non-breaking space
+        let r = check_bash_security("echo\u{00A0}hello");
+        assert!(!r.safe);
+        assert!(r.reasons.iter().any(|r| r.contains("Unicode whitespace")));
+    }
+
+    #[test]
+    fn detects_en_space_whitespace() {
+        // U+2000 en space
+        let r = check_bash_security("rm\u{2000}-rf /");
+        assert!(!r.safe);
+        assert!(r.reasons.iter().any(|r| r.contains("Unicode whitespace")));
+    }
+
+    #[test]
+    fn detects_ideographic_space_whitespace() {
+        // U+3000 ideographic space
+        let r = check_bash_security("ls\u{3000}-la");
+        assert!(!r.safe);
+        assert!(
+            r.reasons
+                .iter()
+                .any(|r| r.contains("Unicode whitespace") && r.contains("3000"))
+        );
+    }
+
+    #[test]
+    fn normal_spaces_are_safe() {
+        assert!(check_bash_security("echo hello world").safe);
+    }
+
+    // ── check_heredoc_patterns ────────────────────────────────────────
+
+    #[test]
+    fn detects_heredoc_with_command_substitution() {
+        let r = check_bash_security("cat << EOF\n$(whoami)\nEOF");
+        assert!(!r.safe);
+        assert!(
+            r.reasons
+                .iter()
+                .any(|r| r.contains("Heredoc with command substitution"))
+        );
+    }
+
+    #[test]
+    fn detects_heredoc_with_backtick_substitution() {
+        let r = check_bash_security("cat << EOF\n`whoami`\nEOF");
+        assert!(!r.safe);
+        assert!(
+            r.reasons
+                .iter()
+                .any(|r| r.contains("Heredoc with command substitution"))
+        );
+    }
+
+    #[test]
+    fn plain_heredoc_without_substitution_is_not_flagged() {
+        let r = check_bash_security("cat << EOF\nhello\nEOF");
+        // Plain heredoc with no substitution ($() or backticks) should not trigger heredoc check
+        assert!(r.reasons.iter().all(|reason| !reason.contains("Heredoc")));
+    }
+
+    // ── check_jq_dangerous_flags ──────────────────────────────────────
+
+    #[test]
+    fn detects_jq_system_call() {
+        let r = check_bash_security("jq 'system(\"reboot\")' input.json");
+        assert!(!r.safe);
+        assert!(r.reasons.iter().any(|r| r.contains("jq system/exec")));
+    }
+
+    #[test]
+    fn detects_jq_exec_call() {
+        let r = check_bash_security("jq 'exec(\"rm -rf /\")' data.json");
+        assert!(!r.safe);
+        assert!(r.reasons.iter().any(|r| r.contains("jq system/exec")));
+    }
+
+    #[test]
+    fn detects_jq_uppercase_command() {
+        let r = check_bash_security("JQ '. | system(\"ls\")' file.json");
+        assert!(!r.safe);
+        assert!(r.reasons.iter().any(|r| r.contains("jq system/exec")));
+    }
+
+    #[test]
+    fn safe_jq_query_passes() {
+        assert!(check_bash_security("jq '.name' data.json").safe);
+    }
+
+    // ── check_backslash_escaped_operators ─────────────────────────────
+
+    #[test]
+    fn detects_escaped_semicolon() {
+        let r = check_bash_security("echo hello \\; whoami");
+        assert!(!r.safe);
+        assert!(
+            r.reasons
+                .iter()
+                .any(|r| r.contains("Backslash-escaped operator"))
+        );
+    }
+
+    #[test]
+    fn detects_escaped_pipe() {
+        let r = check_bash_security("echo hello \\| cat /etc/passwd");
+        assert!(!r.safe);
+        assert!(
+            r.reasons
+                .iter()
+                .any(|r| r.contains("Backslash-escaped operator"))
+        );
+    }
+
+    #[test]
+    fn detects_escaped_ampersand() {
+        let r = check_bash_security("echo hello \\& whoami");
+        assert!(!r.safe);
+        assert!(
+            r.reasons
+                .iter()
+                .any(|r| r.contains("Backslash-escaped operator"))
+        );
+    }
+
+    #[test]
+    fn escaped_ops_in_find_are_safe() {
+        // find command commonly uses \; and should not be flagged
+        assert!(check_bash_security("find . -name '*.rs' -exec cat {} \\;").safe);
+    }
+
+    #[test]
+    fn escaped_ops_in_xargs_are_safe() {
+        // xargs also commonly uses escaped operators
+        assert!(check_bash_security("echo files | xargs -I {} echo {} \\;").safe);
+    }
+
+    // ── check_git_commit_injection ────────────────────────────────────
+
+    #[test]
+    fn detects_git_commit_with_dollar_substitution() {
+        let r = check_bash_security("git commit -m \"$(whoami)\"");
+        assert!(!r.safe);
+        assert!(r.reasons.iter().any(|r| r.contains("git commit message")));
+    }
+
+    #[test]
+    fn detects_git_commit_with_backtick_substitution() {
+        let r = check_bash_security("git commit -m `whoami`");
+        assert!(!r.safe);
+        assert!(r.reasons.iter().any(|r| r.contains("git commit message")));
+    }
+
+    #[test]
+    fn safe_git_commit_message_passes() {
+        assert!(check_bash_security("git commit -m \"Initial commit\"").safe);
+    }
+
+    #[test]
+    fn git_commit_mixed_case_detected() {
+        let r = check_bash_security("GIT COMMIT -m \"$(id)\"");
+        assert!(!r.safe);
+        assert!(r.reasons.iter().any(|r| r.contains("git commit message")));
+    }
+
+    // ── check_redirection_injection ───────────────────────────────────
+
+    #[test]
+    fn detects_variable_redirect_write() {
+        let r = check_bash_security("echo hello >$OUTFILE");
+        assert!(!r.safe);
+        assert!(
+            r.reasons
+                .iter()
+                .any(|r| r.contains("Variable in redirect target"))
+        );
+    }
+
+    #[test]
+    fn detects_variable_redirect_append() {
+        let r = check_bash_security("echo hello >>${LOGFILE}");
+        assert!(!r.safe);
+        assert!(
+            r.reasons
+                .iter()
+                .any(|r| r.contains("Variable in redirect target"))
+        );
+    }
+
+    #[test]
+    fn detects_variable_redirect_input() {
+        let r = check_bash_security("cat <$INPUT");
+        assert!(!r.safe);
+        assert!(
+            r.reasons
+                .iter()
+                .any(|r| r.contains("Variable in redirect target"))
+        );
+    }
+
+    #[test]
+    fn literal_redirect_is_safe() {
+        assert!(check_bash_security("echo hello > output.txt").safe);
+    }
+
+    #[test]
+    fn variable_redirect_outside_quotes_is_flagged() {
+        // $ in redirect target without quoting should be flagged
+        let r = check_bash_security("echo hello >$OUTFILE");
+        assert!(!r.safe);
+        assert!(r.reasons.iter().any(|r| r.contains("redirect")));
+    }
 }

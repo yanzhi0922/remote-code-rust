@@ -567,15 +567,16 @@ fn build_handler(
         }
 
         "roo" => {
-            let cfg = roo_provider_roo::RooConfig {
-                api_key: api_key.map(|s| s.to_string()),
-                base_url: base_url
-                    .map(normalize_openai_base_url)
-                    .or_else(|| Some(roo_provider_roo::RooConfig::DEFAULT_BASE_URL.to_string())),
-                model_id: model_id.map(|s| s.to_string()),
-                temperature: None,
-                request_timeout: None,
-            };
+            let cfg =
+                roo_provider_roo::RooConfig {
+                    api_key: api_key.map(|s| s.to_string()),
+                    base_url: Some(base_url.map(normalize_openai_base_url).unwrap_or_else(|| {
+                        roo_provider_roo::RooConfig::DEFAULT_BASE_URL.to_string()
+                    })),
+                    model_id: model_id.map(|s| s.to_string()),
+                    temperature: None,
+                    request_timeout: None,
+                };
             Ok(Box::new(roo_provider_roo::RooHandler::new(cfg)?))
         }
 
@@ -691,17 +692,18 @@ fn load_custom_modes_for_cwd(cwd: &std::path::Path) -> Vec<roo_types::mode::Mode
 /// inside the [`TaskEngine`]. Every event the native `AgentLoop` emits
 /// is translated and forwarded to the GUI via the unified event channel.
 fn map_task_event(event: &RooTaskEvent, session_id: &str) -> Option<UnifiedAgentEvent> {
+    let sid = session_id.to_string();
     match event {
         // --- Streaming text ---
         RooTaskEvent::StreamingTextDelta { text, .. } => Some(UnifiedAgentEvent::MessageDelta {
-            session_id: session_id.to_string(),
+            session_id: sid.clone(),
             delta: text.clone(),
         }),
 
         // --- Streaming reasoning ---
         RooTaskEvent::StreamingReasoningDelta { text, .. } => {
             Some(UnifiedAgentEvent::MessageDelta {
-                session_id: session_id.to_string(),
+                session_id: sid.clone(),
                 delta: format!("[thinking] {}", text),
             })
         }
@@ -710,25 +712,29 @@ fn map_task_event(event: &RooTaskEvent, session_id: &str) -> Option<UnifiedAgent
         RooTaskEvent::StreamingToolUseStarted {
             tool_name, tool_id, ..
         } => Some(UnifiedAgentEvent::ToolCallStarted {
-            session_id: session_id.to_string(),
+            session_id: sid.clone(),
             tool_name: tool_name.clone(),
             tool_input: serde_json::json!({ "tool_id": tool_id }),
         }),
 
         RooTaskEvent::StreamingToolUseDelta { tool_id, delta, .. } => {
             Some(UnifiedAgentEvent::ToolCallProgress {
-                session_id: session_id.to_string(),
+                session_id: sid.clone(),
                 tool_name: String::new(),
                 progress: format!("[{tool_id}] {delta}"),
             })
         }
 
         RooTaskEvent::StreamingToolUseCompleted {
-            tool_name, success, ..
+            tool_name,
+            tool_id,
+            success,
+            ..
         } => Some(UnifiedAgentEvent::ToolCallCompleted {
-            session_id: session_id.to_string(),
+            session_id: sid.clone(),
             tool_name: tool_name.clone(),
             result: serde_json::json!({
+                "tool_call_id": tool_id,
                 "success": success,
             }),
         }),
@@ -755,7 +761,7 @@ fn map_task_event(event: &RooTaskEvent, session_id: &str) -> Option<UnifiedAgent
         }
 
         RooTaskEvent::TaskAborted { reason, .. } => Some(UnifiedAgentEvent::Error {
-            session_id: session_id.to_string(),
+            session_id: sid.clone(),
             message: reason.clone().unwrap_or_else(|| "Task aborted".to_string()),
             recoverable: false,
         }),
@@ -768,7 +774,7 @@ fn map_task_event(event: &RooTaskEvent, session_id: &str) -> Option<UnifiedAgent
         RooTaskEvent::ContextCondensationCompleted {
             messages_removed, ..
         } => Some(UnifiedAgentEvent::ContextCompacted {
-            session_id: session_id.to_string(),
+            session_id: sid.clone(),
             entries_removed: *messages_removed,
             usage_ratio: 0.0,
         }),
@@ -776,21 +782,21 @@ fn map_task_event(event: &RooTaskEvent, session_id: &str) -> Option<UnifiedAgent
         RooTaskEvent::ContextTruncationPerformed {
             messages_removed, ..
         } => Some(UnifiedAgentEvent::ContextCompacted {
-            session_id: session_id.to_string(),
+            session_id: sid.clone(),
             entries_removed: *messages_removed,
             usage_ratio: 0.0,
         }),
 
         // --- Token usage ---
         RooTaskEvent::TokenUsageUpdated { usage } => Some(UnifiedAgentEvent::ContextUsage {
-            session_id: session_id.to_string(),
+            session_id: sid.clone(),
             used: (usage.total_tokens_in + usage.total_tokens_out) as usize,
             total: usage.context_tokens as usize,
         }),
 
         RooTaskEvent::TaskTokenUsageUpdated { token_usage, .. } => {
             Some(UnifiedAgentEvent::ContextUsage {
-                session_id: session_id.to_string(),
+                session_id: sid.clone(),
                 used: (token_usage.total_tokens_in + token_usage.total_tokens_out) as usize,
                 total: token_usage.context_tokens as usize,
             })
@@ -803,7 +809,7 @@ fn map_task_event(event: &RooTaskEvent, session_id: &str) -> Option<UnifiedAgent
             reason,
             task_id,
         } => Some(UnifiedAgentEvent::PermissionRequest {
-            session_id: session_id.to_string(),
+            session_id: sid.clone(),
             request_id: tool_id.clone(),
             tool_name: tool_name.clone(),
             input: serde_json::json!({
@@ -820,7 +826,7 @@ fn map_task_event(event: &RooTaskEvent, session_id: &str) -> Option<UnifiedAgent
         // --- Subtask lifecycle ---
         RooTaskEvent::TaskSpawned { child_task_id, .. } => {
             Some(UnifiedAgentEvent::SubtaskStarted {
-                session_id: session_id.to_string(),
+                session_id: sid.clone(),
                 task_id: child_task_id.clone(),
                 description: String::new(),
             })
@@ -831,14 +837,14 @@ fn map_task_event(event: &RooTaskEvent, session_id: &str) -> Option<UnifiedAgent
             summary,
             ..
         } => Some(UnifiedAgentEvent::SubtaskCompleted {
-            session_id: session_id.to_string(),
+            session_id: sid.clone(),
             task_id: child_task_id.clone(),
             result: serde_json::json!({ "summary": summary }),
         }),
 
         // --- Errors ---
         RooTaskEvent::Error { error, .. } => Some(UnifiedAgentEvent::Error {
-            session_id: session_id.to_string(),
+            session_id: sid.clone(),
             message: error.clone(),
             recoverable: true,
         }),
@@ -846,7 +852,7 @@ fn map_task_event(event: &RooTaskEvent, session_id: &str) -> Option<UnifiedAgent
         RooTaskEvent::ToolError {
             tool_name, error, ..
         } => Some(UnifiedAgentEvent::Error {
-            session_id: session_id.to_string(),
+            session_id: sid.clone(),
             message: format!("Tool '{}' error: {}", tool_name, error),
             recoverable: true,
         }),
@@ -854,7 +860,7 @@ fn map_task_event(event: &RooTaskEvent, session_id: &str) -> Option<UnifiedAgent
         RooTaskEvent::TaskToolFailed {
             tool_name, error, ..
         } => Some(UnifiedAgentEvent::Error {
-            session_id: session_id.to_string(),
+            session_id: sid.clone(),
             message: format!("Tool '{}' failed: {}", tool_name, error),
             recoverable: true,
         }),
@@ -864,7 +870,7 @@ fn map_task_event(event: &RooTaskEvent, session_id: &str) -> Option<UnifiedAgent
             retry_attempt,
             ..
         } => Some(UnifiedAgentEvent::ToolCallProgress {
-            session_id: session_id.to_string(),
+            session_id: sid.clone(),
             tool_name: "api_retry".to_string(),
             progress: format!(
                 "retry delayed: {}s (attempt {})",
@@ -874,7 +880,7 @@ fn map_task_event(event: &RooTaskEvent, session_id: &str) -> Option<UnifiedAgent
 
         RooTaskEvent::ApiRequestFailed { task_id, error } => {
             Some(UnifiedAgentEvent::PermissionRequest {
-                session_id: session_id.to_string(),
+                session_id: sid.clone(),
                 request_id: format!("api_retry:{task_id}"),
                 tool_name: "api_request_failed".to_string(),
                 input: serde_json::json!({
@@ -889,7 +895,7 @@ fn map_task_event(event: &RooTaskEvent, session_id: &str) -> Option<UnifiedAgent
             count,
             limit,
         } => Some(UnifiedAgentEvent::PermissionRequest {
-            session_id: session_id.to_string(),
+            session_id: sid.clone(),
             request_id: format!("mistake_limit:{task_id}"),
             tool_name: "mistake_limit_reached".to_string(),
             input: serde_json::json!({
@@ -904,7 +910,7 @@ fn map_task_event(event: &RooTaskEvent, session_id: &str) -> Option<UnifiedAgent
             approval_type,
             approval_count,
         } => Some(UnifiedAgentEvent::PermissionRequest {
-            session_id: session_id.to_string(),
+            session_id: sid.clone(),
             request_id: format!("auto_approval_limit:{task_id}"),
             tool_name: "auto_approval_max_req_reached".to_string(),
             input: serde_json::json!({
@@ -918,7 +924,7 @@ fn map_task_event(event: &RooTaskEvent, session_id: &str) -> Option<UnifiedAgent
 
         RooTaskEvent::ApiRateLimitWait { seconds, .. } => {
             Some(UnifiedAgentEvent::ToolCallProgress {
-                session_id: session_id.to_string(),
+                session_id: sid.clone(),
                 tool_name: "api_rate_limit_wait".to_string(),
                 progress: format!("{seconds}s remaining before next API request"),
             })
@@ -929,7 +935,7 @@ fn map_task_event(event: &RooTaskEvent, session_id: &str) -> Option<UnifiedAgent
             tool_call_id,
             question_json,
         } => Some(UnifiedAgentEvent::PermissionRequest {
-            session_id: session_id.to_string(),
+            session_id: sid.clone(),
             request_id: tool_call_id.clone(),
             tool_name: "ask_followup_question".to_string(),
             input: serde_json::json!({
@@ -948,7 +954,7 @@ fn map_task_event(event: &RooTaskEvent, session_id: &str) -> Option<UnifiedAgent
             tool_call_id,
             completion_text,
         } => Some(UnifiedAgentEvent::PermissionRequest {
-            session_id: session_id.to_string(),
+            session_id: sid.clone(),
             request_id: tool_call_id.clone(),
             tool_name: "attempt_completion".to_string(),
             input: serde_json::json!({
@@ -970,7 +976,7 @@ fn map_task_event(event: &RooTaskEvent, session_id: &str) -> Option<UnifiedAgent
         // --- Tool execution feedback ---
         RooTaskEvent::ToolExecuted { tool_name, success } => {
             Some(UnifiedAgentEvent::ToolCallProgress {
-                session_id: session_id.to_string(),
+                session_id: sid.clone(),
                 tool_name: tool_name.clone(),
                 progress: if *success {
                     "completed".to_string()
@@ -1687,61 +1693,38 @@ impl RooInProcessAdapter {
 
         // Pass interactive-response handles back to the adapter so the GUI can
         // respond to Roo asks emitted by the native loop.
-        {
-            let approval_handle = agent_loop.approval_handle();
-            match approval_out.lock() {
-                Ok(mut guard) => *guard = Some(approval_handle),
+        fn store_handle<T>(lock: &std::sync::Mutex<Option<T>>, value: T, label: &str) {
+            match lock.lock() {
+                Ok(mut guard) => *guard = Some(value),
                 Err(e) => {
-                    warn!("Approval-out mutex poisoned, recovering: {e}");
-                    *e.into_inner() = Some(agent_loop.approval_handle());
-                }
-            }
-
-            let api_retry_handle = agent_loop.api_retry_handle();
-            match api_retry_out.lock() {
-                Ok(mut guard) => *guard = Some(api_retry_handle),
-                Err(e) => {
-                    warn!("API-retry-out mutex poisoned, recovering: {e}");
-                    *e.into_inner() = Some(agent_loop.api_retry_handle());
-                }
-            }
-
-            let auto_approval_limit_handle = agent_loop.auto_approval_limit_handle();
-            match auto_approval_limit_out.lock() {
-                Ok(mut guard) => *guard = Some(auto_approval_limit_handle),
-                Err(e) => {
-                    warn!("Auto-approval-limit-out mutex poisoned, recovering: {e}");
-                    *e.into_inner() = Some(agent_loop.auto_approval_limit_handle());
-                }
-            }
-
-            let mistake_limit_handle = agent_loop.mistake_limit_handle();
-            match mistake_limit_out.lock() {
-                Ok(mut guard) => *guard = Some(mistake_limit_handle),
-                Err(e) => {
-                    warn!("Mistake-limit-out mutex poisoned, recovering: {e}");
-                    *e.into_inner() = Some(agent_loop.mistake_limit_handle());
-                }
-            }
-
-            let followup_handle = agent_loop.followup_handle();
-            match followup_out.lock() {
-                Ok(mut guard) => *guard = Some(followup_handle),
-                Err(e) => {
-                    warn!("Followup-out mutex poisoned, recovering: {e}");
-                    *e.into_inner() = Some(agent_loop.followup_handle());
-                }
-            }
-
-            let completion_handle = agent_loop.completion_handle();
-            match completion_out.lock() {
-                Ok(mut guard) => *guard = Some(completion_handle),
-                Err(e) => {
-                    warn!("Completion-out mutex poisoned, recovering: {e}");
-                    *e.into_inner() = Some(agent_loop.completion_handle());
+                    warn!("{label} mutex poisoned, recovering: {e}");
+                    *e.into_inner() = Some(value);
                 }
             }
         }
+
+        store_handle(&approval_out, agent_loop.approval_handle(), "Approval-out");
+        store_handle(
+            &api_retry_out,
+            agent_loop.api_retry_handle(),
+            "API-retry-out",
+        );
+        store_handle(
+            &auto_approval_limit_out,
+            agent_loop.auto_approval_limit_handle(),
+            "Auto-approval-limit-out",
+        );
+        store_handle(
+            &mistake_limit_out,
+            agent_loop.mistake_limit_handle(),
+            "Mistake-limit-out",
+        );
+        store_handle(&followup_out, agent_loop.followup_handle(), "Followup-out");
+        store_handle(
+            &completion_out,
+            agent_loop.completion_handle(),
+            "Completion-out",
+        );
 
         {
             let adapter_token = cancel_token.clone();
@@ -1928,8 +1911,11 @@ impl AgentAdapter for RooInProcessAdapter {
         let rooignore_content = tokio::fs::read_to_string(self.cwd.join(".rooignore"))
             .await
             .ok();
-        let system_prompt =
-            self.build_system_prompt_with_rooignore(has_mcp, Some(&custom_modes), rooignore_content);
+        let system_prompt = self.build_system_prompt_with_rooignore(
+            has_mcp,
+            Some(&custom_modes),
+            rooignore_content,
+        );
         let message_builder = MessageBuilder::new(&system_prompt);
 
         // Build tool dispatcher with a live MCP hub so MCP tools can execute.
@@ -2054,8 +2040,6 @@ impl AgentAdapter for RooInProcessAdapter {
         // Use spawn_blocking so the std::sync::Mutex locks and thread::sleep
         // calls don't block the async runtime for up to 3 seconds total.
         let handles = tokio::task::spawn_blocking(move || {
-            // Helper: try to take a value from a std::sync::Mutex<Option<T>>,
-            // recovering from poison if necessary.
             fn pickup<T>(lock: &std::sync::Mutex<Option<T>>) -> Option<T> {
                 match lock.lock() {
                     Ok(mut guard) => guard.take(),
@@ -2066,77 +2050,33 @@ impl AgentAdapter for RooInProcessAdapter {
                 }
             }
 
+            fn poll_pickup<T>(
+                lock: &std::sync::Mutex<Option<T>>,
+                sleep: std::time::Duration,
+                iterations: usize,
+            ) -> Option<T> {
+                std::iter::repeat_with(|| {
+                    if let Some(v) = pickup(lock) {
+                        return Some(v);
+                    }
+                    std::thread::sleep(sleep);
+                    None
+                })
+                .take(iterations)
+                .find(|v| v.is_some())
+                .flatten()
+            }
+
             let sleep = std::time::Duration::from_millis(10);
-            // 200 iterations x 10 ms = 2 s total window. Slow MCP server
-            // connections (e.g. remote tool servers) can take over 500 ms to
-            // become ready, so the previous 50-iteration window was too short.
+            // 200 iterations x 10 ms = 2 s total window.
             let iterations = 200;
 
-            let approval = std::iter::repeat_with(|| {
-                if let Some(v) = pickup(&approval_out) {
-                    return Some(v);
-                }
-                std::thread::sleep(sleep);
-                None
-            })
-            .take(iterations)
-            .find(|v| v.is_some())
-            .flatten();
-
-            let api_retry = std::iter::repeat_with(|| {
-                if let Some(v) = pickup(&api_retry_out) {
-                    return Some(v);
-                }
-                std::thread::sleep(sleep);
-                None
-            })
-            .take(iterations)
-            .find(|v| v.is_some())
-            .flatten();
-
-            let auto_approval_limit = std::iter::repeat_with(|| {
-                if let Some(v) = pickup(&auto_approval_limit_out) {
-                    return Some(v);
-                }
-                std::thread::sleep(sleep);
-                None
-            })
-            .take(iterations)
-            .find(|v| v.is_some())
-            .flatten();
-
-            let mistake_limit = std::iter::repeat_with(|| {
-                if let Some(v) = pickup(&mistake_limit_out) {
-                    return Some(v);
-                }
-                std::thread::sleep(sleep);
-                None
-            })
-            .take(iterations)
-            .find(|v| v.is_some())
-            .flatten();
-
-            let followup = std::iter::repeat_with(|| {
-                if let Some(v) = pickup(&followup_out) {
-                    return Some(v);
-                }
-                std::thread::sleep(sleep);
-                None
-            })
-            .take(iterations)
-            .find(|v| v.is_some())
-            .flatten();
-
-            let completion = std::iter::repeat_with(|| {
-                if let Some(v) = pickup(&completion_out) {
-                    return Some(v);
-                }
-                std::thread::sleep(sleep);
-                None
-            })
-            .take(iterations)
-            .find(|v| v.is_some())
-            .flatten();
+            let approval = poll_pickup(&approval_out, sleep, iterations);
+            let api_retry = poll_pickup(&api_retry_out, sleep, iterations);
+            let auto_approval_limit = poll_pickup(&auto_approval_limit_out, sleep, iterations);
+            let mistake_limit = poll_pickup(&mistake_limit_out, sleep, iterations);
+            let followup = poll_pickup(&followup_out, sleep, iterations);
+            let completion = poll_pickup(&completion_out, sleep, iterations);
 
             (
                 approval,
@@ -2195,19 +2135,6 @@ impl AgentAdapter for RooInProcessAdapter {
         request_id: &str,
         decision: PermissionDecision,
     ) -> anyhow::Result<()> {
-        let approved = matches!(
-            decision,
-            PermissionDecision::Allow | PermissionDecision::AllowAll
-        );
-        if request_id.starts_with("api_retry:") {
-            return self.resolve_api_retry(approved).await;
-        }
-        if request_id.starts_with("auto_approval_limit:") {
-            return self.resolve_auto_approval_limit(approved).await;
-        }
-        if request_id.starts_with("mistake_limit:") {
-            return self.resolve_mistake_limit(approved, None).await;
-        }
         self.resolve_roo_permission(request_id, decision, None, None)
             .await
     }
@@ -3266,6 +3193,8 @@ mod tests {
     #[tokio::test]
     async fn send_message_resolves_pending_followup_text() {
         let mut adapter = RooInProcessAdapter::new();
+        adapter.status = AgentStatus::Busy;
+        adapter.info.status = AgentStatus::Busy;
 
         let (tx, rx) = tokio::sync::oneshot::channel::<String>();
         adapter.followup_handle = Some(Arc::new(std::sync::Mutex::new(Some(tx))));

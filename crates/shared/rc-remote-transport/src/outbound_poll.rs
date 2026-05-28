@@ -291,6 +291,8 @@ fn update_after_param(url: &str, new_after: u64) -> String {
             .collect::<Vec<_>>()
             .join("&");
         format!("{base}?{updated}")
+    } else if query.is_empty() {
+        format!("{base}?after={new_after}")
     } else {
         format!("{url}&after={new_after}")
     }

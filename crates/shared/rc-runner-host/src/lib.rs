@@ -5,9 +5,12 @@
 //! `remote-code-runner` binary should stay focused on CLI parsing and
 //! startup wiring.
 
-use std::collections::{HashMap, VecDeque, hash_map::Entry};
+use std::collections::{BTreeMap, HashMap, VecDeque, hash_map::Entry};
+use std::io::{BufRead, BufReader as StdBufReader};
 use std::path::{Path, PathBuf};
+use std::process::Command as StdProcessCommand;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -23,12 +26,13 @@ use rc_runner::{
     RunnerSessionStateUpdateRequest, SessionState as RunnerSessionState,
     register_with_control_plane, send_heartbeat,
 };
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::process::{ChildStdin, Command as ProcessCommand};
+use tokio::io::AsyncWriteExt;
+use tokio::process::ChildStdin;
 use tokio::sync::{Mutex, mpsc, watch};
 use tracing::{info, warn};
 use uuid::Uuid;
 
+#[must_use]
 pub fn effective_heartbeat_interval(
     configured_interval_secs: u64,
     lease_ttl_secs: u64,
@@ -40,10 +44,21 @@ pub fn effective_heartbeat_interval(
     )
 }
 
-/// Returns exponential backoff delay, capped at 30 seconds.
+/// Returns exponential backoff delay with ±25% jitter, capped at 30 seconds.
+/// Jitter avoids thundering-herd retries from multiple runners.
 /// Caller is responsible for overall retry budget.
+#[must_use]
 pub fn next_retry_delay(current: Duration) -> Duration {
-    current.saturating_mul(2).min(Duration::from_secs(30))
+    let doubled = current.saturating_mul(2).min(Duration::from_secs(30));
+    // Use SystemTime subsecond nanos as an entropy source (no external dependency).
+    let jitter_nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .subsec_nanos() as u64;
+    let jitter_range = (doubled.as_millis() as u64) / 4;
+    let jitter = jitter_nanos % jitter_range.max(1);
+    Duration::from_millis(doubled.as_millis() as u64 - jitter_range / 2 + jitter)
+        .min(Duration::from_secs(30))
 }
 
 async fn wait_for_shutdown_or_timeout(
@@ -78,8 +93,10 @@ pub struct HostedSessionManager {
     /// Buffered runtime events that failed to reach the control plane.
     /// Keyed by session_id; flushed on next successful post.
     event_buffer: Arc<Mutex<HashMap<Uuid, VecDeque<RuntimeEventDetail>>>>,
-    /// Number of consecutive flush failures. After 10, back off 30s.
-    consecutive_flush_failures: Arc<Mutex<u32>>,
+    /// Number of consecutive flush failures. After 10, back off 5s.
+    consecutive_flush_failures: Arc<AtomicU32>,
+    /// Total events dropped due to buffer overflow across all sessions.
+    dropped_events: Arc<AtomicU32>,
 }
 
 #[derive(Clone)]
@@ -109,7 +126,10 @@ impl HostedSessionManager {
             remote_code_bin,
             profile_dir,
             auth_token,
-            reqwest::Client::new(),
+            reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(30))
+                .build()
+                .unwrap_or_else(|_| reqwest::Client::new()),
         )
     }
 
@@ -130,7 +150,8 @@ impl HostedSessionManager {
             auth_token,
             sessions: Arc::new(Mutex::new(HashMap::new())),
             event_buffer: Arc::new(Mutex::new(HashMap::new())),
-            consecutive_flush_failures: Arc::new(Mutex::new(0)),
+            consecutive_flush_failures: Arc::new(AtomicU32::new(0)),
+            dropped_events: Arc::new(AtomicU32::new(0)),
         }
     }
 
@@ -166,8 +187,6 @@ impl Drop for HostedSessionManager {
 }
 
 impl HostedSessionManager {
-
-
     pub async fn run(
         self,
         mut event_rx: mpsc::Receiver<RunnerApiEvent>,
@@ -225,7 +244,7 @@ impl HostedSessionManager {
             .find(|workspace| workspace.workspace_id == session.workspace_id)
             .cloned()
             .ok_or_else(|| anyhow!("workspace `{}` was not found", session.workspace_id))?;
-        let mut command = ProcessCommand::new(&self.remote_code_bin);
+        let mut command = remote_code_process_command(&self.remote_code_bin);
         command
             .arg("--cwd")
             .arg(&workspace.root_dir)
@@ -248,10 +267,13 @@ impl HostedSessionManager {
                 self.remote_code_bin.display()
             )
         })?;
-        let child_stdin = child
-            .stdin
-            .take()
-            .ok_or_else(|| anyhow!("hosted remote-code stdin was not piped"))?;
+        let child_stdin = ChildStdin::from_std(
+            child
+                .stdin
+                .take()
+                .ok_or_else(|| anyhow!("hosted remote-code stdin was not piped"))?,
+        )
+        .context("failed to register hosted remote-code stdin")?;
         let child_stdout = child
             .stdout
             .take()
@@ -309,10 +331,20 @@ impl HostedSessionManager {
         handle.task_handles.lock().await.push(stdout_join);
 
         let manager = self.clone();
-        let stderr_join: tokio::task::JoinHandle<()> = tokio::spawn(async move {
-            let mut lines = BufReader::new(child_stderr).lines();
-            while let Ok(Some(line)) = lines.next_line().await {
-                warn!("hosted session `{}` stderr: {line}", session.session_id);
+        let stderr_join: tokio::task::JoinHandle<()> = tokio::task::spawn_blocking(move || {
+            for line in StdBufReader::new(child_stderr).lines() {
+                match line {
+                    Ok(line) => {
+                        warn!("hosted session `{}` stderr: {line}", session.session_id);
+                    }
+                    Err(error) => {
+                        warn!(
+                            "hosted session `{}` stderr read failed: {error}",
+                            session.session_id
+                        );
+                        break;
+                    }
+                }
             }
             let _ = manager;
         });
@@ -320,7 +352,12 @@ impl HostedSessionManager {
 
         let manager = self.clone();
         let exit_join: tokio::task::JoinHandle<()> = tokio::spawn(async move {
-            let exit = child.wait().await;
+            let exit = match tokio::task::spawn_blocking(move || child.wait()).await {
+                Ok(exit) => exit,
+                Err(error) => Err(std::io::Error::other(
+                    format!("hosted session wait task failed: {error}"),
+                )),
+            };
             if let Err(error) = manager
                 .handle_hosted_session_exit(session.session_id, exit)
                 .await
@@ -343,16 +380,24 @@ impl HostedSessionManager {
     async fn read_hosted_session_stdout(
         &self,
         session_id: Uuid,
-        stdout: tokio::process::ChildStdout,
+        stdout: std::process::ChildStdout,
         handle: HostedSessionHandle,
     ) -> Result<()> {
-        let mut lines = BufReader::new(stdout).lines();
-        while let Some(line) = lines.next_line().await? {
-            if let Err(error) = self.handle_protocol_line(session_id, &line, &handle).await {
-                warn!("hosted session `{session_id}` ignored protocol line error: {error:#}");
+        let manager = self.clone();
+        let runtime = tokio::runtime::Handle::current();
+        tokio::task::spawn_blocking(move || -> Result<()> {
+            for line in StdBufReader::new(stdout).lines() {
+                let line = line?;
+                if let Err(error) =
+                    runtime.block_on(manager.handle_protocol_line(session_id, &line, &handle))
+                {
+                    warn!("hosted session `{session_id}` ignored protocol line error: {error:#}");
+                }
             }
-        }
-        Ok(())
+            Ok(())
+        })
+        .await
+        .context("hosted remote-code stdout reader task failed")?
     }
 
     async fn handle_protocol_line(
@@ -435,7 +480,7 @@ impl HostedSessionManager {
                 session_id,
                 RunnerSessionStateUpdateRequest {
                     state: runner_state,
-                    metadata: HashMap::new().into_iter().collect(),
+                    metadata: BTreeMap::new(),
                 },
             )
             .await?;
@@ -555,10 +600,11 @@ impl HostedSessionManager {
         request_id: &str,
         handle: &HostedSessionHandle,
     ) -> Result<()> {
+        // Step 1: Remove from request_to_approval to look up the approval_id.
         let approval_id = handle.request_to_approval.lock().await.remove(request_id);
         if let Some(approval_id) = approval_id {
-            handle.approval_to_request.lock().await.remove(&approval_id);
-            if let Err(error) = self
+            // Step 2: Try the network call to cancel on the control plane.
+            let result = self
                 .resolve_control_plane_approval(
                     approval_id,
                     ApprovalDecisionRequest {
@@ -569,9 +615,23 @@ impl HostedSessionManager {
                         )),
                     },
                 )
-                .await
-            {
-                warn!("failed to cancel control-plane approval {approval_id}: {error:#}");
+                .await;
+            match result {
+                Ok(()) => {
+                    // Step 3: Network call succeeded — safe to remove the reverse mapping.
+                    handle.approval_to_request.lock().await.remove(&approval_id);
+                }
+                Err(error) => {
+                    // Network call failed — re-insert into request_to_approval so the
+                    // cancellation can be retried later, and return the error.
+                    warn!("failed to cancel control-plane approval {approval_id}: {error:#}");
+                    handle
+                        .request_to_approval
+                        .lock()
+                        .await
+                        .insert(request_id.to_owned(), approval_id);
+                    return Err(error);
+                }
             }
         }
         Ok(())
@@ -587,15 +647,25 @@ impl HostedSessionManager {
         else {
             return Ok(());
         };
-        let request_id = handle
-            .approval_to_request
-            .lock()
-            .await
-            .remove(&approval.approval_id);
-        let Some(request_id) = request_id else {
+
+        // Acquire locks in consistent order: request_to_approval first, then
+        // approval_to_request.  This matches cancel_pending_approval and
+        // prevents ABBA deadlocks.
+        let r2a = handle.request_to_approval.lock().await;
+        let a2r = handle.approval_to_request.lock().await;
+        let Some(request_id) = a2r.get(&approval.approval_id).cloned() else {
             return Ok(());
         };
-        handle.request_to_approval.lock().await.remove(&request_id);
+        drop(a2r);
+        drop(r2a);
+
+        // Now remove from both maps (re-acquire in same order).
+        let mut r2a = handle.request_to_approval.lock().await;
+        let mut a2r = handle.approval_to_request.lock().await;
+        r2a.remove(&request_id);
+        a2r.remove(&approval.approval_id);
+        drop(a2r);
+        drop(r2a);
 
         let behavior = match approval.state {
             rc_runner::ApprovalState::Approved => "allow",
@@ -687,7 +757,7 @@ impl HostedSessionManager {
                 session_id,
                 RunnerSessionStateUpdateRequest {
                     state: runner_state,
-                    metadata: HashMap::new().into_iter().collect(),
+                    metadata: BTreeMap::new(),
                 },
             )
             .await?;
@@ -786,6 +856,10 @@ impl HostedSessionManager {
         let buf = buffer.entry(session_id).or_default();
         if buf.len() >= MAX_EVENT_BUFFER_PER_SESSION {
             let _ = buf.pop_front();
+            let dropped = self.dropped_events.fetch_add(1, Ordering::Relaxed) + 1;
+            if dropped.is_multiple_of(100) {
+                warn!("Total events dropped due to buffer overflow: {dropped}");
+            }
             warn!("event buffer cap hit for session {session_id}, dropped 1 oldest event");
         }
         buf.push_back(detail);
@@ -796,9 +870,8 @@ impl HostedSessionManager {
     async fn flush_event_buffer(&self, session_id: Uuid) {
         // Back off after too many consecutive failures.
         {
-            let failures = self.consecutive_flush_failures.lock().await;
-            if *failures >= 10 {
-                tokio::time::sleep(Duration::from_secs(30)).await;
+            if self.consecutive_flush_failures.load(Ordering::Relaxed) >= 10 {
+                tokio::time::sleep(Duration::from_secs(5)).await;
             }
         }
 
@@ -809,12 +882,13 @@ impl HostedSessionManager {
         if events.is_empty() {
             return;
         }
+        let flush_url = format!(
+            "{}/v1/sessions/{session_id}/events",
+            self.control_plane_url.trim_end_matches('/')
+        );
         while let Some(detail) = events.pop_front() {
             if self
-                .control_plane_post(format!(
-                    "{}/v1/sessions/{session_id}/events",
-                    self.control_plane_url.trim_end_matches('/')
-                ))
+                .control_plane_post(flush_url.clone())
                 .json(&RuntimeEventCreateRequest {
                     detail: detail.clone(),
                 })
@@ -823,11 +897,12 @@ impl HostedSessionManager {
                 .is_ok_and(|r| r.status().is_success())
             {
                 // Flushed one successfully, reset failure counter and continue
-                *self.consecutive_flush_failures.lock().await = 0;
+                self.consecutive_flush_failures.store(0, Ordering::Relaxed);
             } else {
                 // Control plane still unreachable — re-buffer remaining and stop
                 warn!("control plane still unreachable during flush for session {session_id}");
-                *self.consecutive_flush_failures.lock().await += 1;
+                self.consecutive_flush_failures
+                    .fetch_add(1, Ordering::Relaxed);
                 events.push_front(detail);
                 let mut buffer = self.event_buffer.lock().await;
                 if let Some(mut newer_events) = buffer.remove(&session_id) {
@@ -841,6 +916,7 @@ impl HostedSessionManager {
                 }
                 while events.len() > MAX_EVENT_BUFFER_PER_SESSION {
                     events.pop_front();
+                    self.dropped_events.fetch_add(1, Ordering::Relaxed);
                 }
                 buffer.insert(session_id, events);
                 return;
@@ -907,7 +983,7 @@ impl HostedSessionManager {
             let mut inputs = handle.pending_tool_inputs.lock().await;
             // Evict the oldest entry if the map has grown beyond the limit.
             if inputs.len() >= MAX_PENDING_TOOL_INPUTS {
-                if let Some((evicted_id, _)) = inputs.iter().next().map(|(k, v)| (k.clone(), v.clone())) {
+                if let Some(evicted_id) = inputs.keys().next().cloned() {
                     inputs.remove(&evicted_id);
                     warn!(
                         "pending_tool_inputs cap ({MAX_PENDING_TOOL_INPUTS}) exceeded; \
@@ -1110,24 +1186,25 @@ async fn resolve_artifact_path(workspace_dir: &Path, requested_path: &Path) -> R
     Ok(artifact_path)
 }
 
-fn guess_media_type(path: &Path) -> Option<String> {
+fn guess_media_type(path: &Path) -> String {
     match path.extension().and_then(|ext| ext.to_str()) {
-        Some("rs") => Some("text/rust".to_owned()),
-        Some("ts" | "tsx") => Some("text/typescript".to_owned()),
-        Some("js" | "jsx") => Some("text/javascript".to_owned()),
-        Some("py") => Some("text/x-python".to_owned()),
-        Some("json") => Some("application/json".to_owned()),
-        Some("toml") => Some("text/toml".to_owned()),
-        Some("yaml" | "yml") => Some("text/yaml".to_owned()),
-        Some("md") => Some("text/markdown".to_owned()),
-        Some("html") => Some("text/html".to_owned()),
-        Some("css") => Some("text/css".to_owned()),
-        Some("png") => Some("image/png".to_owned()),
-        Some("jpg" | "jpeg") => Some("image/jpeg".to_owned()),
-        Some("svg") => Some("image/svg+xml".to_owned()),
-        Some("pdf") => Some("application/pdf".to_owned()),
-        _ => Some("application/octet-stream".to_owned()),
+        Some("rs") => "text/rust",
+        Some("ts" | "tsx") => "text/typescript",
+        Some("js" | "jsx") => "text/javascript",
+        Some("py") => "text/x-python",
+        Some("json") => "application/json",
+        Some("toml") => "text/toml",
+        Some("yaml" | "yml") => "text/yaml",
+        Some("md") => "text/markdown",
+        Some("html") => "text/html",
+        Some("css") => "text/css",
+        Some("png") => "image/png",
+        Some("jpg" | "jpeg") => "image/jpeg",
+        Some("svg") => "image/svg+xml",
+        Some("pdf") => "application/pdf",
+        _ => "application/octet-stream",
     }
+    .to_owned()
 }
 
 /// Extract file path from accumulated tool input JSON.
@@ -1207,6 +1284,23 @@ pub fn default_remote_code_bin() -> Result<PathBuf> {
         return Ok(sibling);
     }
     Ok(PathBuf::from("remote-code"))
+}
+
+fn remote_code_process_command(remote_code_bin: &Path) -> StdProcessCommand {
+    if cfg!(windows)
+        && remote_code_bin
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| {
+                extension.eq_ignore_ascii_case("cmd") || extension.eq_ignore_ascii_case("bat")
+            })
+    {
+        let mut command = StdProcessCommand::new("cmd.exe");
+        command.arg("/d").arg("/c").arg(remote_code_bin);
+        return command;
+    }
+
+    StdProcessCommand::new(remote_code_bin)
 }
 
 fn authorize_control_plane_request(

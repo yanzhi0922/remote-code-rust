@@ -204,14 +204,14 @@ pub(crate) enum PendingServerRequestKind {
     Permissions(RequestPermissionProfile),
     McpElicitation,
     ToolUserInput(Vec<ToolRequestUserInputQuestion>),
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Fields stored for completeness; matched by variant type only.
     DynamicTool {
         call_id: String,
         namespace: Option<String>,
         tool: String,
         arguments: serde_json::Value,
     },
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Fields stored for completeness; matched by variant type only.
     ChatgptAuthRefresh {
         reason: String,
         previous_account_id: Option<String>,

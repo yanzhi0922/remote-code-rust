@@ -68,7 +68,7 @@ fn require_owner_or_shared(principal: &AuthPrincipal) -> Result<(), ApiError> {
 /// Snapshot of ownership data for tenant-filtered event streams.
 /// Pre-computed before entering the stream loop so the sync filter closure
 /// doesn't need async lock access.
-struct TenantFilter {
+pub(crate) struct TenantFilter {
     runner_ids: HashSet<String>,
     session_ids: HashSet<Uuid>,
 }
@@ -76,7 +76,10 @@ struct TenantFilter {
 impl TenantFilter {
     /// Build a tenant filter snapshot.  Returns `None` for admin/legacy principals
     /// (no filtering needed).
-    fn from_registry(registry: &crate::registry::Registry, user_id: Option<&str>) -> Option<Self> {
+    pub(crate) fn from_registry(
+        registry: &crate::registry::Registry,
+        user_id: Option<&str>,
+    ) -> Option<Self> {
         let uid = user_id?;
         Some(Self {
             runner_ids: registry
@@ -94,7 +97,7 @@ impl TenantFilter {
         })
     }
 
-    fn event_visible(&self, event: &TimelineEvent) -> bool {
+    pub(crate) fn event_visible(&self, event: &TimelineEvent) -> bool {
         if let Some(ref rid) = event.runner_id {
             return self.runner_ids.contains(rid);
         }
@@ -314,7 +317,8 @@ pub(crate) async fn refresh_token(
 ) -> Result<Json<TokenRefreshResponse>, ApiError> {
     let response = {
         let mut registry = service.registry.write().await;
-        let (_device, access_token, refresh_token) = registry.refresh_access_token(&request.refresh_token)?;
+        let (_device, access_token, refresh_token) =
+            registry.refresh_access_token(&request.refresh_token)?;
         TokenRefreshResponse {
             access_token,
             refresh_token: Some(refresh_token),
@@ -987,7 +991,7 @@ pub(crate) async fn update_runner_heartbeat(
             for (session_id, old_runner_id, previous_state) in &reaped {
                 let session = registry.sessions.get(session_id);
                 let new_state = session.map(|s| s.state).unwrap_or(SessionState::Pending);
-                let _ = service
+                let _event = service
                     .publish_event(TimelineEventDraft {
                         runner_id: Some(old_runner_id.clone()),
                         session_id: Some(*session_id),
@@ -997,9 +1001,14 @@ pub(crate) async fn update_runner_heartbeat(
                         },
                     })
                     .await;
+                tracing::debug!(
+                    session_id = %session_id,
+                    old_runner_id = %old_runner_id,
+                    "published session reaped event"
+                );
             }
         }
-        
+
         registry.get_runner_snapshot(&runner_id)?
     };
 
@@ -1032,9 +1041,20 @@ pub(crate) async fn pull_runner_commands(
     let deadline = tokio::time::Instant::now()
         + std::time::Duration::from_secs(query.timeout.unwrap_or(0).min(30));
     loop {
-        let commands = {
+        // Acquire a READ lock to check if commands exist for this runner.
+        // Only upgrade to a WRITE lock when we actually need to drain commands.
+        let has_commands = {
+            let registry = service.registry.read().await;
+            registry
+                .queued_runner_commands
+                .get(&runner_id)
+                .is_some_and(|q| !q.is_empty())
+        };
+        let commands = if has_commands {
             let mut registry = service.registry.write().await;
             registry.pull_runner_commands(&runner_id, limit)?
+        } else {
+            Vec::new()
         };
         if !commands.is_empty() {
             persist_state_logged(&service).await;
@@ -1524,7 +1544,8 @@ pub(crate) async fn create_artifact(
         registry.get_session_for_user(session_id, user_id)?;
     }
     let encoded_len = request.content_base64.len();
-    if encoded_len > MAX_ARTIFACT_SIZE_BYTES {
+    let max_encoded = MAX_ARTIFACT_SIZE_BYTES * 4 / 3;
+    if encoded_len > max_encoded {
         return Err(ApiError::bad_request(format!(
             "artifact exceeds {MAX_ARTIFACT_SIZE_BYTES} byte limit (got {encoded_len} bytes encoded)"
         )));

@@ -18,24 +18,21 @@ use serde::{Deserialize, Serialize};
 /// These names are allowed ONLY for official marketplaces and blocked for
 /// third parties.
 pub static ALLOWED_OFFICIAL_MARKETPLACE_NAMES: Lazy<HashSet<&'static str>> = Lazy::new(|| {
-    let mut set = HashSet::new();
-    set.insert("claude-code-marketplace");
-    set.insert("claude-code-plugins");
-    set.insert("claude-plugins-official");
-    set.insert("anthropic-marketplace");
-    set.insert("anthropic-plugins");
-    set.insert("agent-skills");
-    set.insert("life-sciences");
-    set.insert("knowledge-work-plugins");
-    set
+    HashSet::from([
+        "claude-code-marketplace",
+        "claude-code-plugins",
+        "claude-plugins-official",
+        "anthropic-marketplace",
+        "anthropic-plugins",
+        "agent-skills",
+        "life-sciences",
+        "knowledge-work-plugins",
+    ])
 });
 
 /// Official marketplaces that should NOT auto-update by default.
-pub static NO_AUTO_UPDATE_OFFICIAL_MARKETPLACES: Lazy<HashSet<&'static str>> = Lazy::new(|| {
-    let mut set = HashSet::new();
-    set.insert("knowledge-work-plugins");
-    set
-});
+pub static NO_AUTO_UPDATE_OFFICIAL_MARKETPLACES: Lazy<HashSet<&'static str>> =
+    Lazy::new(|| HashSet::from(["knowledge-work-plugins"]));
 
 /// Pattern to detect names that impersonate official Anthropic/Claude
 /// marketplaces.

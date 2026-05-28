@@ -22,6 +22,7 @@ import type {
   SubtaskStartedInfo,
   ToolProgressInfo,
   ToolResultInfo,
+  AgentType,
 } from '../lib/types';
 import * as tauri from '../lib/tauri';
 import { normalizePathKey } from '../lib/utils';
@@ -48,6 +49,20 @@ function defaultProjectPath(projects: ProjectInfo[], activeProjectPath: string |
     return activeProjectPath;
   }
   return projects[0]?.path ?? null;
+}
+
+function normalizeSessionAgent(agentType: SessionSummary['agent_type'] | null | undefined): AgentType {
+  if (agentType === 'remote_codex' || agentType === 'remote_roo' || agentType === 'remote_claude') {
+    return agentType;
+  }
+  return 'remote_claude';
+}
+
+function syncActiveAgentForSession(sessionId: string | null, sessions: SessionSummary[]): void {
+  if (!sessionId) return;
+  const session = sessions.find((item) => item.id === sessionId);
+  if (!session) return;
+  useAgentStore.setState({ activeAgentType: normalizeSessionAgent(session.agent_type) });
 }
 
 const WORKSPACE_PRIVACY_STORAGE_KEY = 'remote-code-gui-workspace-overview-privacy';
@@ -574,16 +589,19 @@ export const useAppStore = create<AppState>((set, get) => ({
     set({ sessionsLoading: true });
     try {
       const sessions = await tauri.listSessions();
+      let nextActiveSessionId: string | null = null;
       set((state) => {
         const activeSessionId =
           state.activeSessionId && sessions.some((session) => session.id === state.activeSessionId)
             ? state.activeSessionId
             : sessions[0]?.id ?? null;
+        nextActiveSessionId = activeSessionId;
         const activeProjectPath =
           getProjectPathForSession(activeSessionId, sessions, state.projects) ??
           defaultProjectPath(state.projects, state.activeProjectPath);
         return { sessions, sessionsLoading: false, activeSessionId, activeProjectPath };
       });
+      syncActiveAgentForSession(nextActiveSessionId, sessions);
     } catch {
       set({ sessionsLoading: false });
     }
@@ -601,6 +619,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   selectSession: async (sessionId: string) => {
     const state = get();
     const activeProjectPath = getProjectPathForSession(sessionId, state.sessions, state.projects);
+    syncActiveAgentForSession(sessionId, state.sessions);
     set({
       activeSessionId: sessionId,
       activeProjectPath,
@@ -638,11 +657,13 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
     const { activeAgentType } = useAgentStore.getState();
     const sessionId = await tauri.createSession(title, effectiveProjectPath, activeAgentType ?? undefined);
+    const sessionAgentType = activeAgentType ?? 'remote_claude';
     set({
       activeSessionId: sessionId,
       activeProjectPath: effectiveProjectPath,
       conversation: [],
     });
+    useAgentStore.setState({ activeAgentType: sessionAgentType });
     try {
       const tasks = await tauri.getSessionTasks(sessionId);
       useAgentStore.setState((state) => ({

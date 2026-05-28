@@ -146,6 +146,7 @@ pub(crate) struct SessionSummaryDto {
     pub(crate) cwd: String,
     pub(crate) provider_name: String,
     pub(crate) model: Option<String>,
+    pub(crate) agent_type: String,
     pub(crate) created_at: String,
     pub(crate) updated_at: String,
     pub(crate) archived: bool,
@@ -219,6 +220,21 @@ pub(crate) struct FullSettingsDto {
     pub(crate) codex_permission_profile: Option<serde_json::Value>,
     pub(crate) codex_service_tier: Option<String>,
     pub(crate) codex_ephemeral: Option<bool>,
+    pub(crate) runtime_paths: RuntimePathsDto,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct RuntimePathsDto {
+    pub(crate) profile_dir: String,
+    pub(crate) sessions_dir: String,
+    pub(crate) artifacts_dir: String,
+    pub(crate) logs_dir: String,
+    pub(crate) cache_dir: String,
+    pub(crate) agents_dir: String,
+    pub(crate) remote_control_file: String,
+    pub(crate) gui_projects_file: String,
+    pub(crate) gui_providers_file: String,
+    pub(crate) gui_settings_file: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]

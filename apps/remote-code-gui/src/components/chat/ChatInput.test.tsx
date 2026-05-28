@@ -2,6 +2,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ChatInput } from './ChatInput';
 import { resetAppStore } from '../../test/appStoreTestUtils';
+import { useAgentStore } from '../../stores/useAgentStore';
 
 const DEFAULT_SETTINGS = {
   provider_name: 'glm-coding',
@@ -29,6 +30,18 @@ const DEFAULT_SETTINGS = {
   codex_permission_profile: null,
   codex_service_tier: null,
   codex_ephemeral: null,
+  runtime_paths: {
+    profile_dir: '/test/profile',
+    sessions_dir: '/test/sessions',
+    artifacts_dir: '/test/artifacts',
+    logs_dir: '/test/logs',
+    cache_dir: '/test/cache',
+    agents_dir: '/test/agents',
+    remote_control_file: '/test/remote_control.json',
+    gui_projects_file: '/test/gui-projects.json',
+    gui_providers_file: '/test/gui-providers.json',
+    gui_settings_file: '/test/gui-settings.json',
+  },
 };
 
 describe('ChatInput', () => {
@@ -54,6 +67,7 @@ describe('ChatInput', () => {
           cwd: 'C:\\repo',
           provider_name: 'glm-coding',
           model: 'glm-5.1',
+          agent_type: 'remote_claude',
           created_at: '2026-04-13T00:00:00Z',
           updated_at: '2026-04-13T00:05:00Z',
           archived: false,
@@ -85,7 +99,7 @@ describe('ChatInput', () => {
     expect(screen.getByRole('form', { name: 'Prompt composer' })).toBeInTheDocument();
     expect(screen.getByRole('group', { name: 'Composer controls' })).toBeInTheDocument();
 
-    const textarea = screen.getByPlaceholderText('向 agent 发送指令或代码片段');
+    const textarea = screen.getByRole('textbox', { name: 'Prompt input' });
 
     fireEvent.change(textarea, { target: { value: '请检查当前会话状态' } });
     fireEvent.keyDown(textarea, { key: 'Enter', code: 'Enter' });
@@ -154,6 +168,100 @@ describe('ChatInput', () => {
     });
   });
 
+  it('uses native Codex approval and sandbox options and locks agent for an existing session', async () => {
+    const updateSettings = vi.fn().mockResolvedValue(undefined);
+
+    resetAppStore({
+      activeSessionId: 'session-codex',
+      sessions: [
+        {
+          id: 'session-codex',
+          title: 'Codex work',
+          cwd: 'C:\\repo',
+          provider_name: 'glm-coding',
+          model: 'glm-5.1',
+          agent_type: 'remote_codex',
+          created_at: '2026-04-13T00:00:00Z',
+          updated_at: '2026-04-13T00:05:00Z',
+          archived: false,
+        },
+      ],
+      settings: {
+        ...DEFAULT_SETTINGS,
+        codex_approval_policy: 'on-request',
+        codex_sandbox_mode: 'workspace-write',
+      },
+      updateSettings,
+    });
+    useAgentStore.setState({
+      activeAgentType: 'remote_codex',
+      availableAgents: [
+        { agentType: 'remote_codex', displayName: 'Codex', available: true, installed: true },
+        { agentType: 'remote_claude', displayName: 'Claude', available: true, installed: true },
+        { agentType: 'remote_roo', displayName: 'Roo', available: true, installed: true },
+      ],
+    });
+
+    render(<ChatInput />);
+
+    fireEvent.click(screen.getByRole('button', { name: '请求批准' }));
+    fireEvent.click(screen.getByText('沙盒自动'));
+
+    await waitFor(() => {
+      expect(updateSettings).toHaveBeenCalledWith({
+        codex_approval_policy: 'never',
+        codex_sandbox_mode: 'workspace-write',
+      });
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /Codex/ }));
+    fireEvent.click(screen.getByText('Roo'));
+
+    expect(useAgentStore.getState().activeAgentType).toBe('remote_codex');
+  });
+
+  it('blocks switching to a model with a smaller known context window than the active session uses', async () => {
+    const updateSettings = vi.fn().mockResolvedValue(undefined);
+
+    resetAppStore({
+      activeSessionId: 'session-1',
+      sessions: [
+        {
+          id: 'session-1',
+          title: 'Large context session',
+          cwd: 'C:\\repo',
+          provider_name: 'glm-coding',
+          model: 'glm-5.1',
+          agent_type: 'remote_claude',
+          created_at: '2026-04-13T00:00:00Z',
+          updated_at: '2026-04-13T00:05:00Z',
+          archived: false,
+        },
+      ],
+      contextUsageBySession: {
+        'session-1': {
+          session_id: 'session-1',
+          estimated_tokens: 12_000,
+          max_input_tokens: 128_000,
+          threshold_tokens: 102_400,
+          ratio: 0.09,
+        },
+      },
+      settings: DEFAULT_SETTINGS,
+      updateSettings,
+    });
+
+    render(<ChatInput />);
+
+    const modelInput = screen.getByLabelText('Model for next send');
+    fireEvent.change(modelInput, { target: { value: 'small-8k' } });
+    fireEvent.blur(modelInput);
+
+    expect(await screen.findByText(/不能切换到更小上下文/)).toBeInTheDocument();
+    expect(modelInput).toHaveValue('glm-5.1');
+    expect(updateSettings).not.toHaveBeenCalledWith({ provider_model: 'small-8k' });
+  });
+
   it('cancels the active running prompt from the composer', async () => {
     const cancelPrompt = vi.fn().mockResolvedValue(undefined);
 
@@ -166,6 +274,7 @@ describe('ChatInput', () => {
           cwd: 'C:\\repo',
           provider_name: 'glm-coding',
           model: 'glm-5.1',
+          agent_type: 'remote_claude',
           created_at: '2026-04-13T00:00:00Z',
           updated_at: '2026-04-13T00:05:00Z',
           archived: false,

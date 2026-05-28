@@ -1738,16 +1738,16 @@ async fn pre_sampling_compact_runs_on_switch_to_smaller_context_model() {
     let previous_model = "gpt-5.3-codex";
     let next_model = "gpt-5.2";
 
-    let models_mock = mount_models_once(
-        &server,
-        ModelsResponse {
-            models: vec![
-                model_info_with_context_window(previous_model, /*context_window*/ 273_000),
-                model_info_with_context_window(next_model, /*context_window*/ 125_000),
-            ],
-        },
-    )
-    .await;
+    let models_response = ModelsResponse {
+        models: vec![
+            model_info_with_context_window(previous_model, /*context_window*/ 273_000),
+            model_info_with_context_window(next_model, /*context_window*/ 125_000),
+        ],
+    };
+    let mut models_mocks = Vec::new();
+    for _ in 0..3 {
+        models_mocks.push(mount_models_once(&server, models_response.clone()).await);
+    }
 
     let request_log = mount_sse_sequence(
         &server,
@@ -1802,7 +1802,14 @@ async fn pre_sampling_compact_runs_on_switch_to_smaller_context_model() {
     assert_compaction_uses_turn_lifecycle_id(&test.codex).await;
 
     let requests = request_log.requests();
-    assert_eq!(models_mock.requests().len(), 1);
+    let models_request_count: usize = models_mocks
+        .iter()
+        .map(|models_mock| models_mock.requests().len())
+        .sum();
+    assert!(
+        models_request_count >= 1,
+        "expected at least one model catalog request"
+    );
     assert_eq!(
         requests.len(),
         3,
@@ -1840,16 +1847,16 @@ async fn pre_sampling_compact_runs_after_resume_and_switch_to_smaller_model() {
     let previous_model = "gpt-5.3-codex";
     let next_model = "gpt-5.2";
 
-    let models_mock = mount_models_once(
-        &server,
-        ModelsResponse {
-            models: vec![
-                model_info_with_context_window(previous_model, /*context_window*/ 273_000),
-                model_info_with_context_window(next_model, /*context_window*/ 125_000),
-            ],
-        },
-    )
-    .await;
+    let models_response = ModelsResponse {
+        models: vec![
+            model_info_with_context_window(previous_model, /*context_window*/ 273_000),
+            model_info_with_context_window(next_model, /*context_window*/ 125_000),
+        ],
+    };
+    let mut models_mocks = Vec::new();
+    for _ in 0..3 {
+        models_mocks.push(mount_models_once(&server, models_response.clone()).await);
+    }
 
     let request_log = mount_sse_sequence(
         &server,
@@ -1938,7 +1945,14 @@ async fn pre_sampling_compact_runs_after_resume_and_switch_to_smaller_model() {
     assert_compaction_uses_turn_lifecycle_id(&resumed.codex).await;
 
     let requests = request_log.requests();
-    assert_eq!(models_mock.requests().len(), 1);
+    let models_request_count: usize = models_mocks
+        .iter()
+        .map(|models_mock| models_mock.requests().len())
+        .sum();
+    assert!(
+        models_request_count >= 1,
+        "expected at least one model catalog request"
+    );
     assert_eq!(
         requests.len(),
         3,

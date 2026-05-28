@@ -121,58 +121,58 @@ impl RemoteTransport for HybridTransport {
     }
 
     async fn health_probe(&self) -> HealthStatus {
-        let config = self.direct.config.as_ref().or(self.relay.config.as_ref());
-        if let Some(config) = config {
-            let (runner_url, cp_url) = match &config.strategy {
-                crate::TransportStrategy::Hybrid {
-                    runner_url,
-                    control_plane_url,
-                } => (runner_url.clone(), control_plane_url.clone()),
-                _ => {
-                    return HealthStatus {
-                        endpoints: vec![],
-                        recommended_strategy: None,
-                    };
-                }
-            };
-
-            let runner_health_url = format!("{runner_url}/healthz");
-            let cp_health_url = format!("{cp_url}/healthz");
-            let token = config.auth_token.clone();
-
-            let endpoints = crate::health::probe_endpoints(
-                &[
-                    (runner_health_url.as_str(), Some(token.as_str())),
-                    (cp_health_url.as_str(), Some(token.as_str())),
-                ],
-                std::time::Duration::from_secs(3),
-            )
-            .await;
-
-            let recommended = if endpoints
-                .first()
-                .is_some_and(|e| e.reachable && e.auth_valid)
-            {
-                "direct_websocket"
-            } else {
-                "server_relay"
-            };
-
-            HealthStatus {
-                endpoints,
-                recommended_strategy: Some(recommended.into()),
-            }
-        } else {
-            HealthStatus {
+        // Use URLs stored during connect() — the sub-transports hold
+        // DirectWebSocket/ServerRelay strategies, not Hybrid.
+        let (Some(runner_url), Some(cp_url)) = (&self.runner_url, &self.cp_url) else {
+            return HealthStatus {
                 endpoints: vec![],
                 recommended_strategy: None,
-            }
+            };
+        };
+
+        // Pick auth token from whichever sub-transport has a config.
+        let token = self
+            .direct
+            .config
+            .as_ref()
+            .or(self.relay.config.as_ref())
+            .map(|c| c.auth_token.clone())
+            .unwrap_or_default();
+
+        let runner_health_url = format!("{runner_url}/healthz");
+        let cp_health_url = format!("{cp_url}/healthz");
+
+        let endpoints = crate::health::probe_endpoints(
+            &[
+                (runner_health_url.as_str(), Some(token.as_str())),
+                (cp_health_url.as_str(), Some(token.as_str())),
+            ],
+            std::time::Duration::from_secs(3),
+        )
+        .await;
+
+        let recommended = if endpoints
+            .first()
+            .is_some_and(|e| e.reachable && e.auth_valid)
+        {
+            "direct_websocket"
+        } else {
+            "server_relay"
+        };
+
+        HealthStatus {
+            endpoints,
+            recommended_strategy: Some(recommended.into()),
         }
     }
 
     async fn disconnect(&mut self) -> anyhow::Result<()> {
-        self.direct.disconnect().await.ok();
-        self.relay.disconnect().await.ok();
+        if let Err(e) = self.direct.disconnect().await {
+            tracing::warn!("direct transport disconnect error: {e:#}");
+        }
+        if let Err(e) = self.relay.disconnect().await {
+            tracing::warn!("relay transport disconnect error: {e:#}");
+        }
         Ok(())
     }
 

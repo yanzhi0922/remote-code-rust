@@ -63,11 +63,12 @@ static OAUTH_HTTP_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
 fn oauth_http_client() -> reqwest::Client {
     OAUTH_HTTP_CLIENT
         .get_or_init(|| {
-            build_reqwest_client_with_custom_ca(reqwest::Client::builder())
-                .unwrap_or_else(|error| {
+            build_reqwest_client_with_custom_ca(reqwest::Client::builder()).unwrap_or_else(
+                |error| {
                     tracing::warn!("failed to build OAuth HTTP client: {error}");
                     reqwest::Client::new()
-                })
+                },
+            )
         })
         .clone()
 }

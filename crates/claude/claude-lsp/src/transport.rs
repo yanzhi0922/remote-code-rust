@@ -61,8 +61,7 @@ impl StdioTransport {
             .take()
             .context("language server stdout not available")?;
 
-        let pending: Arc<Mutex<HashMap<u64, PendingEntry>>> =
-            Arc::new(Mutex::new(HashMap::new()));
+        let pending: Arc<Mutex<HashMap<u64, PendingEntry>>> = Arc::new(Mutex::new(HashMap::new()));
         let pending_clone = Arc::clone(&pending);
 
         let reader_handle = tokio::spawn(async move {
@@ -87,7 +86,7 @@ impl StdioTransport {
     pub async fn request(&self, method: &str, params: Option<Value>) -> Result<Value> {
         let id = self.next_id();
         let (tx, rx) = oneshot::channel();
-                {
+        {
             let mut pending = self.pending.lock();
             if pending.len() >= MAX_PENDING_ENTRIES {
                 if let Some(oldest_id) = pending
@@ -98,7 +97,13 @@ impl StdioTransport {
                     pending.remove(&oldest_id);
                 }
             }
-            pending.insert(id, PendingEntry { sender: tx, inserted_at: Instant::now() });
+            pending.insert(
+                id,
+                PendingEntry {
+                    sender: tx,
+                    inserted_at: Instant::now(),
+                },
+            );
         }
 
         let msg = serde_json::json!({

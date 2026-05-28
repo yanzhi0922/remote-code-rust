@@ -796,7 +796,7 @@ pub fn parse_max_tokens_overflow(body: &str) -> Option<u64> {
 
     // Try to extract "X + Y > Z" from the error message.
     static RE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
-        regex::Regex::new(r"(\d+)\s*\+\s*(\d+)\s*>\s*(\d+)").unwrap()
+        regex::Regex::new(r"(\d+)\s*\+\s*(\d+)\s*>\s*(\d+)").expect("hardcoded regex is valid")
     });
     let caps = RE.captures(body)?;
     let input_tokens: u64 = caps[1].parse().ok()?;
@@ -1134,7 +1134,7 @@ where
                         new_max_tokens = new_max,
                         "context overflow detected, adjusting max_tokens"
                     );
-                    context.max_tokens_override = Some(new_max as u32);
+                    context.max_tokens_override = Some(u32::try_from(new_max).unwrap_or(u32::MAX));
                     if attempt < config.max_retries {
                         let delay = compute_retry_delay(config, attempt, None);
                         sleep(delay).await;

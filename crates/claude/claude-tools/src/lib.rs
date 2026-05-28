@@ -674,6 +674,7 @@ pub async fn runtime_tool_search_candidate_specs() -> Vec<ToolSpec> {
         .collect()
 }
 
+#[must_use]
 pub fn extract_discovered_tool_names_from_conversation(
     conversation: &[ConversationEntry],
 ) -> std::collections::BTreeSet<String> {
@@ -1225,12 +1226,14 @@ impl ToolRegistry {
     }
 
     /// Returns the eagerly loaded tool specs (for API requests).
+    #[inline]
     #[must_use]
     pub fn eager_specs(&self) -> &[ToolSpec] {
         &self.eager_tools
     }
 
     /// Returns all tool specs (eager + lazy).
+    #[must_use]
     pub fn all_specs(&self) -> Vec<ToolSpec> {
         let mut all = self.eager_tools.clone();
         all.extend(self.lazy_tools.clone());
@@ -1238,6 +1241,7 @@ impl ToolRegistry {
     }
 
     /// Search tools using BM25 ranking.
+    #[must_use]
     pub fn search(&self, query: &str, max: usize) -> Vec<search::SearchResult> {
         self.search_engine.search(query, max)
     }
@@ -1496,7 +1500,7 @@ fn apply_permission_decision_effects(
         effective_call.input = updated_input;
     }
     if !decision.permission_updates.is_empty() {
-        let _ = broker.apply_permission_updates(&decision.permission_updates)?;
+        broker.apply_permission_updates(&decision.permission_updates)?;
     }
     follow_up_user_blocks.extend(permission_decision_follow_up_blocks(decision, true));
     Ok(())

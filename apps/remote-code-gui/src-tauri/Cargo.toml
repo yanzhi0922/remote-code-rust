@@ -26,6 +26,7 @@ tokio = { workspace = true }
 uuid = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+tracing-appender = { workspace = true }
 rc-remote-transport = { path = "../../../crates/shared/rc-remote-transport", features = ["quic"] }
 rc-engine-events = { path = "../../../crates/shared/rc-engine-events" }
 rc-agent-protocol = { path = "../../../crates/shared/rc-agent-protocol" }
