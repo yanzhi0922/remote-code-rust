@@ -217,24 +217,36 @@ struct TurnState {
 }
 
 impl AnalyticsReducer {
-    /// Remove all state associated with a connection to prevent unbounded map growth.
-    #[allow(dead_code)]
+    /// Remove all state associated with a closed connection to prevent
+    /// unbounded growth of the internal HashMaps.
+    #[allow(dead_code)] // Will be called from the connection lifecycle handler.
     pub(crate) fn connection_closed(&mut self, connection_id: u64) {
+        // Remove connection entry.
         self.connections.remove(&connection_id);
-        // Remove threads whose connection_id matches.
-        let thread_ids_to_remove: Vec<String> = self
+
+        // Collect thread IDs owned by this connection so we can clean turns.
+        let thread_ids_for_connection: Vec<String> = self
             .threads
             .iter()
             .filter(|(_, state)| state.connection_id == Some(connection_id))
             .map(|(id, _)| id.clone())
             .collect();
-        for thread_id in &thread_ids_to_remove {
-            self.threads.remove(thread_id);
-        }
-        // Remove turns associated with this connection.
-        self.turns
+
+        // Remove thread entries for this connection.
+        self.threads
             .retain(|_, state| state.connection_id != Some(connection_id));
-        // Remove in-flight requests for this connection.
+
+        // Remove turn entries explicitly associated with this connection or
+        // with a thread owned by this connection.
+        self.turns.retain(|_, turn_state| {
+            turn_state.connection_id != Some(connection_id)
+                && turn_state
+                    .thread_id
+                    .as_ref()
+                    .map_or(true, |tid| !thread_ids_for_connection.contains(tid))
+        });
+
+        // Remove request entries for this connection.
         self.requests.retain(|(cid, _), _| *cid != connection_id);
     }
 

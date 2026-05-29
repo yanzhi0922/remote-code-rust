@@ -5143,7 +5143,9 @@ impl Handler {
         let canonical_target = match resolved.canonicalize() {
             Ok(p) => p,
             Err(e) => {
-                return Ok(json!({"status": "error", "error": format!("path does not exist: {e}")}));
+                return Ok(
+                    json!({"status": "error", "error": format!("path does not exist: {e}")}),
+                );
             }
         };
         if let Some(ref cwd_canonical) = canonical_cwd {

@@ -635,7 +635,6 @@ pub(crate) async fn remote_trigger_tool(input: &Value) -> Result<String> {
     let response = client
         .post(url)
         .json(&body)
-        .timeout(std::time::Duration::from_secs(30))
         .send()
         .await
         .context("failed to send remote trigger")?;

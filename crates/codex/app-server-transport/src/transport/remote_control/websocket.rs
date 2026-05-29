@@ -584,6 +584,11 @@ impl RemoteControlWebsocket {
         clippy::await_holding_invalid_type,
         reason = "remote-control server event receiver is shared across reconnects"
     )]
+    /// Holds the `server_event_rx` lock for the entire writer loop lifetime.
+    /// This is intentional: there is exactly one writer task per connection, so
+    /// the lock is never contended.  Using an `Arc<Mutex<Receiver>>` allows the
+    /// receiver to be re-acquired across reconnects while keeping the type
+    /// `Send`-safe.
     async fn run_server_writer_inner(
         state: Arc<Mutex<WebsocketState>>,
         server_event_rx: Arc<Mutex<mpsc::Receiver<super::QueuedServerEnvelope>>>,

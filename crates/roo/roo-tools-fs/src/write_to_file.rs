@@ -430,14 +430,7 @@ mod tests {
             content: entity_content.clone(),
         };
         // With Claude model → entities preserved
-        process_write_to_file(
-            &params,
-            dir.path(),
-            None,
-            None,
-            Some("claude-3.5-sonnet"),
-        )
-        .unwrap();
+        process_write_to_file(&params, dir.path(), None, None, Some("claude-3.5-sonnet")).unwrap();
         let written = std::fs::read_to_string(&file_path).unwrap();
         assert_eq!(written, entity_content);
     }

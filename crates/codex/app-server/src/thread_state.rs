@@ -14,6 +14,7 @@ use codex_rollout::state_db::StateDbHandle;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::Weak;
 use tokio::sync::Mutex;
@@ -21,8 +22,6 @@ use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio::sync::watch;
 use tracing::error;
-
-use std::collections::VecDeque;
 
 pub(crate) const MAX_PENDING_INTERRUPTS: usize = 16;
 type PendingInterruptQueue = VecDeque<ConnectionRequestId>;

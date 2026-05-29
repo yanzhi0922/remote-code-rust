@@ -261,6 +261,20 @@ impl ControlPlaneService {
         let expires_at = Utc::now() + Duration::seconds(ttl_secs as i64);
         let mut tickets = self.stream_tickets.write().await;
         prune_expired_stream_tickets(&mut tickets);
+        // Cap active tickets to prevent unbounded growth.
+        const MAX_STREAM_TICKETS: usize = 1024;
+        while tickets.len() >= MAX_STREAM_TICKETS {
+            // Remove the ticket closest to expiry.
+            if let Some(oldest_key) = tickets
+                .iter()
+                .min_by_key(|(_, t)| t.expires_at)
+                .map(|(k, _)| k.clone())
+            {
+                tickets.remove(&oldest_key);
+            } else {
+                break;
+            }
+        }
         tickets.insert(
             ticket.clone(),
             StreamTicket {
@@ -544,8 +558,12 @@ fn load_persisted_state_with_conn(
         .with_context(|| format!("failed to decode {}", state_db_path.display()))?;
     backfill_persisted_events(connection, &snapshot.timeline)
         .with_context(|| format!("failed to backfill events in {}", state_db_path.display()))?;
+    let mut registry = snapshot.registry;
+    // Rebuild the reverse indices since they are `#[serde(skip)]`.
+    registry.rebuild_session_runner_index();
+    registry.rebuild_token_hash_index();
     Ok((
-        snapshot.registry,
+        registry,
         TimelineStore::from_snapshot(
             DEFAULT_EVENT_HISTORY_LIMIT,
             EVENT_STREAM_BUFFER,

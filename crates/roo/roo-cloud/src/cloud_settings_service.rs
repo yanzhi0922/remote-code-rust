@@ -51,9 +51,7 @@ impl CloudSettingsService {
     /// Fetch settings from the cloud API.
     /// Returns true on success, false on failure.
     pub async fn fetch_settings(&self) -> bool {
-        let url = format!("{}/api/extension-settings", get_roo_code_api_url());
-
-        let client = shared_http_client();
+        // Single read of session_token to avoid redundant lock acquisitions.
         let token_val = {
             let token_guard = self.session_token.read().await;
             match token_guard.as_ref() {
@@ -61,6 +59,10 @@ impl CloudSettingsService {
                 None => return false,
             }
         };
+
+        let url = format!("{}/api/extension-settings", get_roo_code_api_url());
+
+        let client = shared_http_client();
 
         let response = client
             .get(&url)

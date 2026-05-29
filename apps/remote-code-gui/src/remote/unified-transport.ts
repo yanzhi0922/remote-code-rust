@@ -123,6 +123,7 @@ export class UnifiedTransport implements TransportHandle {
   private _callbacks: TransportCallbacks;
   private _handle: { close(): void } | null = null;
   private _latestSequence = 0;
+  private _generation = 0;
   private _cancelled = false;
   private _connectGeneration = 0;
   private _reconnectAttempt = 0;
@@ -162,7 +163,9 @@ export class UnifiedTransport implements TransportHandle {
   async connect(afterSequence = 0): Promise<void> {
     this._cancelled = false;
     this._connectGeneration++;
+    this._generation++;
     const gen = this._connectGeneration;
+    this._healthCancelled = false;
     this._latestSequence = afterSequence;
     this.setState('connecting');
 
@@ -245,6 +248,7 @@ export class UnifiedTransport implements TransportHandle {
       const queued = await drainCommands(this._config.sessionId);
       const failed: typeof queued = [];
       for (const cmd of queued) {
+        if (this._cancelled) break;
         try {
           await this.executeCommand(target, cmd.command);
         } catch {
@@ -379,7 +383,10 @@ export class UnifiedTransport implements TransportHandle {
   }
 
   private async connectHybrid(after: number): Promise<void> {
+    const gen = this._generation;
     const report = await this.probeHealth();
+
+    if (this._cancelled || gen !== this._generation) return;
 
     if (this.canUseDirectRunner() && report.runnerReachable && report.runnerLatencyMs !== null) {
       this._strategy = 'direct_websocket';
@@ -390,7 +397,10 @@ export class UnifiedTransport implements TransportHandle {
     }
 
     // Periodic health probe for auto-switching.
-    if (this._healthTimer !== null) { clearInterval(this._healthTimer); this._healthTimer = null; }
+    if (this._healthTimer !== null) {
+      window.clearInterval(this._healthTimer);
+      this._healthTimer = null;
+    }
     this._healthCancelled = false;
     this._healthTimer = window.setInterval(() => {
       if (this._healthCancelled) return;
@@ -411,6 +421,7 @@ export class UnifiedTransport implements TransportHandle {
       const gen = ++this._switchGeneration;
 
       const report = await this.probeHealth();
+      if (this._cancelled) return;
       if (gen !== this._switchGeneration) return; // stale, another switch happened
 
       const currentIsDirect = this._strategy === 'direct_websocket';
@@ -444,15 +455,18 @@ export class UnifiedTransport implements TransportHandle {
     this._latestSequence = after;
 
     const pollInterval = this._config.pollIntervalMs ?? 3000;
+    const gen = this._generation;
 
     const poll = async () => {
-      if (this._cancelled) return;
+      if (this._cancelled || gen !== this._generation) return;
       try {
         const response = await listSessionEvents(
           this._config.baseUrl,
           this._config.sessionId,
           100,
         );
+
+        if (this._cancelled || gen !== this._generation) return;
 
         for (const event of response.items) {
           if (event.sequence > this._latestSequence) {
@@ -483,6 +497,8 @@ export class UnifiedTransport implements TransportHandle {
       return;
     }
 
+    const gen = this._generation;
+
     try {
       await invoke('quic_connect', {
         url: this._config.quicServerUrl ?? this._config.baseUrl,
@@ -490,10 +506,13 @@ export class UnifiedTransport implements TransportHandle {
         sessionId: this._config.sessionId,
         serverCertFingerprint: this._config.quicCertFingerprint ?? null,
       });
+
+      if (this._cancelled || gen !== this._generation) return;
+
       this.setState('open');
 
       const unlisten = await tauriListen<RemoteTimelineEvent>('quic-event', (event) => {
-        if (this._cancelled) return;
+        if (this._cancelled || gen !== this._generation) return;
         this._latestSequence = Math.max(this._latestSequence, event.payload.sequence);
         this._metrics.eventsReceived++;
         this.notifyMetrics();
@@ -507,6 +526,7 @@ export class UnifiedTransport implements TransportHandle {
         },
       };
     } catch (error) {
+      if (this._cancelled || gen !== this._generation) return;
       this._strategy = 'server_relay';
       await this.connectWebSocket(this._config.baseUrl, _after);
     }

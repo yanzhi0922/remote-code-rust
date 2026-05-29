@@ -373,9 +373,9 @@ impl CommandExecManager {
     }
 
     pub(crate) async fn connection_closed(&self, connection_id: ConnectionId) {
-        let controls = {
+        let mut controls = Vec::new();
+        {
             let mut sessions = self.sessions.lock().await;
-            let mut controls = Vec::new();
             sessions.retain(|process_id, session| {
                 if process_id.connection_id == connection_id {
                     controls.push(std::mem::replace(
@@ -387,7 +387,6 @@ impl CommandExecManager {
                     true
                 }
             });
-            controls
         };
 
         for control in controls {

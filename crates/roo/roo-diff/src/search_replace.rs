@@ -322,11 +322,9 @@ impl SingleSearchReplaceDiffStrategy {
                     })
                     .collect();
 
-                // Splice the replacement
-                result_lines.splice(
-                    match_idx..(match_idx + search_lines.len()),
-                    indented_replace_lines,
-                );
+                // Splice the replacement in-place using Vec::splice
+                let replace_len = search_lines.len();
+                result_lines.splice(match_idx..(match_idx + replace_len), indented_replace_lines);
 
                 applied_count += 1;
             } else {

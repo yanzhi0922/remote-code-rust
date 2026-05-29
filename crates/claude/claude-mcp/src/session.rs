@@ -1353,7 +1353,7 @@ impl RemoteMcpSession {
             server_name: server.name.clone(),
             url: url.to_owned(),
             headers: headers.clone(),
-            http,
+            http: http.clone(),
             initialized: init_result,
             request_timeout_secs,
         })
@@ -1418,7 +1418,7 @@ impl RemoteMcpSession {
             server_name: server.name.clone(),
             url: url.to_owned(),
             headers: headers.clone(),
-            http,
+            http: http.clone(),
             initialized: init_result,
             request_timeout_secs,
         })

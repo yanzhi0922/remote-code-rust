@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from 'react';
 import type { RemoteTimelineEvent } from './types';
 import {
   getConnectionManager,
@@ -12,6 +12,9 @@ import {
   type HealthReport,
   type TransportMetrics,
 } from './connection-manager';
+
+// Track how many active hook consumers exist so we can clean up the singleton.
+let activeConsumerCount = 0;
 
 export interface UseConnectionReturn {
   connectionState: ConnectionState;
@@ -53,6 +56,21 @@ export function useConnection(
   onEvent?: (event: RemoteTimelineEvent) => void,
 ): UseConnectionReturn {
   const state = useSyncExternalStore(subscribeToState, getSnapshot, getServerSnapshot);
+  const mountedRef = useRef(false);
+
+  // Lifecycle: increment on mount, destroy singleton on unmount if last consumer.
+  useEffect(() => {
+    mountedRef.current = true;
+    activeConsumerCount++;
+    return () => {
+      mountedRef.current = false;
+      activeConsumerCount--;
+      if (activeConsumerCount <= 0) {
+        activeConsumerCount = 0;
+        destroyConnectionManager();
+      }
+    };
+  }, []);
 
   useEffect(() => {
     const unsubscribe = onEvent ? onConnectionManagerEvent(onEvent) : undefined;
@@ -63,6 +81,7 @@ export function useConnection(
   }, []);
 
   const connect = useCallback(async (config: TransportConfig, afterSequence = 0) => {
+    if (!mountedRef.current) return;
     const mgr = getConnectionManager();
     await mgr.connect(config, afterSequence);
   }, []);

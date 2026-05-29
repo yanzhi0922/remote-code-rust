@@ -261,7 +261,7 @@ fn merge_consecutive_same_role(messages: &mut Vec<Value>) {
 
             prev["content"] = if merged.len() == 1 && merged[0]["type"].as_str() == Some("text") {
                 // Single text block — use string form
-                merged.remove(0)["text"].take()
+                merged.into_iter().next().unwrap()["text"].take()
             } else {
                 Value::Array(merged)
             };

@@ -19,6 +19,25 @@ fn shared_http_client() -> &'static reqwest::Client {
     })
 }
 
+/// Consolidated authentication state, protected by a single RwLock.
+struct WebAuthState {
+    state: AuthState,
+    credentials: Option<AuthCredentials>,
+    session_token: Option<String>,
+    user_info: Option<CloudUserInfo>,
+}
+
+impl Default for WebAuthState {
+    fn default() -> Self {
+        Self {
+            state: AuthState::LoggedOut,
+            credentials: None,
+            session_token: None,
+            user_info: None,
+        }
+    }
+}
+
 /// Web-based authentication service.
 ///
 /// ## Concurrency note
@@ -29,10 +48,7 @@ fn shared_http_client() -> &'static reqwest::Client {
 /// in the future, these four fields should be consolidated into a single
 /// `RwLock<WebAuthState>` struct.
 pub struct WebAuthService {
-    state: Arc<RwLock<AuthState>>,
-    credentials: Arc<RwLock<Option<AuthCredentials>>>,
-    session_token: Arc<RwLock<Option<String>>>,
-    user_info: Arc<RwLock<Option<CloudUserInfo>>>,
+    inner: Arc<RwLock<WebAuthState>>,
     #[allow(dead_code)]
     clerk_base_url: String,
     #[allow(dead_code)]
@@ -50,10 +66,7 @@ impl WebAuthService {
         };
 
         Self {
-            state: Arc::new(RwLock::new(AuthState::LoggedOut)),
-            credentials: Arc::new(RwLock::new(None)),
-            session_token: Arc::new(RwLock::new(None)),
-            user_info: Arc::new(RwLock::new(None)),
+            inner: Arc::new(RwLock::new(WebAuthState::default())),
             clerk_base_url,
             auth_credentials_key,
         }
@@ -61,34 +74,32 @@ impl WebAuthService {
 
     /// Get the current authentication state.
     pub async fn get_state(&self) -> AuthState {
-        self.state.read().await.clone()
+        self.inner.read().await.state.clone()
     }
 
     /// Check if there is an active session.
     pub async fn has_active_session(&self) -> bool {
-        let state = self.state.read().await;
-        matches!(*state, AuthState::ActiveSession)
+        matches!(self.inner.read().await.state, AuthState::ActiveSession)
     }
 
     /// Get the current session token.
     pub async fn get_session_token(&self) -> Option<String> {
-        self.session_token.read().await.clone()
+        self.inner.read().await.session_token.clone()
     }
 
     /// Get the current user info.
     pub async fn get_user_info(&self) -> Option<CloudUserInfo> {
-        self.user_info.read().await.clone()
+        self.inner.read().await.user_info.clone()
     }
 
     /// Get the current credentials.
     pub async fn get_credentials(&self) -> Option<AuthCredentials> {
-        self.credentials.read().await.clone()
+        self.inner.read().await.credentials.clone()
     }
 
     /// Set credentials (e.g., from storage).
     pub async fn set_credentials(&self, creds: Option<AuthCredentials>) {
-        let mut guard = self.credentials.write().await;
-        *guard = creds;
+        self.inner.write().await.credentials = creds;
     }
 
     /// Attempt to sign in using client token and session ID.
@@ -99,8 +110,7 @@ impl WebAuthService {
         organization_id: Option<&str>,
     ) -> Result<(), CloudError> {
         {
-            let mut state = self.state.write().await;
-            *state = AuthState::AttemptingSession;
+            self.inner.write().await.state = AuthState::AttemptingSession;
         }
 
         let clerk_url = &self.clerk_base_url;
@@ -120,8 +130,7 @@ impl WebAuthService {
         let response = match response {
             Ok(r) => r,
             Err(e) => {
-                let mut state = self.state.write().await;
-                *state = AuthState::LoggedOut;
+                self.inner.write().await.state = AuthState::LoggedOut;
                 return Err(CloudError::NetworkError(format!(
                     "Failed to sign in: {}",
                     e
@@ -130,8 +139,7 @@ impl WebAuthService {
         };
 
         if !response.status().is_success() {
-            let mut state = self.state.write().await;
-            *state = AuthState::LoggedOut;
+            self.inner.write().await.state = AuthState::LoggedOut;
             return Err(CloudError::AuthenticationFailed(format!(
                 "Sign-in failed with status: {}",
                 response.status()
@@ -141,8 +149,7 @@ impl WebAuthService {
         let data: serde_json::Value = match response.json().await {
             Ok(d) => d,
             Err(e) => {
-                let mut state = self.state.write().await;
-                *state = AuthState::LoggedOut;
+                self.inner.write().await.state = AuthState::LoggedOut;
                 return Err(CloudError::SerializationError(format!(
                     "Failed to parse sign-in response: {}",
                     e
@@ -160,27 +167,23 @@ impl WebAuthService {
             })?
             .to_string();
 
-        // Store credentials
+        // Store credentials and token atomically under a single lock
         let creds = AuthCredentials {
             client_token: client_token.to_string(),
             session_id: session_id.to_string(),
             organization_id: organization_id.map(|s| s.to_string()),
         };
         {
-            let mut guard = self.credentials.write().await;
-            *guard = Some(creds);
-        }
-        {
-            let mut guard = self.session_token.write().await;
-            *guard = Some(jwt);
+            let mut guard = self.inner.write().await;
+            guard.credentials = Some(creds);
+            guard.session_token = Some(jwt);
         }
 
         // Fetch user info
         self.fetch_user_info().await?;
 
         {
-            let mut state = self.state.write().await;
-            *state = AuthState::ActiveSession;
+            self.inner.write().await.state = AuthState::ActiveSession;
         }
         Ok(())
     }
@@ -188,8 +191,8 @@ impl WebAuthService {
     /// Fetch user info from Clerk.
     pub async fn fetch_user_info(&self) -> Result<CloudUserInfo, CloudError> {
         let token_val = {
-            let token = self.session_token.read().await;
-            token.clone()
+            let guard = self.inner.read().await;
+            guard.session_token.clone()
         };
         let token_val = token_val.ok_or(CloudError::NotAuthenticated)?;
 
@@ -241,16 +244,15 @@ impl WebAuthService {
             avatar_url: response_data["image_url"].as_str().map(|s| s.to_string()),
         };
 
-        let mut guard = self.user_info.write().await;
-        *guard = Some(user_info.clone());
+        self.inner.write().await.user_info = Some(user_info.clone());
         Ok(user_info)
     }
 
     /// Refresh the session token.
     pub async fn refresh_session(&self) -> Result<bool, CloudError> {
         let creds = {
-            let guard = self.credentials.read().await;
-            guard.clone()
+            let guard = self.inner.read().await;
+            guard.credentials.clone()
         };
 
         let creds = match creds {
@@ -275,8 +277,7 @@ impl WebAuthService {
         match response {
             Ok(resp) => {
                 if !resp.status().is_success() {
-                    let mut state = self.state.write().await;
-                    *state = AuthState::InactiveSession;
+                    self.inner.write().await.state = AuthState::InactiveSession;
                     return Ok(false);
                 }
 
@@ -288,41 +289,26 @@ impl WebAuthService {
                     .to_string();
 
                 {
-                    let mut guard = self.session_token.write().await;
-                    *guard = Some(jwt);
-                }
-                {
-                    let mut state = self.state.write().await;
-                    *state = AuthState::ActiveSession;
+                    let mut guard = self.inner.write().await;
+                    guard.session_token = Some(jwt);
+                    guard.state = AuthState::ActiveSession;
                 }
                 Ok(true)
             }
             Err(_) => {
-                let mut state = self.state.write().await;
-                *state = AuthState::InactiveSession;
+                self.inner.write().await.state = AuthState::InactiveSession;
                 Ok(false)
             }
         }
     }
 
-    /// Sign out and clear all session data.
+    /// Sign out and clear all session data atomically under a single lock.
     pub async fn sign_out(&self) {
-        {
-            let mut state = self.state.write().await;
-            *state = AuthState::LoggedOut;
-        }
-        {
-            let mut guard = self.credentials.write().await;
-            *guard = None;
-        }
-        {
-            let mut guard = self.session_token.write().await;
-            *guard = None;
-        }
-        {
-            let mut guard = self.user_info.write().await;
-            *guard = None;
-        }
+        let mut guard = self.inner.write().await;
+        guard.state = AuthState::LoggedOut;
+        guard.credentials = None;
+        guard.session_token = None;
+        guard.user_info = None;
     }
 }
 

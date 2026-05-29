@@ -1,11 +1,11 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 
-/// Maximum total size (in bytes) of cached file contents before eviction kicks in.
-const MAX_TOTAL_CONTENT_SIZE: usize = 50 * 1024 * 1024; // 50 MB
-
 use crate::types::{
     CodeIndexConfig, IndexError, IndexStats, IndexingState, VectorStoreSearchResult,
 };
+
+/// Maximum total size (in bytes) of cached file contents before eviction kicks in.
+const MAX_TOTAL_CONTENT_SIZE: usize = 50 * 1024 * 1024; // 50 MB
 
 /// Manager for building and querying a code index.
 ///

@@ -490,13 +490,19 @@ mod tests {
     fn json_to_toml_primitives() {
         assert_eq!(json_to_toml(json!(42)).unwrap(), TomlValue::Integer(42));
         assert_eq!(json_to_toml(json!(true)).unwrap(), TomlValue::Boolean(true));
-        assert_eq!(json_to_toml(json!("hello")).unwrap(), TomlValue::String("hello".into()));
+        assert_eq!(
+            json_to_toml(json!("hello")).unwrap(),
+            TomlValue::String("hello".into())
+        );
         assert_eq!(json_to_toml(json!(3.14)).unwrap(), TomlValue::Float(3.14));
     }
 
     #[test]
     fn json_to_toml_null_becomes_empty_string() {
-        assert_eq!(json_to_toml(json!(null)).unwrap(), TomlValue::String(String::new()));
+        assert_eq!(
+            json_to_toml(json!(null)).unwrap(),
+            TomlValue::String(String::new())
+        );
     }
 
     #[test]
@@ -570,8 +576,7 @@ mod tests {
         let from_json: CodexAdapterOptions = serde_json::from_str(json).unwrap();
         let from_default = CodexAdapterOptions::default();
         assert_eq!(
-            from_json.feedback_capture_enabled,
-            from_default.feedback_capture_enabled,
+            from_json.feedback_capture_enabled, from_default.feedback_capture_enabled,
             "serde default and programmatic default must agree"
         );
     }

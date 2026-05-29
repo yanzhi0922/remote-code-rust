@@ -59,7 +59,8 @@ impl SigV4Signer {
                     "content-type:application/json\nhost:{}\nx-amz-content-sha256:{}\nx-amz-date:{}\nx-amz-security-token:{}\n",
                     host, payload_hash, amz_date, token
                 ),
-                "content-type;host;x-amz-content-sha256;x-amz-date;x-amz-security-token".to_string(),
+                "content-type;host;x-amz-content-sha256;x-amz-date;x-amz-security-token"
+                    .to_string(),
             ),
             None => (
                 format!(

@@ -489,7 +489,7 @@ impl NotificationManager {
     /// Push a notification into history, respecting max size.
     fn push_history(&mut self, notification: Notification) {
         self.history.push_back(notification);
-        if self.history.len() > self.max_history {
+        while self.history.len() > self.max_history {
             self.history.pop_front();
         }
     }

@@ -296,6 +296,7 @@ function SlashCommandPalette({
 export function ChatInput() {
   const [input, setInput] = useState('');
   const [modelDraft, setModelDraft] = useState('');
+  const modelDraftRef = useRef(modelDraft);
   const [openMenu, setOpenMenu] = useState<'provider' | 'permission' | null>(null);
   const [showSlashPalette, setShowSlashPalette] = useState(false);
   const [slashFilter, setSlashFilter] = useState('');
@@ -303,7 +304,6 @@ export function ChatInput() {
   const [modelError, setModelError] = useState<string | null>(null);
   const textAreaRef = useRef<HTMLTextAreaElement>(null);
   const lastCommittedModel = useRef('');
-  const modelDraftRef = useRef(modelDraft);
 
   const sending = useAppStore((state) => state.sending);
   const activeSessionId = useAppStore((state) => state.activeSessionId);
@@ -440,6 +440,7 @@ export function ChatInput() {
     textAreaRef.current?.focus();
   };
 
+  // Keep ref in sync so commitModelDraft always uses the latest value.
   modelDraftRef.current = modelDraft;
   const commitModelDraft = async () => {
     const trimmed = modelDraftRef.current.trim();

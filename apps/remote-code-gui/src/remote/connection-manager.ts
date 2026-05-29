@@ -56,6 +56,7 @@ export function onConnectionManagerEvent(listener: EventListener): () => void {
 
 class ConnectionManager {
   private transport: UnifiedTransport | null = null;
+  private _connecting = false;
   private _state: ConnectionManagerState = {
     connectionState: 'idle',
     strategy: null,
@@ -71,6 +72,10 @@ class ConnectionManager {
   }
 
   async connect(config: TransportConfig, afterSequence = 0): Promise<void> {
+    // Guard against concurrent connect calls.
+    if (this._connecting) return;
+    this._connecting = true;
+
     this.disconnect();
 
     this._config = config;
@@ -138,6 +143,8 @@ class ConnectionManager {
         void this.reconnect();
       }
     });
+
+    this._connecting = false;
   }
 
   disconnect(): void {
@@ -200,8 +207,9 @@ class ConnectionManager {
 
   private async reconnect(): Promise<void> {
     if (!this.transport || !this._config) return;
+    const seq = this._state.latestSequence;
     try {
-      await this.transport.connect(this._state.latestSequence);
+      await this.transport.connect(seq);
     } catch (error) {
       console.error('[ConnectionManager] reconnect failed:', error);
     }

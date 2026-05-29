@@ -19,14 +19,14 @@ use tokio::sync::oneshot;
 /// Maximum number of pending response senders before evicting the oldest.
 const MAX_PENDING_ENTRIES: usize = 1000;
 
-/// Maximum allowed frame body size (16 MiB).
+/// Maximum allowed frame size (16 MiB) to prevent unbounded memory allocation
+/// from a malicious or corrupted Content-Length header.
 const MAX_FRAME_SIZE: usize = 16 * 1024 * 1024;
 
 struct PendingEntry {
     sender: oneshot::Sender<Value>,
     inserted_at: Instant,
 }
-
 /// A running language server process with stdio transport.
 pub struct StdioTransport {
     /// Child process handle.
@@ -183,7 +183,11 @@ impl StdioTransport {
             };
 
             let content_length = match Self::parse_content_length(&line) {
-                Some(len) => len,
+                Some(len) if len <= MAX_FRAME_SIZE => len,
+                Some(_len) => {
+                    // Frame exceeds maximum allowed size — skip it.
+                    continue;
+                }
                 None => continue,
             };
 

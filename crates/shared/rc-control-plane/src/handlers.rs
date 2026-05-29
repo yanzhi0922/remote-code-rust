@@ -960,15 +960,21 @@ pub(crate) async fn update_runner_heartbeat(
     Json(heartbeat): Json<RunnerHeartbeat>,
 ) -> Result<Json<RunnerSnapshot>, ApiError> {
     let user_id = user_id_from_principal(&principal);
-    let snapshot = {
+
+    // Consolidate visibility check + heartbeat apply + reap into a single write lock scope.
+    let (snapshot, reaped) = {
         let mut registry = service.registry.write().await;
         if !registry.runner_visible_to(&runner_id, user_id) {
             return Err(ApiError::not_found(format!(
                 "runner `{runner_id}` was not found"
             )));
         }
-        registry.apply_heartbeat(&runner_id, heartbeat)?
+        let snapshot = registry.apply_heartbeat(&runner_id, heartbeat)?;
+        // Reap sessions stuck in Assigned whose runner has gone offline.
+        let reaped = registry.reap_orphaned_assigned_sessions(service.runner_lease_ttl_secs);
+        (snapshot, reaped)
     };
+
     let _event = service
         .publish_event(TimelineEventDraft {
             runner_id: Some(snapshot.registration.runner_id.clone()),
@@ -982,34 +988,39 @@ pub(crate) async fn update_runner_heartbeat(
         })
         .await;
 
-    // Reap sessions stuck in Assigned whose runner has gone offline (3x TTL without heartbeat)
-    // and fetch the final snapshot in a single write lock acquisition.
-    let final_snapshot = {
-        let mut registry = service.registry.write().await;
-        let reaped = registry.reap_orphaned_assigned_sessions(service.runner_lease_ttl_secs);
-        if !reaped.is_empty() {
-            for (session_id, old_runner_id, previous_state) in &reaped {
-                let session = registry.sessions.get(session_id);
-                let new_state = session.map(|s| s.state).unwrap_or(SessionState::Pending);
-                let _event = service
-                    .publish_event(TimelineEventDraft {
-                        runner_id: Some(old_runner_id.clone()),
-                        session_id: Some(*session_id),
-                        detail: TimelineEventDetail::SessionStateChanged {
-                            previous_state: *previous_state,
-                            state: new_state,
-                        },
-                    })
-                    .await;
-                tracing::debug!(
-                    session_id = %session_id,
-                    old_runner_id = %old_runner_id,
-                    "published session reaped event"
-                );
-            }
+    // Publish reap events outside the lock.
+    if !reaped.is_empty() {
+        for (session_id, old_runner_id, previous_state) in &reaped {
+            let registry = service.registry.read().await;
+            let new_state = registry
+                .sessions
+                .get(session_id)
+                .map(|s| s.state)
+                .unwrap_or(SessionState::Pending);
+            drop(registry);
+            let _ = service
+                .publish_event(TimelineEventDraft {
+                    runner_id: Some(old_runner_id.clone()),
+                    session_id: Some(*session_id),
+                    detail: TimelineEventDetail::SessionStateChanged {
+                        previous_state: *previous_state,
+                        state: new_state,
+                    },
+                })
+                .await;
+            tracing::debug!(
+                session_id = %session_id,
+                old_runner_id = %old_runner_id,
+                "published session reaped event"
+            );
         }
+    }
 
-        registry.get_runner_snapshot(&runner_id)?
+    let final_snapshot = {
+        let registry = service.registry.read().await;
+        registry
+            .get_runner_snapshot(&runner_id)
+            .unwrap_or_else(|_| snapshot.clone())
     };
 
     dispatch_pending_sessions_for_runner(&service, &runner_id).await;
@@ -1234,21 +1245,23 @@ pub(crate) async fn update_session_state(
     Json(request): Json<SessionStateUpdateRequest>,
 ) -> Result<Json<SessionView>, ApiError> {
     let user_id = user_id_from_principal(&principal);
-    let existing = {
-        let registry = service.registry.read().await;
-        registry.get_session_for_user(session_id, user_id)?
-    };
     let requested_state = request.state;
     let metadata = request.metadata.clone();
 
-    let runner_update = if let Some(runner_id) = existing.owner_runner_id.as_deref() {
-        let runner =
-            {
-                let registry = service.registry.read().await;
-                registry.runners.get(runner_id).cloned().ok_or_else(|| {
-                    ApiError::not_found(format!("runner `{runner_id}` was not found"))
-                })?
-            };
+    // Combine session lookup + runner lookup into a single read lock.
+    let existing_and_runner = {
+        let registry = service.registry.read().await;
+        let session = registry.get_session_for_user(session_id, user_id)?;
+        let runner = session
+            .owner_runner_id
+            .as_deref()
+            .and_then(|runner_id| registry.runners.get(runner_id).cloned());
+        (session, runner)
+    };
+    let (_existing, runner_opt) = existing_and_runner;
+
+    let runner_update = if let Some(runner) = runner_opt {
+        let runner_id = runner.registration.runner_id.as_str();
         if runner_uses_pull_commands(&runner) {
             {
                 let mut registry = service.registry.write().await;
@@ -1873,8 +1886,19 @@ pub(crate) async fn apply_approval_decision(
 
 async fn dispatch_pending_sessions_for_runner(service: &ControlPlaneService, runner_id: &str) {
     let mut skipped_session_ids = BTreeSet::new();
+    // Cap dispatch iterations to prevent runaway loops under heavy load.
+    let mut iterations = 0u32;
+    const MAX_DISPATCH_ITERATIONS: u32 = 64;
 
     loop {
+        iterations += 1;
+        if iterations > MAX_DISPATCH_ITERATIONS {
+            tracing::warn!(
+                runner_id,
+                "capping pending session dispatch at {MAX_DISPATCH_ITERATIONS} iterations"
+            );
+            break;
+        }
         let planned = {
             let registry = service.registry.read().await;
             registry

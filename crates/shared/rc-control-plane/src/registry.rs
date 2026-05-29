@@ -29,6 +29,16 @@ use crate::types::{
 /// Maximum number of concurrent sessions across all runners.
 const MAX_TOTAL_SESSIONS: usize = 10_000;
 
+/// Maximum number of queued commands per runner. Oldest commands are evicted
+/// when this limit is exceeded to prevent unbounded memory growth.
+const MAX_COMMANDS_PER_RUNNER: usize = 256;
+
+/// Maximum number of active pairing offers before pruning is enforced.
+const MAX_PAIRING_OFFERS: usize = 64;
+
+/// Maximum number of approvals per session to prevent unbounded growth.
+const MAX_APPROVALS_PER_SESSION: usize = 128;
+
 // ---------------------------------------------------------------------------
 // Registry
 // ---------------------------------------------------------------------------
@@ -65,6 +75,9 @@ pub(crate) struct Registry {
     /// Reverse index: token_hash -> device_id for O(1) device auth lookup.
     #[serde(default)]
     pub(crate) token_hash_to_device: HashMap<String, Uuid>,
+    /// Reverse index: maps access token hash to device_id for O(1) access token auth.
+    #[serde(default)]
+    pub(crate) access_token_hash_to_device: HashMap<String, Uuid>,
 }
 
 /// Stored push notification token for a trusted device.
@@ -287,7 +300,33 @@ fn normalize_device_name(raw: &str) -> Result<String, ApiError> {
 // ---------------------------------------------------------------------------
 
 impl Registry {
-    #[inline]
+    /// Rebuild the `session_runner_index` from current sessions data.
+    /// Call this after deserialization or bulk mutations.
+    pub(crate) fn rebuild_session_runner_index(&mut self) {
+        self.session_runner_index.clear();
+        for (session_id, session) in &self.sessions {
+            if let Some(ref runner_id) = session.owner_runner_id {
+                self.session_runner_index
+                    .insert(*session_id, runner_id.clone());
+            }
+        }
+    }
+
+    /// Rebuild the token hash reverse indices from trusted devices data.
+    /// Call this after deserialization or bulk mutations.
+    pub(crate) fn rebuild_token_hash_index(&mut self) {
+        self.token_hash_to_device.clear();
+        self.access_token_hash_to_device.clear();
+        for (device_id, device) in &self.trusted_devices {
+            self.token_hash_to_device
+                .insert(device.token_hash.clone(), *device_id);
+            if let Some(ref at_hash) = device.access_token_hash {
+                self.access_token_hash_to_device
+                    .insert(at_hash.clone(), *device_id);
+            }
+        }
+    }
+
     pub(crate) fn owner_claimed(&self) -> bool {
         self.owner_device_id.is_some()
     }
@@ -315,9 +354,11 @@ impl Registry {
         if removed.owner {
             self.owner_device_id = None;
         }
-        // Clean up token hash index.
-        self.token_hash_to_device
-            .retain(|_, &mut did| did != device_id);
+        // Maintain token hash indices.
+        self.token_hash_to_device.remove(&removed.token_hash);
+        if let Some(ref at_hash) = removed.access_token_hash {
+            self.access_token_hash_to_device.remove(at_hash);
+        }
         // Also remove any push tokens for this device
         self.push_tokens.remove(&device_id);
         Ok(removed.public_record())
@@ -326,6 +367,7 @@ impl Registry {
     /// Authenticate using either an access token (short-lived) or a refresh token
     /// (long-lived). Access tokens are preferred; refresh tokens are accepted as
     /// a fallback so existing clients aren't locked out during migration.
+    /// Uses pre-built hash indices for O(1) lookup instead of O(n) iteration.
     pub(crate) fn authenticate_device_token(
         &mut self,
         token: &str,
@@ -333,49 +375,55 @@ impl Registry {
         let hash = sha256_hex(token);
         let now = Utc::now();
 
-        // Try access token first via reverse index (O(1)).
-        if let Some(device_id) = self.token_hash_to_device.get(&hash).copied() {
-            if let Some(device) = self.trusted_devices.get(&device_id) {
-                if let Some(ref at_hash) = device.access_token_hash {
-                    if constant_time_value_eq(&hash, at_hash) {
-                        let expired = device.access_token_expires_at.is_none_or(|exp| now >= exp);
-                        if !expired {
-                            let dev = self.trusted_devices.get_mut(&device_id)?;
-                            dev.last_seen_at = now;
-                            return Some((dev.public_record(), true));
-                        }
-                    }
+        if let Some(device_id) = self.access_token_hash_to_device.get(&hash).copied() {
+            if let Some(device) = self.trusted_devices.get(&device_id)
+                && let Some(ref at_hash) = device.access_token_hash
+                && constant_time_value_eq(&hash, at_hash)
+            {
+                let expired = device.access_token_expires_at.is_none_or(|exp| now >= exp);
+                if !expired {
+                    let dev = self.trusted_devices.get_mut(&device_id)?;
+                    dev.last_seen_at = now;
+                    return Some((dev.public_record(), true));
                 }
             }
         } else {
-            // Backfill: scan devices for access token hash and populate index.
             for device in self.trusted_devices.values() {
-                if let Some(ref at_hash) = device.access_token_hash {
-                    if constant_time_value_eq(&hash, at_hash) {
-                        let expired = device.access_token_expires_at.is_none_or(|exp| now >= exp);
-                        if !expired {
-                            let device_id = device.device_id;
-                            self.token_hash_to_device.insert(hash.clone(), device_id);
-                            let dev = self.trusted_devices.get_mut(&device_id)?;
-                            dev.last_seen_at = now;
-                            return Some((dev.public_record(), true));
-                        }
+                if let Some(ref at_hash) = device.access_token_hash
+                    && constant_time_value_eq(&hash, at_hash)
+                {
+                    let expired = device.access_token_expires_at.is_none_or(|exp| now >= exp);
+                    if !expired {
+                        let device_id = device.device_id;
+                        self.access_token_hash_to_device
+                            .insert(hash.clone(), device_id);
+                        let dev = self.trusted_devices.get_mut(&device_id)?;
+                        dev.last_seen_at = now;
+                        return Some((dev.public_record(), true));
                     }
                 }
             }
         }
 
-        // Fallback: refresh token via reverse index (O(1)).
-        let device_id = self.token_hash_to_device.get(&hash).copied().or_else(|| {
-            // Backfill index on miss (handles entries loaded from persistence).
-            let found = self
-                .trusted_devices
-                .values()
-                .find(|device| constant_time_value_eq(&hash, &device.token_hash))
-                .map(|device| device.device_id)?;
-            self.token_hash_to_device.insert(hash.clone(), found);
-            Some(found)
-        })?;
+        let device_id = self
+            .token_hash_to_device
+            .get(&hash)
+            .copied()
+            .and_then(|did| {
+                self.trusted_devices
+                    .get(&did)
+                    .is_some_and(|device| constant_time_value_eq(&hash, &device.token_hash))
+                    .then_some(did)
+            })
+            .or_else(|| {
+                let found = self
+                    .trusted_devices
+                    .values()
+                    .find(|device| constant_time_value_eq(&hash, &device.token_hash))
+                    .map(|device| device.device_id)?;
+                self.token_hash_to_device.insert(hash.clone(), found);
+                Some(found)
+            })?;
         let device = self.trusted_devices.get_mut(&device_id)?;
         device.last_seen_at = now;
         Some((device.public_record(), false))
@@ -384,8 +432,8 @@ impl Registry {
     /// Refresh an access token using a valid refresh token.
     ///
     /// Implements refresh token rotation: every successful refresh issues a new
-    /// refresh token and invalidates the old one. If a stale (already-rotated)
-    /// token is reused, the device is revoked to prevent token theft.
+    /// refresh token and invalidates the old one. If a stale rotated token is
+    /// reused, the device is revoked to prevent token theft.
     ///
     /// Returns `(device_record, new_access_token, new_refresh_token)`.
     pub(crate) fn refresh_access_token(
@@ -395,29 +443,24 @@ impl Registry {
         let hash = sha256_hex(refresh_token);
         let now = Utc::now();
 
-        // Check for reuse of a previously-rotated token.
-        // This detects token theft: if someone uses an old refresh token,
-        // both the attacker and the legitimate user have valid tokens,
-        // so we revoke the device entirely.
         for device in self.trusted_devices.values() {
-            if let Some(ref prev_hash) = device.previous_token_hash {
-                if constant_time_value_eq(&hash, prev_hash) {
-                    let device_id = device.device_id;
-                    tracing::warn!(
+            if let Some(ref prev_hash) = device.previous_token_hash
+                && constant_time_value_eq(&hash, prev_hash)
+            {
+                let device_id = device.device_id;
+                tracing::warn!(
+                    device_id = %device_id,
+                    "Refresh token reuse detected; revoking device"
+                );
+                if let Err(e) = self.revoke_device(device_id) {
+                    tracing::error!(
                         device_id = %device_id,
-                        "Refresh token reuse detected — revoking device"
+                        "CRITICAL: Failed to revoke device after token reuse detection: {e:?}"
                     );
-                    // Revoke the device to prevent further access.
-                    if let Err(e) = self.revoke_device(device_id) {
-                        tracing::error!(
-                            device_id = %device_id,
-                            "CRITICAL: Failed to revoke device after token reuse detection: {e:?}"
-                        );
-                    }
-                    return Err(ApiError::unauthorized(
-                        "refresh token reuse detected: device revoked".to_owned(),
-                    ));
                 }
+                return Err(ApiError::unauthorized(
+                    "refresh token reuse detected: device revoked".to_owned(),
+                ));
             }
         }
 
@@ -425,37 +468,38 @@ impl Registry {
             .token_hash_to_device
             .get(&hash)
             .copied()
-            .ok_or_else(|| ApiError::unauthorized("invalid or expired refresh token".to_owned()))
-            .or_else(|err| {
-                // Backfill index on miss.
+            .and_then(|did| {
+                self.trusted_devices
+                    .get(&did)
+                    .is_some_and(|device| constant_time_value_eq(&hash, &device.token_hash))
+                    .then_some(did)
+            })
+            .or_else(|| {
                 let found = self
                     .trusted_devices
                     .values()
                     .find(|device| constant_time_value_eq(&hash, &device.token_hash))
-                    .map(|device| device.device_id)
-                    .ok_or_else(|| err.clone())?;
+                    .map(|device| device.device_id)?;
                 self.token_hash_to_device.insert(hash.clone(), found);
-                Ok(found)
-            })?;
+                Some(found)
+            })
+            .ok_or_else(|| ApiError::unauthorized("invalid or expired refresh token".to_owned()))?;
 
         let new_access_token = mint_secret("rcat");
         let access_hash = sha256_hex(&new_access_token);
         let expires_at = now + Duration::minutes(15);
-
-        // Rotate the refresh token.
         let new_refresh_token = mint_secret("rcrt");
         let new_refresh_hash = sha256_hex(&new_refresh_token);
 
-        // Update the token hash reverse index: remove old refresh + old access, add new.
         self.token_hash_to_device.remove(&hash);
-        if let Some(device) = self.trusted_devices.get(&device_id) {
-            if let Some(ref old_at_hash) = device.access_token_hash {
-                self.token_hash_to_device.remove(old_at_hash);
-            }
+        if let Some(device) = self.trusted_devices.get(&device_id)
+            && let Some(ref old_at_hash) = device.access_token_hash
+        {
+            self.access_token_hash_to_device.remove(old_at_hash);
         }
         self.token_hash_to_device
             .insert(new_refresh_hash.clone(), device_id);
-        self.token_hash_to_device
+        self.access_token_hash_to_device
             .insert(access_hash.clone(), device_id);
 
         let device = self.trusted_devices.get_mut(&device_id).ok_or_else(|| {
@@ -523,10 +567,12 @@ impl Registry {
         };
         self.owner_device_id = Some(device_id);
         self.trusted_devices.insert(device_id, record.clone());
+        // Maintain token hash indices.
         self.token_hash_to_device
             .insert(record.token_hash.clone(), device_id);
         if let Some(ref at_hash) = record.access_token_hash {
-            self.token_hash_to_device.insert(at_hash.clone(), device_id);
+            self.access_token_hash_to_device
+                .insert(at_hash.clone(), device_id);
         }
         Ok(DualTokenResponse {
             device: record.public_record(),
@@ -546,6 +592,20 @@ impl Registry {
             ));
         }
         self.prune_expired_pairing_offers();
+        // Enforce maximum pairing offers to prevent unbounded growth.
+        while self.pairing_offers.len() >= MAX_PAIRING_OFFERS {
+            // Remove the offer closest to expiry.
+            if let Some(oldest_key) = self
+                .pairing_offers
+                .iter()
+                .min_by_key(|(_, o)| o.expires_at)
+                .map(|(k, _)| *k)
+            {
+                self.pairing_offers.remove(&oldest_key);
+            } else {
+                break;
+            }
+        }
 
         let expires_in_secs = request
             .expires_in_secs
@@ -624,7 +684,7 @@ impl Registry {
         self.trusted_devices.insert(device_id, record);
         self.token_hash_to_device.insert(refresh_hash, device_id);
         if let Some(at_hash) = access_hash {
-            self.token_hash_to_device.insert(at_hash, device_id);
+            self.access_token_hash_to_device.insert(at_hash, device_id);
         }
         Ok(DualTokenResponse {
             device: public_record,
@@ -862,6 +922,7 @@ impl Registry {
                 record.session_id
             )));
         }
+        // Maintain the reverse index.
         if let Some(ref runner_id) = record.owner_runner_id {
             self.session_runner_index
                 .insert(record.session_id, runner_id.clone());
@@ -937,9 +998,12 @@ impl Registry {
         session.metadata.extend(metadata);
         let updated = session.clone();
         let owner_runner_id = updated.owner_runner_id.clone();
+        // Maintain reverse index if runner assignment changed.
         if let Some(ref runner_id) = owner_runner_id {
             self.session_runner_index
                 .insert(session_id, runner_id.clone());
+        } else {
+            self.session_runner_index.remove(&session_id);
         }
         if let Some(runner_id) = owner_runner_id.as_deref() {
             self.refresh_runner_session_counts(runner_id, updated_at);
@@ -952,12 +1016,12 @@ impl Registry {
         runner_id: &str,
         timestamp: DateTime<Utc>,
     ) {
-        // Use the reverse index to only count sessions belonging to this runner,
+        // Use the reverse index to find sessions for this runner in O(1) per session
         // rather than scanning all sessions.
         let (active_sessions, queued_sessions) = self
             .session_runner_index
             .iter()
-            .filter(|(_, rid)| *rid == runner_id)
+            .filter(|(_, rid)| rid.as_str() == runner_id)
             .filter_map(|(sid, _)| self.sessions.get(sid))
             .fold((0usize, 0usize), |(active, queued), session| {
                 let active = if matches!(
@@ -1011,6 +1075,7 @@ impl Registry {
                 session.state = SessionState::Pending;
                 session.owner_runner_id = None;
                 session.updated_at = now;
+                // Maintain reverse index.
                 self.session_runner_index.remove(&session.session_id);
                 reaped.push((session.session_id, runner_id, previous_state));
                 continue;
@@ -1020,6 +1085,7 @@ impl Registry {
                 session.state = SessionState::Pending;
                 session.owner_runner_id = None;
                 session.updated_at = now;
+                // Maintain reverse index.
                 self.session_runner_index.remove(&session.session_id);
                 runners_needing_refresh.push(runner_id.clone());
                 reaped.push((session.session_id, runner_id, previous_state));
@@ -1237,6 +1303,17 @@ impl Registry {
                 planned.approval.approval_id
             )));
         }
+        // Enforce maximum approvals per session to prevent unbounded growth.
+        let session_approval_count = self
+            .approvals
+            .values()
+            .filter(|a| a.session_id == planned.approval.session_id)
+            .count();
+        if session_approval_count >= MAX_APPROVALS_PER_SESSION {
+            return Err(ApiError::conflict(
+                "session has reached the maximum number of pending approvals".to_owned(),
+            ));
+        }
 
         let session = self
             .sessions
@@ -1411,6 +1488,7 @@ impl Registry {
         session.metadata = dispatched.metadata.clone();
         session.updated_at = dispatched.updated_at;
         let updated = session.clone();
+        // Maintain reverse index.
         self.session_runner_index
             .insert(session_id, runner_id.to_owned());
         self.refresh_runner_session_counts(runner_id, updated.updated_at);
@@ -1459,9 +1537,6 @@ impl Registry {
         Ok(selected)
     }
 
-    /// Maximum number of queued commands per runner.
-    const MAX_COMMANDS_PER_RUNNER: usize = 256;
-
     pub(crate) fn enqueue_runner_command(
         &mut self,
         runner_id: &str,
@@ -1482,9 +1557,10 @@ impl Registry {
             .queued_runner_commands
             .entry(runner_id.to_owned())
             .or_default();
-        if queue.len() >= Self::MAX_COMMANDS_PER_RUNNER {
-            let dropped = queue.pop_front();
-            if let Some(dropped) = dropped {
+        queue.push_back(command.clone());
+        // Evict oldest commands when the per-runner queue exceeds capacity.
+        while queue.len() > MAX_COMMANDS_PER_RUNNER {
+            if let Some(dropped) = queue.pop_front() {
                 tracing::warn!(
                     command_id = %dropped.command_id,
                     runner_id,
@@ -1492,7 +1568,6 @@ impl Registry {
                 );
             }
         }
-        queue.push_back(command.clone());
         Ok(command)
     }
 

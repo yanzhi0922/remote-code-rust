@@ -280,12 +280,16 @@ const DEFERRED_TOOLS_DELTA_MARKER: &str = "__remote_code_meta__:deferred_tools_d
 const AGENT_LISTING_DELTA_MARKER: &str = "__remote_code_meta__:agent_listing_delta:";
 const MCP_INSTRUCTIONS_DELTA_MARKER: &str = "__remote_code_meta__:mcp_instructions_delta:";
 
-static RUNTIME_MCP_SESSION_OBSERVATIONS: OnceLock<
-    ParkingLotMutex<HashMap<Uuid, Arc<ParkingLotMutex<RuntimeMcpObservation>>>>,
-> = OnceLock::new();
-
-/// Maximum number of concurrent MCP session observations retained.
+/// Maximum number of concurrent MCP session observation entries.
+/// Oldest entries are evicted (FIFO) when this limit is exceeded.
 const MAX_MCP_SESSION_OBSERVATIONS: usize = 256;
+
+static RUNTIME_MCP_SESSION_OBSERVATIONS: OnceLock<
+    ParkingLotMutex<(
+        Vec<Uuid>,
+        HashMap<Uuid, Arc<ParkingLotMutex<RuntimeMcpObservation>>>,
+    )>,
+> = OnceLock::new();
 
 /// Dedup guard: only one refresh task may run at a time.
 static MCP_REFRESH_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
@@ -397,9 +401,12 @@ impl ConversationBackend for CriticalReminderBackend {
     }
 }
 
-fn runtime_mcp_session_observations()
--> &'static ParkingLotMutex<HashMap<Uuid, Arc<ParkingLotMutex<RuntimeMcpObservation>>>> {
-    RUNTIME_MCP_SESSION_OBSERVATIONS.get_or_init(|| ParkingLotMutex::new(HashMap::new()))
+fn runtime_mcp_session_observations() -> &'static ParkingLotMutex<(
+    Vec<Uuid>,
+    HashMap<Uuid, Arc<ParkingLotMutex<RuntimeMcpObservation>>>,
+)> {
+    RUNTIME_MCP_SESSION_OBSERVATIONS
+        .get_or_init(|| ParkingLotMutex::new((Vec::new(), HashMap::new())))
 }
 
 fn runtime_mcp_observation_from_discovery(config: &RuntimeConfig) -> RuntimeMcpObservation {
@@ -497,25 +504,27 @@ fn runtime_mcp_session_observation(
     let discovery = runtime_mcp_observation_from_discovery(config);
     let session_id = config.session_id;
     let sessions = runtime_mcp_session_observations();
-    let mut sessions = sessions.lock();
-    if let Some(existing) = sessions.get(&session_id) {
-        if let Some(mut snapshot) = existing.try_lock() {
-            *snapshot = merge_runtime_mcp_observation_with_discovery(&snapshot, discovery);
-        }
+    let mut guard = sessions.lock();
+    let (order, map) = &mut *guard;
+    if let Some(existing) = map.get(&session_id) {
+        let mut snapshot = existing.lock();
+        *snapshot = merge_runtime_mcp_observation_with_discovery(&snapshot, discovery);
         return Arc::clone(existing);
     }
 
-    // Evict oldest entries when the map exceeds the cap.
-    while sessions.len() >= MAX_MCP_SESSION_OBSERVATIONS {
-        if let Some(oldest_key) = sessions.keys().next().copied() {
-            sessions.remove(&oldest_key);
+    // Evict oldest entries if at capacity.
+    while map.len() >= MAX_MCP_SESSION_OBSERVATIONS {
+        if let Some(oldest_id) = order.first().cloned() {
+            order.remove(0);
+            map.remove(&oldest_id);
         } else {
             break;
         }
     }
 
     let snapshot = Arc::new(ParkingLotMutex::new(discovery));
-    sessions.insert(session_id, Arc::clone(&snapshot));
+    order.push(session_id);
+    map.insert(session_id, Arc::clone(&snapshot));
     snapshot
 }
 
@@ -608,13 +617,19 @@ async fn handle_runtime_mcp_session_list_changed(
         .await;
 }
 
-fn spawn_runtime_mcp_providers(
+async fn spawn_runtime_mcp_providers(
     config: &RuntimeConfig,
 ) -> (
     Arc<claude_tools::RuntimeMcpStateProvider>,
     Arc<claude_tools::RuntimeMcpObservationProvider>,
 ) {
-    let observation = runtime_mcp_session_observation(config);
+    // Offload the blocking FS-based MCP server discovery to a blocking thread
+    // to avoid stalling the Tokio runtime during startup.
+    let config_clone = config.clone();
+    let observation =
+        tokio::task::spawn_blocking(move || runtime_mcp_session_observation(&config_clone))
+            .await
+            .expect("MCP discovery task panicked");
     refresh_runtime_mcp_session_observation(config.clone(), Arc::clone(&observation));
 
     let observation_for_state = Arc::clone(&observation);
@@ -634,8 +649,9 @@ fn spawn_runtime_mcp_providers(
 #[cfg(test)]
 fn clear_runtime_mcp_session_observation(session_id: Uuid) {
     if let Some(sessions) = RUNTIME_MCP_SESSION_OBSERVATIONS.get() {
-        let mut sessions = sessions.lock();
-        sessions.remove(&session_id);
+        let mut guard = sessions.lock();
+        guard.0.retain(|id| *id != session_id);
+        guard.1.remove(&session_id);
     }
 }
 
@@ -2475,7 +2491,7 @@ pub(crate) async fn run_prompt_with_query_engine_compat_overrides(
         vec![Message::from(ConversationEntry::user(prompt))]
     };
     let (runtime_mcp_state_provider, runtime_mcp_observation_provider) =
-        spawn_runtime_mcp_providers(config);
+        spawn_runtime_mcp_providers(config).await;
     let runtime_agent_prompt_context_provider = spawn_runtime_agent_prompt_context_provider(
         config,
         broker.as_ref(),

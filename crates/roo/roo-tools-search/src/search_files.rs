@@ -66,7 +66,8 @@ fn validate_regex_detailed(pattern: &str) -> Result<regex::Regex, SearchToolErro
 static RG_AVAILABLE: OnceLock<bool> = OnceLock::new();
 
 /// Check if ripgrep (`rg`) is available on the system PATH.
-/// Result is cached after the first call.
+///
+/// The result is cached using `OnceLock` so the subprocess is spawned at most once.
 pub fn is_ripgrep_available() -> bool {
     *RG_AVAILABLE.get_or_init(|| {
         Command::new("rg")
@@ -229,10 +230,11 @@ fn parse_ripgrep_output(output: &str) -> Result<Vec<FileMatch>, SearchToolError>
                 for &mi in &match_indices {
                     let (_, line_number, line_content, _) = &pending[mi];
 
-                    // Context before: up to 2 preceding context lines
-                    let before_start = mi.saturating_sub(DEFAULT_CONTEXT_LINES);
-                    let context_before: Vec<String> =
-                        (before_start..mi).map(|j| pending[j].2.clone()).collect();
+                    // Context before: up to 2 preceding context lines (in order)
+                    let context_before: Vec<String> = {
+                        let start = mi.saturating_sub(DEFAULT_CONTEXT_LINES);
+                        (start..mi).map(|j| pending[j].2.clone()).collect()
+                    };
 
                     // Context after: up to 2 following context lines
                     let context_after: Vec<String> = ((mi + 1)..pending.len())

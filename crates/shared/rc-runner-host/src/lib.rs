@@ -354,9 +354,9 @@ impl HostedSessionManager {
         let exit_join: tokio::task::JoinHandle<()> = tokio::spawn(async move {
             let exit = match tokio::task::spawn_blocking(move || child.wait()).await {
                 Ok(exit) => exit,
-                Err(error) => Err(std::io::Error::other(
-                    format!("hosted session wait task failed: {error}"),
-                )),
+                Err(error) => Err(std::io::Error::other(format!(
+                    "hosted session wait task failed: {error}"
+                ))),
             };
             if let Err(error) = manager
                 .handle_hosted_session_exit(session.session_id, exit)

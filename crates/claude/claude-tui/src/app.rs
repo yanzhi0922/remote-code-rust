@@ -270,7 +270,7 @@ impl App {
         const MAX_HISTORY: usize = 1000;
         if self.input_history.back() != Some(&text) {
             self.input_history.push_back(text.clone());
-            if self.input_history.len() > MAX_HISTORY {
+            while self.input_history.len() > MAX_HISTORY {
                 self.input_history.pop_front();
             }
         }

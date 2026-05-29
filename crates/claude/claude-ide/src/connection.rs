@@ -542,7 +542,8 @@ impl IdeConnection for HttpConnection {
 // LSP-style framed message I/O
 // ---------------------------------------------------------------------------
 
-/// Maximum allowed frame body size (16 MiB).
+/// Maximum allowed frame size (16 MiB) to prevent unbounded memory allocation
+/// from a malicious or corrupted Content-Length header.
 const MAX_FRAME_SIZE: usize = 16 * 1024 * 1024;
 
 /// Read a single LSP-style framed message from the reader.

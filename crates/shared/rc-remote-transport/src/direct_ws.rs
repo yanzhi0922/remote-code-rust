@@ -62,14 +62,17 @@ impl RemoteTransport for DirectWsTransport {
 
         // Build a real TLS connector from the config so self-signed certs
         // and fingerprint pinning actually work for direct connections.
-        let tls_config = crate::tls::build_client_tls_config(&config.tls)?;
+        let tls_config = crate::tls::build_client_tls_config(&config.tls).map_err(|e| {
+            self.state = ConnectionState::Error(format!("TLS config error: {e}"));
+            e
+        })?;
         let connector = Some(Connector::Rustls(tls_config));
 
         let (stream, _response) = connect_async_tls_with_config(request, None, false, connector)
             .await
             .map_err(|e| {
-                self.state = ConnectionState::Error(e.to_string());
-                anyhow::anyhow!("WebSocket connect failed: {e}")
+                self.state = ConnectionState::Error(format!("WebSocket connect failed: {e}"));
+                anyhow::anyhow!("WebSocket connect to runner at {} failed: {e}", runner_url)
             })?;
 
         // Spawn a task to read events from the WebSocket.

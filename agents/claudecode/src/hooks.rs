@@ -1198,14 +1198,19 @@ fn hook_display(hook_type: &str, object: Option<&serde_json::Map<String, Value>>
     }
 }
 
-/// Computes a deterministic hook ID from the given parts.
+/// Produces a deterministic hook identifier by hashing the contributing parts.
+/// A separator byte (`0xFF`) is injected between parts to prevent collisions
+/// where `"a"+"bc"` and `"ab"+"c"` would otherwise produce the same hash.
 ///
 /// Note: This uses `DefaultHasher` which is intentionally non-cryptographic.
 /// The hash output may change across Rust versions, but this is acceptable
 /// because hook IDs only need to be consistent within a single session.
 fn stable_hook_id(parts: &[&str]) -> String {
     let mut hasher = DefaultHasher::new();
-    for part in parts {
+    for (i, part) in parts.iter().enumerate() {
+        if i > 0 {
+            0xFFu8.hash(&mut hasher);
+        }
         part.hash(&mut hasher);
     }
     format!("{:016x}", hasher.finish())
@@ -1227,13 +1232,16 @@ fn matches_hook_subject(matcher: Option<&str>, subject: &str) -> bool {
 fn wildcard_match(pattern: &str, candidate: &str) -> bool {
     let pattern = pattern.as_bytes();
     let candidate = candidate.as_bytes();
+    // Use a single rolling row instead of a full 2D matrix to reduce
+    // per-match heap allocation from O(pattern.len * candidate.len) to
+    // O(candidate.len).
     let mut prev = vec![false; candidate.len() + 1];
     let mut curr = vec![false; candidate.len() + 1];
     prev[0] = true;
-    for pat_byte in pattern.iter() {
-        curr[0] = *pat_byte == b'*' && prev[0];
+    for i in 0..pattern.len() {
+        curr[0] = pattern[i] == b'*' && prev[0];
         for j in 0..candidate.len() {
-            curr[j + 1] = match *pat_byte {
+            curr[j + 1] = match pattern[i] {
                 b'*' => prev[j + 1] || curr[j],
                 b'?' => prev[j],
                 byte => prev[j] && byte == candidate[j],
@@ -1562,7 +1570,9 @@ fn truncate_preview(value: &str, max_chars: usize) -> String {
     if trimmed.chars().count() <= max_chars {
         return trimmed.to_owned();
     }
-    trimmed.chars().take(max_chars).collect::<String>() + "..."
+    let mut truncated: String = trimmed.chars().take(max_chars).collect();
+    truncated.push_str("...");
+    truncated
 }
 
 fn format_source(hook: &HookRecord) -> String {

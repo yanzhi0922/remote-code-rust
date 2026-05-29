@@ -67,6 +67,8 @@ pub fn truncate_conversation(
 
     // Calculate how many visible messages to truncate (excluding first visible message)
     let visible_count = visible_indices.len();
+
+    // Guard: if 1 or fewer visible messages, nothing to truncate
     if visible_count <= 1 {
         return TruncationResult {
             messages: messages.to_vec(),
@@ -74,6 +76,7 @@ pub fn truncate_conversation(
             messages_removed: 0,
         };
     }
+
     let raw_messages_to_remove = ((visible_count - 1) as f64 * frac_to_remove).floor() as usize;
     // Round down to even number to keep user/assistant pairs intact
     let messages_to_remove = raw_messages_to_remove - (raw_messages_to_remove % 2);

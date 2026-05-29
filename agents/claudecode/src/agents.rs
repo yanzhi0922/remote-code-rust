@@ -159,6 +159,11 @@ fn parse_key_value_pairs(value: &str) -> BTreeMap<String, String> {
         .collect()
 }
 
+/// Holds the base config for spawning sub-agent executions.
+///
+/// Each agent execution mutates its own config copy (new session ID, working
+/// directory, permission mode, etc.), so an `Arc<RuntimeConfig>` cannot be
+/// shared. The clone is intentional and unavoidable for correctness.
 #[derive(Clone)]
 struct RemoteCodeAgentExecutor {
     base_config: RuntimeConfig,

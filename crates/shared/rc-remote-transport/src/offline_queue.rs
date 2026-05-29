@@ -12,7 +12,7 @@ use crate::transport::TransportCommand;
 const MAX_QUEUE_SIZE: usize = 100;
 /// Commands older than this are considered stale and dropped on replay.
 const STALE_THRESHOLD_SECS: i64 = 300; // 5 minutes
-/// Maximum retry count before a command is permanently dropped.
+/// Maximum retry attempts per command before discarding.
 const MAX_RETRY_COUNT: u32 = 10;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -36,6 +36,14 @@ impl OfflineQueue {
         Self {
             inner: Arc::new(RwLock::new(VecDeque::new())),
             stale_threshold_secs: STALE_THRESHOLD_SECS,
+        }
+    }
+
+    /// Create an offline queue with a custom stale threshold in seconds.
+    pub fn with_stale_threshold(stale_threshold_secs: i64) -> Self {
+        Self {
+            inner: Arc::new(RwLock::new(VecDeque::new())),
+            stale_threshold_secs: stale_threshold_secs.max(60),
         }
     }
 
@@ -64,18 +72,19 @@ impl OfflineQueue {
     }
 
     /// Drain all non-stale commands, ordered oldest first.
-    /// Commands exceeding MAX_RETRY_COUNT are permanently dropped.
+    /// Increments retry_count and drops commands that have been retried too many times.
     pub async fn drain(&self) -> Vec<QueuedCommand> {
         let now = chrono::Utc::now().timestamp();
         let mut queue = self.inner.write().await;
-        let (valid, dropped): (Vec<_>, Vec<_>) = queue.drain(..).partition(|item| {
-            now - item.queued_at < self.stale_threshold_secs && item.retry_count <= MAX_RETRY_COUNT
+        let (mut valid, stale): (Vec<_>, Vec<_>) = queue.drain(..).partition(|item| {
+            now - item.queued_at < self.stale_threshold_secs && item.retry_count < MAX_RETRY_COUNT
         });
-        if !dropped.is_empty() {
-            tracing::info!(
-                "dropped {} stale or exceeded-retry offline commands",
-                dropped.len()
-            );
+        if !stale.is_empty() {
+            tracing::info!("dropped {} stale/exhausted offline commands", stale.len(),);
+        }
+        // Increment retry count for all drained commands.
+        for cmd in &mut valid {
+            cmd.retry_count += 1;
         }
         valid
     }
@@ -88,6 +97,11 @@ impl OfflineQueue {
     /// Whether the queue is empty.
     pub async fn is_empty(&self) -> bool {
         self.inner.read().await.is_empty()
+    }
+
+    /// Whether the queue is at capacity.
+    pub async fn is_full(&self) -> bool {
+        self.inner.read().await.len() >= MAX_QUEUE_SIZE
     }
 }
 

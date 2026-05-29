@@ -56,6 +56,7 @@ pub fn get_similarity(original: &str, search: &str) -> f64 {
     let dist = levenshtein_distance(&normalized_original, &normalized_search);
 
     // Calculate similarity ratio (0 to 1, where 1 is an exact match)
+    // Use char count (not byte len) to match the character-based Levenshtein distance.
     let max_length = normalized_original
         .chars()
         .count()
@@ -118,9 +119,16 @@ pub fn fuzzy_search(
                     best_score = similarity;
                     best_match_index = left_index;
                     best_match_content = original_chunk;
+                    if best_score >= 1.0 {
+                        break;
+                    }
                 }
             }
             left_index -= 1;
+        }
+
+        if best_score >= 1.0 {
+            break;
         }
 
         if right_index <= end_index_i64 - search_len_i64 {
@@ -132,6 +140,9 @@ pub fn fuzzy_search(
                     best_score = similarity;
                     best_match_index = right_index;
                     best_match_content = original_chunk;
+                    if best_score >= 1.0 {
+                        break;
+                    }
                 }
             }
             right_index += 1;
