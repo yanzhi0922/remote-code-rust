@@ -1,5 +1,6 @@
 import type { ErrorInfo, ReactNode } from 'react';
 import { Component, useMemo, useState } from 'react';
+import { logFrontendError } from '../../lib/frontendLogging';
 import { getRemoteCopy, resolveRemoteLocale } from '../../remote/i18n';
 
 interface ErrorBoundaryProps {
@@ -29,6 +30,7 @@ class RootErrorBoundary extends Component<
 
   componentDidCatch(error: Error, errorInfo: ErrorInfo) {
     console.error('remote-code-gui runtime error', error, errorInfo);
+    logFrontendError('react.error-boundary', error, errorInfo);
   }
 
   render() {

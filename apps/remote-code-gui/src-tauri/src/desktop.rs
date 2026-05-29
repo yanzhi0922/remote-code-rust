@@ -86,6 +86,7 @@ use crate::state::*;
 mod agent_routing;
 mod bootstrap;
 mod codex_commands;
+mod logging_commands;
 mod mcp_commands;
 mod permission_commands;
 mod project_commands;

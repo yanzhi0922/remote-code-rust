@@ -490,6 +490,43 @@ pub(crate) struct SessionExportResultDto {
     pub(crate) path: String,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DiagnosticBundleRequestDto {
+    #[serde(default = "default_true")]
+    pub(crate) include_logs: bool,
+    #[serde(default)]
+    pub(crate) include_settings: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DiagnosticBundleResultDto {
+    pub(crate) path: String,
+    pub(crate) files: usize,
+    pub(crate) bytes: u64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct FrontendLogEventDto {
+    pub(crate) level: String,
+    pub(crate) source: String,
+    pub(crate) message: String,
+    #[serde(default)]
+    pub(crate) details: Option<String>,
+    #[serde(default)]
+    pub(crate) stack: Option<String>,
+    #[serde(default)]
+    pub(crate) url: Option<String>,
+    #[serde(default)]
+    pub(crate) line: Option<u32>,
+    #[serde(default)]
+    pub(crate) column: Option<u32>,
+    #[serde(default)]
+    pub(crate) user_agent: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct GuiDoctorReportDto {
     pub(crate) ok: bool,

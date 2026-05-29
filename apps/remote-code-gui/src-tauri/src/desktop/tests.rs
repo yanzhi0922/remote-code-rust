@@ -85,6 +85,85 @@ fn desktop_runtime_paths_are_rooted_in_profile_dir() {
 }
 
 #[test]
+fn gui_log_retention_prunes_only_expired_remote_code_logs() {
+    let temp = tempdir().unwrap();
+    let today = chrono::NaiveDate::from_ymd_opt(2026, 5, 29).unwrap();
+
+    let expired = temp.path().join(format!(
+        "{}.2026-05-14",
+        crate::logging::GUI_LOG_FILE_PREFIX
+    ));
+    let fresh = temp.path().join(format!(
+        "{}.2026-05-20",
+        crate::logging::GUI_LOG_FILE_PREFIX
+    ));
+    let active = temp.path().join(crate::logging::GUI_LOG_FILE_PREFIX);
+    let unrelated = temp.path().join("other.log.2026-05-01");
+
+    fs::write(&expired, "expired").unwrap();
+    fs::write(&fresh, "fresh").unwrap();
+    fs::write(&active, "active").unwrap();
+    fs::write(&unrelated, "other").unwrap();
+
+    let removed = crate::logging::prune_old_gui_logs_for_date(temp.path(), today, 14).unwrap();
+
+    assert_eq!(removed, 1);
+    assert!(!expired.exists());
+    assert!(fresh.exists());
+    assert!(active.exists());
+    assert!(unrelated.exists());
+}
+
+#[test]
+fn diagnostic_bundle_copies_logs_and_redacts_provider_secrets() {
+    let temp = tempdir().unwrap();
+    let layout = crate::paths::RuntimePathLayout::from_profile_dir(temp.path().join("profile"));
+    layout.ensure_exists().unwrap();
+
+    fs::write(
+        layout.logs_dir.join(format!(
+            "{}.2026-05-29",
+            crate::logging::GUI_LOG_FILE_PREFIX
+        )),
+        r#"{"level":"INFO","message":"ready"}"#,
+    )
+    .unwrap();
+    fs::write(&layout.gui_settings_file, r#"{"provider_name":"prod"}"#).unwrap();
+    fs::write(
+        &layout.gui_providers_file,
+        r#"{"providers":[{"name":"prod","protocol":"openai","api_key":"secret-token"}]}"#,
+    )
+    .unwrap();
+
+    let result = crate::logging::create_diagnostic_bundle(
+        &layout,
+        crate::logging::DiagnosticBundleOptions {
+            include_logs: true,
+            include_settings: true,
+        },
+    )
+    .unwrap();
+    let bundle_dir = std::path::PathBuf::from(&result.path);
+
+    assert!(bundle_dir.join("manifest.json").exists());
+    assert!(
+        bundle_dir
+            .join("logs")
+            .join(format!(
+                "{}.2026-05-29",
+                crate::logging::GUI_LOG_FILE_PREFIX
+            ))
+            .exists()
+    );
+    let providers =
+        fs::read_to_string(bundle_dir.join("config").join("gui-providers.json")).unwrap();
+    assert!(providers.contains("[redacted]"));
+    assert!(!providers.contains("secret-token"));
+    assert!(result.files >= 3);
+    assert!(result.bytes > 0);
+}
+
+#[test]
 fn roo_provider_id_uses_protocol_and_endpoint_not_display_name() {
     let project_dir = tempdir().unwrap();
     let profile_dir = tempdir().unwrap();

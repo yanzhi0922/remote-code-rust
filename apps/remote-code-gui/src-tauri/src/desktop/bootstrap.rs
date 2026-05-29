@@ -9,12 +9,10 @@ use super::*;
 /// The file layer writes structured JSON for machine parsing.
 /// The stderr layer writes human-readable output for the dev console.
 fn install_gui_tracing() {
-    use tracing_subscriber::EnvFilter;
     use tracing_subscriber::layer::SubscriberExt;
     use tracing_subscriber::util::SubscriberInitExt;
 
-    let env_filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new("remote_code_gui=info"));
+    let env_filter = crate::logging::gui_env_filter_from_env();
 
     let (file_layer, _guard) = match crate::paths::RuntimePathLayout::discover() {
         Some(layout) => {
@@ -22,6 +20,15 @@ fn install_gui_tracing() {
             if let Err(e) = std::fs::create_dir_all(&log_dir) {
                 eprintln!(
                     "warning: could not create log directory {}: {e}",
+                    log_dir.display()
+                );
+            }
+            if let Err(e) = crate::logging::prune_old_gui_logs(
+                &log_dir,
+                crate::logging::DEFAULT_LOG_RETENTION_DAYS,
+            ) {
+                eprintln!(
+                    "warning: could not prune old GUI logs in {}: {e}",
                     log_dir.display()
                 );
             }
@@ -116,6 +123,8 @@ pub fn run() {
             provider_commands::get_runtime_status,
             provider_commands::run_doctor_report,
             session_commands::export_session_bundle,
+            logging_commands::record_frontend_log,
+            logging_commands::export_diagnostic_bundle,
             mcp_commands::list_mcp_servers,
             mcp_commands::list_runtime_mcp_inventory,
             mcp_commands::save_mcp_server,

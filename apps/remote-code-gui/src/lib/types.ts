@@ -65,6 +65,31 @@ export interface SessionExportResult {
   path: string;
 }
 
+export type FrontendLogLevel = 'debug' | 'info' | 'warn' | 'error';
+
+export interface FrontendLogEvent {
+  level: FrontendLogLevel;
+  source: string;
+  message: string;
+  details?: string | null;
+  stack?: string | null;
+  url?: string | null;
+  line?: number | null;
+  column?: number | null;
+  userAgent?: string | null;
+}
+
+export interface DiagnosticBundleRequest {
+  includeLogs?: boolean;
+  includeSettings?: boolean;
+}
+
+export interface DiagnosticBundleResult {
+  path: string;
+  files: number;
+  bytes: number;
+}
+
 type DoctorProbeOutcome =
   | 'reachable'
   | 'auth_rejected'

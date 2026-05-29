@@ -5,6 +5,7 @@ import { resetAppStore } from '../../test/appStoreTestUtils';
 vi.mock('../../lib/tauri', () => ({
   listSessions: vi.fn<() => Promise<import('../../lib/types').SessionSummary[]>>(() => Promise.resolve([])),
   exportSessionBundle: vi.fn(() => Promise.resolve('/tmp/export.json')),
+  exportDiagnosticBundle: vi.fn(() => Promise.resolve({ path: '/tmp/diagnostics', files: 2, bytes: 120 })),
   runDoctorReport: vi.fn(() => Promise.resolve({ status: 'healthy', checks: [] } as unknown as import('../../lib/types').DoctorReportInfo)),
 }));
 
@@ -23,6 +24,14 @@ describe('OperationsTab', () => {
     const { OperationsTab } = await import('./OperationsTab');
     render(<OperationsTab />);
     expect(screen.getByText('Session Export')).toBeInTheDocument();
+  });
+
+  it('renders diagnostics export section', async () => {
+    resetAppStore();
+    const { OperationsTab } = await import('./OperationsTab');
+    render(<OperationsTab />);
+    expect(screen.getByText('Diagnostics')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /导出诊断包/ })).toBeInTheDocument();
   });
 
   it('renders doctor run button', async () => {

@@ -1,4 +1,4 @@
-import { Download, RefreshCw, ShieldCheck, Stethoscope } from 'lucide-react';
+import { Archive, Download, RefreshCw, ShieldCheck, Stethoscope } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { formatSensitivePath } from '../../lib/utils';
 import type { DoctorReportInfo, SessionExportFormat, SessionSummary } from '../../lib/types';
@@ -63,6 +63,11 @@ export function OperationsTab() {
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
   const [exportPath, setExportPath] = useState<string | null>(null);
+  const [includeDiagnosticLogs, setIncludeDiagnosticLogs] = useState(true);
+  const [includeDiagnosticSettings, setIncludeDiagnosticSettings] = useState(false);
+  const [diagnosticExporting, setDiagnosticExporting] = useState(false);
+  const [diagnosticError, setDiagnosticError] = useState<string | null>(null);
+  const [diagnosticPath, setDiagnosticPath] = useState<string | null>(null);
 
   const allSessions = useMemo(() => {
     const deduped = new Map<string, SessionSummary>();
@@ -131,6 +136,22 @@ export function OperationsTab() {
       setExportError(typeof error === 'string' ? error : String(error));
     } finally {
       setExporting(false);
+    }
+  };
+
+  const exportDiagnostics = async () => {
+    setDiagnosticExporting(true);
+    setDiagnosticError(null);
+    try {
+      const result = await tauri.exportDiagnosticBundle({
+        includeLogs: includeDiagnosticLogs,
+        includeSettings: includeDiagnosticSettings,
+      });
+      setDiagnosticPath(result.path);
+    } catch (error) {
+      setDiagnosticError(typeof error === 'string' ? error : String(error));
+    } finally {
+      setDiagnosticExporting(false);
     }
   };
 
@@ -339,6 +360,61 @@ export function OperationsTab() {
                 </div>
               </div>
             </details>
+          </div>
+        )}
+      </section>
+
+      <section className="space-y-4">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h3 className="text-base font-semibold text-rc-text-primary">Diagnostics</h3>
+            <p className="mt-1 text-sm text-rc-text-tertiary">
+              导出本机诊断目录，包含日志和可选的脱敏配置快照。
+            </p>
+          </div>
+          <button
+            onClick={() => {
+              void exportDiagnostics();
+            }}
+            disabled={diagnosticExporting || (!includeDiagnosticLogs && !includeDiagnosticSettings)}
+            className="inline-flex items-center gap-2 rounded-md bg-rc-accent-primary px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-rc-accent-primary-hover disabled:cursor-not-allowed disabled:bg-rc-text-tertiary"
+          >
+            <Archive size={15} />
+            {diagnosticExporting ? '导出中…' : '导出诊断包'}
+          </button>
+        </div>
+
+        <div className="grid gap-3 md:grid-cols-2">
+          <label className="flex items-center gap-3 rounded-md bg-rc-bg-surface px-4 py-3 text-sm text-rc-text-primary">
+            <input
+              type="checkbox"
+              checked={includeDiagnosticLogs}
+              onChange={(event) => setIncludeDiagnosticLogs(event.target.checked)}
+            />
+            <span>包含日志</span>
+          </label>
+          <label className="flex items-center gap-3 rounded-md bg-rc-bg-surface px-4 py-3 text-sm text-rc-text-primary">
+            <input
+              type="checkbox"
+              checked={includeDiagnosticSettings}
+              onChange={(event) => setIncludeDiagnosticSettings(event.target.checked)}
+            />
+            <span>包含脱敏配置</span>
+          </label>
+        </div>
+
+        {diagnosticError && (
+          <div className="rounded-lg border border-rc-accent-error-border bg-rc-accent-error-bg px-4 py-3 text-sm text-rc-accent-error">
+            {diagnosticError}
+          </div>
+        )}
+
+        {diagnosticPath && (
+          <div className="rounded-lg border border-rc-border-primary bg-rc-bg-surface px-4 py-4">
+            <div className="text-sm font-semibold text-rc-text-primary">诊断包已生成</div>
+            <div className="mt-2 break-all rounded-md bg-rc-bg-tertiary px-3 py-3 font-mono text-xs text-rc-text-secondary">
+              {formatSensitivePath(diagnosticPath, privacyMode)}
+            </div>
           </div>
         )}
       </section>

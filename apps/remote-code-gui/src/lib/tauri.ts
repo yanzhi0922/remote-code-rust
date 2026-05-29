@@ -69,7 +69,10 @@ import type {
   ContextCompactedInfo,
   ContextOverflowInfo,
   ContextUsageInfo,
+  DiagnosticBundleRequest,
+  DiagnosticBundleResult,
   DoctorReportInfo,
+  FrontendLogEvent,
   FullSettings,
   InitResult,
   McpMutationResult,
@@ -153,6 +156,16 @@ export function exportSessionBundle(
   format: SessionExportFormat,
 ): Promise<SessionExportResult> {
   return invoke<SessionExportResult>('export_session_bundle', { sessionId, format });
+}
+
+export function recordFrontendLog(event: FrontendLogEvent): Promise<void> {
+  return invoke('record_frontend_log', { event });
+}
+
+export function exportDiagnosticBundle(
+  request: DiagnosticBundleRequest = {},
+): Promise<DiagnosticBundleResult> {
+  return invoke<DiagnosticBundleResult>('export_diagnostic_bundle', { request });
 }
 
 export function listMcpServers(

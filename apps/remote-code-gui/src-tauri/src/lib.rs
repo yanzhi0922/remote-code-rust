@@ -10,6 +10,8 @@ mod desktop;
 #[cfg(feature = "desktop")]
 pub(crate) mod dto;
 #[cfg(feature = "desktop")]
+pub(crate) mod logging;
+#[cfg(feature = "desktop")]
 mod query_engine_gui;
 #[cfg(feature = "desktop")]
 pub mod remote_runner;
