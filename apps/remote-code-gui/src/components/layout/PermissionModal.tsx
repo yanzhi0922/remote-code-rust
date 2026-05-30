@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { ShieldAlert } from 'lucide-react';
 import { formatSensitivePath, redactSensitivePathsForDisplay } from '../../lib/utils';
 import { useAppStore } from '../../stores/useAppStore';
@@ -179,6 +179,30 @@ export function PermissionModal() {
 
   if (!pendingPermission) return null;
 
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  const handleDialogKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Escape') {
+      denyPermission();
+      return;
+    }
+    if (e.key === 'Tab') {
+      const focusable = containerRef.current?.querySelectorAll(
+        'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
+      );
+      if (!focusable || focusable.length === 0) return;
+      const first = focusable[0] as HTMLElement;
+      const last = focusable[focusable.length - 1] as HTMLElement;
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    }
+  };
+
   const trimmedFeedback = feedback.trim();
   const rooQuestionText = stringField(rooQuestionRecord, 'question') ?? stringField(inputRecord, 'question');
   const rooCompletionText = stringField(inputRecord, 'result');
@@ -251,7 +275,14 @@ export function PermissionModal() {
 
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center bg-rc-bg-overlay p-4">
-      <div className="flex max-h-[88vh] w-full max-w-2xl flex-col overflow-hidden rounded-md border border-rc-border-primary bg-rc-bg-surface shadow-xl">
+      <div
+        ref={containerRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Permission request"
+        onKeyDown={handleDialogKeyDown}
+        className="flex max-h-[88vh] w-full max-w-2xl flex-col overflow-hidden rounded-md border border-rc-border-primary bg-rc-bg-surface shadow-xl"
+      >
         <div className="shrink-0 border-b border-rc-border-secondary px-5 py-4">
           <div className="flex items-center gap-3">
             <div className="flex h-9 w-9 items-center justify-center rounded-md bg-rc-accent-error-bg text-rc-accent-error">

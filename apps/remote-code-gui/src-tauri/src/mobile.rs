@@ -20,18 +20,37 @@ fn validate_download_name(file_name: &str) -> Result<std::path::PathBuf, String>
 }
 
 /// Reject URLs that target internal/private networks (SSRF mitigation).
+///
+/// Blocks loopback (127.0.0.0/8, ::1), unspecified (0.0.0.0, ::),
+/// link-local (169.254.0.0/16, fe80::/10), private (10/8, 172.16/12,
+/// 192.168/16), IPv6 unique-local (fc00::/7), and IPv4-mapped IPv6
+/// equivalents.
 fn validate_download_url(url: &str) -> Result<(), String> {
+    use std::net::IpAddr;
     let lowered = url.to_ascii_lowercase();
     if !lowered.starts_with("https://") && !lowered.starts_with("http://") {
         return Err("only http:// and https:// URLs are allowed".to_string());
     }
     let after_scheme = &url[url.find("://").map(|i| i + 3).unwrap_or(0)..];
     let host_port = after_scheme.split('/').next().unwrap_or("");
-    let host = host_port.split(':').next().unwrap_or("");
-    if host == "localhost"
-        || host == "127.0.0.1"
-        || host == "::1"
-        || host.starts_with("169.254.")
+    // Strip brackets from IPv6 literals: [::1]:port -> ::1
+    let host_raw = host_port.split(':').next().unwrap_or("");
+    let host = host_raw.trim_start_matches('[').trim_end_matches(']');
+
+    if host == "localhost" {
+        return Err("URLs targeting internal addresses are not allowed".to_string());
+    }
+
+    // Try to parse as an IP address for comprehensive checks.
+    if let Ok(ip) = host.parse::<IpAddr>() {
+        if is_internal_ip(&ip) {
+            return Err("URLs targeting internal addresses are not allowed".to_string());
+        }
+    }
+
+    // Fallback: string-prefix checks for hosts that failed to parse as IP
+    // (e.g., partial addresses).  This preserves the original defence-in-depth.
+    if host.starts_with("169.254.")
         || host.starts_with("10.")
         || host.starts_with("192.168.")
     {
@@ -47,7 +66,63 @@ fn validate_download_url(url: &str) -> Result<(), String> {
     Ok(())
 }
 
-const MAX_DOWNLOAD_SIZE: usize = 100 * 1024 * 1024; // 100 MB
+/// Return `true` for IP addresses that should never be download targets.
+fn is_internal_ip(ip: &std::net::IpAddr) -> bool {
+    use std::net::IpAddr;
+    match ip {
+        IpAddr::V4(v4) => is_internal_ipv4(v4),
+        IpAddr::V6(v6) => is_internal_ipv6(v6),
+    }
+}
+
+fn is_internal_ipv4(ip: &std::net::Ipv4Addr) -> bool {
+    // 127.0.0.0/8
+    if ip.is_loopback() {
+        return true;
+    }
+    // 0.0.0.0
+    if ip.is_unspecified() {
+        return true;
+    }
+    // 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16
+    if ip.is_private() {
+        return true;
+    }
+    // 169.254.0.0/16
+    if ip.is_link_local() {
+        return true;
+    }
+    false
+}
+
+fn is_internal_ipv6(ip: &std::net::Ipv6Addr) -> bool {
+    // ::1
+    if ip.is_loopback() {
+        return true;
+    }
+    // ::
+    if ip.is_unspecified() {
+        return true;
+    }
+    // fe80::/10 link-local
+    let segments = ip.segments();
+    if (segments[0] & 0xffc0) == 0xfe80 {
+        return true;
+    }
+    // fc00::/7 unique-local (first 7 bits = 1111 110)
+    if (segments[0] & 0xfe00) == 0xfc00 {
+        return true;
+    }
+    // IPv4-mapped IPv6: ::ffff:a.b.c.d
+    if let Some(v4) = ip.to_ipv4_mapped() {
+        if is_internal_ipv4(&v4) {
+            return true;
+        }
+    }
+    false
+}
+
+const MAX_DOWNLOAD_SIZE: u64 = 100 * 1024 * 1024; // 100 MiB
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BiometricAvailability {
@@ -260,7 +335,7 @@ pub async fn mobile_download_artifact(
     if let Some(t) = token {
         request = request.header("Authorization", format!("Bearer {t}"));
     }
-    let response = request.send().await.map_err(|e| {
+    let mut response = request.send().await.map_err(|e| {
         let msg = e.to_string();
         tracing::warn!(error = %msg, "command error");
         msg
@@ -268,18 +343,36 @@ pub async fn mobile_download_artifact(
     if !response.status().is_success() {
         return Err(format!("HTTP {}", response.status()));
     }
-    let bytes = response.bytes().await.map_err(|e| {
+    // Check Content-Length header before reading the body.
+    if let Some(content_length) = response
+        .headers()
+        .get("content-length")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse::<u64>().ok())
+    {
+        if content_length > MAX_DOWNLOAD_SIZE {
+            return Err(format!(
+                "Artifact too large: {content_length} bytes (max {MAX_DOWNLOAD_SIZE} bytes)"
+            ));
+        }
+    }
+    // Stream the response body, aborting if the accumulated size exceeds the limit.
+    let mut total_read: u64 = 0;
+    let mut buffer = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|e| {
         let msg = e.to_string();
         tracing::warn!(error = %msg, "command error");
         msg
-    })?;
-    if bytes.len() > MAX_DOWNLOAD_SIZE {
-        return Err(format!(
-            "download too large ({} bytes, max {} bytes)",
-            bytes.len(),
-            MAX_DOWNLOAD_SIZE
-        ));
+    })? {
+        total_read += chunk.len() as u64;
+        if total_read > MAX_DOWNLOAD_SIZE {
+            return Err(format!(
+                "download too large (exceeded {MAX_DOWNLOAD_SIZE} bytes during streaming)"
+            ));
+        }
+        buffer.extend_from_slice(&chunk);
     }
+    let bytes = buffer;
     let download_dir = app
         .path()
         .download_dir()

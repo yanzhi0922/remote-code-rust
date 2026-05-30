@@ -37,8 +37,10 @@ export function ActivityBar({ activeTab, onTabChange }: ActivityBarProps) {
         </svg>
       </div>
 
-      <div className="mt-4 flex flex-col items-center gap-1">
+      <div role="tablist" aria-orientation="vertical" className="mt-4 flex flex-col items-center gap-1">
         <button
+          role="tab"
+          aria-selected={activeTab === 'chat'}
           aria-label="Explorer"
           title="Explorer"
           onClick={() => onTabChange('chat')}
@@ -47,6 +49,8 @@ export function ActivityBar({ activeTab, onTabChange }: ActivityBarProps) {
           <MessageSquare size={18} />
         </button>
         <button
+          role="tab"
+          aria-selected={false}
           aria-label="Search"
           title="Search"
           onClick={() => onTabChange('chat')}
@@ -55,6 +59,8 @@ export function ActivityBar({ activeTab, onTabChange }: ActivityBarProps) {
           <Search size={17} />
         </button>
         <button
+          role="tab"
+          aria-selected={activeTab === 'mcp'}
           aria-label="MCP"
           title="MCP"
           onClick={() => onTabChange('mcp')}
@@ -76,6 +82,8 @@ export function ActivityBar({ activeTab, onTabChange }: ActivityBarProps) {
           {isDark ? <Sun size={16} /> : <Moon size={16} />}
         </button>
         <button
+          role="tab"
+          aria-selected={activeTab === 'settings'}
           aria-label="Settings"
           title="Settings"
           onClick={() => onTabChange('settings')}

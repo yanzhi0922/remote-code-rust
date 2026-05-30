@@ -127,6 +127,7 @@ export default function MobileRemoteApp() {
     deviceName,
     pairingOfferId,
     pairingSecret,
+    bootstrapSecret,
     setBootstrapSecret,
     setDeviceName,
     setManualAccessToken,
@@ -232,6 +233,7 @@ export default function MobileRemoteApp() {
         health={health}
         deviceName={deviceName}
         manualAccessToken={manualAccessToken}
+        bootstrapSecret={bootstrapSecret}
         username={signInUsername}
         password={signInPassword}
         pairingOfferId={pairingOfferId}
@@ -352,7 +354,7 @@ export default function MobileRemoteApp() {
       </div>
 
       {/* ── Bottom tab bar ── */}
-      <nav className="flex shrink-0 border-t border-rc-border-primary bg-rc-bg-surface/95 backdrop-blur pb-[env(safe-area-inset-bottom)]">
+      <nav role="tablist" className="flex shrink-0 border-t border-rc-border-primary bg-rc-bg-surface/95 backdrop-blur pb-[env(safe-area-inset-bottom)]">
         <TabButton
           active={activeTab === 'sessions'}
           icon={<List size={20} />}
@@ -389,6 +391,7 @@ function MobileAuthScreen({
   health,
   deviceName,
   manualAccessToken,
+  bootstrapSecret,
   username,
   password,
   pairingOfferId,
@@ -413,6 +416,7 @@ function MobileAuthScreen({
   health: RemoteControlPlaneHealth;
   deviceName: string;
   manualAccessToken: string;
+  bootstrapSecret: string;
   username: string;
   password: string;
   pairingOfferId: string;
@@ -513,6 +517,7 @@ function MobileAuthScreen({
               <div className="mt-2 text-sm leading-6 text-rc-text-tertiary">{copy.bootstrapDescription}</div>
               <input
                 type="password"
+                value={bootstrapSecret}
                 onChange={(e) => setBootstrapSecret(e.target.value)}
                 placeholder={copy.bootstrapSecretLabel}
                 className="mt-3 w-full rounded-2xl border border-rc-border-primary bg-rc-bg-secondary px-4 py-3.5 text-sm text-rc-text-primary outline-none focus:border-[#a58a5e]"
@@ -935,6 +940,8 @@ function TabButton({
   return (
     <button
       type="button"
+      role="tab"
+      aria-selected={active}
       onClick={onClick}
       className={`relative flex flex-1 flex-col items-center gap-1 py-2 text-[11px] font-medium transition-colors ${
         active ? 'text-[#1d6b45]' : 'text-rc-text-tertiary active:text-rc-text-secondary'

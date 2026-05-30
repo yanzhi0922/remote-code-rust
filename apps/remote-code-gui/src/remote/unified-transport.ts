@@ -230,8 +230,11 @@ export class UnifiedTransport implements TransportHandle {
     this._metrics.commandsSent++;
     this.notifyMetrics();
 
-    // If offline, queue for later.
+    // If offline, queue for later (except time-sensitive interrupts).
     if (this._state === 'reconnecting' || this._state === 'error' || this._state === 'idle') {
+      if (command.kind === 'interrupt') {
+        throw new Error('Cannot interrupt while offline');
+      }
       await enqueueCommand(this._config.sessionId, command);
       return;
     }
@@ -337,6 +340,8 @@ export class UnifiedTransport implements TransportHandle {
       let timeoutId = window.setTimeout(() => {
         if (!resolved) {
           resolved = true;
+          this._handle?.close();
+          this._handle = null;
           reject(new Error('WebSocket connection timed out after 30 seconds'));
         }
       }, 30_000);

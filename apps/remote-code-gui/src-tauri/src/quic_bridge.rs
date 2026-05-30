@@ -60,7 +60,17 @@ pub async fn quic_connect(
         });
     }
 
-    *state.0.lock().await = Some(QuicBridge { transport });
+    // Disconnect any existing connection before replacing it.
+    {
+        let mut guard = state.0.lock().await;
+        if let Some(mut old_bridge) = guard.take() {
+            tracing::info!("Disconnecting previous QUIC connection before establishing new one");
+            if let Err(e) = old_bridge.transport.disconnect().await {
+                tracing::warn!("Error disconnecting previous QUIC connection: {e:#}");
+            }
+        }
+        *guard = Some(QuicBridge { transport });
+    }
 
     Ok(())
 }

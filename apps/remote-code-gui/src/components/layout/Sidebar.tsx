@@ -432,6 +432,7 @@ function SessionTimeGroups({
 export function Sidebar() {
   const sessions = useAppStore((state) => state.sessions);
   const sessionsLoading = useAppStore((state) => state.sessionsLoading);
+  const sessionError = useAppStore((state) => state.sessionError);
   const activeSessionId = useAppStore((state) => state.activeSessionId);
   const selectSession = useAppStore((state) => state.selectSession);
   const createSession = useAppStore((state) => state.createSession);
@@ -567,7 +568,20 @@ export function Sidebar() {
 
       {/* Content with scroll fade mask */}
       <div className="scroll-fade flex-1 overflow-y-auto">
-        {sessionsLoading ? (
+        {sessionError ? (
+          <div className="px-4 py-4 text-center">
+            <div className="rounded-lg border border-[#f0d3c8] bg-[#fff4f1] px-3 py-3 text-xs text-[#9b3b32]">
+              {sessionError}
+            </div>
+            <button
+              type="button"
+              onClick={() => { void useAppStore.getState().refreshSessions(); }}
+              className="mt-2 text-xs font-medium text-rc-accent-primary hover:underline"
+            >
+              重试
+            </button>
+          </div>
+        ) : sessionsLoading ? (
           <div className="flex items-center gap-2 px-4 py-4 text-xs text-rc-text-secondary">
             <div className="h-3 w-3 animate-spin rounded-full border-2 border-rc-border-primary border-t-rc-accent-primary" />
             正在加载…

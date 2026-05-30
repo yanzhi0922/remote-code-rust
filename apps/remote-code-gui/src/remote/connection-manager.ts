@@ -76,75 +76,77 @@ class ConnectionManager {
     if (this._connecting) return;
     this._connecting = true;
 
-    this.disconnect();
+    try {
+      this.disconnect();
 
-    this._config = config;
-    this._state = {
-      ...this._state,
-      connectionState: 'connecting',
-      strategy: config.strategy,
-      latestSequence: afterSequence,
-    };
-    this.notify();
+      this._config = config;
+      this._state = {
+        ...this._state,
+        connectionState: 'connecting',
+        strategy: config.strategy,
+        latestSequence: afterSequence,
+      };
+      this.notify();
 
-    const callbacks: TransportCallbacks = {
-      onConnectionStateChange: (state) => {
-        this._state = { ...this._state, connectionState: state };
-        this.notify();
-      },
-      onEvent: (event) => {
-        this._state = {
-          ...this._state,
-          latestSequence: Math.max(this._state.latestSequence, event.sequence),
-        };
-        eventListeners.forEach((fn) => fn(event));
-      },
-      onMetricsUpdate: (metrics) => {
-        this._state = { ...this._state, metrics };
-        this.notify();
-      },
-      onHealthReport: (health) => {
-        this._state = { ...this._state, health };
-        this.notify();
-      },
-      onError: (error) => {
-        console.error('[ConnectionManager] transport error:', error);
-      },
-    };
+      const callbacks: TransportCallbacks = {
+        onConnectionStateChange: (state) => {
+          this._state = { ...this._state, connectionState: state };
+          this.notify();
+        },
+        onEvent: (event) => {
+          this._state = {
+            ...this._state,
+            latestSequence: Math.max(this._state.latestSequence, event.sequence),
+          };
+          eventListeners.forEach((fn) => fn(event));
+        },
+        onMetricsUpdate: (metrics) => {
+          this._state = { ...this._state, metrics };
+          this.notify();
+        },
+        onHealthReport: (health) => {
+          this._state = { ...this._state, health };
+          this.notify();
+        },
+        onError: (error) => {
+          console.error('[ConnectionManager] transport error:', error);
+        },
+      };
 
-    this.transport = new UnifiedTransport(config, callbacks);
-    await this.transport.connect(afterSequence);
+      this.transport = new UnifiedTransport(config, callbacks);
+      await this.transport.connect(afterSequence);
 
-    // Drain queued commands from offline periods after the transport is open.
-    if (this._config) {
-      const sessionId = this._config.sessionId;
-      const transport = this.transport;
-      try {
-        const queued = await drainCommands(sessionId);
-        for (const cmd of queued) {
-          if (this.transport !== transport) break;
-          try {
-            await transport.sendCommand(cmd.command);
-          } catch (err) {
-            // Re-enqueue the first failed command and stop to preserve command order.
-            console.warn('[ConnectionManager] drain command failed:', cmd.id, err);
-            try { await enqueueCommand(sessionId, cmd.command); } catch { /* best effort */ }
-            break;
+      // Drain queued commands from offline periods after the transport is open.
+      if (this._config) {
+        const sessionId = this._config.sessionId;
+        const transport = this.transport;
+        try {
+          const queued = await drainCommands(sessionId);
+          for (const cmd of queued) {
+            if (this.transport !== transport) break;
+            try {
+              await transport.sendCommand(cmd.command);
+            } catch (err) {
+              // Re-enqueue the first failed command and stop to preserve command order.
+              console.warn('[ConnectionManager] drain command failed:', cmd.id, err);
+              try { await enqueueCommand(sessionId, cmd.command); } catch { /* best effort */ }
+              break;
+            }
           }
+        } catch {
+          // Drain failed; commands remain queued for next attempt.
         }
-      } catch {
-        // Drain failed; commands remain queued for next attempt.
       }
+
+      // Subscribe to network changes for auto-reconnect.
+      this._unsubscribeNetwork = onNetworkChange((connected) => {
+        if (connected && this.transport && this._state.connectionState === 'reconnecting') {
+          void this.reconnect();
+        }
+      });
+    } finally {
+      this._connecting = false;
     }
-
-    // Subscribe to network changes for auto-reconnect.
-    this._unsubscribeNetwork = onNetworkChange((connected) => {
-      if (connected && this.transport && this._state.connectionState === 'reconnecting') {
-        void this.reconnect();
-      }
-    });
-
-    this._connecting = false;
   }
 
   disconnect(): void {

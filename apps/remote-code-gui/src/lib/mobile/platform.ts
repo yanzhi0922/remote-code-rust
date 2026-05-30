@@ -20,7 +20,7 @@ export function isMobileSync(): boolean {
   if (typeof window === 'undefined') return false;
   const ua = navigator.userAgent;
   _cachedIsMobile = /Android|iPhone|iPad|iPod/i.test(ua);
-  isMobile().then((m) => { _cachedIsMobile = m; }).catch(() => {});
+  isMobile().then((m) => { _cachedIsMobile = m; }).catch((err) => { console.warn('[platform] detection failed:', err); });
   return _cachedIsMobile;
 }
 

@@ -17,7 +17,7 @@ const MAX_QUIC_FRAME_BYTES: usize = 1024 * 1024;
 pub struct QuicTransport {
     state: ConnectionState,
     config: Option<TransportConfig>,
-    metrics: TransportMetrics,
+    metrics: Arc<std::sync::Mutex<TransportMetrics>>,
     event_rx: Option<mpsc::Receiver<TransportEvent>>,
     #[allow(dead_code)]
     reconnect: ReconnectPolicy,
@@ -32,7 +32,7 @@ impl QuicTransport {
         Self {
             state: ConnectionState::Disconnected,
             config: None,
-            metrics: TransportMetrics::default(),
+            metrics: Arc::new(std::sync::Mutex::new(TransportMetrics::default())),
             event_rx: None,
             reconnect,
             connection: None,
@@ -59,8 +59,11 @@ impl RemoteTransport for QuicTransport {
             _ => anyhow::bail!("QuicTransport requires Quic strategy"),
         };
 
+        let is_reconnect = self.config.is_some();
         self.config = Some(config.clone());
         self.state = ConnectionState::Connecting;
+
+        let connect_start = std::time::Instant::now();
 
         // Parse server address.
         let addr = parse_quic_addr(&server_url)?;
@@ -95,6 +98,8 @@ impl RemoteTransport for QuicTransport {
             anyhow::anyhow!("QUIC connect failed: {e}")
         })?;
 
+        let latency_ms = connect_start.elapsed().as_millis() as u32;
+
         // Authenticate the QUIC event stream before accepting server events.
         let auth_payload = serde_json::to_vec(&QuicAuthMessage {
             token: config.auth_token.clone(),
@@ -122,11 +127,26 @@ impl RemoteTransport for QuicTransport {
         self.event_rx = Some(event_rx);
 
         let cancel_rx = self.cancel.subscribe();
-        tokio::spawn(quic_event_reader(conn, event_tx, cancel_rx));
+        let metrics_clone = self.metrics.clone();
+        tokio::spawn(quic_event_reader(conn, event_tx, cancel_rx, metrics_clone));
+
+        {
+            let mut m = self.metrics.lock().unwrap();
+            if is_reconnect {
+                m.reconnect_count += 1;
+            }
+            m.latency_ms = latency_ms;
+            m.last_event_at = Some(
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs() as i64,
+            );
+        }
 
         self.state = ConnectionState::Open {
             active_strategy: "quic".into(),
-            latency_ms: 0,
+            latency_ms,
         };
         Ok(())
     }
@@ -146,11 +166,17 @@ impl RemoteTransport for QuicTransport {
         if payload.len() > MAX_QUIC_FRAME_BYTES {
             anyhow::bail!("QUIC command frame too large: {} bytes", payload.len());
         }
+        let payload_len = payload.len() as u64;
         let len = (payload.len() as u32).to_le_bytes();
         use tokio::io::AsyncWriteExt;
         stream.0.write_all(&len).await?;
         stream.0.write_all(&payload).await?;
         stream.0.shutdown().await?;
+
+        {
+            let mut m = self.metrics.lock().unwrap();
+            m.bytes_sent += payload_len + 4; // payload + length prefix
+        }
 
         // Read response.
         let mut len_buf = [0u8; 4];
@@ -162,6 +188,11 @@ impl RemoteTransport for QuicTransport {
         let mut resp_buf = vec![0u8; resp_len];
         stream.1.read_exact(&mut resp_buf).await?;
 
+        {
+            let mut m = self.metrics.lock().unwrap();
+            m.bytes_received += resp_len as u64 + 4;
+        }
+
         let ack: CommandAck = serde_json::from_slice(&resp_buf)?;
         Ok(ack)
     }
@@ -172,7 +203,7 @@ impl RemoteTransport for QuicTransport {
             endpoints: vec![crate::EndpointHealth {
                 url: "quic://connection".into(),
                 reachable: has_conn,
-                latency_ms: self.metrics.latency_ms.into(),
+                latency_ms: self.metrics.lock().unwrap().latency_ms.into(),
                 auth_valid: has_conn,
                 error: if has_conn {
                     None
@@ -206,7 +237,7 @@ impl RemoteTransport for QuicTransport {
     }
 
     fn metrics(&self) -> TransportMetrics {
-        self.metrics.clone()
+        self.metrics.lock().unwrap().clone()
     }
 }
 
@@ -221,6 +252,7 @@ async fn quic_event_reader(
     conn: quinn::Connection,
     tx: mpsc::Sender<TransportEvent>,
     mut cancel: tokio::sync::watch::Receiver<bool>,
+    metrics: Arc<std::sync::Mutex<TransportMetrics>>,
 ) {
     // Accept incoming streams from the server (events).
     loop {
@@ -244,9 +276,21 @@ async fn quic_event_reader(
                             break;
                         }
                         if let Ok(event) = serde_json::from_slice::<TransportEvent>(&buf)
-                            && tx.send(event).await.is_err()
                         {
-                            break;
+                            {
+                                let mut m = metrics.lock().unwrap();
+                                m.events_received += 1;
+                                m.bytes_received += len as u64 + 4;
+                                m.last_event_at = Some(
+                                    std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .unwrap_or_default()
+                                        .as_secs() as i64,
+                                );
+                            }
+                            if tx.send(event).await.is_err() {
+                                break;
+                            }
                         }
                     }
                     Err(quinn::ConnectionError::ApplicationClosed(_)) => break,

@@ -1,6 +1,7 @@
 //! Strategy 1: Direct WebSocket connection to the runner.
 
 use async_trait::async_trait;
+use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio_tungstenite::Connector;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
@@ -14,7 +15,7 @@ use crate::{ConnectionState, TransportConfig, TransportEvent, TransportMetrics};
 pub struct DirectWsTransport {
     state: ConnectionState,
     pub(crate) config: Option<TransportConfig>,
-    metrics: TransportMetrics,
+    metrics: Arc<std::sync::Mutex<TransportMetrics>>,
     pub(crate) event_rx: Option<mpsc::Receiver<TransportEvent>>,
     client: reqwest::Client,
     #[allow(dead_code)]
@@ -26,7 +27,7 @@ impl DirectWsTransport {
         Self {
             state: ConnectionState::Disconnected,
             config: None,
-            metrics: TransportMetrics::default(),
+            metrics: Arc::new(std::sync::Mutex::new(TransportMetrics::default())),
             event_rx: None,
             client: reqwest::Client::new(),
             reconnect,
@@ -38,7 +39,7 @@ impl DirectWsTransport {
         Self {
             state: ConnectionState::Disconnected,
             config: None,
-            metrics: TransportMetrics::default(),
+            metrics: Arc::new(std::sync::Mutex::new(TransportMetrics::default())),
             event_rx: None,
             client,
             reconnect,
@@ -54,8 +55,24 @@ impl RemoteTransport for DirectWsTransport {
             _ => anyhow::bail!("DirectWsTransport requires DirectWebSocket strategy"),
         };
 
+        // Track reconnects: if we already had a config, this is a reconnect.
+        let is_reconnect = self.config.is_some();
         self.config = Some(config.clone());
         self.state = ConnectionState::Connecting;
+
+        // Enforce HTTPS if the TLS config requires it.
+        if config.tls.enforce_https {
+            let lowered = runner_url.to_ascii_lowercase();
+            if !lowered.starts_with("https://") && !lowered.starts_with("wss://") {
+                self.state = ConnectionState::Error("HTTPS enforced but URL is not secure".into());
+                anyhow::bail!(
+                    "HTTPS is enforced but URL is not secure: {}",
+                    runner_url
+                );
+            }
+        }
+
+        let connect_start = std::time::Instant::now();
 
         let ws_url = build_runner_ws_url(&runner_url, &config.session_id, config.after_sequence);
         let request = build_authenticated_ws_request(&ws_url, &config.auth_token)?;
@@ -75,14 +92,32 @@ impl RemoteTransport for DirectWsTransport {
                 anyhow::anyhow!("WebSocket connect to runner at {} failed: {e}", runner_url)
             })?;
 
+        let latency_ms = connect_start.elapsed().as_millis() as u32;
+
         // Spawn a task to read events from the WebSocket.
         let (tx, rx) = mpsc::channel(256);
         self.event_rx = Some(rx);
-        tokio::spawn(read_ws_events(stream, tx));
+        let metrics_clone = self.metrics.clone();
+        tokio::spawn(read_ws_events(stream, tx, metrics_clone));
+
+        // Update metrics.
+        {
+            let mut m = self.metrics.lock().unwrap();
+            if is_reconnect {
+                m.reconnect_count += 1;
+            }
+            m.latency_ms = latency_ms;
+            m.last_event_at = Some(
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs() as i64,
+            );
+        }
 
         self.state = ConnectionState::Open {
             active_strategy: "direct_websocket".into(),
-            latency_ms: 0,
+            latency_ms,
         };
         Ok(())
     }
@@ -101,6 +136,8 @@ impl RemoteTransport for DirectWsTransport {
         let (path, body) = command_to_request(&command, &config.session_id);
         let url = format!("{runner_url}{path}");
 
+        let body_size = body.to_string().len() as u64;
+
         let response = self
             .client
             .post(&url)
@@ -109,7 +146,17 @@ impl RemoteTransport for DirectWsTransport {
             .send()
             .await?;
 
+        {
+            let mut m = self.metrics.lock().unwrap();
+            m.bytes_sent += body_size;
+        }
+
         if response.status().is_success() {
+            let text = response.text().await.unwrap_or_default();
+            {
+                let mut m = self.metrics.lock().unwrap();
+                m.bytes_received += text.len() as u64;
+            }
             Ok(CommandAck {
                 accepted: true,
                 message: "ok".into(),
@@ -170,7 +217,7 @@ impl RemoteTransport for DirectWsTransport {
     }
 
     fn metrics(&self) -> TransportMetrics {
-        self.metrics.clone()
+        self.metrics.lock().unwrap().clone()
     }
 }
 
@@ -198,14 +245,27 @@ pub(crate) async fn read_ws_events(
         tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
     >,
     tx: mpsc::Sender<TransportEvent>,
+    metrics: Arc<std::sync::Mutex<TransportMetrics>>,
 ) {
     use futures::StreamExt;
     tokio::pin!(stream);
     while let Some(msg) = stream.next().await {
         match msg {
             Ok(tungstenite::Message::Text(text)) => {
+                let frame_bytes = text.len() as u64;
                 match serde_json::from_str::<TransportEvent>(&text) {
                     Ok(event) => {
+                        {
+                            let mut m = metrics.lock().unwrap();
+                            m.events_received += 1;
+                            m.bytes_received += frame_bytes;
+                            m.last_event_at = Some(
+                                std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .unwrap_or_default()
+                                    .as_secs() as i64,
+                            );
+                        }
                         if tx.send(event).await.is_err() {
                             break;
                         }

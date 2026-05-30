@@ -71,7 +71,9 @@ export function persistRemoteAccessToken(token: string): void {
   } catch {
     // Ignore storage access failures.
   }
-  void secureStoreSet(REMOTE_ACCESS_TOKEN_STORAGE_KEY, normalized);
+  secureStoreSet(REMOTE_ACCESS_TOKEN_STORAGE_KEY, normalized).catch((err) => {
+    console.warn('[runtime] failed to persist to secure store:', err);
+  });
 }
 
 export function clearRemoteAccessToken(): void {
@@ -139,7 +141,9 @@ export function persistRemoteRefreshToken(token: string): void {
   } catch {
     // Ignore storage access failures.
   }
-  void secureStoreSet(REMOTE_REFRESH_TOKEN_STORAGE_KEY, normalized);
+  secureStoreSet(REMOTE_REFRESH_TOKEN_STORAGE_KEY, normalized).catch((err) => {
+    console.warn('[runtime] failed to persist to secure store:', err);
+  });
 }
 
 export function clearRemoteRefreshToken(): void {

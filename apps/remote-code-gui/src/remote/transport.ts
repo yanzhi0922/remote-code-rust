@@ -167,12 +167,6 @@ export function subscribeToRemoteSessionEvents(input: {
       return;
     }
 
-    // Give up after too many reconnect attempts to avoid infinite loops.
-    if (reconnectAttempt >= MAX_RECONNECT_ATTEMPTS) {
-      input.onConnectionStateChange('error');
-      return;
-    }
-
     const delayMs = Math.min(1_000 * 2 ** reconnectAttempt, 15_000);
     reconnectTimer = window.setTimeout(() => {
       reconnectTimer = null;

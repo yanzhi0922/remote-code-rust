@@ -427,6 +427,7 @@ function DemoLocalApp() {
   );
 }
 
+// TODO(i18n): extract hardcoded strings when i18n is set up
 function MobileInitScreen() {
   return (
     <div className="flex min-h-dvh w-screen items-center justify-center bg-rc-bg-base">
@@ -452,6 +453,7 @@ function RemoteLazyFallback() {
   );
 }
 
+// TODO(i18n): extract hardcoded strings when i18n is set up
 function MobileBiometricScreen() {
   return (
     <div className="flex min-h-dvh w-screen items-center justify-center bg-rc-bg-base">
@@ -465,6 +467,7 @@ function MobileBiometricScreen() {
   );
 }
 
+// TODO(i18n): extract hardcoded strings when i18n is set up
 function MobileErrorScreen({ error, onRetry }: { error: string; onRetry: () => void }) {
   return (
     <div className="flex min-h-dvh w-screen items-center justify-center bg-rc-bg-base px-6">
@@ -485,6 +488,7 @@ function MobileErrorScreen({ error, onRetry }: { error: string; onRetry: () => v
   );
 }
 
+// TODO(i18n): extract hardcoded strings when i18n is set up
 function MobileNetworkBanner({ online, connectionType }: { online: boolean; connectionType: string }) {
   if (online) return null;
   return (
@@ -494,6 +498,7 @@ function MobileNetworkBanner({ online, connectionType }: { online: boolean; conn
   );
 }
 
+// TODO(i18n): extract hardcoded strings when i18n is set up
 function MobileGate({ children }: { children: React.ReactNode }) {
   const [phase, setPhase] = useState<MobileInitPhase>('loading');
   const [error, setError] = useState<string | null>(null);
@@ -552,6 +557,7 @@ function MobileGate({ children }: { children: React.ReactNode }) {
   );
 }
 
+// TODO(i18n): extract hardcoded strings when i18n is set up
 function LocalApp() {
   const initialised = useAppStore((s) => s.initialised);
   const initError = useAppStore((s) => s.initError);

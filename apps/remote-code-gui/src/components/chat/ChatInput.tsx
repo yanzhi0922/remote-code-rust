@@ -266,7 +266,7 @@ function SlashCommandPalette({
   if (filtered.length === 0) return null;
 
   return (
-    <div className="absolute bottom-full left-0 right-0 z-20 mb-2 overflow-hidden rounded-md border border-rc-border-primary bg-rc-bg-surface shadow-lg animate-fade-in-up">
+    <div role="listbox" aria-label="Slash commands" className="absolute bottom-full left-0 right-0 z-20 mb-2 overflow-hidden rounded-md border border-rc-border-primary bg-rc-bg-surface shadow-lg animate-fade-in-up">
       <div className="px-3 py-2 text-[10px] font-semibold uppercase tracking-wider text-rc-text-tertiary">
         命令
       </div>
@@ -274,6 +274,9 @@ function SlashCommandPalette({
         {filtered.map((cmd, index) => (
           <button
             key={cmd.name}
+            role="option"
+            aria-selected={index === highlightedIndex}
+            id={`slash-option-${index}`}
             className={`flex w-full items-center gap-3 px-3 py-2 text-left text-sm transition-colors ${
               index === highlightedIndex
                 ? 'bg-rc-bg-selected text-rc-text-primary'
@@ -479,6 +482,7 @@ export function ChatInput() {
               disabled={sending}
               rows={1}
               aria-label="Prompt input"
+              aria-activedescendant={showSlashPalette ? `slash-option-${highlightedSlashIndex}` : undefined}
               placeholder="给 agent 发送任务、补充约束或后续修改"
               className="min-h-[64px] max-h-[180px] w-full resize-none border-0 bg-transparent px-1 py-1 text-sm leading-6 text-rc-text-primary outline-none placeholder:text-rc-text-tertiary disabled:cursor-not-allowed focus-visible:outline-none"
             />

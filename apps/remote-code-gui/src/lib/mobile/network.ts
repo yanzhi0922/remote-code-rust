@@ -24,8 +24,8 @@ export function initNetworkMonitoring(): void {
   if (!hasTauriRuntime()) {
     if (typeof window !== 'undefined') {
       const online = () => {
-        currentStatus = { connected: true, connectionType: 'wifi' };
-        listeners.forEach((fn) => fn(true, 'wifi'));
+        currentStatus = { connected: true, connectionType: 'unknown' };
+        listeners.forEach((fn) => fn(true, 'unknown'));
       };
       const offline = () => {
         currentStatus = { connected: false, connectionType: 'none' };

@@ -5,6 +5,7 @@
 //! No inbound ports needed on the runner.
 
 use async_trait::async_trait;
+use std::sync::Arc;
 use tokio::sync::mpsc;
 
 use crate::reconnect::ReconnectPolicy;
@@ -16,7 +17,7 @@ use crate::{ConnectionState, TransportConfig, TransportEvent, TransportMetrics};
 pub struct OutboundPollTransport {
     state: ConnectionState,
     config: Option<TransportConfig>,
-    metrics: TransportMetrics,
+    metrics: Arc<std::sync::Mutex<TransportMetrics>>,
     event_rx: Option<mpsc::Receiver<TransportEvent>>,
     client: reqwest::Client,
     #[allow(dead_code)]
@@ -30,7 +31,7 @@ impl OutboundPollTransport {
         Self {
             state: ConnectionState::Disconnected,
             config: None,
-            metrics: TransportMetrics::default(),
+            metrics: Arc::new(std::sync::Mutex::new(TransportMetrics::default())),
             event_rx: None,
             client: reqwest::Client::new(),
             reconnect,
@@ -44,7 +45,7 @@ impl OutboundPollTransport {
         Self {
             state: ConnectionState::Disconnected,
             config: None,
-            metrics: TransportMetrics::default(),
+            metrics: Arc::new(std::sync::Mutex::new(TransportMetrics::default())),
             event_rx: None,
             client,
             reconnect,
@@ -64,8 +65,21 @@ impl RemoteTransport for OutboundPollTransport {
             _ => anyhow::bail!("OutboundPollTransport requires OutboundPolling strategy"),
         };
 
+        let is_reconnect = self.config.is_some();
         self.config = Some(config.clone());
         self.state = ConnectionState::Connecting;
+
+        // Enforce HTTPS if the TLS config requires it.
+        if config.tls.enforce_https {
+            let lowered = cp_url.to_ascii_lowercase();
+            if !lowered.starts_with("https://") {
+                self.state = ConnectionState::Error("HTTPS enforced but URL is not secure".into());
+                anyhow::bail!(
+                    "HTTPS is enforced but URL is not secure: {}",
+                    cp_url
+                );
+            }
+        }
 
         let sse_url = format!(
             "{cp_url}/v1/sessions/{}/events/stream?after={}",
@@ -76,6 +90,7 @@ impl RemoteTransport for OutboundPollTransport {
         self.event_rx = Some(rx);
 
         let cancel_rx = self.cancel.subscribe();
+        let metrics_clone = self.metrics.clone();
         tokio::spawn(poll_events_loop(
             sse_url,
             poll_ms,
@@ -83,7 +98,22 @@ impl RemoteTransport for OutboundPollTransport {
             cancel_rx,
             self.client.clone(),
             config.auth_token.clone(),
+            metrics_clone,
         ));
+
+        {
+            let mut m = self.metrics.lock().unwrap();
+            if is_reconnect {
+                m.reconnect_count += 1;
+            }
+            m.latency_ms = poll_ms;
+            m.last_event_at = Some(
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs() as i64,
+            );
+        }
 
         self.state = ConnectionState::Open {
             active_strategy: "outbound_polling".into(),
@@ -107,6 +137,8 @@ impl RemoteTransport for OutboundPollTransport {
         let (path, body) = super::direct_ws::command_to_request(&command, &config.session_id);
         let url = format!("{cp_url}{path}");
 
+        let body_size = body.to_string().len() as u64;
+
         let response = self
             .client
             .post(&url)
@@ -115,7 +147,17 @@ impl RemoteTransport for OutboundPollTransport {
             .send()
             .await?;
 
+        {
+            let mut m = self.metrics.lock().unwrap();
+            m.bytes_sent += body_size;
+        }
+
         if response.status().is_success() {
+            let text = response.text().await.unwrap_or_default();
+            {
+                let mut m = self.metrics.lock().unwrap();
+                m.bytes_received += text.len() as u64;
+            }
             Ok(CommandAck {
                 accepted: true,
                 message: "ok".into(),
@@ -179,7 +221,7 @@ impl RemoteTransport for OutboundPollTransport {
     }
 
     fn metrics(&self) -> TransportMetrics {
-        self.metrics.clone()
+        self.metrics.lock().unwrap().clone()
     }
 }
 
@@ -194,6 +236,7 @@ async fn poll_events_loop(
     mut cancel: tokio::sync::watch::Receiver<bool>,
     client: reqwest::Client,
     auth_token: String,
+    metrics: Arc<std::sync::Mutex<TransportMetrics>>,
 ) {
     let interval = std::time::Duration::from_millis(poll_interval_ms as u64);
 
@@ -240,6 +283,16 @@ async fn poll_events_loop(
                             Ok(ev) => {
                                 if ev.sequence > max_seq {
                                     max_seq = ev.sequence;
+                                }
+                                {
+                                    let mut m = metrics.lock().unwrap();
+                                    m.events_received += 1;
+                                    m.last_event_at = Some(
+                                        std::time::SystemTime::now()
+                                            .duration_since(std::time::UNIX_EPOCH)
+                                            .unwrap_or_default()
+                                            .as_secs() as i64,
+                                    );
                                 }
                                 if tx.send(ev).await.is_err() {
                                     return;

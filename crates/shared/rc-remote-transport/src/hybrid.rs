@@ -4,6 +4,7 @@ use crate::reconnect::ReconnectPolicy;
 use crate::transport::{CommandAck, HealthStatus, RemoteTransport, TransportCommand};
 use crate::{ConnectionState, TransportConfig, TransportMetrics};
 use async_trait::async_trait;
+use std::sync::Arc;
 
 /// Active sub-strategy in hybrid mode.
 #[derive(Debug, Clone, PartialEq)]
@@ -21,7 +22,7 @@ pub struct HybridTransport {
     relay: super::relay_ws::RelayWsTransport,
     runner_url: Option<String>,
     cp_url: Option<String>,
-    metrics: TransportMetrics,
+    metrics: Arc<std::sync::Mutex<TransportMetrics>>,
     #[allow(dead_code)]
     reconnect: ReconnectPolicy,
     #[allow(dead_code)]
@@ -36,7 +37,7 @@ impl HybridTransport {
             relay: super::relay_ws::RelayWsTransport::new(reconnect.clone()),
             runner_url: None,
             cp_url: None,
-            metrics: TransportMetrics::default(),
+            metrics: Arc::new(std::sync::Mutex::new(TransportMetrics::default())),
             reconnect,
             probe_interval: std::time::Duration::from_secs(30),
         }
@@ -101,6 +102,10 @@ impl RemoteTransport for HybridTransport {
         };
         self.relay.connect(relay_config).await?;
         self.mode = HybridMode::Relay;
+        {
+            let mut m = self.metrics.lock().unwrap();
+            m.strategy_switches += 1;
+        }
         Ok(())
     }
 
@@ -112,6 +117,10 @@ impl RemoteTransport for HybridTransport {
                     _ => {
                         // Direct failed — try relay if available.
                         tracing::warn!("direct send failed, trying relay");
+                        {
+                            let mut m = self.metrics.lock().unwrap();
+                            m.strategy_switches += 1;
+                        }
                         self.relay.send_command(command).await
                     }
                 }
@@ -191,6 +200,6 @@ impl RemoteTransport for HybridTransport {
     }
 
     fn metrics(&self) -> TransportMetrics {
-        self.metrics.clone()
+        self.metrics.lock().unwrap().clone()
     }
 }

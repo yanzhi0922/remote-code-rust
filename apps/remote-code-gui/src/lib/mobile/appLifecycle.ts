@@ -1,12 +1,10 @@
-import { hasTauriRuntime } from '../runtime';
-
 type LifecycleCallbacks = {
   onResume?: () => void;
   onPause?: () => void;
 };
 
 export function initAppLifecycle(callbacks: LifecycleCallbacks): () => void {
-  if (!hasTauriRuntime()) return () => {};
+  const cleanups: (() => void)[] = [];
 
   const handler = () => {
     if (document.visibilityState === 'visible') {
@@ -17,9 +15,27 @@ export function initAppLifecycle(callbacks: LifecycleCallbacks): () => void {
   };
 
   document.addEventListener('visibilitychange', handler);
+  cleanups.push(() => document.removeEventListener('visibilitychange', handler));
 
-  // Return cleanup function to remove the listener.
+  // Also listen to Tauri native lifecycle events when running inside Tauri.
+  if (typeof window !== 'undefined' && '__TAURI__' in window) {
+    import('@tauri-apps/api/event').then(({ listen }) => {
+      const unlistenResume = listen('tauri://resume', () => {
+        callbacks.onResume?.();
+      });
+      const unlistenPause = listen('tauri://pause', () => {
+        callbacks.onPause?.();
+      });
+      Promise.all([unlistenResume, unlistenPause]).then(([ur, up]) => {
+        cleanups.push(ur);
+        cleanups.push(up);
+      });
+    }).catch(() => {
+      // Tauri event import failed; visibilitychange remains active.
+    });
+  }
+
   return () => {
-    document.removeEventListener('visibilitychange', handler);
+    cleanups.forEach((fn) => fn());
   };
 }

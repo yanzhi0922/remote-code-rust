@@ -76,9 +76,8 @@ export function useConnection(
     const unsubscribe = onEvent ? onConnectionManagerEvent(onEvent) : undefined;
     return () => {
       unsubscribe?.();
-      destroyConnectionManager();
     };
-  }, []);
+  }, [onEvent]);
 
   const connect = useCallback(async (config: TransportConfig, afterSequence = 0) => {
     if (!mountedRef.current) return;

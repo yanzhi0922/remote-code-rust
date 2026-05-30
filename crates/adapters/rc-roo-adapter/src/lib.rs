@@ -1535,29 +1535,104 @@ impl RooInProcessAdapter {
 
         // 2. Load project-level MCP config (.roo/mcp.json).
         //    Project scope overrides global, so same-name servers will be replaced.
+        //    SECURITY: validate file size, structure, and reject absolute-path executables
+        //    to mitigate supply-chain attacks from untrusted repositories.
+        const MAX_MCP_JSON_BYTES: u64 = 1024 * 1024; // 1 MiB
         let mcp_path = std::path::Path::new(&cwd_str).join(".roo").join("mcp.json");
 
-        if mcp_path.exists()
-            && let Ok(content) = std::fs::read_to_string(&mcp_path)
-            && let Ok(config) = serde_json::from_str::<serde_json::Value>(&content)
-            && let Some(servers) = config.get("mcpServers").and_then(|v| v.as_object())
-        {
-            let server_map: std::collections::HashMap<String, serde_json::Value> = servers
-                .into_iter()
-                .map(|(k, v)| (k.clone(), v.clone()))
-                .collect();
-            let count = server_map.len();
-            if let Err(e) = hub
-                .update_server_connections(&server_map, roo_mcp::McpSource::Project, true)
-                .await
-            {
-                warn!("Failed to load project MCP servers: {}", e);
-            } else {
-                info!(
-                    "Loaded {} project MCP servers from {}",
-                    count,
-                    mcp_path.display()
-                );
+        if mcp_path.exists() {
+            // Check file size first to prevent reading huge files.
+            match std::fs::metadata(&mcp_path) {
+                Ok(meta) if meta.len() > MAX_MCP_JSON_BYTES => {
+                    warn!(
+                        "Skipping project MCP config: file too large ({} bytes, max {} bytes) at {}",
+                        meta.len(),
+                        MAX_MCP_JSON_BYTES,
+                        mcp_path.display()
+                    );
+                }
+                Ok(_) => {
+                    if let Ok(content) = std::fs::read_to_string(&mcp_path) {
+                        match serde_json::from_str::<serde_json::Value>(&content) {
+                            Ok(config) => {
+                                if let Some(servers) =
+                                    config.get("mcpServers").and_then(|v| v.as_object())
+                                {
+                                    warn!(
+                                        "Loading project-level MCP configuration from {}. \
+                                         Only trust MCP configs from repositories you control.",
+                                        mcp_path.display()
+                                    );
+
+                                    // Validate server entries: reject absolute-path executables.
+                                    let mut server_map: std::collections::HashMap<
+                                        String,
+                                        serde_json::Value,
+                                    > = std::collections::HashMap::new();
+                                    let mut rejected = 0;
+
+                                    for (name, value) in servers {
+                                        if let Some(cmd) = value.get("command").and_then(|c| c.as_str()) {
+                                            let cmd_path = std::path::Path::new(cmd);
+                                            if cmd_path.is_absolute() {
+                                                warn!(
+                                                    "Rejecting MCP server '{}': absolute-path \
+                                                     executables are not allowed in project-level \
+                                                     config (command: '{}')",
+                                                    name, cmd
+                                                );
+                                                rejected += 1;
+                                                continue;
+                                            }
+                                        }
+                                        server_map.insert(name.clone(), value.clone());
+                                    }
+
+                                    if rejected > 0 {
+                                        warn!(
+                                            "Rejected {} MCP server(s) with absolute-path commands",
+                                            rejected
+                                        );
+                                    }
+
+                                    let count = server_map.len();
+                                    if count > 0 {
+                                        if let Err(e) = hub
+                                            .update_server_connections(
+                                                &server_map,
+                                                roo_mcp::McpSource::Project,
+                                                true,
+                                            )
+                                            .await
+                                        {
+                                            warn!("Failed to load project MCP servers: {}", e);
+                                        } else {
+                                            info!(
+                                                "Loaded {} project MCP servers from {}",
+                                                count,
+                                                mcp_path.display()
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                warn!(
+                                    "Skipping project MCP config: invalid JSON in {}: {}",
+                                    mcp_path.display(),
+                                    e
+                                );
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    warn!(
+                        "Cannot read project MCP config metadata at {}: {}",
+                        mcp_path.display(),
+                        e
+                    );
+                }
             }
         }
 

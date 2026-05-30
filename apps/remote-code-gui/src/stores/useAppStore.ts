@@ -156,6 +156,7 @@ interface AppState {
   sessions: SessionSummary[];
   archivedSessions: SessionSummary[];
   sessionsLoading: boolean;
+  sessionError: string | null;
   activeSessionId: string | null;
 
   conversation: ConversationEntry[];
@@ -229,6 +230,9 @@ function cleanupEventListeners(): void {
   }
 }
 
+/** Mutex lock to prevent concurrent session creation in sendMessage. */
+let _sendLock: Promise<void> | null = null;
+
 async function registerEventListeners(): Promise<(() => void)[]> {
   const refreshActiveConversation = () => {
     const activeSessionId = useAppStore.getState().activeSessionId;
@@ -286,23 +290,27 @@ async function registerEventListeners(): Promise<(() => void)[]> {
       // the race window between the guard check and the actual mutation.
       useAppStore.setState((state) => {
         if (state.activeSessionId !== session_id) return state;
-        const conversation = [...state.conversation];
-        const lastEntry = conversation[conversation.length - 1];
+        const prev = state.conversation;
+        let conversation: ConversationEntry[];
+        const lastEntry = prev[prev.length - 1];
         if (lastEntry && lastEntry.role === 'assistant') {
-          conversation[conversation.length - 1] = {
+          // Avoid O(n) full-array spread: slice off the last element and
+          // push a new one, which only copies n-1 elements instead of n.
+          conversation = prev.slice(0, -1);
+          conversation.push({
             ...lastEntry,
             text: (lastEntry.text ?? '') + delta,
-          };
+          });
         } else {
-          conversation.push({
-            role: 'assistant',
+          conversation = [...prev, {
+            role: 'assistant' as const,
             text: delta,
             content_blocks: [],
             tool_calls: [],
             tool_call_id: null,
             name: null,
             is_error: false,
-          });
+          }];
         }
         return {
           conversation,
@@ -525,6 +533,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   sessions: [],
   archivedSessions: [],
   sessionsLoading: false,
+  sessionError: null,
   activeSessionId: null,
   conversation: [],
   conversationLoading: false,
@@ -599,11 +608,11 @@ export const useAppStore = create<AppState>((set, get) => ({
         const activeProjectPath =
           getProjectPathForSession(activeSessionId, sessions, state.projects) ??
           defaultProjectPath(state.projects, state.activeProjectPath);
-        return { sessions, sessionsLoading: false, activeSessionId, activeProjectPath };
+        return { sessions, sessionsLoading: false, sessionError: null, activeSessionId, activeProjectPath };
       });
       syncActiveAgentForSession(nextActiveSessionId, sessions);
     } catch {
-      set({ sessionsLoading: false });
+      set({ sessionsLoading: false, sessionError: 'Failed to load sessions' });
     }
   },
 
@@ -721,13 +730,26 @@ export const useAppStore = create<AppState>((set, get) => ({
       return;
     }
 
+    // Wait for any in-flight session creation to finish before proceeding.
+    if (_sendLock) {
+      await _sendLock;
+    }
+
     let sessionId = get().activeSessionId;
     if (!sessionId) {
       if (!get().activeProjectPath) {
         set({ sendError: '请先选择项目文件夹，再开始会话。' });
         return;
       }
-      sessionId = await get().createSession(undefined, undefined);
+      // Serialize session creation to avoid duplicate sessions on rapid sends.
+      _sendLock = (async () => {
+        try {
+          sessionId = await get().createSession(undefined, undefined);
+        } finally {
+          _sendLock = null;
+        }
+      })();
+      await _sendLock;
     }
 
     if (!sessionId) {

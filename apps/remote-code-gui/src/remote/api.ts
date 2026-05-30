@@ -238,7 +238,7 @@ export async function requestJson<T>(
 ): Promise<T> {
   const method = (init?.method ?? 'GET').toUpperCase();
   const requestUrl = buildHttpUrl(baseUrl, path);
-  const canRetry = method === 'GET';
+  const canRetry = true;
 
   for (let attempt = 0; ; attempt += 1) {
     try {

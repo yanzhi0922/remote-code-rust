@@ -750,6 +750,7 @@ export function useRemoteSessionController({
     deviceName,
     pairingOfferId,
     pairingSecret,
+    bootstrapSecret,
     setBootstrapSecret,
     setDeviceName,
     setManualAccessToken,
