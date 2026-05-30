@@ -596,6 +596,10 @@ mcp_test_support = { path = "crates/codex/mcp-server/tests/common" }
 	unic-langid = "0.9"
 
 [patch.crates-io]
+# Local tao patch — graceful JavaException handling for Android 16 compat
+tao = { path = "patches/tao-0.35.0" }
+# Local wry patch — same getId() R8 stripping fix for Android 16
+wry = { path = "patches/wry-0.55.0" }
 # Codex patches — needed for tungstenite features (deflate, proxy) and tokio-tungstenite compat
 tungstenite = { git = "https://github.com/openai-oss-forks/tungstenite-rs", rev = "9200079d3b54a1ff51072e24d81fd354f085156f" }
 tokio-tungstenite = { git = "https://github.com/openai-oss-forks/tokio-tungstenite", rev = "132f5b39c862e3a970f731d709608b3e6276d5f6" }

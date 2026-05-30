@@ -305,6 +305,10 @@ export function shouldUseRemoteMode(): boolean {
   if (mode === 'remote') {
     return true;
   }
+  // Mobile Tauri has no local provider — default to remote mode.
+  if (hasTauriRuntime() && /Android|iPhone|iPad|iPod/i.test(navigator.userAgent)) {
+    return true;
+  }
   return false;
 }
 

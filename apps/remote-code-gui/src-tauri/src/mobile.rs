@@ -605,6 +605,15 @@ pub async fn mobile_push_get_token(app: AppHandle<impl Runtime>) -> Result<Optio
     Ok(None)
 }
 
+/// Mobile init_app — returns a minimal init result since the mobile app
+/// has no local provider or session store; it connects to a remote control plane.
+#[cfg(feature = "mobile")]
+#[tauri::command]
+pub async fn init_app(_app: AppHandle<impl Runtime>) -> Result<String, String> {
+    // Return JSON matching InitResultDto shape: { provider: null, sessions_count: 0 }
+    Ok(r#"{"provider":null,"sessions_count":0}"#.to_owned())
+}
+
 #[tauri::command]
 pub async fn mobile_push_register_token(
     _app: AppHandle<impl Runtime>,
@@ -709,5 +718,40 @@ pub fn register_mobile_plugins<R: Runtime>(app: &tauri::AppHandle<R>) {
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     {
         let _ = app;
+    }
+}
+
+// ── Mobile frontend log bridge ──────────────────────────────────────────────────
+// Captures JS errors/events from the WebView and logs them via Rust tracing,
+// which ends up in Android logcat (tagged with the module path).
+
+#[derive(Debug, Deserialize)]
+#[allow(dead_code)]
+pub struct FrontendLogEvent {
+    level: String,
+    source: String,
+    message: String,
+    details: Option<String>,
+    stack: Option<String>,
+    url: Option<String>,
+    line: Option<u32>,
+    column: Option<u32>,
+    user_agent: Option<String>,
+}
+
+#[tauri::command]
+pub fn record_frontend_log(event: FrontendLogEvent) {
+    let msg = match (&event.details, &event.stack) {
+        (Some(d), Some(s)) => format!("{} | details: {} | stack: {}", event.message, d, s),
+        (Some(d), None) => format!("{} | details: {}", event.message, d),
+        (None, Some(s)) => format!("{} | stack: {}", event.message, s),
+        _ => event.message.clone(),
+    };
+    let src = if event.source.is_empty() { "frontend" } else { &event.source };
+    match event.level.as_str() {
+        "error" => tracing::error!("[{src}] {msg}"),
+        "warn" => tracing::warn!("[{src}] {msg}"),
+        "debug" => tracing::debug!("[{src}] {msg}"),
+        _ => tracing::info!("[{src}] {msg}"),
     }
 }

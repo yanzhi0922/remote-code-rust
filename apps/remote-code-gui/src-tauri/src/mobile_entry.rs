@@ -7,11 +7,13 @@
     tauri::mobile_entry_point
 )]
 pub fn run() {
-    // Initialize tracing for mobile — stderr only (no file appender on mobile).
+    // Initialize tracing for mobile.
+    // On Android, stderr is captured by logcat automatically.
+    // Filter to info+ by default; set RUST_LOG env to override.
     {
         use tracing_subscriber::EnvFilter;
         let env_filter = EnvFilter::try_from_default_env()
-            .unwrap_or_else(|_| EnvFilter::new("remote_code_gui=info"));
+            .unwrap_or_else(|_| EnvFilter::new("remote_code_gui=info,wry=info,tao=info"));
         let _ = tracing_subscriber::fmt()
             .with_env_filter(env_filter)
             .with_target(false)
@@ -34,6 +36,7 @@ pub fn run() {
         })
         .manage(crate::quic_bridge::QuicBridgeState::new())
         .invoke_handler(tauri::generate_handler![
+            crate::mobile::init_app,
             crate::mobile::mobile_is_mobile,
             crate::mobile::mobile_haptic_notification,
             crate::mobile::mobile_biometric_check_availability,
@@ -52,6 +55,7 @@ pub fn run() {
             crate::mobile::mobile_delete_downloaded_file,
             crate::mobile::mobile_list_downloaded_files,
             crate::mobile::mobile_quic_status,
+            crate::mobile::record_frontend_log,
             crate::mobile::mobile_connection_strategy,
             crate::quic_bridge::quic_connect,
             crate::quic_bridge::quic_send_command,
