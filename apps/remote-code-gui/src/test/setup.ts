@@ -1,4 +1,5 @@
 import '@testing-library/jest-dom/vitest';
+import { vi } from 'vitest';
 import zh from '../i18n/locales/zh.json';
 
 // Mock ResizeObserver for jsdom
