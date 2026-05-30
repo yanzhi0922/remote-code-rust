@@ -599,26 +599,10 @@ pub async fn mobile_push_show(
 
 #[tauri::command]
 pub async fn mobile_push_get_token(app: AppHandle<impl Runtime>) -> Result<Option<String>, String> {
-    #[cfg(any(target_os = "android", target_os = "ios"))]
-    {
-        use tauri_plugin_notification::NotificationExt;
-        let token = app.notification().get_token().await.map_err(|e| {
-            let msg = format!("failed to get push token: {e}");
-            tracing::warn!(error = %msg, "command error");
-            msg
-        })?;
-        let trimmed = token.trim().to_owned();
-        if trimmed.is_empty() {
-            Ok(None)
-        } else {
-            Ok(Some(trimmed))
-        }
-    }
-    #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    {
-        let _ = app;
-        Ok(None)
-    }
+    // Push token retrieval requires tauri-plugin-remote-push (FCM/APNs).
+    // Stubbed until that plugin is integrated.
+    let _ = app;
+    Ok(None)
 }
 
 #[tauri::command]

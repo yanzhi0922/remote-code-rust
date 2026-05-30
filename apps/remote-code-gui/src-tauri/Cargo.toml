@@ -63,7 +63,6 @@ codex-arg0 = { workspace = true, optional = true }
 # ── Mobile-only dependencies ───────────────────────────────────────────────────
 tauri-plugin-haptics = { version = "2", optional = true }
 tauri-plugin-biometric = { version = "2", optional = true }
-tauri-plugin-network = { version = "2", optional = true, default-features = false }
 tauri-plugin-deep-link = { version = "2", optional = true }
 tauri-plugin-notification = { version = "2", optional = true }
 tauri-plugin-share = { version = "2", optional = true }
@@ -105,7 +104,6 @@ mobile = [
     "dep:tauri-plugin-haptics",
     "dep:tauri-plugin-biometric",
     "dep:tauri-plugin-deep-link",
-    "dep:tauri-plugin-network",
     "dep:tauri-plugin-notification",
     "dep:tauri-plugin-share",
     "dep:mime_guess",
