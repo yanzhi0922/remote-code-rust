@@ -1,7 +1,12 @@
 //! Route definitions and router construction for the control plane.
 
+use std::sync::Arc;
+
 use axum::Router;
+use axum::extract::ConnectInfo;
+use axum::http::{HeaderValue, header};
 use axum::middleware;
+use axum::response::Response;
 use axum::routing::{delete, get, post};
 
 use crate::auth::{build_cors_layer, require_api_auth};
@@ -19,10 +24,108 @@ use crate::handlers::{
     subscribe_session_approvals, subscribe_session_events, update_runner_heartbeat,
     update_session_state,
 };
+use crate::rate_limit::RateLimiter;
 use crate::state::ControlPlaneService;
+use crate::types::ApiError;
+
+/// Paths excluded from security headers (health and metrics probes).
+const SECURITY_HEADER_SKIP_PATHS: &[&str] = &["/healthz", "/metrics"];
+
+/// Middleware that injects standard security response headers.
+///
+/// Adds `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, and
+/// `Content-Security-Policy` to every response, except for the health-check
+/// and metrics endpoints which are skipped to keep probes lightweight.
+async fn security_headers(
+    request: axum::extract::Request,
+    next: middleware::Next,
+) -> Response {
+    let skip = SECURITY_HEADER_SKIP_PATHS
+        .iter()
+        .any(|path| request.uri().path() == *path);
+
+    let mut response = next.run(request).await;
+
+    if !skip {
+        let headers = response.headers_mut();
+        headers.insert(
+            header::X_CONTENT_TYPE_OPTIONS,
+            HeaderValue::from_static("nosniff"),
+        );
+        headers.insert(
+            header::X_FRAME_OPTIONS,
+            HeaderValue::from_static("DENY"),
+        );
+        headers.insert(
+            header::REFERRER_POLICY,
+            HeaderValue::from_static("strict-origin-when-cross-origin"),
+        );
+        headers.insert(
+            header::CONTENT_SECURITY_POLICY,
+            HeaderValue::from_static("default-src 'none'; frame-ancestors 'none'"),
+        );
+    }
+
+    response
+}
+
+/// Extract the client IP from the request for rate limiting purposes.
+///
+/// Checks `x-forwarded-for` first (for reverse-proxy setups), then falls back
+/// to `ConnectInfo<std::net::SocketAddr>` when available.
+fn extract_client_ip(request: &axum::extract::Request) -> String {
+    // Prefer the left-most entry in X-Forwarded-For (original client).
+    if let Some(xff) = request.headers().get("x-forwarded-for") {
+        if let Ok(xff_str) = xff.to_str() {
+            if let Some(ip) = xff_str.split(',').next() {
+                let trimmed = ip.trim();
+                if !trimmed.is_empty() {
+                    return trimmed.to_owned();
+                }
+            }
+        }
+    }
+
+    // Fall back to ConnectInfo if axum was configured with it.
+    if let Some(connect_info) = request.extensions().get::<ConnectInfo<std::net::SocketAddr>>() {
+        return connect_info.0.ip().to_string();
+    }
+
+    // Last resort — unknown origin.
+    "unknown".to_owned()
+}
+
+/// Middleware that enforces per-IP rate limiting on sensitive auth endpoints.
+///
+/// Applied as a route-layer middleware on bootstrap claim, pairing accept,
+/// and token refresh routes.
+async fn rate_limit_middleware(
+    axum::extract::State(limiter): axum::extract::State<Arc<RateLimiter>>,
+    request: axum::extract::Request,
+    next: middleware::Next,
+) -> Result<Response, ApiError> {
+    let client_ip = extract_client_ip(&request);
+    let allowed = limiter.allow(&client_ip).await;
+    if !allowed {
+        tracing::warn!(client_ip = %client_ip, "rate limit exceeded");
+        return Err(ApiError::too_many_requests(
+            "rate limit exceeded; try again later".to_owned(),
+        ));
+    }
+    Ok(next.run(request).await)
+}
 
 impl ControlPlaneService {
     pub fn router(self) -> Router {
+        let rate_limited = Router::new()
+            .route("/v1/bootstrap/claim", post(claim_bootstrap_device))
+            .route("/v1/pairing/accept", post(accept_pairing_offer))
+            .route("/v1/auth/refresh", post(refresh_token))
+            .route_layer(middleware::from_fn_with_state(
+                self.rate_limiter.clone(),
+                rate_limit_middleware,
+            ));
+
         let protected = Router::new()
             .route("/v1/meta", get(get_meta))
             .route("/v1/stream-ticket", post(create_stream_ticket))
@@ -122,10 +225,9 @@ impl ControlPlaneService {
         Router::new()
             .route("/healthz", get(get_health))
             .route("/metrics", get(get_metrics))
-            .route("/v1/bootstrap/claim", post(claim_bootstrap_device))
-            .route("/v1/pairing/accept", post(accept_pairing_offer))
-            .route("/v1/auth/refresh", post(refresh_token))
+            .merge(rate_limited)
             .merge(protected)
+            .layer(middleware::from_fn(security_headers))
             .layer(build_cors_layer(self.meta.public_base_url.as_deref()))
             .with_state(self)
     }

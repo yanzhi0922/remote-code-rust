@@ -14,6 +14,7 @@ import {
   useState,
   type KeyboardEvent,
 } from 'react';
+import { useTranslation } from 'react-i18next';
 import { AgentSelector } from '../agent/AgentSelector';
 import { useAppStore } from '../../stores/useAppStore';
 import { useAgentStore } from '../../stores/useAgentStore';
@@ -168,13 +169,14 @@ function Dropdown({
   trigger: React.ReactNode;
   children: React.ReactNode;
 }) {
+  const { t } = useTranslation();
   return (
     <div className="relative">
       <div onClick={onToggle}>{trigger}</div>
       {open && (
         <>
           <button
-            aria-label="关闭下拉菜单"
+            aria-label={t('chatInput.closeDropdown')}
             className="fixed inset-0 z-10 cursor-default"
             onClick={onToggle}
           />
@@ -257,6 +259,7 @@ function SlashCommandPalette({
   onSelect: (cmd: SlashCommand) => void;
   highlightedIndex: number;
 }) {
+  const { t } = useTranslation();
   const filtered = commands.filter(
     (cmd) =>
       cmd.name.toLowerCase().includes(filter.toLowerCase()) ||
@@ -268,7 +271,7 @@ function SlashCommandPalette({
   return (
     <div role="listbox" aria-label="Slash commands" className="absolute bottom-full left-0 right-0 z-20 mb-2 overflow-hidden rounded-md border border-rc-border-primary bg-rc-bg-surface shadow-lg animate-fade-in-up">
       <div className="px-3 py-2 text-[10px] font-semibold uppercase tracking-wider text-rc-text-tertiary">
-        命令
+        {t('chatInput.slashCommands')}
       </div>
       <div className="max-h-60 overflow-y-auto pb-1">
         {filtered.map((cmd, index) => (
@@ -297,6 +300,7 @@ function SlashCommandPalette({
 }
 
 export function ChatInput() {
+  const { t } = useTranslation();
   const [input, setInput] = useState('');
   const [modelDraft, setModelDraft] = useState('');
   const modelDraftRef = useRef(modelDraft);
@@ -342,9 +346,9 @@ export function ChatInput() {
     () => permissionOptionsForAgent(effectiveAgentType, settings ?? null),
     [effectiveAgentType, settings],
   );
-  const permissionLabel = permissionOptions.find((mode) => mode.active)?.label ?? permissionOptions[0]?.label ?? '权限';
+  const permissionLabel = permissionOptions.find((mode) => mode.active)?.label ?? permissionOptions[0]?.label ?? t('chatInput.permissionLabel');
 
-  const activeProviderName = providerConfigs?.active_provider ?? provider?.name ?? '未配置';
+  const activeProviderName = providerConfigs?.active_provider ?? provider?.name ?? t('chatInput.unconfiguredProvider');
   const providerOptions = providerConfigs?.providers ?? [];
   useEffect(() => {
     const nextModel = settings?.provider_model ?? provider?.model ?? '';
@@ -483,7 +487,7 @@ export function ChatInput() {
               rows={1}
               aria-label="Prompt input"
               aria-activedescendant={showSlashPalette ? `slash-option-${highlightedSlashIndex}` : undefined}
-              placeholder="给 agent 发送任务、补充约束或后续修改"
+              placeholder={t('chatInput.placeholder')}
               className="min-h-[64px] max-h-[180px] w-full resize-none border-0 bg-transparent px-1 py-1 text-sm leading-6 text-rc-text-primary outline-none placeholder:text-rc-text-tertiary disabled:cursor-not-allowed focus-visible:outline-none"
             />
           </div>
@@ -497,7 +501,7 @@ export function ChatInput() {
               availableAgents={availableAgents}
               activeAgentType={effectiveAgentType}
               lockedAgentType={lockedAgentType}
-              lockedReason="该会话已经绑定 Agent，不能切换到其他 Agent"
+              lockedReason={t('chatInput.lockReason')}
               onSelect={(agentType) => {
                 if (lockedAgentType && agentType !== lockedAgentType) return;
                 selectAgent(agentType);
@@ -521,7 +525,7 @@ export function ChatInput() {
                     key={providerOption.name}
                     title={providerOption.name}
                     subtitle={[
-                      providerOption.model ?? '未设置默认模型',
+                      providerOption.model ?? t('chatInput.defaultModel'),
                       providerOption.protocol,
                     ]
                       .filter(Boolean)
@@ -536,8 +540,8 @@ export function ChatInput() {
                 ))
               ) : (
                 <DropdownItem
-                  title={provider?.name ?? '未配置 Provider'}
-                  subtitle="去设置面板添加或导入 Provider"
+                  title={provider?.name ?? t('chatInput.noProvider')}
+                  subtitle={t('chatInput.addProvider')}
                   onClick={() => setOpenMenu(null)}
                 />
               )}
@@ -560,8 +564,8 @@ export function ChatInput() {
                 aria-label="Model for next send"
                 className="w-[160px] min-w-0 border-0 bg-transparent text-xs text-rc-text-primary outline-none placeholder:text-rc-text-tertiary focus:border-0 focus:outline-none focus:ring-0 focus-visible:outline-none"
                 style={{ outline: 'none' }}
-                placeholder="设置模型"
-                title="为下一次发送设置模型"
+                placeholder={t('chatInput.selectModel')}
+                title={t('chatInput.modelTitle')}
               />
             </div>
 
@@ -595,8 +599,8 @@ export function ChatInput() {
             {sending && activeSessionId && (
               <button
                 type="button"
-                aria-label="停止当前运行"
-                title="停止当前运行"
+                aria-label={t('chatInput.interrupt')}
+                title={t('chatInput.interrupt')}
                 onClick={() => {
                   void handleCancel();
                 }}
@@ -608,7 +612,7 @@ export function ChatInput() {
 
             <button
               type="button"
-              aria-label="发送"
+              aria-label={t('chatInput.send')}
               onClick={() => {
                 void handleSend();
               }}
@@ -632,7 +636,7 @@ export function ChatInput() {
 
         {showSlashPalette && input.startsWith('/') && (
           <div className="mt-1 text-[10px] text-rc-text-tertiary">
-            ↑↓ 导航 · Enter 选择 · Esc 关闭
+            {t('chatInput.slashHint')}
           </div>
         )}
       </div>

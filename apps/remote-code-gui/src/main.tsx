@@ -3,6 +3,7 @@ import ReactDOM from "react-dom/client";
 import "katex/dist/katex.min.css";
 import "highlight.js/styles/github.css";
 import "./index.css";
+import "./i18n";
 import App from "./App";
 import { AppErrorBoundary } from "./components/layout/AppErrorBoundary";
 import { logFrontendError, logFrontendEvent } from "./lib/frontendLogging";

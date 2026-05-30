@@ -226,7 +226,7 @@ resolver = "2"
 
 [workspace.package]
 edition = "2024"
-version = "0.1.0"
+version = "1.0.0"
 license = "Proprietary"
 authors = ["Yanzh"]
 repository = "https://github.com/yanzhi0922/remote-code-rust"

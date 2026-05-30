@@ -10,6 +10,7 @@ import {
   type MutableRefObject,
 } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
+import { useTranslation } from 'react-i18next';
 import {
   CheckCircle2,
   ChevronRight,
@@ -37,6 +38,7 @@ import {
   estimateEntryHeight,
 } from '../../lib/conversationUtils';
 import { useAppStore } from '../../stores/useAppStore';
+import i18n from '../../i18n';
 import { WorkspaceOverview } from '../layout/WorkspaceOverview';
 import CollapsibleBlock from './CollapsibleBlock';
 import { InlineDiffView, detectAndRenderDiff } from './InlineDiffView';
@@ -48,7 +50,7 @@ const VIRTUALIZATION_OVERSCAN = 10;
 
 function summarizeToolOutput(text: string): string {
   const compact = text.replace(/\s+/g, ' ').trim();
-  return compact ? truncateMiddle(compact, 84) : '展开查看完整输出';
+  return compact ? truncateMiddle(compact, 84) : i18n.t('chatArea.toolOutput');
 }
 
 function conversationRowKey(entry: ConversationEntry, index: number): string {
@@ -56,6 +58,7 @@ function conversationRowKey(entry: ConversationEntry, index: number): string {
 }
 
 function CopyButton({ text }: { text: string }) {
+  const { t } = useTranslation();
   const handleCopy = () => {
     void navigator.clipboard.writeText(text);
   };
@@ -65,8 +68,8 @@ function CopyButton({ text }: { text: string }) {
       type="button"
       onClick={handleCopy}
       className="flex h-6 w-6 items-center justify-center rounded text-rc-text-tertiary opacity-0 transition-all hover:bg-rc-bg-hover hover:text-rc-text-primary group-hover:opacity-100"
-      aria-label="复制内容"
-      title="复制内容"
+      aria-label={t('chatArea.copyContent')}
+      title={t('chatArea.copyContent')}
     >
       <Copy size={12} />
     </button>
@@ -215,6 +218,7 @@ function ToolMessage({ entry }: { entry: ConversationEntry }) {
 }
 
 function AssistantThinking({ blocks }: { blocks: string[] }) {
+  const { t } = useTranslation();
   if (blocks.length === 0) return null;
 
   return (
@@ -225,12 +229,12 @@ function AssistantThinking({ blocks }: { blocks: string[] }) {
           summary={
             <div className="flex min-w-0 items-center gap-2.5">
               <span className="rounded bg-rc-accent-warning-bg px-1.5 py-0.5 text-[10px] font-semibold uppercase text-rc-accent-warning">
-                Thinking
+                {t('chatArea.thinking')}
               </span>
               <span className="truncate text-xs text-rc-text-tertiary">{summarizeToolOutput(block)}</span>
             </div>
           }
-          buttonLabel="Toggle reasoning details"
+          buttonLabel={t('chatArea.toggleReasoning')}
           iconColor="text-rc-accent-warning"
         >
           <div className="rounded bg-rc-bg-secondary p-3 text-xs leading-6 text-rc-text-secondary">
@@ -243,6 +247,7 @@ function AssistantThinking({ blocks }: { blocks: string[] }) {
 }
 
 function AssistantMessage({ entry }: { entry: ConversationEntry }) {
+  const { t } = useTranslation();
   const thinkingBlocks = extractThinkingBlocks(entry);
 
   return (
@@ -250,7 +255,7 @@ function AssistantMessage({ entry }: { entry: ConversationEntry }) {
       <div className="mb-3 flex items-center gap-2">
         <span className="h-2 w-2 rounded-full bg-rc-accent-info" />
         <span className="text-[10px] font-semibold uppercase text-rc-text-tertiary">
-          Assistant
+          {t('chatArea.assistant')}
         </span>
       </div>
 
@@ -263,7 +268,7 @@ function AssistantMessage({ entry }: { entry: ConversationEntry }) {
           </Suspense>
         </div>
       ) : (
-        <div className="text-sm text-rc-text-tertiary">Tool request</div>
+        <div className="text-sm text-rc-text-tertiary">{t('chatArea.toolRequest')}</div>
       )}
 
       <AssistantToolCalls toolCalls={entry.tool_calls} />
@@ -273,6 +278,7 @@ function AssistantMessage({ entry }: { entry: ConversationEntry }) {
 
 const MessageCard = memo(
   function MessageCard({ entry }: { entry: ConversationEntry }) {
+    const { t } = useTranslation();
     if (entry.role === 'system') return null;
 
     if (entry.role === 'tool') {
@@ -284,7 +290,7 @@ const MessageCard = memo(
         <div className="flex justify-end border-b border-rc-border-secondary py-6 last:border-b-0">
           <div className="max-w-[720px] rounded-xl border border-rc-border-primary bg-rc-bg-elevated px-4 py-3 text-sm leading-6 text-rc-text-primary shadow-xs">
             <div className="mb-2 flex items-center justify-between">
-              <span className="text-[10px] font-semibold uppercase text-rc-text-tertiary">User</span>
+              <span className="text-[10px] font-semibold uppercase text-rc-text-tertiary">{t('chatArea.user')}</span>
               <CopyButton text={entry.text} />
             </div>
             <div className="whitespace-pre-wrap break-words">{entry.text}</div>
@@ -324,7 +330,7 @@ function WorkingIndicator({ sending }: { sending: boolean }) {
   return (
     <div className="flex items-center gap-2 rounded-md border border-rc-border-primary bg-rc-bg-elevated px-3 py-2 text-xs text-rc-text-secondary shadow-xs animate-fade-in">
       <Loader2 size={14} className="animate-spin text-rc-accent-primary" />
-      <span className="font-medium">Processing</span>
+      <span className="font-medium">{i18n.t('chatArea.processing')}</span>
       <span className="flex items-center gap-1 text-rc-text-tertiary">
         <Timer size={11} />
         {timeStr}
@@ -354,7 +360,7 @@ function StatusCards({
             <div className="flex h-5 w-5 items-center justify-center">
               <div className="h-5 w-5 animate-spin rounded-full border-2 border-rc-border-primary border-t-rc-accent-primary" />
             </div>
-            <span className="font-medium">正在处理当前请求…</span>
+            <span className="font-medium">{i18n.t('chatArea.processingRequest')}</span>
           </div>
 
           {compactProgress.length > 0 && (
@@ -524,6 +530,7 @@ function ConversationHeader({
 }
 
 export function ChatArea() {
+  const { t } = useTranslation();
   const activeSessionId = useAppStore((state) => state.activeSessionId);
   const conversation = useAppStore((state) => state.conversation);
   const conversationLoading = useAppStore((state) => state.conversationLoading);
@@ -562,7 +569,7 @@ export function ChatArea() {
           model={activeSession?.model}
         />
         <div className="flex-1 overflow-y-auto">
-          <EmptyState title="正在加载会话" />
+          <EmptyState title={t('chatArea.loadingSession')} />
         </div>
       </div>
     );
@@ -577,7 +584,7 @@ export function ChatArea() {
           model={activeSession?.model}
         />
         <div className="flex-1 overflow-y-auto">
-          <EmptyState title="暂无消息" />
+          <EmptyState title={t('chatArea.noMessages')} />
         </div>
       </div>
     );

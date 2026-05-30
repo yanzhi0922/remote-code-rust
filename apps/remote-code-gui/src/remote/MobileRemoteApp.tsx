@@ -34,6 +34,7 @@ import {
   useState,
 } from 'react';
 import { Virtuoso } from 'react-virtuoso';
+import { useTranslation } from 'react-i18next';
 import {
   clearRemoteActiveSessionId,
   clearRemoteAccessToken,
@@ -114,6 +115,7 @@ const APPROVAL_DECISIONS: Array<{
 // ═══════════════════════════════════════════════════════════════════════════
 
 export default function MobileRemoteApp() {
+  const { t } = useTranslation();
   const {
     baseUrl,
     locale,
@@ -289,7 +291,7 @@ export default function MobileRemoteApp() {
                 ? 'border-emerald-600/40 bg-emerald-500/10 text-emerald-400'
                 : 'border-rc-border-primary bg-rc-bg-hover text-rc-text-secondary'
             }`}
-            title={bioEnabled ? '禁用生物识别' : '启用生物识别'}
+            title={bioEnabled ? t('mobile.disableBiometric') : t('mobile.enableBiometric')}
           >
             {bioEnabled ? '🔒' : '🔓'}
           </button>

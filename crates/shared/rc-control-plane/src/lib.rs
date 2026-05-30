@@ -9,6 +9,7 @@ mod handlers;
 mod helpers;
 pub mod metrics;
 pub mod quic;
+mod rate_limit;
 mod registry;
 mod router;
 mod state;

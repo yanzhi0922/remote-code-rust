@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ShieldAlert } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import { formatSensitivePath, redactSensitivePathsForDisplay } from '../../lib/utils';
 import { useAppStore } from '../../stores/useAppStore';
 
@@ -130,12 +131,14 @@ function parseJsonOrText(value: string): unknown {
 }
 
 export function PermissionModal() {
+  const { t } = useTranslation();
   const pendingPermission = useAppStore((state) => state.pendingPermission);
   const resolvePermission = useAppStore((state) => state.resolvePermission);
   const privacyMode = useAppStore((state) => state.workspacePrivacyMode);
   const [feedback, setFeedback] = useState('');
   const [codexJsonResponse, setCodexJsonResponse] = useState('');
   const [codexTextResponse, setCodexTextResponse] = useState('');
+  const containerRef = useRef<HTMLDivElement>(null);
   const isExitPlanMode = pendingPermission?.tool_name === 'exit_plan_mode';
   const isCodexToolUserInput = pendingPermission?.tool_name === 'tool_user_input';
   const isCodexMcpElicitation = pendingPermission?.tool_name === 'mcp_elicitation';
@@ -178,8 +181,6 @@ export function PermissionModal() {
   }, [pendingPermission?.request_id]);
 
   if (!pendingPermission) return null;
-
-  const containerRef = useRef<HTMLDivElement>(null);
 
   const handleDialogKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Escape') {
@@ -279,7 +280,7 @@ export function PermissionModal() {
         ref={containerRef}
         role="dialog"
         aria-modal="true"
-        aria-label="Permission request"
+        aria-label={t('permission.ariaLabel')}
         onKeyDown={handleDialogKeyDown}
         className="flex max-h-[88vh] w-full max-w-2xl flex-col overflow-hidden rounded-md border border-rc-border-primary bg-rc-bg-surface shadow-xl"
       >
@@ -289,7 +290,7 @@ export function PermissionModal() {
               <ShieldAlert size={18} />
             </div>
             <div>
-              <div className="text-sm font-semibold text-rc-text-primary">权限确认</div>
+              <div className="text-sm font-semibold text-rc-text-primary">{t('permission.title')}</div>
               <div className="mt-1 text-xs text-rc-text-secondary">{pendingPermission.title}</div>
             </div>
           </div>
@@ -297,18 +298,18 @@ export function PermissionModal() {
 
         <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-5 py-4">
           <div>
-            <div className="text-sm font-medium text-rc-text-primary">工具</div>
+            <div className="text-sm font-medium text-rc-text-primary">{t('permission.tool')}</div>
             <div className="mt-1 text-sm text-rc-text-secondary">{pendingPermission.tool_name}</div>
           </div>
           <div>
-            <div className="text-sm font-medium text-rc-text-primary">说明</div>
+            <div className="text-sm font-medium text-rc-text-primary">{t('permission.description')}</div>
             <div className="mt-1 whitespace-pre-wrap text-sm leading-6 text-rc-text-secondary">
               {pendingPermission.description}
             </div>
           </div>
           {isExitPlanMode && planText && (
             <div>
-              <div className="text-sm font-medium text-rc-text-primary">计划内容</div>
+              <div className="text-sm font-medium text-rc-text-primary">{t('permission.planContent')}</div>
               <pre className="mt-1 max-h-64 overflow-auto rounded-md bg-rc-bg-secondary p-4 text-xs leading-6 text-rc-text-primary">
                 {planText}
               </pre>
@@ -321,7 +322,7 @@ export function PermissionModal() {
           )}
           {isExitPlanMode && allowedPrompts.length > 0 && (
             <div>
-              <div className="text-sm font-medium text-rc-text-primary">请求的语义权限</div>
+              <div className="text-sm font-medium text-rc-text-primary">{t('permission.semanticPermissions')}</div>
               <div className="mt-2 space-y-2 rounded-md bg-rc-bg-secondary p-4 text-sm text-rc-text-primary">
                 {allowedPrompts.map((prompt, index) => (
                   <div key={`${prompt.tool}-${prompt.prompt}-${index}`}>
@@ -419,7 +420,7 @@ export function PermissionModal() {
           )}
           {pendingPermission.blocked_path && (
             <div>
-              <div className="text-sm font-medium text-rc-text-primary">目标路径</div>
+              <div className="text-sm font-medium text-rc-text-primary">{t('permission.targetPath')}</div>
               <div className="mt-1 break-all rounded-md bg-rc-bg-secondary px-3 py-2 text-sm text-rc-text-secondary">
                 {formatSensitivePath(pendingPermission.blocked_path, privacyMode)}
               </div>
@@ -427,7 +428,7 @@ export function PermissionModal() {
           )}
           {pendingPermission.permission_suggestions.length > 0 && (
             <div>
-              <div className="text-sm font-medium text-rc-text-primary">权限建议</div>
+              <div className="text-sm font-medium text-rc-text-primary">{t('permission.permissionSuggestions')}</div>
               <div className="mt-1 space-y-2">
                 {pendingPermission.permission_suggestions.map((suggestion, index) => (
                   <pre
@@ -441,7 +442,7 @@ export function PermissionModal() {
             </div>
           )}
           <div>
-            <div className="text-sm font-medium text-rc-text-primary">输入参数</div>
+            <div className="text-sm font-medium text-rc-text-primary">{t('permission.inputParams')}</div>
             <pre className="mt-1 max-h-64 overflow-auto rounded-md bg-rc-bg-secondary p-4 text-xs leading-6 text-rc-text-primary">
               {formatInput(displayedInput)}
             </pre>
@@ -449,13 +450,13 @@ export function PermissionModal() {
           {isExitPlanMode && (
             <div>
               <label htmlFor="permission-feedback" className="text-sm font-medium text-rc-text-primary">
-                审批反馈
+                {t('permission.feedbackLabel')}
               </label>
               <textarea
                 id="permission-feedback"
                 value={feedback}
                 onChange={(event) => setFeedback(event.target.value)}
-                placeholder="可选：补充执行要求或拒绝原因。"
+                placeholder={t('permission.feedbackPlaceholder')}
                 className="mt-2 min-h-28 w-full rounded-md border border-rc-border-secondary bg-rc-bg-surface px-4 py-3 text-sm leading-6 text-rc-text-primary outline-none transition focus:border-rc-border-focus"
               />
             </div>
@@ -467,13 +468,13 @@ export function PermissionModal() {
             onClick={denyPermission}
             className="rounded-md border border-rc-border-primary px-4 py-2 text-sm font-medium text-rc-text-secondary transition-colors hover:bg-rc-bg-hover"
           >
-            拒绝
+            {t('permission.deny')}
           </button>
           <button
             onClick={allowPermission}
             className="rounded-md bg-rc-accent-primary px-5 py-2 text-sm font-medium text-rc-text-inverse transition-colors hover:bg-rc-accent-primary-hover"
           >
-            允许执行
+            {t('permission.allow')}
           </button>
         </div>
       </div>

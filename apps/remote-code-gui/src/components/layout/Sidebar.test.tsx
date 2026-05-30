@@ -77,7 +77,7 @@ describe('Sidebar', () => {
       expect(screen.getByText('审阅修复方案')).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByRole('button', { name: '新会话' }));
+    fireEvent.click(screen.getAllByRole('button', { name: '新会话' })[0]);
     await waitFor(() => {
       expect(createSession).toHaveBeenCalledWith(undefined, 'C:\\repo');
     });

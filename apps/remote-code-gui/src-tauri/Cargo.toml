@@ -1,6 +1,6 @@
 [package]
 name = "remote-code-gui"
-version = "0.1.0"
+version = "1.0.0"
 description = "Remote Code GUI - Tauri Desktop Application"
 authors = ["Yanzh"]
 edition.workspace = true

@@ -6,6 +6,7 @@ import {
   Search,
   Sun,
 } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import { useTheme } from '../design/ThemeProvider';
 
 export type ActivityTab = 'chat' | 'mcp' | 'settings';
@@ -16,6 +17,7 @@ interface ActivityBarProps {
 }
 
 export function ActivityBar({ activeTab, onTabChange }: ActivityBarProps) {
+  const { t } = useTranslation();
   const { isDark, toggle } = useTheme();
 
   const btnClass = (active: boolean) =>
@@ -41,8 +43,8 @@ export function ActivityBar({ activeTab, onTabChange }: ActivityBarProps) {
         <button
           role="tab"
           aria-selected={activeTab === 'chat'}
-          aria-label="Explorer"
-          title="Explorer"
+          aria-label={t('activityBar.explorer')}
+          title={t('activityBar.explorer')}
           onClick={() => onTabChange('chat')}
           className={btnClass(activeTab === 'chat')}
         >
@@ -51,8 +53,8 @@ export function ActivityBar({ activeTab, onTabChange }: ActivityBarProps) {
         <button
           role="tab"
           aria-selected={false}
-          aria-label="Search"
-          title="Search"
+          aria-label={t('activityBar.search')}
+          title={t('activityBar.search')}
           onClick={() => onTabChange('chat')}
           className={btnClass(false)}
         >
@@ -61,8 +63,8 @@ export function ActivityBar({ activeTab, onTabChange }: ActivityBarProps) {
         <button
           role="tab"
           aria-selected={activeTab === 'mcp'}
-          aria-label="MCP"
-          title="MCP"
+          aria-label={t('activityBar.mcp')}
+          title={t('activityBar.mcp')}
           onClick={() => onTabChange('mcp')}
           className={btnClass(activeTab === 'mcp')}
         >
@@ -74,8 +76,8 @@ export function ActivityBar({ activeTab, onTabChange }: ActivityBarProps) {
 
       <div className="flex flex-col items-center gap-1">
         <button
-          aria-label={isDark ? 'Switch to light theme' : 'Switch to dark theme'}
-          title={isDark ? 'Switch to light theme' : 'Switch to dark theme'}
+          aria-label={isDark ? t('activityBar.switchLight') : t('activityBar.switchDark')}
+          title={isDark ? t('activityBar.switchLight') : t('activityBar.switchDark')}
           onClick={toggle}
           className="flex h-9 w-9 items-center justify-center rounded-md text-rc-text-tertiary transition-colors hover:bg-rc-bg-hover hover:text-rc-text-primary"
         >
@@ -84,8 +86,8 @@ export function ActivityBar({ activeTab, onTabChange }: ActivityBarProps) {
         <button
           role="tab"
           aria-selected={activeTab === 'settings'}
-          aria-label="Settings"
-          title="Settings"
+          aria-label={t('activityBar.settings')}
+          title={t('activityBar.settings')}
           onClick={() => onTabChange('settings')}
           className={btnClass(activeTab === 'settings')}
         >

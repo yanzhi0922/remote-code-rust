@@ -15,6 +15,7 @@ use uuid::Uuid;
 
 use crate::auth::{constant_time_value_eq, hash_secret_value};
 use crate::helpers;
+use crate::rate_limit::RateLimiter;
 use crate::registry::{Registry, TimelineSnapshot, TimelineStore};
 use crate::types::{
     ControlPlaneConfig, ControlPlaneConfigOverrides, ControlPlaneMeta, ControlPlaneStatus,
@@ -95,6 +96,8 @@ pub struct ControlPlaneService {
     pub(crate) http_client: reqwest::Client,
     /// Directory containing downloadable app binaries (APK, dmg, etc.).
     pub(crate) downloads_dir: Option<PathBuf>,
+    /// Per-IP rate limiter for authentication endpoints.
+    pub(crate) rate_limiter: Arc<RateLimiter>,
     /// Shared SQLite connection, opened once and reused across queries.
     db_connection: Arc<Mutex<Connection>>,
     /// Whether state was successfully loaded from persistent storage.
@@ -205,6 +208,7 @@ impl ControlPlaneService {
             allowed_user_key_hashes: load_allowed_user_key_hashes_from_env(),
             http_client,
             downloads_dir: config.downloads_dir,
+            rate_limiter: Arc::new(RateLimiter::default()),
             db_connection: Arc::new(Mutex::new(db_connection.unwrap_or_else(|| {
                 open_state_connection(std::path::Path::new(":memory:"))
                     .expect("in-memory SQLite should always open")

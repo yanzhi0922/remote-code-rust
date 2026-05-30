@@ -1,5 +1,6 @@
 import { Cpu, Network, Wifi, WifiOff } from 'lucide-react';
 import { useMemo } from 'react';
+import { useTranslation } from 'react-i18next';
 import { formatSensitivePath } from '../../lib/utils';
 import { useAppStore } from '../../stores/useAppStore';
 import { useAgentStore } from '../../stores/useAgentStore';
@@ -51,6 +52,7 @@ function TokenUsage({
 }
 
 export function StatusBar() {
+  const { t } = useTranslation();
   const provider = useAppStore((state) => state.provider);
   const runtimeStatus = useAppStore((state) => state.runtimeStatus);
   const activeSessionId = useAppStore((state) => state.activeSessionId);
@@ -83,8 +85,8 @@ export function StatusBar() {
     ? `MCP ${mcpSummary.status_counts.connected}/${mcpSummary.enabled_servers}`
     : 'MCP —';
 
-  const projectLabel = activeProjectPath ? formatSensitivePath(activeProjectPath, privacyMode) : 'No project';
-  const sessionLabel = activeSession ? (privacyMode ? 'Hidden session' : activeSession.title) : 'No session';
+  const projectLabel = activeProjectPath ? formatSensitivePath(activeProjectPath, privacyMode) : t('statusBar.noProject');
+  const sessionLabel = activeSession ? (privacyMode ? t('statusBar.hiddenSession') : activeSession.title) : t('statusBar.noSession');
 
   return (
     <div className="flex h-status-bar shrink-0 items-center border-t border-rc-border-secondary bg-rc-bg-base px-3 text-[11px] text-rc-text-tertiary select-none">
@@ -118,12 +120,12 @@ export function StatusBar() {
 
         <span className="flex items-center gap-1.5">
           {runtimeStatus ? <Wifi size={12} className="text-rc-accent-success" /> : <WifiOff size={12} />}
-          <span className="hidden sm:inline">{runtimeStatus ? 'Online' : 'Offline'}</span>
+          <span className="hidden sm:inline">{runtimeStatus ? t('statusBar.online') : t('statusBar.offline')}</span>
         </span>
 
         <span className="hidden items-center gap-1 text-rc-text-tertiary md:flex">
           <kbd className="rounded border border-rc-border-primary bg-rc-bg-tertiary px-1 text-[9px]">⌘K</kbd>
-          <span>命令</span>
+          <span>{t('statusBar.command')}</span>
         </span>
       </div>
     </div>

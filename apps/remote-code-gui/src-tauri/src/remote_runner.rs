@@ -54,6 +54,8 @@ const REMOTE_PASSWORD_HASH_KEY: &str = "remote-control-password-hash";
 const REMOTE_USER_KEY_KEY: &str = "remote-control-user-key";
 const REMOTE_RUNNER_API_TOKEN_KEY: &str = "remote-runner-api-token";
 const MIN_REMOTE_PASSWORD_LEN: usize = 12;
+const MAX_REMOTE_PASSWORD_LEN: usize = 256;
+const MAX_REMOTE_USERNAME_LEN: usize = 128;
 
 // ─── Public API ─────────────────────────────────────────────────────────────
 
@@ -857,6 +859,11 @@ pub fn remote_set_password(app: AppHandle, password: String) -> Result<(), Strin
             "Password must be at least {MIN_REMOTE_PASSWORD_LEN} characters"
         ));
     }
+    if password.len() > MAX_REMOTE_PASSWORD_LEN {
+        return Err(format!(
+            "Password must not exceed {MAX_REMOTE_PASSWORD_LEN} characters"
+        ));
+    }
     set_remote_password(&app, &password).map_err(|e| {
         let msg = e.to_string();
         tracing::warn!(error = %msg, "command error");
@@ -880,6 +887,11 @@ pub fn remote_set_username(app: AppHandle, username: String) -> Result<(), Strin
     if username.is_empty() {
         return Err("Username cannot be empty".to_string());
     }
+    if username.len() > MAX_REMOTE_USERNAME_LEN {
+        return Err(format!(
+            "Username must not exceed {MAX_REMOTE_USERNAME_LEN} characters"
+        ));
+    }
     set_remote_username(&app, &username).map_err(|e| {
         let msg = e.to_string();
         tracing::warn!(error = %msg, "command error");
@@ -902,9 +914,19 @@ pub fn remote_set_credentials(
     if username.is_empty() {
         return Err("Username cannot be empty".to_string());
     }
+    if username.len() > MAX_REMOTE_USERNAME_LEN {
+        return Err(format!(
+            "Username must not exceed {MAX_REMOTE_USERNAME_LEN} characters"
+        ));
+    }
     if password.len() < MIN_REMOTE_PASSWORD_LEN {
         return Err(format!(
             "Password must be at least {MIN_REMOTE_PASSWORD_LEN} characters"
+        ));
+    }
+    if password.len() > MAX_REMOTE_PASSWORD_LEN {
+        return Err(format!(
+            "Password must not exceed {MAX_REMOTE_PASSWORD_LEN} characters"
         ));
     }
     set_remote_username(&app, &username).map_err(|e| {

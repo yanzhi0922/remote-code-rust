@@ -30,6 +30,23 @@ pub async fn quic_connect(
     session_id: String,
     server_cert_fingerprint: Option<String>,
 ) -> std::result::Result<(), String> {
+    // Input length validation to prevent resource exhaustion.
+    const MAX_URL_LEN: usize = 2048;
+    const MAX_TOKEN_LEN: usize = 512;
+    const MAX_SESSION_ID_LEN: usize = 64;
+
+    if url.len() > MAX_URL_LEN {
+        return Err(format!("URL exceeds maximum length of {MAX_URL_LEN} characters"));
+    }
+    if token.len() > MAX_TOKEN_LEN {
+        return Err(format!("Token exceeds maximum length of {MAX_TOKEN_LEN} characters"));
+    }
+    if session_id.len() > MAX_SESSION_ID_LEN {
+        return Err(format!(
+            "Session ID exceeds maximum length of {MAX_SESSION_ID_LEN} characters"
+        ));
+    }
+
     let config = TransportConfig {
         strategy: TransportStrategy::Quic {
             server_url: url,

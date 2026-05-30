@@ -1,5 +1,6 @@
 import { lazy, Suspense, useState, useEffect, useCallback } from 'react';
 import { LockKeyhole, TriangleAlert } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import { Layout } from './components/layout/Layout';
 import { PermissionModal } from './components/layout/PermissionModal';
 import { ChatArea } from './components/chat/ChatArea';
@@ -427,15 +428,15 @@ function DemoLocalApp() {
   );
 }
 
-// TODO(i18n): extract hardcoded strings when i18n is set up
 function MobileInitScreen() {
+  const { t } = useTranslation();
   return (
     <div className="flex min-h-dvh w-screen items-center justify-center bg-rc-bg-base">
       <div className="flex flex-col items-center gap-4">
         <img src="/pwa-icon-192.png" alt="" className="h-14 w-14 rounded-2xl shadow-lg" draggable={false} />
         <div className="flex items-center gap-3 text-rc-text-secondary">
           <div role="status" className="h-5 w-5 rounded-full border-2 border-rc-border-primary border-t-rc-text-primary animate-spin" />
-          <span className="text-sm font-medium">正在初始化...</span>
+          <span className="text-sm font-medium">{t('app.initializing')}</span>
         </div>
       </div>
     </div>
@@ -443,63 +444,64 @@ function MobileInitScreen() {
 }
 
 function RemoteLazyFallback() {
+  const { t } = useTranslation();
   return (
     <div className="flex min-h-dvh w-screen items-center justify-center bg-rc-bg-base">
       <div className="flex items-center gap-3 text-rc-text-secondary">
         <div role="status" className="h-5 w-5 animate-spin rounded-full border-2 border-rc-border-primary border-t-rc-text-primary" />
-        <span className="text-sm font-medium">正在加载 Remote Code...</span>
+        <span className="text-sm font-medium">{t('app.loadingRemote')}</span>
       </div>
     </div>
   );
 }
 
-// TODO(i18n): extract hardcoded strings when i18n is set up
 function MobileBiometricScreen() {
+  const { t } = useTranslation();
   return (
     <div className="flex min-h-dvh w-screen items-center justify-center bg-rc-bg-base">
       <div className="flex flex-col items-center gap-4">
         <div className="h-14 w-14 rounded-2xl bg-rc-bg-user-bubble flex items-center justify-center shadow-lg">
           <LockKeyhole size={24} className="text-rc-text-inverse" />
         </div>
-        <p className="text-sm text-rc-text-secondary font-medium">请验证身份</p>
+        <p className="text-sm text-rc-text-secondary font-medium">{t('app.biometricPrompt')}</p>
       </div>
     </div>
   );
 }
 
-// TODO(i18n): extract hardcoded strings when i18n is set up
 function MobileErrorScreen({ error, onRetry }: { error: string; onRetry: () => void }) {
+  const { t } = useTranslation();
   return (
     <div className="flex min-h-dvh w-screen items-center justify-center bg-rc-bg-base px-6">
       <div className="max-w-sm text-center space-y-4">
         <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-lg bg-rc-accent-error-bg text-rc-accent-error">
           <TriangleAlert size={24} />
         </div>
-        <h1 className="text-lg font-bold text-rc-text-primary">初始化失败</h1>
+        <h1 className="text-lg font-bold text-rc-text-primary">{t('app.errorTitle')}</h1>
         <p role="alert" className="text-sm text-rc-text-secondary break-all">{error}</p>
         <button
           onClick={onRetry}
           className="px-4 py-2 bg-rc-bg-user-bubble text-rc-text-inverse rounded-lg text-sm font-medium hover:opacity-90 transition-colors"
         >
-          重试
+          {t('common.retry')}
         </button>
       </div>
     </div>
   );
 }
 
-// TODO(i18n): extract hardcoded strings when i18n is set up
 function MobileNetworkBanner({ online, connectionType }: { online: boolean; connectionType: string }) {
+  const { t } = useTranslation();
   if (online) return null;
   return (
     <div role="alert" className="fixed top-0 left-0 right-0 z-50 bg-rc-accent-warning text-rc-text-inverse text-center py-1.5 text-xs font-medium shadow-md">
-      网络已断开 — {describeConnectionType(connectionType)}
+      {t('app.networkOffline')} — {describeConnectionType(connectionType)}
     </div>
   );
 }
 
-// TODO(i18n): extract hardcoded strings when i18n is set up
 function MobileGate({ children }: { children: React.ReactNode }) {
+  const { t } = useTranslation();
   const [phase, setPhase] = useState<MobileInitPhase>('loading');
   const [error, setError] = useState<string | null>(null);
   const [networkOnline, setNetworkOnline] = useState(true);
@@ -516,7 +518,7 @@ function MobileGate({ children }: { children: React.ReactNode }) {
       const bioOk = await performBiometricCheck();
       if (!bioOk) {
         hapticError();
-        setError('身份验证失败');
+        setError(t('app.authFailed'));
         setPhase('error');
         return;
       }
@@ -557,8 +559,8 @@ function MobileGate({ children }: { children: React.ReactNode }) {
   );
 }
 
-// TODO(i18n): extract hardcoded strings when i18n is set up
 function LocalApp() {
+  const { t } = useTranslation();
   const initialised = useAppStore((s) => s.initialised);
   const initError = useAppStore((s) => s.initError);
   const init = useAppStore((s) => s.init);
@@ -574,13 +576,13 @@ function LocalApp() {
           <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-lg bg-rc-accent-error-bg text-rc-accent-error">
             <TriangleAlert size={24} />
           </div>
-          <h1 className="text-lg font-bold text-rc-text-primary">初始化失败</h1>
+          <h1 className="text-lg font-bold text-rc-text-primary">{t('app.errorTitle')}</h1>
           <p className="text-sm text-rc-text-secondary break-all">{initError}</p>
           <button
             onClick={() => init()}
             className="px-4 py-2 bg-rc-bg-user-bubble text-rc-text-inverse rounded-lg text-sm font-medium hover:opacity-90 transition-colors"
           >
-            重试
+            {t('common.retry')}
           </button>
         </div>
       </div>
@@ -592,7 +594,7 @@ function LocalApp() {
       <div className="flex min-h-dvh w-screen items-center justify-center bg-rc-bg-base">
         <div className="flex items-center gap-3 text-rc-text-secondary">
           <div className="w-5 h-5 border-2 border-rc-border-primary border-t-rc-text-primary rounded-full animate-spin" />
-          <span className="text-sm font-medium">正在初始化...</span>
+          <span className="text-sm font-medium">{t('app.initializing')}</span>
         </div>
       </div>
     );

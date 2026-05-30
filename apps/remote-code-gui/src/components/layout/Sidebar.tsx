@@ -11,11 +11,13 @@ import {
   X,
 } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import type { ConversationEntry, SessionSubtask, SessionSummary, ToolCallInfo } from '../../lib/types';
 import { cn, normalizePathKey, truncateMiddle } from '../../lib/utils';
 import { useDebouncedValue } from '../../lib/hooks';
 import { useAppStore } from '../../stores/useAppStore';
 import { useAgentStore } from '../../stores/useAgentStore';
+import i18n from '../../i18n';
 
 type SessionTaskStatus = 'pending' | 'running' | 'completed' | 'failed' | 'stopped';
 
@@ -45,25 +47,29 @@ function getTimeBucket(iso: string): TimeBucket {
 }
 
 const BUCKET_ORDER: TimeBucket[] = ['now', 'today', 'yesterday', 'week', 'older'];
-const BUCKET_LABELS: Record<TimeBucket, string> = {
-  now: '刚刚',
-  today: '今天',
-  yesterday: '昨天',
-  week: '本周',
-  older: '更早',
-};
+function getBucketLabel(bucket: TimeBucket): string {
+  const t = i18n.t.bind(i18n);
+  switch (bucket) {
+    case 'now': return t('time.justNow');
+    case 'today': return t('time.today');
+    case 'yesterday': return t('time.yesterday');
+    case 'week': return t('time.thisWeek');
+    case 'older': return t('time.earlier');
+  }
+}
 
 function formatRelativeTime(iso: string): string {
+  const t = i18n.t.bind(i18n);
   const now = Date.now();
   const then = new Date(iso).getTime();
   const diffMinutes = Math.floor((now - then) / 60_000);
-  if (diffMinutes < 1) return '刚刚';
-  if (diffMinutes < 60) return `${diffMinutes} 分钟前`;
+  if (diffMinutes < 1) return t('time.justNow');
+  if (diffMinutes < 60) return t('time.minutesAgo', { count: diffMinutes });
   const diffHours = Math.floor(diffMinutes / 60);
-  if (diffHours < 24) return `${diffHours} 小时前`;
+  if (diffHours < 24) return t('time.hoursAgo', { count: diffHours });
   const diffDays = Math.floor(diffHours / 24);
-  if (diffDays < 7) return `${diffDays} 天前`;
-  return new Date(iso).toLocaleDateString('zh-CN');
+  if (diffDays < 7) return t('time.daysAgo', { count: diffDays });
+  return new Date(iso).toLocaleDateString();
 }
 
 // ── Search highlighting (from CodexMonitor pattern) ───────────
@@ -104,7 +110,7 @@ function summarizeAgentPrompt(toolCall: ToolCallInfo): string {
   if (typeof prompt === 'string' && prompt.trim()) {
     return truncateMiddle(prompt.trim(), 56);
   }
-  return '子任务';
+  return i18n.t('chatArea.subtask');
 }
 
 function summarizeAgentOutput(text: string): string {
@@ -113,11 +119,11 @@ function summarizeAgentOutput(text: string): string {
     const total = typeof parsed.total === 'number' ? parsed.total : null;
     const succeeded = typeof parsed.succeeded === 'number' ? parsed.succeeded : null;
     if (total !== null && succeeded !== null) {
-      return `批量完成 ${succeeded}/${total}`;
+      return i18n.t('chatArea.batchCompleted', { succeeded, total });
     }
   }
   const compact = text.replace(/\s+/g, ' ').trim();
-  return compact ? truncateMiddle(compact, 56) : '已完成';
+  return compact ? truncateMiddle(compact, 56) : i18n.t('chatArea.completed');
 }
 
 function deriveAgentTasks(conversation: ConversationEntry[]): SessionTaskItem[] {
@@ -143,7 +149,7 @@ function deriveAgentTasks(conversation: ConversationEntry[]): SessionTaskItem[] 
             id: `${toolCall.id}:${index}`,
             title: truncateMiddle(task, 56),
             status: 'running',
-            detail: '等待子代理结果',
+            detail: i18n.t('chatArea.waitingSubagent'),
             depth: 0,
           });
         });
@@ -213,7 +219,7 @@ function flattenLiveTasks(tasks: SessionSubtask[]): SessionTaskItem[] {
       id: task.task_id,
       title: truncateMiddle(task.description, 56),
       status: task.status,
-      detail: truncateMiddle(task.output_preview ?? task.summary ?? '等待子代理结果', 56),
+      detail: truncateMiddle(task.output_preview ?? task.summary ?? i18n.t('chatArea.waitingSubagent'), 56),
       depth: task.depth,
     });
     const children = byParent.get(task.task_id) ?? [];
@@ -247,7 +253,7 @@ function SessionTaskRow({ task }: { task: SessionTaskItem }) {
       <StatusDot status={task.status} />
       <div className="min-w-0 flex-1">
         <div className="truncate font-medium text-rc-text-primary">{task.title}</div>
-        {task.detail && task.detail !== '等待子代理结果' && (
+        {task.detail && task.detail !== i18n.t('chatArea.waitingSubagent') && (
           <div className="mt-0.5 truncate text-xs text-rc-text-tertiary">{task.detail}</div>
         )}
       </div>
@@ -276,6 +282,7 @@ function SessionRow({
   onSelect: () => void;
   onArchive: () => void;
 }) {
+  const { t } = useTranslation();
   const hasTasks = tasks.length > 0;
 
   return (
@@ -292,7 +299,7 @@ function SessionRow({
           type="button"
           onClick={hasTasks ? onToggleExpanded : undefined}
           disabled={!hasTasks}
-          title={hasTasks ? '展开/收起子任务' : undefined}
+          title={hasTasks ? t('sidebar.expandTasks') : undefined}
           className={cn(
             'mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-md transition-colors',
             hasTasks
@@ -308,7 +315,7 @@ function SessionRow({
 
         <button type="button" onClick={onSelect} className="min-w-0 flex-1 text-left">
           <div className="truncate text-sm font-medium text-rc-text-primary">
-            {privacyMode ? '会话已隐藏' : (
+            {privacyMode ? t('sidebar.sessionHidden') : (
               <HighlightedText text={session.title} query={searchQuery} />
             )}
           </div>
@@ -327,7 +334,7 @@ function SessionRow({
           type="button"
           onClick={onArchive}
           className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-rc-text-tertiary opacity-0 transition-all duration-200 group-hover:opacity-100 hover:bg-rc-bg-active hover:text-rc-accent-error"
-          title="归档此会话"
+          title={t('sidebar.archiveSession')}
         >
           <Archive size={14} />
         </button>
@@ -388,7 +395,7 @@ function SessionTimeGroups({
   const hasMultipleBuckets = BUCKET_ORDER.filter((b) => (bucketed.get(b)?.length ?? 0) > 0).length > 1;
 
   if (sessions.length === 0) {
-    return <div className="px-8 py-2 text-xs text-rc-text-tertiary">暂无会话</div>;
+    return <div className="px-8 py-2 text-xs text-rc-text-tertiary">{i18n.t('sidebar.noSessions')}</div>;
   }
 
   return (
@@ -402,7 +409,7 @@ function SessionTimeGroups({
             {hasMultipleBuckets && (
               <div className="flex items-center gap-2 px-5 py-1.5 text-[10px] uppercase tracking-[0.08em] text-rc-text-tertiary">
                 <Clock size={10} />
-                {BUCKET_LABELS[bucket]}
+                {getBucketLabel(bucket)}
               </div>
             )}
             {bucketSessions.map((session) => (
@@ -430,6 +437,7 @@ function SessionTimeGroups({
 }
 
 export function Sidebar() {
+  const { t } = useTranslation();
   const sessions = useAppStore((state) => state.sessions);
   const sessionsLoading = useAppStore((state) => state.sessionsLoading);
   const sessionError = useAppStore((state) => state.sessionError);
@@ -526,14 +534,14 @@ export function Sidebar() {
         <input
           value={searchQuery}
           onChange={(event) => setSearchQuery(event.target.value)}
-          aria-label="搜索项目和会话"
-          placeholder="搜索项目、会话"
+          aria-label={t('sidebar.searchAriaLabel')}
+          placeholder={t('sidebar.searchPlaceholder')}
           className="h-9 w-full rounded-lg border border-transparent bg-rc-bg-tertiary pl-8 pr-7 text-xs text-rc-text-primary outline-none transition-colors placeholder:text-rc-text-tertiary focus:border-rc-border-focus focus-visible:outline-none"
         />
         {searchQuery && (
           <button
             type="button"
-            title="清空搜索"
+            title={t('app.clearSearch')}
             onClick={() => setSearchQuery('')}
             className="absolute right-3 top-1/2 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded text-rc-text-tertiary transition-colors hover:bg-rc-bg-hover hover:text-rc-text-primary"
           >
@@ -546,23 +554,23 @@ export function Sidebar() {
       <div className="grid gap-1.5 border-b border-rc-border-secondary px-2 pb-3">
         <button
           onClick={() => { void createSession(undefined, activeProjectPath ?? undefined); }}
-          aria-label="创建新会话"
+          aria-label={t('sidebar.newSession')}
           className="inline-flex h-8 w-full items-center justify-center gap-2 rounded-lg border border-rc-border-primary bg-rc-bg-surface px-2 text-xs font-semibold text-rc-text-primary shadow-xs transition-colors hover:border-rc-border-hover hover:bg-rc-bg-hover"
         >
           <Plus size={14} />
-          新会话
+          {t('sidebar.newSession')}
         </button>
         <div className="flex items-center gap-1">
         <button
           onClick={() => { void pickFolderAndAddProject(); }}
-          aria-label="添加项目"
+          aria-label={t('sidebar.addProject')}
           className="inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-xs text-rc-text-secondary transition-colors hover:bg-rc-bg-hover hover:text-rc-text-primary"
         >
           <FolderPlus size={13} />
-          添加项目
+          {t('sidebar.addProject')}
         </button>
         <div className="flex-1" />
-        <span className="text-[10px] uppercase tracking-[0.08em] text-rc-text-tertiary">{projects.length} projects</span>
+        <span className="text-[10px] uppercase tracking-[0.08em] text-rc-text-tertiary">{t('sidebar.projectCount', { count: projects.length })}</span>
         </div>
       </div>
 
@@ -578,23 +586,23 @@ export function Sidebar() {
               onClick={() => { void useAppStore.getState().refreshSessions(); }}
               className="mt-2 text-xs font-medium text-rc-accent-primary hover:underline"
             >
-              重试
+              {t('common.retry')}
             </button>
           </div>
         ) : sessionsLoading ? (
           <div className="flex items-center gap-2 px-4 py-4 text-xs text-rc-text-secondary">
             <div className="h-3 w-3 animate-spin rounded-full border-2 border-rc-border-primary border-t-rc-accent-primary" />
-            正在加载…
+            {t('sidebar.loadingSessions')}
           </div>
         ) : (
           <div className="py-2">
             {projects.length === 0 ? (
               <div className="px-4 py-6 text-center text-xs text-rc-text-tertiary">
-                <div className="mb-2">暂无项目</div>
+                <div className="mb-2">{t('sidebar.noProjects')}</div>
               </div>
             ) : visibleProjectRows.length === 0 ? (
               <div className="px-4 py-4 text-center text-xs text-rc-text-tertiary">
-                无匹配结果
+                {t('sidebar.noMatch')}
               </div>
             ) : (
               visibleProjectRows.map(({ project, sessions: projectSessions }) => {
@@ -637,8 +645,8 @@ export function Sidebar() {
                           void createSession(undefined, project.path);
                         }}
                         className="flex h-5 w-5 items-center justify-center rounded opacity-0 transition-opacity hover:bg-rc-bg-hover group-hover:opacity-100"
-                        title="新会话"
-                        aria-label="新会话"
+                        title={t('sidebar.newSession')}
+                        aria-label={t('sidebar.newSession')}
                       >
                         <Plus size={12} />
                       </button>
@@ -647,8 +655,8 @@ export function Sidebar() {
                         onClick={() => { void removeProject(project.path); }}
                         disabled={project.session_count > 0}
                         className="flex h-5 w-5 items-center justify-center rounded opacity-0 transition-opacity hover:bg-rc-bg-hover hover:text-rc-accent-error disabled:cursor-not-allowed disabled:opacity-30 group-hover:opacity-100"
-                        title={project.session_count > 0 ? '该项目下仍有会话，无法移除' : '移除此项目'}
-                        aria-label={project.session_count > 0 ? '该项目下仍有会话，无法移除' : '移除此项目'}
+                        title={project.session_count > 0 ? t('sidebar.cannotRemoveProject') : t('sidebar.removeProject')}
+                        aria-label={project.session_count > 0 ? t('sidebar.cannotRemoveProject') : t('sidebar.removeProject')}
                       >
                         <Trash2 size={12} />
                       </button>

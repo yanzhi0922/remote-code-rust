@@ -160,15 +160,21 @@ describe('UnifiedTransport', () => {
     transport.close();
   });
 
-  it('queues commands when disconnected', async () => {
+  it('rejects interrupt commands when disconnected and queues other commands', async () => {
     const cb = makeCallbacks();
     const transport = new UnifiedTransport(makeConfig(), cb);
 
-    await transport.sendCommand({ kind: 'interrupt' });
+    // Interrupt is immediately rejected when offline
+    await expect(
+      transport.sendCommand({ kind: 'interrupt' }),
+    ).rejects.toThrow('Cannot interrupt while offline');
+
+    // Non-interrupt commands are queued
+    await transport.sendCommand({ kind: 'send_prompt', content: 'hello' });
 
     expect(mockOfflineQueue.enqueueCommand).toHaveBeenCalledWith(
       'session-1',
-      { kind: 'interrupt' },
+      { kind: 'send_prompt', content: 'hello' },
     );
     transport.close();
   });

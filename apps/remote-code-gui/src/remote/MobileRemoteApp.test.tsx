@@ -227,7 +227,7 @@ describe('MobileRemoteApp', () => {
 
     render(<MobileRemoteApp />);
     expect((await screen.findAllByText('Alpha Session')).length).toBeGreaterThan(0);
-    fireEvent.click(screen.getByRole('button', { name: /Approvals/ }));
+    fireEvent.click(screen.getByRole('tab', { name: /Approvals/ }));
 
     expect(await screen.findByText('Run deployment check')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Approve' }));
@@ -262,7 +262,7 @@ describe('MobileRemoteApp', () => {
 
     render(<MobileRemoteApp />);
     expect((await screen.findAllByText('Alpha Session')).length).toBeGreaterThan(0);
-    fireEvent.click(screen.getByRole('button', { name: /Approvals/ }));
+    fireEvent.click(screen.getByRole('tab', { name: /Approvals/ }));
 
     expect(await screen.findByText('session.md')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Rendering response...' }));

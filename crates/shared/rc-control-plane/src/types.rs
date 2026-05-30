@@ -1200,6 +1200,14 @@ impl ApiError {
             message,
         }
     }
+
+    pub(crate) fn too_many_requests(message: String) -> Self {
+        Self {
+            status: StatusCode::TOO_MANY_REQUESTS,
+            code: "too_many_requests",
+            message,
+        }
+    }
 }
 
 impl IntoResponse for ApiError {
