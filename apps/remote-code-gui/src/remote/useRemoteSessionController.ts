@@ -214,19 +214,60 @@ export function useRemoteSessionController({
       return;
     }
     let cancelled = false;
+    const HEALTH_TIMEOUT_MS = 8000;
+    const timer = setTimeout(() => {
+      if (!cancelled) {
+        // Timeout: set a fallback health so the UI exits "Contacting..."
+        // and shows the auth screen where the user can configure the URL.
+        setHealth({
+          ok: false,
+          service: baseUrl,
+          phase: 'unreachable',
+          runner_count: 0,
+          available_runner_count: 0,
+          session_count: 0,
+          artifact_count: 0,
+          queued_runner_command_count: 0,
+          auth_required: true,
+          bootstrap_secret_configured: false,
+          owner_claimed: false,
+          device_count: 0,
+        } as Awaited<ReturnType<typeof getControlPlaneHealth>>);
+        reportAsyncError(new Error(`Control plane health check timed out after ${HEALTH_TIMEOUT_MS}ms`));
+      }
+    }, HEALTH_TIMEOUT_MS);
     void getControlPlaneHealth(baseUrl)
       .then((response) => {
+        clearTimeout(timer);
         if (!cancelled) {
           setHealth(response);
         }
       })
       .catch((error) => {
+        clearTimeout(timer);
         if (!cancelled) {
           reportAsyncError(error);
+          // On network error, still show the auth screen rather than
+          // hanging on "Contacting..." forever.
+          setHealth({
+            ok: false,
+            service: baseUrl,
+            phase: 'unreachable',
+            runner_count: 0,
+            available_runner_count: 0,
+            session_count: 0,
+            artifact_count: 0,
+            queued_runner_command_count: 0,
+            auth_required: true,
+            bootstrap_secret_configured: false,
+            owner_claimed: false,
+            device_count: 0,
+          } as Awaited<ReturnType<typeof getControlPlaneHealth>>);
         }
       });
     return () => {
       cancelled = true;
+      clearTimeout(timer);
     };
   }, [baseUrl, accessToken]);
 

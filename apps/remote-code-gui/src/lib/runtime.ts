@@ -39,7 +39,13 @@ export function resolveRemoteBaseUrl(): string | null {
   }
 
   if (window.location.protocol === 'http:' || window.location.protocol === 'https:') {
-    return normalizeBaseUrl(window.location.origin);
+    const origin = window.location.origin;
+    // Tauri uses http://tauri.localhost as its custom-protocol origin.
+    // It is not a real HTTP server — do not treat it as a control plane URL.
+    if (origin.includes('tauri.localhost')) {
+      return null;
+    }
+    return normalizeBaseUrl(origin);
   }
 
   return null;
