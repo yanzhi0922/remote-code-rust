@@ -357,6 +357,7 @@ pub(super) async fn send_prompt(
                 let roo_mcp_servers = roo_mcp_server_overrides(&config);
                 let roo_storage_path = config.paths.profile_dir.join("roo");
                 let roo_session_store = Arc::clone(&session_store);
+                let roo_mode = gui_settings.roo_mode.clone();
 
                 let app_for_cleanup = app.clone();
                 let inner = tokio::spawn(async move {
@@ -374,6 +375,7 @@ pub(super) async fn send_prompt(
                         roo_mcp_servers,
                         roo_storage_path,
                         roo_session_store,
+                        roo_mode,
                     )
                     .await
                 });
@@ -621,6 +623,48 @@ pub(super) async fn archive_session(
             msg
         })?;
     Ok(())
+}
+
+#[tauri::command]
+pub(super) async fn rename_session(
+    state: State<'_, AppState>,
+    session_id: String,
+    new_title: String,
+) -> std::result::Result<(), String> {
+    let runtime = state.runtime.lock().await;
+    let uuid = Uuid::parse_str(&session_id).map_err(|error| error.to_string())?;
+    let title = new_title.trim();
+    if title.is_empty() {
+        return Err("Session title cannot be empty".to_owned());
+    }
+    runtime
+        .session_store
+        .set_title(uuid, title)
+        .map_err(|error| {
+            let msg = format!("{error:#}");
+            tracing::warn!(error = %msg, "command error");
+            msg
+        })
+}
+
+#[tauri::command]
+pub(super) async fn update_session_agent(
+    state: State<'_, AppState>,
+    session_id: String,
+    agent_type: String,
+) -> std::result::Result<(), String> {
+    let runtime = state.runtime.lock().await;
+    let uuid = Uuid::parse_str(&session_id).map_err(|error| error.to_string())?;
+    let _parsed: ProtocolAgentType =
+        serde_json::from_str(&format!("\"{}\"", agent_type)).map_err(|e| format!("无效的 agent_type: {e}"))?;
+    runtime
+        .session_store
+        .append_named_event(uuid, "agent_type", serde_json::json!({ "agent_type": agent_type }))
+        .map_err(|error| {
+            let msg = format!("{error:#}");
+            tracing::warn!(error = %msg, "command error");
+            msg
+        })
 }
 
 #[tauri::command]

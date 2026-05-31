@@ -105,6 +105,7 @@ const demoSettings: FullSettings = {
   codex_permission_profile: null,
   codex_service_tier: null,
   codex_ephemeral: null,
+  roo_mode: null,
   runtime_paths: {
     profile_dir: '/test/profile',
     sessions_dir: '/test/sessions',
@@ -632,11 +633,13 @@ function App() {
     if (mobileExperience) {
       return (
         <AppErrorBoundary>
-          <MobileGate>
-            <Suspense fallback={<MobileInitScreen />}>
-              <MobileRemoteApp />
-            </Suspense>
-          </MobileGate>
+          <ThemeProvider>
+            <MobileGate>
+              <Suspense fallback={<MobileInitScreen />}>
+                <MobileRemoteApp />
+              </Suspense>
+            </MobileGate>
+          </ThemeProvider>
         </AppErrorBoundary>
       );
     }

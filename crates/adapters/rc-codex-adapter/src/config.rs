@@ -24,6 +24,7 @@ pub struct CodexAdapterOptions {
     pub cwd: PathBuf,
     pub model: Option<String>,
     pub model_provider: Option<String>,
+    #[serde(skip_serializing)]
     pub api_key: Option<String>,
     pub base_url: Option<String>,
     /// Wire protocol for the provider. When set to "anthropic_messages", an

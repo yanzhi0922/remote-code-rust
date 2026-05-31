@@ -231,6 +231,8 @@ pub fn run() {
             project_commands::add_project,
             project_commands::remove_project,
             session_commands::archive_session,
+            session_commands::rename_session,
+            session_commands::update_session_agent,
             session_commands::restore_session,
             session_commands::list_archived_sessions,
             provider_commands::list_provider_configs,

@@ -1,5 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { hasTauriRuntime } from '../runtime';
+import i18n from '../../i18n';
 import { isMobile } from './platform';
 
 interface BiometricAvailability {
@@ -24,7 +25,7 @@ export async function performBiometricCheck(): Promise<boolean> {
   if (!enabled) return true;
   const avail = await checkBiometricAvailability();
   if (!avail.available) return true;
-  return authenticateWithBiometrics('请验证身份以访问 Remote Code');
+  return authenticateWithBiometrics(i18n.t('app.biometricPromptAuth'));
 }
 
 export async function getBiometricEnabled(): Promise<boolean> {
@@ -41,7 +42,7 @@ export async function setBiometricEnabled(enabled: boolean): Promise<boolean> {
   }
   const avail = await checkBiometricAvailability();
   if (!avail.available) return false;
-  const ok = await authenticateWithBiometrics('启用生物识别需要先验证身份');
+  const ok = await authenticateWithBiometrics(i18n.t('app.biometricEnablePrompt'));
   if (!ok) return false;
   const { secureStoreSet } = await import('./secureStorage');
   await secureStoreSet('biometric_enabled', 'true');

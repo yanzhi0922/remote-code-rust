@@ -11,7 +11,17 @@
     "send": "Send",
     "offline": "Offline",
     "online": "Online",
-    "back": "Back"
+    "back": "Back",
+    "copy": "Copy",
+    "add": "Add",
+    "edit": "Edit",
+    "restore": "Restore",
+    "saved": "Saved",
+    "saving": "Saving...",
+    "name": "Name",
+    "protocol": "Protocol",
+    "defaultModel": "Default Model",
+    "placeholder": "Placeholder"
   },
   "app": {
     "initializing": "Initializing...",
@@ -25,7 +35,9 @@
     "gateDescription": "Securely control your development environment remotely",
     "loadingRemote": "Loading Remote Code...",
     "authFailed": "Authentication failed",
-    "clearSearch": "Clear search"
+    "clearSearch": "Clear search",
+    "biometricPromptAuth": "Please verify identity to access Remote Code",
+    "biometricEnablePrompt": "Biometric authentication requires verification first"
   },
   "sidebar": {
     "searchPlaceholder": "Search projects & sessions",
@@ -48,7 +60,8 @@
     "sessionHidden": "Session hidden",
     "cannotRemoveProject": "Cannot remove: project has active sessions",
     "removeProject": "Remove this project",
-    "loadingSessions": "Loading..."
+    "loadingSessions": "Loading...",
+    "waitingSubagent": "Waiting for sub-agent result"
   },
   "permission": {
     "title": "Permission Request",
@@ -97,7 +110,54 @@
     "addProvider": "Go to settings to add or import a provider",
     "slashHint": "↑↓ Navigate · Enter Select · Esc Close",
     "permissionLabel": "Permissions",
-    "unconfiguredProvider": "Unconfigured"
+    "unconfiguredProvider": "Unconfigured",
+    "contextError": "Current session has used {{used}} tokens, {{model}} has ~{{next}} — cannot switch to smaller context.",
+    "permission": {
+      "claude": {
+        "default": "Default Mode",
+        "defaultDesc": "Auto-approve reads, confirm writes and commands",
+        "acceptEdits": "Auto-accept Edits",
+        "acceptEditsDesc": "Auto-approve file edits, still confirm commands",
+        "dontAsk": "Silent Mode",
+        "dontAskDesc": "Auto-approve low-risk read tools only",
+        "bypassPermissions": "Bypass Checks",
+        "bypassPermissionsDesc": "Skip all permission confirmations",
+        "plan": "Plan Mode",
+        "planDesc": "Plan only, don't execute tools"
+      },
+      "roo": {
+        "code": "Code",
+        "codeDesc": "Write, modify, and refactor code with full file and terminal access",
+        "architect": "Architect",
+        "architectDesc": "Plan and design before implementation — reads code, writes markdown plans only",
+        "ask": "Ask",
+        "askDesc": "Get answers and explanations — read-only, no code changes",
+        "debug": "Debug",
+        "debugDesc": "Diagnose and fix software issues with systematic problem analysis",
+        "orchestrator": "Orchestrator",
+        "orchestratorDesc": "Coordinate complex tasks by delegating to specialized modes"
+      },
+      "codex": {
+        "requestApproval": "Request Approval",
+        "requestApprovalDesc": "workspace-write sandbox, confirm on out-of-bounds writes or high-risk commands",
+        "sandboxAuto": "Sandbox Auto",
+        "sandboxAutoDesc": "Auto-execute inside workspace-write sandbox, no permission prompts",
+        "readonlySandbox": "Read-only Sandbox",
+        "readonlySandboxDesc": "read-only sandbox, writes and commands need explicit approval",
+        "fullAccess": "Full Access",
+        "fullAccessDesc": "danger-full-access, no sandbox; dangerous operations still request approval",
+        "fullAuto": "Full Auto Access",
+        "fullAutoDesc": "danger-full-access without confirmation, for fully trusted environments only"
+      }
+    },
+    "slash": {
+      "goal": "Set current session goal",
+      "compact": "Compact current context",
+      "clear": "Clear current session content",
+      "plan": "Switch to plan-only mode",
+      "review": "Start code review",
+      "doctor": "Run diagnostics check"
+    }
   },
   "chatArea": {
     "thinking": "Thinking",
@@ -115,13 +175,95 @@
     "batchCompleted": "Batch completed {{succeeded}}/{{total}}",
     "completed": "Completed",
     "waitingSubagent": "Waiting for sub-agent result",
-    "toggleReasoning": "Toggle reasoning details"
+    "toggleReasoning": "Toggle reasoning details",
+    "codeFallback": "Code",
+    "codeExpandText": "Expand to view code block",
+    "sessionActions": "Session actions",
+    "exportSession": "Export session",
+    "copySessionId": "Copy session ID",
+    "scrollToBottom": "Scroll to bottom"
   },
   "settings": {
     "title": "Settings",
     "general": "General",
     "remote": "Remote",
-    "about": "About"
+    "about": "About",
+    "runtimeParams": "Runtime Params",
+    "operations": "Operations",
+    "archive": "Archive",
+    "openAiCompatible": "OpenAI / Compatible Chat Completions",
+    "loadingSettings": "Loading settings…",
+    "resetUnsaved": "Reset unsaved changes",
+    "saveButton": "Save",
+    "saving": "Saving…",
+    "backToApp": "Back to app",
+    "closeSettings": "Close settings",
+    "sessionArchived": "Session archived",
+    "pathHidden": "Path hidden",
+    "archiveHeading": "Archived Sessions",
+    "noArchivedSessions": "No archived sessions.",
+    "newProvider": "New Provider",
+    "editProvider": "Edit {{name}}",
+    "providerExists": "A provider named \"{{name}}\" already exists. Overwrite?",
+    "savedProviders": "Saved Providers",
+    "addProviderBtn": "Add",
+    "noModelSet": "No model",
+    "currentlyActive": "Currently active",
+    "setAsCurrent": "Set as current",
+    "keychainStored": "Keychain",
+    "defaultProfile": "default",
+    "profileTooltip": "Model: {{model}}",
+    "noProvidersYet": "No saved providers yet.",
+    "fieldName": "Name",
+    "fieldProtocol": "Protocol",
+    "fieldDefaultModel": "Default Model",
+    "keyStoredHint": "API key is safely stored in system keychain…",
+    "keyNewHint": "API key will be safely stored in system keychain…",
+    "keyPlaceholder": "•••••••• (leave empty to keep unchanged)",
+    "modelConfigLabel": "Model Config (Profile)",
+    "configNamePlaceholder": "Config name",
+    "modelIdPlaceholder": "Model ID, e.g. glm-5.1",
+    "deleteProfile": "Delete this config",
+    "addProfile": "Add config",
+    "cancelBtn": "Cancel",
+    "saveProvider": "Save Provider",
+    "installDataDir": "Install & Data Directory",
+    "permissionModeField": "Permission Mode",
+    "requestTimeoutMs": "Request Timeout (ms)",
+    "maxRetries": "Max Retries",
+    "initialBackoffMs": "Initial Backoff (ms)",
+    "maxBackoffMs": "Max Backoff (ms)",
+    "otherSection": "Other",
+    "enableRetryAfter": "Enable server-side Retry-After support",
+    "enableVerboseMode": "Enable verbose mode",
+    "urlNormalizationHint": "Will normalize trailing slashes and extract scheme+host for display",
+    "maxOutputTokens": "Max Output Tokens",
+    "maxOutputTokensHint": "Maximum tokens per response",
+    "thinkingBudget": "Thinking Budget",
+    "thinkingBudgetHint": "Extended thinking budget, leave empty for unlimited",
+    "maxTurns": "Max Turns",
+    "maxTurnsHint": "Maximum agent execution turns per conversation",
+    "rooModeField": "Roo Default Mode",
+    "rooModeHint": "Default mode for Roo agent, leave empty for Code",
+    "rooModeDefault": "Default (Code)"
+  },
+  "agent": {
+    "selectType": "Select Agent type",
+    "notInstalled": "Not installed",
+    "locked": "Locked",
+    "closeMenu": "Close dropdown",
+    "claude": {
+      "displayName": "Claude",
+      "description": "Built-in Agent, calls provider API directly"
+    },
+    "roo": {
+      "displayName": "Roo",
+      "description": "Rust native in-process Agent"
+    },
+    "codex": {
+      "displayName": "Codex",
+      "description": "Rust native in-process Agent"
+    }
   },
   "mobile": {
     "sessions": "Sessions",
@@ -137,7 +279,10 @@
     "connected": "Connected",
     "disconnected": "Disconnected",
     "enableBiometric": "Enable biometric auth",
-    "disableBiometric": "Disable biometric auth"
+    "disableBiometric": "Disable biometric auth",
+    "cellular": "Cellular",
+    "noNetwork": "No network",
+    "unknownNetwork": "Unknown"
   },
   "time": {
     "justNow": "Just now",
@@ -148,5 +293,186 @@
     "yesterday": "Yesterday",
     "thisWeek": "This week",
     "earlier": "Earlier"
+  },
+  "inspector": {
+    "ready": "Ready",
+    "running": "Running",
+    "offline": "Offline",
+    "envInfo": "Environment Info",
+    "titleLabel": "Title",
+    "sessionHidden": "Session hidden",
+    "none": "None",
+    "sessionSection": "Session",
+    "projectLabel": "Project",
+    "typeLabel": "Type",
+    "modelLabel": "Model",
+    "permissionsSection": "Permissions",
+    "modeLabel": "Mode",
+    "pendingLabel": "Pending",
+    "contextLabel": "Context",
+    "connectedLabel": "Connected",
+    "warningAuthLabel": "Warning / Auth",
+    "eventsSection": "Run Events",
+    "activeToolsLabel": "Active Tools",
+    "toolResultsLabel": "Tool Results",
+    "runtimeLabel": "Runtime",
+    "codexPermissions": {
+      "fullAutoAccess": "Full Auto Access",
+      "fullAccess": "Full Access",
+      "readonlySandbox": "Read-only Sandbox",
+      "sandboxAuto": "Sandbox Auto",
+      "requestApproval": "Request Approval"
+    },
+    "rooPermissions": {
+      "autoApproveEdit": "Auto-approve edits",
+      "autoApproveAll": "Auto-approve all",
+      "autoApproveRead": "Auto-approve reads",
+      "planOnly": "Plan only",
+      "askEveryTime": "Ask every time"
+    },
+    "claudePermissions": {
+      "autoEdit": "Auto-edit",
+      "fullAuto": "Full auto",
+      "dontAsk": "Don't ask",
+      "planOnly": "Plan only",
+      "defaultPerm": "Default"
+    }
+  },
+  "mcp": {
+    "invalidKeyValue": "Invalid key=value line: {{line}}",
+    "emptyKeyName": "Empty key name: {{line}}",
+    "invalidTimeoutValue": "Invalid timeout value: {{value}}",
+    "selectProjectFirst": "Please select a project first before managing project-scope MCP.",
+    "cannotLoadInventory": "Cannot load runtime inventory: {{err}}",
+    "manageMcp": "MCP Management",
+    "refresh": "Refresh",
+    "connectAndCheck": "Connect & check tools",
+    "selectProjectFirstShort": "Select a project first",
+    "loading": "Loading…",
+    "addOrUpdateServer": "Add / Update MCP Server",
+    "clearForm": "Clear form",
+    "nameField": "Name",
+    "argsField": "Args / one per line",
+    "canBeEmpty": "Can leave empty",
+    "disabledByDefault": "Disabled by default after save",
+    "saving": "Saving…",
+    "saveMcpServer": "Save MCP Server",
+    "resetScope": "Reset current scope",
+    "loadingInventory": "Loading…",
+    "noMcpServersInRuntime": "No MCP servers found in the current runtime inventory.",
+    "noMcpServersInScope": "No MCP servers under the current scope."
+  },
+  "workspace": {
+    "noOpenProject": "No open project",
+    "currentProject": "Current Project",
+    "noProjectSelected": "No project selected",
+    "projectCount": "{{count}} projects",
+    "sessionsLabel": "Sessions",
+    "recentSessions": "Recent Sessions",
+    "sessionCount": "{{count}} items",
+    "searchSessions": "Search sessions...",
+    "gridView": "Grid view",
+    "listView": "List view",
+    "noMatchResults": "No matching results",
+    "noOpenSessions": "No open sessions",
+    "addProjectBtn": "Add project",
+    "newSessionBtn": "New session"
+  },
+  "commandPalette": {
+    "newSession": "New session",
+    "newSessionDesc": "Create a new agent session",
+    "sessionCategory": "Session",
+    "addProjectFolder": "Add project folder",
+    "addProjectFolderDesc": "Select and add a project to the workspace",
+    "projectCategory": "Project",
+    "settingsCmd": "Settings",
+    "settingsDesc": "Open settings panel",
+    "settingsCategory": "Settings",
+    "mcpManagement": "MCP Server Management",
+    "mcpManagementDesc": "View and configure MCP servers",
+    "toggleTheme": "Toggle theme",
+    "toggleThemeDesc": "Switch between dark and light themes",
+    "openTerminal": "Open terminal",
+    "openTerminalDesc": "Open terminal in bottom panel",
+    "toolsCategory": "Tools",
+    "searchFiles": "Search files",
+    "searchFilesDesc": "Search for files in the project",
+    "searchPlaceholder": "Type a command or search...",
+    "noCommandFound": "No matching command found",
+    "navUpdown": "↑↓ Navigate",
+    "navEnter": "↵ Execute",
+    "navEsc": "Esc Close"
+  },
+  "codexSettings": {
+    "followGuiPermission": "Follow GUI permission mode",
+    "followGuiSandbox": "Follow GUI sandbox mode",
+    "nativeSettings": "Codex Native Settings",
+    "nativeSettingsDesc": "These settings are passed through to the official Codex Config/App Server. Leave empty to use GUI's generic Provider/permission mapping.",
+    "modelProviderDesc": "model_provider passed to Codex; auto-generated from current GUI provider when left empty.",
+    "saveExtendedHistory": "Save extended history",
+    "saveExtendedHistoryDesc": "Enable Codex persist_extended_history, retain more complete thread history.",
+    "enableMemories": "Enable Codex memories",
+    "enableMemoriesDesc": "Control Codex memories.generate_memories and memories.use_memories.",
+    "threadStoreDesc": "Leave empty for isolated local thread store; fill in to use Codex remote thread store.",
+    "countBadge": "{{count}} items",
+    "envHelpText": "One key = value per line. Values are parsed as TOML scalars; unparsable values are passed as strings."
+  },
+  "operations": {
+    "doctorDesc": "Check runtime, provider, permissions, extensions, and network reachability directly in the GUI — no need to switch back to CLI.",
+    "diagnosing": "Diagnosing…",
+    "reDiagnose": "Re-diagnose",
+    "probeProvider": "Probe Provider",
+    "probeNetwork": "Probe Network",
+    "showEnvVarProvider": "Show environment variable Providers"
+  },
+  "store": {
+    "selectProjectFirst": "Please select a project folder before creating a new session.",
+    "goalCodexOnly": "/goal is only available with Codex agent.",
+    "goalNeedSession": "Please create a session before using /goal.",
+    "selectProjectBeforeStart": "Please select a project folder before starting a session."
+  },
+  "markdownRenderer": {
+    "codeLabel": "Code",
+    "codeExpandText": "Expand to view code block"
+  },
+  "settingInput": {
+    "hidePassword": "Hide password",
+    "showPassword": "Show password"
+  },
+  "layout": {
+    "resizeSidebar": "Resize sidebar width"
+  },
+  "contextMenu": {
+    "pinTask": "Pin Task",
+    "unpinTask": "Unpin Task",
+    "renameTask": "Rename Task",
+    "archiveTask": "Archive Task",
+    "markUnread": "Mark as Unread",
+    "markRead": "Mark as Read",
+    "openInExplorer": "Open in Explorer",
+    "copyPath": "Copy Path",
+    "copyTaskPath": "Copy Task Path",
+    "copySessionId": "Copy Session ID",
+    "goToSettings": "Go to Settings",
+    "reloadSession": "Reload Session",
+    "feedbackIssue": "Report Issue",
+    "cancel": "Cancel",
+    "renamePlaceholder": "Enter new name...",
+    "renameConfirm": "Confirm",
+    "separator": "Actions"
+  },
+  "projectHover": {
+    "remove": "Remove",
+    "viewFiles": "View Files",
+    "newTask": "New Task"
+  },
+  "fileExplorer": {
+    "title": "File Explorer",
+    "backToTasks": "Back to Tasks",
+    "noFiles": "No files in this directory",
+    "error": "Failed to load directory",
+    "root": "Project Root",
+    "loading": "Loading...",
+    "emptyDirectory": "Empty directory"
   }
 }

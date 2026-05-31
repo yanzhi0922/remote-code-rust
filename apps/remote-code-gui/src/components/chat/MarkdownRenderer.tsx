@@ -5,6 +5,7 @@ import rehypeKatex from 'rehype-katex';
 import type { Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
+import i18n from '../../i18n';
 import { truncateMiddle } from '../../lib/utils';
 import CollapsibleBlock from './CollapsibleBlock';
 
@@ -17,14 +18,14 @@ function summarizeCodeBlock(children: React.ReactNode): { label: string; preview
   const codeElement = elements.find((child) => isValidElement(child));
 
   if (!isValidElement(codeElement)) {
-    return { label: '代码', preview: '展开查看代码块' };
+    return { label: i18n.t('markdownRenderer.codeLabel'), preview: i18n.t('markdownRenderer.codeExpandText') };
   }
 
   const props = codeElement.props as { className?: string; children?: React.ReactNode };
   const className = typeof props.className === 'string' ? props.className : '';
-  const language = /language-(\w+)/.exec(className)?.[1]?.toUpperCase() ?? '代码';
+  const language = /language-(\w+)/.exec(className)?.[1]?.toUpperCase() ?? i18n.t('markdownRenderer.codeLabel');
   const rawText = extractTextContent(props.children);
-  const firstLine = rawText.split('\n').find((line) => line.trim().length > 0)?.trim() ?? '展开查看代码块';
+  const firstLine = rawText.split('\n').find((line) => line.trim().length > 0)?.trim() ?? i18n.t('markdownRenderer.codeExpandText');
 
   return {
     label: language,

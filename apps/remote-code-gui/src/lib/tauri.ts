@@ -788,6 +788,14 @@ export function archiveSession(sessionId: string): Promise<void> {
   return invoke('archive_session', { sessionId });
 }
 
+export function renameSession(sessionId: string, newTitle: string): Promise<void> {
+  return invoke('rename_session', { sessionId, newTitle });
+}
+
+export function updateSessionAgent(sessionId: string, agentType: AgentType): Promise<void> {
+  return invoke('update_session_agent', { sessionId, agentType });
+}
+
 export function restoreSession(sessionId: string): Promise<void> {
   return invoke('restore_session', { sessionId });
 }

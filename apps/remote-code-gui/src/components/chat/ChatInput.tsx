@@ -18,6 +18,7 @@ import { useTranslation } from 'react-i18next';
 import { AgentSelector } from '../agent/AgentSelector';
 import { useAppStore } from '../../stores/useAppStore';
 import { useAgentStore } from '../../stores/useAgentStore';
+import * as tauri from '../../lib/tauri';
 import type { AgentType, FullSettings } from '../../lib/types';
 
 type PermissionOption = {
@@ -28,59 +29,67 @@ type PermissionOption = {
   updates: Record<string, unknown>;
 };
 
-const CLAUDE_PERMISSION_MODES = [
-  { value: 'default', label: '默认', desc: '读取自动执行，写入和命令需确认' },
-  { value: 'acceptEdits', label: '自动编辑', desc: '文件编辑自动执行，命令仍需确认' },
-  { value: 'dontAsk', label: '不询问', desc: '仅自动放行低风险读取工具' },
-  { value: 'bypassPermissions', label: '全自动', desc: '跳过全部权限确认' },
-  { value: 'plan', label: '规划', desc: '只规划，不执行工具' },
-] as const;
+type TFn = (key: string) => string;
 
-const ROO_PERMISSION_MODES = [
-  { value: 'default', label: '每次询问', desc: '工具执行前确认，保留 Roo Code 的手动审批节奏' },
-  { value: 'dontAsk', label: '自动批准读取', desc: '低风险读取工具自动执行，写入和命令仍确认' },
-  { value: 'acceptEdits', label: '自动批准编辑', desc: '文件读写自动执行，命令和外部访问仍确认' },
-  { value: 'bypassPermissions', label: '自动批准全部', desc: '自动放行工具调用，仅用于可信工作区' },
-  { value: 'plan', label: '仅规划', desc: '只生成计划，不执行工具' },
-] as const;
+function claudePermissionModes(t: TFn) {
+  return [
+    { value: 'default', label: t('chatInput.permission.claude.default'), desc: t('chatInput.permission.claude.defaultDesc') },
+    { value: 'acceptEdits', label: t('chatInput.permission.claude.acceptEdits'), desc: t('chatInput.permission.claude.acceptEditsDesc') },
+    { value: 'dontAsk', label: t('chatInput.permission.claude.dontAsk'), desc: t('chatInput.permission.claude.dontAskDesc') },
+    { value: 'bypassPermissions', label: t('chatInput.permission.claude.bypassPermissions'), desc: t('chatInput.permission.claude.bypassPermissionsDesc') },
+    { value: 'plan', label: t('chatInput.permission.claude.plan'), desc: t('chatInput.permission.claude.planDesc') },
+  ] as const;
+}
 
-const CODEX_PERMISSION_MODES = [
-  {
-    key: 'codex-on-request-workspace',
-    label: '请求批准',
-    desc: 'workspace-write 沙盒，越界写入或高风险命令时请求确认',
-    approval: 'on-request',
-    sandbox: 'workspace-write',
-  },
-  {
-    key: 'codex-never-workspace',
-    label: '沙盒自动',
-    desc: 'workspace-write 沙盒内自动执行，不弹权限确认',
-    approval: 'never',
-    sandbox: 'workspace-write',
-  },
-  {
-    key: 'codex-on-request-readonly',
-    label: '只读沙盒',
-    desc: 'read-only 沙盒，写入和命令需要显式批准',
-    approval: 'on-request',
-    sandbox: 'read-only',
-  },
-  {
-    key: 'codex-on-request-full',
-    label: '完全访问',
-    desc: 'danger-full-access，无沙盒；危险操作仍请求批准',
-    approval: 'on-request',
-    sandbox: 'danger-full-access',
-  },
-  {
-    key: 'codex-never-full',
-    label: '全自动访问',
-    desc: 'danger-full-access 且不请求确认，仅用于完全可信环境',
-    approval: 'never',
-    sandbox: 'danger-full-access',
-  },
-] as const;
+function rooPermissionModes(t: TFn) {
+  return [
+    { value: 'code', label: t('chatInput.permission.roo.code'), desc: t('chatInput.permission.roo.codeDesc') },
+    { value: 'architect', label: t('chatInput.permission.roo.architect'), desc: t('chatInput.permission.roo.architectDesc') },
+    { value: 'ask', label: t('chatInput.permission.roo.ask'), desc: t('chatInput.permission.roo.askDesc') },
+    { value: 'debug', label: t('chatInput.permission.roo.debug'), desc: t('chatInput.permission.roo.debugDesc') },
+    { value: 'orchestrator', label: t('chatInput.permission.roo.orchestrator'), desc: t('chatInput.permission.roo.orchestratorDesc') },
+  ] as const;
+}
+
+function codexPermissionModes(t: TFn) {
+  return [
+    {
+      key: 'codex-on-request-workspace',
+      label: t('chatInput.permission.codex.requestApproval'),
+      desc: t('chatInput.permission.codex.requestApprovalDesc'),
+      approval: 'on-request' as const,
+      sandbox: 'workspace-write' as const,
+    },
+    {
+      key: 'codex-never-workspace',
+      label: t('chatInput.permission.codex.sandboxAuto'),
+      desc: t('chatInput.permission.codex.sandboxAutoDesc'),
+      approval: 'never' as const,
+      sandbox: 'workspace-write' as const,
+    },
+    {
+      key: 'codex-on-request-readonly',
+      label: t('chatInput.permission.codex.readonlySandbox'),
+      desc: t('chatInput.permission.codex.readonlySandboxDesc'),
+      approval: 'on-request' as const,
+      sandbox: 'read-only' as const,
+    },
+    {
+      key: 'codex-on-request-full',
+      label: t('chatInput.permission.codex.fullAccess'),
+      desc: t('chatInput.permission.codex.fullAccessDesc'),
+      approval: 'on-request' as const,
+      sandbox: 'danger-full-access' as const,
+    },
+    {
+      key: 'codex-never-full',
+      label: t('chatInput.permission.codex.fullAuto'),
+      desc: t('chatInput.permission.codex.fullAutoDesc'),
+      approval: 'never' as const,
+      sandbox: 'danger-full-access' as const,
+    },
+  ] as const;
+}
 
 const MODEL_CONTEXT_WINDOWS: Array<[RegExp, number]> = [
   [/gpt-4\.1/i, 1_000_000],
@@ -98,11 +107,12 @@ const MODEL_CONTEXT_WINDOWS: Array<[RegExp, number]> = [
 function permissionOptionsForAgent(
   agentType: AgentType,
   settings: FullSettings | null,
+  t: TFn,
 ): PermissionOption[] {
   if (agentType === 'remote_codex') {
     const approval = settings?.codex_approval_policy ?? 'on-request';
     const sandbox = settings?.codex_sandbox_mode ?? 'workspace-write';
-    return CODEX_PERMISSION_MODES.map((mode) => ({
+    return codexPermissionModes(t).map((mode) => ({
       key: mode.key,
       label: mode.label,
       desc: mode.desc,
@@ -114,7 +124,16 @@ function permissionOptionsForAgent(
     }));
   }
 
-  const modes = agentType === 'remote_roo' ? ROO_PERMISSION_MODES : CLAUDE_PERMISSION_MODES;
+  const modes = agentType === 'remote_roo' ? rooPermissionModes(t) : claudePermissionModes(t);
+  if (agentType === 'remote_roo') {
+    return modes.map((mode) => ({
+      key: mode.value,
+      label: mode.label,
+      desc: mode.desc,
+      active: (settings?.roo_mode ?? 'code') === mode.value,
+      updates: { roo_mode: mode.value },
+    }));
+  }
   return modes.map((mode) => ({
     key: mode.value,
     label: mode.label,
@@ -149,14 +168,16 @@ interface SlashCommand {
   icon: string;
 }
 
-const SLASH_COMMANDS: SlashCommand[] = [
-  { name: '/goal', description: '设置当前会话目标', icon: '◎' },
-  { name: '/compact', description: '压缩当前上下文', icon: '⊞' },
-  { name: '/clear', description: '清空当前会话内容', icon: '⊘' },
-  { name: '/plan', description: '切换到只规划模式', icon: '▶' },
-  { name: '/review', description: '开始代码审查', icon: '⊡' },
-  { name: '/doctor', description: '运行诊断检查', icon: '⊕' },
-];
+function slashCommands(t: TFn): SlashCommand[] {
+  return [
+    { name: '/goal', description: t('chatInput.slash.goal'), icon: '◎' },
+    { name: '/compact', description: t('chatInput.slash.compact'), icon: '⊞' },
+    { name: '/clear', description: t('chatInput.slash.clear'), icon: '⊘' },
+    { name: '/plan', description: t('chatInput.slash.plan'), icon: '▶' },
+    { name: '/review', description: t('chatInput.slash.review'), icon: '⊡' },
+    { name: '/doctor', description: t('chatInput.slash.doctor'), icon: '⊕' },
+  ];
+}
 
 function Dropdown({
   open,
@@ -315,6 +336,7 @@ export function ChatInput() {
   const sending = useAppStore((state) => state.sending);
   const activeSessionId = useAppStore((state) => state.activeSessionId);
   const sessions = useAppStore((state) => state.sessions);
+  const conversation = useAppStore((state) => state.conversation);
   const settings = useAppStore((state) => state.settings);
   const provider = useAppStore((state) => state.provider);
   const providerConfigs = useAppStore((state) => state.providerConfigs);
@@ -338,13 +360,13 @@ export function ChatInput() {
     () => sessions.find((session) => session.id === activeSessionId) ?? null,
     [activeSessionId, sessions],
   );
-  const lockedAgentType = activeSession?.agent_type ?? null;
+  const lockedAgentType = conversation.length > 0 ? (activeSession?.agent_type ?? null) : null;
   const effectiveAgentType = lockedAgentType ?? activeAgentType ?? 'remote_claude';
   const contextUsage = activeSessionId ? contextUsageBySession[activeSessionId] : null;
 
   const permissionOptions = useMemo(
-    () => permissionOptionsForAgent(effectiveAgentType, settings ?? null),
-    [effectiveAgentType, settings],
+    () => permissionOptionsForAgent(effectiveAgentType, settings ?? null, t),
+    [effectiveAgentType, settings, t],
   );
   const permissionLabel = permissionOptions.find((mode) => mode.active)?.label ?? permissionOptions[0]?.label ?? t('chatInput.permissionLabel');
 
@@ -362,7 +384,7 @@ export function ChatInput() {
     const nextWindow = inferModelContextWindow(model);
     if (usedTokens > 0 && nextWindow !== null && nextWindow < usedTokens) {
       setModelError(
-        `当前会话已使用 ${formatTokenCount(usedTokens)} tokens，${model} 约 ${formatTokenCount(nextWindow)}，不能切换到更小上下文。`,
+        t('chatInput.contextError', { used: formatTokenCount(usedTokens), model, next: formatTokenCount(nextWindow) }),
       );
       return false;
     }
@@ -372,6 +394,8 @@ export function ChatInput() {
 
   const handleSend = async () => {
     if (!input.trim() || sending) return;
+    // Flush any pending model change before sending to avoid race condition.
+    await commitModelDraft();
     const current = input;
     setInput('');
     setShowSlashPalette(false);
@@ -385,7 +409,7 @@ export function ChatInput() {
 
   const handleKeyDown = async (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (showSlashPalette) {
-      const filteredCommands = SLASH_COMMANDS.filter(
+      const filteredCommands = slashCommands(t).filter(
         (cmd) =>
           cmd.name.toLowerCase().includes(slashFilter.toLowerCase()) ||
           cmd.description.toLowerCase().includes(slashFilter.toLowerCase()),
@@ -468,7 +492,7 @@ export function ChatInput() {
         >
           {showSlashPalette && (
             <SlashCommandPalette
-              commands={SLASH_COMMANDS}
+              commands={slashCommands(t)}
               filter={slashFilter}
               onSelect={handleSlashSelect}
               highlightedIndex={highlightedSlashIndex}
@@ -505,6 +529,10 @@ export function ChatInput() {
               onSelect={(agentType) => {
                 if (lockedAgentType && agentType !== lockedAgentType) return;
                 selectAgent(agentType);
+                // Persist agent change to backend before first message
+                if (agentType && activeSessionId && conversation.length === 0) {
+                  void tauri.updateSessionAgent(activeSessionId, agentType);
+                }
               }}
             />
 

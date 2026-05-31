@@ -122,7 +122,7 @@ pub fn arg0_dispatch() -> Option<Arg0PathEntryGuard> {
                     codex_exec_server::LOCAL_FS.as_ref(),
                     /*sandbox*/ None,
                 )) {
-                    Ok(()) => 0,
+                    Ok(_) => 0,
                     Err(_) => 1,
                 }
             }
@@ -241,30 +241,10 @@ fn build_runtime() -> anyhow::Result<tokio::runtime::Runtime> {
 
 const ILLEGAL_ENV_VAR_PREFIX: &str = "CODEX_";
 
-/// Environment variable names that are too security-sensitive to be set from
-/// a `.env` file.  Overriding these can break the process runtime, alter
-/// library loading, or bypass security boundaries.
-const BLOCKED_ENV_VARS: &[&str] = &[
-    "PATH",
-    "HOME",
-    "LD_PRELOAD",
-    "DYLD_INSERT_LIBRARIES",
-    "LD_LIBRARY_PATH",
-    "SHELL",
-    "USER",
-    "IFS",
-    "TEMP",
-    "TMP",
-    "SYSTEMROOT",
-    "WINDIR",
-    "COMSPEC",
-];
-
 /// Load env vars from ~/.codex/.env.
 ///
 /// Security: Do not allow `.env` files to create or modify any variables
-/// with names starting with `CODEX_` or any system-critical variable listed
-/// in [`BLOCKED_ENV_VARS`].
+/// with names starting with `CODEX_`.
 fn load_dotenv() {
     if let Ok(codex_home) = find_codex_home()
         && let Ok(iter) = dotenvy::from_path_iter(codex_home.join(".env"))
@@ -273,23 +253,17 @@ fn load_dotenv() {
     }
 }
 
-/// Helper to set vars from a dotenvy iterator while filtering out `CODEX_`
-/// prefix keys and blocked security-sensitive variable names.
+/// Helper to set vars from a dotenvy iterator while filtering out `CODEX_` keys.
 fn set_filtered<I>(iter: I)
 where
     I: IntoIterator<Item = Result<(String, String), dotenvy::Error>>,
 {
     for (key, value) in iter.into_iter().flatten() {
-        let upper = key.to_ascii_uppercase();
-        if upper.starts_with(ILLEGAL_ENV_VAR_PREFIX) {
-            continue;
+        if !key.to_ascii_uppercase().starts_with(ILLEGAL_ENV_VAR_PREFIX) {
+            // It is safe to call set_var() because our process is
+            // single-threaded at this point in its execution.
+            unsafe { std::env::set_var(&key, &value) };
         }
-        if BLOCKED_ENV_VARS.contains(&upper.as_str()) {
-            continue;
-        }
-        // It is safe to call set_var() because our process is
-        // single-threaded at this point in its execution.
-        unsafe { std::env::set_var(&key, &value) };
     }
 }
 

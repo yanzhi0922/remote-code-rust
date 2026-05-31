@@ -12,7 +12,9 @@
       "types": "./dist/index.d.ts"
     }
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "license": "MIT OR Apache-2.0",
   "repository": {
     "type": "git",
@@ -20,5 +22,8 @@
   },
   "peerDependencies": {
     "@tauri-apps/api": "^2"
+  },
+  "devDependencies": {
+    "typescript": "^6.0.3"
   }
 }

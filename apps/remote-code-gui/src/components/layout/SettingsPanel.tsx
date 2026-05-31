@@ -14,12 +14,15 @@ import {
   SlidersHorizontal,
   TerminalSquare,
   Trash2,
+  Wifi,
   X,
 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import type { FullSettings, ModelProfile, ProviderConfig, SessionSummary } from '../../lib/types';
 import { useAppStore } from '../../stores/useAppStore';
 import { CodexSettings } from '../settings/CodexSettings';
+import { RemoteTab } from '../settings/RemoteTab';
 import { McpTab } from './McpTab';
 import { OperationsTab } from './OperationsTab';
 
@@ -29,31 +32,40 @@ interface SettingsPanelProps {
   initialTab?: SettingsTab;
 }
 
-export type SettingsTab = 'provider' | 'runtime' | 'codex' | 'mcp' | 'operations' | 'archive';
+export type SettingsTab = 'provider' | 'runtime' | 'codex' | 'mcp' | 'remote' | 'operations' | 'archive';
 
-const TABS: Array<{ key: SettingsTab; label: string; icon: React.ElementType }> = [
-  { key: 'provider', label: 'Provider', icon: SlidersHorizontal },
-  { key: 'runtime', label: '运行参数', icon: Gauge },
-  { key: 'codex', label: 'Codex', icon: Bot },
-  { key: 'mcp', label: 'MCP', icon: Blocks },
-  { key: 'operations', label: '操作面', icon: TerminalSquare },
-  { key: 'archive', label: '归档', icon: Archive },
-];
+type TFn = (key: string, options?: Record<string, unknown>) => string;
 
-const PROTOCOLS = [
-  { value: 'openai', label: 'OpenAI / 兼容 Chat Completions' },
-  { value: 'anthropic', label: 'Anthropic Messages' },
-  { value: 'bedrock', label: 'AWS Bedrock' },
-  { value: 'vertex', label: 'Google Vertex' },
-];
+function settingsTabs(t: TFn): Array<{ key: SettingsTab; label: string; icon: React.ElementType }> {
+  return [
+    { key: 'provider', label: 'Provider', icon: SlidersHorizontal },
+    { key: 'runtime', label: t('settings.runtimeParams'), icon: Gauge },
+    { key: 'codex', label: 'Codex', icon: Bot },
+    { key: 'mcp', label: 'MCP', icon: Blocks },
+    { key: 'remote', label: t('settings.remote'), icon: Wifi },
+    { key: 'operations', label: t('settings.operations'), icon: TerminalSquare },
+    { key: 'archive', label: t('settings.archive'), icon: Archive },
+  ];
+}
 
-const PERMISSION_MODES = [
-  { value: 'default', label: '默认', desc: '读取自动执行，写入和命令需确认' },
-  { value: 'acceptEdits', label: '自动编辑', desc: '文件编辑自动执行，命令仍需确认' },
-  { value: 'dontAsk', label: '不询问', desc: '仅自动放行低风险读取工具' },
-  { value: 'bypassPermissions', label: '全自动', desc: '跳过全部权限确认' },
-  { value: 'plan', label: '规划', desc: '只规划，不执行工具' },
-];
+function protocols(t: TFn) {
+  return [
+    { value: 'openai', label: t('settings.openAiCompatible') },
+    { value: 'anthropic', label: 'Anthropic Messages' },
+    { value: 'bedrock', label: 'AWS Bedrock' },
+    { value: 'vertex', label: 'Google Vertex' },
+  ];
+}
+
+function permissionModes(t: TFn) {
+  return [
+    { value: 'default', label: t('chatInput.permission.claude.default'), desc: t('chatInput.permission.claude.defaultDesc') },
+    { value: 'acceptEdits', label: t('chatInput.permission.claude.acceptEdits'), desc: t('chatInput.permission.claude.acceptEditsDesc') },
+    { value: 'dontAsk', label: t('chatInput.permission.claude.dontAsk'), desc: t('chatInput.permission.claude.dontAskDesc') },
+    { value: 'bypassPermissions', label: t('chatInput.permission.claude.bypassPermissions'), desc: t('chatInput.permission.claude.bypassPermissionsDesc') },
+    { value: 'plan', label: t('chatInput.permission.claude.plan'), desc: t('chatInput.permission.claude.planDesc') },
+  ];
+}
 
 function emptyProviderConfig(): ProviderConfig {
   return {
@@ -83,7 +95,7 @@ function Field({
   );
 }
 
-function RuntimePathRow({ label, path }: { label: string; path: string }) {
+function RuntimePathRow({ label, path, t }: { label: string; path: string; t: TFn }) {
   const copyPath = () => {
     if (typeof navigator === 'undefined' || !navigator.clipboard) return;
     void navigator.clipboard.writeText(path);
@@ -103,13 +115,14 @@ function RuntimePathRow({ label, path }: { label: string; path: string }) {
         className="inline-flex h-7 w-fit items-center gap-1 rounded-md border border-rc-border-primary px-2 text-xs font-medium text-rc-text-secondary transition-colors hover:bg-rc-bg-hover hover:text-rc-text-primary"
       >
         <Copy size={13} />
-        复制
+        {t('common.copy')}
       </button>
     </div>
   );
 }
 
 export function SettingsPanel({ open, onClose, initialTab = 'provider' }: SettingsPanelProps) {
+  const { t } = useTranslation();
   const settings = useAppStore((state) => state.settings);
   const loadSettings = useAppStore((state) => state.loadSettings);
   const loadProviderConfigs = useAppStore((state) => state.loadProviderConfigs);
@@ -158,17 +171,17 @@ export function SettingsPanel({ open, onClose, initialTab = 'provider' }: Settin
           <div className="border-b border-rc-border-secondary px-3 py-3">
             <button
               onClick={onClose}
-              aria-label="返回应用"
+              aria-label={t('settings.backToApp')}
               className="inline-flex h-8 items-center gap-2 rounded-md px-2 text-xs font-medium text-rc-text-secondary transition-colors hover:bg-rc-bg-hover hover:text-rc-text-primary"
             >
               <X size={15} />
-              返回应用
+              {t('settings.backToApp')}
             </button>
           </div>
 
           <div className="min-h-0 flex-1 overflow-y-auto p-2">
             <div role="tablist" aria-label="Settings sections" className="space-y-0.5">
-              {TABS.map((tab) => {
+              {settingsTabs(t).map((tab) => {
                 const Icon = tab.icon;
                 const selected = activeTab === tab.key;
                 return (
@@ -198,12 +211,12 @@ export function SettingsPanel({ open, onClose, initialTab = 'provider' }: Settin
           <header className="flex h-14 shrink-0 items-center justify-between border-b border-rc-border-secondary bg-rc-bg-surface px-6">
             <div className="min-w-0">
               <h2 className="truncate text-sm font-semibold text-rc-text-primary">
-                {TABS.find((tab) => tab.key === activeTab)?.label ?? 'Settings'}
+                {settingsTabs(t).find((tab) => tab.key === activeTab)?.label ?? t('settings.title')}
               </h2>
             </div>
             <button
               onClick={onClose}
-              aria-label="关闭设置"
+              aria-label={t('settings.closeSettings')}
               className="rounded-md p-2 text-rc-text-tertiary transition-colors hover:bg-rc-bg-hover hover:text-rc-text-primary"
             >
               <X size={18} />
@@ -218,7 +231,7 @@ export function SettingsPanel({ open, onClose, initialTab = 'provider' }: Settin
           >
             <div className="mx-auto w-full max-w-[860px]">
               {!settings ? (
-                <div className="py-10 text-sm text-rc-text-secondary">正在加载设置…</div>
+                <div className="py-10 text-sm text-rc-text-secondary">{t('settings.loadingSettings')}</div>
               ) : activeTab === 'provider' ? (
                 <ProviderTab />
               ) : activeTab === 'mcp' ? (
@@ -228,6 +241,8 @@ export function SettingsPanel({ open, onClose, initialTab = 'provider' }: Settin
                   settings={current}
                   onUpdate={(updates) => setDraft((state) => ({ ...state, ...updates }))}
                 />
+              ) : activeTab === 'remote' ? (
+                <RemoteTab />
               ) : activeTab === 'operations' ? (
                 <OperationsTab />
               ) : activeTab === 'archive' ? (
@@ -243,7 +258,7 @@ export function SettingsPanel({ open, onClose, initialTab = 'provider' }: Settin
               onClick={() => setDraft({})}
               className="rounded-md px-4 py-2 text-sm font-medium text-rc-text-secondary transition-colors hover:bg-rc-bg-hover hover:text-rc-text-primary"
             >
-              重置未保存更改
+              {t('settings.resetUnsaved')}
             </button>
             <button
               onClick={() => {
@@ -252,7 +267,7 @@ export function SettingsPanel({ open, onClose, initialTab = 'provider' }: Settin
               disabled={Object.keys(draft).length === 0 || saving}
               className="rounded-md bg-rc-accent-primary px-5 py-2 text-sm font-medium text-white transition-colors hover:bg-rc-accent-primary-hover disabled:cursor-not-allowed disabled:bg-rc-text-tertiary"
             >
-              {saving ? '保存中…' : '保存'}
+              {saving ? t('settings.saving') : t('settings.saveButton')}
             </button>
           </footer>
         </div>
@@ -261,40 +276,42 @@ export function SettingsPanel({ open, onClose, initialTab = 'provider' }: Settin
   );
 }
 
-function formatRelativeTime(iso: string): string {
+function formatRelativeTime(iso: string, t: TFn): string {
   const now = Date.now();
   const then = new Date(iso).getTime();
   const diffMinutes = Math.floor((now - then) / 60_000);
-  if (diffMinutes < 1) return '刚刚';
-  if (diffMinutes < 60) return `${diffMinutes} 分钟前`;
+  if (diffMinutes < 1) return t('time.justNow');
+  if (diffMinutes < 60) return t('time.minutesAgo', { count: diffMinutes });
   const diffHours = Math.floor(diffMinutes / 60);
-  if (diffHours < 24) return `${diffHours} 小时前`;
+  if (diffHours < 24) return t('time.hoursAgo', { count: diffHours });
   const diffDays = Math.floor(diffHours / 24);
-  if (diffDays < 7) return `${diffDays} 天前`;
-  return new Date(iso).toLocaleDateString('zh-CN');
+  if (diffDays < 7) return t('time.daysAgo', { count: diffDays });
+  return new Date(iso).toLocaleDateString();
 }
 
 function ArchiveRow({
   session,
   privacyMode,
   onRestore,
+  t,
 }: {
   session: SessionSummary;
   privacyMode: boolean;
   onRestore: () => void;
+  t: TFn;
 }) {
   return (
     <div className="flex items-center gap-3 rounded-md border border-rc-border-secondary bg-rc-bg-secondary px-3 py-2.5">
       <div className="min-w-0 flex-1">
         <div className="truncate text-sm font-semibold text-rc-text-primary">
-          {privacyMode ? '会话已隐藏' : session.title}
+          {privacyMode ? t('settings.sessionArchived') : session.title}
         </div>
         <div className="mt-1 truncate text-xs text-rc-text-secondary">
-          {privacyMode ? '路径已隐藏' : session.cwd}
+          {privacyMode ? t('settings.pathHidden') : session.cwd}
         </div>
         <div className="mt-1 text-[11px] text-rc-text-tertiary">
           {session.provider_name}
-          {session.model ? ` · ${session.model}` : ''} · {formatRelativeTime(session.updated_at)}
+          {session.model ? ` · ${session.model}` : ''} · {formatRelativeTime(session.updated_at, t)}
         </div>
       </div>
 
@@ -303,13 +320,14 @@ function ArchiveRow({
         className="inline-flex items-center gap-2 rounded-md border border-rc-border-primary bg-rc-bg-surface px-3 py-2 text-sm font-medium text-rc-text-secondary transition-colors hover:bg-rc-bg-hover hover:text-rc-text-primary"
       >
         <ArchiveRestore size={14} />
-        恢复
+        {t('common.restore')}
       </button>
     </div>
   );
 }
 
 function ArchiveTab() {
+  const { t } = useTranslation();
   const archivedSessions = useAppStore((state) => state.archivedSessions);
   const restoreSession = useAppStore((state) => state.restoreSession);
   const privacyMode = useAppStore((state) => state.workspacePrivacyMode);
@@ -317,7 +335,7 @@ function ArchiveTab() {
   return (
     <div className="space-y-5">
       <div>
-        <h3 className="text-sm font-semibold text-rc-text-primary">归档会话</h3>
+        <h3 className="text-sm font-semibold text-rc-text-primary">{t('settings.archiveHeading')}</h3>
       </div>
 
       {archivedSessions.length > 0 ? (
@@ -327,6 +345,7 @@ function ArchiveTab() {
               key={session.id}
               session={session}
               privacyMode={privacyMode}
+              t={t}
               onRestore={() => {
                 void restoreSession(session.id);
               }}
@@ -335,7 +354,7 @@ function ArchiveTab() {
         </div>
       ) : (
         <div className="rounded-md border border-dashed border-rc-border-primary px-3 py-5 text-sm text-rc-text-secondary">
-          当前没有已归档会话。
+          {t('settings.noArchivedSessions')}
         </div>
       )}
     </div>
@@ -343,6 +362,7 @@ function ArchiveTab() {
 }
 
 function ProviderTab() {
+  const { t } = useTranslation();
   const providerConfigs = useAppStore((state) => state.providerConfigs);
   const saveProviderConfig = useAppStore((state) => state.saveProviderConfig);
   const deleteProviderConfig = useAppStore((state) => state.deleteProviderConfig);
@@ -358,7 +378,7 @@ function ProviderTab() {
 
   const title = useMemo(() => {
     if (editingName === null) return null;
-    return editingName === 'new' ? '新增 Provider' : `编辑 ${editingName}`;
+    return editingName === 'new' ? t('settings.newProvider') : t('settings.editProvider', { name: editingName });
   }, [editingName]);
 
   const startAdd = () => {
@@ -392,7 +412,7 @@ function ProviderTab() {
     if (isDuplicate) {
       // eslint-disable-next-line no-alert
       const proceed = window.confirm(
-        `名为 "${trimmedName}" 的 Provider 已存在，是否覆盖？`,
+        t('settings.providerExists', { name: trimmedName }),
       );
       if (!proceed) return;
     }
@@ -447,14 +467,14 @@ function ProviderTab() {
     <div className="space-y-5">
       <div className="flex items-center justify-between">
         <div>
-          <h3 className="text-sm font-semibold text-rc-text-primary">已保存的 Provider</h3>
+          <h3 className="text-sm font-semibold text-rc-text-primary">{t('settings.savedProviders')}</h3>
         </div>
         <button
           onClick={startAdd}
           className="inline-flex items-center gap-2 rounded-md border border-rc-border-primary bg-rc-bg-surface px-4 py-2 text-sm font-medium text-rc-text-secondary transition-colors hover:bg-rc-bg-hover hover:text-rc-text-primary"
         >
           <Plus size={15} />
-          添加
+          {t('settings.addProviderBtn')}
         </button>
       </div>
 
@@ -467,8 +487,8 @@ function ProviderTab() {
             // Determine effective model display
             const effectiveModel =
               activeProfile
-                ? profiles.find((p) => p.name === activeProfile)?.model ?? provider.model ?? '未设模型'
-                : provider.model ?? '未设模型';
+                ? profiles.find((p) => p.name === activeProfile)?.model ?? provider.model ?? t('settings.noModelSet')
+                : provider.model ?? t('settings.noModelSet');
 
             return (
               <div
@@ -479,7 +499,7 @@ function ProviderTab() {
               >
                 <div className="flex items-center gap-3">
                   <button
-                    title={active ? '当前激活' : '设为当前'}
+                    title={active ? t('settings.currentlyActive') : t('settings.setAsCurrent')}
                     className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-md border ${
                       active ? 'border-rc-accent-primary bg-rc-accent-primary text-white' : 'border-rc-border-primary text-rc-text-secondary'
                     }`}
@@ -500,21 +520,21 @@ function ProviderTab() {
                         .join(' · ')}
                       {provider.api_key_stored && (
                         <span className="ml-1.5 inline-flex items-center gap-0.5 rounded bg-rc-accent-success-bg px-1.5 py-0.5 text-[10px] font-medium text-rc-accent-success">
-                          钥匙串
+                          {t('settings.keychainStored')}
                         </span>
                       )}
                     </div>
                   </div>
 
                   <button
-                    title="编辑"
+                    title={t('common.edit')}
                     className="rounded-md p-2 text-rc-text-tertiary transition-colors hover:bg-rc-bg-hover hover:text-rc-text-primary"
                     onClick={() => startEdit(provider)}
                   >
                     <Pencil size={15} />
                   </button>
                   <button
-                    title="删除"
+                    title={t('common.delete')}
                     className="rounded-md p-2 text-rc-text-tertiary transition-colors hover:bg-rc-accent-error-bg hover:text-rc-accent-error"
                     onClick={() => {
                       void deleteProviderConfig(provider.name);
@@ -536,7 +556,7 @@ function ProviderTab() {
                           : 'border-rc-border-primary bg-rc-bg-surface text-rc-text-secondary hover:border-rc-border-hover'
                       }`}
                     >
-                      默认
+                      {t('settings.defaultProfile')}
                     </button>
                     {profiles.map((profile) => (
                       <button
@@ -547,7 +567,7 @@ function ProviderTab() {
                             ? 'border-rc-accent-primary bg-rc-accent-primary text-white'
                             : 'border-rc-border-primary bg-rc-bg-surface text-rc-text-secondary hover:border-rc-border-hover'
                         }`}
-                        title={profile.model ? `模型: ${profile.model}` : profile.name}
+                        title={profile.model ? t('settings.profileTooltip', { model: profile.model }) : profile.name}
                       >
                         {profile.name}
                       </button>
@@ -559,7 +579,7 @@ function ProviderTab() {
           })
         ) : (
           <div className="rounded-md border border-dashed border-rc-border-primary px-3 py-5 text-sm text-rc-text-secondary">
-            还没有保存任何 Provider。
+            {t('settings.noProvidersYet')}
           </div>
         )}
       </div>
@@ -569,7 +589,7 @@ function ProviderTab() {
           <div className="text-sm font-semibold text-rc-text-primary">{title}</div>
 
           <div className="grid gap-4 sm:grid-cols-2">
-            <Field label="名称" hint="切换时显示的名字，例如 GLM CODING PLAN。">
+            <Field label={t('settings.fieldName')} hint="">
               <input
                 value={form.name}
                 onChange={(event) => setForm((state) => ({ ...state, name: event.target.value }))}
@@ -579,14 +599,14 @@ function ProviderTab() {
               />
             </Field>
 
-            <Field label="协议">
+            <Field label={t('settings.fieldProtocol')}>
               <select
-                title="协议"
+                title={t('settings.fieldProtocol')}
                 value={form.protocol}
                 onChange={(event) => setForm((state) => ({ ...state, protocol: event.target.value }))}
                 className="w-full rounded-md border border-rc-border-primary bg-rc-bg-secondary px-3 py-2.5 text-sm text-rc-text-primary outline-none transition-colors focus:border-rc-border-focus"
               >
-                {PROTOCOLS.map((protocol) => (
+                {protocols(t).map((protocol) => (
                   <option key={protocol.value} value={protocol.value}>
                     {protocol.label}
                   </option>
@@ -594,7 +614,7 @@ function ProviderTab() {
               </select>
             </Field>
 
-            <Field label="Base URL" hint="保存时后端会按协议自动规范化末尾路径。">
+            <Field label="Base URL" hint={t('settings.urlNormalizationHint')}>
               <input
                 value={form.base_url ?? ''}
                 onChange={(event) =>
@@ -605,7 +625,7 @@ function ProviderTab() {
               />
             </Field>
 
-            <Field label="默认模型">
+            <Field label={t('settings.fieldDefaultModel')}>
               <input
                 value={form.model ?? ''}
                 onChange={(event) => setForm((state) => ({ ...state, model: event.target.value }))}
@@ -619,8 +639,8 @@ function ProviderTab() {
             label="API Key"
             hint={
               form.api_key_stored
-                ? '密钥已安全存储在系统钥匙串中。留空保持不变，输入新值则覆盖。'
-                : '密钥将安全存储在系统钥匙串（Windows Credential Manager / macOS Keychain）中。'
+                ? t('settings.keyStoredHint')
+                : t('settings.keyNewHint')
             }
           >
             <div className="relative">
@@ -629,7 +649,7 @@ function ProviderTab() {
                 value={form.api_key ?? ''}
                 onChange={(event) => setForm((state) => ({ ...state, api_key: event.target.value }))}
                 className="w-full rounded-md border border-rc-border-primary bg-rc-bg-secondary px-3 py-2.5 pr-11 text-sm text-rc-text-primary outline-none transition-colors focus:border-rc-border-focus"
-                placeholder={form.api_key_stored ? '••••••••（留空保持不变）' : 'sk-...'}
+                placeholder={form.api_key_stored ? t('settings.keyPlaceholder') : 'sk-...'}
               />
               <button
                 className="absolute right-3 top-1/2 -translate-y-1/2 text-rc-text-tertiary transition-colors hover:text-rc-text-primary"
@@ -641,7 +661,7 @@ function ProviderTab() {
           </Field>
 
           {/* Profile management */}
-          <Field label="模型配置（Profile）" hint="为同一 Provider 创建多套模型映射，一键切换。">
+          <Field label={t('settings.modelConfigLabel')} hint="">
             <div className="space-y-2">
               {(form.profiles ?? []).map((profile, index) => (
                 <div key={profile.name || `profile-${index}`} className="flex items-center gap-2">
@@ -649,16 +669,16 @@ function ProviderTab() {
                     value={profile.name}
                     onChange={(event) => updateProfile(index, 'name', event.target.value)}
                     className="w-32 rounded-md border border-rc-border-primary bg-rc-bg-secondary px-3 py-2 text-sm text-rc-text-primary outline-none transition-colors focus:border-rc-border-focus"
-                    placeholder="配置名"
+                    placeholder={t('settings.configNamePlaceholder')}
                   />
                   <input
                     value={profile.model ?? ''}
                     onChange={(event) => updateProfile(index, 'model', event.target.value)}
                     className="min-w-0 flex-1 rounded-md border border-rc-border-primary bg-rc-bg-secondary px-3 py-2 text-sm text-rc-text-primary outline-none transition-colors focus:border-rc-border-focus"
-                    placeholder="模型 ID，例如 glm-5.1"
+                    placeholder={t('settings.modelIdPlaceholder')}
                   />
                   <button
-                    title="删除此配置"
+                    title={t('settings.deleteProfile')}
                     className="shrink-0 rounded-md p-1.5 text-rc-text-tertiary transition-colors hover:bg-rc-accent-error-bg hover:text-rc-accent-error"
                     onClick={() => removeProfile(index)}
                   >
@@ -671,7 +691,7 @@ function ProviderTab() {
                 className="inline-flex items-center gap-1.5 rounded-md border border-dashed border-rc-border-primary px-3 py-2 text-xs font-medium text-rc-text-secondary transition-colors hover:border-rc-border-hover hover:text-rc-text-primary"
               >
                 <Plus size={13} />
-                添加配置
+                {t('settings.addProfile')}
               </button>
             </div>
           </Field>
@@ -684,7 +704,7 @@ function ProviderTab() {
               }}
               className="rounded-md px-4 py-2 text-sm font-medium text-rc-text-secondary transition-colors hover:bg-rc-bg-hover hover:text-rc-text-primary"
             >
-              取消
+              {t('settings.cancelBtn')}
             </button>
             <button
               onClick={() => {
@@ -692,7 +712,7 @@ function ProviderTab() {
               }}
               className="rounded-md bg-rc-accent-primary px-5 py-2 text-sm font-medium text-white transition-colors hover:bg-rc-accent-primary-hover"
             >
-              保存 Provider
+              {t('settings.saveProvider')}
             </button>
           </div>
         </div>
@@ -708,52 +728,59 @@ function RuntimeTab({
   current: FullSettings;
   onChange: (key: keyof FullSettings, value: unknown) => void;
 }) {
+  const { t } = useTranslation();
   const runtimePaths = current.runtime_paths;
 
   return (
     <div className="space-y-6">
       <div>
-        <h3 className="text-sm font-semibold text-rc-text-primary">运行参数</h3>
+        <h3 className="text-sm font-semibold text-rc-text-primary">{t('settings.runtimeParams')}</h3>
       </div>
 
       <section className="space-y-3">
         <div className="flex items-end justify-between gap-3">
           <div>
-            <h4 className="text-sm font-semibold text-rc-text-primary">安装和数据目录</h4>
+            <h4 className="text-sm font-semibold text-rc-text-primary">{t('settings.installDataDir')}</h4>
           </div>
         </div>
 
         <div className="overflow-hidden rounded-md border border-rc-border-secondary bg-rc-bg-secondary">
-          <RuntimePathRow label="Remote Code Home" path={runtimePaths.profile_dir} />
-          <RuntimePathRow label="Sessions" path={runtimePaths.sessions_dir} />
-          <RuntimePathRow label="Artifacts" path={runtimePaths.artifacts_dir} />
-          <RuntimePathRow label="Logs" path={runtimePaths.logs_dir} />
-          <RuntimePathRow label="Cache" path={runtimePaths.cache_dir} />
-          <RuntimePathRow label="Agents" path={runtimePaths.agents_dir} />
-          <RuntimePathRow label="Remote Control" path={runtimePaths.remote_control_file} />
-          <RuntimePathRow label="Projects DB" path={runtimePaths.gui_projects_file} />
-          <RuntimePathRow label="Providers DB" path={runtimePaths.gui_providers_file} />
-          <RuntimePathRow label="Settings DB" path={runtimePaths.gui_settings_file} />
+          <RuntimePathRow t={t} label="Remote Code Home" path={runtimePaths.profile_dir} />
+          <RuntimePathRow t={t} label="Sessions" path={runtimePaths.sessions_dir} />
+          <RuntimePathRow t={t} label="Artifacts" path={runtimePaths.artifacts_dir} />
+          <RuntimePathRow t={t} label="Logs" path={runtimePaths.logs_dir} />
+          <RuntimePathRow t={t} label="Cache" path={runtimePaths.cache_dir} />
+          <RuntimePathRow t={t} label="Agents" path={runtimePaths.agents_dir} />
+          <RuntimePathRow t={t} label="Remote Control" path={runtimePaths.remote_control_file} />
+          <RuntimePathRow t={t} label="Projects DB" path={runtimePaths.gui_projects_file} />
+          <RuntimePathRow t={t} label="Providers DB" path={runtimePaths.gui_providers_file} />
+          <RuntimePathRow t={t} label="Settings DB" path={runtimePaths.gui_settings_file} />
         </div>
       </section>
 
-      <Field label="权限模式">
+      <Field label={t('settings.permissionModeField')}>
         <div className="space-y-2">
-          {PERMISSION_MODES.map((mode) => (
+          {permissionModes(t).map((mode) => (
             <label
               key={mode.value}
-              className={`flex cursor-pointer items-start gap-3 rounded-md border px-3 py-2.5 text-sm ${
+              className={`flex cursor-pointer items-start gap-3 rounded-md border px-3 py-2.5 text-sm transition-colors ${
                 current.permission_mode === mode.value
                   ? 'border-rc-border-focus bg-rc-bg-surface'
-                  : 'border-rc-border-secondary bg-rc-bg-secondary'
+                  : 'border-rc-border-secondary bg-rc-bg-secondary hover:border-rc-border-hover'
               }`}
             >
+              <div className="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full border border-rc-border-primary">
+                {current.permission_mode === mode.value && (
+                  <div className="h-2 w-2 rounded-full bg-rc-accent-primary" />
+                )}
+              </div>
               <input
                 type="radio"
                 name="permission_mode"
                 value={mode.value}
                 checked={current.permission_mode === mode.value}
                 onChange={(event) => onChange('permission_mode', event.target.value)}
+                className="sr-only"
               />
               <div>
                 <div className="font-medium text-rc-text-primary">{mode.label}</div>
@@ -765,7 +792,41 @@ function RuntimeTab({
       </Field>
 
       <div className="grid gap-4 sm:grid-cols-2">
-        <Field label="请求超时（毫秒）">
+        <Field label={t('settings.maxOutputTokens')} hint={t('settings.maxOutputTokensHint')}>
+          <input
+            type="number"
+            min={1}
+            value={current.max_output_tokens}
+            onChange={(event) => onChange('max_output_tokens', Number(event.target.value))}
+            className="w-full rounded-md border border-rc-border-primary bg-rc-bg-surface px-3 py-2.5 text-sm text-rc-text-primary outline-none transition-colors focus:border-rc-border-focus"
+          />
+        </Field>
+
+        <Field label={t('settings.thinkingBudget')} hint={t('settings.thinkingBudgetHint')}>
+          <input
+            type="number"
+            min={0}
+            value={current.thinking_budget ?? ''}
+            placeholder="null"
+            onChange={(event) => {
+              const val = event.target.value;
+              onChange('thinking_budget', val === '' ? null : Number(val));
+            }}
+            className="w-full rounded-md border border-rc-border-primary bg-rc-bg-surface px-3 py-2.5 text-sm text-rc-text-primary outline-none transition-colors focus:border-rc-border-focus"
+          />
+        </Field>
+
+        <Field label={t('settings.maxTurns')} hint={t('settings.maxTurnsHint')}>
+          <input
+            type="number"
+            min={1}
+            value={current.max_turns}
+            onChange={(event) => onChange('max_turns', Number(event.target.value))}
+            className="w-full rounded-md border border-rc-border-primary bg-rc-bg-surface px-3 py-2.5 text-sm text-rc-text-primary outline-none transition-colors focus:border-rc-border-focus"
+          />
+        </Field>
+
+        <Field label={t('settings.requestTimeoutMs')}>
           <input
             type="number"
             min={1000}
@@ -775,7 +836,7 @@ function RuntimeTab({
           />
         </Field>
 
-        <Field label="最大重试次数">
+        <Field label={t('settings.maxRetries')}>
           <input
             type="number"
             min={0}
@@ -785,7 +846,7 @@ function RuntimeTab({
           />
         </Field>
 
-        <Field label="初始退避（毫秒）">
+        <Field label={t('settings.initialBackoffMs')}>
           <input
             type="number"
             min={50}
@@ -794,8 +855,36 @@ function RuntimeTab({
             className="w-full rounded-md border border-rc-border-primary bg-rc-bg-surface px-3 py-2.5 text-sm text-rc-text-primary outline-none transition-colors focus:border-rc-border-focus"
           />
         </Field>
+      </div>
 
-        <Field label="最大退避（毫秒）">
+      <Field label={t('settings.rooModeField')} hint={t('settings.rooModeHint')}>
+        <div className="grid gap-2 sm:grid-cols-3">
+          {[
+            { value: '', label: t('settings.rooModeDefault') },
+            { value: 'code', label: 'Code' },
+            { value: 'architect', label: 'Architect' },
+            { value: 'ask', label: 'Ask' },
+            { value: 'debug', label: 'Debug' },
+            { value: 'orchestrator', label: 'Orchestrator' },
+          ].map((mode) => (
+            <button
+              key={mode.value}
+              type="button"
+              onClick={() => onChange('roo_mode', mode.value || null)}
+              className={`rounded-md border px-3 py-2 text-xs font-medium transition-colors ${
+                (current.roo_mode ?? '') === mode.value
+                  ? 'border-rc-accent-primary bg-rc-bg-selected text-rc-accent-primary'
+                  : 'border-rc-border-secondary bg-rc-bg-secondary text-rc-text-secondary hover:border-rc-border-hover hover:text-rc-text-primary'
+              }`}
+            >
+              {mode.label}
+            </button>
+          ))}
+        </div>
+      </Field>
+
+      <div className="grid gap-4 sm:grid-cols-2">
+        <Field label={t('settings.maxBackoffMs')}>
           <input
             type="number"
             min={50}
@@ -806,24 +895,32 @@ function RuntimeTab({
         </Field>
       </div>
 
-      <Field label="其他">
+      <Field label={t('settings.otherSection')}>
         <div className="space-y-2">
-          <label className="flex items-center gap-3 rounded-md bg-rc-bg-surface px-4 py-3 text-sm text-rc-text-primary">
+          <label className="flex items-center gap-3 rounded-md border border-rc-border-secondary bg-rc-bg-surface px-4 py-3 text-sm text-rc-text-primary transition-colors hover:border-rc-border-hover">
+            <div className="flex h-4 w-4 shrink-0 items-center justify-center rounded border border-rc-border-primary">
+              {current.respect_retry_after && <Check size={12} className="text-rc-accent-primary" />}
+            </div>
             <input
               type="checkbox"
               checked={current.respect_retry_after}
               onChange={(event) => onChange('respect_retry_after', event.target.checked)}
+              className="sr-only"
             />
-            <span>启用服务端 Retry-After 支持</span>
+            <span>{t('settings.enableRetryAfter')}</span>
           </label>
 
-          <label className="flex items-center gap-3 rounded-md bg-rc-bg-surface px-4 py-3 text-sm text-rc-text-primary">
+          <label className="flex items-center gap-3 rounded-md border border-rc-border-secondary bg-rc-bg-surface px-4 py-3 text-sm text-rc-text-primary transition-colors hover:border-rc-border-hover">
+            <div className="flex h-4 w-4 shrink-0 items-center justify-center rounded border border-rc-border-primary">
+              {current.verbose && <Check size={12} className="text-rc-accent-primary" />}
+            </div>
             <input
               type="checkbox"
               checked={current.verbose}
               onChange={(event) => onChange('verbose', event.target.checked)}
+              className="sr-only"
             />
-            <span>启用详细模式</span>
+            <span>{t('settings.enableVerboseMode')}</span>
           </label>
         </div>
       </Field>

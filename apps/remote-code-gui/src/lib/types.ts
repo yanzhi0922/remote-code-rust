@@ -366,6 +366,7 @@ export interface FullSettings {
   codex_permission_profile: unknown | null;
   codex_service_tier: string | null;
   codex_ephemeral: boolean | null;
+  roo_mode: string | null;
   runtime_paths: RuntimePathsInfo;
 }
 

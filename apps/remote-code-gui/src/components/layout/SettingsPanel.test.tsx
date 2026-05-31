@@ -30,6 +30,7 @@ const mockSettings: FullSettings = {
   codex_permission_profile: null,
   codex_service_tier: null,
   codex_ephemeral: null,
+  roo_mode: null,
   runtime_paths: {
     profile_dir: '/test/profile',
     sessions_dir: '/test/sessions',

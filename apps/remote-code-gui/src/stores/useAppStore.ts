@@ -25,6 +25,7 @@ import type {
   AgentType,
 } from '../lib/types';
 import * as tauri from '../lib/tauri';
+import i18n from '../i18n';
 import { normalizePathKey } from '../lib/utils';
 import { useCodexStore } from './useCodexStore';
 import { useAgentStore } from './useAgentStore';
@@ -105,7 +106,7 @@ function applySubtaskStarted(tasks: SessionSubtask[], payload: SubtaskStartedInf
     description: payload.description,
     depth: payload.depth,
     status: 'running',
-    summary: '等待子代理结果',
+    summary: i18n.t('sidebar.waitingSubagent'),
     output_preview: null,
     turns_used: null,
   };
@@ -155,6 +156,8 @@ interface AppState {
 
   sessions: SessionSummary[];
   archivedSessions: SessionSummary[];
+  pinnedSessions: Set<string>;
+  unreadSessions: Set<string>;
   sessionsLoading: boolean;
   sessionError: string | null;
   activeSessionId: string | null;
@@ -179,6 +182,10 @@ interface AppState {
 
   providerConfigs: ProviderConfigList | null;
 
+  /** Path to show in file explorer (null = hidden). Set by sidebar hover menu. */
+  fileExplorerPath: string | null;
+  fileExplorerProjectName: string | null;
+
   pendingPermission: PermissionRequestInfo | null;
 
   /** Current goal state for Codex agent (null when no goal is set). */
@@ -192,6 +199,9 @@ interface AppState {
   selectSession: (sessionId: string) => Promise<void>;
   createSession: (title?: string, projectPath?: string) => Promise<string>;
   archiveSession: (sessionId: string) => Promise<void>;
+  renameSession: (sessionId: string, newTitle: string) => Promise<void>;
+  togglePinSession: (sessionId: string) => void;
+  toggleUnreadSession: (sessionId: string) => void;
   restoreSession: (sessionId: string) => Promise<void>;
   sendMessage: (text: string) => Promise<void>;
   handleGoalCommand: (sessionId: string, args: string) => Promise<void>;
@@ -214,6 +224,8 @@ interface AppState {
   setActiveProvider: (name: string) => Promise<void>;
   switchProfile: (providerName: string, profileName: string | null) => Promise<void>;
   resolvePermission: (resolution: boolean | tauri.PermissionResolutionRequest) => Promise<void>;
+  openFileExplorer: (path: string, projectName: string) => void;
+  closeFileExplorer: () => void;
 }
 
 /**
@@ -532,6 +544,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   workspacePrivacyMode: loadWorkspacePrivacyMode(),
   sessions: [],
   archivedSessions: [],
+  pinnedSessions: new Set<string>(),
+  unreadSessions: new Set<string>(),
   sessionsLoading: false,
   sessionError: null,
   activeSessionId: null,
@@ -554,6 +568,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   goalState: null,
   pendingGoalObjective: null,
   pendingPermission: null,
+  fileExplorerPath: null,
+  fileExplorerProjectName: null,
 
   init: async () => {
     try {
@@ -662,7 +678,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   createSession: async (title?: string, projectPath?: string) => {
     const effectiveProjectPath = projectPath ?? get().activeProjectPath ?? undefined;
     if (!effectiveProjectPath) {
-      throw new Error('请先选择项目文件夹，再新建会话。');
+      throw new Error(i18n.t('store.selectProjectFirst'));
     }
     const { activeAgentType } = useAgentStore.getState();
     const sessionId = await tauri.createSession(title, effectiveProjectPath, activeAgentType ?? undefined);
@@ -704,6 +720,35 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
 
+  renameSession: async (sessionId: string, newTitle: string) => {
+    await tauri.renameSession(sessionId, newTitle);
+    await get().refreshSessions();
+  },
+
+  togglePinSession: (sessionId: string) => {
+    set((state) => {
+      const next = new Set(state.pinnedSessions);
+      if (next.has(sessionId)) {
+        next.delete(sessionId);
+      } else {
+        next.add(sessionId);
+      }
+      return { pinnedSessions: next };
+    });
+  },
+
+  toggleUnreadSession: (sessionId: string) => {
+    set((state) => {
+      const next = new Set(state.unreadSessions);
+      if (next.has(sessionId)) {
+        next.delete(sessionId);
+      } else {
+        next.add(sessionId);
+      }
+      return { unreadSessions: next };
+    });
+  },
+
   restoreSession: async (sessionId: string) => {
     await tauri.restoreSession(sessionId);
     await Promise.all([get().refreshProjects(), get().refreshSessions(), get().loadArchivedSessions()]);
@@ -713,21 +758,70 @@ export const useAppStore = create<AppState>((set, get) => ({
     const prompt = text.trim();
     if (!prompt) return;
 
-    // ── /goal slash command interception ──────────────────────────
-    const goalSlashMatch = prompt.match(/^\/goal(?:\s+(.*))?$/is);
-    if (goalSlashMatch) {
-      const { activeAgentType } = useAgentStore.getState();
-      if (activeAgentType !== 'remote_codex') {
-        set({ sendError: '/goal 仅在 Codex agent 下可用。' });
-        return;
-      }
+    // ── Slash command interception ────────────────────────────────
+    const slashMatch = prompt.match(/^\/(\w+)(?:\s+(.*))?$/s);
+    if (slashMatch) {
+      const cmd = slashMatch[1].toLowerCase();
+      const args = slashMatch[2] ?? '';
       const sessionId = get().activeSessionId;
-      if (!sessionId) {
-        set({ sendError: '请先创建会话再使用 /goal。' });
-        return;
+
+      switch (cmd) {
+        case 'goal': {
+          const { activeAgentType } = useAgentStore.getState();
+          if (activeAgentType !== 'remote_codex') {
+            set({ sendError: i18n.t('store.goalCodexOnly') });
+            return;
+          }
+          if (!sessionId) {
+            set({ sendError: i18n.t('store.goalNeedSession') });
+            return;
+          }
+          await get().handleGoalCommand(sessionId, args);
+          return;
+        }
+        case 'compact': {
+          if (!sessionId) return;
+          const { activeAgentType } = useAgentStore.getState();
+          if (activeAgentType === 'remote_codex') {
+            try {
+              await tauri.codexThreadCompactStart({ sessionId, threadId: '' });
+            } catch { /* ignore if thread not available */ }
+            return;
+          }
+          // For non-Codex agents, fall through to send as regular prompt.
+          break;
+        }
+        case 'clear': {
+          if (sessionId) {
+            set({ conversation: [], streamingText: '', sendError: null, lastPromptResult: null });
+          }
+          return;
+        }
+        case 'plan': {
+          await get().updateSettings({ permission_mode: 'plan' });
+          return;
+        }
+        case 'review': {
+          if (!sessionId) return;
+          const agentType = useAgentStore.getState().activeAgentType;
+          if (agentType === 'remote_codex') {
+            try {
+              await tauri.codexReviewStart({ sessionId, threadId: '' });
+            } catch { /* ignore if not available */ }
+            return;
+          }
+          // For non-Codex agents, fall through to send as regular prompt.
+          break;
+        }
+        case 'doctor': {
+          // Doctor runs via runDoctorReport; no session needed.
+          // Just trigger a no-op to signal the UI to open the operations panel.
+          return;
+        }
+        default:
+          // Unknown slash command — fall through to send as plain text.
+          break;
       }
-      await get().handleGoalCommand(sessionId, goalSlashMatch[1] ?? '');
-      return;
     }
 
     // Wait for any in-flight session creation to finish before proceeding.
@@ -738,7 +832,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     let sessionId = get().activeSessionId;
     if (!sessionId) {
       if (!get().activeProjectPath) {
-        set({ sendError: '请先选择项目文件夹，再开始会话。' });
+        set({ sendError: i18n.t('store.selectProjectBeforeStart') });
         return;
       }
       // Serialize session creation to avoid duplicate sessions on rapid sends.
@@ -1111,10 +1205,33 @@ export const useAppStore = create<AppState>((set, get) => ({
   resolvePermission: async (resolution: boolean | tauri.PermissionResolutionRequest) => {
     const pendingPermission = get().pendingPermission;
     if (!pendingPermission) return;
-    await tauri.resolvePermissionRequest(
-      pendingPermission.request_id,
-      typeof resolution === 'boolean' ? { allowed: resolution } : resolution,
-    );
+    const allowed = typeof resolution === 'boolean' ? resolution : resolution.allowed;
+
+    // Route to agent-specific resolver based on the current agent type.
+    const { activeAgentType } = useAgentStore.getState();
+    if (activeAgentType === 'remote_roo') {
+      await tauri.resolveRooPermissionRequest(
+        pendingPermission.request_id,
+        allowed,
+        typeof resolution !== 'boolean' ? resolution.message : undefined,
+        typeof resolution !== 'boolean' ? resolution.feedback : undefined,
+        typeof resolution !== 'boolean' ? resolution.allow_all : undefined,
+      );
+    } else {
+      // Generic resolver handles Codex and Claude internally via request_id lookup.
+      await tauri.resolvePermissionRequest(
+        pendingPermission.request_id,
+        typeof resolution === 'boolean' ? { allowed: resolution } : resolution,
+      );
+    }
     set({ pendingPermission: null });
+  },
+
+  openFileExplorer: (path: string, projectName: string) => {
+    set({ fileExplorerPath: path, fileExplorerProjectName: projectName, activeSessionId: null });
+  },
+
+  closeFileExplorer: () => {
+    set({ fileExplorerPath: null, fileExplorerProjectName: null });
   },
 }));

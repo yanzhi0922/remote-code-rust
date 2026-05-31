@@ -5,14 +5,15 @@ members = [
     "agent-graph-store",
     "agent-identity",
     "backend-client",
+    "bwrap",
     "ansi-escape",
     "async-utils",
     "app-server",
     "app-server-transport",
+    "app-server-daemon",
     "app-server-client",
     "app-server-protocol",
     "app-server-test-client",
-    "debug-client",
     "apply-patch",
     "arg0",
     "feedback",
@@ -28,7 +29,6 @@ members = [
     "collaboration-mode-templates",
     "connectors",
     "config",
-    "device-key",
     "shell-command",
     "shell-escalation",
     "skills",
@@ -43,10 +43,17 @@ members = [
     "exec-server",
     "execpolicy",
     "execpolicy-legacy",
+    "ext/extension-api",
+    "ext/goal",
+    "ext/guardian",
+    "ext/image-generation",
+    "ext/memories",
+    "ext/web-search",
     "external-agent-migration",
     "external-agent-sessions",
     "keyring-store",
     "file-search",
+    "file-watcher",
     "linux-sandbox",
     "lmstudio",
     "login",
@@ -71,7 +78,7 @@ members = [
     "otel",
     "tui",
     "tools",
-    "v8-poc",
+    # "v8-poc",  # Excluded: V8 build requires Python + network download of prebuilt libs (not available in this environment)
     "utils/absolute-path",
     "utils/cargo-bin",
     "git-utils",
@@ -129,6 +136,7 @@ codex-api = { path = "codex-api" }
 codex-aws-auth = { path = "aws-auth" }
 codex-app-server = { path = "app-server" }
 codex-app-server-transport = { path = "app-server-transport" }
+codex-app-server-daemon = { path = "app-server-daemon" }
 codex-app-server-client = { path = "app-server-client" }
 codex-app-server-protocol = { path = "app-server-protocol" }
 codex-app-server-test-client = { path = "app-server-test-client" }
@@ -150,11 +158,14 @@ codex-core = { path = "core" }
 codex-core-api = { path = "core-api" }
 codex-core-plugins = { path = "core-plugins" }
 codex-core-skills = { path = "core-skills" }
-codex-device-key = { path = "device-key" }
 codex-exec = { path = "exec" }
 codex-file-system = { path = "file-system" }
 codex-exec-server = { path = "exec-server" }
 codex-execpolicy = { path = "execpolicy" }
+codex-extension-api = { path = "ext/extension-api" }
+codex-goal-extension = { path = "ext/goal" }
+codex-guardian = { path = "ext/guardian" }
+codex-image-generation-extension = { path = "ext/image-generation" }
 codex-external-agent-migration = { path = "external-agent-migration" }
 codex-external-agent-sessions = { path = "external-agent-sessions" }
 codex-experimental-api-macros = { path = "codex-experimental-api-macros" }
@@ -162,12 +173,16 @@ codex-features = { path = "features" }
 codex-feedback = { path = "feedback" }
 codex-install-context = { path = "install-context" }
 codex-file-search = { path = "file-search" }
+codex-file-watcher = { path = "file-watcher" }
 codex-git-utils = { path = "git-utils" }
 codex-hooks = { path = "hooks" }
 codex-keyring-store = { path = "keyring-store" }
 codex-linux-sandbox = { path = "linux-sandbox" }
 codex-lmstudio = { path = "lmstudio" }
 codex-login = { path = "login" }
+codex-message-history = { path = "message-history" }
+codex-memories-extension = { path = "ext/memories" }
+codex-web-search-extension = { path = "ext/web-search" }
 codex-memories-read = { path = "memories/read" }
 codex-memories-write = { path = "memories/write" }
 codex-mcp = { path = "codex-mcp" }
@@ -215,7 +230,6 @@ codex-utils-output-truncation = { path = "utils/output-truncation" }
 codex-utils-path = { path = "utils/path-utils" }
 codex-utils-plugins = { path = "utils/plugins" }
 codex-utils-pty = { path = "utils/pty" }
-codex-utils-readiness = { path = "utils/readiness" }
 codex-utils-rustls-provider = { path = "utils/rustls-provider" }
 codex-utils-sandbox-summary = { path = "utils/sandbox-summary" }
 codex-utils-sleep-inhibitor = { path = "utils/sleep-inhibitor" }
@@ -230,7 +244,7 @@ mcp_test_support = { path = "mcp-server/tests/common" }
 # External
 age = "0.11.1"
 allocative = "0.3.3"
-ansi-to-tui = "8.0.1"
+ansi-to-tui = "7.0.0"
 anyhow = "1"
 arboard = { version = "3", features = ["wayland-data-control"] }
 arc-swap = "1.9.0"
@@ -263,21 +277,21 @@ deno_core_icudata = "0.77.0"
 derive_more = "2"
 diffy = "0.4.2"
 dirs = "6"
+divan = "0.1.21"
 dns-lookup = "3.0.1"
 dotenvy = "0.15.7"
 dunce = "1.0.4"
 ed25519-dalek = { version = "2.2.0", features = ["pkcs8"] }
 encoding_rs = "0.8.35"
-env-flags = "0.1.1"
 env_logger = "0.11.9"
 eventsource-stream = "0.2.3"
 flate2 = "1.1.8"
 futures = { version = "0.3", default-features = false }
 gethostname = "1.1.0"
-gix = { version = "0.83.0", default-features = false, features = ["sha1"] }
+gix = { version = "0.81.0", default-features = false, features = ["sha1"] }
 glob = "0.3"
 globset = "0.4"
-hmac = "0.12"
+hmac = "0.12.1"
 http = "1.3.1"
 iana-time-zone = "0.1.64"
 icu_decimal = "2.1"
@@ -290,7 +304,8 @@ indexmap = "2.12.0"
 insta = "1.46.3"
 inventory = "0.3.19"
 itertools = "0.14.0"
-jsonwebtoken = { version = "10.4.0", features = ["rust_crypto"] }
+jsonptr = { version = "0.7.1", default-features = false }
+jsonwebtoken = "9.3.1"
 keyring = { version = "3.6", default-features = false }
 landlock = "0.4.4"
 lazy_static = "1"
@@ -313,15 +328,13 @@ os_info = "3.12.0"
 owo-colors = "4.3.0"
 path-absolutize = "3.1.1"
 pathdiff = "0.2"
-p256 = "0.13.2"
 portable-pty = "0.9.0"
 predicates = "3"
 pretty_assertions = "1.4.1"
 pulldown-cmark = "0.10"
-quick-xml = "0.39.2"
+quick-xml = "0.38.4"
 rand = "0.9"
 ratatui = "0.29.0"
-ratatui-core = "0.1.0"
 ratatui-macros = "0.6.0"
 rcgen = { version = "0.14.7", default-features = false, features = [
     "aws_lc_rs",
@@ -329,8 +342,8 @@ rcgen = { version = "0.14.7", default-features = false, features = [
 ] }
 regex = "1.12.3"
 regex-lite = "0.1.8"
-reqwest = { version = "0.12", default-features = false, features = ["cookies", "rustls-tls"] }
-rmcp = { version = "1.6.0", default-features = false }
+reqwest = { version = "0.12", features = ["cookies"] }
+rmcp = { version = "1.7.0", default-features = false }
 runfiles = { git = "https://github.com/dzbarsky/rules_rust", rev = "b56cbaa8465e74127f1ea216f813cd377295ad81" }
 rustls = { version = "0.23", default-features = false, features = [
     "ring",
@@ -338,11 +351,12 @@ rustls = { version = "0.23", default-features = false, features = [
 ] }
 rustls-native-certs = "0.8.3"
 rustls-pki-types = "1.14.0"
-schemars = "1.2.1"
+schemars = "0.8.22"
 seccompiler = "0.5.0"
 semver = "1.0"
-sentry = "0.48.2"
+sentry = "0.46.0"
 serde = "1"
+serde_ignored = "0.1.14"
 serde_json = "1"
 serde_path_to_error = "0.1.20"
 serde_with = "3.17"
@@ -350,15 +364,16 @@ serde_yaml = "0.9"
 serial_test = "3.2.0"
 sha1 = "0.10.6"
 sha2 = "0.10"
-shlex = "2.0.1"
+shlex = "1.3.0"
 similar = "2.7.0"
 socket2 = "0.6.1"
-sqlx = { version = "0.8.6", default-features = false, features = [
+sqlx = { version = "0.8", default-features = false, features = [
     "chrono",
     "json",
     "macros",
     "migrate",
-    "runtime-tokio-rustls",
+    "runtime-tokio",
+    "tls-rustls",
     "sqlite",
     "time",
     "uuid",
@@ -384,7 +399,7 @@ tokio-tungstenite = { version = "0.28.0", features = [
     "rustls-tls-native-roots",
 ] }
 tokio-util = "0.7.18"
-toml = "1.1.2"
+toml = "0.9.5"
 toml_edit = "0.24.0"
 tracing = "0.1.44"
 tracing-appender = "0.2.3"
@@ -392,10 +407,10 @@ tracing-opentelemetry = "0.32.0"
 tracing-subscriber = "0.3.22"
 tracing-test = "0.2.5"
 tonic = { version = "0.14.3", default-features = false, features = ["channel", "codegen"] }
-tonic-prost = "0.14.6"
-tree-sitter = "0.26.8"
+tonic-prost = "0.14.3"
+tree-sitter = "0.25.10"
 tree-sitter-bash = "0.25"
-ts-rs = "12"
+ts-rs = "11"
 tungstenite = { version = "0.27.0", features = ["deflate", "proxy"] }
 uds_windows = "1.1.0"
 unicode-segmentation = "1.12.0"
@@ -403,7 +418,7 @@ unicode-width = "0.2"
 url = "2"
 urlencoding = "2.1"
 uuid = "1"
-v8 = "=146.4.0"
+v8 = "=147.4.0"
 vt100 = "0.16.2"
 walkdir = "2.5.0"
 webbrowser = "1.0"
@@ -411,7 +426,7 @@ which = "8"
 whoami = "1.6.1"
 wildmatch = "2.6.1"
 winapi-util = "0.1.11"
-zip = "8.6.0"
+zip = "2.4.2"
 zstd = "0.13"
 
 wiremock = "0.6"
@@ -462,23 +477,22 @@ unwrap_used = "deny"
 [workspace.metadata.cargo-shear]
 ignored = [
     "codex-agent-graph-store",
+    "codex-goal-extension",
     "icu_provider",
     "openssl-sys",
-    "codex-utils-readiness",
-    "codex-utils-template",
     "codex-v8-poc",
 ]
 
 [profile.dev]
 # Keep line tables/backtraces while avoiding expensive full variable debug info
 # across local dev builds.
-debug = 1
+debug = "limited"
 
 [profile.dev-small]
 inherits = "dev"
 opt-level = 0
-debug = 0
-strip = true
+debug = "none"
+strip = "symbols"
 
 [profile.release]
 lto = "fat"
@@ -490,14 +504,17 @@ strip = "symbols"
 # See https://github.com/openai/codex/issues/1411 for details.
 codegen-units = 1
 
+[profile.profiling]
+inherits = "release"
+debug = "full"
+lto = false
+strip = false
+
 [profile.ci-test]
-debug = 1         # Reduce debug symbol size
+# Reduce binary size to reduce disk pressure.
+debug = "limited"
 inherits = "test"
 opt-level = 0
-
-[profile.test]
-debug = 0
-incremental = false
 
 [patch.crates-io]
 # Uncomment to debug local changes.

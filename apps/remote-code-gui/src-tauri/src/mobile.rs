@@ -727,6 +727,7 @@ pub fn register_mobile_plugins<R: Runtime>(app: &tauri::AppHandle<R>) {
 
 #[derive(Debug, Deserialize)]
 #[allow(dead_code)]
+#[cfg(feature = "mobile")]
 pub struct FrontendLogEvent {
     level: String,
     source: String,
@@ -739,6 +740,7 @@ pub struct FrontendLogEvent {
     user_agent: Option<String>,
 }
 
+#[cfg(feature = "mobile")]
 #[tauri::command]
 pub fn record_frontend_log(event: FrontendLogEvent) {
     let msg = match (&event.details, &event.stack) {

@@ -1,4 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { ActivityBar, type ActivityTab } from './ActivityBar';
 import { Sidebar } from './Sidebar';
 import { StatusBar } from './StatusBar';
@@ -24,6 +25,7 @@ export function Layout({
   initialSettingsOpen = false,
   initialSettingsTab = 'provider',
 }: LayoutProps) {
+  const { t } = useTranslation();
   const [activeTab, setActiveTab] = useState<ActivityTab>(initialSettingsOpen && initialSettingsTab === 'mcp' ? 'mcp' : 'chat');
   const [settingsOpen, setSettingsOpen] = useState(initialSettingsOpen);
   const [settingsInitialTab, setSettingsInitialTab] = useState<SettingsTab>(initialSettingsTab);
@@ -109,7 +111,7 @@ export function Layout({
               onMouseDown={handleMouseDown}
               role="separator"
               aria-orientation="vertical"
-              aria-label="调整侧边栏宽度"
+              aria-label={t('layout.resizeSidebar')}
             />
           </>
         )}

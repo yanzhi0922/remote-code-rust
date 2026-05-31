@@ -560,6 +560,8 @@ impl QueryObserver for AdapterQueryObserver {
         }
 
         // 2. Map to UnifiedAgentEvent and forward through the event channel.
+        // Relaxed ordering is safe because the query engine calls on_event
+        // sequentially — no concurrent callers, so no TOCTOU risk.
         let mut max_tokens = self
             .cached_max_tokens
             .load(std::sync::atomic::Ordering::Relaxed);
@@ -853,7 +855,7 @@ impl AgentAdapter for ClaudeInProcessAdapter {
                     "{}",
                     match &event {
                         UnifiedAgentEvent::Error { message, .. } => message.clone(),
-                        _ => unreachable!(),
+                        _ => "query engine panicked with unexpected event type".to_string(),
                     }
                 );
                 let _ = event_tx_for_completion.send(event).await;

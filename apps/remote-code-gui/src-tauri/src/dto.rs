@@ -99,6 +99,8 @@ pub(crate) struct GuiSettingsFile {
     pub(crate) codex_service_tier: Option<String>,
     #[serde(default)]
     pub(crate) codex_ephemeral: Option<bool>,
+    #[serde(default)]
+    pub(crate) roo_mode: Option<String>,
 }
 
 impl Default for GuiSettingsFile {
@@ -127,6 +129,7 @@ impl Default for GuiSettingsFile {
             codex_permission_profile: None,
             codex_service_tier: None,
             codex_ephemeral: None,
+            roo_mode: None,
         }
     }
 }
@@ -220,6 +223,7 @@ pub(crate) struct FullSettingsDto {
     pub(crate) codex_permission_profile: Option<serde_json::Value>,
     pub(crate) codex_service_tier: Option<String>,
     pub(crate) codex_ephemeral: Option<bool>,
+    pub(crate) roo_mode: Option<String>,
     pub(crate) runtime_paths: RuntimePathsDto,
 }
 

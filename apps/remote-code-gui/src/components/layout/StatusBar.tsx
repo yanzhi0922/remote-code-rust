@@ -5,6 +5,8 @@ import { formatSensitivePath } from '../../lib/utils';
 import { useAppStore } from '../../stores/useAppStore';
 import { useAgentStore } from '../../stores/useAgentStore';
 
+const isMac = typeof navigator !== 'undefined' && /Mac|iPod|iPhone|iPad/.test(navigator.userAgent);
+
 function ContextGauge({ ratio }: { ratio: number }) {
   const percent = Math.round(ratio * 100);
   const color =
@@ -124,7 +126,9 @@ export function StatusBar() {
         </span>
 
         <span className="hidden items-center gap-1 text-rc-text-tertiary md:flex">
-          <kbd className="rounded border border-rc-border-primary bg-rc-bg-tertiary px-1 text-[9px]">⌘K</kbd>
+          <kbd className="rounded border border-rc-border-primary bg-rc-bg-tertiary px-1 text-[9px]">
+            {isMac ? '⌘K' : 'Ctrl+K'}
+          </kbd>
           <span>{t('statusBar.command')}</span>
         </span>
       </div>

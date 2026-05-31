@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Eye, EyeOff } from 'lucide-react';
 
 export interface SettingInputProps {
@@ -18,6 +19,7 @@ export function SettingInput({
   description,
   placeholder,
 }: SettingInputProps) {
+  const { t } = useTranslation();
   const [showPassword, setShowPassword] = useState(false);
 
   const isPassword = type === 'password';
@@ -40,7 +42,7 @@ export function SettingInput({
             type="button"
             onClick={() => setShowPassword((prev) => !prev)}
             className="absolute right-2 top-1/2 -translate-y-1/2 text-rc-text-tertiary hover:text-rc-text-primary"
-            aria-label={showPassword ? '隐藏密码' : '显示密码'}
+            aria-label={showPassword ? t('settingInput.hidePassword') : t('settingInput.showPassword')}
             data-testid="toggle-password"
           >
             {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}

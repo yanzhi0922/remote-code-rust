@@ -3,7 +3,6 @@ import {
   MessageSquare,
   Settings2,
   Moon,
-  Search,
   Sun,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -49,16 +48,6 @@ export function ActivityBar({ activeTab, onTabChange }: ActivityBarProps) {
           className={btnClass(activeTab === 'chat')}
         >
           <MessageSquare size={18} />
-        </button>
-        <button
-          role="tab"
-          aria-selected={false}
-          aria-label={t('activityBar.search')}
-          title={t('activityBar.search')}
-          onClick={() => onTabChange('chat')}
-          className={btnClass(false)}
-        >
-          <Search size={17} />
         </button>
         <button
           role="tab"

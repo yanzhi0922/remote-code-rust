@@ -13,12 +13,12 @@
     "desktop:build": "tauri build --bundles nsis",
     "desktop:build:debug": "tauri build --debug --bundles nsis",
     "android:init": "tauri android init",
-    "android:dev": "tauri android dev",
-    "android:build": "tsc && vite build && tauri android build",
-    "android:build:debug": "tsc && vite build && tauri android build --debug",
+    "android:dev": "tauri android dev -- --features mobile",
+    "android:build": "tsc && vite build && tauri android build -- --features mobile",
+    "android:build:debug": "tsc && vite build && tauri android build --debug -- --features mobile",
     "ios:init": "tauri ios init",
-    "ios:dev": "tauri ios dev",
-    "ios:build": "tsc && vite build && tauri ios build"
+    "ios:dev": "tauri ios dev -- --features mobile",
+    "ios:build": "tsc && vite build && tauri ios build -- --features mobile"
   },
   "dependencies": {
     "@radix-ui/react-dialog": "^1.1.15",

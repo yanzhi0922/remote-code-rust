@@ -159,6 +159,31 @@ export interface RemoteCopy {
   mobileAuthSubtitle: string;
   mobileExpandOptions: string;
   mobileCollapseOptions: string;
+
+  // Settings tab
+  mobileTabSettings: string;
+  settingsAppearance: string;
+  settingsTheme: string;
+  settingsThemeLight: string;
+  settingsThemeDark: string;
+  settingsThemeSystem: string;
+  settingsLanguage: string;
+  settingsLanguageEn: string;
+  settingsLanguageZh: string;
+  settingsSecurity: string;
+  settingsBiometric: string;
+  settingsBiometricDesc: string;
+  settingsHaptic: string;
+  settingsNetwork: string;
+  settingsNetworkOnline: string;
+  settingsNetworkOffline: string;
+  settingsTransport: string;
+  settingsTransportStrategy: string;
+  settingsLatency: string;
+  settingsNotConnected: string;
+  settingsAbout: string;
+  settingsAppVersion: string;
+  settingsDeviceName: string;
 }
 
 const ENGLISH_COPY: RemoteCopy = {
@@ -353,6 +378,29 @@ const ENGLISH_COPY: RemoteCopy = {
   mobileAuthSubtitle: 'Connect to your desktop runner',
   mobileExpandOptions: 'Other sign-in methods',
   mobileCollapseOptions: 'Hide options',
+  mobileTabSettings: 'Settings',
+  settingsAppearance: 'Appearance',
+  settingsTheme: 'Theme',
+  settingsThemeLight: 'Light',
+  settingsThemeDark: 'Dark',
+  settingsThemeSystem: 'System',
+  settingsLanguage: 'Language',
+  settingsLanguageEn: 'English',
+  settingsLanguageZh: '中文',
+  settingsSecurity: 'Security',
+  settingsBiometric: 'Biometric Auth',
+  settingsBiometricDesc: 'Require biometric to open the app',
+  settingsHaptic: 'Haptic Feedback',
+  settingsNetwork: 'Network',
+  settingsNetworkOnline: 'Online',
+  settingsNetworkOffline: 'Offline',
+  settingsTransport: 'Transport',
+  settingsTransportStrategy: 'Strategy',
+  settingsLatency: 'Latency',
+  settingsNotConnected: 'Not connected',
+  settingsAbout: 'About',
+  settingsAppVersion: 'App Version',
+  settingsDeviceName: 'Device Name',
   mobileTabConnect: 'Connect',
   mobileTabConnected: 'Server',
   connectAction: 'Connect',
@@ -550,6 +598,29 @@ const CHINESE_COPY: RemoteCopy = {
   mobileAuthSubtitle: '连接到你的桌面 Runner',
   mobileExpandOptions: '其他登录方式',
   mobileCollapseOptions: '收起',
+  mobileTabSettings: '设置',
+  settingsAppearance: '外观',
+  settingsTheme: '主题',
+  settingsThemeLight: '浅色',
+  settingsThemeDark: '深色',
+  settingsThemeSystem: '跟随系统',
+  settingsLanguage: '语言',
+  settingsLanguageEn: 'English',
+  settingsLanguageZh: '中文',
+  settingsSecurity: '安全',
+  settingsBiometric: '生物认证',
+  settingsBiometricDesc: '打开应用时需要生物识别验证',
+  settingsHaptic: '触觉反馈',
+  settingsNetwork: '网络',
+  settingsNetworkOnline: '在线',
+  settingsNetworkOffline: '离线',
+  settingsTransport: '传输',
+  settingsTransportStrategy: '策略',
+  settingsLatency: '延迟',
+  settingsNotConnected: '未连接',
+  settingsAbout: '关于',
+  settingsAppVersion: '应用版本',
+  settingsDeviceName: '设备名称',
   mobileTabConnect: '连接',
   mobileTabConnected: '服务器',
   connectAction: '连接',

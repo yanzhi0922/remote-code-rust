@@ -156,7 +156,29 @@ pub fn map_observer_event(
         // ── Internal / not mapped ──────────────────────────────────
         // These engine-internal events are useful for observability in the
         // query engine itself but carry no adapter-protocol semantics.
-        _ => None,
+        QueryObserverEvent::MessagesAppended { .. }
+        | QueryObserverEvent::QueryResult { .. }
+        | QueryObserverEvent::BudgetEvaluated { .. }
+        | QueryObserverEvent::TokenBudgetContinuation { .. }
+        | QueryObserverEvent::ReactiveCompactApplied { .. }
+        | QueryObserverEvent::ToolUseSummary { .. }
+        | QueryObserverEvent::Progress { .. }
+        | QueryObserverEvent::Attachment { .. }
+        | QueryObserverEvent::ApiRetry { .. }
+        | QueryObserverEvent::StopHookBlocking { .. }
+        | QueryObserverEvent::StopHookPrevented { .. }
+        | QueryObserverEvent::CheckpointCreated { .. }
+        | QueryObserverEvent::CheckpointCleared { .. }
+        | QueryObserverEvent::MaxTokensEscalate { .. }
+        | QueryObserverEvent::MaxTokensRecovery { .. }
+        | QueryObserverEvent::ModelFallbackTriggered { .. }
+        | QueryObserverEvent::CollapseDrainRetry { .. }
+        | QueryObserverEvent::ReactiveCompactRetry { .. }
+        | QueryObserverEvent::MaxTokensRecoveryExhausted { .. }
+        | QueryObserverEvent::ImageErrorRecovery { .. }
+        | QueryObserverEvent::MediaSizeErrorRecovery { .. }
+        | QueryObserverEvent::ContextCollapseRecovery { .. }
+        | QueryObserverEvent::AssistantMessageCommitted { .. } => None,
     }
 }
 

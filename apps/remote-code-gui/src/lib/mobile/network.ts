@@ -1,4 +1,5 @@
 import { hasTauriRuntime } from '../runtime';
+import i18n from '../../i18n';
 
 export interface NetworkStatus {
   connected: boolean;
@@ -41,22 +42,25 @@ export function initNetworkMonitoring(): void {
     }
     return;
   }
-  // Use variable to avoid Vite static analysis of the import path
-  const modName = '@tauri-apps/plugin-network';
-  import(/* @vite-ignore */ modName).then((mod: NetworkPluginModule) => {
-    mod.onNetworkStatusChange((status) => {
-      currentStatus = { connected: status.connected, connectionType: status.connectionType ?? 'unknown' };
-      listeners.forEach((fn) => fn(currentStatus.connected, currentStatus.connectionType));
-    }).then((unlisten: () => void) => {
-      cleanup = unlisten;
-    }).catch((err) => {
-      console.warn('[network] onNetworkStatusChange listener setup failed:', err);
-      cleanup = null;
+  // Try to load the native Tauri network plugin for richer status info
+  // (connection type like WiFi/cellular). Falls back to browser events silently.
+  try {
+    const modName = '@tauri-apps/plugin-network';
+    import(/* @vite-ignore */ modName).then((mod: NetworkPluginModule) => {
+      mod.onNetworkStatusChange((status) => {
+        currentStatus = { connected: status.connected, connectionType: status.connectionType ?? 'unknown' };
+        listeners.forEach((fn) => fn(currentStatus.connected, currentStatus.connectionType));
+      }).then((unlisten: () => void) => {
+        cleanup = unlisten;
+      }).catch(() => {
+        // Listener setup failed — browser fallback already active
+      });
+    }).catch(() => {
+      // Plugin not registered on Rust side — browser fallback already active
     });
-  }).catch((err) => {
-    console.warn('[network] plugin-network import failed:', err);
-    cleanup = null;
-  });
+  } catch {
+    // Dynamic import not available — browser fallback already active
+  }
 }
 
 export function getNetworkStatus(): NetworkStatus {
@@ -77,9 +81,9 @@ export function onNetworkChange(listener: NetworkChangeListener): () => void {
 export function describeConnectionType(type: string): string {
   switch (type) {
     case 'wifi': return 'WiFi';
-    case 'cellular': return '蜂窝网络';
-    case 'none': return '无网络';
-    case 'unknown': return '未知';
+    case 'cellular': return i18n.t('mobile.cellular');
+    case 'none': return i18n.t('mobile.noNetwork');
+    case 'unknown': return i18n.t('mobile.unknownNetwork');
     default: return type;
   }
 }

@@ -8,29 +8,6 @@ use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
 
-fn validate_strict_schema(strict: bool, parameters: &JsonSchema) -> Result<(), String> {
-    if !strict {
-        return Ok(());
-    }
-    if parameters.required.is_none() {
-        return Err("strict mode requires 'required' to be set in the JSON schema".to_string());
-    }
-    if parameters.additional_properties.is_none() {
-        return Err("strict mode requires 'additionalProperties' to be set in the JSON schema".to_string());
-    }
-    if let Some(properties) = &parameters.properties {
-        let required = parameters.required.as_ref().unwrap();
-        for key in properties.keys() {
-            if !required.contains(key) {
-                return Err(format!(
-                    "strict mode requires all properties to be in 'required': missing '{key}'"
-                ));
-            }
-        }
-    }
-    Ok(())
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct FreeformTool {
     pub name: String,
@@ -49,18 +26,15 @@ pub struct FreeformToolFormat {
 pub struct ResponsesApiTool {
     pub name: String,
     pub description: String,
+    /// TODO: Validation. When strict is set to true, the JSON schema,
+    /// `required` and `additional_properties` must be present. All fields in
+    /// `properties` must be present in `required`.
     pub strict: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub defer_loading: Option<bool>,
     pub parameters: JsonSchema,
     #[serde(skip)]
     pub output_schema: Option<Value>,
-}
-
-impl ResponsesApiTool {
-    pub fn validate_strict(&self) -> Result<(), String> {
-        validate_strict_schema(self.strict, &self.parameters)
-    }
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -81,7 +55,7 @@ pub struct ResponsesApiNamespace {
     pub tools: Vec<ResponsesApiNamespaceTool>,
 }
 
-pub(crate) fn default_namespace_description(namespace_name: &str) -> String {
+pub fn default_namespace_description(namespace_name: &str) -> String {
     format!("Tools in the {namespace_name} namespace.")
 }
 
@@ -98,21 +72,6 @@ pub fn dynamic_tool_to_responses_api_tool(
     Ok(tool_definition_to_responses_api_tool(parse_dynamic_tool(
         tool,
     )?))
-}
-
-pub fn dynamic_tool_to_loadable_tool_spec(
-    tool: &DynamicToolSpec,
-) -> Result<LoadableToolSpec, serde_json::Error> {
-    let output_tool = dynamic_tool_to_responses_api_tool(tool)?;
-    Ok(match tool.namespace.as_ref() {
-        Some(namespace) => LoadableToolSpec::Namespace(ResponsesApiNamespace {
-            name: namespace.clone(),
-            // the user doesn't provide a description for dynamic tools, so we use the default
-            description: default_namespace_description(namespace),
-            tools: vec![ResponsesApiNamespaceTool::Function(output_tool)],
-        }),
-        None => LoadableToolSpec::Function(output_tool),
-    })
 }
 
 pub fn coalesce_loadable_tool_specs(

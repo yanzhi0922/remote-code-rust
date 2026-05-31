@@ -11,7 +11,17 @@
     "send": "发送",
     "offline": "离线",
     "online": "在线",
-    "back": "返回"
+    "back": "返回",
+    "copy": "复制",
+    "add": "添加",
+    "edit": "编辑",
+    "restore": "恢复",
+    "saved": "已保存",
+    "saving": "保存中…",
+    "name": "名称",
+    "protocol": "协议",
+    "defaultModel": "默认模型",
+    "placeholder": "占位符"
   },
   "app": {
     "initializing": "正在初始化...",
@@ -25,7 +35,9 @@
     "gateDescription": "安全地远程控制您的开发环境",
     "loadingRemote": "正在加载 Remote Code...",
     "authFailed": "身份验证失败",
-    "clearSearch": "清空搜索"
+    "clearSearch": "清空搜索",
+    "biometricPromptAuth": "请验证身份以访问 Remote Code",
+    "biometricEnablePrompt": "启用生物识别需要先验证身份"
   },
   "sidebar": {
     "searchPlaceholder": "搜索项目、会话",
@@ -43,12 +55,13 @@
     "completed": "已完成",
     "failed": "失败",
     "inProgress": "进行中",
-    "projectCount": "{{count}} projects",
+    "projectCount": "{{count}} 个项目",
     "expandTasks": "展开/收起子任务",
     "sessionHidden": "会话已隐藏",
     "cannotRemoveProject": "该项目下仍有会话，无法移除",
     "removeProject": "移除此项目",
-    "loadingSessions": "正在加载…"
+    "loadingSessions": "正在加载…",
+    "waitingSubagent": "等待子代理结果"
   },
   "permission": {
     "title": "权限确认",
@@ -97,7 +110,54 @@
     "addProvider": "去设置面板添加或导入 Provider",
     "slashHint": "↑↓ 导航 · Enter 选择 · Esc 关闭",
     "permissionLabel": "权限",
-    "unconfiguredProvider": "未配置"
+    "unconfiguredProvider": "未配置",
+    "contextError": "当前会话已使用 {{used}} tokens，{{model}} 约 {{next}}，不能切换到更小上下文。",
+    "permission": {
+      "claude": {
+        "default": "默认模式",
+        "defaultDesc": "读取自动执行，写入和命令需确认",
+        "acceptEdits": "自动接受编辑",
+        "acceptEditsDesc": "文件编辑自动执行，命令仍需确认",
+        "dontAsk": "静默模式",
+        "dontAskDesc": "仅自动放行低风险读取工具",
+        "bypassPermissions": "跳过权限检查",
+        "bypassPermissionsDesc": "跳过全部权限确认",
+        "plan": "计划模式",
+        "planDesc": "只规划，不执行工具"
+      },
+      "roo": {
+        "code": "Code 编码",
+        "codeDesc": "读写文件、执行命令，用于日常编码和功能实现",
+        "architect": "Architect 架构",
+        "architectDesc": "规划与设计，仅读取代码和编写 Markdown 计划文档",
+        "ask": "Ask 问答",
+        "askDesc": "获取解答和说明，只读模式，不修改任何代码",
+        "debug": "Debug 调试",
+        "debugDesc": "系统化诊断和修复软件问题，定位根因后修复",
+        "orchestrator": "Orchestrator 编排",
+        "orchestratorDesc": "协调复杂任务，拆分后委派给 Code/Architect 等专业模式"
+      },
+      "codex": {
+        "requestApproval": "请求批准",
+        "requestApprovalDesc": "workspace-write 沙盒，越界写入或高风险命令时请求确认",
+        "sandboxAuto": "沙盒自动",
+        "sandboxAutoDesc": "workspace-write 沙盒内自动执行，不弹权限确认",
+        "readonlySandbox": "只读沙盒",
+        "readonlySandboxDesc": "read-only 沙盒，写入和命令需要显式批准",
+        "fullAccess": "完全访问",
+        "fullAccessDesc": "danger-full-access，无沙盒；危险操作仍请求批准",
+        "fullAuto": "全自动访问",
+        "fullAutoDesc": "danger-full-access 且不请求确认，仅用于完全可信环境"
+      }
+    },
+    "slash": {
+      "goal": "设置当前会话目标",
+      "compact": "压缩当前上下文",
+      "clear": "清空当前会话内容",
+      "plan": "切换到只规划模式",
+      "review": "开始代码审查",
+      "doctor": "运行诊断检查"
+    }
   },
   "chatArea": {
     "thinking": "Thinking",
@@ -115,13 +175,95 @@
     "batchCompleted": "批量完成 {{succeeded}}/{{total}}",
     "completed": "已完成",
     "waitingSubagent": "等待子代理结果",
-    "toggleReasoning": "Toggle reasoning details"
+    "toggleReasoning": "Toggle reasoning details",
+    "codeFallback": "代码",
+    "codeExpandText": "展开查看代码块",
+    "sessionActions": "会话操作",
+    "exportSession": "导出会话",
+    "copySessionId": "复制会话 ID",
+    "scrollToBottom": "回到底部"
   },
   "settings": {
     "title": "设置",
     "general": "通用",
     "remote": "远程",
-    "about": "关于"
+    "about": "关于",
+    "runtimeParams": "运行参数",
+    "operations": "操作面",
+    "archive": "归档",
+    "openAiCompatible": "OpenAI / 兼容 Chat Completions",
+    "loadingSettings": "正在加载设置…",
+    "resetUnsaved": "重置未保存更改",
+    "saveButton": "保存",
+    "saving": "保存中…",
+    "backToApp": "返回应用",
+    "closeSettings": "关闭设置",
+    "sessionArchived": "会话已隐藏",
+    "pathHidden": "路径已隐藏",
+    "archiveHeading": "归档会话",
+    "noArchivedSessions": "当前没有已归档会话。",
+    "newProvider": "新增 Provider",
+    "editProvider": "编辑 {{name}}",
+    "providerExists": "名为 \"{{name}}\" 的 Provider 已存在，是否覆盖？",
+    "savedProviders": "已保存的 Provider",
+    "addProviderBtn": "添加",
+    "noModelSet": "未设模型",
+    "currentlyActive": "当前激活",
+    "setAsCurrent": "设为当前",
+    "keychainStored": "钥匙串",
+    "defaultProfile": "默认",
+    "profileTooltip": "模型: {{model}}",
+    "noProvidersYet": "还没有保存任何 Provider。",
+    "fieldName": "名称",
+    "fieldProtocol": "协议",
+    "fieldDefaultModel": "默认模型",
+    "keyStoredHint": "密钥已安全存储在系统钥匙串中…",
+    "keyNewHint": "密钥将安全存储在系统钥匙串中…",
+    "keyPlaceholder": "••••••••（留空保持不变）",
+    "modelConfigLabel": "模型配置（Profile）",
+    "configNamePlaceholder": "配置名",
+    "modelIdPlaceholder": "模型 ID，例如 glm-5.1",
+    "deleteProfile": "删除此配置",
+    "addProfile": "添加配置",
+    "cancelBtn": "取消",
+    "saveProvider": "保存 Provider",
+    "installDataDir": "安装和数据目录",
+    "permissionModeField": "权限模式",
+    "requestTimeoutMs": "请求超时（毫秒）",
+    "maxRetries": "最大重试次数",
+    "initialBackoffMs": "初始退避（毫秒）",
+    "maxBackoffMs": "最大退避（毫秒）",
+    "otherSection": "其他",
+    "enableRetryAfter": "启用服务端 Retry-After 支持",
+    "enableVerboseMode": "启用详细模式",
+    "urlNormalizationHint": "将标准化尾部斜杠并提取 scheme+host 用于显示",
+    "maxOutputTokens": "最大输出 Tokens",
+    "maxOutputTokensHint": "单次回复的最大 token 数量",
+    "thinkingBudget": "思考预算",
+    "thinkingBudgetHint": "Extended thinking 预算，留空表示不限",
+    "maxTurns": "最大轮次",
+    "maxTurnsHint": "单次对话的 agent 最大执行轮次",
+    "rooModeField": "Roo 默认模式",
+    "rooModeHint": "Roo agent 的默认工作模式，留空使用 Code",
+    "rooModeDefault": "默认（Code）"
+  },
+  "agent": {
+    "selectType": "选择 Agent 类型",
+    "notInstalled": "未安装",
+    "locked": "已锁定",
+    "closeMenu": "关闭下拉菜单",
+    "claude": {
+      "displayName": "Claude",
+      "description": "内置 Agent，直接调用 provider API"
+    },
+    "roo": {
+      "displayName": "Roo",
+      "description": "Rust 原生 in-process Agent"
+    },
+    "codex": {
+      "displayName": "Codex",
+      "description": "Rust 原生 in-process Agent"
+    }
   },
   "mobile": {
     "sessions": "会话",
@@ -137,7 +279,10 @@
     "connected": "已连接",
     "disconnected": "已断开",
     "enableBiometric": "启用生物识别",
-    "disableBiometric": "禁用生物识别"
+    "disableBiometric": "禁用生物识别",
+    "cellular": "蜂窝网络",
+    "noNetwork": "无网络",
+    "unknownNetwork": "未知"
   },
   "time": {
     "justNow": "刚刚",
@@ -148,5 +293,186 @@
     "yesterday": "昨天",
     "thisWeek": "本周",
     "earlier": "更早"
+  },
+  "inspector": {
+    "ready": "就绪",
+    "running": "运行中",
+    "offline": "离线",
+    "envInfo": "环境信息",
+    "titleLabel": "标题",
+    "sessionHidden": "会话已隐藏",
+    "none": "无",
+    "sessionSection": "会话",
+    "projectLabel": "项目",
+    "typeLabel": "类型",
+    "modelLabel": "模型",
+    "permissionsSection": "权限",
+    "modeLabel": "模式",
+    "pendingLabel": "待确认",
+    "contextLabel": "上下文",
+    "connectedLabel": "已连接",
+    "warningAuthLabel": "警告 / 认证",
+    "eventsSection": "运行事件",
+    "activeToolsLabel": "活动工具",
+    "toolResultsLabel": "工具结果",
+    "runtimeLabel": "运行时",
+    "codexPermissions": {
+      "fullAutoAccess": "全自动访问",
+      "fullAccess": "完全访问",
+      "readonlySandbox": "只读沙盒",
+      "sandboxAuto": "沙盒自动",
+      "requestApproval": "请求批准"
+    },
+    "rooPermissions": {
+      "autoApproveEdit": "自动批准编辑",
+      "autoApproveAll": "自动批准全部",
+      "autoApproveRead": "自动批准读取",
+      "planOnly": "仅规划",
+      "askEveryTime": "每次询问"
+    },
+    "claudePermissions": {
+      "autoEdit": "自动接受编辑",
+      "fullAuto": "跳过权限检查",
+      "dontAsk": "静默模式",
+      "planOnly": "计划模式",
+      "defaultPerm": "默认模式"
+    }
+  },
+  "mcp": {
+    "invalidKeyValue": "无效的 key=value 行：{{line}}",
+    "emptyKeyName": "空键名：{{line}}",
+    "invalidTimeoutValue": "无效的超时值：{{value}}",
+    "selectProjectFirst": "请选择项目后再管理 project-scope MCP。",
+    "cannotLoadInventory": "无法加载 runtime inventory：{{err}}",
+    "manageMcp": "MCP 管理",
+    "refresh": "刷新",
+    "connectAndCheck": "连接并检查工具",
+    "selectProjectFirstShort": "请先选择项目",
+    "loading": "加载中…",
+    "addOrUpdateServer": "新增 / 更新 MCP Server",
+    "clearForm": "清空表单",
+    "nameField": "名称",
+    "argsField": "Args / 每行一个",
+    "canBeEmpty": "可留空",
+    "disabledByDefault": "保存后默认禁用",
+    "saving": "保存中…",
+    "saveMcpServer": "保存 MCP Server",
+    "resetScope": "重置当前 scope",
+    "loadingInventory": "加载中…",
+    "noMcpServersInRuntime": "当前 runtime inventory 还没有发现 MCP server。",
+    "noMcpServersInScope": "当前 scope 下还没有 MCP server。"
+  },
+  "workspace": {
+    "noOpenProject": "未打开项目",
+    "currentProject": "当前项目",
+    "noProjectSelected": "未选择项目",
+    "projectCount": "{{count}} 个项目",
+    "sessionsLabel": "会话",
+    "recentSessions": "最近会话",
+    "sessionCount": "{{count}} 条",
+    "searchSessions": "搜索会话...",
+    "gridView": "网格视图",
+    "listView": "列表视图",
+    "noMatchResults": "无匹配结果",
+    "noOpenSessions": "暂无打开的会话",
+    "addProjectBtn": "添加项目",
+    "newSessionBtn": "新会话"
+  },
+  "commandPalette": {
+    "newSession": "新会话",
+    "newSessionDesc": "创建新的 agent 会话",
+    "sessionCategory": "会话",
+    "addProjectFolder": "添加项目文件夹",
+    "addProjectFolderDesc": "选择并添加项目到工作区",
+    "projectCategory": "项目",
+    "settingsCmd": "设置",
+    "settingsDesc": "打开设置面板",
+    "settingsCategory": "设置",
+    "mcpManagement": "MCP 服务器管理",
+    "mcpManagementDesc": "查看和配置 MCP 服务器",
+    "toggleTheme": "切换主题",
+    "toggleThemeDesc": "在深色和浅色主题间切换",
+    "openTerminal": "打开终端",
+    "openTerminalDesc": "在底部面板打开终端",
+    "toolsCategory": "工具",
+    "searchFiles": "搜索文件",
+    "searchFilesDesc": "在项目中搜索文件",
+    "searchPlaceholder": "输入命令或搜索...",
+    "noCommandFound": "未找到匹配的命令",
+    "navUpdown": "↑↓ 导航",
+    "navEnter": "↵ 执行",
+    "navEsc": "Esc 关闭"
+  },
+  "codexSettings": {
+    "followGuiPermission": "跟随 GUI 权限模式",
+    "followGuiSandbox": "跟随 GUI 沙盒模式",
+    "nativeSettings": "Codex 原生设置",
+    "nativeSettingsDesc": "这些设置会透传到官方 Codex Config/App Server。留空表示使用 GUI 的通用 Provider/权限映射。",
+    "modelProviderDesc": "传给 Codex 的 model_provider；留空时根据当前 GUI provider 自动生成。",
+    "saveExtendedHistory": "保存扩展历史",
+    "saveExtendedHistoryDesc": "开启 Codex persist_extended_history，保留更完整的线程历史。",
+    "enableMemories": "启用 Codex memories",
+    "enableMemoriesDesc": "控制 Codex memories.generate_memories 和 memories.use_memories。",
+    "threadStoreDesc": "留空使用隔离本地 thread store；填写后使用 Codex remote thread store。",
+    "countBadge": "{{count}} 条",
+    "envHelpText": "每行一个 key = value。value 会按 TOML scalar 解析；无法解析时按字符串传递。"
+  },
+  "operations": {
+    "doctorDesc": "在 GUI 内直接查看 runtime、provider、权限、扩展和网络可达性，不用切回 CLI。",
+    "diagnosing": "诊断中…",
+    "reDiagnose": "重新诊断",
+    "probeProvider": "探测 Provider",
+    "probeNetwork": "探测网络",
+    "showEnvVarProvider": "显示环境变量 Provider"
+  },
+  "store": {
+    "selectProjectFirst": "请先选择项目文件夹，再新建会话。",
+    "goalCodexOnly": "/goal 仅在 Codex agent 下可用。",
+    "goalNeedSession": "请先创建会话再使用 /goal。",
+    "selectProjectBeforeStart": "请先选择项目文件夹，再开始会话。"
+  },
+  "markdownRenderer": {
+    "codeLabel": "代码",
+    "codeExpandText": "展开查看代码块"
+  },
+  "settingInput": {
+    "hidePassword": "隐藏密码",
+    "showPassword": "显示密码"
+  },
+  "layout": {
+    "resizeSidebar": "调整侧边栏宽度"
+  },
+  "contextMenu": {
+    "pinTask": "置顶任务",
+    "unpinTask": "取消置顶",
+    "renameTask": "重命名任务",
+    "archiveTask": "归档任务",
+    "markUnread": "标记为未读",
+    "markRead": "标记为已读",
+    "openInExplorer": "在资源管理器中打开",
+    "copyPath": "复制路径",
+    "copyTaskPath": "复制任务路径",
+    "copySessionId": "复制会话ID",
+    "goToSettings": "前往配置",
+    "reloadSession": "重载会话",
+    "feedbackIssue": "反馈问题",
+    "cancel": "取消",
+    "renamePlaceholder": "输入新名称...",
+    "renameConfirm": "确认",
+    "separator": "操作"
+  },
+  "projectHover": {
+    "remove": "移除",
+    "viewFiles": "查看文件",
+    "newTask": "新建任务"
+  },
+  "fileExplorer": {
+    "title": "文件浏览器",
+    "backToTasks": "返回任务",
+    "noFiles": "此目录无文件",
+    "error": "加载目录失败",
+    "root": "项目根目录",
+    "loading": "加载中...",
+    "emptyDirectory": "空目录"
   }
 }

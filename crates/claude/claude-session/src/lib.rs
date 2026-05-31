@@ -308,6 +308,21 @@ impl SessionStore {
         Ok(self.list_active_sessions()?.into_iter().next())
     }
 
+    /// Rename a session (update its title).
+    ///
+    /// # Errors
+    /// Returns an error if the session does not exist or the database update fails.
+    pub fn set_title(&self, session_id: Uuid, title: &str) -> Result<()> {
+        let changed = self.conn()?.execute(
+            "UPDATE sessions SET title = ?2, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE session_id = ?1",
+            params![session_id.to_string(), title],
+        )?;
+        if changed == 0 {
+            return Err(anyhow!("session {session_id} does not exist"));
+        }
+        Ok(())
+    }
+
     /// Mark a session as archived or restored.
     ///
     /// # Errors

@@ -1524,6 +1524,7 @@ fn full_settings_from_runtime(
         codex_permission_profile: gui_settings.codex_permission_profile.clone(),
         codex_service_tier: gui_settings.codex_service_tier.clone(),
         codex_ephemeral: gui_settings.codex_ephemeral,
+        roo_mode: gui_settings.roo_mode.clone(),
         runtime_paths: runtime_paths_to_dto(&path_layout),
     }
 }
@@ -3133,6 +3134,7 @@ async fn run_roo_in_process_prompt(
     mcp_servers: HashMap<String, serde_json::Value>,
     roo_storage_path: PathBuf,
     session_store: Arc<claude_session::SessionStore>,
+    roo_mode: Option<String>,
 ) -> std::result::Result<String, String> {
     // Ensure the adapter exists for this session.
     {
@@ -3147,13 +3149,19 @@ async fn run_roo_in_process_prompt(
                 agent_type: ProtocolAgentType::RemoteRoo,
                 binary_path: None,
                 args: Vec::new(),
-                env: vec![
-                    (
-                        "ROO_TASK_STORAGE_PATH".to_owned(),
-                        roo_storage_path.to_string_lossy().to_string(),
-                    ),
-                    ("ROO_API_CONFIG_NAME".to_owned(), provider_name.clone()),
-                ],
+                env: {
+                    let mut env = vec![
+                        (
+                            "ROO_TASK_STORAGE_PATH".to_owned(),
+                            roo_storage_path.to_string_lossy().to_string(),
+                        ),
+                        ("ROO_API_CONFIG_NAME".to_owned(), provider_name.clone()),
+                    ];
+                    if let Some(ref mode) = roo_mode {
+                        env.push(("ROO_MODE".to_owned(), mode.clone()));
+                    }
+                    env
+                },
                 working_dir: Some(working_dir.clone()),
                 model: model.clone(),
                 provider: Some(provider_name.clone()),

@@ -1,13 +1,7 @@
 import { ChevronDown, Cpu } from 'lucide-react';
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import type { AgentTypeInfo, AgentType } from '../../lib/types';
-
-/** Agent 类型对应的默认显示信息（后端未返回时用作 fallback） */
-const AGENT_DEFAULTS: Record<AgentType, { displayName: string; description: string }> = {
-  remote_claude: { displayName: 'Claude', description: '内置 Agent，直接调用 provider API' },
-  remote_roo: { displayName: 'Roo', description: 'Rust 原生 in-process Agent' },
-  remote_codex: { displayName: 'Codex', description: 'Rust 原生 in-process Agent' },
-};
 
 interface AgentSelectorProps {
   availableAgents: AgentTypeInfo[];
@@ -17,6 +11,12 @@ interface AgentSelectorProps {
   onSelect: (agentType: AgentType | null) => void;
 }
 
+const AGENT_TYPE_KEYS: Record<AgentType, string> = {
+  remote_claude: 'claude',
+  remote_roo: 'roo',
+  remote_codex: 'codex',
+};
+
 export function AgentSelector({
   availableAgents,
   activeAgentType,
@@ -24,6 +24,7 @@ export function AgentSelector({
   lockedReason,
   onSelect,
 }: AgentSelectorProps) {
+  const { t } = useTranslation();
   const [open, setOpen] = useState(false);
 
   const agentEntries: Array<{
@@ -34,11 +35,11 @@ export function AgentSelector({
     available: boolean;
   }> = (['remote_codex', 'remote_claude', 'remote_roo'] as const).map((type) => {
     const info = availableAgents.find((agent) => agent.agentType === type);
-    const defaults = AGENT_DEFAULTS[type];
+    const key = AGENT_TYPE_KEYS[type];
     return {
       agentType: type,
-      displayName: info?.displayName ?? defaults.displayName,
-      description: defaults.description,
+      displayName: info?.displayName ?? t(`agent.${key}.displayName`),
+      description: t(`agent.${key}.description`),
       installed: info?.installed ?? type === 'remote_claude',
       available: info?.available ?? type === 'remote_claude',
     };
@@ -61,7 +62,7 @@ export function AgentSelector({
     <div className="relative">
       <button
         type="button"
-        title="选择 Agent 类型"
+        title={t('agent.selectType')}
         aria-expanded={open}
         aria-haspopup="menu"
         onClick={() => setOpen((prev) => !prev)}
@@ -75,7 +76,7 @@ export function AgentSelector({
       {open && (
         <>
           <button
-            aria-label="关闭下拉菜单"
+            aria-label={t('agent.closeMenu')}
             className="fixed inset-0 z-10 cursor-default"
             onClick={() => setOpen(false)}
           />
@@ -110,10 +111,10 @@ export function AgentSelector({
                       <div className="truncate text-sm font-medium">
                         {entry.displayName}
                         {!entry.installed && (
-                          <span className="ml-2 text-xs text-rc-text-tertiary">未安装</span>
+                          <span className="ml-2 text-xs text-rc-text-tertiary">{t('agent.notInstalled')}</span>
                         )}
                         {lockedOut && (
-                          <span className="ml-2 text-xs text-rc-text-tertiary">已锁定</span>
+                          <span className="ml-2 text-xs text-rc-text-tertiary">{t('agent.locked')}</span>
                         )}
                       </div>
                       <div className="mt-0.5 text-xs text-rc-text-tertiary">{entry.description}</div>

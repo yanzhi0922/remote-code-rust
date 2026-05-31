@@ -8,8 +8,7 @@ use std::os::unix::ffi::OsStrExt;
 /// various process hardening steps, such as
 /// - disabling core dumps
 /// - disabling ptrace attach on Linux and macOS.
-/// - removing dangerous or noisy environment variables such as LD_PRELOAD,
-///   DYLD_*, and macOS malloc stack-logging controls
+/// - removing dangerous environment variables such as LD_PRELOAD and DYLD_*
 pub fn pre_main_hardening() {
     #[cfg(any(target_os = "linux", target_os = "android"))]
     pre_main_hardening_linux();
@@ -98,12 +97,6 @@ pub(crate) fn pre_main_hardening_macos() {
     // Remove all DYLD_ environment variables, which can be used to subvert
     // library loading.
     remove_env_vars_with_prefix(b"DYLD_");
-
-    // Remove macOS malloc stack-logging controls so allocator diagnostics from
-    // Codex or inherited child processes do not get sprayed into the TUI:
-    // https://github.com/openai/codex/issues/11555
-    remove_env_vars_with_prefix(b"MallocStackLogging");
-    remove_env_vars_with_prefix(b"MallocLogFile");
 }
 
 #[cfg(unix)]
@@ -125,65 +118,7 @@ fn set_core_file_size_limit_to_zero() {
 
 #[cfg(windows)]
 pub(crate) fn pre_main_hardening_windows() {
-    #[link(name = "kernel32")]
-    extern "system" {
-        fn SetProcessMitigationPolicy(
-            Policy: u32,
-            Buffer: *const std::ffi::c_void,
-            Size: usize,
-        ) -> i32;
-    }
-
-    const PROCESS_DEP_POLICY: u32 = 0;
-
-    #[repr(C)]
-    #[derive(Default)]
-    struct DepPolicy {
-        flags: u32,
-        permanent: bool,
-    }
-
-    let dep = DepPolicy {
-        flags: 1,
-        permanent: true,
-    };
-    let result = unsafe {
-        SetProcessMitigationPolicy(
-            PROCESS_DEP_POLICY,
-            &dep as *const _ as *const std::ffi::c_void,
-            std::mem::size_of::<DepPolicy>(),
-        )
-    };
-    if result == 0 {
-        eprintln!(
-            "WARNING: SetProcessMitigationPolicy(DEP) failed: {}",
-            std::io::Error::last_os_error()
-        );
-    }
-
-    const PROCESS_ASLR_POLICY: u32 = 1;
-
-    #[repr(C)]
-    struct AslrPolicy {
-        flags: u32,
-    }
-
-    let aslr = AslrPolicy {
-        flags: 0x00000002,
-    };
-    let result = unsafe {
-        SetProcessMitigationPolicy(
-            PROCESS_ASLR_POLICY,
-            &aslr as *const _ as *const std::ffi::c_void,
-            std::mem::size_of::<AslrPolicy>(),
-        )
-    };
-    if result == 0 {
-        eprintln!(
-            "WARNING: SetProcessMitigationPolicy(ASLR) failed: {}",
-            std::io::Error::last_os_error()
-        );
-    }
+    // TODO(mbolin): Perform the appropriate configuration for Windows.
 }
 
 #[cfg(unix)]

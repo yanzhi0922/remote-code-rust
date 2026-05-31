@@ -61,31 +61,12 @@ use crate::tui::FrameRequester;
 /// row boundary, which breaks normal terminal URL detection for long URLs that
 /// wrap across multiple rows.
 pub(crate) fn mark_url_hyperlink(buf: &mut Buffer, area: Rect, url: &str) {
-    // Sanitize: strip any characters that could break out of the OSC 8
-    // sequence (ESC or BEL) to prevent terminal escape injection from a
-    // malformed or compromised upstream URL.
-    let safe_url: String = url
-        .chars()
-        .filter(|&c| c != '\x1B' && c != '\x07')
-        .collect();
-    if safe_url.is_empty() {
-        return;
-    }
+    crate::terminal_hyperlinks::mark_url_hyperlink(buf, area, url);
+}
 
-    for y in area.top()..area.bottom() {
-        for x in area.left()..area.right() {
-            let cell = &mut buf[(x, y)];
-            // Only mark cells that carry the URL's distinctive style.
-            if cell.fg != Color::Cyan || !cell.modifier.contains(Modifier::UNDERLINED) {
-                continue;
-            }
-            let sym = cell.symbol().to_string();
-            if sym.trim().is_empty() {
-                continue;
-            }
-            cell.set_symbol(&format!("\x1B]8;;{safe_url}\x07{sym}\x1B]8;;\x07"));
-        }
-    }
+/// Marks any underlined buffer cells as an OSC 8 hyperlink.
+pub(crate) fn mark_underlined_hyperlink(buf: &mut Buffer, area: Rect, url: &str) {
+    crate::terminal_hyperlinks::mark_underlined_hyperlink(buf, area, url);
 }
 
 use super::onboarding_screen::StepState;
@@ -563,24 +544,36 @@ impl AuthModeWidget {
 
     fn render_chatgpt_success_message(&self, area: Rect, buf: &mut Buffer) {
         let lines = vec![
-            "✓ Signed in with your ChatGPT account".fg(Color::Green).into(),
+            "✓ Signed in with your ChatGPT account"
+                .fg(Color::Green)
+                .into(),
             "".into(),
             "  Before you start:".into(),
             "".into(),
             "  Decide how much autonomy you want to grant Codex".into(),
             Line::from(vec![
                 "  For more details see the ".into(),
-                "\u{1b}]8;;https://developers.openai.com/codex/security\u{7}Codex docs\u{1b}]8;;\u{7}".underlined(),
+                crate::terminal_hyperlinks::osc8_hyperlink(
+                    "https://developers.openai.com/codex/security",
+                    "Codex docs",
+                )
+                .underlined(),
             ])
             .dim(),
             "".into(),
             "  Codex can make mistakes".into(),
-            "  Review the code it writes and commands it runs".dim().into(),
+            "  Review the code it writes and commands it runs"
+                .dim()
+                .into(),
             "".into(),
             "  Powered by your ChatGPT account".into(),
             Line::from(vec![
                 "  Uses your plan's rate limits and ".into(),
-                "\u{1b}]8;;https://chatgpt.com/#settings\u{7}training data preferences\u{1b}]8;;\u{7}".underlined(),
+                crate::terminal_hyperlinks::osc8_hyperlink(
+                    "https://chatgpt.com/#settings",
+                    "training data preferences",
+                )
+                .underlined(),
             ])
             .dim(),
             "".into(),
@@ -1039,6 +1032,7 @@ mod tests {
             config: Arc::new(config),
             cli_overrides: Vec::new(),
             loader_overrides: Default::default(),
+            strict_config: false,
             cloud_requirements: cloud_requirements_loader_for_storage(
                 codex_home_path.clone(),
                 /*enable_codex_api_key_env*/ false,
@@ -1048,6 +1042,7 @@ mod tests {
             .await,
             feedback: codex_feedback::CodexFeedback::new(),
             log_db: None,
+            state_db: None,
             environment_manager: Arc::new(
                 codex_app_server_client::EnvironmentManager::default_for_tests(),
             ),

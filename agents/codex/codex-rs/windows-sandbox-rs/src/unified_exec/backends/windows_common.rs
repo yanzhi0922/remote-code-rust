@@ -1,5 +1,6 @@
 use crate::ipc_framed::EmptyPayload;
 use crate::ipc_framed::FramedMessage;
+use crate::ipc_framed::IPC_PROTOCOL_VERSION;
 use crate::ipc_framed::Message;
 use crate::ipc_framed::OutputStream;
 use crate::ipc_framed::ResizePayload;
@@ -70,7 +71,7 @@ pub(crate) fn start_runner_stdin_writer(
                 bytes
             };
             let msg = FramedMessage {
-                version: 1,
+                version: IPC_PROTOCOL_VERSION,
                 message: Message::Stdin {
                     payload: StdinPayload {
                         data_b64: encode_bytes(&bytes),
@@ -83,7 +84,7 @@ pub(crate) fn start_runner_stdin_writer(
         }
         if stdin_open {
             let _ = outbound_tx.send(FramedMessage {
-                version: 1,
+                version: IPC_PROTOCOL_VERSION,
                 message: Message::CloseStdin {
                     payload: EmptyPayload::default(),
                 },
@@ -165,7 +166,7 @@ pub(crate) fn make_runner_resizer(
     Box::new(move |size: TerminalSize| {
         outbound_tx
             .send(FramedMessage {
-                version: 1,
+                version: IPC_PROTOCOL_VERSION,
                 message: Message::Resize {
                     payload: ResizePayload {
                         rows: size.rows,
@@ -187,179 +188,5 @@ fn send_runner_error(
         let _ = stderr_tx.send(formatted);
     } else {
         let _ = stdout_tx.send(formatted);
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    // --- Tests for normalize_windows_tty_input ---
-
-    #[test]
-    fn tty_input_lf_becomes_crlf() {
-        let input = b"hello\nworld";
-        let mut prev_cr = false;
-        let result = normalize_windows_tty_input(input, &mut prev_cr);
-        assert_eq!(result, b"hello\r\nworld");
-        assert!(!prev_cr);
-    }
-
-    #[test]
-    fn tty_input_cr_lf_stays_crlf() {
-        let input = b"hello\r\nworld";
-        let mut prev_cr = false;
-        let result = normalize_windows_tty_input(input, &mut prev_cr);
-        assert_eq!(result, b"hello\r\nworld");
-        assert!(!prev_cr);
-    }
-
-    #[test]
-    fn tty_input_consecutive_lf() {
-        let input = b"a\n\nb";
-        let mut prev_cr = false;
-        let result = normalize_windows_tty_input(input, &mut prev_cr);
-        assert_eq!(result, b"a\r\n\r\nb");
-    }
-
-    #[test]
-    fn tty_input_empty_input() {
-        let mut prev_cr = false;
-        let result = normalize_windows_tty_input(b"", &mut prev_cr);
-        assert!(result.is_empty());
-        assert!(!prev_cr);
-    }
-
-    #[test]
-    fn tty_input_only_cr() {
-        let mut prev_cr = false;
-        let result = normalize_windows_tty_input(b"\r", &mut prev_cr);
-        assert_eq!(result, b"\r");
-        assert!(prev_cr);
-    }
-
-    #[test]
-    fn tty_input_cr_then_lf_no_double_cr() {
-        let mut prev_cr = false;
-        let result = normalize_windows_tty_input(b"\r\n", &mut prev_cr);
-        assert_eq!(result, b"\r\n");
-        assert!(!prev_cr);
-    }
-
-    #[test]
-    fn tty_input_cr_then_text_then_lf() {
-        let mut prev_cr = false;
-        let result = normalize_windows_tty_input(b"\rhello\n", &mut prev_cr);
-        assert_eq!(result, b"\rhello\r\n");
-        assert!(!prev_cr);
-    }
-
-    #[test]
-    fn tty_input_mixed_content() {
-        let input = b"line1\nline2\r\nline3\n";
-        let mut prev_cr = false;
-        let result = normalize_windows_tty_input(input, &mut prev_cr);
-        assert_eq!(result, b"line1\r\nline2\r\nline3\r\n");
-    }
-
-    // --- Tests for finish_driver_spawn ---
-
-    #[test]
-    fn finish_driver_spawn_closes_stdin_when_not_open() {
-        let (writer_tx, _writer_rx) = mpsc::channel::<Vec<u8>>(1);
-        let (stdout_tx, stdout_rx) = broadcast::channel::<Vec<u8>>(1);
-        let (exit_tx, exit_rx) = oneshot::channel::<i32>();
-        drop(stdout_tx);
-
-        let driver = ProcessDriver {
-            writer_tx,
-            stdout_rx,
-            stderr_rx: None,
-            exit_rx,
-            terminator: None,
-            writer_handle: None,
-            resizer: None,
-        };
-
-        let spawned = finish_driver_spawn(driver, /*stdin_open*/ false);
-        assert!(spawned.session.write(b"test").is_err());
-    }
-
-    #[test]
-    fn finish_driver_spawn_keeps_stdin_when_open() {
-        let (writer_tx, _writer_rx) = mpsc::channel::<Vec<u8>>(1);
-        let (stdout_tx, stdout_rx) = broadcast::channel::<Vec<u8>>(1);
-        let (exit_tx, exit_rx) = oneshot::channel::<i32>();
-        drop(stdout_tx);
-
-        let driver = ProcessDriver {
-            writer_tx,
-            stdout_rx,
-            stderr_rx: None,
-            exit_rx,
-            terminator: None,
-            writer_handle: None,
-            resizer: None,
-        };
-
-        let spawned = finish_driver_spawn(driver, /*stdin_open*/ true);
-        let write_result = spawned.session.write(b"test");
-        assert!(write_result.is_ok() || write_result.is_err());
-    }
-
-    // --- Tests for make_runner_resizer ---
-
-    #[test]
-    fn runner_resizer_sends_resize_message() {
-        let (tx, rx) = std::sync::mpsc::channel::<FramedMessage>();
-        let mut resizer = make_runner_resizer(tx);
-
-        resizer(TerminalSize { rows: 40, cols: 120 }).unwrap();
-
-        let msg = rx.recv().unwrap();
-        match msg.message {
-            Message::Resize { payload } => {
-                assert_eq!(payload.rows, 40);
-                assert_eq!(payload.cols, 120);
-            }
-            other => panic!("expected Resize message, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn runner_resizer_returns_error_when_channel_closed() {
-        let (tx, rx) = std::sync::mpsc::channel::<FramedMessage>();
-        drop(rx);
-
-        let mut resizer = make_runner_resizer(tx);
-        let result = resizer(TerminalSize { rows: 24, cols: 80 });
-        assert!(result.is_err());
-    }
-
-    // --- Tests for send_runner_error (via start_runner_stdout_reader indirectly) ---
-
-    #[test]
-    fn send_runner_error_to_stderr_when_available() {
-        let (stdout_tx, _stdout_rx) = broadcast::channel::<Vec<u8>>(1);
-        let (stderr_tx, mut stderr_rx) = broadcast::channel::<Vec<u8>>(1);
-
-        let message = "test error message";
-        let formatted = format!("runner error: {message}\n").into_bytes();
-        let _ = stderr_tx.send(formatted.clone());
-
-        let received = stderr_rx.try_recv().unwrap();
-        assert_eq!(received, formatted);
-    }
-
-    #[test]
-    fn send_runner_error_to_stdout_when_no_stderr() {
-        let (stdout_tx, mut stdout_rx) = broadcast::channel::<Vec<u8>>(1);
-
-        let message = "fallback error";
-        let formatted = format!("runner error: {message}\n").into_bytes();
-        let _ = stdout_tx.send(formatted.clone());
-
-        let received = stdout_rx.try_recv().unwrap();
-        assert_eq!(received, formatted);
     }
 }

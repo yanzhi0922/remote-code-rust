@@ -391,7 +391,9 @@ fn build_handler(
         }
 
         "litellm" => {
-            let api_key = api_key.unwrap_or("dummy-key").to_string();
+            let api_key = api_key
+                    .ok_or_else(|| anyhow::anyhow!("api_key is required for litellm provider"))?
+                    .to_string();
             let cfg = roo_provider_litellm::LiteLlmConfig {
                 api_key,
                 base_url: openai_base_url(
@@ -1712,7 +1714,9 @@ impl RooInProcessAdapter {
         let sid_ev = session_id.clone();
         engine.emitter().on(move |event: &RooTaskEvent| {
             if let Some(unified) = map_task_event(event, &sid_ev) {
-                let _ = tx_ev.blocking_send(unified);
+                if let Err(e) = tx_ev.blocking_send(unified) {
+                    tracing::warn!("event channel send failed (consumer disconnected or full): {e}");
+                }
             }
         });
 
@@ -1867,7 +1871,7 @@ impl RooInProcessAdapter {
                     })
                     .collect();
 
-                let _ = tx.blocking_send(UnifiedAgentEvent::Completed {
+                if let Err(send_err) = tx.blocking_send(UnifiedAgentEvent::Completed {
                     session_id,
                     result: rc_agent_protocol::events::AgentResult {
                         response_text: final_message,
@@ -1875,15 +1879,19 @@ impl RooInProcessAdapter {
                         usage: usage_info,
                         cost: Some(result.token_usage.total_cost),
                     },
-                });
+                }) {
+                    tracing::error!("Completed event dropped — GUI may hang: {send_err}");
+                }
             }
             Err(e) => {
                 tracing::warn!(error = %e, "AgentLoop ended with error");
-                let _ = tx.blocking_send(UnifiedAgentEvent::Error {
+                if let Err(send_err) = tx.blocking_send(UnifiedAgentEvent::Error {
                     session_id,
                     message: format!("AgentLoop error: {}", e),
                     recoverable: false,
-                });
+                }) {
+                    tracing::error!("Error event dropped: {send_err}");
+                }
             }
         }
 

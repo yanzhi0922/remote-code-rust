@@ -12,6 +12,7 @@ import {
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { useTranslation } from 'react-i18next';
 import {
+  ArrowDown,
   CheckCircle2,
   ChevronRight,
   Copy,
@@ -38,6 +39,7 @@ import {
   estimateEntryHeight,
 } from '../../lib/conversationUtils';
 import { useAppStore } from '../../stores/useAppStore';
+import * as tauri from '../../lib/tauri';
 import i18n from '../../i18n';
 import { WorkspaceOverview } from '../layout/WorkspaceOverview';
 import CollapsibleBlock from './CollapsibleBlock';
@@ -428,6 +430,7 @@ function ConversationTimeline({
   bottomRef: MutableRefObject<HTMLDivElement | null>;
 }) {
   const scrollContainerRef = useRef<HTMLElement>(null);
+  const [showScrollFab, setShowScrollFab] = useState(false);
   const shouldVirtualize = conversation.length >= VIRTUALIZATION_THRESHOLD;
   const getScrollElement = useCallback(() => scrollContainerRef.current, []);
   const estimateSize = useCallback((index: number) => {
@@ -444,9 +447,21 @@ function ConversationTimeline({
     getItemKey: (index) => conversationRowKey(conversation[index] ?? conversation[0], index),
   });
 
+  const handleScroll = useCallback(() => {
+    const el = scrollContainerRef.current;
+    if (!el) return;
+    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+    setShowScrollFab(!atBottom);
+  }, []);
+
+  const scrollToBottom = useCallback(() => {
+    bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+  }, [bottomRef]);
+
   return (
     <section
       ref={scrollContainerRef}
+      onScroll={handleScroll}
       aria-label="Conversation transcript"
       className="flex-1 min-h-0 overflow-y-auto bg-rc-bg-chat px-5 py-5"
     >
@@ -488,6 +503,17 @@ function ConversationTimeline({
           bottomRef={bottomRef}
         />
       </div>
+
+      {showScrollFab && (
+        <button
+          type="button"
+          onClick={scrollToBottom}
+          aria-label="Scroll to bottom"
+          className="absolute bottom-4 right-6 z-10 flex h-9 w-9 items-center justify-center rounded-full border border-rc-border-primary bg-rc-bg-surface shadow-lg transition-all hover:bg-rc-bg-hover hover:shadow-xl"
+        >
+          <ArrowDown size={16} className="text-rc-text-secondary" />
+        </button>
+      )}
     </section>
   );
 }
@@ -496,23 +522,69 @@ function ConversationHeader({
   title,
   model,
   provider,
+  sessionId,
 }: {
   title: string;
   model?: string | null;
   provider?: string | null;
+  sessionId?: string | null;
 }) {
+  const { t } = useTranslation();
+  const [menuOpen, setMenuOpen] = useState(false);
+
+  const copySessionId = () => {
+    if (sessionId) void navigator.clipboard.writeText(sessionId);
+    setMenuOpen(false);
+  };
+  const exportSession = () => {
+    if (sessionId) void tauri.exportSessionBundle(sessionId, 'json');
+    setMenuOpen(false);
+  };
+
   return (
     <div className="flex h-12 shrink-0 items-center justify-between border-b border-rc-border-secondary bg-rc-bg-surface px-4">
       <div className="flex min-w-0 items-center gap-2">
         <div className="min-w-0 truncate text-sm font-semibold text-rc-text-primary">{title}</div>
-        <button
-          type="button"
-          aria-label="Session actions"
-          title="Session actions"
-          className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-rc-text-tertiary transition-colors hover:bg-rc-bg-hover hover:text-rc-text-primary"
-        >
-          <MoreHorizontal size={16} />
-        </button>
+        <div className="relative">
+          <button
+            type="button"
+            aria-label={t('chatArea.sessionActions')}
+            className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-rc-text-tertiary transition-colors hover:bg-rc-bg-hover hover:text-rc-text-primary"
+            onClick={() => setMenuOpen((v) => !v)}
+          >
+            <MoreHorizontal size={16} />
+          </button>
+          {menuOpen && (
+            <>
+              <button
+                type="button"
+                aria-label={t('chatInput.closeDropdown')}
+                className="fixed inset-0 z-10 cursor-default"
+                onClick={() => setMenuOpen(false)}
+              />
+              <div className="absolute left-0 top-full z-20 mt-1 min-w-[180px] overflow-hidden rounded-md border border-rc-border-primary bg-rc-bg-surface shadow-lg animate-fade-in-up">
+                <div className="p-1.5">
+                  <button
+                    type="button"
+                    onClick={exportSession}
+                    className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-xs text-rc-text-primary hover:bg-rc-bg-hover"
+                  >
+                    <Copy size={13} className="text-rc-text-tertiary" />
+                    {t('chatArea.exportSession')}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={copySessionId}
+                    className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-xs text-rc-text-primary hover:bg-rc-bg-hover"
+                  >
+                    <FileText size={13} className="text-rc-text-tertiary" />
+                    {t('chatArea.copySessionId')}
+                  </button>
+                </div>
+              </div>
+            </>
+          )}
+        </div>
       </div>
 
       <div className="hidden min-w-0 items-center gap-2 rounded-lg border border-rc-border-secondary bg-rc-bg-elevated px-2.5 py-1.5 text-xs text-rc-text-tertiary md:flex">
@@ -567,6 +639,7 @@ export function ChatArea() {
           title={activeSession?.title ?? 'Session'}
           provider={activeSession?.provider_name}
           model={activeSession?.model}
+          sessionId={activeSessionId}
         />
         <div className="flex-1 overflow-y-auto">
           <EmptyState title={t('chatArea.loadingSession')} />
@@ -582,6 +655,7 @@ export function ChatArea() {
           title={activeSession?.title ?? 'Session'}
           provider={activeSession?.provider_name}
           model={activeSession?.model}
+          sessionId={activeSessionId}
         />
         <div className="flex-1 overflow-y-auto">
           <EmptyState title={t('chatArea.noMessages')} />
@@ -596,6 +670,7 @@ export function ChatArea() {
         title={activeSession?.title ?? 'Session'}
         provider={activeSession?.provider_name}
         model={activeSession?.model}
+        sessionId={activeSessionId}
       />
       <GoalStatusBar />
       <ConversationTimeline

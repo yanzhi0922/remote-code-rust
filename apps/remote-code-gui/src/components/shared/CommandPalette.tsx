@@ -18,6 +18,7 @@ import {
   useRef,
   useState,
 } from 'react';
+import { useTranslation } from 'react-i18next';
 import { cn } from '../../lib/utils';
 
 interface CommandItem {
@@ -41,6 +42,87 @@ interface CommandPaletteProps {
   onToggleTheme: () => void;
 }
 
+type TFn = (key: string) => string;
+
+function buildCommands(t: TFn, callbacks: {
+  onNewSession: () => void;
+  onAddProject: () => void;
+  onOpenSettings: () => void;
+  onOpenMcp: () => void;
+  onToggleTheme: () => void;
+  onClose: () => void;
+}): CommandItem[] {
+  return [
+    {
+      id: 'new-session',
+      label: t('commandPalette.newSession'),
+      description: t('commandPalette.newSessionDesc'),
+      icon: MessageSquarePlus,
+      iconColor: 'text-rc-accent-success',
+      shortcut: '\u2318N',
+      category: t('commandPalette.sessionCategory'),
+      action: () => { callbacks.onNewSession(); callbacks.onClose(); },
+    },
+    {
+      id: 'add-project',
+      label: t('commandPalette.addProjectFolder'),
+      description: t('commandPalette.addProjectFolderDesc'),
+      icon: FolderPlus,
+      iconColor: 'text-rc-accent-info',
+      category: t('commandPalette.projectCategory'),
+      action: () => { callbacks.onAddProject(); callbacks.onClose(); },
+    },
+    {
+      id: 'settings',
+      label: t('commandPalette.settingsCmd'),
+      description: t('commandPalette.settingsDesc'),
+      icon: Settings2,
+      shortcut: '\u2318,',
+      category: t('commandPalette.settingsCategory'),
+      action: () => { callbacks.onOpenSettings(); callbacks.onClose(); },
+    },
+    {
+      id: 'mcp',
+      label: t('commandPalette.mcpManagement'),
+      description: t('commandPalette.mcpManagementDesc'),
+      icon: Blocks,
+      iconColor: 'text-rc-accent-warning',
+      category: t('commandPalette.settingsCategory'),
+      action: () => { callbacks.onOpenMcp(); callbacks.onClose(); },
+    },
+    {
+      id: 'toggle-theme',
+      label: t('commandPalette.toggleTheme'),
+      description: t('commandPalette.toggleThemeDesc'),
+      icon: Palette,
+      iconColor: 'text-rc-accent-primary',
+      shortcut: '\u2318\u21E7T',
+      category: t('commandPalette.settingsCategory'),
+      action: () => { callbacks.onToggleTheme(); callbacks.onClose(); },
+    },
+    {
+      id: 'terminal',
+      label: t('commandPalette.openTerminal'),
+      description: t('commandPalette.openTerminalDesc'),
+      icon: Terminal,
+      iconColor: 'text-rc-accent-warning',
+      shortcut: '\u2318`',
+      category: t('commandPalette.toolsCategory'),
+      action: () => { callbacks.onClose(); },
+    },
+    {
+      id: 'search-files',
+      label: t('commandPalette.searchFiles'),
+      description: t('commandPalette.searchFilesDesc'),
+      icon: Search,
+      iconColor: 'text-rc-accent-info',
+      shortcut: '\u2318P',
+      category: t('commandPalette.toolsCategory'),
+      action: () => { callbacks.onClose(); },
+    },
+  ];
+}
+
 export function CommandPalette({
   open,
   onClose,
@@ -50,80 +132,16 @@ export function CommandPalette({
   onOpenMcp,
   onToggleTheme,
 }: CommandPaletteProps) {
+  const { t } = useTranslation();
   const [query, setQuery] = useState('');
   const [selectedIndex, setSelectedIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
 
-  const commands: CommandItem[] = useMemo(() => [
-    {
-      id: 'new-session',
-      label: '新会话',
-      description: '创建新的 agent 会话',
-      icon: MessageSquarePlus,
-      iconColor: 'text-rc-accent-success',
-      shortcut: '⌘N',
-      category: '会话',
-      action: () => { onNewSession(); onClose(); },
-    },
-    {
-      id: 'add-project',
-      label: '添加项目文件夹',
-      description: '选择并添加项目到工作区',
-      icon: FolderPlus,
-      iconColor: 'text-rc-accent-info',
-      category: '项目',
-      action: () => { onAddProject(); onClose(); },
-    },
-    {
-      id: 'settings',
-      label: '设置',
-      description: '打开设置面板',
-      icon: Settings2,
-      shortcut: '⌘,',
-      category: '设置',
-      action: () => { onOpenSettings(); onClose(); },
-    },
-    {
-      id: 'mcp',
-      label: 'MCP 服务器管理',
-      description: '查看和配置 MCP 服务器',
-      icon: Blocks,
-      iconColor: 'text-rc-accent-warning',
-      category: '设置',
-      action: () => { onOpenMcp(); onClose(); },
-    },
-    {
-      id: 'toggle-theme',
-      label: '切换主题',
-      description: '在深色和浅色主题间切换',
-      icon: Palette,
-      iconColor: 'text-rc-accent-primary',
-      shortcut: '⌘⇧T',
-      category: '设置',
-      action: () => { onToggleTheme(); onClose(); },
-    },
-    {
-      id: 'terminal',
-      label: '打开终端',
-      description: '在底部面板打开终端',
-      icon: Terminal,
-      iconColor: 'text-rc-accent-warning',
-      shortcut: '⌘`',
-      category: '工具',
-      action: () => { onClose(); },
-    },
-    {
-      id: 'search-files',
-      label: '搜索文件',
-      description: '在项目中搜索文件',
-      icon: Search,
-      iconColor: 'text-rc-accent-info',
-      shortcut: '⌘P',
-      category: '工具',
-      action: () => { onClose(); },
-    },
-  ], [onNewSession, onAddProject, onOpenSettings, onOpenMcp, onToggleTheme, onClose]);
+  const commands: CommandItem[] = useMemo(
+    () => buildCommands(t, { onNewSession, onAddProject, onOpenSettings, onOpenMcp, onToggleTheme, onClose }),
+    [t, onNewSession, onAddProject, onOpenSettings, onOpenMcp, onToggleTheme, onClose],
+  );
 
   const filteredCommands = useMemo(() => {
     if (!query.trim()) return commands;
@@ -209,7 +227,7 @@ export function CommandPalette({
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="输入命令或搜索..."
+            placeholder={t('commandPalette.searchPlaceholder')}
             className="flex-1 bg-transparent text-sm text-rc-text-primary outline-none placeholder:text-rc-text-tertiary"
           />
           <button
@@ -224,7 +242,7 @@ export function CommandPalette({
         <div ref={listRef} className="max-h-[320px] overflow-y-auto py-1">
           {filteredCommands.length === 0 ? (
             <div className="px-4 py-6 text-center text-sm text-rc-text-tertiary">
-              未找到匹配的命令
+              {t('commandPalette.noCommandFound')}
             </div>
           ) : (
             filteredCommands.map((cmd, index) => (
@@ -258,9 +276,9 @@ export function CommandPalette({
         </div>
 
         <div className="flex items-center gap-4 border-t border-rc-border-secondary px-4 py-2 text-[10px] text-rc-text-tertiary">
-          <span>↑↓ 导航</span>
-          <span>↵ 执行</span>
-          <span>Esc 关闭</span>
+          <span>{t('commandPalette.navUpdown')}</span>
+          <span>{t('commandPalette.navEnter')}</span>
+          <span>{t('commandPalette.navEsc')}</span>
         </div>
       </div>
     </div>

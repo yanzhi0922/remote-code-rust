@@ -1,5 +1,6 @@
 import { Cable, PlugZap, RefreshCw, RotateCcw, Trash2 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { formatSensitivePath } from '../../lib/utils';
 import type {
   ConfigScope,
@@ -54,12 +55,12 @@ function parseKeyValueLines(value: string): Record<string, string> {
   for (const line of parseListLines(value)) {
     const separatorIndex = line.indexOf('=');
     if (separatorIndex <= 0) {
-      throw new Error(`无效的 key=value 行：${line}`);
+      throw new Error(`Invalid key=value line: ${line}`);
     }
     const key = line.slice(0, separatorIndex).trim();
     const rawValue = line.slice(separatorIndex + 1).trim();
     if (!key) {
-      throw new Error(`空键名：${line}`);
+      throw new Error(`Empty key name: ${line}`);
     }
     result[key] = rawValue;
   }
@@ -71,7 +72,7 @@ function normalizeTimeout(value: string): number | null {
   if (!trimmed) return null;
   const parsed = Number(trimmed);
   if (!Number.isFinite(parsed) || parsed <= 0) {
-    throw new Error(`无效的超时值：${value}`);
+    throw new Error(`Invalid timeout value: ${value}`);
   }
   return Math.floor(parsed);
 }
@@ -99,6 +100,7 @@ function isWorkbenchDemo(): boolean {
 }
 
 export function McpTab() {
+  const { t } = useTranslation();
   const privacyMode = useAppStore((state) => state.workspacePrivacyMode);
   const activeProjectPath = useAppStore((state) => state.activeProjectPath);
 
@@ -232,7 +234,7 @@ export function McpTab() {
       : Promise.resolve({
           scope,
           config_path: '',
-          warnings: ['请选择项目后再管理 project-scope MCP。'],
+          warnings: [t('mcp.selectProjectFirst')],
           servers: [] as McpServerInfo[],
         });
 
@@ -266,7 +268,7 @@ export function McpTab() {
     } else {
       setRuntimeServers([]);
       setRuntimeWarnings([
-        `无法加载 runtime inventory：${formatErrorMessage(runtimeResult.reason)}`,
+        t('mcp.cannotLoadInventory', { err: formatErrorMessage(runtimeResult.reason) }),
       ]);
       setRuntimeEffectiveCwd(activeProjectPath ?? '');
     }
@@ -321,7 +323,7 @@ export function McpTab() {
       <section className="space-y-3">
         <div className="flex items-start justify-between gap-4">
           <div>
-            <h3 className="text-sm font-semibold text-rc-text-primary">MCP 管理</h3>
+            <h3 className="text-sm font-semibold text-rc-text-primary">{t('mcp.manageMcp')}</h3>
           </div>
           <button
             onClick={() => {
@@ -331,7 +333,7 @@ export function McpTab() {
             className="inline-flex items-center gap-2 rounded-md border border-rc-border-primary bg-rc-bg-surface px-4 py-2 text-sm font-medium text-rc-text-primary transition-colors hover:bg-rc-bg-secondary disabled:cursor-not-allowed disabled:opacity-60"
           >
             <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
-            刷新
+            {t('mcp.refresh')}
           </button>
         </div>
 
@@ -356,7 +358,7 @@ export function McpTab() {
           </label>
           <label className="flex items-center gap-3 rounded-md border border-rc-border-secondary bg-rc-bg-secondary px-3 py-2 text-sm text-rc-text-primary">
             <input type="checkbox" checked={connect} onChange={(event) => setConnect(event.target.checked)} />
-            <span>连接并检查工具</span>
+            <span>{t('mcp.connectAndCheck')}</span>
           </label>
         </div>
 
@@ -368,8 +370,8 @@ export function McpTab() {
               : scope === 'project'
                 ? activeProjectPath
                   ? formatSensitivePath(activeProjectPath, privacyMode)
-                  : '请先选择项目'
-                : '加载中…'}
+                  : t('mcp.selectProjectFirstShort')
+                : t('mcp.loading')}
           </div>
           {scope === 'project' && activeProjectPath && (
             <div className="mt-2 text-xs text-rc-text-tertiary">
@@ -399,20 +401,20 @@ export function McpTab() {
         >
         <div className="flex items-center justify-between gap-3">
           <div>
-            <div className="text-sm font-semibold text-rc-text-primary">新增 / 更新 MCP Server</div>
+            <div className="text-sm font-semibold text-rc-text-primary">{t('mcp.addOrUpdateServer')}</div>
           </div>
           <button
             onClick={() => setForm(emptyForm())}
             className="inline-flex items-center gap-1.5 rounded-md border border-rc-border-primary bg-rc-bg-secondary px-3 py-2 text-xs font-medium text-rc-text-secondary transition-colors hover:bg-rc-bg-hover"
           >
             <RotateCcw size={13} />
-            清空表单
+            {t('mcp.clearForm')}
           </button>
         </div>
 
         <div className="grid gap-3 md:grid-cols-2">
           <label className="space-y-1.5">
-            <span className="block text-sm font-medium text-rc-text-primary">名称</span>
+            <span className="block text-sm font-medium text-rc-text-primary">{t('mcp.nameField')}</span>
             <input
               value={form.name}
               onChange={(event) => setForm((state) => ({ ...state, name: event.target.value }))}
@@ -476,13 +478,13 @@ export function McpTab() {
           )}
 
           <label className="space-y-1.5 md:col-span-2">
-            <span className="block text-sm font-medium text-rc-text-primary">Args / 每行一个</span>
+            <span className="block text-sm font-medium text-rc-text-primary">{t('mcp.argsField')}</span>
             <textarea
               value={form.argsText}
               onChange={(event) => setForm((state) => ({ ...state, argsText: event.target.value }))}
               rows={2}
               className="w-full rounded-md border border-rc-border-primary bg-rc-bg-secondary px-3 py-2.5 text-sm text-rc-text-primary outline-none transition-colors focus:border-rc-border-focus"
-              placeholder={form.transport === 'stdio' ? 'server.py\n--port\n3000' : '可留空'}
+              placeholder={form.transport === 'stdio' ? 'server.py\n--port\n3000' : t('mcp.canBeEmpty')}
             />
           </label>
 
@@ -543,7 +545,7 @@ export function McpTab() {
             checked={form.disabled}
             onChange={(event) => setForm((state) => ({ ...state, disabled: event.target.checked }))}
           />
-          <span>保存后默认禁用</span>
+          <span>{t('mcp.disabledByDefault')}</span>
         </label>
 
         <div className="flex flex-wrap items-center gap-2">
@@ -555,7 +557,7 @@ export function McpTab() {
             className="inline-flex items-center gap-2 rounded-md bg-rc-accent-primary px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-rc-accent-primary-hover disabled:cursor-not-allowed disabled:bg-rc-text-tertiary"
           >
             <PlugZap size={14} />
-            {saving ? '保存中…' : '保存 MCP Server'}
+            {saving ? t('mcp.saving') : t('mcp.saveMcpServer')}
           </button>
           <button
             onClick={() => {
@@ -570,7 +572,7 @@ export function McpTab() {
             className="inline-flex items-center gap-2 rounded-md border border-rc-border-primary bg-rc-bg-surface px-4 py-2.5 text-sm font-medium text-rc-text-primary transition-colors hover:bg-rc-bg-secondary disabled:cursor-not-allowed disabled:opacity-60"
           >
             <RotateCcw size={14} />
-            重置当前 scope
+            {t('mcp.resetScope')}
           </button>
         </div>
       </section>
@@ -588,7 +590,7 @@ export function McpTab() {
             cwd{' '}
             {runtimeEffectiveCwd || activeProjectPath
               ? formatSensitivePath(runtimeEffectiveCwd || activeProjectPath, privacyMode)
-              : '加载中…'}
+              : t('mcp.loading')}
           </div>
           <div className="mt-2 text-xs text-rc-text-tertiary">
             enabled {runtimeServers.filter((server) => server.enabled).length} · disabled{' '}
@@ -606,7 +608,7 @@ export function McpTab() {
 
         {runtimeServers.length === 0 ? (
           <div className="rounded-md border border-dashed border-rc-border-primary px-3 py-5 text-sm text-rc-text-tertiary">
-            当前 runtime inventory 还没有发现 MCP server。
+            {t('mcp.noMcpServersInRuntime')}
           </div>
         ) : (
           <div className="space-y-3">
@@ -680,7 +682,7 @@ export function McpTab() {
 
         {servers.length === 0 ? (
           <div className="rounded-md border border-dashed border-rc-border-primary px-3 py-5 text-sm text-rc-text-tertiary">
-            当前 scope 下还没有 MCP server。
+            {t('mcp.noMcpServersInScope')}
           </div>
         ) : (
           <div className="space-y-3">

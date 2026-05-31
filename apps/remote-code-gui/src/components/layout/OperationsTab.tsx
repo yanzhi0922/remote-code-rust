@@ -1,5 +1,6 @@
 import { Archive, Download, RefreshCw, ShieldCheck, Stethoscope } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { formatSensitivePath } from '../../lib/utils';
 import type { DoctorReportInfo, SessionExportFormat, SessionSummary } from '../../lib/types';
 import * as tauri from '../../lib/tauri';
@@ -44,6 +45,7 @@ function describeSession(session: SessionSummary): string {
 }
 
 export function OperationsTab() {
+  const { t } = useTranslation();
   const privacyMode = useAppStore((state) => state.workspacePrivacyMode);
   const sessions = useAppStore((state) => state.sessions);
   const archivedSessions = useAppStore((state) => state.archivedSessions);
@@ -164,7 +166,7 @@ export function OperationsTab() {
           <div>
             <h3 className="text-base font-semibold text-rc-text-primary">Doctor</h3>
             <p className="mt-1 text-sm text-rc-text-tertiary">
-              在 GUI 内直接查看 runtime、provider、权限、扩展和网络可达性，不用切回 CLI。
+              {t('operations.doctorDesc')}
             </p>
           </div>
           <button
@@ -175,7 +177,7 @@ export function OperationsTab() {
             className="inline-flex items-center gap-2 rounded-md border border-rc-border-primary bg-rc-bg-surface px-4 py-2 text-sm font-medium text-rc-text-primary transition-colors hover:bg-rc-bg-hover disabled:cursor-not-allowed disabled:opacity-60"
           >
             <RefreshCw size={14} className={doctorLoading ? 'animate-spin' : ''} />
-            {doctorLoading ? '诊断中…' : '重新诊断'}
+            {doctorLoading ? t('operations.diagnosing') : t('operations.reDiagnose')}
           </button>
         </div>
 
@@ -186,7 +188,7 @@ export function OperationsTab() {
               checked={probeProvider}
               onChange={(event) => setProbeProvider(event.target.checked)}
             />
-            <span>探测 Provider</span>
+            <span>{t('operations.probeProvider')}</span>
           </label>
           <label className="flex items-center gap-3 rounded-md bg-rc-bg-surface px-4 py-3 text-sm text-rc-text-primary">
             <input
@@ -194,7 +196,7 @@ export function OperationsTab() {
               checked={probeNetwork}
               onChange={(event) => setProbeNetwork(event.target.checked)}
             />
-            <span>探测网络</span>
+            <span>{t('operations.probeNetwork')}</span>
           </label>
           <label className="flex items-center gap-3 rounded-md bg-rc-bg-surface px-4 py-3 text-sm text-rc-text-primary">
             <input
@@ -202,7 +204,7 @@ export function OperationsTab() {
               checked={includeEnvProviders}
               onChange={(event) => setIncludeEnvProviders(event.target.checked)}
             />
-            <span>显示环境变量 Provider</span>
+            <span>{t('operations.showEnvVarProvider')}</span>
           </label>
         </div>
 

@@ -2,21 +2,32 @@ import {
   Archive,
   ChevronRight,
   Clock,
+  Copy,
+  Eye,
+  EyeOff,
+  ExternalLink,
+  FileText,
   Folder,
   FolderOpen,
-  FolderPlus,
+  MessageCircleWarning,
+  Pencil,
+  Pin,
+  PinOff,
   Plus,
+  RefreshCw,
   Search,
   Trash2,
   X,
+  FolderPlus,
 } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { ConversationEntry, SessionSubtask, SessionSummary, ToolCallInfo } from '../../lib/types';
 import { cn, normalizePathKey, truncateMiddle } from '../../lib/utils';
 import { useDebouncedValue } from '../../lib/hooks';
 import { useAppStore } from '../../stores/useAppStore';
 import { useAgentStore } from '../../stores/useAgentStore';
+import { useContextMenu, type ContextMenuItem } from '../shared/ContextMenu';
 import i18n from '../../i18n';
 
 type SessionTaskStatus = 'pending' | 'running' | 'completed' | 'failed' | 'stopped';
@@ -162,7 +173,7 @@ function deriveAgentTasks(conversation: ConversationEntry[]): SessionTaskItem[] 
         id: toolCall.id,
         title: summarizeAgentPrompt(toolCall),
         status: 'running',
-        detail: '等待子代理结果',
+        detail: i18n.t('sidebar.waitingSubagent'),
         depth: 0,
       });
     }
@@ -268,9 +279,12 @@ function SessionRow({
   expanded,
   privacyMode,
   searchQuery,
+  renaming,
   onToggleExpanded,
   onSelect,
   onArchive,
+  onContextMenu,
+  onRenameDone,
 }: {
   session: SessionSummary;
   active: boolean;
@@ -278,12 +292,16 @@ function SessionRow({
   expanded: boolean;
   privacyMode: boolean;
   searchQuery: string;
+  renaming: boolean;
   onToggleExpanded: () => void;
   onSelect: () => void;
   onArchive: () => void;
+  onContextMenu?: (e: React.MouseEvent) => void;
+  onRenameDone: () => void;
 }) {
   const { t } = useTranslation();
   const hasTasks = tasks.length > 0;
+  const [renameVal, setRenameVal] = useState(session.title);
 
   return (
     <div className="space-y-0.5">
@@ -294,6 +312,7 @@ function SessionRow({
             ? 'border-transparent bg-rc-bg-selected shadow-xs'
             : 'border-transparent hover:bg-rc-bg-hover',
         )}
+        onContextMenu={onContextMenu}
       >
         <button
           type="button"
@@ -313,21 +332,43 @@ function SessionRow({
           />
         </button>
 
-        <button type="button" onClick={onSelect} className="min-w-0 flex-1 text-left">
-          <div className="truncate text-sm font-medium text-rc-text-primary">
-            {privacyMode ? t('sidebar.sessionHidden') : (
-              <HighlightedText text={session.title} query={searchQuery} />
-            )}
-          </div>
-          <div className="mt-1 flex min-w-0 items-center gap-2 text-xs text-rc-text-tertiary">
-            <span className="truncate">
-              {session.provider_name}
-              {session.model && <span className="mx-1">·</span>}
-              {session.model}
-            </span>
-            <span>·</span>
-            <span>{formatRelativeTime(session.updated_at)}</span>
-          </div>
+        <button type="button" onClick={renaming ? undefined : onSelect} className="min-w-0 flex-1 text-left">
+          {renaming ? (
+            <input
+              autoFocus
+              value={renameVal}
+              onChange={(e) => setRenameVal(e.target.value)}
+              onBlur={() => {
+                onRenameDone();
+                if (renameVal.trim()) void useAppStore.getState().renameSession(session.id, renameVal.trim());
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  onRenameDone();
+                  if (renameVal.trim()) void useAppStore.getState().renameSession(session.id, renameVal.trim());
+                }
+                if (e.key === 'Escape') onRenameDone();
+              }}
+              className="w-full rounded border border-rc-border-focus bg-rc-bg-tertiary px-1.5 py-0.5 text-sm text-rc-text-primary outline-none"
+            />
+          ) : (
+            <>
+              <div className="truncate text-sm font-medium text-rc-text-primary">
+                {privacyMode ? t('sidebar.sessionHidden') : (
+                  <HighlightedText text={session.title} query={searchQuery} />
+                )}
+              </div>
+              <div className="mt-1 flex min-w-0 items-center gap-2 text-xs text-rc-text-tertiary">
+                <span className="truncate">
+                  {session.provider_name}
+                  {session.model && <span className="mx-1">·</span>}
+                  {session.model}
+                </span>
+                <span>·</span>
+                <span>{formatRelativeTime(session.updated_at)}</span>
+              </div>
+            </>
+          )}
         </button>
 
         <button
@@ -362,10 +403,13 @@ function SessionTimeGroups({
   activeSessionTasks,
   liveSessionTasks,
   expandedSessions,
+  renamingSessionId,
   onToggleSessionTasks,
   onSelectSession,
   onArchiveSession,
   setProjectPath,
+  onSessionContextMenu,
+  onRenameDone,
 }: {
   sessions: SessionSummary[];
   activeSessionId: string | null;
@@ -374,10 +418,13 @@ function SessionTimeGroups({
   activeSessionTasks: SessionTaskItem[];
   liveSessionTasks: Record<string, SessionTaskItem[]>;
   expandedSessions: Record<string, boolean>;
+  renamingSessionId: string | null;
   onToggleSessionTasks: (id: string) => void;
   onSelectSession: (session: SessionSummary) => void;
   onArchiveSession: (id: string) => void;
   setProjectPath: () => void;
+  onSessionContextMenu?: (session: SessionSummary) => (e: React.MouseEvent) => void;
+  onRenameDone: () => void;
 }) {
   const bucketed = useMemo(() => {
     const map = new Map<TimeBucket, SessionSummary[]>();
@@ -421,12 +468,15 @@ function SessionTimeGroups({
                 searchQuery={searchQuery}
                 tasks={session.id === activeSessionId ? activeSessionTasks : liveSessionTasks[session.id] ?? []}
                 expanded={!!expandedSessions[session.id]}
+                renaming={renamingSessionId === session.id}
                 onToggleExpanded={() => onToggleSessionTasks(session.id)}
                 onSelect={() => {
                   setProjectPath();
                   onSelectSession(session);
                 }}
                 onArchive={() => onArchiveSession(session.id)}
+                onContextMenu={(e) => onSessionContextMenu?.(session)(e)}
+                onRenameDone={onRenameDone}
               />
             ))}
           </div>
@@ -450,12 +500,93 @@ export function Sidebar() {
   const setActiveProject = useAppStore((state) => state.setActiveProject);
   const removeProject = useAppStore((state) => state.removeProject);
   const archiveSession = useAppStore((state) => state.archiveSession);
+  const renameSession = useAppStore((state) => state.renameSession);
+  const togglePinSession = useAppStore((state) => state.togglePinSession);
+  const toggleUnreadSession = useAppStore((state) => state.toggleUnreadSession);
+  const pinnedSessions = useAppStore((state) => state.pinnedSessions);
+  const unreadSessions = useAppStore((state) => state.unreadSessions);
   const pickFolderAndAddProject = useAppStore((state) => state.pickFolderAndAddProject);
+  const openFileExplorer = useAppStore((state) => state.openFileExplorer);
   const conversation = useAppStore((state) => state.conversation);
   const sessionTasks = useAgentStore((state) => state.sessionTasks);
 
+  // Context menu for sidebar sessions
+  const { show: showMenu, MenuComponent } = useContextMenu();
+  const [projectHoverKey, setProjectHoverKey] = useState<string | null>(null);
+
+  /** Build context menu items for a sidebar session */
+  const buildSessionMenu = useCallback(
+    (session: SessionSummary): ContextMenuItem[] => {
+      const isPinned = pinnedSessions.has(session.id);
+      const isUnread = unreadSessions.has(session.id);
+      return [
+        {
+          key: 'pin',
+          label: isPinned ? t('contextMenu.unpinTask') : t('contextMenu.pinTask'),
+          icon: isPinned ? <PinOff size={13} /> : <Pin size={13} />,
+          action: () => togglePinSession(session.id),
+        },
+        {
+          key: 'rename',
+          label: t('contextMenu.renameTask'),
+          icon: <Pencil size={13} />,
+          action: () => setRenamingSessionId(session.id),
+        },
+        {
+          key: 'archive',
+          label: t('contextMenu.archiveTask'),
+          icon: <Archive size={13} />,
+          danger: true,
+          action: () => void archiveSession(session.id),
+        },
+        {
+          key: 'unread',
+          label: isUnread ? t('contextMenu.markRead') : t('contextMenu.markUnread'),
+          icon: isUnread ? <Eye size={13} /> : <EyeOff size={13} />,
+          action: () => toggleUnreadSession(session.id),
+        },
+        { key: 'sep1', label: '', separator: true, action: () => {} },
+        {
+          key: 'open-explorer',
+          label: t('contextMenu.openInExplorer'),
+          icon: <ExternalLink size={13} />,
+          action: () => {
+            navigator.clipboard.writeText(session.cwd).catch(() => {});
+          },
+        },
+        {
+          key: 'copy-path',
+          label: t('contextMenu.copyPath'),
+          icon: <Copy size={13} />,
+          action: () => { navigator.clipboard.writeText(session.cwd).catch(() => {}); },
+        },
+        {
+          key: 'copy-session-id',
+          label: t('contextMenu.copySessionId'),
+          icon: <FileText size={13} />,
+          action: () => { navigator.clipboard.writeText(session.id).catch(() => {}); },
+        },
+        { key: 'sep2', label: '', separator: true, action: () => {} },
+        {
+          key: 'reload',
+          label: t('contextMenu.reloadSession'),
+          icon: <RefreshCw size={13} />,
+          action: () => void selectSession(session.id),
+        },
+        {
+          key: 'feedback',
+          label: t('contextMenu.feedbackIssue'),
+          icon: <MessageCircleWarning size={13} />,
+          action: () => {},
+        },
+      ];
+    },
+    [t, pinnedSessions, unreadSessions, togglePinSession, toggleUnreadSession, archiveSession, renameSession, selectSession],
+  );
+
   const [expandedProjects, setExpandedProjects] = useState<Record<string, boolean>>({});
   const [expandedSessions, setExpandedSessions] = useState<Record<string, boolean>>({});
+  const [renamingSessionId, setRenamingSessionId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const debouncedSearch = useDebouncedValue(searchQuery, 150);
 
@@ -578,7 +709,7 @@ export function Sidebar() {
       <div className="scroll-fade flex-1 overflow-y-auto">
         {sessionError ? (
           <div className="px-4 py-4 text-center">
-            <div className="rounded-lg border border-[#f0d3c8] bg-[#fff4f1] px-3 py-3 text-xs text-[#9b3b32]">
+            <div className="rounded-lg border border-rc-accent-error-border bg-rc-accent-error-bg px-3 py-3 text-xs text-rc-accent-error">
               {sessionError}
             </div>
             <button
@@ -634,9 +765,52 @@ export function Sidebar() {
                       ) : (
                         <Folder size={14} className="shrink-0 text-rc-text-tertiary" />
                       )}
-                      <span className="flex-1 truncate font-semibold">
+                      <div
+                        className="relative flex-1 truncate font-semibold"
+                        onMouseEnter={() => setProjectHoverKey(projectKey)}
+                        onMouseLeave={() => setProjectHoverKey(null)}
+                      >
                         <HighlightedText text={project.name} query={debouncedSearch} />
-                      </span>
+                        {projectHoverKey === projectKey && (
+                          <div className="absolute left-0 top-full z-30 mt-1 rounded-lg border border-rc-border-primary bg-rc-bg-surface py-1 shadow-lg">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                void removeProject(project.path);
+                                setProjectHoverKey(null);
+                              }}
+                              className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-rc-text-secondary hover:bg-rc-bg-hover hover:text-rc-accent-error"
+                            >
+                              <Trash2 size={13} />
+                              {t('projectHover.remove')}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                openFileExplorer(project.path, project.name);
+                                setProjectHoverKey(null);
+                              }}
+                              className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-rc-text-secondary hover:bg-rc-bg-hover hover:text-rc-text-primary"
+                            >
+                              <FolderOpen size={13} />
+                              {t('projectHover.viewFiles')}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setActiveProject(project.path);
+                                setExpandedProjects((state) => ({ ...state, [projectKey]: true }));
+                                void createSession(undefined, project.path);
+                                setProjectHoverKey(null);
+                              }}
+                              className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-rc-text-secondary hover:bg-rc-bg-hover hover:text-rc-text-primary"
+                            >
+                              <Plus size={13} />
+                              {t('projectHover.newTask')}
+                            </button>
+                          </div>
+                        )}
+                      </div>
                       <button
                         type="button"
                         onClick={() => {
@@ -673,10 +847,13 @@ export function Sidebar() {
                           activeSessionTasks={activeSessionTasks}
                           liveSessionTasks={liveSessionTasks}
                           expandedSessions={expandedSessions}
+                          renamingSessionId={renamingSessionId}
                           onToggleSessionTasks={toggleSessionTasks}
                           onSelectSession={(session) => void selectSession(session.id)}
                           onArchiveSession={(id) => void archiveSession(id)}
                           setProjectPath={() => setActiveProject(project.path)}
+                          onSessionContextMenu={(session) => (e) => showMenu(e, buildSessionMenu(session))}
+                          onRenameDone={() => setRenamingSessionId(null)}
                         />
                       </div>
                     </div>
@@ -687,6 +864,7 @@ export function Sidebar() {
           </div>
         )}
       </div>
+      {MenuComponent}
     </aside>
   );
 }

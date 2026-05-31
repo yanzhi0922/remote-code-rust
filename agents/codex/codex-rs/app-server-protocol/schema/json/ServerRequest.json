@@ -121,6 +121,9 @@
       ],
       "type": "object"
     },
+    "AttestationGenerateParams": {
+      "type": "object"
+    },
     "ChatgptAuthTokensRefreshParams": {
       "properties": {
         "previousAccountId": {
@@ -417,6 +420,11 @@
             "null"
           ]
         },
+        "startedAtMs": {
+          "description": "Unix timestamp (in milliseconds) when this approval request started.",
+          "format": "int64",
+          "type": "integer"
+        },
         "threadId": {
           "type": "string"
         },
@@ -426,6 +434,7 @@
       },
       "required": [
         "itemId",
+        "startedAtMs",
         "threadId",
         "turnId"
       ],
@@ -598,6 +607,11 @@
             "null"
           ]
         },
+        "startedAtMs": {
+          "description": "Unix timestamp (in milliseconds) when this approval request started.",
+          "format": "int64",
+          "type": "integer"
+        },
         "threadId": {
           "type": "string"
         },
@@ -607,6 +621,7 @@
       },
       "required": [
         "itemId",
+        "startedAtMs",
         "threadId",
         "turnId"
       ],
@@ -616,7 +631,7 @@
       "enum": [
         "read",
         "write",
-        "none"
+        "deny"
       ],
       "type": "string"
     },
@@ -1554,402 +1569,4 @@
               "type": "string"
             },
             "type": {
-              "enum": [
-                "unknown"
-              ],
-              "title": "UnknownParsedCommandType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "cmd",
-            "type"
-          ],
-          "title": "UnknownParsedCommand",
-          "type": "object"
-        }
-      ]
-    },
-    "PermissionsRequestApprovalParams": {
-      "properties": {
-        "cwd": {
-          "$ref": "#/definitions/AbsolutePathBuf"
-        },
-        "itemId": {
-          "type": "string"
-        },
-        "permissions": {
-          "$ref": "#/definitions/RequestPermissionProfile"
-        },
-        "reason": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "threadId": {
-          "type": "string"
-        },
-        "turnId": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "cwd",
-        "itemId",
-        "permissions",
-        "threadId",
-        "turnId"
-      ],
-      "type": "object"
-    },
-    "RequestId": {
-      "anyOf": [
-        {
-          "type": "string"
-        },
-        {
-          "format": "int64",
-          "type": "integer"
-        }
-      ]
-    },
-    "RequestPermissionProfile": {
-      "additionalProperties": false,
-      "properties": {
-        "fileSystem": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/AdditionalFileSystemPermissions"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "network": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/AdditionalNetworkPermissions"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "type": "object"
-    },
-    "ThreadId": {
-      "type": "string"
-    },
-    "ToolRequestUserInputOption": {
-      "description": "EXPERIMENTAL. Defines a single selectable option for request_user_input.",
-      "properties": {
-        "description": {
-          "type": "string"
-        },
-        "label": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "description",
-        "label"
-      ],
-      "type": "object"
-    },
-    "ToolRequestUserInputParams": {
-      "description": "EXPERIMENTAL. Params sent with a request_user_input event.",
-      "properties": {
-        "itemId": {
-          "type": "string"
-        },
-        "questions": {
-          "items": {
-            "$ref": "#/definitions/ToolRequestUserInputQuestion"
-          },
-          "type": "array"
-        },
-        "threadId": {
-          "type": "string"
-        },
-        "turnId": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "itemId",
-        "questions",
-        "threadId",
-        "turnId"
-      ],
-      "type": "object"
-    },
-    "ToolRequestUserInputQuestion": {
-      "description": "EXPERIMENTAL. Represents one request_user_input question and its required options.",
-      "properties": {
-        "header": {
-          "type": "string"
-        },
-        "id": {
-          "type": "string"
-        },
-        "isOther": {
-          "default": false,
-          "type": "boolean"
-        },
-        "isSecret": {
-          "default": false,
-          "type": "boolean"
-        },
-        "options": {
-          "items": {
-            "$ref": "#/definitions/ToolRequestUserInputOption"
-          },
-          "type": [
-            "array",
-            "null"
-          ]
-        },
-        "question": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "header",
-        "id",
-        "question"
-      ],
-      "type": "object"
-    }
-  },
-  "description": "Request initiated from the server and sent to the client.",
-  "oneOf": [
-    {
-      "description": "NEW APIs Sent when approval is requested for a specific command execution. This request is used for Turns started via turn/start.",
-      "properties": {
-        "id": {
-          "$ref": "#/definitions/RequestId"
-        },
-        "method": {
-          "enum": [
-            "item/commandExecution/requestApproval"
-          ],
-          "title": "Item/commandExecution/requestApprovalRequestMethod",
-          "type": "string"
-        },
-        "params": {
-          "$ref": "#/definitions/CommandExecutionRequestApprovalParams"
-        }
-      },
-      "required": [
-        "id",
-        "method",
-        "params"
-      ],
-      "title": "Item/commandExecution/requestApprovalRequest",
-      "type": "object"
-    },
-    {
-      "description": "Sent when approval is requested for a specific file change. This request is used for Turns started via turn/start.",
-      "properties": {
-        "id": {
-          "$ref": "#/definitions/RequestId"
-        },
-        "method": {
-          "enum": [
-            "item/fileChange/requestApproval"
-          ],
-          "title": "Item/fileChange/requestApprovalRequestMethod",
-          "type": "string"
-        },
-        "params": {
-          "$ref": "#/definitions/FileChangeRequestApprovalParams"
-        }
-      },
-      "required": [
-        "id",
-        "method",
-        "params"
-      ],
-      "title": "Item/fileChange/requestApprovalRequest",
-      "type": "object"
-    },
-    {
-      "description": "EXPERIMENTAL - Request input from the user for a tool call.",
-      "properties": {
-        "id": {
-          "$ref": "#/definitions/RequestId"
-        },
-        "method": {
-          "enum": [
-            "item/tool/requestUserInput"
-          ],
-          "title": "Item/tool/requestUserInputRequestMethod",
-          "type": "string"
-        },
-        "params": {
-          "$ref": "#/definitions/ToolRequestUserInputParams"
-        }
-      },
-      "required": [
-        "id",
-        "method",
-        "params"
-      ],
-      "title": "Item/tool/requestUserInputRequest",
-      "type": "object"
-    },
-    {
-      "description": "Request input for an MCP server elicitation.",
-      "properties": {
-        "id": {
-          "$ref": "#/definitions/RequestId"
-        },
-        "method": {
-          "enum": [
-            "mcpServer/elicitation/request"
-          ],
-          "title": "McpServer/elicitation/requestRequestMethod",
-          "type": "string"
-        },
-        "params": {
-          "$ref": "#/definitions/McpServerElicitationRequestParams"
-        }
-      },
-      "required": [
-        "id",
-        "method",
-        "params"
-      ],
-      "title": "McpServer/elicitation/requestRequest",
-      "type": "object"
-    },
-    {
-      "description": "Request approval for additional permissions from the user.",
-      "properties": {
-        "id": {
-          "$ref": "#/definitions/RequestId"
-        },
-        "method": {
-          "enum": [
-            "item/permissions/requestApproval"
-          ],
-          "title": "Item/permissions/requestApprovalRequestMethod",
-          "type": "string"
-        },
-        "params": {
-          "$ref": "#/definitions/PermissionsRequestApprovalParams"
-        }
-      },
-      "required": [
-        "id",
-        "method",
-        "params"
-      ],
-      "title": "Item/permissions/requestApprovalRequest",
-      "type": "object"
-    },
-    {
-      "description": "Execute a dynamic tool call on the client.",
-      "properties": {
-        "id": {
-          "$ref": "#/definitions/RequestId"
-        },
-        "method": {
-          "enum": [
-            "item/tool/call"
-          ],
-          "title": "Item/tool/callRequestMethod",
-          "type": "string"
-        },
-        "params": {
-          "$ref": "#/definitions/DynamicToolCallParams"
-        }
-      },
-      "required": [
-        "id",
-        "method",
-        "params"
-      ],
-      "title": "Item/tool/callRequest",
-      "type": "object"
-    },
-    {
-      "properties": {
-        "id": {
-          "$ref": "#/definitions/RequestId"
-        },
-        "method": {
-          "enum": [
-            "account/chatgptAuthTokens/refresh"
-          ],
-          "title": "Account/chatgptAuthTokens/refreshRequestMethod",
-          "type": "string"
-        },
-        "params": {
-          "$ref": "#/definitions/ChatgptAuthTokensRefreshParams"
-        }
-      },
-      "required": [
-        "id",
-        "method",
-        "params"
-      ],
-      "title": "Account/chatgptAuthTokens/refreshRequest",
-      "type": "object"
-    },
-    {
-      "description": "DEPRECATED APIs below Request to approve a patch. This request is used for Turns started via the legacy APIs (i.e. SendUserTurn, SendUserMessage).",
-      "properties": {
-        "id": {
-          "$ref": "#/definitions/RequestId"
-        },
-        "method": {
-          "enum": [
-            "applyPatchApproval"
-          ],
-          "title": "ApplyPatchApprovalRequestMethod",
-          "type": "string"
-        },
-        "params": {
-          "$ref": "#/definitions/ApplyPatchApprovalParams"
-        }
-      },
-      "required": [
-        "id",
-        "method",
-        "params"
-      ],
-      "title": "ApplyPatchApprovalRequest",
-      "type": "object"
-    },
-    {
-      "description": "Request to exec a command. This request is used for Turns started via the legacy APIs (i.e. SendUserTurn, SendUserMessage).",
-      "properties": {
-        "id": {
-          "$ref": "#/definitions/RequestId"
-        },
-        "method": {
-          "enum": [
-            "execCommandApproval"
-          ],
-          "title": "ExecCommandApprovalRequestMethod",
-          "type": "string"
-        },
-        "params": {
-          "$ref": "#/definitions/ExecCommandApprovalParams"
-        }
-      },
-      "required": [
-        "id",
-        "method",
-        "params"
-      ],
-      "title": "ExecCommandApprovalRequest",
-      "type": "object"
-    }
-  ],
-  "title": "ServerRequest"
-}
+              "enum
