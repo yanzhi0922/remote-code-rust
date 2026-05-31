@@ -16,7 +16,7 @@ serde_json = { workspace = true }
 reqwest = { workspace = true }
 eventsource-stream = { workspace = true }
 tokio-stream = { workspace = true }
-notify = { version = "7" }
+notify = { version = "8" }
 tracing = { workspace = true }
 thiserror = { workspace = true }
 uuid = { workspace = true }
