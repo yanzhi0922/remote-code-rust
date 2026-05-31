@@ -67,6 +67,17 @@ export function Layout({
     void pickFolderAndAddProject();
   }, [pickFolderAndAddProject]);
 
+  // Listen for custom navigation events (e.g., from context menu "前往配置")
+  useEffect(() => {
+    const handleNavigateToSettings = () => {
+      setSettingsInitialTab('provider');
+      setSettingsOpen(true);
+      setActiveTab('settings');
+    };
+    window.addEventListener('navigate-to-settings', handleNavigateToSettings);
+    return () => window.removeEventListener('navigate-to-settings', handleNavigateToSettings);
+  }, []);
+
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       const isMod = event.metaKey || event.ctrlKey;

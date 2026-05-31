@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import {
   ChevronRight,
   ChevronDown,
@@ -13,10 +13,14 @@ import {
   AlertCircle,
   Image,
   FileType2,
+  Copy,
+  MessageSquarePlus,
+  ExternalLink,
+  TerminalSquare,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import * as tauri from '../../lib/tauri';
-import { cn } from '../../lib/utils';
+import { useContextMenu, type ContextMenuItem } from './ContextMenu';
 
 function getFileIcon(name: string) {
   const ext = name.split('.').pop()?.toLowerCase() ?? '';
@@ -34,18 +38,18 @@ interface FsEntry {
   isDir: boolean;
 }
 
-function FileTreeNode({
-  entry,
-  depth = 0,
-  onOpenFile,
-}: {
+interface FileTreeNodeProps {
   entry: FsEntry;
   depth?: number;
   onOpenFile: (path: string) => void;
-}) {
+  onAddToChat: (path: string) => void;
+}
+
+function FileTreeNode({ entry, depth = 0, onOpenFile, onAddToChat }: FileTreeNodeProps) {
   const [expanded, setExpanded] = useState(false);
   const [children, setChildren] = useState<FsEntry[] | null>(null);
   const [loading, setLoading] = useState(false);
+  const { show: showMenu, MenuComponent } = useContextMenu();
 
   const toggle = useCallback(async () => {
     if (!entry.isDir) return;
@@ -71,6 +75,51 @@ function FileTreeNode({
       setLoading(false);
     }
   }, [entry, children, expanded]);
+
+  const handleContextMenu = useCallback(
+    (e: React.MouseEvent) => {
+      if (entry.isDir) return;
+      showMenu(e, [
+        {
+          key: 'open',
+          label: '打开',
+          icon: <ExternalLink size={13} />,
+          action: () => onOpenFile(entry.path),
+        },
+        {
+          key: 'open-terminal',
+          label: '在终端中打开',
+          icon: <TerminalSquare size={13} />,
+          action: () => onOpenFile(entry.path),
+        },
+        { key: 'sep1', label: '', separator: true, action: () => {} },
+        {
+          key: 'open-explorer',
+          label: '在资源管理器中打开',
+          icon: <FolderOpen size={13} />,
+          action: () => {
+            void navigator.clipboard.writeText(entry.path).catch(() => {});
+          },
+        },
+        {
+          key: 'copy-path',
+          label: '复制路径',
+          icon: <Copy size={13} />,
+          action: () => {
+            void navigator.clipboard.writeText(entry.path).catch(() => {});
+          },
+        },
+        { key: 'sep2', label: '', separator: true, action: () => {} },
+        {
+          key: 'add-to-chat',
+          label: '添加到聊天',
+          icon: <MessageSquarePlus size={13} />,
+          action: () => onAddToChat(entry.path),
+        },
+      ]);
+    },
+    [entry, showMenu, onOpenFile, onAddToChat],
+  );
 
   if (entry.isDir) {
     return (
@@ -101,7 +150,7 @@ function FileTreeNode({
           <div>
             {children.length > 0
               ? children.map((child) => (
-                  <FileTreeNode key={child.path} entry={child} depth={depth + 1} onOpenFile={onOpenFile} />
+                  <FileTreeNode key={child.path} entry={child} depth={depth + 1} onOpenFile={onOpenFile} onAddToChat={onAddToChat} />
                 ))
               : null}
           </div>
@@ -114,6 +163,7 @@ function FileTreeNode({
     <button
       type="button"
       onClick={() => onOpenFile(entry.path)}
+      onContextMenu={handleContextMenu}
       className="flex w-full items-center gap-1.5 rounded px-1 py-0.5 text-xs text-rc-text-secondary hover:bg-rc-bg-hover hover:text-rc-text-primary"
       style={{ paddingLeft: `${depth * 16 + 20}px` }}
       title={entry.path}
@@ -129,9 +179,10 @@ interface FileExplorerProps {
   rootPath: string;
   projectName: string;
   onBack: () => void;
+  onAddToChat?: (filePath: string) => void;
 }
 
-export function FileExplorer({ rootPath, projectName, onBack }: FileExplorerProps) {
+export function FileExplorer({ rootPath, projectName, onBack, onAddToChat }: FileExplorerProps) {
   const { t } = useTranslation();
   const [entries, setEntries] = useState<FsEntry[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -173,6 +224,13 @@ export function FileExplorer({ rootPath, projectName, onBack }: FileExplorerProp
     void navigator.clipboard.writeText(path);
   }, []);
 
+  const handleAddToChat = useCallback(
+    (path: string) => {
+      onAddToChat?.(path);
+    },
+    [onAddToChat],
+  );
+
   return (
     <div className="flex min-h-0 flex-1 flex-col bg-rc-bg-chat">
       <div className="flex h-12 shrink-0 items-center gap-2 border-b border-rc-border-secondary bg-rc-bg-surface px-4">
@@ -188,6 +246,16 @@ export function FileExplorer({ rootPath, projectName, onBack }: FileExplorerProp
           <div className="truncate text-xs font-semibold text-rc-text-primary">{projectName}</div>
           <div className="truncate text-[11px] text-rc-text-tertiary">{rootPath}</div>
         </div>
+        {onAddToChat && (
+          <button
+            type="button"
+            onClick={() => handleAddToChat(rootPath)}
+            className="flex h-7 w-7 items-center justify-center rounded-md text-rc-text-secondary transition-colors hover:bg-rc-bg-hover hover:text-rc-accent-primary"
+            title="将路径添加到聊天"
+          >
+            <MessageSquarePlus size={14} />
+          </button>
+        )}
       </div>
 
       <div className="min-h-0 flex-1 overflow-auto p-2">
@@ -204,7 +272,7 @@ export function FileExplorer({ rootPath, projectName, onBack }: FileExplorerProp
         ) : entries && entries.length > 0 ? (
           <div className="space-y-0.5">
             {entries.map((entry) => (
-              <FileTreeNode key={entry.path} entry={entry} depth={0} onOpenFile={handleOpenFile} />
+              <FileTreeNode key={entry.path} entry={entry} depth={0} onOpenFile={handleOpenFile} onAddToChat={handleAddToChat} />
             ))}
           </div>
         ) : (

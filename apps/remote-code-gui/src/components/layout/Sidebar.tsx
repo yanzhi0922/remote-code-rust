@@ -16,6 +16,7 @@ import {
   Plus,
   RefreshCw,
   Search,
+  SlidersHorizontal,
   Trash2,
   X,
   FolderPlus,
@@ -561,12 +562,28 @@ export function Sidebar() {
           action: () => { navigator.clipboard.writeText(session.cwd).catch(() => {}); },
         },
         {
+          key: 'copy-task-path',
+          label: t('contextMenu.copyTaskPath'),
+          icon: <Copy size={13} />,
+          action: () => { navigator.clipboard.writeText(session.cwd).catch(() => {}); },
+        },
+        {
           key: 'copy-session-id',
           label: t('contextMenu.copySessionId'),
           icon: <FileText size={13} />,
           action: () => { navigator.clipboard.writeText(session.id).catch(() => {}); },
         },
         { key: 'sep2', label: '', separator: true, action: () => {} },
+        {
+          key: 'go-settings',
+          label: t('contextMenu.goToSettings'),
+          icon: <SlidersHorizontal size={13} />,
+          action: () => {
+            // Navigate to settings by emitting a custom event or setting state
+            const event = new CustomEvent('navigate-to-settings');
+            window.dispatchEvent(event);
+          },
+        },
         {
           key: 'reload',
           label: t('contextMenu.reloadSession'),
