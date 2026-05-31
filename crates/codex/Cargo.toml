@@ -289,7 +289,7 @@ inventory = "0.3.19"
 itertools = "0.14.0"
 jsonwebtoken = { version = "10.4.0", features = ["rust_crypto"] }
 keyring = { version = "3.6", default-features = false }
-landlock = "0.4.4"
+landlock = "0.4.5"
 lazy_static = "1"
 libc = "0.2.182"
 log = "0.4"

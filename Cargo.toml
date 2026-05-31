@@ -316,7 +316,7 @@ diffy = "0.4.2"
 icu_decimal = "=2.1.1"
 icu_locale_core = "=2.2.0"
 icu_provider = { version = "=2.1.1", features = ["sync"] }
-landlock = "0.4.4"
+landlock = "0.4.5"
 quick-xml = { version = "0.39.2", features = ["serialize"] }
 seccompiler = "0.5.0"
 strum = "0.28.0"
