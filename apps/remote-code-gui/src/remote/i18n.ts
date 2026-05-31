@@ -146,6 +146,16 @@ export interface RemoteCopy {
   mobileTabSessions: string;
   mobileTabTimeline: string;
   mobileTabApprovals: string;
+  mobileTabConnect: string;
+  mobileTabConnected: string;
+  connectAction: string;
+  disconnectAction: string;
+  connectedTitle: string;
+  notConnectedTitle: string;
+  notConnectedDescription: string;
+  enterServerUrlTitle: string;
+  enterServerUrlDescription: string;
+  scanQrAction: string;
   mobileAuthSubtitle: string;
   mobileExpandOptions: string;
   mobileCollapseOptions: string;
@@ -343,6 +353,16 @@ const ENGLISH_COPY: RemoteCopy = {
   mobileAuthSubtitle: 'Connect to your desktop runner',
   mobileExpandOptions: 'Other sign-in methods',
   mobileCollapseOptions: 'Hide options',
+  mobileTabConnect: 'Connect',
+  mobileTabConnected: 'Server',
+  connectAction: 'Connect',
+  disconnectAction: 'Disconnect',
+  connectedTitle: 'Connected',
+  notConnectedTitle: 'Not Connected',
+  notConnectedDescription: 'Enter your server URL or scan a QR code to get started.',
+  enterServerUrlTitle: 'Server URL',
+  enterServerUrlDescription: 'Enter the address of your Remote Code control plane server.',
+  scanQrAction: 'Scan QR Code',
 };
 
 const CHINESE_COPY: RemoteCopy = {
@@ -530,6 +550,16 @@ const CHINESE_COPY: RemoteCopy = {
   mobileAuthSubtitle: '连接到你的桌面 Runner',
   mobileExpandOptions: '其他登录方式',
   mobileCollapseOptions: '收起',
+  mobileTabConnect: '连接',
+  mobileTabConnected: '服务器',
+  connectAction: '连接',
+  disconnectAction: '断开连接',
+  connectedTitle: '已连接',
+  notConnectedTitle: '未连接',
+  notConnectedDescription: '输入服务器地址或扫描二维码开始使用。',
+  enterServerUrlTitle: '服务器地址',
+  enterServerUrlDescription: '输入你的 Remote Code 控制平面服务器地址。',
+  scanQrAction: '扫描二维码',
 };
 
 export function resolveRemoteLocale(): RemoteLocale {

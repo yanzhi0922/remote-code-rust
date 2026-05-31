@@ -21,6 +21,7 @@ const REMOTE_REFRESH_TOKEN_STORAGE_KEY = 'remote-code-control-plane-refresh-toke
 const REMOTE_ACTIVE_SESSION_STORAGE_KEY_PREFIX = 'remote-code-control-plane-active-session:';
 const REMOTE_PAIRING_OFFER_STORAGE_KEY = 'remote_pairing_offer_id';
 const REMOTE_PAIRING_SECRET_STORAGE_KEY = 'remote_pairing_secret';
+const REMOTE_BASE_URL_STORAGE_KEY = 'remote-code-control-plane-url';
 
 export function hasTauriRuntime(): boolean {
   return Boolean(window.__TAURI__ || window.__TAURI_INTERNALS__);
@@ -37,6 +38,14 @@ export function resolveRemoteBaseUrl(): string | null {
   if (envValue) {
     return normalizeBaseUrl(envValue);
   }
+
+  // Check persisted base URL (saved from the mobile connect screen).
+  try {
+    const stored = window.localStorage.getItem(REMOTE_BASE_URL_STORAGE_KEY)?.trim();
+    if (stored) {
+      return normalizeBaseUrl(stored);
+    }
+  } catch { /* ignore storage errors */ }
 
   if (window.location.protocol === 'http:' || window.location.protocol === 'https:') {
     const origin = window.location.origin;
@@ -90,6 +99,20 @@ export function clearRemoteAccessToken(): void {
   }
   void secureStoreRemove(REMOTE_ACCESS_TOKEN_STORAGE_KEY);
   clearLegacyPersistentRemoteTokens();
+}
+
+export function persistRemoteBaseUrl(url: string): void {
+  const normalized = normalizeBaseUrl(url.trim());
+  if (!normalized) return;
+  try {
+    window.localStorage.setItem(REMOTE_BASE_URL_STORAGE_KEY, normalized);
+  } catch { /* ignore */ }
+}
+
+export function clearRemoteBaseUrl(): void {
+  try {
+    window.localStorage.removeItem(REMOTE_BASE_URL_STORAGE_KEY);
+  } catch { /* ignore */ }
 }
 
 /**

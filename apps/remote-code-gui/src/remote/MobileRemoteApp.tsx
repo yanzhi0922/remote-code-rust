@@ -38,11 +38,13 @@ import { useTranslation } from 'react-i18next';
 import {
   clearRemoteActiveSessionId,
   clearRemoteAccessToken,
+  clearRemoteBaseUrl,
   clearRemotePairingContext,
   deriveUserKey,
   hydrateRemoteAuthTokensFromSecureStore,
   persistRemoteAccessToken,
   persistRemoteActiveSessionId,
+  persistRemoteBaseUrl,
   persistRemoteRefreshToken,
   resolveRemoteActiveSessionId,
   resolveRemoteAccessToken,
@@ -99,7 +101,7 @@ import type {
   RemoteTimelineEvent,
 } from './types';
 
-type MobileTab = 'sessions' | 'timeline' | 'approvals';
+type MobileTab = 'sessions' | 'timeline' | 'approvals' | 'connect';
 
 const APPROVAL_DECISIONS: Array<{
   decision: RemoteApprovalDecision;
@@ -198,34 +200,13 @@ export default function MobileRemoteApp() {
     setActiveTab('timeline');
   }, [setActiveSessionId]);
   const hasPending = pendingApprovals.length > 0;
+  const connected = Boolean(baseUrl && health);
 
   // ═══════════════════════════════════════════════════════════════════════
   // Render
   // ═══════════════════════════════════════════════════════════════════════
-  // Early exits
-  if (!baseUrl) {
-    return (
-      <div className="flex h-dvh items-center justify-center bg-rc-bg-base px-6">
-        <div className="max-w-sm rounded-3xl border border-rc-border-primary bg-rc-bg-surface p-8 text-center shadow-lg">
-          <div className="text-lg font-semibold text-rc-text-primary">{copy.remoteModeNotConfiguredTitle}</div>
-          <div className="mt-3 text-sm leading-6 text-rc-text-tertiary">{copy.remoteModeNotConfiguredDescription}</div>
-        </div>
-      </div>
-    );
-  }
-
-  if (!health) {
-    return (
-      <div className="flex h-dvh items-center justify-center bg-rc-bg-base">
-        <div className="flex items-center gap-3 rounded-2xl border border-rc-border-primary bg-rc-bg-surface px-5 py-4 text-sm text-rc-text-secondary shadow-lg">
-          <LoaderCircle size={16} className="animate-spin" />
-          {copy.contactingControlPlane}
-        </div>
-      </div>
-    );
-  }
-
-  if (showAuthGate) {
+  // Auth gate — when connected but not yet authenticated
+  if (connected && health && showAuthGate) {
     return (
       <MobileAuthScreen
         copy={copy}
@@ -275,7 +256,7 @@ export default function MobileRemoteApp() {
       <header className="flex shrink-0 items-center justify-between border-b border-rc-border-primary bg-rc-bg-surface/90 px-4 py-3 backdrop-blur">
         <div className="min-w-0">
           <div className="truncate text-sm font-semibold">
-            {activeSession ? resolveRemoteSessionTitle(activeSession) : copy.selectRemoteSession}
+            {!connected ? 'Remote Code' : activeSession ? resolveRemoteSessionTitle(activeSession) : copy.selectRemoteSession}
           </div>
           <div className="mt-0.5 flex items-center gap-2 text-xs text-rc-text-tertiary">
             <ConnectionPill state={connectionState} copy={copy} />
@@ -283,31 +264,44 @@ export default function MobileRemoteApp() {
           </div>
         </div>
         <div className="ml-3 flex shrink-0 items-center gap-2">
-          <button
-            type="button"
-            onClick={handleToggleBiometric}
-            className={`rounded-xl border px-3 py-2 text-xs font-medium active:bg-rc-bg-surface ${
-              bioEnabled
-                ? 'border-emerald-600/40 bg-emerald-500/10 text-emerald-400'
-                : 'border-rc-border-primary bg-rc-bg-hover text-rc-text-secondary'
-            }`}
-            title={bioEnabled ? t('mobile.disableBiometric') : t('mobile.enableBiometric')}
-          >
-            {bioEnabled ? '🔒' : '🔓'}
-          </button>
-          <button
-            type="button"
-            onClick={handleClearSavedToken}
-            className="shrink-0 rounded-xl border border-rc-border-primary bg-rc-bg-hover px-3 py-2 text-xs font-medium text-rc-text-secondary active:bg-rc-bg-surface"
-          >
-            {copy.signOutAction}
-          </button>
+          {connected && (
+            <button
+              type="button"
+              onClick={handleToggleBiometric}
+              className={`rounded-xl border px-3 py-2 text-xs font-medium active:bg-rc-bg-surface ${
+                bioEnabled
+                  ? 'border-emerald-600/40 bg-emerald-500/10 text-emerald-400'
+                  : 'border-rc-border-primary bg-rc-bg-hover text-rc-text-secondary'
+              }`}
+              title={bioEnabled ? t('mobile.disableBiometric') : t('mobile.enableBiometric')}
+            >
+              {bioEnabled ? '🔒' : '🔓'}
+            </button>
+          )}
+          {connected && (
+            <button
+              type="button"
+              onClick={handleClearSavedToken}
+              className="shrink-0 rounded-xl border border-rc-border-primary bg-rc-bg-hover px-3 py-2 text-xs font-medium text-rc-text-secondary active:bg-rc-bg-surface"
+            >
+              {copy.signOutAction}
+            </button>
+          )}
         </div>
       </header>
 
       {/* ── Tab content (full screen) ── */}
       <div className="min-h-0 flex-1 overflow-hidden">
-        {activeTab === 'sessions' && (
+        {activeTab === 'connect' && (
+          <MobileConnectTab
+            copy={copy}
+            connected={connected}
+            health={health}
+            connectionState={connectionState}
+            onClearSavedToken={handleClearSavedToken}
+          />
+        )}
+        {activeTab === 'sessions' && connected && (
           <MobileSessionsTab
             sessions={sessions}
             sessionsLoading={sessionsLoading}
@@ -318,7 +312,7 @@ export default function MobileRemoteApp() {
             onRefresh={() => { void refreshSessions(); }}
           />
         )}
-        {activeTab === 'timeline' && (
+        {activeTab === 'timeline' && connected && (
           <MobileTimelineTab
             activeSession={activeSession}
             events={deferredEvents}
@@ -334,7 +328,7 @@ export default function MobileRemoteApp() {
             onInterrupt={() => { void handleInterrupt(); }}
           />
         )}
-        {activeTab === 'approvals' && (
+        {activeTab === 'approvals' && connected && (
           <MobileApprovalsTab
             pendingApprovals={pendingApprovals}
             approvalActions={approvalActions}
@@ -357,24 +351,36 @@ export default function MobileRemoteApp() {
 
       {/* ── Bottom tab bar ── */}
       <nav role="tablist" className="flex shrink-0 border-t border-rc-border-primary bg-rc-bg-surface/95 backdrop-blur pb-[env(safe-area-inset-bottom)]">
+        {connected && (
+          <TabButton
+            active={activeTab === 'sessions'}
+            icon={<List size={20} />}
+            label={copy.mobileTabSessions}
+            onClick={() => setActiveTab('sessions')}
+          />
+        )}
+        {connected && (
+          <TabButton
+            active={activeTab === 'timeline'}
+            icon={<MessageSquare size={20} />}
+            label={copy.mobileTabTimeline}
+            onClick={() => setActiveTab('timeline')}
+          />
+        )}
+        {connected && (
+          <TabButton
+            active={activeTab === 'approvals'}
+            icon={<Shield size={20} />}
+            label={copy.mobileTabApprovals}
+            badge={hasPending ? pendingApprovals.length : undefined}
+            onClick={() => setActiveTab('approvals')}
+          />
+        )}
         <TabButton
-          active={activeTab === 'sessions'}
-          icon={<List size={20} />}
-          label={copy.mobileTabSessions}
-          onClick={() => setActiveTab('sessions')}
-        />
-        <TabButton
-          active={activeTab === 'timeline'}
-          icon={<MessageSquare size={20} />}
-          label={copy.mobileTabTimeline}
-          onClick={() => setActiveTab('timeline')}
-        />
-        <TabButton
-          active={activeTab === 'approvals'}
-          icon={<Shield size={20} />}
-          label={copy.mobileTabApprovals}
-          badge={hasPending ? pendingApprovals.length : undefined}
-          onClick={() => setActiveTab('approvals')}
+          active={activeTab === 'connect'}
+          icon={connected ? <Wifi size={20} /> : <WifiOff size={20} />}
+          label={connected ? copy.mobileTabConnected : copy.mobileTabConnect}
+          onClick={() => setActiveTab('connect')}
         />
       </nav>
     </div>
@@ -918,6 +924,125 @@ function MobileApprovalsTab({
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Tab: Connect / Server Configuration
+// ═══════════════════════════════════════════════════════════════════════════
+
+function MobileConnectTab({
+  copy,
+  connected,
+  health,
+  connectionState,
+  onClearSavedToken,
+}: {
+  copy: ReturnType<typeof getRemoteCopy>;
+  connected: boolean;
+  health: Awaited<ReturnType<typeof getControlPlaneHealth>> | null;
+  connectionState: RemoteConnectionState;
+  onClearSavedToken: () => void;
+}) {
+  const [inputUrl, setInputUrl] = useState('');
+  const [saveError, setSaveError] = useState<string | null>(null);
+
+  const handleConnect = useCallback(() => {
+    const trimmed = inputUrl.trim();
+    if (!trimmed) return;
+    try {
+      new URL(trimmed);
+      persistRemoteBaseUrl(trimmed);
+      // Reload the app so resolveRemoteBaseUrl() picks up the persisted URL.
+      window.location.reload();
+    } catch {
+      setSaveError('Invalid URL — please include https://');
+    }
+  }, [inputUrl]);
+
+  const handleDisconnect = useCallback(() => {
+    clearRemoteBaseUrl();
+    onClearSavedToken();
+    window.location.reload();
+  }, [onClearSavedToken]);
+
+  const handleDeepLinkScan = useCallback(() => {
+    // TODO: integrate camera-based QR scanner for pairing URLs.
+    // For now, the user can paste a pairing URL into the field above.
+  }, []);
+
+  return (
+    <div className="h-full overflow-y-auto px-5 py-6">
+      {/* Connection status */}
+      <div className="mb-6 rounded-3xl border border-rc-border-primary bg-rc-bg-surface p-5 text-center">
+        {connected ? (
+          <>
+            <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-[#edf7ef]">
+              <Wifi size={24} className="text-[#1d6b45]" />
+            </div>
+            <div className="mt-3 text-sm font-semibold text-rc-text-primary">{copy.connectedTitle}</div>
+            <div className="mt-1 text-xs text-rc-text-tertiary break-all">{health?.service}</div>
+            <div className="mt-2 flex items-center justify-center gap-2 text-xs text-rc-text-tertiary">
+              <ConnectionPill state={connectionState} copy={copy} />
+            </div>
+            {health && (
+              <div className="mt-3 text-xs text-rc-text-tertiary">
+                {copy.availableRunnersLabel}: {health.available_runner_count} · {copy.activeSessionsLabel}: {health.session_count}
+              </div>
+            )}
+            <button
+              type="button"
+              onClick={handleDisconnect}
+              className="mt-4 rounded-2xl border border-[#f0d3c8] bg-[#fff2ed] px-6 py-2.5 text-sm font-medium text-[#8d3f30] active:bg-[#ffe8de]"
+            >
+              {copy.disconnectAction}
+            </button>
+          </>
+        ) : (
+          <>
+            <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-rc-bg-secondary">
+              <WifiOff size={24} className="text-rc-text-tertiary" />
+            </div>
+            <div className="mt-3 text-sm font-semibold text-rc-text-primary">{copy.notConnectedTitle}</div>
+            <div className="mt-1 text-xs text-rc-text-tertiary">{copy.notConnectedDescription}</div>
+          </>
+        )}
+      </div>
+
+      {/* Server URL input */}
+      {!connected && (
+        <div className="rounded-3xl border border-rc-border-primary bg-rc-bg-surface p-5">
+          <div className="text-sm font-semibold text-rc-text-primary">{copy.enterServerUrlTitle}</div>
+          <div className="mt-2 text-sm leading-6 text-rc-text-tertiary">{copy.enterServerUrlDescription}</div>
+          <input
+            value={inputUrl}
+            onChange={(e) => { setInputUrl(e.target.value); setSaveError(null); }}
+            placeholder="https://your-server.example.com"
+            autoCapitalize="none"
+            autoCorrect="off"
+            className="mt-3 w-full rounded-2xl border border-rc-border-primary bg-rc-bg-secondary px-4 py-3.5 text-sm text-rc-text-primary outline-none focus:border-[#a58a5e]"
+          />
+          {saveError && (
+            <div className="mt-2 text-xs text-[#9b3b32]">{saveError}</div>
+          )}
+          <button
+            type="button"
+            onClick={handleConnect}
+            disabled={!inputUrl.trim()}
+            className="mt-3 flex h-12 w-full items-center justify-center rounded-2xl bg-[#1d6b45] text-sm font-semibold text-white active:bg-[#145033] disabled:opacity-50"
+          >
+            {copy.connectAction}
+          </button>
+          <button
+            type="button"
+            onClick={handleDeepLinkScan}
+            className="mt-3 flex w-full items-center justify-center gap-2 rounded-2xl border border-rc-border-primary bg-rc-bg-hover py-3 text-sm font-medium text-rc-text-secondary active:bg-rc-bg-surface"
+          >
+            {copy.scanQrAction}
+          </button>
+        </div>
+      )}
     </div>
   );
 }
