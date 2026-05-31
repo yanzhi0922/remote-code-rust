@@ -302,7 +302,7 @@ gix = { version = "0.83.0", default-features = false, features = ["sha1"] }
 
 # ── Codex-only external deps ────────────────────────────────────
 async-channel = "2.3.1"
-chardetng = "0.1.17"
+chardetng = "1.0.0"
 crypto_box = { version = "0.9.1", features = ["seal"] }
 ed25519-dalek = { version = "2.2.0", features = ["pkcs8", "rand_core"] }
 tokio-test = "0.4"
