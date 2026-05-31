@@ -27,6 +27,7 @@ import {
 import { useCallback, useMemo, useState } from 'react';
 import type { ElementType } from 'react';
 import { useTranslation } from 'react-i18next';
+import { revealItemInDir } from '@tauri-apps/plugin-opener';
 import { useAppStore } from '../../stores/useAppStore';
 import { useAgentStore } from '../../stores/useAgentStore';
 import { formatSensitivePath, cn } from '../../lib/utils';
@@ -323,7 +324,9 @@ export function WorkspaceOverview() {
           label: t('contextMenu.openInExplorer'),
           icon: <ExternalLink size={13} />,
           action: () => {
-            navigator.clipboard.writeText(session.cwd).catch(() => {});
+            revealItemInDir(session.cwd).catch(() => {
+              navigator.clipboard.writeText(session.cwd).catch(() => {});
+            });
           },
         },
         {
@@ -353,7 +356,9 @@ export function WorkspaceOverview() {
           key: 'feedback',
           label: t('contextMenu.feedbackIssue'),
           icon: <MessageCircleWarning size={13} />,
-          action: () => {},
+          action: () => {
+            window.open('https://github.com/yanzhi0922/remote-code/issues', '_blank')?.focus();
+          },
         },
       ];
     },

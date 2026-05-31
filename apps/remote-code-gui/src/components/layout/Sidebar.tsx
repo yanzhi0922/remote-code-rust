@@ -23,6 +23,7 @@ import {
 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { revealItemInDir } from '@tauri-apps/plugin-opener';
 import type { ConversationEntry, SessionSubtask, SessionSummary, ToolCallInfo } from '../../lib/types';
 import { cn, normalizePathKey, truncateMiddle } from '../../lib/utils';
 import { useDebouncedValue } from '../../lib/hooks';
@@ -552,8 +553,9 @@ export function Sidebar() {
           label: t('contextMenu.openInExplorer'),
           icon: <ExternalLink size={13} />,
           action: () => {
-            // TODO: use tauri shell plugin once available; fallback to clipboard
-            navigator.clipboard.writeText(session.cwd).catch(() => {});
+            revealItemInDir(session.cwd).catch(() => {
+              navigator.clipboard.writeText(session.cwd).catch(() => {});
+            });
           },
         },
         {

@@ -19,6 +19,7 @@ import {
   TerminalSquare,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import { openPath, revealItemInDir } from '@tauri-apps/plugin-opener';
 import * as tauri from '../../lib/tauri';
 import { useContextMenu, type ContextMenuItem } from './ContextMenu';
 
@@ -79,19 +80,66 @@ function FileTreeNode({ entry, depth = 0, onOpenFile, onAddToChat }: FileTreeNod
 
   const handleContextMenu = useCallback(
     (e: React.MouseEvent) => {
-      if (entry.isDir) return;
+      if (entry.isDir) {
+        showMenu(e, [
+          {
+            key: 'open-explorer',
+            label: t('fileExplorer.openInExplorer'),
+            icon: <FolderOpen size={13} />,
+            action: () => {
+              revealItemInDir(entry.path).catch(() => {
+                void navigator.clipboard.writeText(entry.path);
+              });
+            },
+          },
+          {
+            key: 'open-terminal',
+            label: t('fileExplorer.openInTerminal'),
+            icon: <TerminalSquare size={13} />,
+            action: () => {
+              openPath(entry.path).catch(() => {});
+            },
+          },
+          { key: 'sep1', label: '', separator: true, action: () => {} },
+          {
+            key: 'copy-path',
+            label: t('fileExplorer.copyPath'),
+            icon: <Copy size={13} />,
+            action: () => {
+              void navigator.clipboard.writeText(entry.path).catch(() => {});
+            },
+          },
+          { key: 'sep2', label: '', separator: true, action: () => {} },
+          {
+            key: 'add-to-chat',
+            label: t('fileExplorer.addToChat'),
+            icon: <MessageSquarePlus size={13} />,
+            action: () => onAddToChat(entry.path),
+          },
+        ]);
+        return;
+      }
+
       showMenu(e, [
         {
           key: 'open',
           label: t('fileExplorer.open'),
           icon: <ExternalLink size={13} />,
-          action: () => onOpenFile(entry.path),
+          action: () => {
+            openPath(entry.path).catch(() => {
+              onOpenFile(entry.path);
+            });
+          },
         },
         {
           key: 'open-terminal',
           label: t('fileExplorer.openInTerminal'),
           icon: <TerminalSquare size={13} />,
-          action: () => onOpenFile(entry.path),
+          action: () => {
+            const sep = entry.path.includes('\\') ? '\\' : '/';
+            const dir = entry.path.substring(0, entry.path.lastIndexOf(sep));
+            openPath(dir || '.').catch(() => {});
+          },
         },
         { key: 'sep1', label: '', separator: true, action: () => {} },
         {
@@ -99,7 +147,9 @@ function FileTreeNode({ entry, depth = 0, onOpenFile, onAddToChat }: FileTreeNod
           label: t('fileExplorer.openInExplorer'),
           icon: <FolderOpen size={13} />,
           action: () => {
-            void navigator.clipboard.writeText(entry.path).catch(() => {});
+            revealItemInDir(entry.path).catch(() => {
+              void navigator.clipboard.writeText(entry.path);
+            });
           },
         },
         {
@@ -128,6 +178,7 @@ function FileTreeNode({ entry, depth = 0, onOpenFile, onAddToChat }: FileTreeNod
         <button
           type="button"
           onClick={toggle}
+          onContextMenu={handleContextMenu}
           className="flex w-full items-center gap-1.5 rounded px-1 py-0.5 text-xs text-rc-text-primary hover:bg-rc-bg-hover"
           style={{ paddingLeft: `${depth * 16 + 4}px` }}
         >
