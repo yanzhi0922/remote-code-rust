@@ -1,4 +1,4 @@
-import { Children, isValidElement, memo, type ReactNode, useDeferredValue, useMemo } from 'react';
+import { Children, isValidElement, memo, useState, useCallback, type ReactNode, useDeferredValue, useMemo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import rehypeHighlight from 'rehype-highlight';
 import rehypeKatex from 'rehype-katex';
@@ -53,12 +53,34 @@ function extractTextContent(node: ReactNode): string {
     .join('');
 }
 
+function CodeBlockCopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  const handleCopy = useCallback(() => {
+    navigator.clipboard.writeText(text).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    }).catch(() => {});
+  }, [text]);
+
+  return (
+    <button
+      type="button"
+      onClick={handleCopy}
+      className="absolute right-2 top-2 rounded-md px-1.5 py-0.5 text-[10px] font-medium text-rc-text-tertiary opacity-0 transition-opacity hover:bg-rc-bg-hover hover:text-rc-text-primary group-hover/code:opacity-100"
+      title={i18n.t('markdownRenderer.copyCode')}
+    >
+      {copied ? i18n.t('markdownRenderer.copied') : i18n.t('markdownRenderer.copyCode')}
+    </button>
+  );
+}
+
 const MarkdownRenderer = memo(function MarkdownRenderer({ content }: MarkdownRendererProps) {
   const deferredContent = useDeferredValue(content);
   const components = useMemo<Components>(
     () => ({
       pre: ({ children }) => {
         const summary = summarizeCodeBlock(children);
+        const codeText = extractTextContent(children);
         return (
           <CollapsibleBlock
             summary={
@@ -70,11 +92,14 @@ const MarkdownRenderer = memo(function MarkdownRenderer({ content }: MarkdownRen
               </div>
             }
             iconColor="text-rc-text-tertiary"
-            className="my-4"
+            className="my-4 group/code"
           >
-            <pre className="overflow-x-auto rounded-md bg-rc-bg-code p-4 text-xs leading-relaxed text-rc-text-primary">
-              {children}
-            </pre>
+            <div className="relative">
+              <CodeBlockCopyButton text={codeText} />
+              <pre className="overflow-x-auto rounded-md bg-rc-bg-code p-4 text-xs leading-relaxed text-rc-text-primary">
+                {children}
+              </pre>
+            </div>
           </CollapsibleBlock>
         );
       },

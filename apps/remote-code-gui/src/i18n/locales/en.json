@@ -61,7 +61,10 @@
     "cannotRemoveProject": "Cannot remove: project has active sessions",
     "removeProject": "Remove this project",
     "loadingSessions": "Loading...",
-    "waitingSubagent": "Waiting for sub-agent result"
+    "waitingSubagent": "Waiting for sub-agent result",
+    "selectedCount": "{{count}} selected",
+    "batchArchive": "Archive",
+    "batchPin": "Pin"
   },
   "permission": {
     "title": "Permission Request",
@@ -171,6 +174,8 @@
     "loadingSession": "Loading session...",
     "noMessages": "No messages yet",
     "processingRequest": "Processing current request...",
+    "streaming": "Streaming...",
+    "tokenUsage": "Token usage (in→out)",
     "copyContent": "Copy content",
     "subtask": "Subtask",
     "batchCompleted": "Batch completed {{succeeded}}/{{total}}",
@@ -198,6 +203,7 @@
     "saveButton": "Save",
     "saving": "Saving…",
     "backToApp": "Back to app",
+    "searchPlaceholder": "Search settings…",
     "closeSettings": "Close settings",
     "sessionArchived": "Session archived",
     "pathHidden": "Path hidden",
@@ -434,7 +440,16 @@
   },
   "markdownRenderer": {
     "codeLabel": "Code",
-    "codeExpandText": "Expand to view code block"
+    "codeExpandText": "Expand to view code block",
+    "copyCode": "Copy",
+    "copied": "Copied!"
+  },
+  "followUp": {
+    "reviewChanges": "Review the changes made",
+    "tellMeMore": "Tell me more about this"
+  },
+  "sessionSwitcher": {
+    "title": "Switch Session"
   },
   "settingInput": {
     "hidePassword": "Hide password",

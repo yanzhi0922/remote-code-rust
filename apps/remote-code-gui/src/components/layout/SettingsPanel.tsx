@@ -132,6 +132,7 @@ export function SettingsPanel({ open, onClose, initialTab = 'provider' }: Settin
   const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab);
   const [draft, setDraft] = useState<Partial<FullSettings>>({});
   const [saving, setSaving] = useState(false);
+  const [settingsSearch, setSettingsSearch] = useState('');
 
   useEffect(() => {
     if (!open) return;
@@ -180,8 +181,27 @@ export function SettingsPanel({ open, onClose, initialTab = 'provider' }: Settin
           </div>
 
           <div className="min-h-0 flex-1 overflow-y-auto p-2">
+            <div className="relative mb-2">
+              <input
+                value={settingsSearch}
+                onChange={(e) => setSettingsSearch(e.target.value)}
+                placeholder={t('settings.searchPlaceholder')}
+                className="h-8 w-full rounded-md border border-rc-border-primary bg-rc-bg-base px-2.5 text-xs text-rc-text-primary outline-none placeholder:text-rc-text-tertiary focus:border-rc-border-focus"
+              />
+              {settingsSearch && (
+                <button
+                  type="button"
+                  onClick={() => setSettingsSearch('')}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-rc-text-tertiary hover:text-rc-text-primary"
+                >
+                  <X size={12} />
+                </button>
+              )}
+            </div>
             <div role="tablist" aria-label="Settings sections" className="space-y-0.5">
-              {settingsTabs(t).map((tab) => {
+              {settingsTabs(t)
+                .filter((tab) => !settingsSearch || tab.label.toLowerCase().includes(settingsSearch.toLowerCase()))
+                .map((tab) => {
                 const Icon = tab.icon;
                 const selected = activeTab === tab.key;
                 return (

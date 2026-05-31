@@ -5,6 +5,7 @@ import { Sidebar } from './Sidebar';
 import { StatusBar } from './StatusBar';
 import { SessionInspector } from './SessionInspector';
 import { CommandPalette } from '../shared/CommandPalette';
+import { SessionSwitcher } from './SessionSwitcher';
 import type { SettingsTab } from './SettingsPanel';
 import { useResizableWidth } from '../../lib/useResizableWidth';
 import { useAppStore } from '../../stores/useAppStore';
@@ -36,6 +37,8 @@ export function Layout({
   const createSession = useAppStore((state) => state.createSession);
   const activeProjectPath = useAppStore((state) => state.activeProjectPath);
   const pickFolderAndAddProject = useAppStore((state) => state.pickFolderAndAddProject);
+  const sessions = useAppStore((state) => state.sessions);
+  const activeSessionId = useAppStore((state) => state.activeSessionId);
 
   const handleTabChange = (tab: ActivityTab) => {
     if (tab === 'settings' || tab === 'mcp') {
@@ -161,6 +164,8 @@ export function Layout({
         onOpenMcp={handleOpenMcp}
         onToggleTheme={toggleTheme}
       />
+
+      <SessionSwitcher sessions={sessions} activeSessionId={activeSessionId} />
     </div>
   );
 }

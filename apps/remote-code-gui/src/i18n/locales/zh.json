@@ -61,7 +61,10 @@
     "cannotRemoveProject": "该项目下仍有会话，无法移除",
     "removeProject": "移除此项目",
     "loadingSessions": "正在加载…",
-    "waitingSubagent": "等待子代理结果"
+    "waitingSubagent": "等待子代理结果",
+    "selectedCount": "已选 {{count}} 项",
+    "batchArchive": "归档",
+    "batchPin": "置顶"
   },
   "permission": {
     "title": "权限确认",
@@ -171,6 +174,8 @@
     "loadingSession": "正在加载会话",
     "noMessages": "暂无消息",
     "processingRequest": "正在处理当前请求…",
+    "streaming": "正在生成…",
+    "tokenUsage": "Token 用量（输入→输出）",
     "copyContent": "复制内容",
     "subtask": "子任务",
     "batchCompleted": "批量完成 {{succeeded}}/{{total}}",
@@ -198,6 +203,7 @@
     "saveButton": "保存",
     "saving": "保存中…",
     "backToApp": "返回应用",
+    "searchPlaceholder": "搜索设置…",
     "closeSettings": "关闭设置",
     "sessionArchived": "会话已隐藏",
     "pathHidden": "路径已隐藏",
@@ -434,7 +440,16 @@
   },
   "markdownRenderer": {
     "codeLabel": "代码",
-    "codeExpandText": "展开查看代码块"
+    "codeExpandText": "展开查看代码块",
+    "copyCode": "复制",
+    "copied": "已复制！"
+  },
+  "followUp": {
+    "reviewChanges": "审查已做的更改",
+    "tellMeMore": "告诉我更多相关信息"
+  },
+  "sessionSwitcher": {
+    "title": "切换会话"
   },
   "settingInput": {
     "hidePassword": "隐藏密码",

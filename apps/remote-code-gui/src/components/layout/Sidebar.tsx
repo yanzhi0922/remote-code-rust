@@ -25,7 +25,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { revealItemInDir } from '@tauri-apps/plugin-opener';
 import type { ConversationEntry, SessionSubtask, SessionSummary, ToolCallInfo } from '../../lib/types';
-import { cn, normalizePathKey, truncateMiddle } from '../../lib/utils';
+import { cn, normalizePathKey, truncateMiddle, projectColor } from '../../lib/utils';
 import { useDebouncedValue } from '../../lib/hooks';
 import { useAppStore } from '../../stores/useAppStore';
 import { useAgentStore } from '../../stores/useAgentStore';
@@ -282,6 +282,7 @@ function SessionRow({
   privacyMode,
   searchQuery,
   renaming,
+  selected,
   onToggleExpanded,
   onSelect,
   onArchive,
@@ -295,8 +296,9 @@ function SessionRow({
   privacyMode: boolean;
   searchQuery: string;
   renaming: boolean;
+  selected?: boolean;
   onToggleExpanded: () => void;
-  onSelect: () => void;
+  onSelect: (ctrlKey: boolean) => void;
   onArchive: () => void;
   onContextMenu?: (e: React.MouseEvent) => void;
   onRenameDone: () => void;
@@ -310,9 +312,11 @@ function SessionRow({
       <div
         className={cn(
           'group mx-2 flex items-start gap-2 rounded-lg border px-2.5 py-2.5 transition-colors duration-150',
-          active
-            ? 'border-transparent bg-rc-bg-selected shadow-xs'
-            : 'border-transparent hover:bg-rc-bg-hover',
+          selected
+            ? 'border-rc-accent-primary/30 bg-rc-bg-selected shadow-xs'
+            : active
+              ? 'border-transparent bg-rc-bg-selected shadow-xs'
+              : 'border-transparent hover:bg-rc-bg-hover',
         )}
         onContextMenu={onContextMenu}
       >
@@ -334,7 +338,7 @@ function SessionRow({
           />
         </button>
 
-        <button type="button" onClick={renaming ? undefined : onSelect} className="min-w-0 flex-1 text-left">
+        <button type="button" onClick={renaming ? undefined : (e) => onSelect(e.ctrlKey || e.metaKey)} className="min-w-0 flex-1 text-left">
           {renaming ? (
             <input
               autoFocus
@@ -411,6 +415,7 @@ function SessionTimeGroups({
   onArchiveSession,
   setProjectPath,
   onSessionContextMenu,
+  selectedSessionIds,
   onRenameDone,
 }: {
   sessions: SessionSummary[];
@@ -422,10 +427,11 @@ function SessionTimeGroups({
   expandedSessions: Record<string, boolean>;
   renamingSessionId: string | null;
   onToggleSessionTasks: (id: string) => void;
-  onSelectSession: (session: SessionSummary) => void;
+  onSelectSession: (session: SessionSummary, ctrlKey?: boolean) => void;
   onArchiveSession: (id: string) => void;
   setProjectPath: () => void;
   onSessionContextMenu?: (session: SessionSummary) => (e: React.MouseEvent) => void;
+  selectedSessionIds?: Set<string>;
   onRenameDone: () => void;
 }) {
   const bucketed = useMemo(() => {
@@ -471,10 +477,11 @@ function SessionTimeGroups({
                 tasks={session.id === activeSessionId ? activeSessionTasks : liveSessionTasks[session.id] ?? []}
                 expanded={!!expandedSessions[session.id]}
                 renaming={renamingSessionId === session.id}
+                selected={selectedSessionIds?.has(session.id)}
                 onToggleExpanded={() => onToggleSessionTasks(session.id)}
-                onSelect={() => {
+                onSelect={(ctrlKey) => {
                   setProjectPath();
-                  onSelectSession(session);
+                  onSelectSession(session, ctrlKey);
                 }}
                 onArchive={() => onArchiveSession(session.id)}
                 onContextMenu={(e) => onSessionContextMenu?.(session)(e)}
@@ -602,7 +609,23 @@ export function Sidebar() {
   const [expandedSessions, setExpandedSessions] = useState<Record<string, boolean>>({});
   const [renamingSessionId, setRenamingSessionId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
+  const [selectedSessionIds, setSelectedSessionIds] = useState<Set<string>>(new Set());
   const debouncedSearch = useDebouncedValue(searchQuery, 150);
+
+  // Multi-select: Ctrl+A and Escape
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'a' && selectedSessionIds.size > 0) {
+        e.preventDefault();
+        setSelectedSessionIds(new Set(sessions.map((s) => s.id)));
+      }
+      if (e.key === 'Escape' && selectedSessionIds.size > 0) {
+        setSelectedSessionIds(new Set());
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [sessions, selectedSessionIds.size]);
 
   const projectSessionGroups = useMemo(() => {
     const projectMap = new Map<string, SessionSummary[]>();
@@ -779,6 +802,7 @@ export function Sidebar() {
                       ) : (
                         <Folder size={14} className="shrink-0 text-rc-text-tertiary" />
                       )}
+                      <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: projectColor(project.name) }} />
                       <div
                         className="relative flex-1 truncate font-semibold"
                         onMouseEnter={() => setProjectHoverKey(projectKey)}
@@ -863,10 +887,23 @@ export function Sidebar() {
                           expandedSessions={expandedSessions}
                           renamingSessionId={renamingSessionId}
                           onToggleSessionTasks={toggleSessionTasks}
-                          onSelectSession={(session) => void selectSession(session.id)}
+                          onSelectSession={(session, ctrlKey) => {
+                            if (ctrlKey) {
+                              setSelectedSessionIds((prev) => {
+                                const next = new Set(prev);
+                                if (next.has(session.id)) next.delete(session.id);
+                                else next.add(session.id);
+                                return next;
+                              });
+                            } else {
+                              if (selectedSessionIds.size > 0) setSelectedSessionIds(new Set());
+                              void selectSession(session.id);
+                            }
+                          }}
                           onArchiveSession={(id) => void archiveSession(id)}
                           setProjectPath={() => setActiveProject(project.path)}
                           onSessionContextMenu={(session) => (e) => showMenu(e, buildSessionMenu(session))}
+                          selectedSessionIds={selectedSessionIds}
                           onRenameDone={() => setRenamingSessionId(null)}
                         />
                       </div>
@@ -879,6 +916,42 @@ export function Sidebar() {
         )}
       </div>
       {MenuComponent}
+
+      {selectedSessionIds.size > 0 && (
+        <div className="absolute bottom-3 left-3 right-3 z-20 flex items-center gap-2 rounded-xl border border-rc-border-primary bg-rc-bg-surface px-3 py-2 shadow-lg animate-fade-in-up">
+          <span className="text-xs font-medium text-rc-text-secondary">{t('sidebar.selectedCount', { count: selectedSessionIds.size })}</span>
+          <div className="flex-1" />
+          <button
+            type="button"
+            onClick={() => {
+              selectedSessionIds.forEach((id) => void archiveSession(id));
+              setSelectedSessionIds(new Set());
+            }}
+            className="flex items-center gap-1 rounded-md px-2 py-1 text-xs text-rc-text-secondary hover:bg-rc-bg-hover hover:text-rc-accent-error"
+          >
+            <Archive size={12} />
+            {t('sidebar.batchArchive')}
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              selectedSessionIds.forEach((id) => togglePinSession(id));
+              setSelectedSessionIds(new Set());
+            }}
+            className="flex items-center gap-1 rounded-md px-2 py-1 text-xs text-rc-text-secondary hover:bg-rc-bg-hover hover:text-rc-text-primary"
+          >
+            <Pin size={12} />
+            {t('sidebar.batchPin')}
+          </button>
+          <button
+            type="button"
+            onClick={() => setSelectedSessionIds(new Set())}
+            className="flex items-center justify-center rounded-md p-1 text-rc-text-tertiary hover:bg-rc-bg-hover hover:text-rc-text-primary"
+          >
+            <X size={12} />
+          </button>
+        </div>
+      )}
     </aside>
   );
 }

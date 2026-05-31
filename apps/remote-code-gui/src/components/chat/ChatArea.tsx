@@ -45,6 +45,7 @@ import { WorkspaceOverview } from '../layout/WorkspaceOverview';
 import CollapsibleBlock from './CollapsibleBlock';
 import { InlineDiffView, detectAndRenderDiff } from './InlineDiffView';
 import { GoalStatusBar } from './GoalStatusBar';
+import { FollowUpSuggestions } from './FollowUpSuggestions';
 
 const LazyMarkdownRenderer = lazy(() => import('./MarkdownRenderer'));
 const VIRTUALIZATION_THRESHOLD = 80;
@@ -440,6 +441,7 @@ function StatusCards({
 function ConversationTimeline({
   conversation,
   sending,
+  streamingText,
   compactProgress,
   compactResults,
   sendError,
@@ -447,6 +449,7 @@ function ConversationTimeline({
 }: {
   conversation: ConversationEntry[];
   sending: boolean;
+  streamingText: string;
   compactProgress: ToolProgressInfo[];
   compactResults: ToolResultInfo[];
   sendError: string | null;
@@ -518,6 +521,18 @@ function ConversationTimeline({
 
         <WorkingIndicator sending={sending} />
 
+        {sending && streamingText && (
+          <div className="markdown-body max-w-none border-b border-rc-border-secondary py-6 text-rc-text-primary animate-fade-in">
+            <div className="mb-3 flex items-center gap-2">
+              <span className="h-2 w-2 rounded-full bg-rc-accent-info animate-pulse" />
+              <span className="text-[10px] font-semibold uppercase text-rc-text-tertiary">{i18n.t('chatArea.streaming')}</span>
+            </div>
+            <Suspense fallback={<div className="space-y-2"><div className="h-4 w-3/4 animate-pulse rounded bg-rc-bg-code" /><div className="h-4 w-1/2 animate-pulse rounded bg-rc-bg-code" /></div>}>
+              <LazyMarkdownRenderer content={streamingText} />
+            </Suspense>
+          </div>
+        )}
+
         <StatusCards
           sending={sending}
           compactProgress={compactProgress}
@@ -525,6 +540,18 @@ function ConversationTimeline({
           sendError={sendError}
           bottomRef={bottomRef}
         />
+
+        {!sending && conversation.length > 0 && (() => {
+          const lastAssistant = [...conversation].reverse().find((e) => e.role === 'assistant');
+          if (!lastAssistant || !lastAssistant.text) return null;
+          return (
+            <FollowUpSuggestions
+              lastAssistantText={lastAssistant.text}
+              hadToolCalls={(lastAssistant.tool_calls?.length ?? 0) > 0}
+              onSuggestionClick={(text) => { void useAppStore.getState().sendMessage(text); }}
+            />
+          );
+        })()}
       </div>
 
       {showScrollFab && (
@@ -546,11 +573,13 @@ function ConversationHeader({
   model,
   provider,
   sessionId,
+  tokenUsage,
 }: {
   title: string;
   model?: string | null;
   provider?: string | null;
   sessionId?: string | null;
+  tokenUsage?: { input: number; output: number } | null;
 }) {
   const { t } = useTranslation();
   const [menuOpen, setMenuOpen] = useState(false);
@@ -619,6 +648,14 @@ function ConversationHeader({
             <span className="truncate font-mono">{model}</span>
           </>
         )}
+        {tokenUsage && (tokenUsage.input > 0 || tokenUsage.output > 0) && (
+          <>
+            <span>·</span>
+            <span className="whitespace-nowrap" title={t('chatArea.tokenUsage')}>
+              {tokenUsage.input.toLocaleString()}→{tokenUsage.output.toLocaleString()}
+            </span>
+          </>
+        )}
       </div>
     </div>
   );
@@ -631,9 +668,11 @@ export function ChatArea() {
   const conversationLoading = useAppStore((state) => state.conversationLoading);
   const sending = useAppStore((state) => state.sending);
   const sendError = useAppStore((state) => state.sendError);
+  const streamingText = useAppStore((state) => state.streamingText);
   const liveToolProgress = useAppStore((state) => state.liveToolProgress);
   const liveToolResults = useAppStore((state) => state.liveToolResults);
   const sessions = useAppStore((state) => state.sessions);
+  const lastPromptResult = useAppStore((state) => state.lastPromptResult);
   const bottomRef = useRef<HTMLDivElement>(null);
   const lastScrollRef = useRef(0);
 
@@ -643,13 +682,17 @@ export function ChatArea() {
     () => sessions.find((session) => session.id === activeSessionId) ?? null,
     [activeSessionId, sessions],
   );
+  const tokenUsage = useMemo(
+    () => lastPromptResult?.usage ? { input: lastPromptResult.usage.input_tokens, output: lastPromptResult.usage.output_tokens } : null,
+    [lastPromptResult],
+  );
 
   useEffect(() => {
     const now = Date.now();
     if (now - lastScrollRef.current < 100) return;
     lastScrollRef.current = now;
     bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
-  }, [conversation, sending, liveToolProgress, liveToolResults]);
+  }, [conversation, sending, streamingText, liveToolProgress, liveToolResults]);
 
   if (!activeSessionId) {
     return <WorkspaceOverview />;
@@ -694,11 +737,13 @@ export function ChatArea() {
         provider={activeSession?.provider_name}
         model={activeSession?.model}
         sessionId={activeSessionId}
+        tokenUsage={tokenUsage}
       />
       <GoalStatusBar />
       <ConversationTimeline
         conversation={conversation}
         sending={sending}
+        streamingText={streamingText}
         compactProgress={compactProgress}
         compactResults={compactResults}
         sendError={sendError}
