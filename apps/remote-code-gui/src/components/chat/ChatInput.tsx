@@ -348,6 +348,18 @@ export function ChatInput() {
   const updateSettings = useAppStore((state) => state.updateSettings);
   const setActiveProvider = useAppStore((state) => state.setActiveProvider);
   const selectAgent = useAgentStore((state) => state.selectAgent);
+  const pendingChatAttachment = useAppStore((state) => state.pendingChatAttachment);
+  const consumeChatAttachment = useAppStore((state) => state.consumeChatAttachment);
+
+  // Consume file path injected from FileExplorer "add to chat"
+  useEffect(() => {
+    if (!pendingChatAttachment) return;
+    const attachment = consumeChatAttachment();
+    if (attachment) {
+      setInput((prev) => prev ? `${prev}\n${attachment}` : attachment);
+      textAreaRef.current?.focus();
+    }
+  }, [pendingChatAttachment, consumeChatAttachment]);
 
   useEffect(() => {
     const element = textAreaRef.current;

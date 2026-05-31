@@ -552,18 +552,13 @@ export function Sidebar() {
           label: t('contextMenu.openInExplorer'),
           icon: <ExternalLink size={13} />,
           action: () => {
+            // TODO: use tauri shell plugin once available; fallback to clipboard
             navigator.clipboard.writeText(session.cwd).catch(() => {});
           },
         },
         {
           key: 'copy-path',
           label: t('contextMenu.copyPath'),
-          icon: <Copy size={13} />,
-          action: () => { navigator.clipboard.writeText(session.cwd).catch(() => {}); },
-        },
-        {
-          key: 'copy-task-path',
-          label: t('contextMenu.copyTaskPath'),
           icon: <Copy size={13} />,
           action: () => { navigator.clipboard.writeText(session.cwd).catch(() => {}); },
         },
@@ -579,9 +574,7 @@ export function Sidebar() {
           label: t('contextMenu.goToSettings'),
           icon: <SlidersHorizontal size={13} />,
           action: () => {
-            // Navigate to settings by emitting a custom event or setting state
-            const event = new CustomEvent('navigate-to-settings');
-            window.dispatchEvent(event);
+            window.dispatchEvent(new CustomEvent('navigate-to-settings'));
           },
         },
         {
@@ -594,7 +587,9 @@ export function Sidebar() {
           key: 'feedback',
           label: t('contextMenu.feedbackIssue'),
           icon: <MessageCircleWarning size={13} />,
-          action: () => {},
+          action: () => {
+            window.open('https://github.com/yanzhi0922/remote-code/issues', '_blank')?.focus();
+          },
         },
       ];
     },

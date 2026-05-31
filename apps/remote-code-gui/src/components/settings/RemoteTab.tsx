@@ -66,7 +66,7 @@ export function RemoteTab() {
       } else if (username) {
         await tauri.remoteSetUsername(username);
       }
-      setSuccess('Credentials saved');
+      setSuccess(t('remoteTab.credentialsSaved'));
       setPassword('');
       await loadState();
     } catch (e) {
@@ -82,7 +82,7 @@ export function RemoteTab() {
     setSuccess(null);
     try {
       await tauri.remoteSetConnection(controlPlaneUrl, runnerId || undefined, autoStart);
-      setSuccess('Connection saved');
+      setSuccess(t('remoteTab.connectionSaved'));
       await loadState();
     } catch (e) {
       setError(typeof e === 'string' ? e : String(e));
@@ -110,7 +110,7 @@ export function RemoteTab() {
       <div>
         <h3 className="text-sm font-semibold text-rc-text-primary">{t('settings.remote')}</h3>
         <p className="mt-1 text-xs leading-5 text-rc-text-tertiary">
-          Configure remote access to control this machine from another device.
+          {t('remoteTab.description')}
         </p>
       </div>
 
@@ -119,7 +119,7 @@ export function RemoteTab() {
         <span className={`inline-block h-2.5 w-2.5 rounded-full ${status === 'running' ? 'bg-rc-accent-success' : status === 'enabled' ? 'bg-rc-accent-warning' : 'bg-rc-text-tertiary'}`} />
         <span className="text-sm text-rc-text-primary capitalize">{status}</span>
         {connectionInfo?.connected && (
-          <span className="text-xs text-rc-accent-success ml-2">Connected</span>
+          <span className="text-xs text-rc-accent-success ml-2">{t('remoteTab.connected')}</span>
         )}
       </div>
 
@@ -129,18 +129,18 @@ export function RemoteTab() {
 
       {/* Connection settings */}
       <div className="space-y-3">
-        <h4 className="text-sm font-medium text-rc-text-primary">Control Plane</h4>
+        <h4 className="text-sm font-medium text-rc-text-primary">{t('remoteTab.controlPlane')}</h4>
         <SettingInput
-          label="Control Plane URL"
+          label={t('remoteTab.controlPlaneUrl')}
           value={controlPlaneUrl}
           onChange={setControlPlaneUrl}
-          placeholder="https://your-control-plane.example.com"
+          placeholder={t('remoteTab.controlPlaneUrlPlaceholder')}
         />
         <SettingInput
-          label="Runner ID"
+          label={t('remoteTab.runnerId')}
           value={runnerId}
           onChange={setRunnerId}
-          placeholder="Auto-generated if empty"
+          placeholder={t('remoteTab.runnerIdPlaceholder')}
         />
         <label className="flex items-center gap-2 text-sm text-rc-text-primary">
           <input
@@ -149,31 +149,31 @@ export function RemoteTab() {
             onChange={(e) => setAutoStart(e.target.checked)}
             className="rounded border-rc-border-primary"
           />
-          Auto-start on launch
+          {t('remoteTab.autoStart')}
         </label>
         <button
           onClick={() => void handleSaveConnection()}
           disabled={saving}
           className="rounded-md bg-rc-bg-accent px-3 py-1.5 text-sm text-rc-text-on-accent hover:opacity-90 disabled:opacity-50"
         >
-          {saving ? 'Saving...' : 'Save Connection'}
+          {saving ? t('common.saving') : t('remoteTab.saveConnection')}
         </button>
       </div>
 
       {/* Credentials */}
       <div className="space-y-3">
-        <h4 className="text-sm font-medium text-rc-text-primary">Authentication</h4>
+        <h4 className="text-sm font-medium text-rc-text-primary">{t('remoteTab.authentication')}</h4>
         <SettingInput
-          label="Username"
+          label={t('remoteTab.username')}
           value={username}
           onChange={setUsername}
           placeholder="admin"
         />
         <SettingInput
-          label={hasPassword ? 'New Password (leave empty to keep)' : 'Password'}
+          label={hasPassword ? t('remoteTab.newPassword') : t('remoteTab.password')}
           value={password}
           onChange={setPassword}
-          placeholder={hasPassword ? '••••••••' : 'Set a password'}
+          placeholder={hasPassword ? t('remoteTab.passwordSetPlaceholder') : t('remoteTab.passwordNewPlaceholder')}
           type="password"
         />
         <button
@@ -181,7 +181,7 @@ export function RemoteTab() {
           disabled={saving || (!username && !password)}
           className="rounded-md bg-rc-bg-accent px-3 py-1.5 text-sm text-rc-text-on-accent hover:opacity-90 disabled:opacity-50"
         >
-          {saving ? 'Saving...' : 'Save Credentials'}
+          {saving ? t('common.saving') : t('remoteTab.saveCredentials')}
         </button>
       </div>
 
@@ -192,7 +192,7 @@ export function RemoteTab() {
           disabled={saving}
           className="flex items-center gap-2 rounded-md bg-rc-accent-success px-4 py-2 text-sm text-white hover:opacity-90 disabled:opacity-50"
         >
-          Start Remote Service
+          {t('remoteTab.startService')}
         </button>
       )}
     </div>

@@ -208,10 +208,10 @@ export function PermissionModal() {
   const rooQuestionText = stringField(rooQuestionRecord, 'question') ?? stringField(inputRecord, 'question');
   const rooCompletionText = stringField(inputRecord, 'result');
   const rooResponseLabel = isRooFollowup
-    ? 'Roo 回复'
+    ? t('permissionModal.rooReply')
     : isRooCompletion
-    ? 'Roo 完成反馈'
-    : 'Roo 继续反馈';
+    ? t('permissionModal.rooCompletionFeedback')
+    : t('permissionModal.rooContinueFeedback');
 
   function denyPermission() {
     if (isCodexMcpElicitation) {
@@ -334,7 +334,7 @@ export function PermissionModal() {
           )}
           {isCodexToolUserInput && (
             <div className="space-y-3 rounded-md border border-rc-border-secondary bg-rc-bg-surface p-4">
-              <div className="text-sm font-medium text-rc-text-primary">Codex 用户输入请求</div>
+              <div className="text-sm font-medium text-rc-text-primary">{t('permissionModal.codexUserInput')}</div>
               {codexQuestions.map((question) => (
                 <div key={question.id} className="rounded-md bg-rc-bg-surface p-3 text-sm text-rc-text-primary">
                   <div className="font-medium">{question.header || question.id}</div>
@@ -352,7 +352,7 @@ export function PermissionModal() {
                 </div>
               ))}
               <label htmlFor="codex-user-input-response" className="text-sm font-medium text-rc-text-primary">
-                官方 ToolRequestUserInputResponse JSON
+                {t('permissionModal.codexUserInputLabel')}
               </label>
               <textarea
                 id="codex-user-input-response"
@@ -364,9 +364,9 @@ export function PermissionModal() {
           )}
           {isCodexMcpElicitation && (
             <div className="space-y-3 rounded-md border border-rc-border-secondary bg-rc-bg-surface p-4">
-              <div className="text-sm font-medium text-rc-text-primary">Codex MCP elicitation</div>
+              <div className="text-sm font-medium text-rc-text-primary">{t('permissionModal.codexMcpElicitation')}</div>
               <div className="text-sm text-rc-text-secondary">
-                填写官方 `McpServerElicitationRequestResponse`。拒绝按钮会返回 decline。
+                {t('permissionModal.codexMcpElicitationDesc')}
               </div>
               <textarea
                 aria-label="MCP elicitation response"
@@ -379,13 +379,13 @@ export function PermissionModal() {
           {isCodexDynamicTool && (
             <div className="space-y-3 rounded-md border border-rc-border-secondary bg-rc-bg-surface p-4">
               <label htmlFor="codex-dynamic-tool-output" className="text-sm font-medium text-rc-text-primary">
-                Codex dynamic tool 输出
+                {t('permissionModal.codexDynamicTool')}
               </label>
               <textarea
                 id="codex-dynamic-tool-output"
                 value={codexTextResponse}
                 onChange={(event) => setCodexTextResponse(event.target.value)}
-                placeholder="返回给官方 DynamicToolCallResponse 的文本。"
+                placeholder={t('permissionModal.codexDynamicToolPlaceholder')}
                 className="min-h-28 w-full rounded-md border border-rc-border-secondary bg-rc-bg-surface px-4 py-3 text-sm leading-6 text-rc-text-primary outline-none transition focus:border-rc-border-focus"
               />
             </div>
@@ -411,8 +411,8 @@ export function PermissionModal() {
                 onChange={(event) => setFeedback(event.target.value)}
                 placeholder={
                   isRooCompletion
-                    ? '留空表示接受结果；填写内容会作为反馈继续执行。'
-                    : '填写要返回给 Roo 的补充信息。'
+                    ? t('permissionModal.rooCompletionPlaceholder')
+                    : t('permissionModal.rooFollowupPlaceholder')
                 }
                 className="mt-2 min-h-28 w-full rounded-md border border-rc-border-secondary bg-rc-bg-surface px-4 py-3 text-sm leading-6 text-rc-text-primary outline-none transition focus:border-rc-border-focus"
               />

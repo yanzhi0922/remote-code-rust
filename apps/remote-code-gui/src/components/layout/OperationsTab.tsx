@@ -164,7 +164,7 @@ export function OperationsTab() {
       <section className="space-y-4">
         <div className="flex items-start justify-between gap-4">
           <div>
-            <h3 className="text-base font-semibold text-rc-text-primary">Doctor</h3>
+            <h3 className="text-base font-semibold text-rc-text-primary">{t('operationsTab.doctor')}</h3>
             <p className="mt-1 text-sm text-rc-text-tertiary">
               {t('operations.doctorDesc')}
             </p>
@@ -220,14 +220,14 @@ export function OperationsTab() {
               <div className="rounded-lg border border-rc-border-primary bg-rc-bg-surface px-4 py-4">
                 <div className="flex items-center gap-2 text-sm font-semibold text-rc-text-primary">
                   <Stethoscope size={15} />
-                  Readiness
+                  {t('operationsTab.readiness')}
                 </div>
                 <div
                   className={`mt-3 inline-flex rounded-full px-3 py-1 text-xs font-semibold ${
                     doctor.ok ? 'bg-rc-accent-success-bg text-rc-accent-success' : 'bg-rc-accent-error-bg text-rc-accent-error'
                   }`}
                 >
-                  {doctor.ok ? 'READY' : 'NOT READY'}
+                  {doctor.ok ? t('operationsTab.ready') : t('operationsTab.notReady')}
                 </div>
                 <div className="mt-3 text-xs text-rc-text-tertiary">
                   {doctor.provider.name} · {doctor.provider.protocol}
@@ -235,7 +235,7 @@ export function OperationsTab() {
               </div>
 
               <div className="rounded-lg border border-rc-border-primary bg-rc-bg-surface px-4 py-4">
-                <div className="text-sm font-semibold text-rc-text-primary">Runtime</div>
+                <div className="text-sm font-semibold text-rc-text-primary">{t('operationsTab.runtime')}</div>
                 <div className="mt-3 text-sm text-rc-text-primary">{doctor.runtime.permission_mode}</div>
                 <div className="mt-2 text-xs text-rc-text-tertiary">
                   session {doctor.runtime.session_name ?? '(auto)'}
@@ -244,7 +244,7 @@ export function OperationsTab() {
               </div>
 
               <div className="rounded-lg border border-rc-border-primary bg-rc-bg-surface px-4 py-4">
-                <div className="text-sm font-semibold text-rc-text-primary">Provider</div>
+                <div className="text-sm font-semibold text-rc-text-primary">{t('operationsTab.provider')}</div>
                 <div className="mt-3 text-sm text-rc-text-primary">
                   {doctor.provider.model ?? '(missing model)'}
                 </div>
@@ -259,7 +259,7 @@ export function OperationsTab() {
               <div className="rounded-lg border border-rc-border-primary bg-rc-bg-surface px-4 py-4">
                 <div className="flex items-center gap-2 text-sm font-semibold text-rc-text-primary">
                   <ShieldCheck size={15} />
-                  Surfaces
+                  {t('operationsTab.surfaces')}
                 </div>
                 <div className="mt-3 text-sm text-rc-text-primary">
                   tools {doctor.tools.builtin_tools} · rules {doctor.permissions.layered_rules}
@@ -274,12 +274,12 @@ export function OperationsTab() {
               </div>
             </div>
 
-            <DoctorList title="Issues" items={doctor.issues} tone="issue" />
-            <DoctorList title="Warnings" items={doctor.warnings} tone="warning" />
+            <DoctorList title={t('operationsTab.issues')} items={doctor.issues} tone="issue" />
+            <DoctorList title={t('operationsTab.warnings')} items={doctor.warnings} tone="warning" />
 
             <details className="rounded-lg border border-rc-border-primary bg-rc-bg-surface px-4 py-4">
               <summary className="cursor-pointer text-sm font-semibold text-rc-text-primary">
-                详细信息
+                {t('operationsTab.details')}
               </summary>
               <div className="mt-4 grid gap-4 lg:grid-cols-2">
                 <div className="space-y-2 text-sm text-rc-text-secondary">
@@ -369,9 +369,9 @@ export function OperationsTab() {
       <section className="space-y-4">
         <div className="flex items-start justify-between gap-4">
           <div>
-            <h3 className="text-base font-semibold text-rc-text-primary">Diagnostics</h3>
+            <h3 className="text-base font-semibold text-rc-text-primary">{t('operationsTab.diagnostics')}</h3>
             <p className="mt-1 text-sm text-rc-text-tertiary">
-              导出本机诊断目录，包含日志和可选的脱敏配置快照。
+              {t('operationsTab.diagnosticsDesc')}
             </p>
           </div>
           <button
@@ -382,7 +382,7 @@ export function OperationsTab() {
             className="inline-flex items-center gap-2 rounded-md bg-rc-accent-primary px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-rc-accent-primary-hover disabled:cursor-not-allowed disabled:bg-rc-text-tertiary"
           >
             <Archive size={15} />
-            {diagnosticExporting ? '导出中…' : '导出诊断包'}
+            {diagnosticExporting ? t('common.saving') : t('operationsTab.exportDiagnostic')}
           </button>
         </div>
 
@@ -393,7 +393,7 @@ export function OperationsTab() {
               checked={includeDiagnosticLogs}
               onChange={(event) => setIncludeDiagnosticLogs(event.target.checked)}
             />
-            <span>包含日志</span>
+            <span>{t('operationsTab.includeLogs')}</span>
           </label>
           <label className="flex items-center gap-3 rounded-md bg-rc-bg-surface px-4 py-3 text-sm text-rc-text-primary">
             <input
@@ -401,7 +401,7 @@ export function OperationsTab() {
               checked={includeDiagnosticSettings}
               onChange={(event) => setIncludeDiagnosticSettings(event.target.checked)}
             />
-            <span>包含脱敏配置</span>
+            <span>{t('operationsTab.includeSanitizedConfig')}</span>
           </label>
         </div>
 
@@ -413,7 +413,7 @@ export function OperationsTab() {
 
         {diagnosticPath && (
           <div className="rounded-lg border border-rc-border-primary bg-rc-bg-surface px-4 py-4">
-            <div className="text-sm font-semibold text-rc-text-primary">诊断包已生成</div>
+            <div className="text-sm font-semibold text-rc-text-primary">{t('operationsTab.diagnosticGenerated')}</div>
             <div className="mt-2 break-all rounded-md bg-rc-bg-tertiary px-3 py-3 font-mono text-xs text-rc-text-secondary">
               {formatSensitivePath(diagnosticPath, privacyMode)}
             </div>
@@ -423,22 +423,22 @@ export function OperationsTab() {
 
       <section className="space-y-4">
         <div>
-          <h3 className="text-base font-semibold text-rc-text-primary">Session Export</h3>
+          <h3 className="text-base font-semibold text-rc-text-primary">{t('operationsTab.sessionExport')}</h3>
           <p className="mt-1 text-sm text-rc-text-tertiary">
-            直接把当前或历史会话导出为 JSON bundle / NDJSON transcript，落到 runtime 默认导出目录。
+            {t('operationsTab.sessionExportDesc')}
           </p>
         </div>
 
         <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_220px]">
           <div className="space-y-1.5">
-            <label className="block text-sm font-medium text-rc-text-primary">选择会话</label>
+            <label className="block text-sm font-medium text-rc-text-primary">{t('operationsTab.selectSession')}</label>
             <select
               value={selectedSessionId}
               onChange={(event) => setSelectedSessionId(event.target.value)}
               className="w-full rounded-md border border-rc-border-primary bg-rc-bg-surface px-3 py-2.5 text-sm text-rc-text-primary outline-none transition-colors focus:border-rc-border-focus"
             >
               {allSessions.length === 0 ? (
-                <option value="">没有可导出的会话</option>
+                <option value="">{t('operationsTab.noExportableSessions')}</option>
               ) : (
                 allSessions.map((session) => (
                   <option key={session.id} value={session.id}>
@@ -450,7 +450,7 @@ export function OperationsTab() {
           </div>
 
           <div className="space-y-1.5">
-            <label className="block text-sm font-medium text-rc-text-primary">导出格式</label>
+            <label className="block text-sm font-medium text-rc-text-primary">{t('operationsTab.exportFormat')}</label>
             <select
               value={exportFormat}
               onChange={(event) => setExportFormat(event.target.value as SessionExportFormat)}
@@ -473,7 +473,7 @@ export function OperationsTab() {
           className="inline-flex items-center gap-2 rounded-md bg-rc-accent-primary px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-rc-accent-primary-hover disabled:cursor-not-allowed disabled:bg-rc-text-tertiary"
         >
           <Download size={15} />
-          {exporting ? '导出中…' : '导出会话'}
+          {exporting ? t('common.saving') : t('operationsTab.exportSession')}
         </button>
 
         {exportError && (
@@ -484,7 +484,7 @@ export function OperationsTab() {
 
         {exportPath && (
           <div className="rounded-lg border border-rc-border-primary bg-rc-bg-surface px-4 py-4">
-            <div className="text-sm font-semibold text-rc-text-primary">导出完成</div>
+            <div className="text-sm font-semibold text-rc-text-primary">{t('operationsTab.exportComplete')}</div>
             <div className="mt-2 break-all rounded-md bg-rc-bg-tertiary px-3 py-3 font-mono text-xs text-rc-text-secondary">
               {exportPath}
             </div>

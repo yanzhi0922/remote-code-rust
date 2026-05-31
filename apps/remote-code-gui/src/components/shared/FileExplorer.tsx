@@ -50,6 +50,7 @@ function FileTreeNode({ entry, depth = 0, onOpenFile, onAddToChat }: FileTreeNod
   const [children, setChildren] = useState<FsEntry[] | null>(null);
   const [loading, setLoading] = useState(false);
   const { show: showMenu, MenuComponent } = useContextMenu();
+  const { t } = useTranslation();
 
   const toggle = useCallback(async () => {
     if (!entry.isDir) return;
@@ -82,20 +83,20 @@ function FileTreeNode({ entry, depth = 0, onOpenFile, onAddToChat }: FileTreeNod
       showMenu(e, [
         {
           key: 'open',
-          label: '打开',
+          label: t('fileExplorer.open'),
           icon: <ExternalLink size={13} />,
           action: () => onOpenFile(entry.path),
         },
         {
           key: 'open-terminal',
-          label: '在终端中打开',
+          label: t('fileExplorer.openInTerminal'),
           icon: <TerminalSquare size={13} />,
           action: () => onOpenFile(entry.path),
         },
         { key: 'sep1', label: '', separator: true, action: () => {} },
         {
           key: 'open-explorer',
-          label: '在资源管理器中打开',
+          label: t('fileExplorer.openInExplorer'),
           icon: <FolderOpen size={13} />,
           action: () => {
             void navigator.clipboard.writeText(entry.path).catch(() => {});
@@ -103,7 +104,7 @@ function FileTreeNode({ entry, depth = 0, onOpenFile, onAddToChat }: FileTreeNod
         },
         {
           key: 'copy-path',
-          label: '复制路径',
+          label: t('fileExplorer.copyPath'),
           icon: <Copy size={13} />,
           action: () => {
             void navigator.clipboard.writeText(entry.path).catch(() => {});
@@ -112,13 +113,13 @@ function FileTreeNode({ entry, depth = 0, onOpenFile, onAddToChat }: FileTreeNod
         { key: 'sep2', label: '', separator: true, action: () => {} },
         {
           key: 'add-to-chat',
-          label: '添加到聊天',
+          label: t('fileExplorer.addToChat'),
           icon: <MessageSquarePlus size={13} />,
           action: () => onAddToChat(entry.path),
         },
       ]);
     },
-    [entry, showMenu, onOpenFile, onAddToChat],
+    [entry, showMenu, onOpenFile, onAddToChat, t],
   );
 
   if (entry.isDir) {
@@ -251,7 +252,7 @@ export function FileExplorer({ rootPath, projectName, onBack, onAddToChat }: Fil
             type="button"
             onClick={() => handleAddToChat(rootPath)}
             className="flex h-7 w-7 items-center justify-center rounded-md text-rc-text-secondary transition-colors hover:bg-rc-bg-hover hover:text-rc-accent-primary"
-            title="将路径添加到聊天"
+            title={t('fileExplorer.addToChatTooltip')}
           >
             <MessageSquarePlus size={14} />
           </button>

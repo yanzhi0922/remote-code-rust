@@ -1,4 +1,4 @@
-import { Cpu, Network, Wifi, WifiOff } from 'lucide-react';
+import { Cpu, Network, Shield, Wifi, WifiOff } from 'lucide-react';
 import { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { formatSensitivePath } from '../../lib/utils';
@@ -64,6 +64,7 @@ export function StatusBar() {
   const privacyMode = useAppStore((state) => state.workspacePrivacyMode);
   const activeAgentType = useAgentStore((state) => state.activeAgentType);
   const lastPromptResult = useAppStore((state) => state.lastPromptResult);
+  const settings = useAppStore((state) => state.settings);
 
   const activeSession = useMemo(
     () => sessions.find((s) => s.id === activeSessionId) ?? null,
@@ -114,6 +115,13 @@ export function StatusBar() {
         )}
 
         {contextUsage && <ContextGauge ratio={contextUsage.ratio} />}
+
+        {settings?.permission_mode && (
+          <span className="hidden items-center gap-1 sm:flex">
+            <Shield size={12} className="text-rc-text-tertiary" />
+            <span className="text-rc-text-secondary">{settings.permission_mode}</span>
+          </span>
+        )}
 
         <span className={`hidden items-center gap-1.5 sm:flex ${mcpIssueCount > 0 ? 'text-rc-accent-warning' : ''}`}>
           <Network size={12} />

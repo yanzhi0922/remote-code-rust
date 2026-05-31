@@ -368,6 +368,7 @@ export function WorkspaceOverview() {
           rootPath={fileExplorerPath}
           projectName={fileExplorerProjectName}
           onBack={() => closeFileExplorer()}
+          onAddToChat={(path) => useAppStore.getState().injectChatAttachment(path)}
         />
         {MenuComponent}
       </div>

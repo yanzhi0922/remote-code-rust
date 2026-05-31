@@ -186,6 +186,11 @@ interface AppState {
   fileExplorerPath: string | null;
   fileExplorerProjectName: string | null;
 
+  /** Path injected by FileExplorer "add to chat" — ChatInput reads and clears this. */
+  pendingChatAttachment: string | null;
+  injectChatAttachment: (text: string) => void;
+  consumeChatAttachment: () => string | null;
+
   pendingPermission: PermissionRequestInfo | null;
 
   /** Current goal state for Codex agent (null when no goal is set). */
@@ -570,6 +575,13 @@ export const useAppStore = create<AppState>((set, get) => ({
   pendingPermission: null,
   fileExplorerPath: null,
   fileExplorerProjectName: null,
+  pendingChatAttachment: null,
+  injectChatAttachment: (text: string) => set({ pendingChatAttachment: text }),
+  consumeChatAttachment: () => {
+    const val = get().pendingChatAttachment;
+    if (val) set({ pendingChatAttachment: null });
+    return val;
+  },
 
   init: async () => {
     try {
