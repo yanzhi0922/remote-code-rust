@@ -253,7 +253,7 @@ getrandom = "0.3"
 glob = "0.3"
 globset = "0.4"
 hmac = "0.12"
-hkdf = "0.12"
+hkdf = "0.13"
 pbkdf2 = { version = "0.12", features = ["hmac"] }
 ignore = "0.4"
 indexmap = { version = "2.12.0", features = ["serde"] }
