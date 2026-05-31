@@ -310,6 +310,12 @@ export interface ToolCallInfo {
   input: unknown;
 }
 
+export interface AttachmentInfo {
+  media_type: string;
+  data: string;
+  filename?: string;
+}
+
 export interface ConversationEntry {
   role: ConversationRole;
   text: string;
@@ -318,6 +324,7 @@ export interface ConversationEntry {
   tool_call_id: string | null;
   name: string | null;
   is_error: boolean;
+  attachments?: AttachmentInfo[];
 }
 
 interface UsageInfo {

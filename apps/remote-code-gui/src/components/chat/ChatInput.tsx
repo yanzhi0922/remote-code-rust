@@ -1,13 +1,16 @@
 import {
   ChevronDown,
   Cpu,
+  Image as ImageIcon,
   Send,
   Shield,
   Slash,
   Sparkles,
   Square,
+  X,
 } from 'lucide-react';
 import {
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -330,6 +333,9 @@ export function ChatInput() {
   const [slashFilter, setSlashFilter] = useState('');
   const [highlightedSlashIndex, setHighlightedSlashIndex] = useState(0);
   const [modelError, setModelError] = useState<string | null>(null);
+  const [pendingAttachments, setPendingAttachments] = useState<
+    Array<{ mediaType: string; data: string; preview: string }>
+  >([]);
   const textAreaRef = useRef<HTMLTextAreaElement>(null);
   const lastCommittedModel = useRef('');
 
@@ -404,14 +410,50 @@ export function ChatInput() {
     return true;
   };
 
+  const handlePaste = useCallback(async (e: React.ClipboardEvent) => {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+
+    for (const item of items) {
+      if (item.type.startsWith('image/')) {
+        e.preventDefault();
+        const blob = item.getAsFile();
+        if (!blob) continue;
+
+        const mediaType = item.type;
+        const reader = new FileReader();
+        reader.onload = () => {
+          const dataUrl = reader.result as string;
+          // dataUrl is "data:image/png;base64,XXXXX" — extract the base64 part.
+          const base64 = dataUrl.split(',')[1];
+          if (!base64) return;
+          setPendingAttachments((prev) => [
+            ...prev,
+            { mediaType, data: base64, preview: dataUrl },
+          ]);
+        };
+        reader.readAsDataURL(blob);
+        return; // Only process the first image.
+      }
+    }
+  }, []);
+
   const handleSend = async () => {
-    if (!input.trim() || sending) return;
+    if ((!input.trim() && pendingAttachments.length === 0) || sending) return;
     // Flush any pending model change before sending to avoid race condition.
     await commitModelDraft();
     const current = input;
+    const attachments: tauri.AttachmentInput[] | undefined =
+      pendingAttachments.length > 0
+        ? pendingAttachments.map((a) => ({
+            media_type: a.mediaType,
+            data: a.data,
+          }))
+        : undefined;
     setInput('');
+    setPendingAttachments([]);
     setShowSlashPalette(false);
-    await sendMessage(current);
+    await sendMessage(current, attachments);
   };
 
   const handleCancel = async () => {
@@ -520,12 +562,39 @@ export function ChatInput() {
                 void handleKeyDown(event);
               }}
               disabled={sending}
+              onPaste={handlePaste}
               rows={1}
               aria-label="Prompt input"
               aria-activedescendant={showSlashPalette ? `slash-option-${highlightedSlashIndex}` : undefined}
               placeholder={t('chatInput.placeholder')}
               className="min-h-[64px] max-h-[180px] w-full resize-none border-0 bg-transparent px-1 py-1 text-sm leading-6 text-rc-text-primary outline-none placeholder:text-rc-text-tertiary disabled:cursor-not-allowed focus-visible:outline-none"
             />
+
+            {pendingAttachments.length > 0 && (
+              <div className="flex flex-wrap gap-2 px-1 pt-1">
+                {pendingAttachments.map((att, idx) => (
+                  <div
+                    key={idx}
+                    className="group relative h-16 w-16 overflow-hidden rounded-md border border-rc-border-primary"
+                  >
+                    <img
+                      src={att.preview}
+                      alt="Pasted"
+                      className="h-full w-full object-cover"
+                    />
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setPendingAttachments((prev) => prev.filter((_, i) => i !== idx))
+                      }
+                      className="absolute right-0.5 top-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-rc-bg-elevated/80 text-rc-text-tertiary opacity-0 transition-opacity group-hover:opacity-100"
+                    >
+                      <X size={10} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
 
           <div
@@ -656,7 +725,7 @@ export function ChatInput() {
               onClick={() => {
                 void handleSend();
               }}
-              disabled={sending || !input.trim()}
+              disabled={sending || (!input.trim() && pendingAttachments.length === 0)}
               className="flex h-8 w-8 items-center justify-center rounded-lg bg-rc-accent-primary text-white shadow-sm transition-colors hover:bg-rc-accent-primary-hover disabled:cursor-not-allowed disabled:opacity-45 focus-visible:outline-none"
             >
               {sending ? (

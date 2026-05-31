@@ -1476,6 +1476,22 @@ fn conversation_entry_to_dto(entry: &ConversationEntry) -> ConversationEntryDto 
         tool_call_id: entry.tool_call_id.clone(),
         name: entry.name.clone(),
         is_error: entry.is_error,
+        attachments: entry
+            .attachments
+            .iter()
+            .map(|a| crate::dto::AttachmentDto {
+                media_type: match a.media_type {
+                    claude_core::AttachmentMediaType::ImagePng => "image/png",
+                    claude_core::AttachmentMediaType::ImageJpeg => "image/jpeg",
+                    claude_core::AttachmentMediaType::ImageGif => "image/gif",
+                    claude_core::AttachmentMediaType::ImageWebp => "image/webp",
+                    claude_core::AttachmentMediaType::ApplicationPdf => "application/pdf",
+                }
+                .to_owned(),
+                data: a.data.clone(),
+                filename: a.filename.clone(),
+            })
+            .collect(),
     }
 }
 
@@ -3274,6 +3290,7 @@ async fn run_claude_in_process_prompt(
     prompt: &str,
     runtime_config: claude_config::RuntimeConfig,
     session_store: Arc<claude_session::SessionStore>,
+    attachments: Vec<claude_core::Attachment>,
 ) -> std::result::Result<String, String> {
     // Ensure the adapter exists for this session.
     {
@@ -3310,23 +3327,15 @@ async fn run_claude_in_process_prompt(
         .get_mut(session_id)
         .ok_or_else(|| "Claude adapter not found".to_string())?;
 
+    // Pass attachments to the adapter before sending the message.
+    if !attachments.is_empty() {
+        adapter.set_attachments(attachments);
+    }
+
     let mut rx = adapter
         .send_message(session_id, prompt)
         .await
         .map_err(|e| format!("ClaudeInProcessAdapter::send_message failed: {e}"))?;
-
-    // Persist user message to SessionStore for crash recovery.
-    if let Ok(sid) = Uuid::parse_str(session_id) {
-        let user_entry = ConversationEntry::user(prompt);
-        if let Err(error) = session_store.append_conversation_entry(sid, &user_entry) {
-            tracing::warn!(%session_id, "Failed to persist Claude user message: {error:#}");
-        }
-    } else {
-        tracing::warn!(
-            session_id,
-            "Cannot persist Claude user message: invalid UUID"
-        );
-    }
 
     // Forward events to the frontend. Drop the lock before streaming.
     drop(adapters);

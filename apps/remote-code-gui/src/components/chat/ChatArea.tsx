@@ -288,6 +288,7 @@ const MessageCard = memo(
     }
 
     if (entry.role === 'user') {
+      const hasAttachments = entry.attachments && entry.attachments.length > 0;
       return (
         <div className="flex justify-end border-b border-rc-border-secondary py-6 last:border-b-0">
           <div className="max-w-[720px] rounded-xl border border-rc-border-primary bg-rc-bg-elevated px-4 py-3 text-sm leading-6 text-rc-text-primary shadow-xs">
@@ -295,7 +296,29 @@ const MessageCard = memo(
               <span className="text-[10px] font-semibold uppercase text-rc-text-tertiary">{t('chatArea.user')}</span>
               <CopyButton text={entry.text} />
             </div>
-            <div className="whitespace-pre-wrap break-words">{entry.text}</div>
+            {hasAttachments && (
+              <div className="mb-2 flex flex-wrap gap-2">
+                {entry.attachments!.map((att, idx) => {
+                  if (att.media_type.startsWith('image/')) {
+                    return (
+                      <img
+                        key={idx}
+                        src={`data:${att.media_type};base64,${att.data}`}
+                        alt={att.filename ?? 'Attachment'}
+                        className="max-h-48 max-w-full rounded-md border border-rc-border-secondary object-contain"
+                      />
+                    );
+                  }
+                  return (
+                    <div key={idx} className="flex items-center gap-1.5 rounded-md border border-rc-border-secondary bg-rc-bg-tertiary px-2 py-1 text-xs text-rc-text-secondary">
+                      <FileText size={12} />
+                      <span>{att.filename ?? att.media_type}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+            {entry.text && <div className="whitespace-pre-wrap break-words">{entry.text}</div>}
           </div>
         </div>
       );

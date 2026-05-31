@@ -162,6 +162,18 @@ pub(crate) struct ToolCallDto {
     pub(crate) input: serde_json::Value,
 }
 
+/// A multimodal attachment sent from the frontend (e.g. pasted image).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct AttachmentInput {
+    /// MIME type: "image/png", "image/jpeg", "image/gif", "image/webp", "application/pdf".
+    pub(crate) media_type: String,
+    /// Base64-encoded content.
+    pub(crate) data: String,
+    /// Optional original filename.
+    #[serde(default)]
+    pub(crate) filename: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct ConversationEntryDto {
     pub(crate) role: String,
@@ -171,6 +183,17 @@ pub(crate) struct ConversationEntryDto {
     pub(crate) tool_call_id: Option<String>,
     pub(crate) name: Option<String>,
     pub(crate) is_error: bool,
+    #[serde(default)]
+    pub(crate) attachments: Vec<AttachmentDto>,
+}
+
+/// DTO for a multimodal attachment in a conversation entry.
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct AttachmentDto {
+    pub(crate) media_type: String,
+    pub(crate) data: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) filename: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]

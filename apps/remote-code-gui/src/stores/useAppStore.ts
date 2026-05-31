@@ -208,7 +208,7 @@ interface AppState {
   togglePinSession: (sessionId: string) => void;
   toggleUnreadSession: (sessionId: string) => void;
   restoreSession: (sessionId: string) => Promise<void>;
-  sendMessage: (text: string) => Promise<void>;
+  sendMessage: (text: string, attachments?: tauri.AttachmentInput[]) => Promise<void>;
   handleGoalCommand: (sessionId: string, args: string) => Promise<void>;
   addAssistantMessage: (sessionId: string, text: string) => void;
   extractGoalFromResponse: (raw: Record<string, unknown> | undefined) => CodexThreadGoalInfo | null;
@@ -766,9 +766,9 @@ export const useAppStore = create<AppState>((set, get) => ({
     await Promise.all([get().refreshProjects(), get().refreshSessions(), get().loadArchivedSessions()]);
   },
 
-  sendMessage: async (text: string) => {
+  sendMessage: async (text: string, attachments?: tauri.AttachmentInput[]) => {
     const prompt = text.trim();
-    if (!prompt) return;
+    if (!prompt && (!attachments || attachments.length === 0)) return;
 
     // ── Slash command interception ────────────────────────────────
     const slashMatch = prompt.match(/^\/(\w+)(?:\s+(.*))?$/s);
@@ -890,7 +890,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 
     try {
       // Fire-and-forget: sendPrompt returns immediately with session_id.
-      await tauri.sendPrompt(prompt, sid);
+      await tauri.sendPrompt(prompt, sid, attachments);
       // Actual result arrives via gui://prompt-done event.
     } catch (error) {
       set({

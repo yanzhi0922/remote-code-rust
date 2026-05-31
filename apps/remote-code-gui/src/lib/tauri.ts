@@ -240,10 +240,21 @@ export function resetMcpServers(
   });
 }
 
-export function sendPrompt(prompt: string, sessionId?: string): Promise<string> {
+export interface AttachmentInput {
+  media_type: string;
+  data: string;
+  filename?: string;
+}
+
+export function sendPrompt(
+  prompt: string,
+  sessionId?: string,
+  attachments?: AttachmentInput[],
+): Promise<string> {
   return invoke<string>('send_prompt', {
     prompt,
     sessionId: sessionId ?? null,
+    attachments: attachments ?? null,
   });
 }
 

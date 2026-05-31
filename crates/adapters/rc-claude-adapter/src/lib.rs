@@ -57,7 +57,7 @@ use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 use claude_config::RuntimeConfig;
-use claude_core::{ConversationEntry, Message, SessionId, SubAgentCompletion, ToolResult};
+use claude_core::{Attachment, ConversationEntry, Message, SessionId, SubAgentCompletion, ToolResult};
 use claude_permissions::{
     PermissionBroker, PermissionDecision as PermissionsPermissionDecision,
     PermissionRequest as PermissionsPermissionRequest,
@@ -604,6 +604,9 @@ pub struct ClaudeInProcessAdapter {
 
     // Session ID (from RuntimeConfig, cached for convenience).
     session_id: Uuid,
+
+    // Pending multimodal attachments for the next send_message call.
+    pending_attachments: StdMutex<Vec<Attachment>>,
 }
 
 impl ClaudeInProcessAdapter {
@@ -634,6 +637,7 @@ impl ClaudeInProcessAdapter {
             worker_handle: None,
             pending_permissions: Arc::new(StdMutex::new(HashMap::new())),
             session_id,
+            pending_attachments: StdMutex::new(Vec::new()),
         }
     }
 
@@ -647,6 +651,15 @@ impl ClaudeInProcessAdapter {
         }
         // Recreate the cancel token so future calls get a fresh token.
         self.cancel_token = CancellationToken::new();
+    }
+
+    /// Store attachments to be consumed by the next `send_message` call.
+    pub fn set_attachments(&self, attachments: Vec<Attachment>) {
+        let mut pending = self.pending_attachments.lock().unwrap_or_else(|e| {
+            tracing::warn!("Pending attachments mutex poisoned, recovering: {e}");
+            e.into_inner()
+        });
+        *pending = attachments;
     }
 
     /// Synchronously drain and deny all pending permissions.
@@ -730,8 +743,19 @@ impl AgentAdapter for ClaudeInProcessAdapter {
         )?;
         let existing_messages: Vec<Message> = conversation.into_iter().map(Message::from).collect();
 
-        // Persist user entry.
-        let user_entry = ConversationEntry::user(message);
+        // Persist user entry (with attachments if any).
+        let attachments: Vec<Attachment> = {
+            let mut pending = self.pending_attachments.lock().unwrap_or_else(|e| {
+                tracing::warn!("Pending attachments mutex poisoned, recovering: {e}");
+                e.into_inner()
+            });
+            std::mem::take(&mut *pending)
+        };
+        let user_entry = if attachments.is_empty() {
+            ConversationEntry::user(message)
+        } else {
+            ConversationEntry::user_with_attachments(message, attachments.clone())
+        };
         self.session_store
             .append_conversation_entry(self.session_id, &user_entry)?;
 
@@ -795,8 +819,12 @@ impl AgentAdapter for ClaudeInProcessAdapter {
         context.system_prompt = self.runtime_config.system_prompt.clone();
         context.requested_effort = self.runtime_config.effort.clone();
 
-        // 12. Create user message.
-        let user_message = vec![Message::from(ConversationEntry::user(message))];
+        // 12. Create user message (with attachments if present).
+        let user_message = if attachments.is_empty() {
+            vec![Message::from(ConversationEntry::user(message))]
+        } else {
+            vec![Message::from(ConversationEntry::user_with_attachments(message, attachments))]
+        };
 
         // 13. Send Started event.
         let _ = event_tx

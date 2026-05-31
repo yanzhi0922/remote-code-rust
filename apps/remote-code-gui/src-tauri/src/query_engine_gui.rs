@@ -592,6 +592,7 @@ pub(crate) async fn run_unified_prompt_with_provider(
     store: Arc<SessionStore>,
     pending_permissions: Arc<Mutex<HashMap<String, oneshot::Sender<PermissionDecision>>>>,
     prompt: &str,
+    attachments: Vec<claude_core::Attachment>,
 ) -> Result<UnifiedPromptOutcome> {
     let session_id = config.session_id;
     let model = config
@@ -619,7 +620,11 @@ pub(crate) async fn run_unified_prompt_with_provider(
     )?;
 
     // Persist user entry.
-    let user_entry = ConversationEntry::user(prompt);
+    let user_entry = if attachments.is_empty() {
+        ConversationEntry::user(prompt)
+    } else {
+        ConversationEntry::user_with_attachments(prompt, attachments.clone())
+    };
     store.append_conversation_entry(session_id, &user_entry)?;
     conversation.push(user_entry);
 
@@ -682,7 +687,12 @@ pub(crate) async fn run_unified_prompt_with_provider(
     let context =
         ProcessUserInputContext::new(SessionId::from(session_id), config.permission_mode, &model);
 
-    let user_message = vec![Message::from(ConversationEntry::user(prompt))];
+    let user_entry_for_msg = if attachments.is_empty() {
+        ConversationEntry::user(prompt)
+    } else {
+        ConversationEntry::user_with_attachments(prompt, attachments)
+    };
+    let user_message = vec![Message::from(user_entry_for_msg)];
     let result = engine.submit_message(user_message, context).await?;
 
     // 10. Convert result.

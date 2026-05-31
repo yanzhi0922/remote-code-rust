@@ -241,8 +241,10 @@ pub(super) async fn send_prompt(
     state: State<'_, AppState>,
     prompt: String,
     session_id: Option<String>,
+    attachments: Option<Vec<crate::dto::AttachmentInput>>,
 ) -> std::result::Result<String, String> {
     let prompt = prompt.trim().to_owned();
+    let attachments = attachments.unwrap_or_default();
     if prompt.is_empty() {
         return Err("prompt cannot be empty".to_owned());
     }
@@ -298,6 +300,26 @@ pub(super) async fn send_prompt(
     })?;
 
     let sid = config.session_id.to_string();
+
+    // Convert frontend AttachmentInput → claude_core::Attachment once.
+    let core_attachments: Vec<claude_core::Attachment> = attachments
+        .iter()
+        .filter_map(|a| {
+            let media_type = match a.media_type.as_str() {
+                "image/png" => claude_core::AttachmentMediaType::ImagePng,
+                "image/jpeg" => claude_core::AttachmentMediaType::ImageJpeg,
+                "image/gif" => claude_core::AttachmentMediaType::ImageGif,
+                "image/webp" => claude_core::AttachmentMediaType::ImageWebp,
+                "application/pdf" => claude_core::AttachmentMediaType::ApplicationPdf,
+                _ => return None,
+            };
+            Some(claude_core::Attachment {
+                media_type,
+                data: a.data.clone(),
+                filename: a.filename.clone(),
+            })
+        })
+        .collect();
 
     // Atomically check for duplicate and reserve the slot to prevent TOCTOU races.
     {
@@ -397,6 +419,7 @@ pub(super) async fn send_prompt(
                 let pending_claude_permissions = Arc::clone(&state.pending_claude_permissions);
                 let sid_clone = sid.clone();
                 let prompt_owned = prompt.clone();
+                let claude_attachments = core_attachments.clone();
 
                 let app_for_cleanup = app.clone();
                 let inner = tokio::spawn(async move {
@@ -408,6 +431,7 @@ pub(super) async fn send_prompt(
                         &prompt_owned,
                         config.clone(),
                         session_store.clone(),
+                        claude_attachments,
                     )
                     .await
                 });
@@ -424,6 +448,7 @@ pub(super) async fn send_prompt(
             }
             _ => {
                 // Fallback path: uses the in-process QueryEngine directly.
+                let fallback_attachments = core_attachments.clone();
                 let app_for_cleanup = app.clone();
                 let inner = tokio::spawn(async move {
                     crate::query_engine_gui::run_unified_prompt_with_provider(
@@ -433,6 +458,7 @@ pub(super) async fn send_prompt(
                         session_store,
                         pending_permissions,
                         &prompt,
+                        fallback_attachments,
                     )
                     .await
                 });
