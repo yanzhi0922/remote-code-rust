@@ -74,6 +74,13 @@ runner-local.env
 # Codex cargo-test history and chrome-ui-qa browser profiles
 .codex-logs/
 
+# ZCode session bookkeeping (session-scoped, ephemeral)
+# If ZCode is revived, it MUST use refs/notes/zcode-archive/ namespace
+# (notes refs, not commit objects) per plans/archive/zcode-checkpoints-archive.md.
+.zcode-session/
+.zcode-cache/
+.zcode-checkpoints/
+
 # Claude Code worktrees (session-scoped, ephemeral)
 .claude/worktrees/
 
