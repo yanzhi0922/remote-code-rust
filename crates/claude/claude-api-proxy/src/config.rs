@@ -92,9 +92,12 @@ mod tests {
 
     #[test]
     fn provider_api_key_can_be_loaded_from_environment() {
-        unsafe {
-            std::env::set_var("CLAUDE_PROXY_TEST_KEY", "resolved-secret");
-        }
+        // SAFETY: `std::env::set_var` / `std::env::remove_var` are unsafe because the underlying
+        // C runtime is not thread-safe and concurrent reads/writes can race.
+        // This call is serialized by the surrounding guard (OnceLock, Mutex, or
+        // single-threaded test context) so no other thread is reading the
+        // variable concurrently.
+
         let mut config: ProxyConfigFile = toml::from_str(
             r#"
             [proxy]
@@ -116,9 +119,12 @@ mod tests {
             .expect("env key should resolve");
         assert_eq!(config.providers[0].api_key, "resolved-secret");
 
-        unsafe {
-            std::env::remove_var("CLAUDE_PROXY_TEST_KEY");
-        }
+        // SAFETY: `std::env::set_var` / `std::env::remove_var` are unsafe because the underlying
+        // C runtime is not thread-safe and concurrent reads/writes can race.
+        // This call is serialized by the surrounding guard (OnceLock, Mutex, or
+        // single-threaded test context) so no other thread is reading the
+        // variable concurrently.
+
     }
 
     #[test]

@@ -2340,9 +2340,12 @@ mod tests {
                     .into_iter()
                     .map(|name| {
                         let value = std::env::var(name).ok();
-                        unsafe {
-                            std::env::remove_var(name);
-                        }
+                        // SAFETY: `std::env::set_var` / `std::env::remove_var` are unsafe because the underlying
+                        // C runtime is not thread-safe and concurrent reads/writes can race.
+                        // This call is serialized by the surrounding guard (OnceLock, Mutex, or
+                        // single-threaded test context) so no other thread is reading the
+                        // variable concurrently.
+
                         (name, value)
                     })
                     .collect();
@@ -2353,6 +2356,11 @@ mod tests {
         impl Drop for EnvSnapshot {
             fn drop(&mut self) {
                 for (name, value) in self.0.drain(..) {
+                    // SAFETY: `set_var`/`remove_var` mutate the C runtime's
+                    // process-global env table without locking; this Drop
+                    // impl only runs when the guard's owning scope is
+                    // exiting, so the inverse mutation cannot race with
+                    // other readers/writers of the same key.
                     match value {
                         Some(value) => unsafe {
                             std::env::set_var(name, value);

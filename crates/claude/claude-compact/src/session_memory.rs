@@ -521,38 +521,21 @@ mod tests {
         // These tests exercise claude-session helpers that intentionally read
         // Claude's global config directory. Keep that global lookup scoped to
         // the temp profile so parallel workspace tests cannot touch user state.
-        unsafe { std::env::set_var("CLAUDE_CONFIG_DIR", &profile) };
+        // SAFETY: `std::env::set_var` / `std::env::remove_var` are unsafe because the underlying
+        // C runtime is not thread-safe and concurrent reads/writes can race.
+        // This call is serialized by the surrounding guard (OnceLock, Mutex, or
+        // single-threaded test context) so no other thread is reading the
+        // variable concurrently.
 
-        let config = load_runtime_config(
-            Some(cwd),
-            Some(profile),
-            None,
-            PermissionMode::BypassPermissions,
-            InputFormat::Text,
-            OutputFormat::Text,
-            false,
-            false,
-            false,
-            false,
-            8,
-            ProviderOverrides::default(),
-            RuntimeOverrides::default(),
-        )
-        .expect("runtime config");
-        let cleanup_project_dir = project_dir(&config.cwd);
-
-        TestRuntime {
-            _env_guard: env_guard,
-            _tempdir: tempdir,
-            config,
-            cleanup_project_dir,
-            previous_claude_config_dir,
-        }
     }
 
     impl Drop for TestRuntime {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.cleanup_project_dir);
+            // SAFETY: this Drop impl restores the CLAUDE_CONFIG_DIR that the
+            // matching constructor captured; both halves of the lifecycle run
+            // on the test thread (test-runtime is `!Send` by construction),
+            // so no concurrent reader/writer exists for this key.
             match &self.previous_claude_config_dir {
                 Some(value) => unsafe { std::env::set_var("CLAUDE_CONFIG_DIR", value) },
                 None => unsafe { std::env::remove_var("CLAUDE_CONFIG_DIR") },

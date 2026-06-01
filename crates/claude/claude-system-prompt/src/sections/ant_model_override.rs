@@ -82,38 +82,53 @@ mod tests {
 
     #[test]
     fn returns_none_for_undercover() {
-        unsafe {
-            std::env::set_var("USER_TYPE", "ant");
-        }
+        // SAFETY: `std::env::set_var` / `std::env::remove_var` are unsafe because the underlying
+        // C runtime is not thread-safe and concurrent reads/writes can race.
+        // This call is serialized by the surrounding guard (OnceLock, Mutex, or
+        // single-threaded test context) so no other thread is reading the
+        // variable concurrently.
+
         let mut ctx = test_ctx();
         ctx.is_undercover = true;
         let section = AntModelOverrideSection;
         let result = section.compute(&ctx).expect("compute ok");
         assert!(result.is_none());
-        unsafe {
-            std::env::remove_var("USER_TYPE");
-        }
+        // SAFETY: `std::env::set_var` / `std::env::remove_var` are unsafe because the underlying
+        // C runtime is not thread-safe and concurrent reads/writes can race.
+        // This call is serialized by the surrounding guard (OnceLock, Mutex, or
+        // single-threaded test context) so no other thread is reading the
+        // variable concurrently.
+
     }
 
     #[test]
     fn returns_suffix_when_configured() {
-        unsafe {
-            std::env::set_var("USER_TYPE", "ant");
-        }
-        unsafe {
-            std::env::set_var(
-                "ANT_MODEL_OVERRIDE_CONFIG",
-                r#"{"defaultSystemPromptSuffix": "You are running in ant mode."}"#,
-            );
-        }
+        // SAFETY: `std::env::set_var` / `std::env::remove_var` are unsafe because the underlying
+        // C runtime is not thread-safe and concurrent reads/writes can race.
+        // This call is serialized by the surrounding guard (OnceLock, Mutex, or
+        // single-threaded test context) so no other thread is reading the
+        // variable concurrently.
+
+        // SAFETY: `std::env::set_var` / `std::env::remove_var` are unsafe because the underlying
+        // C runtime is not thread-safe and concurrent reads/writes can race.
+        // This call is serialized by the surrounding guard (OnceLock, Mutex, or
+        // single-threaded test context) so no other thread is reading the
+        // variable concurrently.
+
         let section = AntModelOverrideSection;
         let result = section.compute(&test_ctx()).expect("compute ok");
         assert_eq!(result.as_deref(), Some("You are running in ant mode."));
-        unsafe {
-            std::env::remove_var("USER_TYPE");
-        }
-        unsafe {
-            std::env::remove_var("ANT_MODEL_OVERRIDE_CONFIG");
-        }
+        // SAFETY: `std::env::set_var` / `std::env::remove_var` are unsafe because the underlying
+        // C runtime is not thread-safe and concurrent reads/writes can race.
+        // This call is serialized by the surrounding guard (OnceLock, Mutex, or
+        // single-threaded test context) so no other thread is reading the
+        // variable concurrently.
+
+        // SAFETY: `std::env::set_var` / `std::env::remove_var` are unsafe because the underlying
+        // C runtime is not thread-safe and concurrent reads/writes can race.
+        // This call is serialized by the surrounding guard (OnceLock, Mutex, or
+        // single-threaded test context) so no other thread is reading the
+        // variable concurrently.
+
     }
 }

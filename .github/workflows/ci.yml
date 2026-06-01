@@ -115,6 +115,16 @@ jobs:
       - name: Check unwrap/expect/panic!() budget
         run: python scripts/check_panic_macros.py
 
+  unsafe-audit:
+    name: Unsafe block SAFETY comments
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install ripgrep
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ripgrep
+      - name: Enforce SAFETY comments on every unsafe block
+        run: python scripts/audit_unsafe_blocks.py --enforce
+
   test:
     name: Test (${{ matrix.os }}, ${{ matrix.slice }})
     runs-on: ${{ matrix.os }}

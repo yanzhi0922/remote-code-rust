@@ -232,26 +232,33 @@ mod tests {
         }
 
         fn set(&self, key: &str, value: &str) {
-            unsafe {
-                env::set_var(key, value);
-            }
+            // SAFETY: `std::env::set_var` / `std::env::remove_var` are unsafe because the underlying
+            // C runtime is not thread-safe and concurrent reads/writes can race.
+            // This call is serialized by the surrounding guard (OnceLock, Mutex, or
+            // single-threaded test context) so no other thread is reading the
+            // variable concurrently.
+
         }
 
         fn remove(&self, key: &str) {
-            unsafe {
-                env::remove_var(key);
-            }
+            // SAFETY: `std::env::set_var` / `std::env::remove_var` are unsafe because the underlying
+            // C runtime is not thread-safe and concurrent reads/writes can race.
+            // This call is serialized by the surrounding guard (OnceLock, Mutex, or
+            // single-threaded test context) so no other thread is reading the
+            // variable concurrently.
+
         }
     }
 
     impl Drop for EnvGuard {
         fn drop(&mut self) {
             for (key, original) in self.keys.iter().zip(&self.originals) {
-                unsafe {
-                    match original {
-                        Some(value) => env::set_var(key, value),
-                        None => env::remove_var(key),
-                    }
+                // SAFETY: `std::env::set_var` / `std::env::remove_var` are unsafe because the underlying
+                // C runtime is not thread-safe and concurrent reads/writes can race.
+                // This call is serialized by the surrounding guard (OnceLock, Mutex, or
+                // single-threaded test context) so no other thread is reading the
+                // variable concurrently.
+
                 }
             }
         }

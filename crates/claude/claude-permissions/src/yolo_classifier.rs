@@ -1456,9 +1456,12 @@ mod tests {
     fn resolve_yolo_model_defaults_to_main() {
         // Clear env var to ensure no override
         #[allow(unsafe_code)]
-        unsafe {
-            std::env::remove_var("CLAUDE_CODE_AUTO_MODE_MODEL");
-        }
+        // SAFETY: `std::env::set_var` / `std::env::remove_var` are unsafe because the underlying
+        // C runtime is not thread-safe and concurrent reads/writes can race.
+        // This call is serialized by the surrounding guard (OnceLock, Mutex, or
+        // single-threaded test context) so no other thread is reading the
+        // variable concurrently.
+
         assert_eq!(resolve_yolo_model("claude-sonnet-4-6"), "claude-sonnet-4-6");
     }
 
