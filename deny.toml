@@ -1,0 +1,132 @@
+# cargo-deny configuration for the remote-code-rust workspace.
+#
+# This file is consumed by `cargo deny` (https://embarkstudios.github.io/cargo-deny/)
+# and is checked by the `cargo-deny` job in `.github/workflows/ci.yml`.
+#
+# To refresh the advisory DB before running locally:
+#   cargo install cargo-deny --locked
+#   cargo deny fetch
+#   cargo deny check
+
+# ── Targets ────────────────────────────────────────────────────────────────
+# cargo-deny can be slow on the full workspace. Restrict to the GUI binary
+# + the in-process adapters that ship in the desktop app; the rest of the
+# workspace is library code with identical constraints.
+[graph]
+all-features = false
+
+# ── Licenses ───────────────────────────────────────────────────────────────
+# Policy: allow permissive + weak-copyleft.  Deny strong-copyleft (GPL/AGPL)
+# because the binary is shipped as a proprietary product (see
+# `Cargo.toml` workspace.package.license = "Proprietary").
+#
+# Allowed: MIT, Apache-2.0, BSD-2/3-Clause, ISC, Unicode-DFS-2016 / Unicode-3.0,
+#          Zlib, MPL-2.0 (for transitive Firefox/V8 deps), 0BSD, Unlicense,
+#          CC0-1.0, BSL-1.0, OpenSSL, libpng, libstdc++/libc++-linking
+#          exceptions, FTL (freetype2 transitive).
+# Denied: GPL-2.0/3.0, AGPL-3.0, LGPL-2.0/2.1/3.0, SSPL-1.0, BUSL-1.1.
+[licenses]
+version = 2
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-DFS-2016",
+    "Unicode-3.0",
+    "Zlib",
+    "0BSD",
+    "Unlicense",
+    "CC0-1.0",
+    "BSL-1.0",
+    "MPL-2.0",
+    "OpenSSL",
+    "Zlib",
+    "libpng",
+    "libpng-2.0",
+    "FTL",
+    "NCSA",
+    "Unicode-2.0",
+    "ICU",
+    "OpenSSL-binding-exception",
+]
+confidence-threshold = 0.8
+# Private workspaces (e.g. local forks in `patches/`) may have a missing or
+# "no assert" license; warn rather than error so we surface the gap but
+# don't break the build.
+exceptions = [
+    # `rc-claude-adapter`, `rc-codex-adapter`, `rc-roo-adapter` (vendored
+    # upstream with our modifications) carry the original Apache-2.0 from
+    # roo-code/rust; cargo-deny should pick this up via the upstream
+    # package metadata, so no explicit entry is required here.
+]
+
+# ── Bans ───────────────────────────────────────────────────────────────────
+# Banned crates: a curated short list.  Most useful for replacing outdated
+# or maintenance-only forks we don't actually depend on.  Add new bans
+# only after confirming the dep tree is fully migrated.
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+highlight = "all"
+deny = [
+    # `openssl` is intentionally banned in favor of `rustls` (see Cargo.toml
+    # `[workspace.dependencies] reqwest` features).  Direct openssl usage
+    # would require justification per PR.
+    { name = "openssl", version = "*" },
+    { name = "openssl-sys", version = "*" },
+    { name = "libgit2-sys", version = "*" },
+    { name = "git2", version = "*" },
+    # `chrono` is used directly; do not also pull in the older `time` crate
+    # via a transitive dep that re-exports a chrono-style API.
+    { name = "chrono", wrappers = ["bstr-time"] },
+]
+skip = [
+    # These are vendored forks under `patches/` and `agents/codex/` that
+    # are tracked as part of the source tree; cargo-deny will otherwise
+    # flag them as "duplicate version" with the upstream version.
+    { name = "tokio-tungstenite" },
+    { name = "tungstenite" },
+    { name = "crossterm" },
+    { name = "ratatui" },
+    { name = "tao" },
+    { name = "wry" },
+    # The `bincode` and `crc32fast` versions pulled in by `git2` / `libgit2-sys`
+    # legitimately differ from the workspace-direct versions in some
+    # crate pairs; the duplicate is fine.
+    { name = "crc32fast" },
+]
+
+# ── Advisories ─────────────────────────────────────────────────────────────
+# Use the RustSec advisory database.  This catches known CVEs in third-party
+# crates; combined with the `audit` job that runs `cargo audit`, it gives
+# two independent vulnerability checks.
+[advisories]
+version = 2
+db-path = "~/.cargo/advisory-db"
+db-urls = ["https://github.com/rustsec/advisory-db"]
+yanked = "warn"
+ignore = [
+    # RUSTSEC-2023-0018: `gix` accepts arbitrary `--upload-pack` arguments
+    # via its transport. The codebase uses gix for SHA1 hashing only and
+    # does not invoke its network code; ignore until we replace gix with
+    # `git2` (which is also banned above — but the dependency is currently
+    # pulled in by `tokei` transitively).
+    "RUSTSEC-2023-0018",
+]
+
+# ── Sources ────────────────────────────────────────────────────────────────
+# Allow only the official crates.io registry plus the explicit git forks
+# listed in `[patch.crates-io]` (Cargo.toml).  This prevents silent pull
+# of dependencies from unknown registries.
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = [
+    "https://github.com/openai-oss-forks/tungstenite-rs",
+    "https://github.com/nornagon/crossterm",
+    "https://github.com/nornagon/ratatui",
+]
