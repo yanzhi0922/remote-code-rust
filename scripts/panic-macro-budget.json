@@ -1,0 +1,12 @@
+{
+  "_comment": [
+    "Thresholds for scripts/check_panic_macros.py. Lower these over time as",
+    "unwrap/expect and panic!() are replaced with `?` + anyhow::Context.",
+    "Production count is measured across crates/ + apps/ excluding tests/,",
+    "tests.rs, test_*.rs and *_test.rs paths. The values below were captured",
+    "on 2026-06-02 from the working tree at HEAD before the threshold was",
+    "introduced; they should be tightened in follow-up commits."
+  ],
+  "unwrap_expect_in_production": 7600,
+  "bare_panic_in_production": 500
+}

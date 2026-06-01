@@ -5,6 +5,11 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  schedule:
+    # Nightly full-history secret scan at 03:00 UTC (~11:00 Beijing) to catch
+    # long-lived feature branches that never opened a PR to main.
+    - cron: "0 3 * * *"
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
@@ -99,6 +104,16 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo install cargo-audit --locked
       - run: cargo audit --quiet
+
+  panic-macros:
+    name: Panic-macro budget
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install ripgrep
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ripgrep
+      - name: Check unwrap/expect/panic!() budget
+        run: python scripts/check_panic_macros.py
 
   test:
     name: Test (${{ matrix.os }}, ${{ matrix.slice }})
