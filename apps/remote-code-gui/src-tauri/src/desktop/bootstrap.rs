@@ -90,6 +90,10 @@ pub fn run() {
     let active_codex_adapters = Arc::new(Mutex::new(HashMap::new()));
     let active_roo_adapters = Arc::new(Mutex::new(HashMap::new()));
     let active_claude_adapters = Arc::new(Mutex::new(HashMap::new()));
+    let probe_client = Arc::new(
+        crate::desktop::provider_commands::ProbeClient::new()
+            .unwrap_or_else(|error| panic!("failed to build probe HTTP client: {error}")),
+    );
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
@@ -110,6 +114,7 @@ pub fn run() {
             active_codex_adapters,
             active_roo_adapters,
             active_claude_adapters,
+            probe_client,
         })
         .manage(crate::quic_bridge::QuicBridgeState::new())
         .invoke_handler(tauri::generate_handler![
@@ -243,6 +248,7 @@ pub fn run() {
             provider_commands::update_provider_model,
             provider_commands::remove_provider_model,
             provider_commands::refresh_provider_configs,
+            provider_commands::probe_provider_model,
             permission_commands::resolve_permission_request,
             permission_commands::resolve_roo_permission_request,
             permission_commands::resolve_claude_permission_request,

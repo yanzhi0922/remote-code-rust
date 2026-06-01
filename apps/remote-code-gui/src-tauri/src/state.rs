@@ -94,6 +94,11 @@ pub(crate) struct AppState {
     pub(crate) active_roo_adapters: Arc<Mutex<HashMap<String, RooInProcessAdapter>>>,
     /// Claude in-process adapters (session_id → adapter).
     pub(crate) active_claude_adapters: Arc<Mutex<HashMap<String, ClaudeInProcessAdapter>>>,
+    /// Shared HTTP client + rate-limit gate for `probe_provider_model`. Reusing
+    /// one client keeps connection pools warm and avoids per-call `reqwest::Client::builder()`
+    /// cost; the gate prevents accidental upstream `429`s when a user spams the
+    /// "Plug" icon.
+    pub(crate) probe_client: Arc<crate::desktop::provider_commands::ProbeClient>,
 }
 
 #[derive(Debug, Clone)]

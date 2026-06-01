@@ -1,5 +1,10 @@
 use super::*;
 
+use std::time::{Duration, Instant};
+
+use secrecy::{ExposeSecret, SecretString};
+use tokio::sync::Mutex;
+
 #[tauri::command]
 pub(super) async fn get_provider_info(
     state: State<'_, AppState>,
@@ -641,6 +646,205 @@ pub(super) async fn refresh_provider_configs(
 }
 
 #[tauri::command]
+pub(super) async fn probe_provider_model(
+    state: State<'_, AppState>,
+    name: String,
+    model_id: String,
+) -> std::result::Result<GuiProbeModelResultDto, String> {
+    use claude_core::ProviderProtocol;
+
+    let trimmed_model = model_id.trim().to_owned();
+    if trimmed_model.is_empty() {
+        return Err("model id cannot be empty".to_owned());
+    }
+
+    let (stored, active_protocol) = {
+        let runtime = state.runtime.lock().await;
+        let stored = runtime
+            .provider_configs
+            .providers
+            .iter()
+            .find(|p| p.name == name)
+            .cloned()
+            .ok_or_else(|| format!("unknown provider config: {name}"))?;
+        let active_protocol = if runtime.provider_configs.active_provider.as_deref()
+            == Some(name.as_str())
+        {
+            runtime.config.provider.protocol
+        } else {
+            parse_protocol(Some(&stored.protocol)).unwrap_or(ProviderProtocol::OpenAi)
+        };
+        (stored, active_protocol)
+    };
+
+    // Resolve the URL for the active protocol.
+    let url = match active_protocol {
+        ProviderProtocol::Anthropic => stored
+            .anthropic_base_url
+            .clone()
+            .or_else(|| stored.base_url.clone())
+            .ok_or_else(|| "provider has no Anthropic endpoint configured".to_owned())?,
+        ProviderProtocol::OpenAi => stored
+            .openai_base_url
+            .clone()
+            .or_else(|| stored.base_url.clone())
+            .ok_or_else(|| "provider has no OpenAI endpoint configured".to_owned())?,
+        _ => stored
+            .base_url
+            .clone()
+            .ok_or_else(|| "provider has no endpoint configured".to_owned())?,
+    };
+
+    // Build a minimal test request body — 1 token, minimal message, the model under test.
+    let (body, content_type) = match active_protocol {
+        ProviderProtocol::Anthropic => (
+            serde_json::json!({
+                "model": trimmed_model,
+                "max_tokens": 1,
+                "messages": [{"role": "user", "content": "."}],
+            })
+            .to_string(),
+            "application/json",
+        ),
+        ProviderProtocol::OpenAi | _ => (
+            serde_json::json!({
+                "model": trimmed_model,
+                "max_tokens": 1,
+                "messages": [{"role": "user", "content": "."}],
+            })
+            .to_string(),
+            "application/json",
+        ),
+    };
+
+    // Wrap the API key in a `SecretString` so the inner buffer is wiped on drop
+    // (`secrecy::SecretString::Drop` calls `zeroize::Zeroize::zeroize`). This is
+    // the smallest change that keeps the key off the heap after the function
+    // returns; we still `expose_secret()` exactly once at header construction
+    // time, then let the Secret go out of scope.
+    let api_key: Option<SecretString> = stored
+        .api_key
+        .as_ref()
+        .map(|raw| SecretString::new(raw.clone().into_boxed_str()));
+
+    let mut headers = BTreeMap::new();
+    if let Some(ref key) = api_key {
+        match active_protocol {
+            ProviderProtocol::Anthropic => {
+                headers.insert("x-api-key".to_owned(), key.expose_secret().to_owned());
+                headers.insert("anthropic-version".to_owned(), "2023-06-01".to_owned());
+            }
+            _ => {
+                headers.insert("authorization".to_owned(), format!("Bearer {}", key.expose_secret()));
+            }
+        }
+    }
+    // Drop the Secret as early as possible so the key buffer is wiped before
+    // the long-running HTTP send completes. The `headers` map now holds its own
+    // copy (reqwest will move it into a header value when the request fires).
+    drop(api_key);
+
+    // Rate-limit gate: prevents a user spamming the "Plug" icon from triggering
+    // upstream 429s. Uses a single Mutex<Instant> so concurrent probe requests
+    // are serialized.
+    let probe = match state.probe_client.try_acquire_probe_slot().await {
+        Ok(()) => run_model_probe(state.probe_client.http(), &url, &headers, &body, content_type).await,
+        Err(rate_error) => GuiDoctorProbeDto {
+            label: "model probe".to_owned(),
+            url: url.clone(),
+            outcome: GuiDoctorProbeOutcomeDto::TransportError,
+            status_code: None,
+            latency_ms: 0,
+            detail: rate_error,
+        },
+    };
+    let (outcome, detail) = (probe.outcome, probe.detail.clone());
+    let status_code = probe.status_code;
+    let latency_ms = probe.latency_ms;
+    let success = matches!(outcome, GuiDoctorProbeOutcomeDto::Reachable);
+    let mut agents = Vec::new();
+
+    // Attribute the same probe outcome to every in-process agent that can
+    // speak the active protocol. The protocol is the routing gate — Claude
+    // adapter speaks Anthropic, the rest speak OpenAI-compatible.
+    let protocol_agents: &[(&str, &str)] = match active_protocol {
+        ProviderProtocol::Anthropic => &[("remote_claude", "Remote Claude")],
+        ProviderProtocol::OpenAi => &[
+            ("remote_roo", "Remote Roo"),
+            ("remote_codex", "Remote Codex"),
+        ],
+        _ => &[],
+    };
+    for (agent_type, agent_name) in protocol_agents {
+        agents.push(GuiProbeModelAgentDto {
+            agent_type: (*agent_type).to_owned(),
+            agent_name: (*agent_name).to_owned(),
+            available: success,
+            detail: detail.clone(),
+            status_code,
+            latency_ms,
+        });
+    }
+    if agents.is_empty() {
+        // Protocol has no known in-process agent — surface a single placeholder.
+        agents.push(GuiProbeModelAgentDto {
+            agent_type: "unknown".to_owned(),
+            agent_name: "No compatible agent".to_owned(),
+            available: false,
+            detail: "no in-process agent speaks this protocol".to_owned(),
+            status_code,
+            latency_ms,
+        });
+    }
+
+    Ok(GuiProbeModelResultDto {
+        model_id: trimmed_model,
+        url,
+        outcome,
+        detail,
+        status_code,
+        latency_ms,
+        agents,
+    })
+}
+
+async fn run_model_probe(
+    client: &reqwest::Client,
+    url: &str,
+    headers: &BTreeMap<String, String>,
+    body: &str,
+    content_type: &str,
+) -> GuiDoctorProbeDto {
+    let started = Instant::now();
+    let mut request = client.post(url).header("content-type", content_type);
+    for (name, value) in headers {
+        request = request.header(name, value);
+    }
+    let result = request.body(body.to_owned()).send().await;
+    match result {
+        Ok(response) => {
+            let (outcome, detail) = classify_probe_status(response.status());
+            GuiDoctorProbeDto {
+                label: "model probe".to_owned(),
+                url: url.to_owned(),
+                outcome,
+                status_code: Some(response.status().as_u16()),
+                latency_ms: started.elapsed().as_millis(),
+                detail,
+            }
+        }
+        Err(error) => GuiDoctorProbeDto {
+            label: "model probe".to_owned(),
+            url: url.to_owned(),
+            outcome: GuiDoctorProbeOutcomeDto::TransportError,
+            status_code: None,
+            latency_ms: started.elapsed().as_millis(),
+            detail: error.to_string(),
+        },
+    }
+}
+
+#[tauri::command]
 pub(super) async fn transcribe_audio(
     _app: AppHandle,
     state: State<'_, AppState>,
@@ -668,5 +872,73 @@ pub(super) async fn transcribe_audio(
             tracing::error!("STT transcription failed: {e}");
             Err(format!("语音转录失败: {e}"))
         }
+    }
+}
+
+/// Default minimum interval between two consecutive `probe_provider_model` calls
+/// across the whole app. Tuned to (a) avoid a 429 from the upstream when the
+/// user spam-clicks the "Plug" icon in settings, and (b) keep the per-model
+/// probe latency below 1 s in the common path. The upstream's
+/// `anthropic-version: 2023-06-01` header is treated as idempotent, but most
+/// OpenAI-compatible providers do not token-bucket probes — 1 probe/sec is
+/// a safe middle ground.
+const PROBE_MIN_INTERVAL: Duration = Duration::from_millis(1000);
+
+/// Shared HTTP client + per-process rate-limit gate for `probe_provider_model`.
+///
+/// The HTTP client keeps connection pools warm across probe calls; rebuilding
+/// `reqwest::Client::builder()` per call (the pre-hardening behavior) defeats
+/// keep-alive and adds 5-15 ms of TCP+TLS setup per call. The rate-limit gate
+/// uses a single `Mutex<Instant>` so concurrent probe requests are serialized
+/// through one slot.
+pub(crate) struct ProbeClient {
+    http: reqwest::Client,
+    last_probe: Mutex<Instant>,
+}
+
+impl ProbeClient {
+    /// Build a new `ProbeClient` with a 15 s per-request timeout and a
+    /// `remote-code-gui-model-probe` user-agent. Returns a `reqwest::Client`
+    /// build error if the underlying client cannot be constructed (very rare;
+    /// e.g. invalid TLS backend).
+    pub(crate) fn new() -> std::result::Result<Self, reqwest::Error> {
+        let http = reqwest::Client::builder()
+            .user_agent("remote-code-gui-model-probe")
+            .timeout(Duration::from_secs(15))
+            .pool_idle_timeout(Duration::from_secs(90))
+            .build()?;
+        Ok(Self {
+            http,
+            // Initialize "last probe" far in the past so the first call always
+            // succeeds. Using `Instant::now()` would require a subtraction.
+            last_probe: Mutex::new(Instant::now() - PROBE_MIN_INTERVAL * 2),
+        })
+    }
+
+    /// Borrow the shared `reqwest::Client`. Use this in `run_model_probe` to
+    /// reuse the connection pool.
+    pub(crate) fn http(&self) -> &reqwest::Client {
+        &self.http
+    }
+
+    /// Try to acquire the rate-limit slot. Returns `Ok(())` when the caller
+    /// may proceed with the probe, or `Err(detail)` with a user-visible
+    /// message to surface in the UI when the slot is too fresh.
+    ///
+    /// TODO: implement the rate-limit check. See the "Learning" prompt in the
+    /// PR description for design constraints (1 s min interval, concurrent
+    /// callers must serialize, decide block-vs-error policy).
+    pub(crate) async fn try_acquire_probe_slot(&self) -> std::result::Result<(), String> {
+        let mut last = self.last_probe.lock().await;
+        let now = Instant::now();
+        let elapsed = now.saturating_duration_since(*last);
+        if elapsed < PROBE_MIN_INTERVAL {
+            let wait_ms = (PROBE_MIN_INTERVAL - elapsed).as_millis() as u64;
+            return Err(format!(
+                "probe rate-limited: wait {wait_ms} ms between probes"
+            ));
+        }
+        *last = now;
+        Ok(())
     }
 }

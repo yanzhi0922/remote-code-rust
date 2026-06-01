@@ -89,7 +89,7 @@ mod logging_commands;
 mod mcp_commands;
 mod permission_commands;
 mod project_commands;
-mod provider_commands;
+pub(super) mod provider_commands;
 mod session_commands;
 
 pub use bootstrap::run;
@@ -1002,7 +1002,8 @@ fn mcp_server_transport_fields(server: &McpServerConfig) -> McpTransportFields {
         }
         McpTransportConfig::Http { url, headers, .. }
         | McpTransportConfig::WebSocket { url, headers, .. }
-        | McpTransportConfig::Sse { url, headers, .. } => {
+        | McpTransportConfig::Sse { url, headers, .. }
+        | McpTransportConfig::StreamableHttp { url, headers, .. } => {
             let mut env_keys = headers.keys().cloned().collect::<Vec<_>>();
             env_keys.sort();
             McpTransportFields {
@@ -1225,6 +1226,32 @@ fn build_mcp_transport(request: &McpServerUpsertRequestDto) -> Result<McpTranspo
                 .filter(|value| !value.is_empty())
                 .ok_or_else(|| anyhow!("http MCP servers require a url"))?;
             Ok(McpTransportConfig::Http {
+                url: url.to_owned(),
+                headers: request.headers.clone(),
+                headers_helper: None,
+            })
+        }
+        "streamable_http" | "streamable-http" => {
+            let url = request
+                .url
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| anyhow!("streamable_http MCP servers require a url"))?;
+            Ok(McpTransportConfig::StreamableHttp {
+                url: url.to_owned(),
+                headers: request.headers.clone(),
+                headers_helper: None,
+            })
+        }
+        "sse" => {
+            let url = request
+                .url
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| anyhow!("sse MCP servers require a url"))?;
+            Ok(McpTransportConfig::Sse {
                 url: url.to_owned(),
                 headers: request.headers.clone(),
                 headers_helper: None,
@@ -2073,7 +2100,8 @@ fn build_mcp_server_entries(
             }
             McpTransportConfig::Http { url, headers, .. }
             | McpTransportConfig::Sse { url, headers, .. }
-            | McpTransportConfig::WebSocket { url, headers, .. } => {
+            | McpTransportConfig::WebSocket { url, headers, .. }
+            | McpTransportConfig::StreamableHttp { url, headers, .. } => {
                 format_url_transport(&mut server, url, headers, &entry.server.transport);
             }
             McpTransportConfig::SseIde { url, .. } | McpTransportConfig::WsIde { url, .. } => {

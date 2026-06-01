@@ -301,6 +301,7 @@ url = "2"
 tiny_http = "0.12"
 v8 = "=146.4.0"
 zeroize = "1.8"
+secrecy = "0.10"
 zip = "8.6.0"
 # rama (network proxy framework)
 rama-core = "=0.3.0-alpha.4"

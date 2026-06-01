@@ -32,6 +32,7 @@ rc-engine-events = { path = "../../../crates/shared/rc-engine-events" }
 rc-agent-protocol = { path = "../../../crates/shared/rc-agent-protocol" }
 reqwest = { workspace = true }
 keyring = { workspace = true }
+secrecy = { workspace = true }
 
 # ── Desktop-only dependencies ──────────────────────────────────────────────────
 async-trait = { workspace = true, optional = true }
