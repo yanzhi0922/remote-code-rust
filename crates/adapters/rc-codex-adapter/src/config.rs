@@ -128,7 +128,7 @@ pub(super) fn build_harness_overrides(
         permission_profile: options
             .permission_profile
             .clone()
-            .map(serde_json::from_value::<codex_app_server_protocol::PermissionProfile>)
+            .map(serde_json::from_value::<CorePermissionProfile>)
             .transpose()
             .context("invalid Codex permission profile")?
             .map(CorePermissionProfile::from),

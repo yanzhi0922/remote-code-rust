@@ -128,6 +128,7 @@ fn thread_item_tool_call(item: &ThreadItem) -> Option<ToolCallInfo> {
             status,
             arguments,
             mcp_app_resource_uri,
+            plugin_id: _,
             result,
             error,
             duration_ms,
@@ -675,6 +676,19 @@ fn map_server_notification(
                 recoverable: notification.will_retry,
             }]
         }
+
+        // ── New upstream notifications forwarded as raw events ──
+        ServerNotification::ThreadSettingsUpdated(notification) => {
+            official_event(session_id, "thread/settings/updated", notification)
+        }
+
+        ServerNotification::ProcessOutputDelta(notification) => {
+            json_progress_event(session_id, "process_output_delta", notification)
+        }
+
+        ServerNotification::ProcessExited(notification) => {
+            json_progress_event(session_id, "process_exited", notification)
+        }
     }
 }
 
@@ -716,6 +730,13 @@ fn map_server_request(request: ServerRequest, session_id: &str) -> Vec<UnifiedAg
         ServerRequest::ChatgptAuthTokensRefresh { params, .. } => (
             "chatgpt_auth_refresh".to_owned(),
             to_json_value("chatgpt_auth_refresh_request", params),
+        ),
+        // New upstream variants — forward as generic server request.
+        _ => (
+            "server_request".to_owned(),
+            serde_json::json!({
+                "requestId": request_id_to_string(request.id()),
+            }),
         ),
     };
 
@@ -891,6 +912,7 @@ mod tests {
         let notification = ServerNotification::ItemStarted(ItemStartedNotification {
             thread_id: "t".to_owned(),
             turn_id: "t".to_owned(),
+            started_at_ms: 0,
             item: ThreadItem::AgentMessage {
                 id: "item-1".to_owned(),
                 text: "thinking...".to_owned(),
@@ -919,6 +941,7 @@ mod tests {
         let notification = ServerNotification::ItemCompleted(ItemCompletedNotification {
             thread_id: "t".to_owned(),
             turn_id: "t".to_owned(),
+            completed_at_ms: 0,
             item: ThreadItem::AgentMessage {
                 id: "item-1".to_owned(),
                 text: "done".to_owned(),
@@ -950,6 +973,7 @@ mod tests {
             thread_id: "t".to_owned(),
             turn: Turn {
                 id: "turn-1".to_owned(),
+                items_view: Default::default(),
                 items: vec![
                     ThreadItem::AgentMessage {
                         id: "msg".to_owned(),
@@ -990,6 +1014,7 @@ mod tests {
             thread_id: "t".to_owned(),
             turn: Turn {
                 id: "turn-1".to_owned(),
+                items_view: Default::default(),
                 items: vec![
                     ThreadItem::AgentMessage {
                         id: "msg".to_owned(),

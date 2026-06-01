@@ -797,12 +797,36 @@ export interface ModelProfile {
   model?: string;
 }
 
+export type ProviderGroup = 'custom' | 'builtin';
+
+export interface ProviderModel {
+  id: string;
+  display_name?: string | null;
+}
+
+export interface ClaudeModelMapping {
+  opus?: string | null;
+  sonnet?: string | null;
+  haiku?: string | null;
+}
+
 export interface ProviderConfig {
   name: string;
   protocol: string;
+  /** Legacy single-endpoint field. Prefer the per-protocol URLs below. */
   base_url?: string;
+  anthropic_base_url?: string | null;
+  openai_base_url?: string | null;
   api_key?: string;
   model?: string;
+  /** Per-provider model catalog shown in the settings UI. */
+  models?: ProviderModel[];
+  /** Maps Claude tier names (Opus / Sonnet / Haiku) to actual model ids. */
+  claude_model_mapping?: ClaudeModelMapping;
+  /** Built-in providers (seeded by the app) vs user-added custom providers. */
+  group?: ProviderGroup;
+  /** When false, the provider is hidden from the active-provider selection. */
+  enabled?: boolean;
   profiles?: ModelProfile[];
   active_profile?: string;
   /** True when an API key is securely stored in the OS keychain. */

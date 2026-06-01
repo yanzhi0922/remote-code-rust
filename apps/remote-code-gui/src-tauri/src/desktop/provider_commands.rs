@@ -295,6 +295,18 @@ pub(super) async fn delete_provider_config(
         return Err(format!("unknown provider config: {name}"));
     }
 
+    // Built-in providers can be disabled but not deleted.
+    let is_builtin = runtime
+        .provider_configs
+        .providers
+        .iter()
+        .any(|provider| provider.name == name && matches!(provider.group, ProviderGroup::Builtin));
+    if is_builtin {
+        return Err(format!(
+            "built-in provider {name} cannot be deleted; disable it instead"
+        ));
+    }
+
     // Remove API key from OS keychain only after confirming the provider exists.
     keyring_delete(&name);
 
@@ -427,6 +439,205 @@ pub(super) async fn switch_profile(
     })?;
     emit_runtime_status(&app, &runtime.config);
     Ok(())
+}
+
+#[tauri::command]
+pub(super) async fn set_provider_enabled(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    name: String,
+    enabled: bool,
+) -> std::result::Result<(), String> {
+    let mut runtime = state.runtime.lock().await;
+    let index = find_provider_config_index(&runtime.provider_configs, &name)
+        .ok_or_else(|| format!("unknown provider config: {name}"))?;
+    runtime.provider_configs.providers[index].enabled = enabled;
+
+    // If the active provider was disabled, clear the active pointer so the
+    // next provider in the list becomes the runtime's current provider.
+    if !enabled && runtime.provider_configs.active_provider.as_deref() == Some(name.as_str()) {
+        runtime.provider_configs.active_provider = runtime
+            .provider_configs
+            .providers
+            .iter()
+            .find(|p| p.enabled)
+            .map(|p| p.name.clone());
+        if let Some(active) = active_provider_config(&runtime.provider_configs).cloned() {
+            runtime.config.provider = provider_config_to_runtime(&active, &runtime.config.provider)
+                .map_err(|error| {
+                    let msg = format!("{error:#}");
+                    tracing::warn!(error = %msg, "command error");
+                    msg
+                })?;
+            let provider_configs_snapshot = runtime.provider_configs.clone();
+            apply_provider_credentials_from_configs(
+                &mut runtime.config.provider,
+                &provider_configs_snapshot,
+            );
+            let selected_provider = runtime.config.provider.clone();
+            store_provider_selection(&mut runtime, &selected_provider);
+        }
+    } else if enabled && runtime.provider_configs.active_provider.is_none() {
+        runtime.provider_configs.active_provider = Some(name.clone());
+        let snapshot = runtime.provider_configs.providers[index].clone();
+        runtime.config.provider = provider_config_to_runtime(&snapshot, &runtime.config.provider)
+            .map_err(|error| {
+                let msg = format!("{error:#}");
+                tracing::warn!(error = %msg, "command error");
+                msg
+            })?;
+        let provider_configs_snapshot = runtime.provider_configs.clone();
+        apply_provider_credentials_from_configs(
+            &mut runtime.config.provider,
+            &provider_configs_snapshot,
+        );
+        let selected_provider = runtime.config.provider.clone();
+        store_provider_selection(&mut runtime, &selected_provider);
+    }
+
+    persist_runtime_files(&runtime).map_err(|error| {
+        let msg = format!("{error:#}");
+        tracing::warn!(error = %msg, "command error");
+        msg
+    })?;
+    emit_runtime_status(&app, &runtime.config);
+    Ok(())
+}
+
+#[tauri::command]
+pub(super) async fn set_claude_model_mapping(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    name: String,
+    mapping: ClaudeModelMapping,
+) -> std::result::Result<(), String> {
+    let mut runtime = state.runtime.lock().await;
+    let index = find_provider_config_index(&runtime.provider_configs, &name)
+        .ok_or_else(|| format!("unknown provider config: {name}"))?;
+    runtime.provider_configs.providers[index].claude_model_mapping = mapping;
+    persist_runtime_files(&runtime).map_err(|error| {
+        let msg = format!("{error:#}");
+        tracing::warn!(error = %msg, "command error");
+        msg
+    })?;
+    emit_runtime_status(&app, &runtime.config);
+    Ok(())
+}
+
+#[tauri::command]
+pub(super) async fn add_provider_model(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    name: String,
+    model: ProviderModel,
+) -> std::result::Result<(), String> {
+    let mut runtime = state.runtime.lock().await;
+    let index = find_provider_config_index(&runtime.provider_configs, &name)
+        .ok_or_else(|| format!("unknown provider config: {name}"))?;
+    let trimmed_id = model.id.trim();
+    if trimmed_id.is_empty() {
+        return Err("model id cannot be empty".to_owned());
+    }
+    let entry = ProviderModel {
+        id: trimmed_id.to_owned(),
+        display_name: model
+            .display_name
+            .map(|d| d.trim().to_owned())
+            .filter(|d| !d.is_empty()),
+    };
+    let provider = &mut runtime.provider_configs.providers[index];
+    if let Some(existing) = provider.models.iter_mut().find(|m| m.id == entry.id) {
+        existing.display_name = entry.display_name.or(existing.display_name.clone());
+    } else {
+        provider.models.push(entry);
+    }
+    persist_runtime_files(&runtime).map_err(|error| {
+        let msg = format!("{error:#}");
+        tracing::warn!(error = %msg, "command error");
+        msg
+    })?;
+    emit_runtime_status(&app, &runtime.config);
+    Ok(())
+}
+
+#[tauri::command]
+pub(super) async fn update_provider_model(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    name: String,
+    old_id: String,
+    model: ProviderModel,
+) -> std::result::Result<(), String> {
+    let mut runtime = state.runtime.lock().await;
+    let index = find_provider_config_index(&runtime.provider_configs, &name)
+        .ok_or_else(|| format!("unknown provider config: {name}"))?;
+    let trimmed_id = model.id.trim();
+    if trimmed_id.is_empty() {
+        return Err("model id cannot be empty".to_owned());
+    }
+    let entry = ProviderModel {
+        id: trimmed_id.to_owned(),
+        display_name: model
+            .display_name
+            .map(|d| d.trim().to_owned())
+            .filter(|d| !d.is_empty()),
+    };
+    let provider = &mut runtime.provider_configs.providers[index];
+    let target_index = provider
+        .models
+        .iter()
+        .position(|m| m.id == old_id)
+        .ok_or_else(|| format!("unknown model id: {old_id}"))?;
+    provider.models[target_index] = entry;
+    persist_runtime_files(&runtime).map_err(|error| {
+        let msg = format!("{error:#}");
+        tracing::warn!(error = %msg, "command error");
+        msg
+    })?;
+    emit_runtime_status(&app, &runtime.config);
+    Ok(())
+}
+
+#[tauri::command]
+pub(super) async fn remove_provider_model(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    name: String,
+    model_id: String,
+) -> std::result::Result<(), String> {
+    let mut runtime = state.runtime.lock().await;
+    let index = find_provider_config_index(&runtime.provider_configs, &name)
+        .ok_or_else(|| format!("unknown provider config: {name}"))?;
+    let provider = &mut runtime.provider_configs.providers[index];
+    let before = provider.models.len();
+    provider.models.retain(|m| m.id != model_id);
+    if provider.models.len() == before {
+        return Err(format!("unknown model id: {model_id}"));
+    }
+    persist_runtime_files(&runtime).map_err(|error| {
+        let msg = format!("{error:#}");
+        tracing::warn!(error = %msg, "command error");
+        msg
+    })?;
+    emit_runtime_status(&app, &runtime.config);
+    Ok(())
+}
+
+#[tauri::command]
+pub(super) async fn refresh_provider_configs(
+    state: State<'_, AppState>,
+) -> std::result::Result<ProviderConfigList, String> {
+    // Same masking logic as list_provider_configs — kept as a separate command
+    // so the FE 刷新 button has a verb-shaped action to call.
+    let runtime = state.runtime.lock().await;
+    let mut result = runtime.provider_configs.clone();
+    for provider in &mut result.providers {
+        let in_keychain = keyring_retrieve(&provider.name).is_some();
+        let in_json = provider.api_key.is_some();
+        provider.api_key_stored = in_keychain || in_json;
+        provider.api_key = None;
+    }
+    Ok(result)
 }
 
 #[tauri::command]

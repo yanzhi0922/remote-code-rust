@@ -4,6 +4,7 @@ import {
   Blocks,
   Bot,
   Check,
+  ChevronDown,
   Copy,
   Eye,
   EyeOff,
@@ -11,6 +12,7 @@ import {
   Pencil,
   Plus,
   Power,
+  RefreshCw,
   SlidersHorizontal,
   TerminalSquare,
   Trash2,
@@ -19,7 +21,14 @@ import {
 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import type { FullSettings, ModelProfile, ProviderConfig, SessionSummary } from '../../lib/types';
+import type {
+  ClaudeModelMapping,
+  FullSettings,
+  ModelProfile,
+  ProviderConfig,
+  ProviderModel,
+  SessionSummary,
+} from '../../lib/types';
 import { useAppStore } from '../../stores/useAppStore';
 import { CodexSettings } from '../settings/CodexSettings';
 import { RemoteTab } from '../settings/RemoteTab';
@@ -387,356 +396,837 @@ function ProviderTab() {
   const saveProviderConfig = useAppStore((state) => state.saveProviderConfig);
   const deleteProviderConfig = useAppStore((state) => state.deleteProviderConfig);
   const setActiveProvider = useAppStore((state) => state.setActiveProvider);
-  const switchProfileAction = useAppStore((state) => state.switchProfile);
+  const setProviderEnabled = useAppStore((state) => state.setProviderEnabled);
+  const setClaudeModelMapping = useAppStore((state) => state.setClaudeModelMapping);
+  const addProviderModel = useAppStore((state) => state.addProviderModel);
+  const updateProviderModel = useAppStore((state) => state.updateProviderModel);
+  const removeProviderModel = useAppStore((state) => state.removeProviderModel);
+  const refreshProviders = useAppStore((state) => state.refreshProviders);
 
-  const [editingName, setEditingName] = useState<string | null>(null);
+  const providers = providerConfigs?.providers ?? [];
+  const activeProviderName = providerConfigs?.active_provider ?? null;
+  const [selectedName, setSelectedName] = useState<string | null>(null);
+  const [editingNew, setEditingNew] = useState(false);
   const [form, setForm] = useState<ProviderConfig>(emptyProviderConfig());
   const [showApiKey, setShowApiKey] = useState(false);
 
-  const activeProviderName = providerConfigs?.active_provider;
-  const providers = providerConfigs?.providers ?? [];
+  // Default selection: prefer active provider, else first row.
+  useEffect(() => {
+    if (selectedName && providers.some((p) => p.name === selectedName)) return;
+    const next = activeProviderName && providers.some((p) => p.name === activeProviderName)
+      ? activeProviderName
+      : providers[0]?.name ?? null;
+    setSelectedName(next);
+  }, [activeProviderName, providers, selectedName]);
 
-  const title = useMemo(() => {
-    if (editingName === null) return null;
-    return editingName === 'new' ? t('settings.newProvider') : t('settings.editProvider', { name: editingName });
-  }, [editingName]);
+  const selected = useMemo(
+    () => providers.find((p) => p.name === selectedName) ?? null,
+    [providers, selectedName],
+  );
 
-  const startAdd = () => {
-    setEditingName('new');
-    setForm(emptyProviderConfig());
+  // --- List helpers ---
+  const grouped = useMemo(() => {
+    const builtin: ProviderConfig[] = [];
+    const custom: ProviderConfig[] = [];
+    for (const provider of providers) {
+      if (provider.group === 'builtin') builtin.push(provider);
+      else custom.push(provider);
+    }
+    return { builtin, custom };
+  }, [providers]);
+
+  // --- Add new provider ---
+  const startAddNew = () => {
+    setEditingNew(true);
+    setSelectedName(null);
+    setForm({ ...emptyProviderConfig(), group: 'custom' });
     setShowApiKey(false);
   };
 
+  // --- Edit existing provider ---
   const startEdit = (config: ProviderConfig) => {
-    setEditingName(config.name);
+    setEditingNew(false);
     setForm({
       ...config,
       base_url: config.base_url ?? '',
-      // Never pre-fill API key — it's masked by backend. Track stored status separately.
+      anthropic_base_url: config.anthropic_base_url ?? '',
+      openai_base_url: config.openai_base_url ?? '',
       api_key: '',
       model: config.model ?? '',
-      profiles: config.profiles ? [...config.profiles] : [],
+      models: config.models ? config.models.map((m) => ({ ...m })) : [],
+      claude_model_mapping: { ...(config.claude_model_mapping ?? {}) },
+      profiles: config.profiles ? config.profiles.map((p) => ({ ...p })) : [],
       api_key_stored: config.api_key_stored ?? false,
     });
     setShowApiKey(false);
   };
 
+  const cancelEdit = () => {
+    setEditingNew(false);
+    setForm(emptyProviderConfig());
+    setShowApiKey(false);
+  };
+
   const handleSave = async () => {
     if (!form.name.trim()) return;
-    // Check for duplicate provider name (excluding the provider being edited)
     const trimmedName = form.name.trim();
     const existingNames = new Set(
-      providers.filter((p) => p.name !== editingName).map((p) => p.name),
+      providers.filter((p) => p.name !== selectedName).map((p) => p.name),
     );
-    const isDuplicate = existingNames.has(trimmedName);
-    if (isDuplicate) {
+    if (existingNames.has(trimmedName)) {
       // eslint-disable-next-line no-alert
       const proceed = window.confirm(
         t('settings.providerExists', { name: trimmedName }),
       );
       if (!proceed) return;
     }
+    const shouldActivate = editingNew || activeProviderName === trimmedName;
     await saveProviderConfig(
       {
         name: trimmedName,
         protocol: form.protocol,
         base_url: form.base_url?.trim() || undefined,
+        anthropic_base_url: form.anthropic_base_url?.trim() || undefined,
+        openai_base_url: form.openai_base_url?.trim() || undefined,
         api_key: form.api_key?.trim() || undefined,
         model: form.model?.trim() || undefined,
-        profiles: form.profiles?.filter((p) => p.name.trim()),
-        active_profile: form.active_profile,
+        models: form.models?.filter((m) => m.id.trim()),
+        claude_model_mapping: form.claude_model_mapping,
+        group: form.group,
+        enabled: form.enabled,
       },
-      editingName === 'new' || activeProviderName === trimmedName,
+      shouldActivate,
     );
-    setEditingName(null);
-    setForm(emptyProviderConfig());
+    cancelEdit();
+    setSelectedName(trimmedName);
   };
 
-  // --- Profile editing helpers ---
-  const addProfile = () => {
-    setForm((state) => ({
-      ...state,
-      profiles: [...(state.profiles ?? []), { name: '', model: '' }],
-    }));
+  // --- Delete (with built-in protection) ---
+  const handleDelete = async (name: string) => {
+    const target = providers.find((p) => p.name === name);
+    if (target?.group === 'builtin') {
+      // eslint-disable-next-line no-alert
+      window.alert(t('settings.builtinCannotDelete'));
+      return;
+    }
+    await deleteProviderConfig(name);
+    if (selectedName === name) setSelectedName(null);
   };
 
-  const removeProfile = (index: number) => {
-    setForm((state) => {
-      const profiles = [...(state.profiles ?? [])];
-      profiles.splice(index, 1);
-      return { ...state, profiles };
-    });
+  // --- Model catalog CRUD ---
+  const handleAddModel = async (model: ProviderModel) => {
+    if (!selected) return;
+    const trimmed = model.id.trim();
+    if (!trimmed) return;
+    await addProviderModel(selected.name, { id: trimmed, display_name: model.display_name?.trim() || undefined });
   };
 
-  const updateProfile = (index: number, field: keyof ModelProfile, value: string) => {
-    setForm((state) => {
-      const profiles = [...(state.profiles ?? [])];
-      profiles[index] = { ...profiles[index], [field]: value || undefined };
-      return { ...state, profiles };
-    });
+  const handleUpdateModel = async (oldId: string, model: ProviderModel) => {
+    if (!selected) return;
+    const trimmed = model.id.trim();
+    if (!trimmed) return;
+    await updateProviderModel(selected.name, oldId, { id: trimmed, display_name: model.display_name?.trim() || undefined });
   };
 
-  const handleSwitchProfile = useCallback(
-    (providerName: string, profileName: string | null) => {
-      void switchProfileAction(providerName, profileName);
-    },
-    [switchProfileAction],
-  );
+  const handleRemoveModel = async (modelId: string) => {
+    if (!selected) return;
+    await removeProviderModel(selected.name, modelId);
+  };
+
+  // --- Claude tier mapping ---
+  const handleTierChange = async (tier: 'opus' | 'sonnet' | 'haiku', modelId: string | null) => {
+    if (!selected) return;
+    const current = selected.claude_model_mapping ?? {};
+    const next: ClaudeModelMapping = { ...current, [tier]: modelId };
+    await setClaudeModelMapping(selected.name, next);
+  };
+
+  // --- Refresh ---
+  const handleRefresh = () => {
+    void refreshProviders();
+  };
 
   return (
-    <div className="space-y-5">
-      <div className="flex items-center justify-between">
+    <div className="space-y-4">
+      <div className="flex items-start justify-between gap-4">
         <div>
-          <h3 className="text-sm font-semibold text-rc-text-primary">{t('settings.savedProviders')}</h3>
+          <h3 className="text-sm font-semibold text-rc-text-primary">{t('settings.modelProvider')}</h3>
+          <p className="mt-1 text-xs leading-5 text-rc-text-tertiary">{t('settings.modelProviderDesc')}</p>
         </div>
         <button
-          onClick={startAdd}
-          className="inline-flex items-center gap-2 rounded-md border border-rc-border-primary bg-rc-bg-surface px-4 py-2 text-sm font-medium text-rc-text-secondary transition-colors hover:bg-rc-bg-hover hover:text-rc-text-primary"
+          onClick={handleRefresh}
+          className="inline-flex shrink-0 items-center gap-2 rounded-md border border-rc-border-primary bg-rc-bg-surface px-3 py-1.5 text-xs font-medium text-rc-text-secondary transition-colors hover:bg-rc-bg-hover hover:text-rc-text-primary"
+          title={t('settings.refresh')}
         >
-          <Plus size={15} />
-          {t('settings.addProviderBtn')}
+          <RefreshCw size={13} />
+          {t('settings.refresh')}
         </button>
       </div>
 
-      <div className="space-y-2">
-        {providers.length > 0 ? (
-          providers.map((provider) => {
-            const active = provider.name === activeProviderName;
-            const profiles = provider.profiles ?? [];
-            const activeProfile = provider.active_profile ?? null;
-            // Determine effective model display
-            const effectiveModel =
-              activeProfile
-                ? profiles.find((p) => p.name === activeProfile)?.model ?? provider.model ?? t('settings.noModelSet')
-                : provider.model ?? t('settings.noModelSet');
+      <div className="grid min-h-[460px] grid-cols-[280px_minmax(0,1fr)] overflow-hidden rounded-md border border-rc-border-secondary">
+        <ProviderListPanel
+          builtin={grouped.builtin}
+          custom={grouped.custom}
+          activeProviderName={activeProviderName}
+          selectedName={selectedName}
+          onSelect={setSelectedName}
+          onAddNew={startAddNew}
+        />
+        <ProviderDetailPanel
+          selected={selected}
+          editingNew={editingNew}
+          form={form}
+          showApiKey={showApiKey}
+          onEdit={startEdit}
+          onCancel={cancelEdit}
+          onChangeForm={setForm}
+          onToggleApiKey={() => setShowApiKey((s) => !s)}
+          onSave={handleSave}
+          onDelete={handleDelete}
+          onSetActive={(name) => void setActiveProvider(name)}
+          onToggleEnabled={(name, enabled) => void setProviderEnabled(name, enabled)}
+          onAddModel={handleAddModel}
+          onUpdateModel={handleUpdateModel}
+          onRemoveModel={handleRemoveModel}
+          onTierChange={handleTierChange}
+        />
+      </div>
+    </div>
+  );
+}
 
-            return (
-              <div
-                key={provider.name}
-                className={`rounded-md border px-3 py-2.5 ${
-                  active ? 'border-rc-border-focus bg-rc-bg-surface' : 'border-rc-border-secondary bg-rc-bg-secondary'
-                }`}
-              >
-                <div className="flex items-center gap-3">
-                  <button
-                    title={active ? t('settings.currentlyActive') : t('settings.setAsCurrent')}
-                    className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-md border ${
-                      active ? 'border-rc-accent-primary bg-rc-accent-primary text-white' : 'border-rc-border-primary text-rc-text-secondary'
-                    }`}
-                    onClick={() => {
-                      if (!active) {
-                        void setActiveProvider(provider.name);
-                      }
-                    }}
-                  >
-                    {active ? <Check size={14} /> : <Power size={14} />}
-                  </button>
+interface ProviderListPanelProps {
+  builtin: ProviderConfig[];
+  custom: ProviderConfig[];
+  activeProviderName: string | null;
+  selectedName: string | null;
+  onSelect: (name: string) => void;
+  onAddNew: () => void;
+}
 
-                  <div className="min-w-0 flex-1">
-                    <div className="truncate text-sm font-semibold text-rc-text-primary">{provider.name}</div>
-                    <div className="mt-1 truncate text-xs text-rc-text-secondary">
-                      {[effectiveModel, provider.protocol, provider.base_url]
-                        .filter(Boolean)
-                        .join(' · ')}
-                      {provider.api_key_stored && (
-                        <span className="ml-1.5 inline-flex items-center gap-0.5 rounded bg-rc-accent-success-bg px-1.5 py-0.5 text-[10px] font-medium text-rc-accent-success">
-                          {t('settings.keychainStored')}
-                        </span>
-                      )}
-                    </div>
-                  </div>
-
-                  <button
-                    title={t('common.edit')}
-                    className="rounded-md p-2 text-rc-text-tertiary transition-colors hover:bg-rc-bg-hover hover:text-rc-text-primary"
-                    onClick={() => startEdit(provider)}
-                  >
-                    <Pencil size={15} />
-                  </button>
-                  <button
-                    title={t('common.delete')}
-                    className="rounded-md p-2 text-rc-text-tertiary transition-colors hover:bg-rc-accent-error-bg hover:text-rc-accent-error"
-                    onClick={() => {
-                      void deleteProviderConfig(provider.name);
-                    }}
-                  >
-                    <Trash2 size={15} />
-                  </button>
-                </div>
-
-                {/* Profile pills */}
-                {profiles.length > 0 && (
-                  <div className="mt-2.5 flex flex-wrap items-center gap-1.5 pl-11">
-                    {/* Default (no profile) pill */}
-                    <button
-                      onClick={() => handleSwitchProfile(provider.name, null)}
-                      className={`inline-flex items-center gap-1 rounded border px-2.5 py-1 text-[11px] font-medium transition-colors ${
-                        activeProfile === null
-                          ? 'border-rc-accent-primary bg-rc-accent-primary text-white'
-                          : 'border-rc-border-primary bg-rc-bg-surface text-rc-text-secondary hover:border-rc-border-hover'
-                      }`}
-                    >
-                      {t('settings.defaultProfile')}
-                    </button>
-                    {profiles.map((profile) => (
-                      <button
-                        key={profile.name}
-                        onClick={() => handleSwitchProfile(provider.name, profile.name)}
-                        className={`inline-flex items-center gap-1 rounded border px-2.5 py-1 text-[11px] font-medium transition-colors ${
-                          activeProfile === profile.name
-                            ? 'border-rc-accent-primary bg-rc-accent-primary text-white'
-                            : 'border-rc-border-primary bg-rc-bg-surface text-rc-text-secondary hover:border-rc-border-hover'
-                        }`}
-                        title={profile.model ? t('settings.profileTooltip', { model: profile.model }) : profile.name}
-                      >
-                        {profile.name}
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-            );
-          })
-        ) : (
-          <div className="rounded-md border border-dashed border-rc-border-primary px-3 py-5 text-sm text-rc-text-secondary">
+function ProviderListPanel({
+  builtin,
+  custom,
+  activeProviderName,
+  selectedName,
+  onSelect,
+  onAddNew,
+}: ProviderListPanelProps) {
+  const { t } = useTranslation();
+  return (
+    <div className="flex min-h-0 flex-col border-r border-rc-border-secondary bg-rc-bg-secondary">
+      <div className="min-h-0 flex-1 overflow-y-auto p-2">
+        <ProviderListGroup
+          heading={t('settings.builtinGroup')}
+          providers={builtin}
+          activeProviderName={activeProviderName}
+          selectedName={selectedName}
+          onSelect={onSelect}
+        />
+        <ProviderListGroup
+          heading={t('settings.customGroup')}
+          providers={custom}
+          activeProviderName={activeProviderName}
+          selectedName={selectedName}
+          onSelect={onSelect}
+        />
+        {builtin.length === 0 && custom.length === 0 && (
+          <div className="rounded-md border border-dashed border-rc-border-primary px-3 py-4 text-xs text-rc-text-secondary">
             {t('settings.noProvidersYet')}
           </div>
         )}
       </div>
+      <div className="border-t border-rc-border-secondary p-2">
+        <button
+          onClick={onAddNew}
+          className="inline-flex w-full items-center justify-center gap-2 rounded-md border border-dashed border-rc-border-primary px-3 py-2 text-xs font-medium text-rc-text-secondary transition-colors hover:border-rc-border-hover hover:text-rc-text-primary"
+        >
+          <Plus size={13} />
+          {t('settings.addProvider')}
+        </button>
+      </div>
+    </div>
+  );
+}
 
-      {editingName && (
-        <div className="space-y-4 rounded-md border border-rc-border-primary bg-rc-bg-surface p-4">
-          <div className="text-sm font-semibold text-rc-text-primary">{title}</div>
-
-          <div className="grid gap-4 sm:grid-cols-2">
-            <Field label={t('settings.fieldName')} hint="">
-              <input
-                value={form.name}
-                onChange={(event) => setForm((state) => ({ ...state, name: event.target.value }))}
-                disabled={editingName !== 'new'}
-                className="w-full rounded-md border border-rc-border-primary bg-rc-bg-secondary px-3 py-2.5 text-sm text-rc-text-primary outline-none transition-colors focus:border-rc-border-focus"
-                placeholder="GLM CODING PLAN"
-              />
-            </Field>
-
-            <Field label={t('settings.fieldProtocol')}>
-              <select
-                title={t('settings.fieldProtocol')}
-                value={form.protocol}
-                onChange={(event) => setForm((state) => ({ ...state, protocol: event.target.value }))}
-                className="w-full rounded-md border border-rc-border-primary bg-rc-bg-secondary px-3 py-2.5 text-sm text-rc-text-primary outline-none transition-colors focus:border-rc-border-focus"
-              >
-                {protocols(t).map((protocol) => (
-                  <option key={protocol.value} value={protocol.value}>
-                    {protocol.label}
-                  </option>
-                ))}
-              </select>
-            </Field>
-
-            <Field label="Base URL" hint={t('settings.urlNormalizationHint')}>
-              <input
-                value={form.base_url ?? ''}
-                onChange={(event) =>
-                  setForm((state) => ({ ...state, base_url: event.target.value }))
-                }
-                className="w-full rounded-md border border-rc-border-primary bg-rc-bg-secondary px-3 py-2.5 text-sm text-rc-text-primary outline-none transition-colors focus:border-rc-border-focus"
-                placeholder="https://open.bigmodel.cn/api/anthropic"
-              />
-            </Field>
-
-            <Field label={t('settings.fieldDefaultModel')}>
-              <input
-                value={form.model ?? ''}
-                onChange={(event) => setForm((state) => ({ ...state, model: event.target.value }))}
-                className="w-full rounded-md border border-rc-border-primary bg-rc-bg-secondary px-3 py-2.5 text-sm text-rc-text-primary outline-none transition-colors focus:border-rc-border-focus"
-                placeholder="glm-5.1"
-              />
-            </Field>
-          </div>
-
-          <Field
-            label="API Key"
-            hint={
-              form.api_key_stored
-                ? t('settings.keyStoredHint')
-                : t('settings.keyNewHint')
-            }
-          >
-            <div className="relative">
-              <input
-                type={showApiKey ? 'text' : 'password'}
-                value={form.api_key ?? ''}
-                onChange={(event) => setForm((state) => ({ ...state, api_key: event.target.value }))}
-                className="w-full rounded-md border border-rc-border-primary bg-rc-bg-secondary px-3 py-2.5 pr-11 text-sm text-rc-text-primary outline-none transition-colors focus:border-rc-border-focus"
-                placeholder={form.api_key_stored ? t('settings.keyPlaceholder') : 'sk-...'}
-              />
-              <button
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-rc-text-tertiary transition-colors hover:text-rc-text-primary"
-                onClick={() => setShowApiKey((state) => !state)}
-              >
-                {showApiKey ? <EyeOff size={16} /> : <Eye size={16} />}
-              </button>
-            </div>
-          </Field>
-
-          {/* Profile management */}
-          <Field label={t('settings.modelConfigLabel')} hint="">
-            <div className="space-y-2">
-              {(form.profiles ?? []).map((profile, index) => (
-                <div key={profile.name || `profile-${index}`} className="flex items-center gap-2">
-                  <input
-                    value={profile.name}
-                    onChange={(event) => updateProfile(index, 'name', event.target.value)}
-                    className="w-32 rounded-md border border-rc-border-primary bg-rc-bg-secondary px-3 py-2 text-sm text-rc-text-primary outline-none transition-colors focus:border-rc-border-focus"
-                    placeholder={t('settings.configNamePlaceholder')}
-                  />
-                  <input
-                    value={profile.model ?? ''}
-                    onChange={(event) => updateProfile(index, 'model', event.target.value)}
-                    className="min-w-0 flex-1 rounded-md border border-rc-border-primary bg-rc-bg-secondary px-3 py-2 text-sm text-rc-text-primary outline-none transition-colors focus:border-rc-border-focus"
-                    placeholder={t('settings.modelIdPlaceholder')}
-                  />
-                  <button
-                    title={t('settings.deleteProfile')}
-                    className="shrink-0 rounded-md p-1.5 text-rc-text-tertiary transition-colors hover:bg-rc-accent-error-bg hover:text-rc-accent-error"
-                    onClick={() => removeProfile(index)}
-                  >
-                    <X size={14} />
-                  </button>
-                </div>
-              ))}
-              <button
-                onClick={addProfile}
-                className="inline-flex items-center gap-1.5 rounded-md border border-dashed border-rc-border-primary px-3 py-2 text-xs font-medium text-rc-text-secondary transition-colors hover:border-rc-border-hover hover:text-rc-text-primary"
-              >
-                <Plus size={13} />
-                {t('settings.addProfile')}
-              </button>
-            </div>
-          </Field>
-
-          <div className="flex justify-end gap-3">
+function ProviderListGroup({
+  heading,
+  providers,
+  activeProviderName,
+  selectedName,
+  onSelect,
+}: {
+  heading: string;
+  providers: ProviderConfig[];
+  activeProviderName: string | null;
+  selectedName: string | null;
+  onSelect: (name: string) => void;
+}) {
+  const { t } = useTranslation();
+  if (providers.length === 0) return null;
+  return (
+    <div className="mb-3">
+      <div className="px-2 pb-1.5 pt-2 text-[11px] font-semibold uppercase tracking-wider text-rc-text-tertiary">
+        {heading}
+      </div>
+      <div className="space-y-1">
+        {providers.map((provider) => {
+          const isSelected = provider.name === selectedName;
+          const isActive = provider.name === activeProviderName;
+          const enabled = provider.enabled !== false;
+          return (
             <button
-              onClick={() => {
-                setEditingName(null);
-                setForm(emptyProviderConfig());
-              }}
-              className="rounded-md px-4 py-2 text-sm font-medium text-rc-text-secondary transition-colors hover:bg-rc-bg-hover hover:text-rc-text-primary"
+              key={provider.name}
+              data-testid={`provider-row-${provider.name}`}
+              onClick={() => onSelect(provider.name)}
+              className={`flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-sm transition-colors ${
+                isSelected
+                  ? 'bg-rc-bg-active text-rc-text-primary'
+                  : 'text-rc-text-secondary hover:bg-rc-bg-hover hover:text-rc-text-primary'
+              }`}
             >
-              {t('settings.cancelBtn')}
+              <span
+                aria-hidden
+                className={`inline-block h-2 w-2 shrink-0 rounded-full ${
+                  enabled ? 'bg-rc-accent-success' : 'bg-rc-text-tertiary'
+                }`}
+              />
+              <span className="truncate font-medium">{provider.name}</span>
+              {isActive && (
+                <span className="ml-auto inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-rc-accent-primary text-white">
+                  <Check size={10} />
+                </span>
+              )}
+              {provider.api_key_stored && !isActive && (
+                <span
+                  className="ml-auto inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-rc-accent-primary"
+                  title={t('settings.keychainStored')}
+                />
+              )}
             </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+interface ProviderDetailPanelProps {
+  selected: ProviderConfig | null;
+  editingNew: boolean;
+  form: ProviderConfig;
+  showApiKey: boolean;
+  onEdit: (provider: ProviderConfig) => void;
+  onCancel: () => void;
+  onChangeForm: (form: ProviderConfig) => void;
+  onToggleApiKey: () => void;
+  onSave: () => Promise<void>;
+  onDelete: (name: string) => Promise<void>;
+  onSetActive: (name: string) => void;
+  onToggleEnabled: (name: string, enabled: boolean) => void;
+  onAddModel: (model: ProviderModel) => Promise<void>;
+  onUpdateModel: (oldId: string, model: ProviderModel) => Promise<void>;
+  onRemoveModel: (modelId: string) => Promise<void>;
+  onTierChange: (tier: 'opus' | 'sonnet' | 'haiku', modelId: string | null) => Promise<void>;
+}
+
+function ProviderDetailPanel({
+  selected,
+  editingNew,
+  form,
+  showApiKey,
+  onEdit,
+  onCancel,
+  onChangeForm,
+  onToggleApiKey,
+  onSave,
+  onDelete,
+  onSetActive,
+  onToggleEnabled,
+  onAddModel,
+  onUpdateModel,
+  onRemoveModel,
+  onTierChange,
+}: ProviderDetailPanelProps) {
+  const { t } = useTranslation();
+  const isEditing = editingNew || (selected != null && !selected.api_key_stored && false);
+  // Edit form applies when the user clicked edit (the `editingNew` flag is
+  // only true for newly-added providers; existing providers are edited in place
+  // by mutating `form`).
+  const inEditMode = editingNew || (selected != null && form.name === selected.name && form !== selected);
+
+  if (selected == null) {
+    return (
+      <div className="flex min-h-0 items-center justify-center bg-rc-bg-chat p-8 text-sm text-rc-text-tertiary">
+        {editingNew ? t('settings.newProvider') : t('settings.noProvidersYet')}
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex min-h-0 flex-col bg-rc-bg-chat" data-testid="provider-detail-panel">
+      <ProviderDetailHeader
+        selected={selected}
+        form={form}
+        inEditMode={inEditMode}
+        onEdit={() => onEdit(selected)}
+        onCancel={onCancel}
+        onChangeForm={onChangeForm}
+        onSetActive={() => onSetActive(selected.name)}
+        onToggleEnabled={(enabled) => onToggleEnabled(selected.name, enabled)}
+        onDelete={() => void onDelete(selected.name)}
+      />
+
+      <div className="min-h-0 flex-1 overflow-y-auto p-5">
+        <div className="space-y-4">
+          {inEditMode ? (
+            <ProviderEditForm
+              form={form}
+              showApiKey={showApiKey}
+              onChangeForm={onChangeForm}
+              onToggleApiKey={onToggleApiKey}
+              onSave={() => void onSave()}
+              onCancel={onCancel}
+            />
+          ) : (
+            <ProviderReadOnlyView
+              selected={selected}
+              onAddModel={onAddModel}
+              onUpdateModel={onUpdateModel}
+              onRemoveModel={onRemoveModel}
+              onTierChange={onTierChange}
+            />
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ProviderDetailHeader({
+  selected,
+  form,
+  inEditMode,
+  onEdit,
+  onCancel,
+  onChangeForm,
+  onSetActive,
+  onToggleEnabled,
+  onDelete,
+}: {
+  selected: ProviderConfig;
+  form: ProviderConfig;
+  inEditMode: boolean;
+  onEdit: () => void;
+  onCancel: () => void;
+  onChangeForm: (form: ProviderConfig) => void;
+  onSetActive: () => void;
+  onToggleEnabled: (enabled: boolean) => void;
+  onDelete: () => void;
+}) {
+  const { t } = useTranslation();
+  const isBuiltin = selected.group === 'builtin';
+  const enabled = selected.enabled !== false;
+  return (
+    <div className="flex items-center justify-between gap-3 border-b border-rc-border-secondary px-5 py-3">
+      <div className="flex min-w-0 items-center gap-2.5">
+        <span
+          aria-hidden
+          className={`inline-block h-2.5 w-2.5 shrink-0 rounded-full ${
+            enabled ? 'bg-rc-accent-success' : 'bg-rc-text-tertiary'
+          }`}
+        />
+        <span className="truncate text-base font-semibold text-rc-text-primary" data-testid="provider-detail-name">
+          {selected.name}
+        </span>
+        {enabled && (
+          <span className="inline-flex items-center gap-1 rounded-full bg-rc-accent-success-bg px-2 py-0.5 text-[11px] font-medium text-rc-accent-success">
+            {t('settings.enabled')}
+          </span>
+        )}
+      </div>
+      <div className="flex shrink-0 items-center gap-1.5">
+        {!inEditMode && (
+          <button
+            onClick={onEdit}
+            className="rounded-md p-1.5 text-rc-text-tertiary transition-colors hover:bg-rc-bg-hover hover:text-rc-text-primary"
+            title={t('common.edit')}
+            data-testid="provider-edit-btn"
+          >
+            <Pencil size={15} />
+          </button>
+        )}
+        <button
+          onClick={() => onToggleEnabled(!enabled)}
+          className={`rounded-md border px-2.5 py-1 text-xs font-medium transition-colors ${
+            enabled
+              ? 'border-rc-border-primary text-rc-text-secondary hover:bg-rc-bg-hover hover:text-rc-text-primary'
+              : 'border-rc-accent-primary bg-rc-accent-primary text-white hover:bg-rc-accent-primary-hover'
+          }`}
+          data-testid="provider-enable-btn"
+        >
+          {enabled ? t('settings.disable') : t('settings.enable')}
+        </button>
+        {!isBuiltin && (
+          <button
+            onClick={onDelete}
+            className="rounded-md p-1.5 text-rc-text-tertiary transition-colors hover:bg-rc-accent-error-bg hover:text-rc-accent-error"
+            title={t('common.delete')}
+            data-testid="provider-delete-btn"
+          >
+            <Trash2 size={15} />
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ProviderReadOnlyView({
+  selected,
+  onAddModel,
+  onUpdateModel,
+  onRemoveModel,
+  onTierChange,
+}: {
+  selected: ProviderConfig;
+  onAddModel: (model: ProviderModel) => Promise<void>;
+  onUpdateModel: (oldId: string, model: ProviderModel) => Promise<void>;
+  onRemoveModel: (modelId: string) => Promise<void>;
+  onTierChange: (tier: 'opus' | 'sonnet' | 'haiku', modelId: string | null) => Promise<void>;
+}) {
+  const { t } = useTranslation();
+  const [editingModel, setEditingModel] = useState<{ oldId: string; id: string; display_name: string } | null>(null);
+  const [newModelId, setNewModelId] = useState('');
+
+  const models = selected.models ?? [];
+  const mapping = selected.claude_model_mapping ?? {};
+  const modelOptions = models.length > 0 ? models : (selected.model ? [{ id: selected.model }] : []);
+
+  return (
+    <>
+      <div className="grid gap-4 sm:grid-cols-2">
+        <Field label={t('settings.anthropicBaseUrl')}>
+          <ReadonlyValue value={selected.anthropic_base_url ?? selected.base_url ?? null} placeholder="—" />
+        </Field>
+        <Field label={t('settings.openaiBaseUrl')}>
+          <ReadonlyValue value={selected.openai_base_url ?? null} placeholder="—" />
+        </Field>
+        <Field label="API Key">
+          <span className="text-sm text-rc-text-secondary">
+            {selected.api_key_stored
+              ? `••••••••  ${t('settings.keychainStored')}`
+              : t('settings.unset')}
+          </span>
+        </Field>
+        <Field label={t('settings.fieldDefaultModel')}>
+          <ReadonlyValue value={selected.model ?? null} placeholder={t('settings.unset')} />
+        </Field>
+      </div>
+
+      <div className="rounded-md border border-rc-border-secondary bg-rc-bg-surface p-3">
+        <div className="mb-2 flex items-center justify-between">
+          <span className="text-sm font-medium text-rc-text-primary">{t('settings.modelList')}</span>
+          <span className="text-xs text-rc-text-tertiary">{models.length}</span>
+        </div>
+        <div className="space-y-1.5">
+          {models.map((model) =>
+            editingModel && editingModel.oldId === model.id ? (
+              <ModelRowEditor
+                key={model.id}
+                initialId={model.id}
+                initialDisplayName={model.display_name ?? ''}
+                onCancel={() => setEditingModel(null)}
+                onSave={(next) => {
+                  void onUpdateModel(model.id, { id: next.id, display_name: next.display_name });
+                  setEditingModel(null);
+                }}
+              />
+            ) : (
+              <div
+                key={model.id}
+                className="flex items-center gap-2 rounded-md border border-rc-border-secondary bg-rc-bg-secondary px-3 py-1.5"
+              >
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-sm text-rc-text-primary">{model.id}</div>
+                  {model.display_name && (
+                    <div className="truncate text-xs text-rc-text-tertiary">{model.display_name}</div>
+                  )}
+                </div>
+                <button
+                  className="rounded-md p-1 text-rc-text-tertiary transition-colors hover:bg-rc-bg-hover hover:text-rc-text-primary"
+                  onClick={() =>
+                    setEditingModel({ oldId: model.id, id: model.id, display_name: model.display_name ?? '' })
+                  }
+                  title={t('common.edit')}
+                >
+                  <Pencil size={13} />
+                </button>
+                <button
+                  className="rounded-md p-1 text-rc-text-tertiary transition-colors hover:bg-rc-accent-error-bg hover:text-rc-accent-error"
+                  onClick={() => void onRemoveModel(model.id)}
+                  title={t('common.delete')}
+                >
+                  <Trash2 size={13} />
+                </button>
+              </div>
+            ),
+          )}
+
+          <div className="flex items-center gap-2 pt-1">
+            <input
+              value={newModelId}
+              onChange={(e) => setNewModelId(e.target.value)}
+              placeholder={t('settings.modelIdPlaceholder')}
+              className="min-w-0 flex-1 rounded-md border border-rc-border-primary bg-rc-bg-secondary px-3 py-1.5 text-sm text-rc-text-primary outline-none focus:border-rc-border-focus"
+              data-testid="add-model-input"
+            />
             <button
               onClick={() => {
-                void handleSave();
+                const id = newModelId.trim();
+                if (!id) return;
+                void onAddModel({ id });
+                setNewModelId('');
               }}
-              className="rounded-md bg-rc-accent-primary px-5 py-2 text-sm font-medium text-white transition-colors hover:bg-rc-accent-primary-hover"
+              className="inline-flex items-center gap-1.5 rounded-md border border-dashed border-rc-border-primary px-3 py-1.5 text-xs font-medium text-rc-text-secondary transition-colors hover:border-rc-border-hover hover:text-rc-text-primary"
+              data-testid="add-model-btn"
             >
-              {t('settings.saveProvider')}
+              <Plus size={13} />
+              {t('settings.addModel')}
             </button>
           </div>
         </div>
-      )}
+      </div>
+
+      <div className="rounded-md border border-rc-border-secondary bg-rc-bg-surface p-3">
+        <div className="mb-2 flex items-center gap-1.5 text-sm font-medium text-rc-text-primary">
+          <ChevronDown size={14} />
+          {t('settings.claudeModelMapping')}
+        </div>
+        <p className="mb-3 text-xs leading-5 text-rc-text-tertiary">
+          {t('settings.claudeModelMappingHint')}
+        </p>
+        <div className="grid gap-2 sm:grid-cols-3">
+          <TierSelect
+            label={t('settings.opusTask')}
+            value={mapping.opus ?? ''}
+            options={modelOptions}
+            onChange={(id) => void onTierChange('opus', id || null)}
+            data-testid="tier-opus"
+          />
+          <TierSelect
+            label={t('settings.sonnetTask')}
+            value={mapping.sonnet ?? ''}
+            options={modelOptions}
+            onChange={(id) => void onTierChange('sonnet', id || null)}
+            data-testid="tier-sonnet"
+          />
+          <TierSelect
+            label={t('settings.haikuTask')}
+            value={mapping.haiku ?? ''}
+            options={modelOptions}
+            onChange={(id) => void onTierChange('haiku', id || null)}
+            data-testid="tier-haiku"
+          />
+        </div>
+      </div>
+    </>
+  );
+}
+
+function ModelRowEditor({
+  initialId,
+  initialDisplayName,
+  onCancel,
+  onSave,
+}: {
+  initialId: string;
+  initialDisplayName: string;
+  onCancel: () => void;
+  onSave: (next: { id: string; display_name?: string }) => void;
+}) {
+  const [id, setId] = useState(initialId);
+  const [displayName, setDisplayName] = useState(initialDisplayName);
+  const { t } = useTranslation();
+  return (
+    <div className="flex items-center gap-2 rounded-md border border-rc-accent-primary bg-rc-bg-surface px-3 py-1.5">
+      <input
+        value={id}
+        onChange={(e) => setId(e.target.value)}
+        placeholder="model id"
+        className="min-w-0 flex-1 rounded-md border border-rc-border-primary bg-rc-bg-secondary px-2 py-1 text-sm text-rc-text-primary outline-none focus:border-rc-border-focus"
+      />
+      <input
+        value={displayName}
+        onChange={(e) => setDisplayName(e.target.value)}
+        placeholder={t('settings.modelIdPlaceholder')}
+        className="min-w-0 flex-1 rounded-md border border-rc-border-primary bg-rc-bg-secondary px-2 py-1 text-sm text-rc-text-primary outline-none focus:border-rc-border-focus"
+      />
+      <button
+        onClick={onCancel}
+        className="rounded-md p-1 text-rc-text-tertiary hover:bg-rc-bg-hover hover:text-rc-text-primary"
+        title={t('common.cancel')}
+      >
+        <X size={13} />
+      </button>
+      <button
+        onClick={() => {
+          const trimmedId = id.trim();
+          if (!trimmedId) return;
+          onSave({ id: trimmedId, display_name: displayName.trim() || undefined });
+        }}
+        className="rounded-md bg-rc-accent-primary px-2 py-1 text-xs font-medium text-white hover:bg-rc-accent-primary-hover"
+      >
+        {t('common.save')}
+      </button>
+    </div>
+  );
+}
+
+function TierSelect({
+  label,
+  value,
+  options,
+  onChange,
+  ...rest
+}: {
+  label: string;
+  value: string;
+  options: Array<{ id: string; display_name?: string | null }>;
+  onChange: (id: string) => void;
+  'data-testid'?: string;
+}) {
+  const { t } = useTranslation();
+  return (
+    <div className="space-y-1">
+      <label className="text-xs font-medium text-rc-text-secondary">{label}</label>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        data-testid={rest['data-testid']}
+        className="w-full appearance-none rounded-md border border-rc-border-primary bg-rc-bg-secondary px-3 py-1.5 text-sm text-rc-text-primary outline-none focus:border-rc-border-focus"
+      >
+        <option value="">{t('settings.unset')}</option>
+        {options.map((m) => (
+          <option key={m.id} value={m.id}>
+            {m.display_name ?? m.id}
+          </option>
+        ))}
+      </select>
+    </div>
+  );
+}
+
+function ReadonlyValue({ value, placeholder }: { value: string | null; placeholder: string }) {
+  if (!value) return <span className="text-sm text-rc-text-tertiary">{placeholder}</span>;
+  return <span className="break-all text-sm text-rc-text-primary">{value}</span>;
+}
+
+function ProviderEditForm({
+  form,
+  showApiKey,
+  onChangeForm,
+  onToggleApiKey,
+  onSave,
+  onCancel,
+}: {
+  form: ProviderConfig;
+  showApiKey: boolean;
+  onChangeForm: (form: ProviderConfig) => void;
+  onToggleApiKey: () => void;
+  onSave: () => void;
+  onCancel: () => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <div className="space-y-4">
+      <div className="grid gap-4 sm:grid-cols-2">
+        <Field label={t('settings.fieldName')}>
+          <input
+            value={form.name}
+            onChange={(e) => onChangeForm({ ...form, name: e.target.value })}
+            className="w-full rounded-md border border-rc-border-primary bg-rc-bg-secondary px-3 py-2.5 text-sm text-rc-text-primary outline-none transition-colors focus:border-rc-border-focus"
+            placeholder="my-provider"
+          />
+        </Field>
+        <Field label={t('settings.fieldProtocol')}>
+          <select
+            value={form.protocol}
+            onChange={(e) => onChangeForm({ ...form, protocol: e.target.value })}
+            className="w-full rounded-md border border-rc-border-primary bg-rc-bg-secondary px-3 py-2.5 text-sm text-rc-text-primary outline-none transition-colors focus:border-rc-border-focus"
+          >
+            {protocols(t).map((p) => (
+              <option key={p.value} value={p.value}>
+                {p.label}
+              </option>
+            ))}
+          </select>
+        </Field>
+        <Field label={t('settings.anthropicBaseUrl')} hint={t('settings.urlNormalizationHint')}>
+          <input
+            value={form.anthropic_base_url ?? ''}
+            onChange={(e) => onChangeForm({ ...form, anthropic_base_url: e.target.value })}
+            className="w-full rounded-md border border-rc-border-primary bg-rc-bg-secondary px-3 py-2.5 text-sm text-rc-text-primary outline-none transition-colors focus:border-rc-border-focus"
+            placeholder={t('settings.anthropicBaseUrlPlaceholder')}
+          />
+        </Field>
+        <Field label={t('settings.openaiBaseUrl')} hint={t('settings.urlNormalizationHint')}>
+          <input
+            value={form.openai_base_url ?? ''}
+            onChange={(e) => onChangeForm({ ...form, openai_base_url: e.target.value })}
+            className="w-full rounded-md border border-rc-border-primary bg-rc-bg-secondary px-3 py-2.5 text-sm text-rc-text-primary outline-none transition-colors focus:border-rc-border-focus"
+            placeholder={t('settings.openaiBaseUrlPlaceholder')}
+          />
+        </Field>
+        <Field label={t('settings.fieldDefaultModel')}>
+          <input
+            value={form.model ?? ''}
+            onChange={(e) => onChangeForm({ ...form, model: e.target.value })}
+            className="w-full rounded-md border border-rc-border-primary bg-rc-bg-secondary px-3 py-2.5 text-sm text-rc-text-primary outline-none transition-colors focus:border-rc-border-focus"
+            placeholder="glm-5.1"
+          />
+        </Field>
+        <Field
+          label="API Key"
+          hint={
+            form.api_key_stored
+              ? t('settings.keyStoredHint')
+              : t('settings.keyNewHint')
+          }
+        >
+          <div className="relative">
+            <input
+              type={showApiKey ? 'text' : 'password'}
+              value={form.api_key ?? ''}
+              onChange={(e) => onChangeForm({ ...form, api_key: e.target.value })}
+              className="w-full rounded-md border border-rc-border-primary bg-rc-bg-secondary px-3 py-2.5 pr-11 text-sm text-rc-text-primary outline-none transition-colors focus:border-rc-border-focus"
+              placeholder={form.api_key_stored ? t('settings.keyPlaceholder') : 'sk-...'}
+            />
+            <button
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-rc-text-tertiary transition-colors hover:text-rc-text-primary"
+              onClick={onToggleApiKey}
+              type="button"
+            >
+              {showApiKey ? <EyeOff size={16} /> : <Eye size={16} />}
+            </button>
+          </div>
+        </Field>
+      </div>
+
+      <div className="flex justify-end gap-3">
+        <button
+          onClick={onCancel}
+          className="rounded-md px-4 py-2 text-sm font-medium text-rc-text-secondary transition-colors hover:bg-rc-bg-hover hover:text-rc-text-primary"
+        >
+          {t('settings.cancelBtn')}
+        </button>
+        <button
+          onClick={onSave}
+          className="rounded-md bg-rc-accent-primary px-5 py-2 text-sm font-medium text-white transition-colors hover:bg-rc-accent-primary-hover"
+        >
+          {t('settings.saveProvider')}
+        </button>
+      </div>
     </div>
   );
 }

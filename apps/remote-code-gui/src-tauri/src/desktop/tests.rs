@@ -221,8 +221,14 @@ fn anthropic_base_url_is_normalized_from_gui_input() {
         name: "glm".to_owned(),
         protocol: "anthropic".to_owned(),
         base_url: Some("https://open.bigmodel.cn/api/anthropic".to_owned()),
+        anthropic_base_url: Some("https://open.bigmodel.cn/api/anthropic".to_owned()),
+        openai_base_url: None,
         api_key: Some("secret".to_owned()),
         model: Some("glm-5.1".to_owned()),
+        models: vec![],
+        claude_model_mapping: ClaudeModelMapping::default(),
+        group: ProviderGroup::Custom,
+        enabled: true,
         profiles: vec![],
         active_profile: None,
         api_key_stored: false,
@@ -341,8 +347,14 @@ fn provider_config_sanitizer_trims_blank_fields() {
         name: "  minimax  ".to_owned(),
         protocol: "anthropic".to_owned(),
         base_url: Some(" https://api.minimaxi.com/anthropic/ ".to_owned()),
+        anthropic_base_url: None,
+        openai_base_url: None,
         api_key: Some("  token  ".to_owned()),
         model: Some(" minimax-m2.7 ".to_owned()),
+        models: vec![],
+        claude_model_mapping: ClaudeModelMapping::default(),
+        group: ProviderGroup::Custom,
+        enabled: true,
         profiles: vec![],
         active_profile: None,
         api_key_stored: false,
@@ -352,6 +364,180 @@ fn provider_config_sanitizer_trims_blank_fields() {
     assert_eq!(config.name, "minimax");
     assert_eq!(config.api_key.as_deref(), Some("token"));
     assert_eq!(config.model.as_deref(), Some("minimax-m2.7"));
+}
+
+#[test]
+fn normalize_dedups_models_by_id() {
+    let config = normalize_provider_config(ProviderConfig {
+        name: "p".to_owned(),
+        protocol: "openai".to_owned(),
+        base_url: None,
+        anthropic_base_url: None,
+        openai_base_url: None,
+        api_key: None,
+        model: None,
+        models: vec![
+            ProviderModel { id: "  m1 ".to_owned(), display_name: Some(" M1 ".to_owned()) },
+            ProviderModel { id: "".to_owned(), display_name: None }, // blank id is filtered out
+            ProviderModel { id: "m1".to_owned(), display_name: Some("Renamed".to_owned()) },
+        ],
+        claude_model_mapping: ClaudeModelMapping::default(),
+        group: ProviderGroup::Custom,
+        enabled: true,
+        profiles: vec![],
+        active_profile: None,
+        api_key_stored: false,
+    })
+    .expect("normalize should succeed");
+
+    assert_eq!(config.models.len(), 2, "blank ids filtered, ids trimmed");
+    assert_eq!(config.models[0].id, "m1");
+    assert_eq!(config.models[0].display_name.as_deref(), Some("M1"));
+    assert_eq!(config.models[1].id, "m1");
+    assert_eq!(config.models[1].display_name.as_deref(), Some("Renamed"));
+}
+
+#[test]
+fn provider_config_to_runtime_uses_anthropic_base_url_for_anthropic_protocol() {
+    use claude_core::ProviderProtocol;
+
+    let stored = ProviderConfig {
+        name: "bigmodel".to_owned(),
+        protocol: "anthropic".to_owned(),
+        base_url: Some("https://legacy.example/v1/messages".to_owned()),
+        anthropic_base_url: Some("https://open.bigmodel.cn/api/anthropic".to_owned()),
+        openai_base_url: Some("https://open.bigmodel.cn/api/coding/paas/v4".to_owned()),
+        api_key: None,
+        model: Some("glm-5.1".to_owned()),
+        models: vec![],
+        claude_model_mapping: ClaudeModelMapping::default(),
+        group: ProviderGroup::Builtin,
+        enabled: true,
+        profiles: vec![],
+        active_profile: None,
+        api_key_stored: false,
+    };
+    let current = RuntimeProviderConfig {
+        name: "test".to_owned(),
+        base_url: None,
+        api_key: None,
+        model: None,
+        protocol: ProviderProtocol::OpenAi,
+        timeout_ms: 30_000,
+        max_output_tokens: 4096,
+        max_retries: 2,
+        retry_initial_backoff_ms: 1000,
+        retry_max_backoff_ms: 10_000,
+        respect_retry_after: true,
+        request_header_overrides: Default::default(),
+        request_metadata: Default::default(),
+        thinking_budget: None,
+        temperature: None,
+        top_p: None,
+        top_k: None,
+    };
+    let runtime = provider_config_to_runtime(&stored, &current)
+        .expect("projection should succeed");
+    // Anthropic protocol picks the anthropic_base_url, normalized to v1/messages.
+    assert_eq!(
+        runtime.base_url.as_deref(),
+        Some("https://open.bigmodel.cn/api/anthropic/v1/messages")
+    );
+    assert_eq!(runtime.protocol, ProviderProtocol::Anthropic);
+}
+
+#[test]
+fn provider_config_to_runtime_uses_openai_base_url_for_openai_protocol() {
+    use claude_core::ProviderProtocol;
+
+    let stored = ProviderConfig {
+        name: "bigmodel".to_owned(),
+        protocol: "openai".to_owned(),
+        base_url: Some("https://legacy.example/v1".to_owned()),
+        anthropic_base_url: Some("https://open.bigmodel.cn/api/anthropic".to_owned()),
+        openai_base_url: Some("https://open.bigmodel.cn/api/coding/paas/v4".to_owned()),
+        api_key: None,
+        model: Some("glm-5.1".to_owned()),
+        models: vec![],
+        claude_model_mapping: ClaudeModelMapping::default(),
+        group: ProviderGroup::Builtin,
+        enabled: true,
+        profiles: vec![],
+        active_profile: None,
+        api_key_stored: false,
+    };
+    let current = RuntimeProviderConfig {
+        name: "test".to_owned(),
+        base_url: None,
+        api_key: None,
+        model: None,
+        protocol: ProviderProtocol::OpenAi,
+        timeout_ms: 30_000,
+        max_output_tokens: 4096,
+        max_retries: 2,
+        retry_initial_backoff_ms: 1000,
+        retry_max_backoff_ms: 10_000,
+        respect_retry_after: true,
+        request_header_overrides: Default::default(),
+        request_metadata: Default::default(),
+        thinking_budget: None,
+        temperature: None,
+        top_p: None,
+        top_k: None,
+    };
+    let runtime = provider_config_to_runtime(&stored, &current)
+        .expect("projection should succeed");
+    assert_eq!(
+        runtime.base_url.as_deref(),
+        Some("https://open.bigmodel.cn/api/coding/paas/v4/v1")
+    );
+    assert_eq!(runtime.protocol, ProviderProtocol::OpenAi);
+}
+
+#[test]
+fn merge_missing_builtin_providers_adds_only_new_entries() {
+    let mut configs = ProviderConfigList {
+        providers: vec![ProviderConfig {
+            name: "bigmodel".to_owned(),
+            protocol: "anthropic".to_owned(),
+            base_url: None,
+            anthropic_base_url: None,
+            openai_base_url: None,
+            api_key: None,
+            model: None,
+            models: vec![],
+            claude_model_mapping: ClaudeModelMapping::default(),
+            group: ProviderGroup::Builtin,
+            enabled: true,
+            profiles: vec![],
+            active_profile: None,
+            api_key_stored: false,
+        }],
+        active_provider: None,
+    };
+    let added = merge_missing_builtin_providers(&mut configs);
+    assert!(added, "at least one new built-in should be added");
+    // bigmodel already exists, so the result must still contain it but with
+    // additional seeded entries (e.g. openrouter, moonshot, ...).
+    assert!(configs.providers.iter().any(|p| p.name == "bigmodel"));
+    assert!(configs.providers.iter().any(|p| p.name == "openrouter"));
+    assert!(configs.providers.iter().any(|p| p.name == "moonshot"));
+    // Sorted case-insensitively by name.
+    let names: Vec<&str> = configs.providers.iter().map(|p| p.name.as_str()).collect();
+    let mut sorted = names.clone();
+    sorted.sort_by_key(|n| n.to_lowercase());
+    assert_eq!(names, sorted, "providers must be sorted by name");
+}
+
+#[test]
+fn merge_missing_builtin_providers_is_idempotent() {
+    let mut configs = ProviderConfigList::default();
+    assert!(merge_missing_builtin_providers(&mut configs));
+    let count_after_first = configs.providers.len();
+    // Second call with the merged list must add nothing.
+    let added_again = merge_missing_builtin_providers(&mut configs);
+    assert!(!added_again, "second merge should be a no-op");
+    assert_eq!(configs.providers.len(), count_after_first);
 }
 
 #[test]

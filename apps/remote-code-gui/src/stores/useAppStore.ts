@@ -11,9 +11,11 @@ import type {
   PermissionRequestInfo,
   ProjectInfo,
   PromptResult,
+  ClaudeModelMapping,
   ProviderConfig,
   ProviderConfigList,
   ProviderInfo,
+  ProviderModel,
   RuntimeStatusInfo,
   SessionSubtask,
   SessionSummary,
@@ -227,6 +229,12 @@ interface AppState {
   saveProviderConfig: (config: ProviderConfig, setActive: boolean) => Promise<void>;
   deleteProviderConfig: (name: string) => Promise<void>;
   setActiveProvider: (name: string) => Promise<void>;
+  setProviderEnabled: (name: string, enabled: boolean) => Promise<void>;
+  setClaudeModelMapping: (name: string, mapping: ClaudeModelMapping) => Promise<void>;
+  addProviderModel: (name: string, model: ProviderModel) => Promise<void>;
+  updateProviderModel: (name: string, oldId: string, model: ProviderModel) => Promise<void>;
+  removeProviderModel: (name: string, modelId: string) => Promise<void>;
+  refreshProviders: () => Promise<void>;
   switchProfile: (providerName: string, profileName: string | null) => Promise<void>;
   resolvePermission: (resolution: boolean | tauri.PermissionResolutionRequest) => Promise<void>;
   openFileExplorer: (path: string, projectName: string) => void;
@@ -1212,6 +1220,48 @@ export const useAppStore = create<AppState>((set, get) => ({
       get().refreshRuntimeStatus(),
       get().loadSettings(),
     ]);
+  },
+
+  setProviderEnabled: async (name: string, enabled: boolean) => {
+    await tauri.setProviderEnabled(name, enabled);
+    await Promise.all([
+      get().loadProviderConfigs(),
+      get().refreshProviderInfo(),
+      get().refreshRuntimeStatus(),
+      get().loadSettings(),
+    ]);
+  },
+
+  setClaudeModelMapping: async (name: string, mapping: ClaudeModelMapping) => {
+    await tauri.setClaudeModelMapping(name, mapping);
+    await Promise.all([
+      get().loadProviderConfigs(),
+      get().refreshRuntimeStatus(),
+    ]);
+  },
+
+  addProviderModel: async (name: string, model: ProviderModel) => {
+    await tauri.addProviderModel(name, model);
+    await Promise.all([get().loadProviderConfigs()]);
+  },
+
+  updateProviderModel: async (name: string, oldId: string, model: ProviderModel) => {
+    await tauri.updateProviderModel(name, oldId, model);
+    await Promise.all([get().loadProviderConfigs()]);
+  },
+
+  removeProviderModel: async (name: string, modelId: string) => {
+    await tauri.removeProviderModel(name, modelId);
+    await Promise.all([get().loadProviderConfigs()]);
+  },
+
+  refreshProviders: async () => {
+    try {
+      const providerConfigs = await tauri.refreshProviderConfigs();
+      set({ providerConfigs });
+    } catch {
+      // Non-fatal — fall back to the last known config.
+    }
   },
 
   resolvePermission: async (resolution: boolean | tauri.PermissionResolutionRequest) => {

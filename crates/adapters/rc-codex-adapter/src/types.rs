@@ -242,6 +242,9 @@ impl PendingServerRequestKind {
                 reason: format!("{:?}", params.reason),
                 previous_account_id: params.previous_account_id.clone(),
             },
+            // Upstream variants that don't map to a permission prompt.
+            // Catch-all to remain forward-compatible with new ServerRequest additions.
+            _ => Self::CommandExecution,
         }
     }
 }

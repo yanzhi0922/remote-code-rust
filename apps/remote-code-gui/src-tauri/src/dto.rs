@@ -23,16 +23,70 @@ pub(crate) struct ModelProfile {
     pub(crate) model: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum ProviderGroup {
+    #[default]
+    Custom,
+    Builtin,
+}
+
+/// A single model entry in a provider's model catalog.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct ProviderModel {
+    pub(crate) id: String,
+    #[serde(default)]
+    pub(crate) display_name: Option<String>,
+}
+
+/// Maps Claude tier names (Opus / Sonnet / Haiku) to actual model ids exposed
+/// by the upstream provider. Consulted by the Claude adapter when it sees a
+/// tier-style model name in a request.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub(crate) struct ClaudeModelMapping {
+    #[serde(default)]
+    pub(crate) opus: Option<String>,
+    #[serde(default)]
+    pub(crate) sonnet: Option<String>,
+    #[serde(default)]
+    pub(crate) haiku: Option<String>,
+}
+
+fn default_provider_enabled() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct ProviderConfig {
     pub(crate) name: String,
     pub(crate) protocol: String,
     #[serde(default)]
     pub(crate) base_url: Option<String>,
+    /// Anthropic-compatible endpoint. Used when the active adapter is Anthropic.
+    #[serde(default)]
+    pub(crate) anthropic_base_url: Option<String>,
+    /// OpenAI-compatible endpoint. Used when the active adapter is OpenAI.
+    #[serde(default)]
+    pub(crate) openai_base_url: Option<String>,
     #[serde(default)]
     pub(crate) api_key: Option<String>,
     #[serde(default)]
     pub(crate) model: Option<String>,
+    /// Per-provider model catalog shown in the settings UI.
+    #[serde(default)]
+    pub(crate) models: Vec<ProviderModel>,
+    /// Optional Claude-tier → model id mapping. Recorded here for now; the
+    /// adapter will consult it in a follow-up change.
+    #[serde(default)]
+    pub(crate) claude_model_mapping: ClaudeModelMapping,
+    /// Built-in providers (seeded by the app) vs user-added custom providers.
+    #[serde(default)]
+    pub(crate) group: ProviderGroup,
+    /// When false, the provider is hidden from the active-provider selection.
+    #[serde(default = "default_provider_enabled")]
+    pub(crate) enabled: bool,
+    // Legacy fields kept for backwards-compatible deserialization of existing
+    // `gui-providers.json` files. Ignored on load.
     #[serde(default)]
     pub(crate) profiles: Vec<ModelProfile>,
     #[serde(default)]
@@ -1118,4 +1172,282 @@ pub(crate) struct CodexAppServerRequest {
 
 pub(crate) fn default_true() -> bool {
     true
+}
+
+/// Built-in providers seeded on first launch when the user's
+/// `gui-providers.json` is empty. Users can edit and disable these but
+/// cannot delete them.
+pub(crate) fn builtin_provider_seed() -> Vec<ProviderConfig> {
+    vec![
+        builtin_bigmodel(),
+        builtin_z_ai(),
+        builtin_openrouter(),
+        builtin_moonshot(),
+        builtin_deepseek(),
+        builtin_mimo(),
+        builtin_qwen(),
+        builtin_kat(),
+    ]
+}
+
+fn builtin_bigmodel() -> ProviderConfig {
+    ProviderConfig {
+        name: "bigmodel".to_owned(),
+        protocol: "anthropic".to_owned(),
+        base_url: None,
+        anthropic_base_url: Some("https://open.bigmodel.cn/api/anthropic".to_owned()),
+        openai_base_url: Some("https://open.bigmodel.cn/api/coding/paas/v4".to_owned()),
+        api_key: None,
+        model: Some("glm-5.1".to_owned()),
+        models: vec![
+            ProviderModel { id: "glm-5v-turbo".to_owned(), display_name: None },
+            ProviderModel { id: "glm-5.1".to_owned(), display_name: None },
+            ProviderModel { id: "glm-5-turbo".to_owned(), display_name: None },
+            ProviderModel { id: "glm-5".to_owned(), display_name: None },
+        ],
+        claude_model_mapping: ClaudeModelMapping {
+            opus: Some("glm-5.1".to_owned()),
+            sonnet: Some("glm-5.1".to_owned()),
+            haiku: Some("glm-5.1".to_owned()),
+        },
+        group: ProviderGroup::Builtin,
+        enabled: true,
+        profiles: Vec::new(),
+        active_profile: None,
+        api_key_stored: false,
+    }
+}
+
+fn builtin_z_ai() -> ProviderConfig {
+    ProviderConfig {
+        name: "z.ai".to_owned(),
+        protocol: "anthropic".to_owned(),
+        base_url: None,
+        anthropic_base_url: Some("https://api.z.ai/api/anthropic".to_owned()),
+        openai_base_url: Some("https://api.z.ai/api/coding/paas/v4".to_owned()),
+        api_key: None,
+        model: Some("glm-5".to_owned()),
+        models: vec![
+            ProviderModel { id: "glm-5".to_owned(), display_name: None },
+            ProviderModel { id: "glm-4.5".to_owned(), display_name: None },
+        ],
+        claude_model_mapping: ClaudeModelMapping::default(),
+        group: ProviderGroup::Builtin,
+        enabled: true,
+        profiles: Vec::new(),
+        active_profile: None,
+        api_key_stored: false,
+    }
+}
+
+fn builtin_openrouter() -> ProviderConfig {
+    ProviderConfig {
+        name: "openrouter".to_owned(),
+        protocol: "openai".to_owned(),
+        base_url: None,
+        anthropic_base_url: None,
+        openai_base_url: Some("https://openrouter.ai/api/v1".to_owned()),
+        api_key: None,
+        model: None,
+        models: Vec::new(),
+        claude_model_mapping: ClaudeModelMapping::default(),
+        group: ProviderGroup::Builtin,
+        enabled: true,
+        profiles: Vec::new(),
+        active_profile: None,
+        api_key_stored: false,
+    }
+}
+
+fn builtin_moonshot() -> ProviderConfig {
+    ProviderConfig {
+        name: "moonshot".to_owned(),
+        protocol: "openai".to_owned(),
+        base_url: None,
+        anthropic_base_url: None,
+        openai_base_url: Some("https://api.moonshot.cn/v1".to_owned()),
+        api_key: None,
+        model: None,
+        models: Vec::new(),
+        claude_model_mapping: ClaudeModelMapping::default(),
+        group: ProviderGroup::Builtin,
+        enabled: true,
+        profiles: Vec::new(),
+        active_profile: None,
+        api_key_stored: false,
+    }
+}
+
+fn builtin_deepseek() -> ProviderConfig {
+    ProviderConfig {
+        name: "deepseek".to_owned(),
+        protocol: "openai".to_owned(),
+        base_url: None,
+        anthropic_base_url: None,
+        openai_base_url: Some("https://api.deepseek.com/v1".to_owned()),
+        api_key: None,
+        model: Some("deepseek-chat".to_owned()),
+        models: Vec::new(),
+        claude_model_mapping: ClaudeModelMapping::default(),
+        group: ProviderGroup::Builtin,
+        enabled: true,
+        profiles: Vec::new(),
+        active_profile: None,
+        api_key_stored: false,
+    }
+}
+
+fn builtin_mimo() -> ProviderConfig {
+    ProviderConfig {
+        name: "mimo".to_owned(),
+        protocol: "openai".to_owned(),
+        base_url: None,
+        anthropic_base_url: None,
+        openai_base_url: Some("https://api.mimo.example/v1".to_owned()),
+        api_key: None,
+        model: None,
+        models: Vec::new(),
+        claude_model_mapping: ClaudeModelMapping::default(),
+        group: ProviderGroup::Builtin,
+        enabled: true,
+        profiles: Vec::new(),
+        active_profile: None,
+        api_key_stored: false,
+    }
+}
+
+fn builtin_qwen() -> ProviderConfig {
+    ProviderConfig {
+        name: "qwen".to_owned(),
+        protocol: "openai".to_owned(),
+        base_url: None,
+        anthropic_base_url: None,
+        openai_base_url: Some("https://dashscope.aliyuncs.com/compatible-mode/v1".to_owned()),
+        api_key: None,
+        model: None,
+        models: Vec::new(),
+        claude_model_mapping: ClaudeModelMapping::default(),
+        group: ProviderGroup::Builtin,
+        enabled: true,
+        profiles: Vec::new(),
+        active_profile: None,
+        api_key_stored: false,
+    }
+}
+
+fn builtin_kat() -> ProviderConfig {
+    ProviderConfig {
+        name: "kat".to_owned(),
+        protocol: "openai".to_owned(),
+        base_url: None,
+        anthropic_base_url: None,
+        openai_base_url: Some("https://api.kat.example/v1".to_owned()),
+        api_key: None,
+        model: None,
+        models: Vec::new(),
+        claude_model_mapping: ClaudeModelMapping::default(),
+        group: ProviderGroup::Builtin,
+        enabled: true,
+        profiles: Vec::new(),
+        active_profile: None,
+        api_key_stored: false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn builtin_seed_contains_expected_names() {
+        let providers = builtin_provider_seed();
+        let names: Vec<&str> = providers
+            .iter()
+            .map(|p| p.name.as_str())
+            .collect();
+        assert!(names.contains(&"bigmodel"));
+        assert!(names.contains(&"z.ai"));
+        assert!(names.contains(&"openrouter"));
+        assert_eq!(names.len(), 8);
+    }
+
+    #[test]
+    fn builtin_seed_marks_every_entry_as_builtin() {
+        for provider in builtin_provider_seed() {
+            assert_eq!(provider.group, ProviderGroup::Builtin);
+            assert!(provider.enabled);
+        }
+    }
+
+    #[test]
+    fn bigmodel_has_both_protocol_endpoints() {
+        let bigmodel = builtin_provider_seed()
+            .into_iter()
+            .find(|p| p.name == "bigmodel")
+            .expect("bigmodel seeded");
+        assert!(bigmodel.anthropic_base_url.is_some());
+        assert!(bigmodel.openai_base_url.is_some());
+        assert!(!bigmodel.models.is_empty());
+        assert!(bigmodel.claude_model_mapping.opus.is_some());
+    }
+
+    #[test]
+    fn provider_config_deserializes_without_new_fields() {
+        // Old JSON shape (no anthropic_base_url / models / claude_model_mapping /
+        // group / enabled) must still load.
+        let json = r#"{
+            "name": "old",
+            "protocol": "openai",
+            "base_url": "https://example.com",
+            "api_key": null,
+            "model": "old-model"
+        }"#;
+        let config: ProviderConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(config.name, "old");
+        assert_eq!(config.protocol, "openai");
+        assert!(config.anthropic_base_url.is_none());
+        assert!(config.openai_base_url.is_none());
+        assert!(config.models.is_empty());
+        assert_eq!(config.group, ProviderGroup::Custom);
+        assert!(config.enabled, "enabled should default to true");
+    }
+
+    #[test]
+    fn provider_config_round_trips_with_all_new_fields() {
+        let config = ProviderConfig {
+            name: "bigmodel".to_owned(),
+            protocol: "anthropic".to_owned(),
+            base_url: None,
+            anthropic_base_url: Some("https://open.bigmodel.cn/api/anthropic".to_owned()),
+            openai_base_url: Some("https://open.bigmodel.cn/api/coding/paas/v4".to_owned()),
+            api_key: None,
+            model: Some("glm-5.1".to_owned()),
+            models: vec![ProviderModel { id: "glm-5.1".to_owned(), display_name: None }],
+            claude_model_mapping: ClaudeModelMapping {
+                opus: Some("glm-5.1".to_owned()),
+                sonnet: None,
+                haiku: None,
+            },
+            group: ProviderGroup::Builtin,
+            enabled: false,
+            profiles: Vec::new(),
+            active_profile: None,
+            api_key_stored: false,
+        };
+        let json = serde_json::to_string(&config).unwrap();
+        let back: ProviderConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.name, config.name);
+        assert_eq!(back.anthropic_base_url, config.anthropic_base_url);
+        assert_eq!(back.openai_base_url, config.openai_base_url);
+        assert_eq!(back.models.len(), 1);
+        assert_eq!(back.claude_model_mapping.opus.as_deref(), Some("glm-5.1"));
+        assert_eq!(back.group, ProviderGroup::Builtin);
+        assert!(!back.enabled);
+    }
+
+    #[test]
+    fn provider_group_serializes_lowercase() {
+        assert_eq!(serde_json::to_string(&ProviderGroup::Builtin).unwrap(), "\"builtin\"");
+        assert_eq!(serde_json::to_string(&ProviderGroup::Custom).unwrap(), "\"custom\"");
+    }
 }

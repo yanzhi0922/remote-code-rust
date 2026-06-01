@@ -1340,65 +1340,7 @@ pub(super) async fn codex_realtime_voices_list(
     .await
 }
 
-#[tauri::command]
-pub(super) async fn codex_device_key_create(
-    state: State<'_, AppState>,
-    request: CodexNativeParamsRequest,
-) -> std::result::Result<serde_json::Value, String> {
-    let params =
-        decode_required_codex_params::<DeviceKeyCreateParams>(request.params).map_err(|error| {
-            let msg = format!("{error:#}");
-            tracing::warn!(error = %msg, "command error");
-            msg
-        })?;
-    with_codex_adapter_value(&state, request.session_id, |adapter| {
-        Box::pin(async move {
-            serde_json::to_value(adapter.create_device_key(params).await?)
-                .map_err(anyhow::Error::from)
-        })
-    })
-    .await
-}
-
-#[tauri::command]
-pub(super) async fn codex_device_key_public(
-    state: State<'_, AppState>,
-    request: CodexNativeParamsRequest,
-) -> std::result::Result<serde_json::Value, String> {
-    let params =
-        decode_required_codex_params::<DeviceKeyPublicParams>(request.params).map_err(|error| {
-            let msg = format!("{error:#}");
-            tracing::warn!(error = %msg, "command error");
-            msg
-        })?;
-    with_codex_adapter_value(&state, request.session_id, |adapter| {
-        Box::pin(async move {
-            serde_json::to_value(adapter.get_device_key_public(params).await?)
-                .map_err(anyhow::Error::from)
-        })
-    })
-    .await
-}
-
-#[tauri::command]
-pub(super) async fn codex_device_key_sign(
-    state: State<'_, AppState>,
-    request: CodexNativeParamsRequest,
-) -> std::result::Result<serde_json::Value, String> {
-    let params =
-        decode_required_codex_params::<DeviceKeySignParams>(request.params).map_err(|error| {
-            let msg = format!("{error:#}");
-            tracing::warn!(error = %msg, "command error");
-            msg
-        })?;
-    with_codex_adapter_value(&state, request.session_id, |adapter| {
-        Box::pin(async move {
-            serde_json::to_value(adapter.sign_device_key(params).await?)
-                .map_err(anyhow::Error::from)
-        })
-    })
-    .await
-}
+// Device key commands removed — upstream removed DeviceKey APIs
 
 #[tauri::command]
 pub(super) async fn codex_fs_read_file(

@@ -50,7 +50,6 @@ use claude_ui_bridge::{
 use codex_app_server_protocol::{
     CancelLoginAccountParams, CommandExecResizeParams, CommandExecTerminalSize,
     CommandExecWriteParams, ConfigBatchWriteParams, ConfigEdit, ConfigValueWriteParams,
-    DeviceKeyCreateParams, DeviceKeyPublicParams, DeviceKeySignParams,
     ExternalAgentConfigDetectParams, ExternalAgentConfigImportParams, FsCopyParams,
     FsCreateDirectoryParams, FsGetMetadataParams, FsReadDirectoryParams, FsReadFileParams,
     FsRemoveParams, FsUnwatchParams, FsWatchParams, FsWriteFileParams, FuzzyFileSearchParams,
@@ -180,6 +179,29 @@ fn save_provider_configs(paths: &AppPaths, configs: &ProviderConfigList) -> Resu
     save_json_file(&gui_storage_path(paths, PROVIDERS_FILE_NAME), configs)
 }
 
+/// Append any built-in providers the user doesn't already have, in seed order.
+/// Returns `true` if at least one provider was added.
+fn merge_missing_builtin_providers(configs: &mut ProviderConfigList) -> bool {
+    let existing: std::collections::HashSet<String> = configs
+        .providers
+        .iter()
+        .map(|p| p.name.to_lowercase())
+        .collect();
+    let mut added = false;
+    for provider in builtin_provider_seed() {
+        if !existing.contains(&provider.name.to_lowercase()) {
+            configs.providers.push(provider);
+            added = true;
+        }
+    }
+    if added {
+        configs
+            .providers
+            .sort_by(|left, right| left.name.to_lowercase().cmp(&right.name.to_lowercase()));
+    }
+    added
+}
+
 fn load_gui_settings(paths: &AppPaths) -> Result<GuiSettingsFile> {
     load_json_file(&gui_storage_path(paths, SETTINGS_FILE_NAME))
 }
@@ -221,14 +243,39 @@ fn normalize_provider_config(input: ProviderConfig) -> Result<ProviderConfig> {
     }
     let protocol = parse_protocol(Some(&input.protocol)).unwrap_or(ProviderProtocol::OpenAi);
     let base_url = normalize_base_url(trimmed_option(input.base_url), protocol);
+    let anthropic_base_url = if matches!(protocol, ProviderProtocol::Anthropic) {
+        normalize_base_url(trimmed_option(input.anthropic_base_url), protocol)
+    } else {
+        trimmed_option(input.anthropic_base_url)
+    };
+    let openai_base_url = if matches!(protocol, ProviderProtocol::OpenAi) {
+        normalize_base_url(trimmed_option(input.openai_base_url), protocol)
+    } else {
+        trimmed_option(input.openai_base_url)
+    };
     let api_key = trimmed_option(input.api_key);
     let model = trimmed_option(input.model);
+    let models = input
+        .models
+        .into_iter()
+        .map(|m| ProviderModel {
+            id: m.id.trim().to_owned(),
+            display_name: trimmed_option(m.display_name),
+        })
+        .filter(|m| !m.id.is_empty())
+        .collect();
     Ok(ProviderConfig {
         name,
         protocol: protocol.as_str().to_owned(),
         base_url,
+        anthropic_base_url,
+        openai_base_url,
         api_key,
         model,
+        models,
+        claude_model_mapping: input.claude_model_mapping,
+        group: input.group,
+        enabled: input.enabled,
         profiles: input.profiles,
         active_profile: input.active_profile,
         api_key_stored: false,
@@ -1622,7 +1669,20 @@ fn provider_config_to_runtime(
     current: &RuntimeProviderConfig,
 ) -> Result<RuntimeProviderConfig> {
     let protocol = parse_protocol(Some(&stored.protocol)).unwrap_or(ProviderProtocol::OpenAi);
-    let base_url = normalize_base_url(stored.base_url.clone(), protocol);
+    // Pick the right per-protocol URL when the user has set one, otherwise
+    // fall back to the legacy combined `base_url` field.
+    let per_protocol_url = match protocol {
+        ProviderProtocol::Anthropic => stored
+            .anthropic_base_url
+            .clone()
+            .or_else(|| stored.base_url.clone()),
+        ProviderProtocol::OpenAi => stored
+            .openai_base_url
+            .clone()
+            .or_else(|| stored.base_url.clone()),
+        _ => stored.base_url.clone(),
+    };
+    let base_url = normalize_base_url(per_protocol_url, protocol);
     Ok(RuntimeProviderConfig {
         name: stored.name.clone(),
         base_url,
@@ -1710,6 +1770,22 @@ fn build_runtime_state() -> Result<RuntimeState> {
         })?;
     let mut provider_configs = load_provider_configs(&config.paths)?;
     let gui_settings = load_gui_settings(&config.paths)?;
+
+    // Seed built-in providers the first time the user opens the app, so the
+    // "model provider" page in settings has something to show even with an
+    // empty `gui-providers.json`. Existing entries are never overwritten —
+    // we only merge missing built-ins in case the seed list grew in a later
+    // version.
+    let mut providers_dirty = false;
+    if provider_configs.providers.is_empty() {
+        provider_configs.providers = builtin_provider_seed();
+        providers_dirty = true;
+    } else if merge_missing_builtin_providers(&mut provider_configs) {
+        providers_dirty = true;
+    }
+    if providers_dirty {
+        save_provider_configs(&config.paths, &provider_configs)?;
+    }
 
     sync_active_provider_from_runtime(&config, &mut provider_configs);
     if let Some(stored) = active_provider_config(&provider_configs) {
@@ -1827,7 +1903,20 @@ fn apply_provider_credentials_from_configs(
         provider.model = trimmed_option(stored.model.clone());
     }
     if provider.base_url.is_none() {
-        provider.base_url = normalize_base_url(stored.base_url.clone(), provider.protocol);
+        // Pick the right per-protocol URL when one is set, else fall back to
+        // the legacy combined `base_url` field.
+        let candidate = match provider.protocol {
+            ProviderProtocol::Anthropic => stored
+                .anthropic_base_url
+                .clone()
+                .or_else(|| stored.base_url.clone()),
+            ProviderProtocol::OpenAi => stored
+                .openai_base_url
+                .clone()
+                .or_else(|| stored.base_url.clone()),
+            _ => stored.base_url.clone(),
+        };
+        provider.base_url = normalize_base_url(candidate, provider.protocol);
     }
 }
 

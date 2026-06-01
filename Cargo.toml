@@ -11,142 +11,6 @@ members = [
     "crates/shared/*",
     "apps/remote-code-gui/src-tauri",
     "agents/claudecode",
-    # Codex leaf crates (Stage 1) — listed explicitly to avoid glob issues
-    "crates/codex/ansi-escape",
-    "crates/codex/async-utils",
-    "crates/codex/codex-backend-openapi-models",
-    "crates/codex/codex-experimental-api-macros",
-    "crates/codex/collaboration-mode-templates",
-    "crates/codex/device-key",
-    "crates/codex/process-hardening",
-    "crates/codex/terminal-detection",
-    "crates/codex/uds",
-    # Codex Stage 2 crates (depend on leaf crates)
-    "crates/codex/codex-client",
-    "crates/codex/execpolicy",
-    "crates/codex/responses-api-proxy",
-    "crates/codex/skills",
-    "crates/codex/stdio-to-uds",
-    # Codex Stage 3 crates (depend on stage 2)
-    "crates/codex/install-context",
-    "crates/codex/network-proxy",
-    # Codex Stage 4: protocol (key crate — unlocks ~40 crates)
-    "crates/codex/protocol",
-    # Codex Stage 5: protocol-dependent crates
-    "crates/codex/agent-identity",
-    "crates/codex/codex-api",
-    "crates/codex/sandboxing",
-    "crates/codex/shell-command",
-    # Codex Stage 6: app-server-protocol + codex-api (unblocked by tungstenite patch)
-    "crates/codex/app-server-protocol",
-    # Codex Stage 7: api/protocol-dependent crates
-    "crates/codex/connectors",
-    "crates/codex/debug-client",
-    "crates/codex/model-provider-info",
-    "crates/codex/otel",
-    "crates/codex/response-debug-context",
-    # Codex Stage 8: features (feature flags)
-    "crates/codex/features",
-    # Codex Stage 9: config (key crate — unlocks hooks, login, exec-server)
-    "crates/codex/config",
-    # Codex Stage 10: config-dependent crates
-    "crates/codex/hooks",
-    "crates/codex/login",
-    # Codex Stage 11: login-dependent crates
-    "crates/codex/feedback",
-    "crates/codex/models-manager",
-    # Codex Stage 12: model-provider (key unlocker)
-    "crates/codex/model-provider",
-    # Codex Stage 13: exec-server, shell-escalation, backend-client
-    "crates/codex/exec-server",
-    "crates/codex/shell-escalation",
-    "crates/codex/backend-client",
-    # Codex Stage 13.5: new crates from upstream update
-    "crates/codex/agent-graph-store",
-    "crates/codex/core-api",
-    "crates/codex/file-system",
-    # Codex Stage 14: exec-server-dependent crates
-    "crates/codex/apply-patch",
-    "crates/codex/git-utils",
-    "crates/codex/rmcp-client",
-    "crates/codex/utils/plugins",
-    "crates/codex/app-server-transport",
-    # Codex Stage 15: cloud-tasks-client, plugin, secrets, state
-    "crates/codex/cloud-tasks-client",
-    "crates/codex/plugin",
-    "crates/codex/secrets",
-    "crates/codex/state",
-    # Codex Stage 16: analytics, cloud-tasks-mock-client, codex-mcp, rollout
-    "crates/codex/analytics",
-    "crates/codex/cloud-tasks-mock-client",
-    "crates/codex/codex-mcp",
-    "crates/codex/rollout",
-    # Codex Stage 17: core-skills, thread-store
-    "crates/codex/core-skills",
-    "crates/codex/thread-store",
-    # Codex Stage 18: core-plugins
-    "crates/codex/core-plugins",
-    # Codex utils leaf crates
-    "crates/codex/utils/absolute-path",
-    "crates/codex/utils/cache",
-    "crates/codex/utils/elapsed",
-    "crates/codex/utils/fuzzy-match",
-    "crates/codex/utils/json-to-toml",
-    "crates/codex/utils/pty",
-    "crates/codex/utils/readiness",
-    "crates/codex/utils/rustls-provider",
-    "crates/codex/utils/sleep-inhibitor",
-    "crates/codex/utils/stream-parser",
-    "crates/codex/utils/string",
-    "crates/codex/utils/template",
-    # Codex utils Stage 2
-    "crates/codex/utils/home-dir",
-    "crates/codex/utils/image",
-    "crates/codex/utils/path-utils",
-    # Codex utils Stage 3
-    "crates/codex/utils/approval-presets",
-    "crates/codex/utils/cli",
-    "crates/codex/utils/output-truncation",
-    # Codex Stage 18.5: new crates from upstream update
-    "crates/codex/external-agent-migration",
-    "crates/codex/external-agent-sessions",
-    "crates/codex/memories/read",
-    "crates/codex/memories/write",
-    # Codex Stage 19: code-mode service, rollout-trace, tools, core
-    "crates/codex/code-mode",
-    "crates/codex/rollout-trace",
-    "crates/codex/tools",
-    "crates/codex/core",
-    # Codex Stage 20: core-dependent crates
-    "crates/codex/app-server-test-client",
-    "crates/codex/app-server/tests/common",
-    "crates/codex/core/tests/common",
-    "crates/codex/chatgpt",
-    "crates/codex/cloud-requirements",
-    "crates/codex/linux-sandbox",
-    "crates/codex/lmstudio",
-    "crates/codex/ollama",
-    "crates/codex/utils/cargo-bin",
-    "crates/codex/utils/sandbox-summary",
-    # Codex Stage 21: arg0, utils/oss
-    "crates/codex/arg0",
-    "crates/codex/utils/oss",
-    # Codex Stage 22: mcp-server, test-binary-support
-    "crates/codex/mcp-server",
-    "crates/codex/mcp-server/tests/common",
-    "crates/codex/test-binary-support",
-    # Codex Stage 23: app-server
-    "crates/codex/app-server",
-    # Codex Stage 24: app-server-client
-    "crates/codex/app-server-client",
-    # Codex Stage 25: exec
-    "crates/codex/exec",
-    # Codex Stage 26: windows-sandbox-rs
-    "crates/codex/windows-sandbox-rs",
-    # Codex Stage 27: cloud-tasks, tui, cli (final crates — circular deps)
-    "crates/codex/cloud-tasks",
-    "crates/codex/tui",
-    "crates/codex/cli",
     # Roo crates (merged from crates/roo workspace)
     "crates/roo/roo-types",
     "crates/roo/roo-jsonrpc",
@@ -221,6 +85,9 @@ members = [
 ]
 exclude = [
     "apps/remote-code-gui",
+    # Codex is a git submodule with its own Cargo workspace.
+    # Internal codex deps resolve from agents/codex/codex-rs/Cargo.toml.
+    "agents/codex",
 ]
 resolver = "2"
 
@@ -306,7 +173,7 @@ chardetng = "0.1.17"
 crypto_box = { version = "0.9.1", features = ["seal"] }
 ed25519-dalek = { version = "2.2.0", features = ["pkcs8", "rand_core"] }
 tokio-test = "0.4"
-tree-sitter = "0.26.8"
+tree-sitter = "0.25.10"
 tree-sitter-bash = "0.25"
 tungstenite = { version = "0.27.0", features = ["deflate"] }
 which = "8"
@@ -450,130 +317,143 @@ rc-agent-protocol = { path = "crates/shared/rc-agent-protocol" }
 rc-engine-events = { path = "crates/shared/rc-engine-events" }
 
 # ── Internal crate path dependencies (codex leaf crates) ────────
-codex-ansi-escape = { path = "crates/codex/ansi-escape" }
-codex-async-utils = { path = "crates/codex/async-utils" }
-codex-aws-auth = { path = "crates/codex/aws-auth" }
-codex-backend-openapi-models = { path = "crates/codex/codex-backend-openapi-models" }
-codex-collaboration-mode-templates = { path = "crates/codex/collaboration-mode-templates" }
-codex-device-key = { path = "crates/codex/device-key" }
-codex-experimental-api-macros = { path = "crates/codex/codex-experimental-api-macros" }
-codex-execpolicy-legacy = { path = "crates/codex/execpolicy-legacy" }
-codex-file-search = { path = "crates/codex/file-search" }
-codex-keyring-store = { path = "crates/codex/keyring-store" }
-codex-process-hardening = { path = "crates/codex/process-hardening" }
-codex-realtime-webrtc = { path = "crates/codex/realtime-webrtc" }
-codex-terminal-detection = { path = "crates/codex/terminal-detection" }
-codex-uds = { path = "crates/codex/uds" }
-codex-utils-absolute-path = { path = "crates/codex/utils/absolute-path" }
-codex-utils-cache = { path = "crates/codex/utils/cache" }
-codex-utils-cargo-bin = { path = "crates/codex/utils/cargo-bin" }
-codex-utils-elapsed = { path = "crates/codex/utils/elapsed" }
-codex-utils-fuzzy-match = { path = "crates/codex/utils/fuzzy-match" }
-codex-utils-json-to-toml = { path = "crates/codex/utils/json-to-toml" }
-codex-utils-pty = { path = "crates/codex/utils/pty" }
-codex-utils-readiness = { path = "crates/codex/utils/readiness" }
-codex-utils-rustls-provider = { path = "crates/codex/utils/rustls-provider" }
-codex-utils-sleep-inhibitor = { path = "crates/codex/utils/sleep-inhibitor" }
-codex-utils-stream-parser = { path = "crates/codex/utils/stream-parser" }
-codex-utils-string = { path = "crates/codex/utils/string" }
-codex-utils-template = { path = "crates/codex/utils/template" }
+codex-ansi-escape = { path = "agents/codex/codex-rs/ansi-escape" }
+codex-async-utils = { path = "agents/codex/codex-rs/async-utils" }
+codex-aws-auth = { path = "agents/codex/codex-rs/aws-auth" }
+codex-backend-openapi-models = { path = "agents/codex/codex-rs/codex-backend-openapi-models" }
+codex-collaboration-mode-templates = { path = "agents/codex/codex-rs/collaboration-mode-templates" }
+codex-device-key = { path = "agents/codex/codex-rs/device-key" }
+codex-experimental-api-macros = { path = "agents/codex/codex-rs/codex-experimental-api-macros" }
+codex-execpolicy-legacy = { path = "agents/codex/codex-rs/execpolicy-legacy" }
+codex-file-search = { path = "agents/codex/codex-rs/file-search" }
+codex-keyring-store = { path = "agents/codex/codex-rs/keyring-store" }
+codex-process-hardening = { path = "agents/codex/codex-rs/process-hardening" }
+codex-realtime-webrtc = { path = "agents/codex/codex-rs/realtime-webrtc" }
+codex-terminal-detection = { path = "agents/codex/codex-rs/terminal-detection" }
+codex-uds = { path = "agents/codex/codex-rs/uds" }
+codex-utils-absolute-path = { path = "agents/codex/codex-rs/utils/absolute-path" }
+codex-utils-cache = { path = "agents/codex/codex-rs/utils/cache" }
+codex-utils-cargo-bin = { path = "agents/codex/codex-rs/utils/cargo-bin" }
+codex-utils-elapsed = { path = "agents/codex/codex-rs/utils/elapsed" }
+codex-utils-fuzzy-match = { path = "agents/codex/codex-rs/utils/fuzzy-match" }
+codex-utils-json-to-toml = { path = "agents/codex/codex-rs/utils/json-to-toml" }
+codex-utils-pty = { path = "agents/codex/codex-rs/utils/pty" }
+codex-utils-readiness = { path = "agents/codex/codex-rs/utils/readiness" }
+codex-utils-rustls-provider = { path = "agents/codex/codex-rs/utils/rustls-provider" }
+codex-utils-sleep-inhibitor = { path = "agents/codex/codex-rs/utils/sleep-inhibitor" }
+codex-utils-stream-parser = { path = "agents/codex/codex-rs/utils/stream-parser" }
+codex-utils-string = { path = "agents/codex/codex-rs/utils/string" }
+codex-utils-template = { path = "agents/codex/codex-rs/utils/template" }
 # Stage 2 internal deps
-codex-client = { path = "crates/codex/codex-client" }
-codex-execpolicy = { path = "crates/codex/execpolicy" }
-codex-responses-api-proxy = { path = "crates/codex/responses-api-proxy" }
-codex-skills = { path = "crates/codex/skills" }
-codex-stdio-to-uds = { path = "crates/codex/stdio-to-uds" }
-codex-utils-home-dir = { path = "crates/codex/utils/home-dir" }
-codex-utils-image = { path = "crates/codex/utils/image" }
-codex-utils-path = { path = "crates/codex/utils/path-utils" }
+codex-client = { path = "agents/codex/codex-rs/codex-client" }
+codex-execpolicy = { path = "agents/codex/codex-rs/execpolicy" }
+codex-responses-api-proxy = { path = "agents/codex/codex-rs/responses-api-proxy" }
+codex-skills = { path = "agents/codex/codex-rs/skills" }
+codex-stdio-to-uds = { path = "agents/codex/codex-rs/stdio-to-uds" }
+codex-utils-home-dir = { path = "agents/codex/codex-rs/utils/home-dir" }
+codex-utils-image = { path = "agents/codex/codex-rs/utils/image" }
+codex-utils-path = { path = "agents/codex/codex-rs/utils/path-utils" }
 # Stage 3 internal deps
-codex-install-context = { path = "crates/codex/install-context" }
-codex-network-proxy = { path = "crates/codex/network-proxy" }
+codex-install-context = { path = "agents/codex/codex-rs/install-context" }
+codex-network-proxy = { path = "agents/codex/codex-rs/network-proxy" }
 # Stage 4 internal deps
-codex-protocol = { path = "crates/codex/protocol" }
+codex-protocol = { path = "agents/codex/codex-rs/protocol" }
 # Stage 5 internal deps
-codex-agent-identity = { path = "crates/codex/agent-identity" }
-codex-api = { path = "crates/codex/codex-api" }
-codex-sandboxing = { path = "crates/codex/sandboxing" }
-codex-shell-command = { path = "crates/codex/shell-command" }
-codex-utils-approval-presets = { path = "crates/codex/utils/approval-presets" }
-codex-utils-cli = { path = "crates/codex/utils/cli" }
-codex-utils-output-truncation = { path = "crates/codex/utils/output-truncation" }
+codex-agent-identity = { path = "agents/codex/codex-rs/agent-identity" }
+codex-api = { path = "agents/codex/codex-rs/codex-api" }
+codex-sandboxing = { path = "agents/codex/codex-rs/sandboxing" }
+codex-shell-command = { path = "agents/codex/codex-rs/shell-command" }
+codex-utils-approval-presets = { path = "agents/codex/codex-rs/utils/approval-presets" }
+codex-utils-cli = { path = "agents/codex/codex-rs/utils/cli" }
+codex-utils-output-truncation = { path = "agents/codex/codex-rs/utils/output-truncation" }
 # Stage 6 internal deps
-codex-app-server-protocol = { path = "crates/codex/app-server-protocol" }
+codex-app-server-protocol = { path = "agents/codex/codex-rs/app-server-protocol" }
 # Stage 7 internal deps
-codex-connectors = { path = "crates/codex/connectors" }
-codex-debug-client = { path = "crates/codex/debug-client" }
-codex-model-provider-info = { path = "crates/codex/model-provider-info" }
-codex-otel = { path = "crates/codex/otel" }
-codex-response-debug-context = { path = "crates/codex/response-debug-context" }
+codex-connectors = { path = "agents/codex/codex-rs/connectors" }
+codex-debug-client = { path = "agents/codex/codex-rs/debug-client" }
+codex-model-provider-info = { path = "agents/codex/codex-rs/model-provider-info" }
+codex-otel = { path = "agents/codex/codex-rs/otel" }
+codex-response-debug-context = { path = "agents/codex/codex-rs/response-debug-context" }
 # Stage 8 internal deps
-codex-features = { path = "crates/codex/features" }
+codex-features = { path = "agents/codex/codex-rs/features" }
 # Stage 9 internal deps
-codex-config = { path = "crates/codex/config" }
+codex-config = { path = "agents/codex/codex-rs/config" }
 # Stage 10 internal deps
-codex-hooks = { path = "crates/codex/hooks" }
-codex-login = { path = "crates/codex/login" }
+codex-hooks = { path = "agents/codex/codex-rs/hooks" }
+codex-login = { path = "agents/codex/codex-rs/login" }
 # Stage 11 internal deps
-codex-feedback = { path = "crates/codex/feedback" }
-codex-models-manager = { path = "crates/codex/models-manager" }
-codex-model-provider = { path = "crates/codex/model-provider" }
-codex-exec-server = { path = "crates/codex/exec-server" }
-codex-shell-escalation = { path = "crates/codex/shell-escalation" }
-codex-backend-client = { path = "crates/codex/backend-client" }
-codex-apply-patch = { path = "crates/codex/apply-patch" }
-codex-git-utils = { path = "crates/codex/git-utils" }
-codex-rmcp-client = { path = "crates/codex/rmcp-client" }
-codex-utils-plugins = { path = "crates/codex/utils/plugins" }
-codex-cloud-tasks-client = { path = "crates/codex/cloud-tasks-client" }
-codex-plugin = { path = "crates/codex/plugin" }
-codex-secrets = { path = "crates/codex/secrets" }
-codex-state = { path = "crates/codex/state" }
-codex-analytics = { path = "crates/codex/analytics" }
-codex-cloud-tasks-mock-client = { path = "crates/codex/cloud-tasks-mock-client" }
-codex-mcp = { path = "crates/codex/codex-mcp" }
-codex-rollout = { path = "crates/codex/rollout" }
-codex-core-skills = { path = "crates/codex/core-skills" }
-codex-thread-store = { path = "crates/codex/thread-store" }
-codex-core-plugins = { path = "crates/codex/core-plugins" }
-codex-code-mode = { path = "crates/codex/code-mode" }
-codex-rollout-trace = { path = "crates/codex/rollout-trace" }
-codex-tools = { path = "crates/codex/tools" }
-codex-core = { path = "crates/codex/core" }
-codex-core-test-support = { path = "crates/codex/core/tests/common" }
-codex-app-test-support = { path = "crates/codex/app-server/tests/common" }
-codex-app-server-test-client = { path = "crates/codex/app-server-test-client" }
-codex-chatgpt = { path = "crates/codex/chatgpt" }
-codex-cloud-requirements = { path = "crates/codex/cloud-requirements" }
-codex-linux-sandbox = { path = "crates/codex/linux-sandbox" }
-codex-lmstudio = { path = "crates/codex/lmstudio" }
-codex-ollama = { path = "crates/codex/ollama" }
-codex-utils-sandbox-summary = { path = "crates/codex/utils/sandbox-summary" }
-codex-arg0 = { path = "crates/codex/arg0" }
-codex-utils-oss = { path = "crates/codex/utils/oss" }
-codex-mcp-server = { path = "crates/codex/mcp-server" }
-codex-test-binary-support = { path = "crates/codex/test-binary-support" }
-codex-app-server = { path = "crates/codex/app-server" }
-codex-app-server-client = { path = "crates/codex/app-server-client" }
-codex-exec = { path = "crates/codex/exec" }
-codex-windows-sandbox = { path = "crates/codex/windows-sandbox-rs" }
+codex-feedback = { path = "agents/codex/codex-rs/feedback" }
+codex-models-manager = { path = "agents/codex/codex-rs/models-manager" }
+codex-model-provider = { path = "agents/codex/codex-rs/model-provider" }
+codex-exec-server = { path = "agents/codex/codex-rs/exec-server" }
+codex-shell-escalation = { path = "agents/codex/codex-rs/shell-escalation" }
+codex-backend-client = { path = "agents/codex/codex-rs/backend-client" }
+codex-apply-patch = { path = "agents/codex/codex-rs/apply-patch" }
+codex-git-utils = { path = "agents/codex/codex-rs/git-utils" }
+codex-rmcp-client = { path = "agents/codex/codex-rs/rmcp-client" }
+codex-utils-plugins = { path = "agents/codex/codex-rs/utils/plugins" }
+codex-cloud-tasks-client = { path = "agents/codex/codex-rs/cloud-tasks-client" }
+codex-plugin = { path = "agents/codex/codex-rs/plugin" }
+codex-secrets = { path = "agents/codex/codex-rs/secrets" }
+codex-state = { path = "agents/codex/codex-rs/state" }
+codex-analytics = { path = "agents/codex/codex-rs/analytics" }
+codex-cloud-tasks-mock-client = { path = "agents/codex/codex-rs/cloud-tasks-mock-client" }
+codex-mcp = { path = "agents/codex/codex-rs/codex-mcp" }
+codex-rollout = { path = "agents/codex/codex-rs/rollout" }
+codex-core-skills = { path = "agents/codex/codex-rs/core-skills" }
+codex-thread-store = { path = "agents/codex/codex-rs/thread-store" }
+codex-core-plugins = { path = "agents/codex/codex-rs/core-plugins" }
+codex-code-mode = { path = "agents/codex/codex-rs/code-mode" }
+codex-rollout-trace = { path = "agents/codex/codex-rs/rollout-trace" }
+codex-tools = { path = "agents/codex/codex-rs/tools" }
+codex-core = { path = "agents/codex/codex-rs/core" }
+codex-core-test-support = { path = "agents/codex/codex-rs/core/tests/common" }
+codex-app-test-support = { path = "agents/codex/codex-rs/app-server/tests/common" }
+codex-app-server-test-client = { path = "agents/codex/codex-rs/app-server-test-client" }
+codex-chatgpt = { path = "agents/codex/codex-rs/chatgpt" }
+codex-cloud-requirements = { path = "agents/codex/codex-rs/cloud-requirements" }
+codex-linux-sandbox = { path = "agents/codex/codex-rs/linux-sandbox" }
+codex-lmstudio = { path = "agents/codex/codex-rs/lmstudio" }
+codex-ollama = { path = "agents/codex/codex-rs/ollama" }
+codex-utils-sandbox-summary = { path = "agents/codex/codex-rs/utils/sandbox-summary" }
+codex-arg0 = { path = "agents/codex/codex-rs/arg0" }
+codex-utils-oss = { path = "agents/codex/codex-rs/utils/oss" }
+codex-mcp-server = { path = "agents/codex/codex-rs/mcp-server" }
+codex-test-binary-support = { path = "agents/codex/codex-rs/test-binary-support" }
+codex-app-server = { path = "agents/codex/codex-rs/app-server" }
+codex-app-server-client = { path = "agents/codex/codex-rs/app-server-client" }
+codex-exec = { path = "agents/codex/codex-rs/exec" }
+codex-windows-sandbox = { path = "agents/codex/codex-rs/windows-sandbox-rs" }
 # Stage 27 internal deps (cloud-tasks, tui, cli)
-codex-cloud-tasks = { path = "crates/codex/cloud-tasks" }
-codex-tui = { path = "crates/codex/tui" }
-codex-cli = { path = "crates/codex/cli" }
+codex-cloud-tasks = { path = "agents/codex/codex-rs/cloud-tasks" }
+codex-tui = { path = "agents/codex/codex-rs/tui" }
+codex-cli = { path = "agents/codex/codex-rs/cli" }
 # New upstream crates
-codex-agent-graph-store = { path = "crates/codex/agent-graph-store" }
-codex-app-server-transport = { path = "crates/codex/app-server-transport" }
-codex-core-api = { path = "crates/codex/core-api" }
-codex-file-system = { path = "crates/codex/file-system" }
-codex-external-agent-migration = { path = "crates/codex/external-agent-migration" }
-codex-external-agent-sessions = { path = "crates/codex/external-agent-sessions" }
-codex-memories-read = { path = "crates/codex/memories/read" }
-codex-memories-write = { path = "crates/codex/memories/write" }
+codex-agent-graph-store = { path = "agents/codex/codex-rs/agent-graph-store" }
+codex-app-server-transport = { path = "agents/codex/codex-rs/app-server-transport" }
+codex-core-api = { path = "agents/codex/codex-rs/core-api" }
+codex-file-system = { path = "agents/codex/codex-rs/file-system" }
+codex-external-agent-migration = { path = "agents/codex/codex-rs/external-agent-migration" }
+codex-external-agent-sessions = { path = "agents/codex/codex-rs/external-agent-sessions" }
+codex-memories-read = { path = "agents/codex/codex-rs/memories/read" }
+codex-memories-write = { path = "agents/codex/codex-rs/memories/write" }
+# Upstream extension crates (identical to upstream — were excluded from old fork workspace)
+codex-extension-api = { path = "agents/codex/codex-rs/ext/extension-api" }
+codex-goal-extension = { path = "agents/codex/codex-rs/ext/goal" }
+codex-guardian = { path = "agents/codex/codex-rs/ext/guardian" }
+codex-image-generation-extension = { path = "agents/codex/codex-rs/ext/image-generation" }
+codex-memories-extension = { path = "agents/codex/codex-rs/ext/memories" }
+codex-web-search-extension = { path = "agents/codex/codex-rs/ext/web-search" }
+# Other upstream crates missing from old fork
+codex-app-server-daemon = { path = "agents/codex/codex-rs/app-server-daemon" }
+codex-bwrap = { path = "agents/codex/codex-rs/bwrap" }
+# codex-file-watcher — empty crate (Bazel-only), skip
+codex-message-history = { path = "agents/codex/codex-rs/message-history" }
+codex-thread-manager-sample = { path = "agents/codex/codex-rs/thread-manager-sample" }
 # Upstream aliases for test support crates
-app_test_support = { path = "crates/codex/app-server/tests/common" }
-core_test_support = { path = "crates/codex/core/tests/common" }
-mcp_test_support = { path = "crates/codex/mcp-server/tests/common" }
+app_test_support = { path = "agents/codex/codex-rs/app-server/tests/common" }
+core_test_support = { path = "agents/codex/codex-rs/core/tests/common" }
+mcp_test_support = { path = "agents/codex/codex-rs/mcp-server/tests/common" }
 
 	# ── Internal crate path dependencies (roo) ──────────────────────
 	roo-types = { path = "crates/roo/roo-types" }

@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { FullSettings } from '../../lib/types';
+import type { FullSettings, ProviderConfig, ProviderConfigList } from '../../lib/types';
 import { resetAppStore } from '../../test/appStoreTestUtils';
 import { SettingsPanel } from './SettingsPanel';
 
@@ -93,3 +93,182 @@ describe('layout SettingsPanel', () => {
     expect(screen.getByText('/test/remote_control.json')).toBeInTheDocument();
   });
 });
+
+function makeProviderConfig(overrides: Partial<ProviderConfig>): ProviderConfig {
+  return {
+    name: 'bigmodel',
+    protocol: 'anthropic',
+    anthropic_base_url: 'https://open.bigmodel.cn/api/anthropic',
+    openai_base_url: 'https://open.bigmodel.cn/api/coding/paas/v4',
+    api_key: '',
+    api_key_stored: true,
+    model: 'glm-5.1',
+    models: [
+      { id: 'glm-5.1' },
+      { id: 'glm-5-turbo' },
+    ],
+    claude_model_mapping: { opus: 'glm-5.1', sonnet: 'glm-5.1', haiku: 'glm-5.1' },
+    group: 'builtin',
+    enabled: true,
+    profiles: [],
+    active_profile: undefined,
+    ...overrides,
+  };
+}
+
+const builtinBigmodel = makeProviderConfig({ name: 'bigmodel', group: 'builtin' });
+const builtinZai = makeProviderConfig({ name: 'z.ai', group: 'builtin' });
+const customProvider = makeProviderConfig({
+  name: 'my-provider',
+  group: 'custom',
+  anthropic_base_url: 'https://example.com/anthropic',
+  openai_base_url: 'https://example.com/v1',
+  model: 'foo',
+  models: [{ id: 'foo' }, { id: 'bar' }],
+  claude_model_mapping: { opus: 'foo', sonnet: 'foo', haiku: 'foo' },
+});
+
+describe('layout SettingsPanel — model providers redesign', () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  function seedProviders(
+    overrides: Partial<StoreState> = {},
+  ): { providerConfigs: ProviderConfigList } {
+    const providerConfigs: ProviderConfigList = {
+      providers: [builtinBigmodel, builtinZai, customProvider],
+      active_provider: 'bigmodel',
+    };
+    resetAppStore({
+      settings: mockSettings,
+      providerConfigs,
+      ...overrides,
+    });
+    return { providerConfigs };
+  }
+
+  it('renders built-in and custom groups in the left list', async () => {
+    seedProviders();
+    render(<SettingsPanel open onClose={vi.fn()} initialTab="provider" />);
+
+    await waitFor(() => {
+      expect(screen.getByText('模型供应商')).toBeInTheDocument();
+    });
+    // Both group headings
+    expect(screen.getByText('智谱')).toBeInTheDocument();
+    expect(screen.getByText('自定义供应商')).toBeInTheDocument();
+    // Provider names
+    expect(screen.getByTestId('provider-row-bigmodel')).toBeInTheDocument();
+    expect(screen.getByTestId('provider-row-z.ai')).toBeInTheDocument();
+    expect(screen.getByTestId('provider-row-my-provider')).toBeInTheDocument();
+  });
+
+  it('opens the detail panel for the active provider by default', async () => {
+    seedProviders();
+    render(<SettingsPanel open onClose={vi.fn()} initialTab="provider" />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('provider-detail-name')).toHaveTextContent('bigmodel');
+    });
+  });
+
+  it('switches detail panel when a different provider row is clicked', async () => {
+    seedProviders();
+    render(<SettingsPanel open onClose={vi.fn()} initialTab="provider" />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('provider-detail-name')).toHaveTextContent('bigmodel');
+    });
+    fireEvent.click(screen.getByTestId('provider-row-my-provider'));
+    expect(screen.getByTestId('provider-detail-name')).toHaveTextContent('my-provider');
+  });
+
+  it('hides the delete button for built-in providers', async () => {
+    seedProviders();
+    render(<SettingsPanel open onClose={vi.fn()} initialTab="provider" />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('provider-detail-name')).toHaveTextContent('bigmodel');
+    });
+    expect(screen.queryByTestId('provider-delete-btn')).not.toBeInTheDocument();
+  });
+
+  it('shows the delete button for custom providers', async () => {
+    seedProviders();
+    render(<SettingsPanel open onClose={vi.fn()} initialTab="provider" />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('provider-detail-name')).toHaveTextContent('bigmodel');
+    });
+    fireEvent.click(screen.getByTestId('provider-row-my-provider'));
+    expect(screen.getByTestId('provider-delete-btn')).toBeInTheDocument();
+  });
+
+  it('calls setProviderEnabled when the disable button is clicked', async () => {
+    const setProviderEnabled = vi.fn().mockResolvedValue(undefined);
+    seedProviders({ setProviderEnabled });
+    render(<SettingsPanel open onClose={vi.fn()} initialTab="provider" />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('provider-detail-name')).toHaveTextContent('bigmodel');
+    });
+    fireEvent.click(screen.getByTestId('provider-enable-btn'));
+    await waitFor(() => {
+      expect(setProviderEnabled).toHaveBeenCalledWith('bigmodel', false);
+    });
+  });
+
+  it('calls addProviderModel when a new model is added', async () => {
+    const addProviderModel = vi.fn().mockResolvedValue(undefined);
+    seedProviders({ addProviderModel });
+    render(<SettingsPanel open onClose={vi.fn()} initialTab="provider" />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('provider-detail-name')).toHaveTextContent('bigmodel');
+    });
+    fireEvent.change(screen.getByTestId('add-model-input'), {
+      target: { value: 'glm-5-new' },
+    });
+    fireEvent.click(screen.getByTestId('add-model-btn'));
+    await waitFor(() => {
+      expect(addProviderModel).toHaveBeenCalledWith('bigmodel', { id: 'glm-5-new' });
+    });
+  });
+
+  it('calls setClaudeModelMapping when the Opus tier dropdown changes', async () => {
+    const setClaudeModelMapping = vi.fn().mockResolvedValue(undefined);
+    seedProviders({ setClaudeModelMapping });
+    render(<SettingsPanel open onClose={vi.fn()} initialTab="provider" />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('provider-detail-name')).toHaveTextContent('bigmodel');
+    });
+    fireEvent.change(screen.getByTestId('tier-opus'), {
+      target: { value: 'glm-5-turbo' },
+    });
+    await waitFor(() => {
+      expect(setClaudeModelMapping).toHaveBeenCalledWith('bigmodel', {
+        opus: 'glm-5-turbo',
+        sonnet: 'glm-5.1',
+        haiku: 'glm-5.1',
+      });
+    });
+  });
+
+  it('calls refreshProviders when the refresh button is clicked', async () => {
+    const refreshProviders = vi.fn().mockResolvedValue(undefined);
+    seedProviders({ refreshProviders });
+    render(<SettingsPanel open onClose={vi.fn()} initialTab="provider" />);
+
+    await waitFor(() => {
+      expect(screen.getByText('模型供应商')).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole('button', { name: '刷新' }));
+    await waitFor(() => {
+      expect(refreshProviders).toHaveBeenCalledTimes(1);
+    });
+  });
+});
+
+type StoreState = ReturnType<typeof import('../../stores/useAppStore').useAppStore.getState>;

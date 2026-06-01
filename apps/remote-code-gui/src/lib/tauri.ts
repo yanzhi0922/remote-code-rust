@@ -82,9 +82,11 @@ import type {
   PermissionRequestInfo,
   ProjectInfo,
   PromptDoneInfo,
+  ClaudeModelMapping,
   ProviderConfig,
   ProviderConfigList,
   ProviderInfo,
+  ProviderModel,
   RuntimeMcpInventoryInfo,
   RuntimeStatusInfo,
   SessionExportFormat,
@@ -819,6 +821,10 @@ export function listProviderConfigs(): Promise<ProviderConfigList> {
   return invoke<ProviderConfigList>('list_provider_configs');
 }
 
+export function refreshProviderConfigs(): Promise<ProviderConfigList> {
+  return invoke<ProviderConfigList>('refresh_provider_configs');
+}
+
 export function saveProviderConfig(config: ProviderConfig, setActive: boolean): Promise<void> {
   return invoke<void>('save_provider_config', { config, setActive });
 }
@@ -829,6 +835,33 @@ export function deleteProviderConfig(name: string): Promise<void> {
 
 export function setActiveProvider(name: string): Promise<void> {
   return invoke<void>('set_active_provider', { name });
+}
+
+export function setProviderEnabled(name: string, enabled: boolean): Promise<void> {
+  return invoke<void>('set_provider_enabled', { name, enabled });
+}
+
+export function setClaudeModelMapping(
+  name: string,
+  mapping: ClaudeModelMapping,
+): Promise<void> {
+  return invoke<void>('set_claude_model_mapping', { name, mapping });
+}
+
+export function addProviderModel(name: string, model: ProviderModel): Promise<void> {
+  return invoke<void>('add_provider_model', { name, model });
+}
+
+export function updateProviderModel(
+  name: string,
+  oldId: string,
+  model: ProviderModel,
+): Promise<void> {
+  return invoke<void>('update_provider_model', { name, oldId, model });
+}
+
+export function removeProviderModel(name: string, modelId: string): Promise<void> {
+  return invoke<void>('remove_provider_model', { name, modelId });
 }
 
 export function switchProfile(

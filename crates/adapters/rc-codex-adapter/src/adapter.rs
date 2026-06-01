@@ -24,8 +24,7 @@ use codex_app_server_protocol::{
     CommandExecResponse, CommandExecTerminateParams, CommandExecTerminateResponse,
     CommandExecWriteParams, CommandExecWriteResponse, ConfigBatchWriteParams, ConfigReadParams,
     ConfigReadResponse, ConfigRequirementsReadResponse, ConfigValueWriteParams,
-    ConfigWriteResponse, DeviceKeyCreateParams, DeviceKeyCreateResponse, DeviceKeyPublicParams,
-    DeviceKeyPublicResponse, DeviceKeySignParams, DeviceKeySignResponse,
+    ConfigWriteResponse,
     ExperimentalFeatureEnablementSetParams, ExperimentalFeatureEnablementSetResponse,
     ExperimentalFeatureListParams, ExperimentalFeatureListResponse,
     ExternalAgentConfigDetectParams, ExternalAgentConfigDetectResponse,
@@ -74,7 +73,7 @@ use codex_app_server_protocol::{
     UserInput as ProtocolUserInput, WindowsSandboxSetupStartParams,
     WindowsSandboxSetupStartResponse,
 };
-use codex_exec_server::{EnvironmentManager, EnvironmentManagerArgs, ExecServerRuntimePaths};
+use codex_exec_server::{EnvironmentManager, ExecServerRuntimePaths};
 
 use crate::config::{
     CodexAdapterOptions, build_cli_overrides, build_harness_overrides,
@@ -121,8 +120,8 @@ pub struct CodexInProcessAdapter {
     model_provider: Option<String>,
     approval_policy: Option<AskForApproval>,
     sandbox: Option<SandboxMode>,
-    permissions: Option<codex_app_server_protocol::PermissionProfileSelectionParams>,
-    service_tier: Option<Option<codex_protocol::config_types::ServiceTier>>,
+    permissions: Option<String>,
+    service_tier: Option<Option<String>>,
     config_overrides: Option<HashMap<String, serde_json::Value>>,
     ephemeral: Option<bool>,
     persist_extended_history: bool,
@@ -294,6 +293,18 @@ impl CodexInProcessAdapter {
 
         let mut cli_overrides = options.cli_overrides.clone();
         cli_overrides.extend(build_cli_overrides(&options)?);
+
+        // Convert cli_overrides from workspace toml::Value (v1) to codex toml::Value (v0.9).
+        // The two types are different crate versions, so we round-trip through serde_json.
+        let codex_cli_overrides: Vec<(String, codex_toml::Value)> = cli_overrides
+            .into_iter()
+            .map(|(k, v)| {
+                let json = serde_json::to_string(&v).unwrap_or_default();
+                let parsed: codex_toml::Value = serde_json::from_str(&json).unwrap_or(codex_toml::Value::String(String::new()));
+                (k, parsed)
+            })
+            .collect();
+
         let harness_overrides = build_harness_overrides(&options, &cwd)?;
         let loader_overrides = codex_config::LoaderOverrides::default();
         let cloud_requirements = codex_config::CloudRequirementsLoader::default();
@@ -302,7 +313,7 @@ impl CodexInProcessAdapter {
         let config = codex_core::config::ConfigBuilder::default()
             .codex_home(codex_home)
             .fallback_cwd(Some(cwd.clone()))
-            .cli_overrides(cli_overrides.clone())
+            .cli_overrides(codex_cli_overrides.clone())
             .harness_overrides(harness_overrides)
             .loader_overrides(loader_overrides.clone())
             .cloud_requirements(cloud_requirements.clone())
@@ -320,10 +331,11 @@ impl CodexInProcessAdapter {
             arg0_paths.codex_linux_sandbox_exe.clone(),
         )
         .map_err(|e| anyhow::anyhow!("Codex runtime paths unavailable: {e}"))?;
-        let environment_manager = EnvironmentManager::new(EnvironmentManagerArgs {
-            local_runtime_paths: runtime_paths,
-        })
-        .await;
+        let environment_manager = EnvironmentManager::from_env(
+            Some(runtime_paths),
+        )
+        .await
+        .map_err(|e| anyhow::anyhow!("Codex environment manager init failed: {e}"))?;
 
         let state_db = codex_state::StateRuntime::init(
             config.sqlite_home.clone(),
@@ -338,11 +350,13 @@ impl CodexInProcessAdapter {
         let args = codex_app_server_client::InProcessClientStartArgs {
             arg0_paths,
             config: Arc::new(config),
-            cli_overrides,
+            cli_overrides: codex_cli_overrides,
             loader_overrides,
+            strict_config: false,
             cloud_requirements,
             feedback,
             log_db,
+            state_db,
             environment_manager: Arc::new(environment_manager),
             config_warnings: Vec::new(),
             session_source: codex_app_server_protocol::SessionSource::AppServer.into(),
@@ -390,15 +404,8 @@ impl CodexInProcessAdapter {
         self.permissions = options
             .permission_profile
             .clone()
-            .map(serde_json::from_value)
-            .transpose()
-            .context("invalid Codex permission profile")?;
-        self.service_tier = options
-            .service_tier
-            .clone()
-            .map(serde_json::from_value)
-            .transpose()
-            .context("invalid Codex service tier")?;
+            .and_then(|v| v.as_str().map(str::to_owned));
+        self.service_tier = options.service_tier.clone().map(|v| v.as_str().map(str::to_owned));
         self.config_overrides = Some(build_thread_config_overrides_json(&options));
         self.ephemeral = options.ephemeral;
         self.persist_extended_history = options.persist_extended_history;
@@ -478,7 +485,7 @@ impl CodexInProcessAdapter {
             cwd: Some(self.cwd.to_string_lossy().into_owned()),
             model: self.model.clone(),
             model_provider: self.model_provider.clone(),
-            service_tier: self.service_tier,
+            service_tier: self.service_tier.clone(),
             approval_policy: self.approval_policy,
             sandbox: self.sandbox,
             permissions: self.permissions.clone(),
@@ -494,7 +501,7 @@ impl CodexInProcessAdapter {
             thread_id,
             model: self.model.clone(),
             model_provider: self.model_provider.clone(),
-            service_tier: self.service_tier,
+            service_tier: self.service_tier.clone(),
             cwd: Some(self.cwd.to_string_lossy().into_owned()),
             approval_policy: self.approval_policy,
             sandbox: self.sandbox,
@@ -511,7 +518,7 @@ impl CodexInProcessAdapter {
             thread_id,
             model: self.model.clone(),
             model_provider: self.model_provider.clone(),
-            service_tier: self.service_tier,
+            service_tier: self.service_tier.clone(),
             cwd: Some(self.cwd.to_string_lossy().into_owned()),
             approval_policy: self.approval_policy,
             sandbox: self.sandbox,
@@ -970,6 +977,7 @@ impl CodexInProcessAdapter {
                 cursor,
                 limit,
                 sort_direction: Some(SortDirection::Desc),
+                items_view: None,
             },
         })
         .await
@@ -1014,11 +1022,13 @@ impl CodexInProcessAdapter {
             request_id: self.next_request_id(),
             params: TurnSteerParams {
                 thread_id: request.thread_id,
+                client_user_message_id: None,
                 input: vec![ProtocolUserInput::Text {
                     text: request.message,
                     text_elements: Vec::new(),
                 }],
                 responsesapi_client_metadata: None,
+                additional_context: None,
                 expected_turn_id: request.expected_turn_id,
             },
         })
@@ -1070,6 +1080,7 @@ impl CodexInProcessAdapter {
             params: ExperimentalFeatureListParams {
                 cursor: None,
                 limit: None,
+                thread_id: None,
             },
         })
         .await
@@ -1171,7 +1182,6 @@ impl CodexInProcessAdapter {
             params: SkillsListParams {
                 cwds,
                 force_reload,
-                per_cwd_extra_user_roots: None,
             },
         })
         .await
@@ -1215,6 +1225,7 @@ impl CodexInProcessAdapter {
                         })
                         .collect()
                 }),
+                marketplace_kinds: None,
             },
         })
         .await
@@ -1444,6 +1455,7 @@ impl CodexInProcessAdapter {
                 cursor,
                 limit,
                 detail,
+                thread_id: None,
             },
         })
         .await
@@ -1637,39 +1649,6 @@ impl CodexInProcessAdapter {
         self.request_typed(ClientRequest::ThreadRealtimeListVoices {
             request_id: self.next_request_id(),
             params: ThreadRealtimeListVoicesParams::default(),
-        })
-        .await
-    }
-
-    pub async fn create_device_key(
-        &self,
-        params: DeviceKeyCreateParams,
-    ) -> anyhow::Result<DeviceKeyCreateResponse> {
-        self.request_typed(ClientRequest::DeviceKeyCreate {
-            request_id: self.next_request_id(),
-            params,
-        })
-        .await
-    }
-
-    pub async fn get_device_key_public(
-        &self,
-        params: DeviceKeyPublicParams,
-    ) -> anyhow::Result<DeviceKeyPublicResponse> {
-        self.request_typed(ClientRequest::DeviceKeyPublic {
-            request_id: self.next_request_id(),
-            params,
-        })
-        .await
-    }
-
-    pub async fn sign_device_key(
-        &self,
-        params: DeviceKeySignParams,
-    ) -> anyhow::Result<DeviceKeySignResponse> {
-        self.request_typed(ClientRequest::DeviceKeySign {
-            request_id: self.next_request_id(),
-            params,
         })
         .await
     }
@@ -1953,7 +1932,7 @@ impl AgentAdapter for CodexInProcessAdapter {
                     input: vec![user_input],
                     cwd: Some(cwd.clone()),
                     model: self.model.clone(),
-                    service_tier: self.service_tier,
+                    service_tier: self.service_tier.clone(),
                     approval_policy: self.approval_policy,
                     permissions: self.permissions.clone(),
                     ..Default::default()
