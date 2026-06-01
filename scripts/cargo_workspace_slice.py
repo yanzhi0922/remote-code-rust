@@ -47,7 +47,7 @@ def package_slice(package: dict) -> str | None:
         return None
     if "/crates/claude/" in path or path.endswith("/agents/claudecode"):
         return "claude"
-    if "/crates/codex/" in path:
+    if "/crates/codex/" in path or "/agents/codex/codex-rs/" in path:
         return "codex"
     if "/crates/roo/" in path:
         return "roo"

@@ -330,7 +330,7 @@ pub fn process_captures(
                 let child_count = parent.child_count();
                 if child_count > 0
                     && let Ok(last_child_index) = u32::try_from(child_count - 1)
-                    && let Some(last_child) = parent.child(last_child_index)
+                    && let Some(last_child) = parent.child(last_child_index as usize)
                 {
                     let context_end = last_child.end_position().row;
                     let context_span = context_end - parent.start_position().row + 1;

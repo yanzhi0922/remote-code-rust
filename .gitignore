@@ -66,11 +66,13 @@ tmp_deps.txt
 gh-push-db.js
 runner-local.env
 
-# Agent source — exclude vendored git internals only
-agents/codex/.git/
+# Agent source — managed as git submodule (agents/codex)
 
 # Temporary UI screenshots and browser data
 .tmp-chrome-ui/
+
+# Codex cargo-test history and chrome-ui-qa browser profiles
+.codex-logs/
 
 # Claude Code worktrees (session-scoped, ephemeral)
 .claude/worktrees/
