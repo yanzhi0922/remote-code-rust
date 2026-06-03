@@ -73,6 +73,9 @@ for overlay in "$OVERLAY_DIR"/*.rs; do
             exec-build.rs)
                 target="$CODEX_DIR/codex-rs/exec/build.rs"
                 ;;
+            windows-sandbox-build.rs)
+                target="$CODEX_DIR/codex-rs/windows-sandbox-rs/build.rs"
+                ;;
             *)
                 echo "  Skipping unknown overlay: $filename"
                 continue
