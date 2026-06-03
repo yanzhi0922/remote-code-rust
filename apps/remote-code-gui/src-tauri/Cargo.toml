@@ -112,3 +112,10 @@ mobile = [
 
 [lints]
 workspace = true
+
+# Propagate a build-time env var to all build scripts in the dependency
+# graph so that codex-windows-sandbox can skip embedding a VERSIONINFO
+# resource that would otherwise clash with tauri-build's own VERSIONINFO
+# at link time (winres 0.1 hardcodes resource ID=1 → CVT1100).
+[env]
+REMOTE_CODE_GUI_BUILD = "1"
