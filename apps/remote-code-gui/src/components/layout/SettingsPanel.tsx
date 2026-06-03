@@ -19,7 +19,7 @@ import {
   Wifi,
   X,
 } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type {
   ClaudeModelMapping,
@@ -29,6 +29,7 @@ import type {
   ProviderModel,
   SessionSummary,
 } from '../../lib/types';
+import { recordFrontendLog } from '../../lib/tauri';
 import { useAppStore } from '../../stores/useAppStore';
 import { CodexSettings } from '../settings/CodexSettings';
 import { RemoteTab } from '../settings/RemoteTab';
@@ -410,6 +411,14 @@ function ProviderTab() {
   const [editingNew, setEditingNew] = useState(false);
   const [form, setForm] = useState<ProviderConfig>(emptyProviderConfig());
   const [showApiKey, setShowApiKey] = useState(false);
+  // Most recent probe failure (inline error banner).  Cleared on the
+  // next successful probe, when the user dismisses it, or when the
+  // active tab changes.
+  const [probeError, setProbeError] = useState<string | null>(null);
+  // Tracks the (message, timestamp) of the last banner we set so we
+  // can coalesce identical 1-s rate-limit messages instead of stacking
+  // 5 banners when a user spam-clicks the Plug icon.
+  const lastProbeErrorRef = useRef<{ message: string; at: number } | null>(null);
 
   // Default selection: prefer active provider, else first row.
   useEffect(() => {
@@ -550,32 +559,58 @@ function ProviderTab() {
   // so a rejected promise here means the Rust side returned `Err(String)`.
   // The most common cause in production is the per-process rate-limit gate
   // in `apps/remote-code-gui/src-tauri/src/desktop/provider_commands.rs`
-  // (1 s minimum interval between probes — see PROBE_MIN_INTERVAL). Other
-  // possible errors: HTTP transport error, model-not-found, key rejected.
+  // (1 s minimum interval between probes — see PROBE_MIN_INTERVAL).
+  // Other possible errors: HTTP transport error, model-not-found, key
+  // rejected.
+  //
+  // Error UX policy:
+  //   1. Surface the message in an inline `probeError` banner so the
+  //      user sees what went wrong without leaving the dialog.
+  //   2. Coalesce identical rate-limit messages within 2 s, so 5
+  //      spam-clicks produce 1 banner instead of 5.
+  //   3. Mirror the error to the backend tracing layer via
+  //      `recordFrontendLog`, so the Rust-side `daily` log has a
+  //      matching record for user-reported issues.
+  //   4. Do NOT re-throw. The error is captured into local state
+  //      and the banner renders it; re-throwing would let React's
+  //      error boundary take over (a much worse experience).
+  //   5. The Rust error message is English-only; i18n translation
+  //      happens at the i18n-key layer (see docs/dev/probe-error-ux.md
+  //      for the design note).
   const handleProbeModel = async (name: string, modelId: string) => {
     try {
-      return await probeProviderModel(name, modelId);
+      const result = await probeProviderModel(name, modelId);
+      setProbeError(null);
+      return result;
     } catch (err) {
-      // The Rust error message is English-only; surface it as a toast for
-      // the user.  We deliberately do NOT show a per-row error chip in
-      // ProviderList because the rate-limit message applies to the whole
-      // app, not to a single model.
-      //
-      // TODO: implement error UX (5-10 lines, see PR description for
-      // design guidance).  Trade-offs to consider:
-      //  - show a toast via the existing `useToast` hook (synchronous),
-      //    vs. write to a global error store (lets other components
-      //    subscribe)
-      //  - debounce: if the user spam-clicks "Probe", the same 1-s
-      //    rate-limit toast would fire 5+ times. Should we coalesce?
-      //  - log: should we also call `recordFrontendLog` so the backend
-      //    tracing layer sees the error?
-      //
-      // Implement your chosen policy here.
-      void err; // silence unused-var until implementation is added
+      const message = err instanceof Error ? err.message : String(err);
+      const now = Date.now();
+      const last = lastProbeErrorRef.current;
+      if (!(last && last.message === message && now - last.at < 2000)) {
+        lastProbeErrorRef.current = { message, at: now };
+        setProbeError(message);
+      }
+      // Best-effort backend trace; never let this swallow the original
+      // error if it fails.
+      void recordFrontendLog({
+        level: 'warn',
+        source: 'SettingsPanel.handleProbeModel',
+        message: `probe failed for ${name}/${modelId}: ${message}`,
+      }).catch(() => {
+        // Tracing is best-effort; do not surface a second error to the
+        // user just because the log call failed.
+      });
+      // Re-throw so callers (e.g. ProviderDetailPanel) can short-circuit
+      // their own state updates.  The banner above already shows the
+      // message; we are NOT swallowing the failure.
       throw err;
     }
   };
+
+  const clearProbeError = useCallback(() => {
+    setProbeError(null);
+    lastProbeErrorRef.current = null;
+  }, []);
 
   return (
     <div className="space-y-4">
@@ -593,6 +628,25 @@ function ProviderTab() {
           {t('settings.refresh')}
         </button>
       </div>
+
+      {probeError && (
+        <div
+          role="alert"
+          aria-live="polite"
+          className="flex items-start justify-between gap-3 rounded-md border border-rc-status-danger/40 bg-rc-status-danger/10 px-3 py-2 text-xs text-rc-status-danger"
+        >
+          <span className="break-words">{probeError}</span>
+          <button
+            type="button"
+            onClick={clearProbeError}
+            className="shrink-0 rounded p-0.5 text-rc-status-danger/80 transition-colors hover:bg-rc-status-danger/20 hover:text-rc-status-danger"
+            title={t('common.dismiss')}
+            aria-label={t('common.dismiss')}
+          >
+            <X size={14} />
+          </button>
+        </div>
+      )}
 
       <div className="grid min-h-[460px] grid-cols-[280px_minmax(0,1fr)] overflow-hidden rounded-md border border-rc-border-secondary">
         <ProviderListPanel

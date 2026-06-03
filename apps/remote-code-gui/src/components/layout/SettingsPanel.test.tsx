@@ -205,6 +205,79 @@ describe('layout SettingsPanel — model providers redesign', () => {
     });
   });
 
+  it('shows an inline error banner when the probe fails', async () => {
+    const probeProviderModel = vi
+      .fn()
+      .mockRejectedValue(new Error('probe rate-limited: wait 600 ms between probes'));
+    seedProviders({ probeProviderModel });
+    render(<SettingsPanel open onClose={vi.fn()} initialTab="provider" />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('probe-model-glm-5.1')).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByTestId('probe-model-glm-5.1'));
+
+    const banner = await screen.findByRole('alert');
+    expect(banner).toHaveTextContent('probe rate-limited: wait 600 ms between probes');
+  });
+
+  it('coalesces identical probe-error banners within 2 s', async () => {
+    const probeProviderModel = vi
+      .fn()
+      .mockRejectedValue(new Error('probe rate-limited: wait 500 ms between probes'));
+    seedProviders({ probeProviderModel });
+    render(<SettingsPanel open onClose={vi.fn()} initialTab="provider" />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('probe-model-glm-5.1')).toBeInTheDocument();
+    });
+
+    // Fire 5 clicks in rapid succession.  The banner should appear
+    // exactly once because all 5 errors are coalesced inside the 2-s
+    // window — even though the backend's promise rejection fires 5
+    // times.
+    for (let i = 0; i < 5; i += 1) {
+      fireEvent.click(screen.getByTestId('probe-model-glm-5.1'));
+    }
+
+    // Wait long enough for any deferred React state to flush.
+    await new Promise((r) => setTimeout(r, 50));
+    const banners = screen.getAllByRole('alert');
+    expect(banners).toHaveLength(1);
+  });
+
+  it('clears the probe error when a subsequent probe succeeds', async () => {
+    const probeProviderModel = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('first call fails'))
+      .mockResolvedValueOnce({
+        model_id: 'glm-5.1',
+        url: 'https://open.bigmodel.cn/api/anthropic',
+        outcome: 'reachable',
+        detail: 'HTTP 200',
+        status_code: 200,
+        latency_ms: 312,
+        agents: [
+          { agent_type: 'remote_claude', agent_name: 'Remote Claude', available: true, detail: 'HTTP 200', status_code: 200, latency_ms: 312 },
+        ],
+      });
+    seedProviders({ probeProviderModel });
+    render(<SettingsPanel open onClose={vi.fn()} initialTab="provider" />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('probe-model-glm-5.1')).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByTestId('probe-model-glm-5.1'));
+    expect(await screen.findByRole('alert')).toHaveTextContent('first call fails');
+
+    // Click again; the rejection has been consumed and the next call
+    // resolves.  The banner should clear.
+    fireEvent.click(screen.getByTestId('probe-model-glm-5.1'));
+    await waitFor(() => {
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    });
+  });
+
   it('opens the detail panel for the active provider by default', async () => {
     seedProviders();
     render(<SettingsPanel open onClose={vi.fn()} initialTab="provider" />);
