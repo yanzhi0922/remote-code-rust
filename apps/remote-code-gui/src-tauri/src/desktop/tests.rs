@@ -489,7 +489,7 @@ fn provider_config_to_runtime_uses_openai_base_url_for_openai_protocol() {
         .expect("projection should succeed");
     assert_eq!(
         runtime.base_url.as_deref(),
-        Some("https://open.bigmodel.cn/api/coding/paas/v4/v1")
+        Some("https://open.bigmodel.cn/api/coding/paas/v4/chat/completions")
     );
     assert_eq!(runtime.protocol, ProviderProtocol::OpenAi);
 }
@@ -889,6 +889,7 @@ async fn build_mcp_server_list_respects_setting_sources() {
         &projects,
         false,
         false,
+        false,
     )
     .await
     .expect("project list should build");
@@ -902,6 +903,7 @@ async fn build_mcp_server_list_respects_setting_sources() {
         ConfigScopeDto::Profile,
         None,
         &[],
+        false,
         false,
         false,
     )
@@ -944,9 +946,17 @@ async fn managed_mcp_helpers_round_trip_and_reset() {
     assert_eq!(saved.status, "created");
     assert_eq!(saved.enabled, Some(true));
 
-    let listed = build_mcp_server_list(&config, ConfigScopeDto::Profile, None, &[], false, true)
-        .await
-        .expect("list should succeed");
+    let listed = build_mcp_server_list(
+        &config,
+        ConfigScopeDto::Profile,
+        None,
+        &[],
+        false,
+        true,
+        true,
+    )
+    .await
+    .expect("list should succeed");
     assert_eq!(listed.servers.len(), 1);
     assert_eq!(listed.servers[0].name, "demo");
     assert_eq!(listed.servers[0].command.as_deref(), Some("demo-mcp"));
@@ -965,7 +975,7 @@ async fn managed_mcp_helpers_round_trip_and_reset() {
     assert_eq!(toggled.enabled, Some(false));
 
     let enabled_only =
-        build_mcp_server_list(&config, ConfigScopeDto::Profile, None, &[], false, false)
+        build_mcp_server_list(&config, ConfigScopeDto::Profile, None, &[], false, false, false)
             .await
             .expect("filtered list should succeed");
     assert!(enabled_only.servers.is_empty());
