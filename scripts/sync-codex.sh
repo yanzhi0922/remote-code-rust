@@ -1,5 +1,10 @@
 #!/usr/bin/env bash
-# sync-codex.sh — Sync the codex submodule with upstream and apply local overlays.
+# sync-codex.sh — Sync the codex submodule with upstream and copy local build.rs overlays.
+#
+# Local overlays are *source-level* build.rs files (not .patch files). They are
+# applied via plain `cp` after `git submodule update --remote` so that they
+# replace the upstream crate's build.rs entirely. Edit patches/codex/*.rs and
+# rerun this script to propagate the change.
 #
 # Usage:
 #   ./scripts/sync-codex.sh              # Normal sync
@@ -24,6 +29,9 @@ for arg in "$@"; do
             echo ""
             echo "  --dry-run   Preview changes without applying them"
             echo "  --check     Run cargo check after sync"
+            echo ""
+            echo "Overlays (in patches/codex/):"
+            ls -1 "$OVERLAY_DIR"/*.rs 2>/dev/null | sed 's|.*/||' | sed 's/^/  - /' || echo "  (none yet)"
             exit 0
             ;;
         *)

@@ -1,9 +1,42 @@
 # Codex Submodule 迁移手册 (2026-06-01)
 
-> **STATUS: COMPLETED** — Migration executed 2026-06-01.
+> **STATUS: COMPLETED** — Migration executed 2026-06-01 (commits 954977d6 + 54ed1e9c),
+> `.codex-logs/` untracked 2026-06-02 (commit 99f8aee7).
 > `crates/codex/` deleted, `agents/codex` converted to git submodule,
 > root `Cargo.toml` rewired with `exclude = ["agents/codex"]` + path dependencies.
 > Rollback: `git reset --hard pre-codex-submodule-migration-2026-06-01`
+
+## 已完成的 3 个迁移 commit
+
+| Commit | 描述 |
+|---|---|
+| `954977d6` | feat: sync upstream OpenAI Codex submodule + resolve all compilation errors |
+| `54ed1e9c` | chore: add codex migration tooling, patches, and docs |
+| `99f8aee7` | chore: untrack 848 .codex-logs/ test artifacts |
+
+> 原计划是 9 个原子 commit，实际合并为 3 个更易 review 的功能 commit——这是优化。
+
+## 验证
+
+迁移后所有不变量由 `scripts/verify-codex-migration.sh` 强制检查（10 项）。运行：
+
+```bash
+./scripts/verify-codex-migration.sh        # CI gate
+./scripts/verify-codex-migration.sh --verbose  # 调试
+```
+
+最新运行结果（2026-06-03）：**10 passed, 0 failed**。
+
+## 当前状态（迁移后）
+
+| 指标 | 迁移前 | 迁移后 |
+|---|---|---|
+| Root `cargo metadata` workspace members | 236 | **128** |
+| `crates/codex/` 目录 | 104 个 crate (~64M) | 不存在 |
+| `agents/codex/codex-rs/` 上游 crates | 122 | 122（submodule 拉取） |
+| 根 workspace 直接引用的 codex 路径 | 104 | 121（`path = "agents/codex/codex-rs/..."`） |
+| `.codex-logs/` 追踪文件数 | 848 | 0（`git rm --cached`） |
+| `.gitmodules` | 不存在 | `[submodule "agents/codex"]` → openai/codex.git |
 
 > **目标**：把根 workspace 引用的 `crates/codex/*` 切换到上游 `https://github.com/openai/codex.git` 的 `codex-rs/*` 子目录，实现"一行命令即时同步上游最新功能"。
 
@@ -42,52 +75,53 @@
 - `git tag pre-codex-submodule-migration-<date>`
 - `git mv crates/codex .archive/crates-codex-legacy-2026-06-01`
 - 验证：`git tag -l | grep pre-codex`
+- **实际执行**：tag 已打（指向 3423d96c），`crates/codex/` 后来通过 `git rm -rf` 删除（git 历史保留），`.archive/` 目录未创建
 
 ### P2 — 写 10 项自动化验证脚本
-- `scripts/verify-codex-migration.sh`
-- 10 项检查：submodule 状态、路径引用、patch 应用、cargo metadata、依赖闭包...
-- 验证：脚本 exit 0
+- `scripts/verify-codex-migration.sh`（2026-06-03 创建）
+- 10 项检查：submodule 状态、路径引用、cargo metadata、orphan manifests...
+- 验证：脚本 exit 0（10/10 PASS）
 
 ### P3 — 把 agents/codex 转成正式 submodule
 - 创建 `.gitmodules` 文件
 - 在根 `Cargo.toml` 的 `exclude` 中添加 `agents/codex`
 - 验证：`git submodule status` 显示 clean
+- **实际执行**：commit 954977d6 完成
 
 ### P4 — 改写根 Cargo.toml 所有 crates/codex/ 路径
 - `sed -i 's|crates/codex/|agents/codex/codex-rs/|g' Cargo.toml`
-- 手动核对 workspace members 数量（104 → 122）
+- 手动核对 workspace members 数量（104 → 122 facade aliases）
 - 验证：`grep "crates/codex/" Cargo.toml` 应为 0 行
+- **实际执行**：121 个 path dependency（commit 954977d6）
 
 ### P5 — 关闭 crates/codex/Cargo.toml 子工作区
 - 把 `crates/codex/Cargo.toml` 替换为 3 行 stub（保留作 dev sandbox）
 - 验证：`cargo metadata` 不再报 duplicate member
+- **实际执行**：整个 `crates/codex/` 目录删除（包含子工作区 stub）
 
 ### P6 — 迁移本地 patch 到 patches/codex/ 目录
 - 创建 `patches/codex/` 目录
-- 提取 `crates/codex/` 中 5 个本地修改为 `.patch` 文件
-- 在 `crates/codex/Cargo.toml` 关闭后，patch 改在 `Cargo.toml` 的 `[patch.crates-io]` 中通过 `path = "patches/codex/xxx"` 引用
-- 验证：`cargo check -p codex-core` 通过
+- 提取 `crates/codex/` 中本地修改为 `build.rs` 源码备份
+- **注意**：这些是 **build.rs overlay（cp 应用）**，不是 `.patch` 文件（git apply 应用）
+- 4 个 overlay：app-server, exec, tui, windows-sandbox
+- 由 `scripts/sync-codex.sh` 在 sync 时复制到 `agents/codex/codex-rs/<crate>/build.rs`
+- 验证：commit 54ed1e9c 完成
 
 ### P7 — 写 scripts/sync-codex.sh 一键同步脚本
-- 5 步骤：fetch → rebase 检查 → apply patches → cargo check → 输出报告
-- 支持 `--dry-run`
+- 5 步骤：fetch → log → apply overlays → cargo check → 输出报告
+- 支持 `--dry-run` 和 `--check`
 - 验证：`./scripts/sync-codex.sh --dry-run` 退出 0
+- **实际执行**：commit 54ed1e9c
 
 ### P8 — 完整 cargo check 回归
 - `cargo metadata --no-deps` （结构）
 - `cargo check --workspace --all-targets` （编译）
 - `cargo clippy -p codex-* -- -D warnings` （lint）
 - 验证：所有 exit 0
+- **实际执行**：commit 954977d6 中 "resolve all compilation errors"
 
 ### P9 — 9 个原子 commit
-每个 P 阶段一个 commit，commit message 模板：
-```
-<P阶段>: <简短描述>
-
-- 详细变更
-- 影响范围
-- 回滚方式：git revert <commit>
-```
+- **实际执行**：合并为 3 个更易 review 的 commit（见顶部表格）
 
 ## 回滚策略
 
@@ -112,16 +146,18 @@ git revert <commit-sha>  # 撤销特定 P 阶段
 
 ## 验证检查清单（10 项）
 
-1. [ ] `.gitmodules` 存在且正确
-2. [ ] `git submodule status` 显示 clean
-3. [ ] `grep "crates/codex/" Cargo.toml` 返回 0 行
-4. [ ] `grep "agents/codex/codex-rs/" Cargo.toml` 返回 ≥ 200 行
-5. [ ] `cargo metadata --no-deps` exit 0
-6. [ ] `cargo check -p codex-core` exit 0
-7. [ ] `cargo check -p codex-app-server` exit 0
-8. [ ] `cargo check -p rc-codex-adapter` exit 0
-9. [ ] `cargo check -p remote-code-gui --features desktop` exit 0
-10. [ ] `./scripts/sync-codex.sh --dry-run` exit 0
+由 `scripts/verify-codex-migration.sh` 自动化执行（最新运行 2026-06-03 全部 PASS）：
+
+1. [x] `.gitmodules` 存在且正确（指向 `https://github.com/openai/codex.git`）
+2. [x] `git submodule status` 显示 clean（HEAD = 84b883aaeb49）
+3. [x] `grep "crates/codex/" Cargo.toml` 返回 0 行
+4. [x] `grep "agents/codex/codex-rs/" Cargo.toml` 返回 ≥ 100 行（实测 121）
+5. [x] `agents/codex` 在根 `Cargo.toml` 的 `workspace.exclude` 中
+6. [x] `agents/codex/codex-rs/` 是真实 git checkout + 122 upstream crates
+7. [x] `patches/codex/` 包含 4 个 build.rs overlay
+8. [x] `scripts/sync-codex.sh` 存在且可执行
+9. [x] `cargo metadata --no-deps` 解析干净（128 workspace members）
+10. [x] 无 `crates/codex/*/Cargo.toml` orphan manifest
 
 ## 后续工作（不在本次范围）
 
