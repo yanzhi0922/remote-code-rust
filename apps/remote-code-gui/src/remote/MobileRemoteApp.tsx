@@ -37,10 +37,10 @@ import {
   useDeferredValue,
   useCallback,
   useEffect,
-  useEffectEvent,
   useMemo,
   useRef,
   useState,
+  type ReactNode,
 } from 'react';
 import { Virtuoso } from 'react-virtuoso';
 import {
