@@ -148,20 +148,61 @@ describe('layout SettingsPanel — model providers redesign', () => {
     return { providerConfigs };
   }
 
-  it('renders built-in and custom groups in the left list', async () => {
+  it('renders a flat list of all providers with no brand-specific grouping', async () => {
     seedProviders();
     render(<SettingsPanel open onClose={vi.fn()} initialTab="provider" />);
 
     await waitFor(() => {
       expect(screen.getByText('模型供应商')).toBeInTheDocument();
     });
-    // Both group headings
-    expect(screen.getByText('智谱')).toBeInTheDocument();
-    expect(screen.getByText('自定义供应商')).toBeInTheDocument();
-    // Provider names
+    // All providers render as peers; no "智谱" / "自定义供应商" headers.
+    expect(screen.queryByText('智谱')).not.toBeInTheDocument();
+    expect(screen.queryByText('自定义供应商')).not.toBeInTheDocument();
     expect(screen.getByTestId('provider-row-bigmodel')).toBeInTheDocument();
     expect(screen.getByTestId('provider-row-z.ai')).toBeInTheDocument();
     expect(screen.getByTestId('provider-row-my-provider')).toBeInTheDocument();
+  });
+
+  it('renders a probe button on every model row', async () => {
+    seedProviders();
+    render(<SettingsPanel open onClose={vi.fn()} initialTab="provider" />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('provider-detail-name')).toHaveTextContent('bigmodel');
+    });
+    // bigmodel has two seeded models — both should have probe buttons.
+    expect(screen.getByTestId('probe-model-glm-5.1')).toBeInTheDocument();
+    expect(screen.getByTestId('probe-model-glm-5-turbo')).toBeInTheDocument();
+    // No agent chips yet — the user hasn't clicked any plug.
+    expect(screen.queryByTestId('probe-agent-remote_claude-ok')).not.toBeInTheDocument();
+  });
+
+  it('probes a model and shows per-agent availability chips', async () => {
+    const probeProviderModel = vi.fn().mockResolvedValue({
+      model_id: 'glm-5.1',
+      url: 'https://open.bigmodel.cn/api/anthropic',
+      outcome: 'reachable',
+      detail: 'HTTP 200',
+      status_code: 200,
+      latency_ms: 312,
+      agents: [
+        { agent_type: 'remote_claude', agent_name: 'Remote Claude', available: true, detail: 'HTTP 200', status_code: 200, latency_ms: 312 },
+      ],
+    });
+    seedProviders({ probeProviderModel });
+    render(<SettingsPanel open onClose={vi.fn()} initialTab="provider" />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('probe-model-glm-5.1')).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByTestId('probe-model-glm-5.1'));
+
+    await waitFor(() => {
+      expect(probeProviderModel).toHaveBeenCalledWith('bigmodel', 'glm-5.1');
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId('probe-agent-remote_claude-ok')).toBeInTheDocument();
+    });
   });
 
   it('opens the detail panel for the active provider by default', async () => {

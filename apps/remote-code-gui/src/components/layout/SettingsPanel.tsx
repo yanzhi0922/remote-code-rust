@@ -10,8 +10,8 @@ import {
   EyeOff,
   Gauge,
   Pencil,
+  Plug,
   Plus,
-  Power,
   RefreshCw,
   SlidersHorizontal,
   TerminalSquare,
@@ -24,7 +24,7 @@ import { useTranslation } from 'react-i18next';
 import type {
   ClaudeModelMapping,
   FullSettings,
-  ModelProfile,
+  ProbeModelResult,
   ProviderConfig,
   ProviderModel,
   SessionSummary,
@@ -401,6 +401,7 @@ function ProviderTab() {
   const addProviderModel = useAppStore((state) => state.addProviderModel);
   const updateProviderModel = useAppStore((state) => state.updateProviderModel);
   const removeProviderModel = useAppStore((state) => state.removeProviderModel);
+  const probeProviderModel = useAppStore((state) => state.probeProviderModel);
   const refreshProviders = useAppStore((state) => state.refreshProviders);
 
   const providers = providerConfigs?.providers ?? [];
@@ -425,15 +426,10 @@ function ProviderTab() {
   );
 
   // --- List helpers ---
-  const grouped = useMemo(() => {
-    const builtin: ProviderConfig[] = [];
-    const custom: ProviderConfig[] = [];
-    for (const provider of providers) {
-      if (provider.group === 'builtin') builtin.push(provider);
-      else custom.push(provider);
-    }
-    return { builtin, custom };
-  }, [providers]);
+  // All providers (Builtins and user-added Customs) appear in a single
+  // flat list under one header. Builtins are protected from deletion by the
+  // backend, but visually they are peers of every other provider.
+  const allProviders = providers;
 
   // --- Add new provider ---
   const startAddNew = () => {
@@ -546,6 +542,13 @@ function ProviderTab() {
     void refreshProviders();
   };
 
+  // Per-model probe results, keyed by model id. Cleared when the active
+  // provider changes so we never display stale results from a previous
+  // selection.
+  const handleProbeModel = async (name: string, modelId: string) => {
+    return await probeProviderModel(name, modelId);
+  };
+
   return (
     <div className="space-y-4">
       <div className="flex items-start justify-between gap-4">
@@ -565,8 +568,7 @@ function ProviderTab() {
 
       <div className="grid min-h-[460px] grid-cols-[280px_minmax(0,1fr)] overflow-hidden rounded-md border border-rc-border-secondary">
         <ProviderListPanel
-          builtin={grouped.builtin}
-          custom={grouped.custom}
+          providers={allProviders}
           activeProviderName={activeProviderName}
           selectedName={selectedName}
           onSelect={setSelectedName}
@@ -589,6 +591,7 @@ function ProviderTab() {
           onUpdateModel={handleUpdateModel}
           onRemoveModel={handleRemoveModel}
           onTierChange={handleTierChange}
+          onProbeModel={handleProbeModel}
         />
       </div>
     </div>
@@ -596,8 +599,7 @@ function ProviderTab() {
 }
 
 interface ProviderListPanelProps {
-  builtin: ProviderConfig[];
-  custom: ProviderConfig[];
+  providers: ProviderConfig[];
   activeProviderName: string | null;
   selectedName: string | null;
   onSelect: (name: string) => void;
@@ -605,8 +607,7 @@ interface ProviderListPanelProps {
 }
 
 function ProviderListPanel({
-  builtin,
-  custom,
+  providers,
   activeProviderName,
   selectedName,
   onSelect,
@@ -617,20 +618,12 @@ function ProviderListPanel({
     <div className="flex min-h-0 flex-col border-r border-rc-border-secondary bg-rc-bg-secondary">
       <div className="min-h-0 flex-1 overflow-y-auto p-2">
         <ProviderListGroup
-          heading={t('settings.builtinGroup')}
-          providers={builtin}
+          providers={providers}
           activeProviderName={activeProviderName}
           selectedName={selectedName}
           onSelect={onSelect}
         />
-        <ProviderListGroup
-          heading={t('settings.customGroup')}
-          providers={custom}
-          activeProviderName={activeProviderName}
-          selectedName={selectedName}
-          onSelect={onSelect}
-        />
-        {builtin.length === 0 && custom.length === 0 && (
+        {providers.length === 0 && (
           <div className="rounded-md border border-dashed border-rc-border-primary px-3 py-4 text-xs text-rc-text-secondary">
             {t('settings.noProvidersYet')}
           </div>
@@ -650,26 +643,19 @@ function ProviderListPanel({
 }
 
 function ProviderListGroup({
-  heading,
   providers,
   activeProviderName,
   selectedName,
   onSelect,
 }: {
-  heading: string;
   providers: ProviderConfig[];
   activeProviderName: string | null;
   selectedName: string | null;
   onSelect: (name: string) => void;
 }) {
   const { t } = useTranslation();
-  if (providers.length === 0) return null;
   return (
-    <div className="mb-3">
-      <div className="px-2 pb-1.5 pt-2 text-[11px] font-semibold uppercase tracking-wider text-rc-text-tertiary">
-        {heading}
-      </div>
-      <div className="space-y-1">
+    <div className="space-y-1">
         {providers.map((provider) => {
           const isSelected = provider.name === selectedName;
           const isActive = provider.name === activeProviderName;
@@ -706,7 +692,6 @@ function ProviderListGroup({
             </button>
           );
         })}
-      </div>
     </div>
   );
 }
@@ -728,6 +713,7 @@ interface ProviderDetailPanelProps {
   onUpdateModel: (oldId: string, model: ProviderModel) => Promise<void>;
   onRemoveModel: (modelId: string) => Promise<void>;
   onTierChange: (tier: 'opus' | 'sonnet' | 'haiku', modelId: string | null) => Promise<void>;
+  onProbeModel: (name: string, modelId: string) => Promise<ProbeModelResult>;
 }
 
 function ProviderDetailPanel({
@@ -747,6 +733,7 @@ function ProviderDetailPanel({
   onUpdateModel,
   onRemoveModel,
   onTierChange,
+  onProbeModel,
 }: ProviderDetailPanelProps) {
   const { t } = useTranslation();
   const isEditing = editingNew || (selected != null && !selected.api_key_stored && false);
@@ -795,6 +782,7 @@ function ProviderDetailPanel({
               onUpdateModel={onUpdateModel}
               onRemoveModel={onRemoveModel}
               onTierChange={onTierChange}
+              onProbeModel={onProbeModel}
             />
           )}
         </div>
@@ -888,20 +876,89 @@ function ProviderReadOnlyView({
   onUpdateModel,
   onRemoveModel,
   onTierChange,
+  onProbeModel,
 }: {
   selected: ProviderConfig;
   onAddModel: (model: ProviderModel) => Promise<void>;
   onUpdateModel: (oldId: string, model: ProviderModel) => Promise<void>;
   onRemoveModel: (modelId: string) => Promise<void>;
   onTierChange: (tier: 'opus' | 'sonnet' | 'haiku', modelId: string | null) => Promise<void>;
+  onProbeModel: (name: string, modelId: string) => Promise<ProbeModelResult>;
 }) {
   const { t } = useTranslation();
   const [editingModel, setEditingModel] = useState<{ oldId: string; id: string; display_name: string } | null>(null);
   const [newModelId, setNewModelId] = useState('');
+  // Map of model_id -> latest probe result, plus a `probing` set to disable
+  // the button while the request is in flight.
+  const [probeResults, setProbeResults] = useState<Record<string, ProbeModelResult | null>>({});
+  const [probingIds, setProbingIds] = useState<Set<string>>(new Set());
+
+  // Reset probe state when the active provider changes — probe results
+  // belong to a specific (provider, model) pair and would mislead the user
+  // if shown against a different provider.
+  useEffect(() => {
+    setProbeResults({});
+    setProbingIds(new Set());
+  }, [selected.name]);
+
+  const handleProbe = async (modelId: string) => {
+    recordRecent(modelId);
+    setProbingIds((prev) => new Set(prev).add(modelId));
+    try {
+      const result = await onProbeModel(selected.name, modelId);
+      setProbeResults((prev) => ({ ...prev, [modelId]: result }));
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      setProbeResults((prev) => ({
+        ...prev,
+        [modelId]: {
+          model_id: modelId,
+          url: '',
+          outcome: 'transport_error',
+          detail,
+          status_code: null,
+          latency_ms: 0,
+          agents: [],
+        },
+      }));
+    } finally {
+      setProbingIds((prev) => {
+        const next = new Set(prev);
+        next.delete(modelId);
+        return next;
+      });
+    }
+  };
 
   const models = selected.models ?? [];
   const mapping = selected.claude_model_mapping ?? {};
   const modelOptions = models.length > 0 ? models : (selected.model ? [{ id: selected.model }] : []);
+
+  // --- P3 #22: recent models, persisted in localStorage per provider ---
+  const RECENT_KEY = `rc-provider-recent-${selected.name}`;
+  const [recent, setRecent] = useState<string[]>(() => {
+    try {
+      const raw = localStorage.getItem(RECENT_KEY);
+      return raw ? (JSON.parse(raw) as string[]) : [];
+    } catch { return []; }
+  });
+  const recordRecent = (modelId: string) => {
+    setRecent((prev) => {
+      const next = [modelId, ...prev.filter((m) => m !== modelId)].slice(0, 5);
+      try { localStorage.setItem(RECENT_KEY, JSON.stringify(next)); } catch { /* ignore */ }
+      return next;
+    });
+  };
+  // Reset recent when the active provider changes.
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(RECENT_KEY);
+      setRecent(raw ? (JSON.parse(raw) as string[]) : []);
+    } catch { setRecent([]); }
+  }, [selected.name]); // eslint-disable-line react-hooks/exhaustive-deps
+  const recentModels = recent
+    .map((id) => models.find((m) => m.id === id))
+    .filter((m): m is NonNullable<typeof m> => Boolean(m));
 
   return (
     <>
@@ -929,6 +986,26 @@ function ProviderReadOnlyView({
           <span className="text-sm font-medium text-rc-text-primary">{t('settings.modelList')}</span>
           <span className="text-xs text-rc-text-tertiary">{models.length}</span>
         </div>
+        {recentModels.length > 0 && (
+          <div className="mb-2" data-testid="recent-models">
+            <div className="mb-1 text-[11px] font-medium uppercase tracking-wide text-rc-text-tertiary">
+              {t('settings.recentModels')}
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {recentModels.map((m) => (
+                <button
+                  key={`recent-${m.id}`}
+                  type="button"
+                  onClick={() => recordRecent(m.id)}
+                  data-testid={`recent-model-${m.id}`}
+                  className="inline-flex items-center gap-1 rounded-full border border-rc-accent-primary/30 bg-rc-bg-active px-2.5 py-1 text-[11px] font-medium text-rc-text-primary hover:border-rc-accent-primary"
+                >
+                  <span>{m.display_name ?? m.id}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
         <div className="space-y-1.5">
           {models.map((model) =>
             editingModel && editingModel.oldId === model.id ? (
@@ -945,30 +1022,47 @@ function ProviderReadOnlyView({
             ) : (
               <div
                 key={model.id}
-                className="flex items-center gap-2 rounded-md border border-rc-border-secondary bg-rc-bg-secondary px-3 py-1.5"
+                className="rounded-md border border-rc-border-secondary bg-rc-bg-secondary px-3 py-1.5"
               >
-                <div className="min-w-0 flex-1">
-                  <div className="truncate text-sm text-rc-text-primary">{model.id}</div>
-                  {model.display_name && (
-                    <div className="truncate text-xs text-rc-text-tertiary">{model.display_name}</div>
-                  )}
+                <div className="flex items-center gap-2">
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-sm text-rc-text-primary">{model.id}</div>
+                    {model.display_name && (
+                      <div className="truncate text-xs text-rc-text-tertiary">{model.display_name}</div>
+                    )}
+                  </div>
+                  <button
+                    className="rounded-md p-1 text-rc-text-tertiary transition-colors hover:bg-rc-bg-hover hover:text-rc-text-primary disabled:cursor-not-allowed disabled:opacity-50"
+                    onClick={() => void handleProbe(model.id)}
+                    title={t('settings.probeModel')}
+                    disabled={probingIds.has(model.id)}
+                    data-testid={`probe-model-${model.id}`}
+                  >
+                    <Plug size={13} className={probingIds.has(model.id) ? 'animate-pulse' : ''} />
+                  </button>
+                  <button
+                    className="rounded-md p-1 text-rc-text-tertiary transition-colors hover:bg-rc-bg-hover hover:text-rc-text-primary"
+                    onClick={() =>
+                      setEditingModel({ oldId: model.id, id: model.id, display_name: model.display_name ?? '' })
+                    }
+                    title={t('common.edit')}
+                  >
+                    <Pencil size={13} />
+                  </button>
+                  <button
+                    className="rounded-md p-1 text-rc-text-tertiary transition-colors hover:bg-rc-accent-error-bg hover:text-rc-accent-error"
+                    onClick={() => void onRemoveModel(model.id)}
+                    title={t('common.delete')}
+                    data-testid={`remove-model-${model.id}`}
+                  >
+                    <Trash2 size={13} />
+                  </button>
                 </div>
-                <button
-                  className="rounded-md p-1 text-rc-text-tertiary transition-colors hover:bg-rc-bg-hover hover:text-rc-text-primary"
-                  onClick={() =>
-                    setEditingModel({ oldId: model.id, id: model.id, display_name: model.display_name ?? '' })
-                  }
-                  title={t('common.edit')}
-                >
-                  <Pencil size={13} />
-                </button>
-                <button
-                  className="rounded-md p-1 text-rc-text-tertiary transition-colors hover:bg-rc-accent-error-bg hover:text-rc-accent-error"
-                  onClick={() => void onRemoveModel(model.id)}
-                  title={t('common.delete')}
-                >
-                  <Trash2 size={13} />
-                </button>
+                <ModelProbeChips
+                  result={probeResults[model.id] ?? null}
+                  probing={probingIds.has(model.id)}
+                  t={t}
+                />
               </div>
             ),
           )}
@@ -1031,6 +1125,69 @@ function ProviderReadOnlyView({
         </div>
       </div>
     </>
+  );
+}
+
+type ProbeTfn = (key: string, options?: Record<string, unknown>) => string;
+
+function ModelProbeChips({
+  result,
+  probing,
+  t,
+}: {
+  result: ProbeModelResult | null;
+  probing: boolean;
+  t: ProbeTfn;
+}) {
+  // No probe yet — render an "Unknown" stub row so the layout doesn't jump
+  // when the user clicks the plug icon.
+  if (!result) {
+    return (
+      <div className="mt-1.5 space-y-1 text-[11px] leading-4">
+        <div className="flex flex-wrap items-center gap-1.5 text-rc-text-tertiary">
+          <span className="font-medium">{t('settings.availableAgents')}:</span>
+          <span className="italic">{probing ? t('settings.probing') : t('settings.unprobed')}</span>
+        </div>
+      </div>
+    );
+  }
+  const available = result.agents.filter((a) => a.available);
+  const unavailable = result.agents.filter((a) => !a.available);
+  return (
+    <div className="mt-1.5 space-y-1 text-[11px] leading-4">
+      <div className="flex flex-wrap items-center gap-1.5">
+        <span className="font-medium text-rc-text-tertiary">{t('settings.availableAgents')}:</span>
+        {available.length === 0 ? (
+          <span className="text-rc-text-tertiary">-</span>
+        ) : (
+          available.map((a) => (
+            <span
+              key={a.agent_type}
+              data-testid={`probe-agent-${a.agent_type}-ok`}
+              className="inline-flex items-center rounded border border-rc-accent-success/40 bg-rc-accent-success-bg px-1.5 py-0.5 text-rc-accent-success"
+              title={a.detail}
+            >
+              {a.agent_name}
+            </span>
+          ))
+        )}
+      </div>
+      {unavailable.length > 0 && (
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="font-medium text-rc-text-tertiary">{t('settings.unavailableAgents')}:</span>
+          {unavailable.map((a) => (
+            <span
+              key={a.agent_type}
+              data-testid={`probe-agent-${a.agent_type}-fail`}
+              className="inline-flex items-center rounded border border-rc-accent-error/40 bg-rc-accent-error-bg px-1.5 py-0.5 text-rc-accent-error"
+              title={a.detail}
+            >
+              {a.agent_name}
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 

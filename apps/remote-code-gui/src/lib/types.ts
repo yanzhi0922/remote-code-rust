@@ -230,6 +230,10 @@ export interface McpServerInfo {
   startup_timeout_secs: number | null;
   request_timeout_secs: number | null;
   live: McpServerLiveInfo | null;
+  /** Only present when the list command was called with `include_secrets: true`. */
+  env_map?: Record<string, string> | null;
+  headers_map?: Record<string, string> | null;
+  metadata_map?: Record<string, string> | null;
 }
 
 export interface McpServerListInfo {
@@ -831,6 +835,32 @@ export interface ProviderConfig {
   active_profile?: string;
   /** True when an API key is securely stored in the OS keychain. */
   api_key_stored?: boolean;
+}
+
+export type ProbeOutcome =
+  | 'reachable'
+  | 'auth_rejected'
+  | 'rate_limited'
+  | 'server_error'
+  | 'transport_error';
+
+export interface ProbeModelAgentResult {
+  agent_type: string;
+  agent_name: string;
+  available: boolean;
+  detail: string;
+  status_code?: number | null;
+  latency_ms: number;
+}
+
+export interface ProbeModelResult {
+  model_id: string;
+  url: string;
+  outcome: ProbeOutcome;
+  detail: string;
+  status_code?: number | null;
+  latency_ms: number;
+  agents: ProbeModelAgentResult[];
 }
 
 export interface ProviderConfigList {

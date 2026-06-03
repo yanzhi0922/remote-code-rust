@@ -3,6 +3,7 @@ import type {
   BatchProgressInfo,
   CodexGoalState,
   CodexThreadGoalInfo,
+  ConfigScope,
   ConversationEntry,
   ContextCompactedInfo,
   ContextOverflowInfo,
@@ -15,6 +16,7 @@ import type {
   ProviderConfig,
   ProviderConfigList,
   ProviderInfo,
+  ProbeModelResult,
   ProviderModel,
   RuntimeStatusInfo,
   SessionSubtask,
@@ -234,7 +236,14 @@ interface AppState {
   addProviderModel: (name: string, model: ProviderModel) => Promise<void>;
   updateProviderModel: (name: string, oldId: string, model: ProviderModel) => Promise<void>;
   removeProviderModel: (name: string, modelId: string) => Promise<void>;
+  probeMcpServer: (
+    scope: ConfigScope,
+    projectPath: string | null,
+    name: string,
+  ) => Promise<tauri.McpProbeResult>;
+  oauthLoginMcpServer: (sessionId: string | null, server: string) => Promise<void>;
   refreshProviders: () => Promise<void>;
+  probeProviderModel: (name: string, modelId: string) => Promise<ProbeModelResult>;
   switchProfile: (providerName: string, profileName: string | null) => Promise<void>;
   resolvePermission: (resolution: boolean | tauri.PermissionResolutionRequest) => Promise<void>;
   openFileExplorer: (path: string, projectName: string) => void;
@@ -1253,6 +1262,18 @@ export const useAppStore = create<AppState>((set, get) => ({
   removeProviderModel: async (name: string, modelId: string) => {
     await tauri.removeProviderModel(name, modelId);
     await Promise.all([get().loadProviderConfigs()]);
+  },
+
+  probeMcpServer: async (scope, projectPath, name) => {
+    return await tauri.probeMcpServer(scope, projectPath, name);
+  },
+
+  oauthLoginMcpServer: async (sessionId, server) => {
+    await tauri.oauthLoginMcpServer(sessionId, server);
+  },
+
+  probeProviderModel: async (name: string, modelId: string) => {
+    return await tauri.probeProviderModel(name, modelId);
   },
 
   refreshProviders: async () => {

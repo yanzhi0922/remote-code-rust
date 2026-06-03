@@ -973,6 +973,130 @@ fn mcp_transport_to_display(transport: McpTransport) -> String {
     .to_owned()
 }
 
+/// Extract the display URL for an MCP server (None for stdio).
+fn mcp_server_url(server: &McpServerConfig) -> Option<String> {
+    match &server.transport {
+        McpTransportConfig::Stdio { .. } | McpTransportConfig::Sdk { .. } => None,
+        McpTransportConfig::Http { url, .. }
+        | McpTransportConfig::Sse { url, .. }
+        | McpTransportConfig::SseIde { url, .. }
+        | McpTransportConfig::WebSocket { url, .. }
+        | McpTransportConfig::WsIde { url, .. } => Some(url.clone()),
+        McpTransportConfig::ClaudeAiProxy { url, .. } => url.clone(),
+    }
+}
+
+/// HTTP/stdio probe used by `probe_mcp_server`. For stdio we just confirm
+/// the command binary resolves on PATH; for HTTP-family transports we
+/// issue a GET and classify the status code the same way the doctor
+/// probe does.
+async fn run_mcp_probe(server: &McpServerConfig) -> GuiDoctorProbeDto {
+    let url = match mcp_server_url(server) {
+        Some(u) => u,
+        None => {
+            let cmd = match &server.transport {
+                McpTransportConfig::Stdio { command, .. } => command.clone(),
+                _ => {
+                    return GuiDoctorProbeDto {
+                        label: server.name.clone(),
+                        url: String::new(),
+                        outcome: GuiDoctorProbeOutcomeDto::Reachable,
+                        status_code: None,
+                        latency_ms: 0,
+                        detail: "stdio transport has no URL to probe".to_owned(),
+                    };
+                }
+            };
+            let found = std::process::Command::new("where")
+                .arg(&cmd)
+                .output()
+                .ok()
+                .filter(|o| o.status.success());
+            // `where` is Windows-specific; on Unix we'd want `which`. Since
+            // this is a best-effort sanity check, fall back to `which` on
+            // non-Windows.
+            #[cfg(unix)]
+            let found = found.or_else(|| {
+                std::process::Command::new("which")
+                    .arg(&cmd)
+                    .output()
+                    .ok()
+                    .filter(|o| o.status.success())
+            });
+            return GuiDoctorProbeDto {
+                label: server.name.clone(),
+                url: cmd.clone(),
+                outcome: if found.is_some() {
+                    GuiDoctorProbeOutcomeDto::Reachable
+                } else {
+                    GuiDoctorProbeOutcomeDto::TransportError
+                },
+                status_code: None,
+                latency_ms: 0,
+                detail: if found.is_some() {
+                    format!("stdio command `{cmd}` is on PATH")
+                } else {
+                    format!("stdio command `{cmd}` not found on PATH")
+                },
+            };
+        }
+    };
+    let client = match reqwest::Client::builder()
+        .user_agent("remote-code-gui-mcp-probe")
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            return GuiDoctorProbeDto {
+                label: server.name.clone(),
+                url,
+                outcome: GuiDoctorProbeOutcomeDto::TransportError,
+                status_code: None,
+                latency_ms: 0,
+                detail: format!("failed to build HTTP client: {e}"),
+            };
+        }
+    };
+    let started = Instant::now();
+    let mut headers = BTreeMap::new();
+    if let McpTransportConfig::Http { headers: h, .. }
+    | McpTransportConfig::Sse { headers: h, .. }
+    | McpTransportConfig::WebSocket { headers: h, .. } = &server.transport
+    {
+        for (k, v) in h {
+            headers.insert(k.clone(), v.clone());
+        }
+    }
+    // GET (not HEAD) — many MCP servers (especially Streamable HTTP)
+    // don't implement HEAD. 2xx and 4xx (e.g. 405) count as Reachable.
+    let mut request = client.get(&url);
+    for (k, v) in &headers {
+        request = request.header(k, v);
+    }
+    match request.send().await {
+        Ok(response) => {
+            let (outcome, detail) = classify_probe_status(response.status());
+            GuiDoctorProbeDto {
+                label: server.name.clone(),
+                url,
+                outcome,
+                status_code: Some(response.status().as_u16()),
+                latency_ms: started.elapsed().as_millis(),
+                detail,
+            }
+        }
+        Err(e) => GuiDoctorProbeDto {
+            label: server.name.clone(),
+            url,
+            outcome: GuiDoctorProbeOutcomeDto::TransportError,
+            status_code: None,
+            latency_ms: started.elapsed().as_millis(),
+            detail: e.to_string(),
+        },
+    }
+}
+
 /// Transport fields extracted from an MCP server config for display.
 struct McpTransportFields {
     command: Option<String>,
@@ -1002,8 +1126,7 @@ fn mcp_server_transport_fields(server: &McpServerConfig) -> McpTransportFields {
         }
         McpTransportConfig::Http { url, headers, .. }
         | McpTransportConfig::WebSocket { url, headers, .. }
-        | McpTransportConfig::Sse { url, headers, .. }
-        | McpTransportConfig::StreamableHttp { url, headers, .. } => {
+        | McpTransportConfig::Sse { url, headers, .. } => {
             let mut env_keys = headers.keys().cloned().collect::<Vec<_>>();
             env_keys.sort();
             McpTransportFields {
@@ -1039,10 +1162,28 @@ fn mcp_server_to_dto(
     config_path: &Path,
     server: McpServerConfig,
     live: Option<McpServerLiveDto>,
+    include_secrets: bool,
 ) -> McpServerDto {
     let fields = mcp_server_transport_fields(&server);
     let mut metadata_keys = server.metadata.keys().cloned().collect::<Vec<_>>();
     metadata_keys.sort();
+    // Only surface secret values when the caller explicitly opts in. For
+    // stdio transports `fields.env_keys` is the env map; for HTTP-family
+    // transports it is the headers map. Both come from the persisted
+    // config so the FE can re-populate edit forms without forcing the
+    // user to re-type secrets.
+    let (env_map, headers_map, metadata_map) = if include_secrets {
+        let (env, headers) = match &server.transport {
+            McpTransportConfig::Stdio { env, .. } => (Some(env.clone()), None),
+            McpTransportConfig::Http { headers: h, .. }
+            | McpTransportConfig::Sse { headers: h, .. }
+            | McpTransportConfig::WebSocket { headers: h, .. } => (None, Some(h.clone())),
+            _ => (None, None),
+        };
+        (env, headers, Some(server.metadata.clone()))
+    } else {
+        (None, None, None)
+    };
     McpServerDto {
         name: server.name,
         enabled: server.enabled,
@@ -1057,6 +1198,9 @@ fn mcp_server_to_dto(
         startup_timeout_secs: server.startup_timeout_secs,
         request_timeout_secs: server.request_timeout_secs,
         live,
+        env_map,
+        headers_map,
+        metadata_map,
     }
 }
 
@@ -1097,6 +1241,7 @@ async fn build_mcp_server_list(
     projects: &[ProjectEntry],
     connect: bool,
     include_disabled: bool,
+    include_secrets: bool,
 ) -> Result<McpServerListDto> {
     let config_path = mcp_config_path_for_scope(config, scope, project_path, projects)?;
     if !mcp_scope_enabled(config, scope) {
@@ -1139,7 +1284,12 @@ async fn build_mcp_server_list(
         } else {
             None
         };
-        servers.push(mcp_server_to_dto(&config_path, server, live));
+        servers.push(mcp_server_to_dto(
+            &config_path,
+            server,
+            live,
+            include_secrets,
+        ));
     }
 
     servers.sort_by(|left, right| left.name.cmp(&right.name));
@@ -1237,8 +1387,8 @@ fn build_mcp_transport(request: &McpServerUpsertRequestDto) -> Result<McpTranspo
                 .as_deref()
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
-                .ok_or_else(|| anyhow!("streamable_http MCP servers require a url"))?;
-            Ok(McpTransportConfig::StreamableHttp {
+                .ok_or_else(|| anyhow!("http MCP servers require a url"))?;
+            Ok(McpTransportConfig::Http {
                 url: url.to_owned(),
                 headers: request.headers.clone(),
                 headers_helper: None,
@@ -2100,8 +2250,7 @@ fn build_mcp_server_entries(
             }
             McpTransportConfig::Http { url, headers, .. }
             | McpTransportConfig::Sse { url, headers, .. }
-            | McpTransportConfig::WebSocket { url, headers, .. }
-            | McpTransportConfig::StreamableHttp { url, headers, .. } => {
+            | McpTransportConfig::WebSocket { url, headers, .. } => {
                 format_url_transport(&mut server, url, headers, &entry.server.transport);
             }
             McpTransportConfig::SseIde { url, .. } | McpTransportConfig::WsIde { url, .. } => {

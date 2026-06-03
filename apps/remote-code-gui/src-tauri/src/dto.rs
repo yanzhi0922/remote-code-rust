@@ -754,6 +754,15 @@ pub(crate) struct McpServerDto {
     pub(crate) startup_timeout_secs: Option<u64>,
     pub(crate) request_timeout_secs: Option<u64>,
     pub(crate) live: Option<McpServerLiveDto>,
+    /// Full env / headers / metadata key-value pairs. Populated when the
+    /// caller passes `include_secrets: true`; `None` otherwise. Treat as
+    /// sensitive on the wire — never log or persist on the FE side.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) env_map: Option<BTreeMap<String, String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) headers_map: Option<BTreeMap<String, String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) metadata_map: Option<BTreeMap<String, String>>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -773,6 +782,44 @@ pub(crate) struct McpToolInfoDto {
     pub(crate) description: Option<String>,
     #[serde(skip_serializing_if = "serde_json::Value::is_null")]
     pub(crate) input_schema: serde_json::Value,
+}
+
+/// Per-agent availability for a model probe. The same upstream probe result
+/// is attributed to every in-process agent that can speak the active
+/// protocol — the protocol gate determines which agents are available
+/// rather than a per-agent network call.
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct GuiProbeModelAgentDto {
+    pub(crate) agent_type: String,
+    pub(crate) agent_name: String,
+    pub(crate) available: bool,
+    pub(crate) detail: String,
+    pub(crate) status_code: Option<u16>,
+    pub(crate) latency_ms: u128,
+}
+
+/// Result of probing a (provider, model) pair.
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct GuiProbeModelResultDto {
+    pub(crate) model_id: String,
+    pub(crate) url: String,
+    pub(crate) outcome: GuiDoctorProbeOutcomeDto,
+    pub(crate) detail: String,
+    pub(crate) status_code: Option<u16>,
+    pub(crate) latency_ms: u128,
+    pub(crate) agents: Vec<GuiProbeModelAgentDto>,
+}
+
+/// Result of probing an MCP server for reachability.
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct GuiMcpProbeDto {
+    pub(crate) name: String,
+    pub(crate) transport: String,
+    pub(crate) url: Option<String>,
+    pub(crate) outcome: GuiDoctorProbeOutcomeDto,
+    pub(crate) status_code: Option<u16>,
+    pub(crate) latency_ms: u128,
+    pub(crate) detail: String,
 }
 
 #[derive(Debug, Clone, Serialize)]

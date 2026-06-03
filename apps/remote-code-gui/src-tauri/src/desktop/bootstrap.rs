@@ -136,6 +136,8 @@ pub fn run() {
             mcp_commands::toggle_mcp_server,
             mcp_commands::remove_mcp_server,
             mcp_commands::reset_mcp_servers,
+            mcp_commands::probe_mcp_server,
+            mcp_commands::oauth_login_mcp_server,
             session_commands::create_session,
             provider_commands::get_settings,
             codex_commands::codex_list_threads,

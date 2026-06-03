@@ -86,6 +86,8 @@ import type {
   ProviderConfig,
   ProviderConfigList,
   ProviderInfo,
+  ProbeModelAgentResult,
+  ProbeModelResult,
   ProviderModel,
   RuntimeMcpInventoryInfo,
   RuntimeStatusInfo,
@@ -175,12 +177,14 @@ export function listMcpServers(
   projectPath: string | null,
   connect = false,
   includeDisabled = true,
+  includeSecrets = false,
 ): Promise<McpServerListInfo> {
   return invoke<McpServerListInfo>('list_mcp_servers', {
     scope,
     projectPath: projectPath ?? null,
     connect,
     includeDisabled,
+    includeSecrets,
   });
 }
 
@@ -862,6 +866,42 @@ export function updateProviderModel(
 
 export function removeProviderModel(name: string, modelId: string): Promise<void> {
   return invoke<void>('remove_provider_model', { name, modelId });
+}
+
+export function probeProviderModel(name: string, modelId: string): Promise<ProbeModelResult> {
+  return invoke<ProbeModelResult>('probe_provider_model', { name, modelId });
+}
+
+export interface McpProbeResult {
+  name: string;
+  transport: string;
+  url: string | null;
+  outcome: 'reachable' | 'auth_rejected' | 'rate_limited' | 'server_error' | 'transport_error';
+  status_code: number | null;
+  latency_ms: number;
+  detail: string;
+}
+
+export function probeMcpServer(
+  scope: ConfigScope,
+  projectPath: string | null,
+  name: string,
+): Promise<McpProbeResult> {
+  return invoke<McpProbeResult>('probe_mcp_server', {
+    scope,
+    projectPath: projectPath ?? null,
+    name,
+  });
+}
+
+export function oauthLoginMcpServer(
+  sessionId: string | null,
+  server: string,
+): Promise<void> {
+  return invoke<void>('oauth_login_mcp_server', {
+    sessionId: sessionId ?? null,
+    server,
+  });
 }
 
 export function switchProfile(
