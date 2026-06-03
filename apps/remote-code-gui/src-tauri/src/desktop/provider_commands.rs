@@ -925,9 +925,13 @@ impl ProbeClient {
     /// may proceed with the probe, or `Err(detail)` with a user-visible
     /// message to surface in the UI when the slot is too fresh.
     ///
-    /// TODO: implement the rate-limit check. See the "Learning" prompt in the
-    /// PR description for design constraints (1 s min interval, concurrent
-    /// callers must serialize, decide block-vs-error policy).
+    /// The chosen policy is **fail-fast** (return `Err` immediately on rate
+    /// limit, do not block the caller). Trade-off vs `tokio::time::sleep`:
+    ///   - fail-fast keeps the GUI responsive when a user spam-clicks
+    ///     "Probe"; the FE can debounce the button.
+    ///   - blocking would tie up a Tauri command worker for up to 1 second.
+    /// Concurrent callers are serialized through `self.last_probe.lock()`
+    /// so two near-simultaneous requests cannot both pass the gate.
     pub(crate) async fn try_acquire_probe_slot(&self) -> std::result::Result<(), String> {
         let mut last = self.last_probe.lock().await;
         let now = Instant::now();

@@ -545,8 +545,36 @@ function ProviderTab() {
   // Per-model probe results, keyed by model id. Cleared when the active
   // provider changes so we never display stale results from a previous
   // selection.
+  //
+  // The backend Tauri command returns `Result<ProbeModelResult, String>`,
+  // so a rejected promise here means the Rust side returned `Err(String)`.
+  // The most common cause in production is the per-process rate-limit gate
+  // in `apps/remote-code-gui/src-tauri/src/desktop/provider_commands.rs`
+  // (1 s minimum interval between probes — see PROBE_MIN_INTERVAL). Other
+  // possible errors: HTTP transport error, model-not-found, key rejected.
   const handleProbeModel = async (name: string, modelId: string) => {
-    return await probeProviderModel(name, modelId);
+    try {
+      return await probeProviderModel(name, modelId);
+    } catch (err) {
+      // The Rust error message is English-only; surface it as a toast for
+      // the user.  We deliberately do NOT show a per-row error chip in
+      // ProviderList because the rate-limit message applies to the whole
+      // app, not to a single model.
+      //
+      // TODO: implement error UX (5-10 lines, see PR description for
+      // design guidance).  Trade-offs to consider:
+      //  - show a toast via the existing `useToast` hook (synchronous),
+      //    vs. write to a global error store (lets other components
+      //    subscribe)
+      //  - debounce: if the user spam-clicks "Probe", the same 1-s
+      //    rate-limit toast would fire 5+ times. Should we coalesce?
+      //  - log: should we also call `recordFrontendLog` so the backend
+      //    tracing layer sees the error?
+      //
+      // Implement your chosen policy here.
+      void err; // silence unused-var until implementation is added
+      throw err;
+    }
   };
 
   return (

@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# .githooks/pre-receive — server-side hook to block `refs/zcode/**` pushes.
+#
+# Enable on the remote by setting:
+#   git config receive.denyCurrentBranch ignore
+#   ln -sf ../../scripts/git-hooks/pre-receive .git/hooks/pre-receive
+# (or run scripts/install-hooks.sh on clone).
+#
+# This is defense-in-depth — even if the Z.ai ZCode integration somehow
+# pushes refs/zcode/checkpoints/<session>/<uuid>, the server-side hook
+# will reject the push with a clear error.  Local `git update-ref` is
+# unaffected; run `scripts/purge_zcode_refs.sh` for that.
+set -euo pipefail
+
+while read oldrev newrev refname; do
+    case "$refname" in
+        refs/zcode/*)
+            echo "✗ Rejected: $refname" >&2
+            echo "  ZCode checkpoint refs are not allowed in this repository." >&2
+            echo "  See plans/archive/zcode-checkpoints-archive.md for the rationale." >&2
+            echo "  Use 'refs/notes/zcode-archive/<session>/<id>' instead if you must persist." >&2
+            exit 1
+            ;;
+    esac
+done

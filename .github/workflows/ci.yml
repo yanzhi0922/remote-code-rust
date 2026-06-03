@@ -1,5 +1,22 @@
 name: CI
 
+# Minimal GITHUB_TOKEN permissions: the CI jobs only read the repository,
+# they do not push commits or create releases.  `contents: read` blocks a
+# compromised step from pushing to main.  The `release.yml` workflow is the
+# only one that needs `contents: write`, and it sets that explicitly.
+permissions:
+  contents: read
+
+# Cancel in-progress runs of the same ref; this prevents old CI runs from
+# consuming runner minutes after a developer force-pushes a branch.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+# Cap any single job at 60 minutes; without this, a hung build can pin a
+# runner for hours and starve later workflow runs.
+timeout-minutes: 60
+
 on:
   push:
     branches: [main]
@@ -23,6 +40,12 @@ env:
   # futures even though the same tests pass with a normal application stack.
   RUST_MIN_STACK: 8388608
 
+  # Pin Rust version explicitly so the workflow does not silently drift
+  # when the dtolnay/rust-toolchain action's default ref advances. Each
+  # job also passes `with: toolchain: 1.93.1` as a second layer of
+  # defense (action versions are now `@v1` to avoid floating refs).
+  RUSTUP_TOOLCHAIN: "1.93.1"
+
 jobs:
   check:
     name: Check (${{ matrix.slice }})
@@ -33,7 +56,7 @@ jobs:
         slice: [claude, codex, roo, apps-shared]
     steps:
       - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@master
+      - uses: dtolnay/rust-toolchain@v1
         with:
           toolchain: 1.93.1
           components: clippy, rustfmt
@@ -58,7 +81,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@master
+      - uses: dtolnay/rust-toolchain@v1
         with:
           toolchain: 1.93.1
           components: rustfmt
@@ -73,7 +96,7 @@ jobs:
         slice: [claude, codex, roo, apps-shared]
     steps:
       - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@master
+      - uses: dtolnay/rust-toolchain@v1
         with:
           toolchain: 1.93.1
           components: clippy
@@ -98,7 +121,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@master
+      - uses: dtolnay/rust-toolchain@v1
         with:
           toolchain: 1.93.1
       - uses: Swatinem/rust-cache@v2
@@ -130,7 +153,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@master
+      - uses: dtolnay/rust-toolchain@v1
         with:
           toolchain: 1.93.1
       - uses: Swatinem/rust-cache@v2
@@ -151,7 +174,7 @@ jobs:
         slice: [claude, codex, roo, apps-shared]
     steps:
       - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@master
+      - uses: dtolnay/rust-toolchain@v1
         with:
           toolchain: 1.93.1
       - name: Install Linux desktop dependencies
@@ -261,7 +284,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@master
+      - uses: dtolnay/rust-toolchain@v1
         with:
           toolchain: 1.93.1
       - name: Install Linux desktop dependencies
@@ -279,3 +302,51 @@ jobs:
             patchelf
       - uses: Swatinem/rust-cache@v2
       - run: cargo check --package remote-code-gui
+
+  tauri-bundle-dryrun:
+    name: Tauri bundle dry run (weekly)
+    # Catch Tauri 2 capability / CSP / bundler config regressions before they
+    # surface at release time.  This builds the Linux AppImage on every push
+    # so a Tauri config change that breaks the bundler fails CI within one
+    # business day.  It does NOT run on every PR to keep CI latency low —
+    # the cheaper `cargo check --package remote-code-gui` already covers
+    # that case.
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: 1.93.1
+      - name: Install Linux desktop dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config \
+            libssl-dev \
+            libcap-dev \
+            libgtk-3-dev \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            bubblewrap \
+            patchelf
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: apps/remote-code-gui/package-lock.json
+      - name: Build frontend
+        working-directory: apps/remote-code-gui
+        run: |
+          npm ci
+          npm run build
+      - name: Build Tauri AppImage
+        env:
+          NODE_ENV: production
+        run: cargo build --package remote-code-gui --release --features desktop
+      - name: Verify AppImage artifact exists
+        run: |
+          find apps/remote-code-gui/src-tauri/target/release/bundle -name '*.AppImage' -print

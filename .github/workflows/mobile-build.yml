@@ -1,5 +1,16 @@
 name: Mobile Build
 
+# Minimal GITHUB_TOKEN permissions: mobile builds only read the repo and
+# run `cargo check` for the Android/iOS targets.
+permissions:
+  contents: read
+
+concurrency:
+  group: mobile-build-${{ github.ref }}
+  cancel-in-progress: true
+
+timeout-minutes: 60
+
 on:
   push:
     branches: [main]
@@ -30,7 +41,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - uses: dtolnay/rust-toolchain@master
+      - uses: dtolnay/rust-toolchain@v1
         with:
           toolchain: 1.93.1
           targets: aarch64-linux-android
@@ -55,7 +66,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - uses: dtolnay/rust-toolchain@master
+      - uses: dtolnay/rust-toolchain@v1
         with:
           toolchain: 1.93.1
           targets: aarch64-apple-ios
