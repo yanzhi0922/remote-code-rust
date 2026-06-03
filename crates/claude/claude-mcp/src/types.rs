@@ -444,6 +444,9 @@ mod tests {
         // This call is serialized by the surrounding guard (OnceLock, Mutex, or
         // single-threaded test context) so no other thread is reading the
         // variable concurrently.
+        unsafe {
+            std::env::remove_var("MAX_MCP_OUTPUT_TOKENS");
+        }
 
         assert_eq!(super::mcp_tool_result_max_chars(), 50_000);
     }
@@ -456,6 +459,9 @@ mod tests {
         // This call is serialized by the surrounding guard (OnceLock, Mutex, or
         // single-threaded test context) so no other thread is reading the
         // variable concurrently.
+        unsafe {
+            std::env::set_var("MAX_MCP_OUTPUT_TOKENS", "100");
+        }
 
         let long = "a".repeat(500);
         let truncated = super::truncate_tool_result_content(&long);
@@ -467,7 +473,9 @@ mod tests {
         // This call is serialized by the surrounding guard (OnceLock, Mutex, or
         // single-threaded test context) so no other thread is reading the
         // variable concurrently.
-
+        unsafe {
+            std::env::remove_var("MAX_MCP_OUTPUT_TOKENS");
+        }
     }
 
     #[test]
@@ -477,6 +485,9 @@ mod tests {
         // This call is serialized by the surrounding guard (OnceLock, Mutex, or
         // single-threaded test context) so no other thread is reading the
         // variable concurrently.
+        unsafe {
+            std::env::remove_var("MAX_MCP_OUTPUT_TOKENS");
+        }
 
         let short = "hello";
         assert_eq!(super::truncate_tool_result_content(short), short);

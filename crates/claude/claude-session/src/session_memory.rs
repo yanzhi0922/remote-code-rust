@@ -1,4 +1,5 @@
 use parking_lot::Mutex;
+use std::collections::BTreeMap;
 use std::fs;
 use std::fs::OpenOptions;
 use std::io::Write;
@@ -7,7 +8,9 @@ use std::thread::sleep;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
-use claude_config::RuntimeConfig;
+use claude_config::{AppPaths, RuntimeConfig};
+use claude_core::{InputFormat, OutputFormat, PermissionMode};
+use uuid::Uuid;
 
 const MAX_SECTION_LENGTH: usize = 2_000;
 const MAX_TOTAL_SESSION_MEMORY_TOKENS: usize = 12_000;
@@ -496,15 +499,17 @@ fn rough_token_count_estimation(text: &str) -> usize {
 #[cfg(test)]
 mod tests {
     use parking_lot::Mutex;
+    use std::collections::BTreeMap;
     use std::ffi::OsString;
     use std::path::PathBuf;
     use std::sync::OnceLock;
 
     use claude_config::load_runtime_config;
     use claude_config::settings_layers::RuntimeOverrides;
-    use claude_config::{ProviderOverrides, RuntimeConfig};
+    use claude_config::{AppPaths, ProviderOverrides, RuntimeConfig};
     use claude_core::{InputFormat, OutputFormat, PermissionMode};
     use tempfile::{TempDir, tempdir};
+    use uuid::Uuid;
 
     use super::{
         DEFAULT_SESSION_MEMORY_TEMPLATE, SessionMemoryState, build_session_memory_update_prompt,
@@ -541,7 +546,73 @@ mod tests {
         // This call is serialized by the surrounding guard (OnceLock, Mutex, or
         // single-threaded test context) so no other thread is reading the
         // variable concurrently.
-
+        unsafe {
+            std::env::set_var("CLAUDE_CONFIG_DIR", &profile);
+        }
+        let paths = AppPaths::discover_for_cwd(Some(profile.clone()), &cwd).expect("paths");
+        paths.ensure_exists().expect("ensure paths");
+        let config = claude_config::RuntimeConfig {
+            cwd: cwd.clone(),
+            original_cwd: cwd.clone(),
+            active_worktree_session: None,
+            session_id: Uuid::new_v4(),
+            permission_mode: PermissionMode::Default,
+            input_format: InputFormat::Text,
+            output_format: OutputFormat::Text,
+            print_mode: false,
+            verbose: false,
+            replay_user_messages: false,
+            include_partial_messages: false,
+            structured_output_schema: None,
+            mcp_config_paths: Vec::new(),
+            strict_mcp_config: false,
+            max_turns: 1,
+            session_name: None,
+            system_prompt: None,
+            append_system_prompt: None,
+            setting_sources: Vec::new(),
+            allowed_setting_sources: Vec::new(),
+            settings_files: Vec::new(),
+            cli_settings_files: Vec::new(),
+            allowed_tools: Vec::new(),
+            disallowed_tools: Vec::new(),
+            effort: None,
+            fallback_model: None,
+            output_style: None,
+            language: None,
+            brief_enabled: false,
+            proactive_active: false,
+            auth_source: None,
+            api_key_helper: None,
+            api_key_helper_source: None,
+            provider: claude_config::ProviderConfig {
+                name: "test".to_owned(),
+                base_url: None,
+                api_key: None,
+                model: None,
+                protocol: claude_core::ProviderProtocol::OpenAi,
+                timeout_ms: 30_000,
+                max_output_tokens: 4096,
+                max_retries: 3,
+                retry_initial_backoff_ms: 500,
+                retry_max_backoff_ms: 30_000,
+                respect_retry_after: true,
+                request_header_overrides: BTreeMap::new(),
+                request_metadata: BTreeMap::new(),
+                thinking_budget: None,
+                temperature: None,
+                top_p: None,
+                top_k: None,
+            },
+            paths,
+        };
+        TestRuntime {
+            _env_guard: env_guard,
+            _tempdir: tempdir,
+            config,
+            cleanup_project_dir: cwd,
+            previous_claude_config_dir,
+        }
     }
 
     impl Drop for TestRuntime {

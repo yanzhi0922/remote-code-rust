@@ -237,7 +237,9 @@ mod tests {
             // This call is serialized by the surrounding guard (OnceLock, Mutex, or
             // single-threaded test context) so no other thread is reading the
             // variable concurrently.
-
+            unsafe {
+                env::set_var(key, value);
+            }
         }
 
         fn remove(&self, key: &str) {
@@ -246,7 +248,9 @@ mod tests {
             // This call is serialized by the surrounding guard (OnceLock, Mutex, or
             // single-threaded test context) so no other thread is reading the
             // variable concurrently.
-
+            unsafe {
+                env::remove_var(key);
+            }
         }
     }
 
@@ -258,7 +262,9 @@ mod tests {
                 // This call is serialized by the surrounding guard (OnceLock, Mutex, or
                 // single-threaded test context) so no other thread is reading the
                 // variable concurrently.
-
+                match original {
+                    Some(value) => unsafe { env::set_var(key, value) },
+                    None => unsafe { env::remove_var(key) },
                 }
             }
         }

@@ -97,6 +97,9 @@ mod tests {
         // This call is serialized by the surrounding guard (OnceLock, Mutex, or
         // single-threaded test context) so no other thread is reading the
         // variable concurrently.
+        unsafe {
+            std::env::set_var("CLAUDE_PROXY_TEST_KEY", "resolved-secret");
+        }
 
         let mut config: ProxyConfigFile = toml::from_str(
             r#"
@@ -124,7 +127,9 @@ mod tests {
         // This call is serialized by the surrounding guard (OnceLock, Mutex, or
         // single-threaded test context) so no other thread is reading the
         // variable concurrently.
-
+        unsafe {
+            std::env::remove_var("CLAUDE_PROXY_TEST_KEY");
+        }
     }
 
     #[test]

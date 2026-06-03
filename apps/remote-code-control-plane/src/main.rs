@@ -167,15 +167,29 @@ mod tests {
         // This call is serialized by the surrounding guard (OnceLock, Mutex, or
         // single-threaded test context) so no other thread is reading the
         // variable concurrently.
+        unsafe {
+            std::env::remove_var("REMOTE_CODE_CONTROL_PLANE_QUIC_DISABLE");
+        }
 
         // Without QUIC_DISABLE, QUIC is not disabled (i.e. enabled by default).
         assert!(!quic_disabled());
+        // SAFETY: `std::env::set_var` / `std::env::remove_var` are unsafe because the underlying
+        // C runtime is not thread-safe and concurrent reads/writes can race.
+        // This call is serialized by the surrounding guard (OnceLock, Mutex, or
+        // single-threaded test context) so no other thread is reading the
+        // variable concurrently.
+        unsafe {
+            std::env::set_var("REMOTE_CODE_TEST_FLAG", "1");
+        }
         assert!(env_flag_enabled("REMOTE_CODE_TEST_FLAG"));
         // SAFETY: `std::env::set_var` / `std::env::remove_var` are unsafe because the underlying
         // C runtime is not thread-safe and concurrent reads/writes can race.
         // This call is serialized by the surrounding guard (OnceLock, Mutex, or
         // single-threaded test context) so no other thread is reading the
         // variable concurrently.
+        unsafe {
+            std::env::set_var("REMOTE_CODE_CONTROL_PLANE_QUIC_DISABLE", "1");
+        }
 
         // With QUIC_DISABLE, QUIC is disabled.
         assert!(quic_disabled());
@@ -184,6 +198,11 @@ mod tests {
         // This call is serialized by the surrounding guard (OnceLock, Mutex, or
         // single-threaded test context) so no other thread is reading the
         // variable concurrently.
-
+        unsafe {
+            std::env::remove_var("REMOTE_CODE_CONTROL_PLANE_QUIC_DISABLE");
+        }
+        unsafe {
+            std::env::remove_var("REMOTE_CODE_TEST_FLAG");
+        }
     }
 }

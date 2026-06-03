@@ -2345,7 +2345,7 @@ mod tests {
                         // This call is serialized by the surrounding guard (OnceLock, Mutex, or
                         // single-threaded test context) so no other thread is reading the
                         // variable concurrently.
-
+                        unsafe { std::env::remove_var(name) };
                         (name, value)
                     })
                     .collect();
