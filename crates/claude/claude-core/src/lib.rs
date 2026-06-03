@@ -820,14 +820,17 @@ pub struct SubAgentExecutionResult {
     pub usage: UsageSummary,
 }
 
-/// Trait for providing LLM completion capability to sub-agents.
+/// Trait for sending a single conversation to the LLM and getting the
+/// response. This is the **minimum** capability a sub-agent runtime must
+/// provide.
 ///
-/// This trait breaks the circular dependency between `rc-tools` and
-/// `rc-provider`: `rc-tools` defines the agent tool that needs LLM access,
-/// but cannot depend on `rc-provider` directly. Instead, the completion
-/// capability is injected via this trait at the TUI/application layer.
+/// This trait is the leaf abstraction that `claude-tools` depends on. It
+/// breaks the circular dependency between `rc-tools` and `rc-provider`:
+/// `rc-tools` defines the agent tool that needs LLM access, but cannot
+/// depend on `rc-provider` directly. The completion capability is injected
+/// via this trait at the TUI/application layer.
 #[async_trait::async_trait]
-pub trait SubAgentCompletion: Send + Sync {
+pub trait SubAgentLlmComplete: Send + Sync {
     /// Send a conversation to the LLM and return the response.
     ///
     /// The implementation is responsible for provider selection, retry logic,
@@ -836,8 +839,21 @@ pub trait SubAgentCompletion: Send + Sync {
         &self,
         conversation: &[ConversationEntry],
     ) -> anyhow::Result<ProviderResponse>;
+}
 
-    /// Returns `true` when this runtime can execute a fully-resolved agent request.
+/// Trait for executing a fully-resolved agent request. This is a **richer
+/// seam** than `SubAgentLlmComplete` because it lets the host runtime
+/// drive tool calls, multi-turn execution, and approval flows in one
+/// place, instead of forcing the caller to reimplement them per agent.
+///
+/// Most runtimes only implement `SubAgentLlmComplete`; the default
+/// `SubAgentExecutionHost::execute_agent` returns an error so callers
+/// can fall back to the per-message completion path.
+#[async_trait::async_trait]
+pub trait SubAgentExecutionHost: Send + Sync {
+    /// Returns `true` when this runtime can execute a fully-resolved agent
+    /// request. Used by callers to choose between the two execution seams
+    /// without an upfront `is_supported()` round trip.
     fn supports_agent_execution(&self) -> bool {
         false
     }
@@ -845,7 +861,7 @@ pub trait SubAgentCompletion: Send + Sync {
     /// Execute a fully-resolved agent request using the host runtime.
     ///
     /// Implementations that do not support this richer execution seam can
-    /// leave the default behavior in place and only provide `complete(...)`.
+    /// leave the default behavior in place.
     async fn execute_agent(
         &self,
         _request: SubAgentExecutionRequest,
@@ -855,6 +871,27 @@ pub trait SubAgentCompletion: Send + Sync {
         ))
     }
 }
+
+/// Back-compat umbrella trait combining the two seams. **New code should
+/// depend on the narrower trait** (`SubAgentLlmComplete` for plain
+/// completion, `SubAgentExecutionHost` for full agent execution); this
+/// umbrella exists so legacy implementations can keep implementing a
+/// single trait object.
+#[async_trait::async_trait]
+pub trait SubAgentCompletion: SubAgentLlmComplete + SubAgentExecutionHost {
+    // Inherits `complete` from SubAgentLlmComplete, and
+    // `supports_agent_execution` / `execute_agent` from
+    // SubAgentExecutionHost.  Provided as a convenience for the
+    // `Arc<dyn SubAgentCompletion>` call sites in claude-tools and the
+    // claude-provider conversation backend.
+}
+
+// Blanket impl: any type that implements both narrower traits
+// automatically implements the umbrella.  Implementations that need a
+// custom `execute_agent` (e.g. a host runtime) can still `impl
+// SubAgentExecutionHost for X` separately; the auto-impl only fires
+// when both are in scope, so there is no conflict.
+impl<T> SubAgentCompletion for T where T: SubAgentLlmComplete + SubAgentExecutionHost {}
 
 /// A persisted event in the session transcript.
 #[derive(Debug, Clone, Serialize, Deserialize)]

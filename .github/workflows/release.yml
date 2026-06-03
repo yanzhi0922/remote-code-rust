@@ -1,5 +1,26 @@
 name: Release
 
+# `contents: write` is required because this workflow pushes git tags
+# and creates GitHub releases.  `packages: write` is needed for GHCR
+# container pushes.  `id-token: write` lets the workflow sign provenance
+# attestations if `slsa-framework/slsa-github-generator` is added later.
+permissions:
+  contents: write
+  packages: write
+
+# Cancel any older in-progress release run for the same tag; without
+# this, accidentally re-tagging a release kicks off N parallel builds.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false  # never cancel a release that has already started pushing
+
+# Release builds compile the full desktop GUI in release mode for
+# 8 targets (Windows / Linux GNU+MUSL / macOS, x64 + ARM64), which
+# is significantly more expensive than a CI check.  120 minutes per
+# job is the upper bound; if a target takes longer, it is genuinely
+# broken and should fail.
+timeout-minutes: 120
+
 on:
   push:
     tags:

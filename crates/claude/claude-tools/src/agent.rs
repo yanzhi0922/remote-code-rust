@@ -1347,14 +1347,17 @@ mod tests {
     }
 
     #[async_trait::async_trait]
-    impl SubAgentCompletion for RecordingAgentRuntime {
+    impl SubAgentLlmComplete for RecordingAgentRuntime {
         async fn complete(
             &self,
             _conversation: &[claude_core::ConversationEntry],
         ) -> Result<ProviderResponse> {
             panic!("complete() should not be used when execute_agent is supported")
         }
+    }
 
+    #[async_trait::async_trait]
+    impl SubAgentExecutionHost for RecordingAgentRuntime {
         fn supports_agent_execution(&self) -> bool {
             true
         }

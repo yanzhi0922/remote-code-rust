@@ -5,7 +5,10 @@ use std::sync::Arc;
 use anyhow::Result;
 use async_trait::async_trait;
 use claude_config::ProviderConfig;
-use claude_core::{ConversationEntry, ProviderResponse, SubAgentCompletion};
+use claude_core::{
+    ConversationEntry, ProviderResponse, SubAgentCompletion, SubAgentExecutionHost,
+    SubAgentLlmComplete,
+};
 
 use crate::{ProviderClient, StreamingCallbacks, query_source::ProviderRequestContext};
 
@@ -100,7 +103,7 @@ impl ProviderSubAgentCompletion {
 }
 
 #[async_trait]
-impl SubAgentCompletion for ProviderSubAgentCompletion {
+impl SubAgentLlmComplete for ProviderSubAgentCompletion {
     async fn complete(
         &self,
         conversation: &[ConversationEntry],
@@ -115,6 +118,14 @@ impl SubAgentCompletion for ProviderSubAgentCompletion {
             .await
     }
 }
+
+// The provider backend only does per-message LLM completion; it does not
+// drive multi-turn tool execution, so we inherit the default error path
+// for `execute_agent`.  This is what makes the new narrower trait split
+// useful: callers that only need a completion can now depend on
+// `SubAgentLlmComplete` alone, while agent-tool callers can still
+// combine both via the `SubAgentCompletion` umbrella.
+impl SubAgentExecutionHost for ProviderSubAgentCompletion {}
 
 #[async_trait]
 impl ConversationBackend for ProviderCompatBackend {

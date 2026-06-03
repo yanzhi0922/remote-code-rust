@@ -436,6 +436,7 @@ mod tests {
     use async_trait::async_trait;
     use claude_core::{
         ConversationEntry, PermissionMode, ProviderResponse, SessionId, SubAgentCompletion,
+        SubAgentExecutionHost, SubAgentLlmComplete,
         ToolCall, ToolResult, UsageSummary,
     };
     use claude_provider::context::ContextWindowManager;
@@ -455,7 +456,7 @@ mod tests {
     struct DummyCompletion;
 
     #[async_trait]
-    impl SubAgentCompletion for DummyCompletion {
+    impl SubAgentLlmComplete for DummyCompletion {
         async fn complete(
             &self,
             _conversation: &[ConversationEntry],
@@ -463,6 +464,7 @@ mod tests {
             Ok(ProviderResponse::default())
         }
     }
+    impl SubAgentExecutionHost for DummyCompletion {}
 
     #[derive(Debug, Clone)]
     enum MockStreamingEvent {
