@@ -21,7 +21,9 @@ test.describe('Application launch', () => {
 
   test('renders the primary UI shell elements', async ({ page }) => {
     await page.goto('/');
-    await page.waitForLoadState('domcontentloaded');
+    // Vite dev server: wait for the activity bar to actually mount before counting.
+    // domcontentloaded fires before React 18 hydrates, so we wait for a real element.
+    await page.waitForSelector('nav[aria-label="Workbench activity bar"]', { timeout: 15_000 });
 
     // The app should render either the activity bar, sidebar, or main content area
     // These are the main structural elements of the app
@@ -40,7 +42,7 @@ test.describe('Application launch', () => {
     });
 
     await page.goto('/');
-    await page.waitForLoadState('domcontentloaded');
+    await page.waitForSelector('nav[aria-label="Workbench activity bar"]', { timeout: 15_000 });
 
     // Give a moment for any async errors to surface
     await page.waitForTimeout(1000);

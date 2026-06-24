@@ -1,0 +1,369 @@
+diff --git a/apps/remote-code-gui/src/components/chat/ChatInput.tsx b/apps/remote-code-gui/src/components/chat/ChatInput.tsx
+index 70d52c0a..11933114 100644
+--- a/apps/remote-code-gui/src/components/chat/ChatInput.tsx
++++ b/apps/remote-code-gui/src/components/chat/ChatInput.tsx
+@@ -101,6 +101,7 @@ function Chip({
+ export function ChatInput() {
+   const [input, setInput] = useState('');
+   const [modelDraft, setModelDraft] = useState('');
++  const modelDraftRef = useRef(modelDraft);
+   const [openMenu, setOpenMenu] = useState<'provider' | 'permission' | null>(null);
+   const textAreaRef = useRef<HTMLTextAreaElement>(null);
+ 
+@@ -142,6 +143,9 @@ export function ChatInput() {
+     setModelDraft(settings?.provider_model ?? provider?.model ?? '');
+   }, [provider?.model, settings?.provider_model]);
+ 
++  // Keep ref in sync so commitModelDraft always uses the latest value.
++  modelDraftRef.current = modelDraft;
++
+   const handleSend = async () => {
+     if (!input.trim() || sending) return;
+     const current = input;
+@@ -162,7 +166,7 @@ export function ChatInput() {
+   };
+ 
+   const commitModelDraft = async () => {
+-    await updateSettings({ provider_model: modelDraft.trim() });
++    await updateSettings({ provider_model: modelDraftRef.current.trim() });
+   };
+ 
+   return (
+diff --git a/apps/remote-code-gui/src/remote/api.ts b/apps/remote-code-gui/src/remote/api.ts
+index 87375ed4..c29f8454 100644
+--- a/apps/remote-code-gui/src/remote/api.ts
++++ b/apps/remote-code-gui/src/remote/api.ts
+@@ -184,6 +184,8 @@ export function buildSessionEventsStreamUrl(
+   return wsUrl.toString();
+ }
+ 
++const REFRESH_TIMEOUT_MS = 30_000;
++
+ let _refreshPromise: Promise<boolean> | null = null;
+ 
+ async function tryRefreshAccessToken(baseUrl: string): Promise<boolean> {
+@@ -194,24 +196,34 @@ async function tryRefreshAccessToken(baseUrl: string): Promise<boolean> {
+     if (!refreshToken) return false;
+ 
+     try {
+-      const response = await fetch(buildHttpUrl(baseUrl, '/v1/auth/refresh'), {
+-        method: 'POST',
+-        headers: { 'content-type': 'application/json' },
+-        body: JSON.stringify({ refresh_token: refreshToken }),
+-        signal: AbortSignal.timeout(5000),
+-      });
+-
+-      if (!response.ok) {
+-        if (response.status === 401) {
+-          clearRemoteAccessToken();
+-          clearRemoteRefreshToken();
++      const refreshPromise = (async () => {
++        const response = await fetch(buildHttpUrl(baseUrl, '/v1/auth/refresh'), {
++          method: 'POST',
++          headers: { 'content-type': 'application/json' },
++          body: JSON.stringify({ refresh_token: refreshToken }),
++          signal: AbortSignal.timeout(5000),
++        });
++
++        if (!response.ok) {
++          if (response.status === 401) {
++            clearRemoteAccessToken();
++            clearRemoteRefreshToken();
++          }
++          return false;
+         }
+-        return false;
+-      }
+ 
+-      const data = await response.json() as { access_token: string };
+-      persistRemoteAccessToken(data.access_token);
+-      return true;
++        const data = await response.json() as { access_token: string };
++        persistRemoteAccessToken(data.access_token);
++        return true;
++      })();
++
++      const result = await Promise.race([
++        refreshPromise,
++        new Promise<false>((_, reject) =>
++          setTimeout(() => reject(new Error('Token refresh timed out')), REFRESH_TIMEOUT_MS),
++        ),
++      ]);
++      return result;
+     } catch {
+       return false;
+     } finally {
+diff --git a/apps/remote-code-gui/src/remote/connection-manager.ts b/apps/remote-code-gui/src/remote/connection-manager.ts
+index c30f712a..5df41be4 100644
+--- a/apps/remote-code-gui/src/remote/connection-manager.ts
++++ b/apps/remote-code-gui/src/remote/connection-manager.ts
+@@ -56,6 +56,7 @@ export function onConnectionManagerEvent(listener: EventListener): () => void {
+ 
+ class ConnectionManager {
+   private transport: UnifiedTransport | null = null;
++  private _connecting = false;
+   private _state: ConnectionManagerState = {
+     connectionState: 'idle',
+     strategy: null,
+@@ -71,6 +72,10 @@ class ConnectionManager {
+   }
+ 
+   async connect(config: TransportConfig, afterSequence = 0): Promise<void> {
++    // Guard against concurrent connect calls.
++    if (this._connecting) return;
++    this._connecting = true;
++
+     this.disconnect();
+ 
+     this._config = config;
+@@ -116,8 +121,9 @@ class ConnectionManager {
+       for (const cmd of queued) {
+         try {
+           await this.transport.sendCommand(cmd.command);
+-        } catch {
+-          break;
++        } catch (e) {
++          console.error('[ConnectionManager] failed to drain queued command:', e);
++          // Continue with next command instead of breaking.
+         }
+       }
+     }
+@@ -128,6 +134,8 @@ class ConnectionManager {
+         void this.reconnect();
+       }
+     });
++
++    this._connecting = false;
+   }
+ 
+   disconnect(): void {
+@@ -190,8 +198,9 @@ class ConnectionManager {
+ 
+   private async reconnect(): Promise<void> {
+     if (!this.transport || !this._config) return;
++    const seq = this._state.latestSequence;
+     try {
+-      await this.transport.connect(this._state.latestSequence);
++      await this.transport.connect(seq);
+     } catch (error) {
+       console.error('[ConnectionManager] reconnect failed:', error);
+     }
+diff --git a/apps/remote-code-gui/src/remote/offline-queue.ts b/apps/remote-code-gui/src/remote/offline-queue.ts
+index 139ac721..2318d913 100644
+--- a/apps/remote-code-gui/src/remote/offline-queue.ts
++++ b/apps/remote-code-gui/src/remote/offline-queue.ts
+@@ -34,6 +34,10 @@ function openDb(): Promise<IDBDatabase> {
+     };
+     request.onsuccess = () => {
+       dbInstance = request.result;
++      // Guard against unexpected close (e.g. user clears site data).
++      dbInstance.addEventListener('close', () => {
++        dbInstance = null;
++      }, { once: true });
+       resolve(dbInstance);
+     };
+     request.onerror = () => reject(request.error);
+diff --git a/apps/remote-code-gui/src/remote/transport.ts b/apps/remote-code-gui/src/remote/transport.ts
+index 6dea27a0..3ff59b55 100644
+--- a/apps/remote-code-gui/src/remote/transport.ts
++++ b/apps/remote-code-gui/src/remote/transport.ts
+@@ -56,6 +56,7 @@ export function subscribeToRemoteSessionEvents(input: {
+   let reconnectTimer: number | null = null;
+   let socket: WebSocket | null = null;
+   let reconnectAttempt = 0;
++  const MAX_RECONNECT_ATTEMPTS = 20;
+ 
+   const streamBaseUrl = input.runnerBaseUrl ?? input.baseUrl;
+ 
+@@ -147,6 +148,12 @@ export function subscribeToRemoteSessionEvents(input: {
+       return;
+     }
+ 
++    // Give up after too many reconnect attempts to avoid infinite loops.
++    if (reconnectAttempt >= MAX_RECONNECT_ATTEMPTS) {
++      input.onConnectionStateChange('error');
++      return;
++    }
++
+     const delayMs = Math.min(1_000 * 2 ** reconnectAttempt, 15_000);
+     reconnectTimer = window.setTimeout(() => {
+       reconnectTimer = null;
+diff --git a/apps/remote-code-gui/src/remote/unified-transport.ts b/apps/remote-code-gui/src/remote/unified-transport.ts
+index 662b24b2..ddfc9754 100644
+--- a/apps/remote-code-gui/src/remote/unified-transport.ts
++++ b/apps/remote-code-gui/src/remote/unified-transport.ts
+@@ -123,10 +123,12 @@ export class UnifiedTransport implements TransportHandle {
+   private _callbacks: TransportCallbacks;
+   private _handle: { close(): void } | null = null;
+   private _latestSequence = 0;
++  private _generation = 0;
+   private _cancelled = false;
+   private _reconnectAttempt = 0;
+   private _reconnectTimer: number | null = null;
+   private _healthTimer: number | null = null;
++  private _healthCancelled = false;
+   private _pollTimer: number | null = null;
+ 
+   constructor(config: TransportConfig, callbacks: TransportCallbacks) {
+@@ -159,6 +161,8 @@ export class UnifiedTransport implements TransportHandle {
+ 
+   async connect(afterSequence = 0): Promise<void> {
+     this._cancelled = false;
++    this._healthCancelled = false;
++    this._generation++;
+     this._latestSequence = afterSequence;
+     this.setState('connecting');
+ 
+@@ -193,6 +197,7 @@ export class UnifiedTransport implements TransportHandle {
+ 
+   close(): void {
+     this._cancelled = true;
++    this._healthCancelled = true;
+     this._handle?.close();
+     this._handle = null;
+ 
+@@ -233,6 +238,7 @@ export class UnifiedTransport implements TransportHandle {
+       const queued = await drainCommands(this._config.sessionId);
+       const failed: typeof queued = [];
+       for (const cmd of queued) {
++        if (this._cancelled) break;
+         try {
+           await this.executeCommand(target, cmd.command);
+         } catch {
+@@ -342,8 +348,11 @@ export class UnifiedTransport implements TransportHandle {
+   }
+ 
+   private async connectHybrid(after: number): Promise<void> {
++    const gen = this._generation;
+     const report = await this.probeHealth();
+ 
++    if (this._cancelled || gen !== this._generation) return;
++
+     if (this.canUseDirectRunner() && report.runnerReachable && report.runnerLatencyMs !== null) {
+       this._strategy = 'direct_websocket';
+       await this.connectWebSocket(this.directRunnerBaseUrl()!, after);
+@@ -356,7 +365,9 @@ export class UnifiedTransport implements TransportHandle {
+     if (this._healthTimer !== null) {
+       window.clearInterval(this._healthTimer);
+     }
++    this._healthCancelled = false;
+     this._healthTimer = window.setInterval(() => {
++      if (this._healthCancelled) return;
+       void this.autoSwitchIfNeeded();
+     }, 30_000);
+   }
+@@ -364,7 +375,11 @@ export class UnifiedTransport implements TransportHandle {
+   private async autoSwitchIfNeeded(): Promise<void> {
+     if (this._cancelled) return;
+ 
++    const gen = this._generation;
+     const report = await this.probeHealth();
++
++    if (this._cancelled || gen !== this._generation) return;
++
+     const currentIsDirect = this._strategy === 'direct_websocket';
+     const shouldDirect = report.recommendedStrategy === 'direct_websocket';
+ 
+@@ -388,9 +403,10 @@ export class UnifiedTransport implements TransportHandle {
+     this._latestSequence = after;
+ 
+     const pollInterval = this._config.pollIntervalMs ?? 3000;
++    const gen = this._generation;
+ 
+     const poll = async () => {
+-      if (this._cancelled) return;
++      if (this._cancelled || gen !== this._generation) return;
+       try {
+         const response = await listSessionEvents(
+           this._config.baseUrl,
+@@ -398,6 +414,8 @@ export class UnifiedTransport implements TransportHandle {
+           100,
+         );
+ 
++        if (this._cancelled || gen !== this._generation) return;
++
+         for (const event of response.items) {
+           if (event.sequence > this._latestSequence) {
+             this._latestSequence = Math.max(this._latestSequence, event.sequence);
+@@ -427,6 +445,8 @@ export class UnifiedTransport implements TransportHandle {
+       return;
+     }
+ 
++    const gen = this._generation;
++
+     try {
+       await invoke('quic_connect', {
+         url: this._config.quicServerUrl ?? this._config.baseUrl,
+@@ -434,10 +454,13 @@ export class UnifiedTransport implements TransportHandle {
+         sessionId: this._config.sessionId,
+         serverCertFingerprint: this._config.quicCertFingerprint ?? null,
+       });
++
++      if (this._cancelled || gen !== this._generation) return;
++
+       this.setState('open');
+ 
+       const unlisten = await tauriListen<RemoteTimelineEvent>('quic-event', (event) => {
+-        if (this._cancelled) return;
++        if (this._cancelled || gen !== this._generation) return;
+         this._latestSequence = Math.max(this._latestSequence, event.payload.sequence);
+         this._metrics.eventsReceived++;
+         this.notifyMetrics();
+@@ -451,6 +474,7 @@ export class UnifiedTransport implements TransportHandle {
+         },
+       };
+     } catch (error) {
++      if (this._cancelled || gen !== this._generation) return;
+       this._strategy = 'server_relay';
+       await this.connectWebSocket(this._config.baseUrl, _after);
+     }
+diff --git a/apps/remote-code-gui/src/remote/useConnection.ts b/apps/remote-code-gui/src/remote/useConnection.ts
+index 0fd07533..db1fa21e 100644
+--- a/apps/remote-code-gui/src/remote/useConnection.ts
++++ b/apps/remote-code-gui/src/remote/useConnection.ts
+@@ -1,4 +1,4 @@
+-import { useCallback, useEffect, useMemo, useSyncExternalStore } from 'react';
++import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from 'react';
+ import type { RemoteTimelineEvent } from './types';
+ import {
+   getConnectionManager,
+@@ -13,6 +13,9 @@ import {
+   type TransportMetrics,
+ } from './connection-manager';
+ 
++// Track how many active hook consumers exist so we can clean up the singleton.
++let activeConsumerCount = 0;
++
+ export interface UseConnectionReturn {
+   connectionState: ConnectionState;
+   strategy: TransportStrategyType | null;
+@@ -53,6 +56,21 @@ export function useConnection(
+   onEvent?: (event: RemoteTimelineEvent) => void,
+ ): UseConnectionReturn {
+   const state = useSyncExternalStore(subscribeToState, getSnapshot, getServerSnapshot);
++  const mountedRef = useRef(false);
++
++  // Lifecycle: increment on mount, destroy singleton on unmount if last consumer.
++  useEffect(() => {
++    mountedRef.current = true;
++    activeConsumerCount++;
++    return () => {
++      mountedRef.current = false;
++      activeConsumerCount--;
++      if (activeConsumerCount <= 0) {
++        activeConsumerCount = 0;
++        destroyConnectionManager();
++      }
++    };
++  }, []);
+ 
+   // Subscribe to transport events via the connection manager.
+   useEffect(() => {
+@@ -61,6 +79,7 @@ export function useConnection(
+   }, [onEvent]);
+ 
+   const connect = useCallback(async (config: TransportConfig, afterSequence = 0) => {
++    if (!mountedRef.current) return;
+     const mgr = getConnectionManager();
+     await mgr.connect(config, afterSequence);
+   }, []);

@@ -1,0 +1,38 @@
+[
+  {
+    "worktree": "agent-a01ae358c28929b1c",
+    "patch": "D:\\remote-code-rust-worktree-backups\\20260529-043835\\agent-a01ae358c28929b1c.patch",
+    "files": 9,
+    "sha256": "C2F3EE1AA5113214E144D0D0B699C45C84C1859880478D07BCFFCC7A2A537D75"
+  },
+  {
+    "worktree": "agent-a0e8d254064057c43",
+    "patch": "D:\\remote-code-rust-worktree-backups\\20260529-043835\\agent-a0e8d254064057c43.patch",
+    "files": 7,
+    "sha256": "ADC675E29E632C5EC6401F4C103570F0CF918C4FBFEBF09F7B846EFF02DD5831"
+  },
+  {
+    "worktree": "agent-a8193b827f44ce74f",
+    "patch": "D:\\remote-code-rust-worktree-backups\\20260529-043835\\agent-a8193b827f44ce74f.patch",
+    "files": 15,
+    "sha256": "E7B5E2979600D3535AD4742063F505AC4E02E845B4A7107A089B0526B60B4DA7"
+  },
+  {
+    "worktree": "agent-acde4e57472b74f44",
+    "patch": "D:\\remote-code-rust-worktree-backups\\20260529-043835\\agent-acde4e57472b74f44.patch",
+    "files": 6,
+    "sha256": "9F073FCC8F084A417F947459DD5D767034CE4F3B35CFF2774D1BFF2556203F4B"
+  },
+  {
+    "worktree": "agent-ad3100b58ec3fe852",
+    "patch": "D:\\remote-code-rust-worktree-backups\\20260529-043835\\agent-ad3100b58ec3fe852.patch",
+    "files": 11,
+    "sha256": "EAB8B6E3A4A829E3C62C7F3393C56974AEDB17FE260245FC1147EEEC301ED5CD"
+  },
+  {
+    "worktree": "agent-ad7e0c4baf6fc7a1c",
+    "patch": "D:\\remote-code-rust-worktree-backups\\20260529-043835\\agent-ad7e0c4baf6fc7a1c.patch",
+    "files": 4,
+    "sha256": "E2C150184474E8C5AD65EF5D588906F63EED0DA8A8F3DAC1A8AD7B0F3B320CDE"
+  }
+]

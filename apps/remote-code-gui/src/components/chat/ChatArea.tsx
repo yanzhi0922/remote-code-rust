@@ -38,6 +38,12 @@ import {
   extractThinkingBlocks,
   estimateEntryHeight,
 } from '../../lib/conversationUtils';
+import {
+  describeLiveProgress,
+  describeLiveResult,
+  describeToolCall,
+  describeToolResult,
+} from '../../lib/codexTimeline';
 import { useAppStore } from '../../stores/useAppStore';
 import * as tauri from '../../lib/tauri';
 import i18n from '../../i18n';
@@ -46,10 +52,24 @@ import CollapsibleBlock from './CollapsibleBlock';
 import { InlineDiffView, detectAndRenderDiff } from './InlineDiffView';
 import { GoalStatusBar } from './GoalStatusBar';
 import { FollowUpSuggestions } from './FollowUpSuggestions';
+import { CodexTimelineCard } from './CodexTimelineCard';
 
 const LazyMarkdownRenderer = lazy(() => import('./MarkdownRenderer'));
 const VIRTUALIZATION_THRESHOLD = 80;
 const VIRTUALIZATION_OVERSCAN = 10;
+
+/**
+ * Compute a 1-based "turn number" for an entry at `index` in the conversation.
+ * A turn is one user→assistant exchange; tool messages are tagged with the
+ * turn they belong to so the user can scan the transcript.
+ */
+function computeTurnNumber(conversation: ConversationEntry[], index: number): number {
+  let turn = 0;
+  for (let i = 0; i <= index && i < conversation.length; i++) {
+    if (conversation[i].role === 'user') turn++;
+  }
+  return turn || 1;
+}
 
 function summarizeToolOutput(text: string): string {
   const compact = text.replace(/\s+/g, ' ').trim();
@@ -95,7 +115,7 @@ function ToolIcon({ name }: { name: string }) {
 function EmptyState({ title }: { title: string }) {
   return (
     <div className="flex h-full min-h-[320px] items-center justify-center px-6">
-      <div className="rounded-xl border border-dashed border-rc-border-primary bg-rc-bg-elevated px-5 py-4 text-sm text-rc-text-tertiary shadow-xs">
+      <div className="rounded-md border border-dashed border-rc-border-primary bg-rc-bg-elevated px-5 py-4 text-sm text-rc-text-tertiary shadow-xs">
         {title}
       </div>
     </div>
@@ -103,8 +123,13 @@ function EmptyState({ title }: { title: string }) {
 }
 
 function ToolCallCard({ toolCall }: { toolCall: ToolCallInfo }) {
+  const descriptor = useMemo(() => describeToolCall(toolCall), [toolCall]);
   const formattedInput = formatToolInput(toolCall.input);
   const diffResult = useMemo(() => detectAndRenderDiff(formattedInput), [formattedInput]);
+
+  if (descriptor.kind !== 'generic') {
+    return <CodexTimelineCard item={descriptor} />;
+  }
 
   if (diffResult.isDiff && diffResult.element) {
     return (
@@ -144,47 +169,39 @@ function ToolCallCard({ toolCall }: { toolCall: ToolCallInfo }) {
 }
 
 function AssistantToolCalls({ toolCalls }: { toolCalls: ToolCallInfo[] }) {
+  const { t } = useTranslation();
   if (toolCalls.length === 0) return null;
 
-  // Group consecutive tool calls into a summary when there are 3+
-  if (toolCalls.length >= 3) {
-    return (
-      <CollapsibleBlock
-        summary={
-          <div className="flex min-w-0 items-center gap-2.5">
-            <Wrench size={13} className="text-rc-accent-info" />
-            <span className="text-xs font-medium text-rc-text-primary">
-              {toolCalls.length} tool calls
-            </span>
-            <span className="truncate text-xs text-rc-text-tertiary">
-              {toolCalls.map((tc) => tc.name).join(', ')}
-            </span>
-          </div>
-        }
-        buttonLabel={`Toggle ${toolCalls.length} tool calls`}
-        iconColor="text-rc-accent-info"
-        className="mt-3"
-      >
-        <div className="space-y-2">
-          {toolCalls.map((toolCall) => (
-            <ToolCallCard key={toolCall.id} toolCall={toolCall} />
-          ))}
-        </div>
-      </CollapsibleBlock>
-    );
-  }
-
   return (
-    <div className="mt-3 space-y-2">
-      {toolCalls.map((toolCall) => (
-        <ToolCallCard key={toolCall.id} toolCall={toolCall} />
-      ))}
-    </div>
+    <CollapsibleBlock
+      summary={
+        <div className="flex min-w-0 items-center gap-2.5">
+          <CheckCircle2 size={13} className="text-rc-accent-success" />
+          <span className="text-xs font-medium text-rc-text-primary">
+            {t('chatArea.actionsCompleted', { count: toolCalls.length })}
+          </span>
+          <span className="truncate text-xs text-rc-text-tertiary">
+            {t('chatArea.actionDetailsAvailable')}
+          </span>
+        </div>
+      }
+      buttonLabel={t('chatArea.toggleActions')}
+      iconColor="text-rc-text-tertiary"
+      className="mt-3"
+    >
+      <div className="space-y-2">
+        {toolCalls.map((toolCall) => (
+          <ToolCallCard key={toolCall.id} toolCall={toolCall} />
+        ))}
+      </div>
+    </CollapsibleBlock>
   );
 }
 
 function ToolMessage({ entry }: { entry: ConversationEntry }) {
+  const { t } = useTranslation();
   const label = entry.name ?? 'tool';
+  const descriptor = useMemo(() => describeToolResult(entry), [entry]);
   const diffResult = useMemo(() => detectAndRenderDiff(entry.text), [entry.text]);
 
   return (
@@ -196,14 +213,30 @@ function ToolMessage({ entry }: { entry: ConversationEntry }) {
           ) : (
             <CheckCircle2 size={13} className="text-rc-accent-success" />
           )}
-          <span className="font-mono text-xs font-medium text-rc-text-primary">{label}</span>
-          <span className="truncate text-xs text-rc-text-tertiary">{summarizeToolOutput(entry.text)}</span>
+          <span className="text-xs font-medium text-rc-text-primary">
+            {entry.is_error ? t('chatArea.actionFailed') : t('chatArea.actionCompleted')}
+          </span>
+          <span
+            className={`inline-flex items-center rounded-full px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider ${
+              entry.is_error
+                ? 'bg-rc-accent-error-bg text-rc-accent-error'
+                : 'bg-rc-accent-success-bg text-rc-accent-success'
+            }`}
+            data-testid="tool-status-badge"
+          >
+            {entry.is_error ? t('chatArea.actionFailed') : t('chatArea.actionCompleted')}
+          </span>
+          <span className="truncate text-xs text-rc-text-tertiary">
+            {descriptor.kind === 'generic' ? summarizeToolOutput(entry.text) : t('chatArea.actionDetailsAvailable')}
+          </span>
         </div>
       }
-      buttonLabel={`Toggle tool result ${label}`}
+      buttonLabel={`${t('chatArea.toggleActions')} ${label}`}
       iconColor={entry.is_error ? 'text-rc-accent-error' : 'text-rc-accent-success'}
     >
-      {diffResult.isDiff && diffResult.element ? (
+      {descriptor.kind !== 'generic' ? (
+        <CodexTimelineCard item={descriptor} defaultOpen={entry.is_error} />
+      ) : diffResult.isDiff && diffResult.element ? (
         diffResult.element
       ) : (
         <pre
@@ -249,17 +282,33 @@ function AssistantThinking({ blocks }: { blocks: string[] }) {
   );
 }
 
-function AssistantMessage({ entry }: { entry: ConversationEntry }) {
+function AssistantMessage({ entry, turnNumber }: { entry: ConversationEntry; turnNumber?: number }) {
   const { t } = useTranslation();
   const thinkingBlocks = extractThinkingBlocks(entry);
 
   return (
-    <article className="group border-b border-rc-border-secondary py-6 last:border-b-0">
+    <article className="group py-6">
       <div className="mb-3 flex items-center gap-2">
-        <span className="h-2 w-2 rounded-full bg-rc-accent-info" />
-        <span className="text-[10px] font-semibold uppercase text-rc-text-tertiary">
+        <span className="flex h-5 w-5 items-center justify-center rounded-full bg-rc-accent-info-bg text-[10px] font-bold text-rc-accent-info">
+          {t('chatArea.assistant').slice(0, 1)}
+        </span>
+        <span className="text-[10px] font-semibold uppercase tracking-wider text-rc-text-tertiary">
           {t('chatArea.assistant')}
         </span>
+        {turnNumber !== undefined && (
+          <span
+            data-testid="chat-turn-number"
+            className="rounded-full bg-rc-bg-tertiary px-1.5 py-0.5 font-mono text-[9px] text-rc-text-tertiary"
+            title={`Turn #${turnNumber}`}
+          >
+            #{turnNumber}
+          </span>
+        )}
+        {entry.name && (
+          <span className="text-[10px] text-rc-text-tertiary opacity-0 transition-opacity group-hover:opacity-100">
+            {entry.name}
+          </span>
+        )}
       </div>
 
       <AssistantThinking blocks={thinkingBlocks} />
@@ -280,7 +329,7 @@ function AssistantMessage({ entry }: { entry: ConversationEntry }) {
 }
 
 const MessageCard = memo(
-  function MessageCard({ entry }: { entry: ConversationEntry }) {
+  function MessageCard({ entry, turnNumber }: { entry: ConversationEntry; turnNumber?: number }) {
     const { t } = useTranslation();
     if (entry.role === 'system') return null;
 
@@ -291,10 +340,20 @@ const MessageCard = memo(
     if (entry.role === 'user') {
       const hasAttachments = entry.attachments && entry.attachments.length > 0;
       return (
-        <div className="flex justify-end border-b border-rc-border-secondary py-6 last:border-b-0">
-          <div className="max-w-[720px] rounded-xl border border-rc-border-primary bg-rc-bg-elevated px-4 py-3 text-sm leading-6 text-rc-text-primary shadow-xs">
+        <div className="flex justify-end py-5">
+          <div className="max-w-[700px] rounded-lg border border-rc-border-secondary bg-rc-bg-surface/88 px-4 py-3 text-sm leading-6 text-rc-text-primary shadow-sm">
             <div className="mb-2 flex items-center justify-between">
-              <span className="text-[10px] font-semibold uppercase text-rc-text-tertiary">{t('chatArea.user')}</span>
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] font-semibold uppercase text-rc-text-tertiary">{t('chatArea.user')}</span>
+                {turnNumber !== undefined && (
+                  <span
+                    data-testid="chat-turn-number"
+                    className="rounded-full bg-rc-bg-tertiary px-1.5 py-0.5 font-mono text-[9px] text-rc-text-tertiary"
+                  >
+                    #{turnNumber}
+                  </span>
+                )}
+              </div>
               <CopyButton text={entry.text} />
             </div>
             {hasAttachments && (
@@ -311,7 +370,7 @@ const MessageCard = memo(
                     );
                   }
                   return (
-                    <div key={idx} className="flex items-center gap-1.5 rounded-md border border-rc-border-secondary bg-rc-bg-tertiary px-2 py-1 text-xs text-rc-text-secondary">
+                    <div key={idx} className="flex items-center gap-1.5 rounded-full border border-rc-border-secondary bg-rc-bg-elevated px-2 py-1 text-xs text-rc-text-secondary">
                       <FileText size={12} />
                       <span>{att.filename ?? att.media_type}</span>
                     </div>
@@ -325,7 +384,7 @@ const MessageCard = memo(
       );
     }
 
-    return <AssistantMessage entry={entry} />;
+    return <AssistantMessage entry={entry} turnNumber={turnNumber} />;
   },
   (previous, next) => previous.entry === next.entry,
 );
@@ -354,7 +413,7 @@ function WorkingIndicator({ sending }: { sending: boolean }) {
   const timeStr = minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`;
 
   return (
-    <div className="flex items-center gap-2 rounded-md border border-rc-border-primary bg-rc-bg-elevated px-3 py-2 text-xs text-rc-text-secondary shadow-xs animate-fade-in">
+    <div className="codex-soft-card flex w-fit items-center gap-2 px-3 py-2 text-xs text-rc-text-secondary animate-fade-in">
       <Loader2 size={14} className="animate-spin text-rc-accent-primary" />
       <span className="font-medium">{i18n.t('chatArea.processing')}</span>
       <span className="flex items-center gap-1 text-rc-text-tertiary">
@@ -381,7 +440,7 @@ function StatusCards({
   return (
     <>
       {sending && (
-        <div role="status" className="rounded-md border border-rc-border-primary bg-rc-bg-elevated px-4 py-3 text-sm text-rc-text-secondary shadow-xs">
+        <div role="status" className="codex-soft-card px-4 py-3 text-sm text-rc-text-secondary">
           <div className="flex items-center gap-3">
             <div className="flex h-5 w-5 items-center justify-center">
               <div className="h-5 w-5 animate-spin rounded-full border-2 border-rc-border-primary border-t-rc-accent-primary" />
@@ -392,15 +451,10 @@ function StatusCards({
           {compactProgress.length > 0 && (
             <div className="mt-4 space-y-2">
               {compactProgress.map((progress, index) => (
-                <div
+                <CodexTimelineCard
                   key={`${progress.tool_name}-${progress.tool_call_id}-${index}`}
-                    className="flex items-center gap-2 rounded bg-rc-bg-code px-2.5 py-1.5 text-xs"
-                >
-                  <ToolIcon name={progress.tool_name} />
-                  <span className="font-mono font-medium text-rc-text-primary">{progress.tool_name || 'tool'}</span>
-                  <span className="text-rc-text-tertiary">·</span>
-                  <span className="truncate text-rc-text-secondary">{truncateMiddle(progress.active_form ?? progress.message, 120)}</span>
-                </div>
+                  item={describeLiveProgress(progress)}
+                />
               ))}
             </div>
           )}
@@ -408,19 +462,10 @@ function StatusCards({
           {compactResults.length > 0 && (
             <div className="mt-4 space-y-2">
               {compactResults.map((result, index) => (
-                <div
+                <CodexTimelineCard
                   key={`${result.tool_name}-${result.tool_call_id}-${index}`}
-                  className={`flex items-center gap-2 rounded-md px-3 py-2 text-xs ${
-                    result.is_error
-                      ? 'bg-rc-accent-error-bg text-rc-accent-error'
-                      : 'bg-rc-accent-success-bg text-rc-accent-success'
-                  }`}
-                >
-                  {result.is_error ? <XCircle size={13} /> : <CheckCircle2 size={13} />}
-                  <span className="font-mono font-medium">{result.tool_name}</span>
-                  <span className="opacity-60">·</span>
-                  <span className="truncate">{truncateMiddle(result.output, 110)}</span>
-                </div>
+                  item={describeLiveResult(result)}
+                />
               ))}
             </div>
           )}
@@ -489,13 +534,14 @@ function ConversationTimeline({
       ref={scrollContainerRef}
       onScroll={handleScroll}
       aria-label="Conversation transcript"
-      className="flex-1 min-h-0 overflow-y-auto bg-rc-bg-chat px-5 py-5"
+      className="flex-1 min-h-0 overflow-y-auto bg-transparent px-6 py-5"
     >
       <div className="mx-auto flex w-full max-w-chat flex-col">
         {shouldVirtualize ? (
           <div className="relative w-full" style={{ height: `${rowVirtualizer.getTotalSize()}px` }}>
             {rowVirtualizer.getVirtualItems().map((virtualRow) => {
               const entry = conversation[virtualRow.index];
+              const turnNumber = computeTurnNumber(conversation, virtualRow.index);
               return (
                 <div
                   key={virtualRow.key}
@@ -505,24 +551,27 @@ function ConversationTimeline({
                   style={{ transform: `translateY(${virtualRow.start}px)` }}
                 >
                   <div>
-                    <MessageCard entry={entry} />
+                    <MessageCard entry={entry} turnNumber={turnNumber} />
                   </div>
                 </div>
               );
             })}
           </div>
         ) : (
-          conversation.map((entry, index) => (
+          conversation.map((entry, index) => {
+            const turnNumber = computeTurnNumber(conversation, index);
+            return (
             <div key={conversationRowKey(entry, index)}>
-              <MessageCard entry={entry} />
+              <MessageCard entry={entry} turnNumber={turnNumber} />
             </div>
-          ))
+            );
+          })
         )}
 
         <WorkingIndicator sending={sending} />
 
         {sending && streamingText && (
-          <div className="markdown-body max-w-none border-b border-rc-border-secondary py-6 text-rc-text-primary animate-fade-in">
+          <div className="markdown-body max-w-none rounded-lg bg-rc-bg-surface/45 px-5 py-5 text-rc-text-primary shadow-xs animate-fade-in">
             <div className="mb-3 flex items-center gap-2">
               <span className="h-2 w-2 rounded-full bg-rc-accent-info animate-pulse" />
               <span className="text-[10px] font-semibold uppercase text-rc-text-tertiary">{i18n.t('chatArea.streaming')}</span>
@@ -559,7 +608,7 @@ function ConversationTimeline({
           type="button"
           onClick={scrollToBottom}
           aria-label="Scroll to bottom"
-          className="absolute bottom-4 right-6 z-10 flex h-9 w-9 items-center justify-center rounded-full border border-rc-border-primary bg-rc-bg-surface shadow-lg transition-all hover:bg-rc-bg-hover hover:shadow-xl"
+          className="codex-floating-control absolute bottom-4 right-6 z-10 h-9 w-9 px-0"
         >
           <ArrowDown size={16} className="text-rc-text-secondary" />
         </button>
@@ -594,14 +643,14 @@ function ConversationHeader({
   };
 
   return (
-    <div className="flex h-12 shrink-0 items-center justify-between border-b border-rc-border-secondary bg-rc-bg-surface px-4">
+    <div className="flex h-14 shrink-0 items-center justify-between border-b border-rc-border-secondary/60 bg-rc-bg-surface/55 px-5 backdrop-blur-xl">
       <div className="flex min-w-0 items-center gap-2">
         <div className="min-w-0 truncate text-sm font-semibold text-rc-text-primary">{title}</div>
         <div className="relative">
           <button
             type="button"
             aria-label={t('chatArea.sessionActions')}
-            className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-rc-text-tertiary transition-colors hover:bg-rc-bg-hover hover:text-rc-text-primary"
+            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-rc-text-tertiary transition-colors hover:bg-rc-bg-hover hover:text-rc-text-primary"
             onClick={() => setMenuOpen((v) => !v)}
           >
             <MoreHorizontal size={16} />
@@ -614,7 +663,7 @@ function ConversationHeader({
                 className="fixed inset-0 z-10 cursor-default"
                 onClick={() => setMenuOpen(false)}
               />
-              <div className="absolute left-0 top-full z-20 mt-1 min-w-[180px] overflow-hidden rounded-md border border-rc-border-primary bg-rc-bg-surface shadow-lg animate-fade-in-up">
+              <div className="codex-popover absolute left-0 top-full z-20 mt-1 min-w-[190px] animate-fade-in-up">
                 <div className="p-1.5">
                   <button
                     type="button"
@@ -639,7 +688,7 @@ function ConversationHeader({
         </div>
       </div>
 
-      <div className="hidden min-w-0 items-center gap-2 rounded-lg border border-rc-border-secondary bg-rc-bg-elevated px-2.5 py-1.5 text-xs text-rc-text-tertiary md:flex">
+      <div className="hidden min-w-0 items-center gap-2 rounded-full border border-rc-border-secondary bg-rc-bg-elevated/70 px-3 py-1.5 text-xs text-rc-text-tertiary md:flex">
         <GitBranch size={14} />
         <span className="truncate">{provider ?? 'provider'}</span>
         {model && (
@@ -700,7 +749,7 @@ export function ChatArea() {
 
   if (conversationLoading) {
     return (
-      <div className="flex min-h-0 flex-1 flex-col bg-rc-bg-chat">
+      <div className="flex min-h-0 flex-1 flex-col bg-transparent">
         <ConversationHeader
           title={activeSession?.title ?? 'Session'}
           provider={activeSession?.provider_name}
@@ -716,7 +765,7 @@ export function ChatArea() {
 
   if (conversation.length === 0) {
     return (
-      <div className="flex min-h-0 flex-1 flex-col bg-rc-bg-chat">
+      <div className="flex min-h-0 flex-1 flex-col bg-transparent">
         <ConversationHeader
           title={activeSession?.title ?? 'Session'}
           provider={activeSession?.provider_name}
@@ -731,7 +780,7 @@ export function ChatArea() {
   }
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col bg-rc-bg-chat">
+    <div className="flex min-h-0 flex-1 flex-col bg-transparent">
       <ConversationHeader
         title={activeSession?.title ?? 'Session'}
         provider={activeSession?.provider_name}

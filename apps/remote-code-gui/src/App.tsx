@@ -170,7 +170,7 @@ const demoProjects: ProjectInfo[] = [
 const demoSessions: SessionSummary[] = [
   {
     id: 'demo-session-1',
-    title: 'Remote Code GUI workbench redesign',
+    title: 'Polish Remote Code into a calm Codex desktop',
     cwd: demoProjectPath,
     provider_name: demoProvider.name,
     model: demoProvider.model,
@@ -206,7 +206,7 @@ const demoSessions: SessionSummary[] = [
 const demoConversation: ConversationEntry[] = [
   {
     role: 'user',
-    text: '把桌面端改成更像长期使用的 coding agent IDE，重点处理聊天、composer、MCP 和设置页。',
+    text: '把 Remote Code 调整成更像 Codex 桌面版：线程优先、输入框优先，工具面板只在需要时出现。',
     content_blocks: [],
     tool_calls: [],
     tool_call_id: null,
@@ -215,8 +215,8 @@ const demoConversation: ConversationEntry[] = [
   },
   {
     role: 'assistant',
-    text: '已把外壳调整为 IDE workbench：左侧 activity bar 和 explorer，中间高密度会话流，右侧 inspector，底部状态栏和固定 composer。',
-    content_blocks: [{ type: 'thinking', thinking: '先保留现有 Tauri contract，再只调整前端布局、token 和组件密度。' }],
+    text: '已把默认界面收敛成更安静的桌面 agent：左侧是线程导航，中间保留大块对话留白，Composer 只突出任务输入和发送。',
+    content_blocks: [{ type: 'thinking', thinking: '先降低默认噪声，再把终端、diff、审批和设置收进按需展开的浮层。' }],
     tool_calls: [
       {
         id: 'tool-1',

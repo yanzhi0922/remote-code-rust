@@ -1,0 +1,724 @@
+diff --git a/crates/shared/rc-control-plane/src/handlers.rs b/crates/shared/rc-control-plane/src/handlers.rs
+index 8e37e513..c7b2ff65 100644
+--- a/crates/shared/rc-control-plane/src/handlers.rs
++++ b/crates/shared/rc-control-plane/src/handlers.rs
+@@ -933,18 +933,21 @@ pub(crate) async fn update_runner_heartbeat(
+     Json(heartbeat): Json<RunnerHeartbeat>,
+ ) -> Result<Json<RunnerSnapshot>, ApiError> {
+     let user_id = user_id_from_principal(&principal);
+-    {
+-        let registry = service.registry.read().await;
++
++    // Consolidate visibility check + heartbeat apply + reap into a single write lock scope.
++    let (snapshot, reaped) = {
++        let mut registry = service.registry.write().await;
+         if !registry.runner_visible_to(&runner_id, user_id) {
+             return Err(ApiError::not_found(format!(
+                 "runner `{runner_id}` was not found"
+             )));
+         }
+-    }
+-    let snapshot = {
+-        let mut registry = service.registry.write().await;
+-        registry.apply_heartbeat(&runner_id, heartbeat)?
++        let snapshot = registry.apply_heartbeat(&runner_id, heartbeat)?;
++        // Reap sessions stuck in Assigned whose runner has gone offline.
++        let reaped = registry.reap_orphaned_assigned_sessions(service.runner_lease_ttl_secs);
++        (snapshot, reaped)
+     };
++
+     let _event = service
+         .publish_event(TimelineEventDraft {
+             runner_id: Some(snapshot.registration.runner_id.clone()),
+@@ -958,25 +961,26 @@ pub(crate) async fn update_runner_heartbeat(
+         })
+         .await;
+ 
+-    // Reap sessions stuck in Assigned whose runner has gone offline (3x TTL without heartbeat)
+-    {
+-        let mut registry = service.registry.write().await;
+-        let reaped = registry.reap_orphaned_assigned_sessions(service.runner_lease_ttl_secs);
+-        if !reaped.is_empty() {
+-            for (session_id, old_runner_id, previous_state) in &reaped {
+-                let session = registry.sessions.get(session_id);
+-                let new_state = session.map(|s| s.state).unwrap_or(SessionState::Pending);
+-                let _ = service
+-                    .publish_event(TimelineEventDraft {
+-                        runner_id: Some(old_runner_id.clone()),
+-                        session_id: Some(*session_id),
+-                        detail: TimelineEventDetail::SessionStateChanged {
+-                            previous_state: *previous_state,
+-                            state: new_state,
+-                        },
+-                    })
+-                    .await;
+-            }
++    // Publish reap events outside the lock.
++    if !reaped.is_empty() {
++        for (session_id, old_runner_id, previous_state) in &reaped {
++            let registry = service.registry.read().await;
++            let new_state = registry
++                .sessions
++                .get(session_id)
++                .map(|s| s.state)
++                .unwrap_or(SessionState::Pending);
++            drop(registry);
++            let _ = service
++                .publish_event(TimelineEventDraft {
++                    runner_id: Some(old_runner_id.clone()),
++                    session_id: Some(*session_id),
++                    detail: TimelineEventDetail::SessionStateChanged {
++                        previous_state: *previous_state,
++                        state: new_state,
++                    },
++                })
++                .await;
+         }
+     }
+ 
+@@ -1179,21 +1183,22 @@ pub(crate) async fn update_session_state(
+     Json(request): Json<SessionStateUpdateRequest>,
+ ) -> Result<Json<SessionView>, ApiError> {
+     let user_id = user_id_from_principal(&principal);
+-    let existing = {
+-        let registry = service.registry.read().await;
+-        registry.get_session_for_user(session_id, user_id)?
+-    };
+     let requested_state = request.state;
+     let metadata = request.metadata.clone();
+ 
+-    let runner_update = if let Some(runner_id) = existing.owner_runner_id.as_deref() {
+-        let runner =
+-            {
+-                let registry = service.registry.read().await;
+-                registry.runners.get(runner_id).cloned().ok_or_else(|| {
+-                    ApiError::not_found(format!("runner `{runner_id}` was not found"))
+-                })?
+-            };
++    // Combine session lookup + runner lookup into a single read lock.
++    let existing_and_runner = {
++        let registry = service.registry.read().await;
++        let session = registry.get_session_for_user(session_id, user_id)?;
++        let runner = session.owner_runner_id.as_deref().and_then(|runner_id| {
++            registry.runners.get(runner_id).cloned()
++        });
++        (session, runner)
++    };
++    let (_existing, runner_opt) = existing_and_runner;
++
++    let runner_update = if let Some(runner) = runner_opt {
++        let runner_id = runner.registration.runner_id.as_str();
+         if runner_uses_pull_commands(&runner) {
+             {
+                 let mut registry = service.registry.write().await;
+@@ -1809,8 +1814,19 @@ pub(crate) async fn apply_approval_decision(
+ 
+ async fn dispatch_pending_sessions_for_runner(service: &ControlPlaneService, runner_id: &str) {
+     let mut skipped_session_ids = BTreeSet::new();
++    // Cap dispatch iterations to prevent runaway loops under heavy load.
++    let mut iterations = 0u32;
++    const MAX_DISPATCH_ITERATIONS: u32 = 64;
+ 
+     loop {
++        iterations += 1;
++        if iterations > MAX_DISPATCH_ITERATIONS {
++            tracing::warn!(
++                runner_id,
++                "capping pending session dispatch at {MAX_DISPATCH_ITERATIONS} iterations"
++            );
++            break;
++        }
+         let planned = {
+             let registry = service.registry.read().await;
+             registry
+diff --git a/crates/shared/rc-control-plane/src/registry.rs b/crates/shared/rc-control-plane/src/registry.rs
+index 06be4021..ed01f2f2 100644
+--- a/crates/shared/rc-control-plane/src/registry.rs
++++ b/crates/shared/rc-control-plane/src/registry.rs
+@@ -1,6 +1,6 @@
+ //! In-memory registry for runners, sessions, approvals, and artifacts.
+ 
+-use std::collections::{BTreeMap, BTreeSet, VecDeque};
++use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
+ use std::sync::Arc;
+ 
+ use chrono::{DateTime, Duration, Utc};
+@@ -25,6 +25,16 @@ use crate::types::{
+     SessionStateTransition, TimelineEvent, TimelineEventDraft, TrustedDeviceRecord,
+ };
+ 
++/// Maximum number of queued commands per runner. Oldest commands are evicted
++/// when this limit is exceeded to prevent unbounded memory growth.
++const MAX_COMMANDS_PER_RUNNER: usize = 256;
++
++/// Maximum number of active pairing offers before pruning is enforced.
++const MAX_PAIRING_OFFERS: usize = 64;
++
++/// Maximum number of approvals per session to prevent unbounded growth.
++const MAX_APPROVALS_PER_SESSION: usize = 128;
++
+ // ---------------------------------------------------------------------------
+ // Registry
+ // ---------------------------------------------------------------------------
+@@ -53,6 +63,17 @@ pub(crate) struct Registry {
+     /// Populated when a runner registers via `AuthPrincipal::User`.
+     #[serde(default)]
+     pub(crate) runner_owners: BTreeMap<String, String>,
++    /// Reverse index: maps session_id to runner_id for O(1) session-to-runner lookup.
++    /// Derived from `sessions.owner_runner_id` — rebuilt on deserialization via `rebuild_session_runner_index`.
++    #[serde(skip)]
++    pub(crate) session_runner_index: HashMap<Uuid, String>,
++    /// Reverse index: maps token hash to device_id for O(1) device auth lookup.
++    /// Derived from `trusted_devices` — rebuilt on mutation via `rebuild_token_hash_index`.
++    #[serde(skip)]
++    pub(crate) token_hash_to_device: HashMap<String, Uuid>,
++    /// Reverse index: maps access token hash to device_id for O(1) access token auth.
++    #[serde(skip)]
++    pub(crate) access_token_hash_to_device: HashMap<String, Uuid>,
+ }
+ 
+ /// Stored push notification token for a trusted device.
+@@ -278,6 +299,30 @@ fn normalize_device_name(raw: &str) -> Result<String, ApiError> {
+ // ---------------------------------------------------------------------------
+ 
+ impl Registry {
++    /// Rebuild the `session_runner_index` from current sessions data.
++    /// Call this after deserialization or bulk mutations.
++    pub(crate) fn rebuild_session_runner_index(&mut self) {
++        self.session_runner_index.clear();
++        for (session_id, session) in &self.sessions {
++            if let Some(ref runner_id) = session.owner_runner_id {
++                self.session_runner_index.insert(*session_id, runner_id.clone());
++            }
++        }
++    }
++
++    /// Rebuild the token hash reverse indices from trusted devices data.
++    /// Call this after deserialization or bulk mutations.
++    pub(crate) fn rebuild_token_hash_index(&mut self) {
++        self.token_hash_to_device.clear();
++        self.access_token_hash_to_device.clear();
++        for (device_id, device) in &self.trusted_devices {
++            self.token_hash_to_device.insert(device.token_hash.clone(), *device_id);
++            if let Some(ref at_hash) = device.access_token_hash {
++                self.access_token_hash_to_device.insert(at_hash.clone(), *device_id);
++            }
++        }
++    }
++
+     pub(crate) fn owner_claimed(&self) -> bool {
+         self.owner_device_id.is_some()
+     }
+@@ -304,6 +349,11 @@ impl Registry {
+         if removed.owner {
+             self.owner_device_id = None;
+         }
++        // Maintain token hash indices.
++        self.token_hash_to_device.remove(&removed.token_hash);
++        if let Some(ref at_hash) = removed.access_token_hash {
++            self.access_token_hash_to_device.remove(at_hash);
++        }
+         // Also remove any push tokens for this device
+         self.push_tokens.remove(&device_id);
+         Ok(removed.public_record())
+@@ -312,6 +362,7 @@ impl Registry {
+     /// Authenticate using either an access token (short-lived) or a refresh token
+     /// (long-lived). Access tokens are preferred; refresh tokens are accepted as
+     /// a fallback so existing clients aren't locked out during migration.
++    /// Uses pre-built hash indices for O(1) lookup instead of O(n) iteration.
+     pub(crate) fn authenticate_device_token(
+         &mut self,
+         token: &str,
+@@ -319,27 +370,34 @@ impl Registry {
+         let hash = sha256_hex(token);
+         let now = Utc::now();
+ 
+-        // Try access token first.
+-        for device in self.trusted_devices.values() {
+-            if let Some(ref at_hash) = device.access_token_hash
+-                && constant_time_hash_eq(&hash, at_hash)
+-            {
+-                let expired = device.access_token_expires_at.is_none_or(|exp| now >= exp);
+-                if !expired {
+-                    let device_id = device.device_id;
+-                    let dev = self.trusted_devices.get_mut(&device_id)?;
+-                    dev.last_seen_at = now;
+-                    return Some((dev.public_record(), true));
++        // Try access token first — O(1) lookup via index.
++        if let Some(&device_id) = self.access_token_hash_to_device.get(&hash) {
++            if let Some(device) = self.trusted_devices.get(&device_id) {
++                // Still need constant-time comparison for security.
++                if let Some(ref at_hash) = device.access_token_hash {
++                    if constant_time_hash_eq(&hash, at_hash) {
++                        let expired = device.access_token_expires_at.is_none_or(|exp| now >= exp);
++                        if !expired {
++                            let dev = self.trusted_devices.get_mut(&device_id)?;
++                            dev.last_seen_at = now;
++                            return Some((dev.public_record(), true));
++                        }
++                    }
+                 }
+             }
+         }
+ 
+-        // Fallback: refresh token.
++        // Fallback: refresh token — O(1) lookup via index.
+         let device_id = self
+-            .trusted_devices
+-            .values()
+-            .find(|device| constant_time_hash_eq(&hash, &device.token_hash))
+-            .map(|device| device.device_id)?;
++            .token_hash_to_device
++            .get(&hash)
++            .filter(|&&did| {
++                // Constant-time comparison for security.
++                self.trusted_devices
++                    .get(&did)
++                    .is_some_and(|d| constant_time_hash_eq(&hash, &d.token_hash))
++            })
++            .copied()?;
+         let device = self.trusted_devices.get_mut(&device_id)?;
+         device.last_seen_at = now;
+         Some((device.public_record(), false))
+@@ -347,6 +405,7 @@ impl Registry {
+ 
+     /// Refresh an access token using a valid refresh token.
+     /// Returns `(device_record, new_access_token)` or an error.
++    /// Uses O(1) lookup via the token hash index.
+     pub(crate) fn refresh_access_token(
+         &mut self,
+         refresh_token: &str,
+@@ -354,24 +413,39 @@ impl Registry {
+         let hash = sha256_hex(refresh_token);
+         let now = Utc::now();
+ 
++        // O(1) lookup via index with constant-time verification.
+         let device_id = self
+-            .trusted_devices
+-            .values()
+-            .find(|device| constant_time_hash_eq(&hash, &device.token_hash))
+-            .map(|device| device.device_id)
++            .token_hash_to_device
++            .get(&hash)
++            .filter(|&&did| {
++                self.trusted_devices
++                    .get(&did)
++                    .is_some_and(|d| constant_time_hash_eq(&hash, &d.token_hash))
++            })
++            .copied()
+             .ok_or_else(|| ApiError::unauthorized("invalid or expired refresh token".to_owned()))?;
+ 
+         let new_access_token = mint_secret("rcat");
+         let access_hash = sha256_hex(&new_access_token);
+         let expires_at = now + Duration::minutes(15);
+ 
++        // Remove old access token hash from index before updating.
++        if let Some(device) = self.trusted_devices.get(&device_id) {
++            if let Some(ref old_at_hash) = device.access_token_hash {
++                self.access_token_hash_to_device.remove(old_at_hash);
++            }
++        }
++
+         let device = self.trusted_devices.get_mut(&device_id).ok_or_else(|| {
+             ApiError::internal("device disappeared during token refresh".to_owned())
+         })?;
+-        device.access_token_hash = Some(access_hash);
++        device.access_token_hash = Some(access_hash.clone());
+         device.access_token_expires_at = Some(expires_at);
+         device.last_seen_at = now;
+ 
++        // Update access token index.
++        self.access_token_hash_to_device.insert(access_hash, device_id);
++
+         Ok((device.public_record(), new_access_token))
+     }
+ }
+@@ -427,6 +501,11 @@ impl Registry {
+         };
+         self.owner_device_id = Some(device_id);
+         self.trusted_devices.insert(device_id, record.clone());
++        // Maintain token hash indices.
++        self.token_hash_to_device.insert(record.token_hash.clone(), device_id);
++        if let Some(ref at_hash) = record.access_token_hash {
++            self.access_token_hash_to_device.insert(at_hash.clone(), device_id);
++        }
+         Ok(DualTokenResponse {
+             device: record.public_record(),
+             access_token,
+@@ -445,6 +524,20 @@ impl Registry {
+             ));
+         }
+         self.prune_expired_pairing_offers();
++        // Enforce maximum pairing offers to prevent unbounded growth.
++        while self.pairing_offers.len() >= MAX_PAIRING_OFFERS {
++            // Remove the offer closest to expiry.
++            if let Some(oldest_key) = self
++                .pairing_offers
++                .iter()
++                .min_by_key(|(_, o)| o.expires_at)
++                .map(|(k, _)| *k)
++            {
++                self.pairing_offers.remove(&oldest_key);
++            } else {
++                break;
++            }
++        }
+ 
+         let expires_in_secs = request
+             .expires_in_secs
+@@ -517,6 +610,11 @@ impl Registry {
+         };
+         let public_record = record.public_record();
+         let device_id = record.device_id;
++        // Maintain token hash indices.
++        self.token_hash_to_device.insert(record.token_hash.clone(), device_id);
++        if let Some(ref at_hash) = record.access_token_hash {
++            self.access_token_hash_to_device.insert(at_hash.clone(), device_id);
++        }
+         self.trusted_devices.insert(device_id, record);
+         Ok(DualTokenResponse {
+             device: public_record,
+@@ -749,6 +847,10 @@ impl Registry {
+                 record.session_id
+             )));
+         }
++        // Maintain the reverse index.
++        if let Some(ref runner_id) = record.owner_runner_id {
++            self.session_runner_index.insert(record.session_id, runner_id.clone());
++        }
+         self.sessions.insert(record.session_id, record.clone());
+         if let Some(runner_id) = &record.owner_runner_id {
+             self.refresh_runner_session_counts(runner_id, record.updated_at);
+@@ -815,6 +917,12 @@ impl Registry {
+         session.metadata.extend(metadata);
+         let updated = session.clone();
+         let owner_runner_id = updated.owner_runner_id.clone();
++        // Maintain reverse index if runner assignment changed.
++        if let Some(ref runner_id) = owner_runner_id {
++            self.session_runner_index.insert(session_id, runner_id.clone());
++        } else {
++            self.session_runner_index.remove(&session_id);
++        }
+         if let Some(runner_id) = owner_runner_id.as_deref() {
+             self.refresh_runner_session_counts(runner_id, updated_at);
+         }
+@@ -826,10 +934,13 @@ impl Registry {
+         runner_id: &str,
+         timestamp: DateTime<Utc>,
+     ) {
++        // Use the reverse index to find sessions for this runner in O(1) per session
++        // rather than scanning all sessions.
+         let (active_sessions, queued_sessions) = self
+-            .sessions
+-            .values()
+-            .filter(|session| session.owner_runner_id.as_deref() == Some(runner_id))
++            .session_runner_index
++            .iter()
++            .filter(|(_, rid)| rid.as_str() == runner_id)
++            .filter_map(|(sid, _)| self.sessions.get(sid))
+             .fold((0usize, 0usize), |(active, queued), session| {
+                 let active = if matches!(
+                     session.state,
+@@ -882,6 +993,8 @@ impl Registry {
+                 session.state = SessionState::Pending;
+                 session.owner_runner_id = None;
+                 session.updated_at = now;
++                // Maintain reverse index.
++                self.session_runner_index.remove(&session.session_id);
+                 reaped.push((session.session_id, runner_id, previous_state));
+                 continue;
+             };
+@@ -890,6 +1003,8 @@ impl Registry {
+                 session.state = SessionState::Pending;
+                 session.owner_runner_id = None;
+                 session.updated_at = now;
++                // Maintain reverse index.
++                self.session_runner_index.remove(&session.session_id);
+                 runners_needing_refresh.push(runner_id.clone());
+                 reaped.push((session.session_id, runner_id, previous_state));
+             }
+@@ -1097,6 +1212,17 @@ impl Registry {
+                 planned.approval.approval_id
+             )));
+         }
++        // Enforce maximum approvals per session to prevent unbounded growth.
++        let session_approval_count = self
++            .approvals
++            .values()
++            .filter(|a| a.session_id == planned.approval.session_id)
++            .count();
++        if session_approval_count >= MAX_APPROVALS_PER_SESSION {
++            return Err(ApiError::conflict(
++                "session has reached the maximum number of pending approvals".to_owned(),
++            ));
++        }
+ 
+         let session = self
+             .sessions
+@@ -1271,6 +1397,8 @@ impl Registry {
+         session.metadata = dispatched.metadata.clone();
+         session.updated_at = dispatched.updated_at;
+         let updated = session.clone();
++        // Maintain reverse index.
++        self.session_runner_index.insert(session_id, runner_id.to_owned());
+         self.refresh_runner_session_counts(runner_id, updated.updated_at);
+         Ok((updated, previous_state))
+     }
+@@ -1333,10 +1461,15 @@ impl Registry {
+             created_at: Utc::now(),
+             body,
+         };
+-        self.queued_runner_commands
++        let queue = self
++            .queued_runner_commands
+             .entry(runner_id.to_owned())
+-            .or_default()
+-            .push_back(command.clone());
++            .or_default();
++        queue.push_back(command.clone());
++        // Evict oldest commands when the per-runner queue exceeds capacity.
++        while queue.len() > MAX_COMMANDS_PER_RUNNER {
++            queue.pop_front();
++        }
+         Ok(command)
+     }
+ 
+diff --git a/crates/shared/rc-control-plane/src/state.rs b/crates/shared/rc-control-plane/src/state.rs
+index 012ffad5..a8e9c066 100644
+--- a/crates/shared/rc-control-plane/src/state.rs
++++ b/crates/shared/rc-control-plane/src/state.rs
+@@ -187,6 +187,20 @@ impl ControlPlaneService {
+         let expires_at = Utc::now() + Duration::seconds(ttl_secs as i64);
+         let mut tickets = self.stream_tickets.write().await;
+         prune_expired_stream_tickets(&mut tickets);
++        // Cap active tickets to prevent unbounded growth.
++        const MAX_STREAM_TICKETS: usize = 1024;
++        while tickets.len() >= MAX_STREAM_TICKETS {
++            // Remove the ticket closest to expiry.
++            if let Some(oldest_key) = tickets
++                .iter()
++                .min_by_key(|(_, t)| t.expires_at)
++                .map(|(k, _)| k.clone())
++            {
++                tickets.remove(&oldest_key);
++            } else {
++                break;
++            }
++        }
+         tickets.insert(
+             ticket.clone(),
+             StreamTicket {
+@@ -255,16 +269,23 @@ impl ControlPlaneService {
+     }
+ 
+     pub(crate) async fn persist_state(&self) -> Result<()> {
+-        let snapshot = PersistedControlPlaneState {
+-            registry: self.registry.read().await.clone(),
+-            timeline: self.timeline.snapshot().await,
++        // Serialize the registry directly from the read lock to produce the
++        // full snapshot JSON without cloning the entire data structure into a
++        // separate `PersistedControlPlaneState` value.
++        let payload = {
++            let registry = self.registry.read().await;
++            let timeline = self.timeline.snapshot().await;
++            let snapshot = PersistedControlPlaneState {
++                registry: (*registry).clone(),
++                timeline,
++            };
++            serde_json::to_string(&snapshot)
++                .with_context(|| "failed to serialize control plane state")?
+         };
+         let state_db_path = self.state_db_path.clone();
+-        tokio::task::spawn_blocking(move || {
+-            persist_control_plane_state(&state_db_path, &snapshot, None)
+-        })
+-        .await
+-        .context("control-plane snapshot task failed to join")??;
++        tokio::task::spawn_blocking(move || persist_state_json(&state_db_path, &payload))
++            .await
++            .context("control-plane snapshot task failed to join")??;
+         Ok(())
+     }
+ }
+@@ -468,8 +489,12 @@ fn load_persisted_state(state_db_path: &std::path::Path) -> Result<(Registry, Ti
+         .with_context(|| format!("failed to decode {}", state_db_path.display()))?;
+     backfill_persisted_events(&connection, &snapshot.timeline)
+         .with_context(|| format!("failed to backfill events in {}", state_db_path.display()))?;
++    let mut registry = snapshot.registry;
++    // Rebuild the reverse indices since they are `#[serde(skip)]`.
++    registry.rebuild_session_runner_index();
++    registry.rebuild_token_hash_index();
+     Ok((
+-        snapshot.registry,
++        registry,
+         TimelineStore::from_snapshot(
+             DEFAULT_EVENT_HISTORY_LIMIT,
+             EVENT_STREAM_BUFFER,
+@@ -508,6 +533,21 @@ pub(crate) fn persist_control_plane_state(
+     Ok(())
+ }
+ 
++/// Persist a pre-serialized state JSON payload directly to SQLite.
++/// This avoids re-serializing the entire registry when only the JSON is needed.
++fn persist_state_json(state_db_path: &std::path::Path, payload: &str) -> Result<()> {
++    let connection = open_state_connection(state_db_path)?;
++    connection
++        .execute(
++            "INSERT INTO control_plane_snapshot (id, payload, updated_at)
++             VALUES (1, ?1, CURRENT_TIMESTAMP)
++             ON CONFLICT(id) DO UPDATE SET payload = excluded.payload, updated_at = CURRENT_TIMESTAMP",
++            params![payload],
++        )
++        .with_context(|| format!("failed to persist {}", state_db_path.display()))?;
++    Ok(())
++}
++
+ fn open_state_connection(state_db_path: &std::path::Path) -> Result<Connection> {
+     let connection = Connection::open(state_db_path)
+         .with_context(|| format!("failed to open {}", state_db_path.display()))?;
+diff --git a/crates/shared/rc-remote-transport/src/direct_ws.rs b/crates/shared/rc-remote-transport/src/direct_ws.rs
+index cdbbd5e7..553c2957 100644
+--- a/crates/shared/rc-remote-transport/src/direct_ws.rs
++++ b/crates/shared/rc-remote-transport/src/direct_ws.rs
+@@ -50,14 +50,20 @@ impl RemoteTransport for DirectWsTransport {
+ 
+         // Build a real TLS connector from the config so self-signed certs
+         // and fingerprint pinning actually work for direct connections.
+-        let tls_config = crate::tls::build_client_tls_config(&config.tls)?;
++        let tls_config = crate::tls::build_client_tls_config(&config.tls).map_err(|e| {
++            self.state = ConnectionState::Error(format!("TLS config error: {e}"));
++            e
++        })?;
+         let connector = Some(Connector::Rustls(tls_config));
+ 
+         let (stream, _response) = connect_async_tls_with_config(request, None, false, connector)
+             .await
+             .map_err(|e| {
+-                self.state = ConnectionState::Error(e.to_string());
+-                anyhow::anyhow!("WebSocket connect failed: {e}")
++                self.state = ConnectionState::Error(format!("WebSocket connect failed: {e}"));
++                anyhow::anyhow!(
++                    "WebSocket connect to runner at {} failed: {e}",
++                    runner_url
++                )
+             })?;
+ 
+         // Spawn a task to read events from the WebSocket.
+diff --git a/crates/shared/rc-remote-transport/src/health.rs b/crates/shared/rc-remote-transport/src/health.rs
+index e8a4f70e..859402aa 100644
+--- a/crates/shared/rc-remote-transport/src/health.rs
++++ b/crates/shared/rc-remote-transport/src/health.rs
+@@ -4,6 +4,19 @@ use std::time::{Duration, Instant};
+ 
+ use crate::EndpointHealth;
+ 
++/// Shared health probe client — avoids creating a new `reqwest::Client` per probe.
++static HEALTH_CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
++
++fn health_client(timeout: Duration) -> &'static reqwest::Client {
++    HEALTH_CLIENT.get_or_init(|| {
++        reqwest::Client::builder()
++            .timeout(timeout)
++            .no_proxy()
++            .build()
++            .unwrap_or_else(|_| reqwest::Client::new())
++    })
++}
++
+ /// Probe a single HTTP endpoint for reachability and latency.
+ pub async fn probe_endpoint(
+     url: &str,
+@@ -11,23 +24,7 @@ pub async fn probe_endpoint(
+     timeout: Duration,
+ ) -> EndpointHealth {
+     let start = Instant::now();
+-    let client = reqwest::Client::builder()
+-        .timeout(timeout)
+-        .no_proxy()
+-        .build();
+-
+-    let client = match client {
+-        Ok(c) => c,
+-        Err(e) => {
+-            return EndpointHealth {
+-                url: url.to_owned(),
+-                reachable: false,
+-                latency_ms: None,
+-                auth_valid: false,
+-                error: Some(e.to_string()),
+-            };
+-        }
+-    };
++    let client = health_client(timeout);
+ 
+     let mut request = client.get(url);
+     if let Some(token) = auth_token {
+diff --git a/crates/shared/rc-remote-transport/src/offline_queue.rs b/crates/shared/rc-remote-transport/src/offline_queue.rs
+index db861b39..06560101 100644
+--- a/crates/shared/rc-remote-transport/src/offline_queue.rs
++++ b/crates/shared/rc-remote-transport/src/offline_queue.rs
+@@ -11,6 +11,8 @@ use crate::transport::TransportCommand;
+ const MAX_QUEUE_SIZE: usize = 100;
+ /// Commands older than this are considered stale and dropped on replay.
+ const STALE_THRESHOLD_SECS: i64 = 300; // 5 minutes
++/// Maximum retry attempts per command before discarding.
++const MAX_RETRY_COUNT: u32 = 10;
+ 
+ #[derive(Debug, Clone, Serialize, Deserialize)]
+ pub struct QueuedCommand {
+@@ -36,6 +38,14 @@ impl OfflineQueue {
+         }
+     }
+ 
++    /// Create an offline queue with a custom stale threshold in seconds.
++    pub fn with_stale_threshold(stale_threshold_secs: i64) -> Self {
++        Self {
++            inner: Arc::new(RwLock::new(Vec::new())),
++            stale_threshold_secs: stale_threshold_secs.max(60),
++        }
++    }
++
+     /// Enqueue a command for later delivery.
+     pub async fn enqueue(&self, session_id: String, command: TransportCommand) -> String {
+         let id = uuid::Uuid::new_v4().to_string();
+@@ -55,14 +65,25 @@ impl OfflineQueue {
+     }
+ 
+     /// Drain all non-stale commands, ordered oldest first.
++    /// Increments retry_count and drops commands that have been retried too many times.
+     pub async fn drain(&self) -> Vec<QueuedCommand> {
+         let now = chrono::Utc::now().timestamp();
+         let mut queue = self.inner.write().await;
+-        let (valid, stale): (Vec<_>, Vec<_>) = queue
++        let (mut valid, stale): (Vec<_>, Vec<_>) = queue
+             .drain(..)
+-            .partition(|item| now - item.queued_at < self.stale_threshold_secs);
++            .partition(|item| {
++                now - item.queued_at < self.stale_threshold_secs
++                    && item.retry_count < MAX_RETRY_COUNT
++            });
+         if !stale.is_empty() {
+-            tracing::info!("dropped {} stale offline commands", stale.len(),);
++            tracing::info!(
++                "dropped {} stale/exhausted offline commands",
++                stale.len(),
++            );
++        }
++        // Increment retry count for all drained commands.
++        for cmd in &mut valid {
++            cmd.retry_count += 1;
+         }
+         valid
+     }
+@@ -76,6 +97,11 @@ impl OfflineQueue {
+     pub async fn is_empty(&self) -> bool {
+         self.inner.read().await.is_empty()
+     }
++
++    /// Whether the queue is at capacity.
++    pub async fn is_full(&self) -> bool {
++        self.inner.read().await.len() >= MAX_QUEUE_SIZE
++    }
+ }
+ 
+ impl Default for OfflineQueue {

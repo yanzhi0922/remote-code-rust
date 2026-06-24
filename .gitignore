@@ -86,3 +86,9 @@ runner-local.env
 
 # SST binary (state store data, not source)
 roots.sst
+
+# Playwright transient artifacts (HTML report + test outputs)
+playwright-report/
+test-results/
+apps/*/playwright-report/
+apps/*/test-results/

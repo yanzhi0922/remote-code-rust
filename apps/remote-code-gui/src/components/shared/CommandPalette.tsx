@@ -1,14 +1,22 @@
 import {
   Blocks,
+  Bot,
+  Brain,
+  Download,
   FileText,
   FolderPlus,
+  GitBranch,
+  HeartPulse,
   MessageSquarePlus,
-  Moon,
   Palette,
+  RotateCcw,
   Search,
   Settings2,
-  Sun,
+  Shield,
+  Square,
+  Target,
   Terminal,
+  Trash2,
   X,
 } from 'lucide-react';
 import {
@@ -20,6 +28,9 @@ import {
 } from 'react';
 import { useTranslation } from 'react-i18next';
 import { cn } from '../../lib/utils';
+import { useAppStore } from '../../stores/useAppStore';
+import { useAgentStore } from '../../stores/useAgentStore';
+import * as tauri from '../../lib/tauri';
 
 interface CommandItem {
   id: string;
@@ -29,6 +40,7 @@ interface CommandItem {
   iconColor?: string;
   shortcut?: string;
   category?: string;
+  disabled?: boolean;
   action: () => void;
 }
 
@@ -51,7 +63,20 @@ function buildCommands(t: TFn, callbacks: {
   onOpenMcp: () => void;
   onToggleTheme: () => void;
   onClose: () => void;
+  onSendSlash: (command: string) => void;
+  onRunDoctor: () => void;
+  onExportSession: () => void;
+  onExportDiagnostics: () => void;
+  onStopCodex: () => void;
+  onRestartCodex: () => void;
+  onUpdateSettings: (updates: Record<string, unknown>) => void;
+  activeSessionId: string | null;
+  activeAgentType: string | null;
 }): CommandItem[] {
+  const hasSession = !!callbacks.activeSessionId;
+  const isCodex = callbacks.activeAgentType === 'remote_codex';
+  const isClaude = callbacks.activeAgentType === 'remote_claude';
+  const isRoo = callbacks.activeAgentType === 'remote_roo';
   return [
     {
       id: 'new-session',
@@ -82,6 +107,62 @@ function buildCommands(t: TFn, callbacks: {
       action: () => { callbacks.onOpenSettings(); callbacks.onClose(); },
     },
     {
+      id: 'goal',
+      label: t('commandPalette.goal'),
+      description: t('commandPalette.goalDesc'),
+      icon: Target,
+      iconColor: 'text-rc-accent-success',
+      category: t('commandPalette.sessionCategory'),
+      disabled: !hasSession || !isCodex,
+      action: () => { callbacks.onSendSlash('/goal '); callbacks.onClose(); },
+    },
+    {
+      id: 'compact',
+      label: t('commandPalette.compact'),
+      description: t('commandPalette.compactDesc'),
+      icon: RotateCcw,
+      iconColor: 'text-rc-accent-info',
+      category: t('commandPalette.sessionCategory'),
+      disabled: !hasSession,
+      action: () => { callbacks.onSendSlash('/compact'); callbacks.onClose(); },
+    },
+    {
+      id: 'review',
+      label: t('commandPalette.review'),
+      description: t('commandPalette.reviewDesc'),
+      icon: FileText,
+      iconColor: 'text-rc-accent-warning',
+      category: t('commandPalette.sessionCategory'),
+      disabled: !hasSession,
+      action: () => { callbacks.onSendSlash('/review'); callbacks.onClose(); },
+    },
+    {
+      id: 'plan-mode',
+      label: t('commandPalette.planMode'),
+      description: t('commandPalette.planModeDesc'),
+      icon: Shield,
+      iconColor: 'text-rc-accent-primary',
+      category: t('commandPalette.sessionCategory'),
+      action: () => {
+        if (isClaude) {
+          callbacks.onUpdateSettings({ permission_mode: 'plan' });
+        } else {
+          callbacks.onSendSlash('/plan');
+        }
+        callbacks.onClose();
+      },
+    },
+    {
+      id: 'clear-session',
+      label: t('commandPalette.clearSession'),
+      description: t('commandPalette.clearSessionDesc'),
+      icon: Trash2,
+      iconColor: 'text-rc-accent-error',
+      category: t('commandPalette.sessionCategory'),
+      disabled: !hasSession,
+      action: () => { callbacks.onSendSlash('/clear'); callbacks.onClose(); },
+    },
+    {
       id: 'mcp',
       label: t('commandPalette.mcpManagement'),
       description: t('commandPalette.mcpManagementDesc'),
@@ -108,7 +189,8 @@ function buildCommands(t: TFn, callbacks: {
       iconColor: 'text-rc-accent-warning',
       shortcut: '\u2318`',
       category: t('commandPalette.toolsCategory'),
-      action: () => { callbacks.onClose(); },
+      disabled: !hasSession || !isCodex,
+      action: () => { callbacks.onSendSlash('/terminal '); callbacks.onClose(); },
     },
     {
       id: 'search-files',
@@ -119,6 +201,124 @@ function buildCommands(t: TFn, callbacks: {
       shortcut: '\u2318P',
       category: t('commandPalette.toolsCategory'),
       action: () => { callbacks.onClose(); },
+    },
+    {
+      id: 'doctor',
+      label: t('commandPalette.doctor'),
+      description: t('commandPalette.doctorDesc'),
+      icon: HeartPulse,
+      iconColor: 'text-rc-accent-success',
+      category: t('commandPalette.toolsCategory'),
+      action: () => { callbacks.onRunDoctor(); callbacks.onClose(); },
+    },
+    {
+      id: 'export-session',
+      label: t('commandPalette.exportSession'),
+      description: t('commandPalette.exportSessionDesc'),
+      icon: Download,
+      iconColor: 'text-rc-accent-info',
+      category: t('commandPalette.sessionCategory'),
+      disabled: !hasSession,
+      action: () => { callbacks.onExportSession(); callbacks.onClose(); },
+    },
+    {
+      id: 'export-diagnostics',
+      label: t('commandPalette.exportDiagnostics'),
+      description: t('commandPalette.exportDiagnosticsDesc'),
+      icon: Download,
+      iconColor: 'text-rc-accent-warning',
+      category: t('commandPalette.toolsCategory'),
+      action: () => { callbacks.onExportDiagnostics(); callbacks.onClose(); },
+    },
+    {
+      id: 'claude-default',
+      label: t('commandPalette.claudeDefault'),
+      description: t('commandPalette.claudeDefaultDesc'),
+      icon: Brain,
+      iconColor: 'text-rc-accent-primary',
+      category: t('commandPalette.claudeCategory'),
+      disabled: !isClaude,
+      action: () => { callbacks.onUpdateSettings({ permission_mode: 'default' }); callbacks.onClose(); },
+    },
+    {
+      id: 'claude-safe-edit',
+      label: t('commandPalette.claudeSafeEdit'),
+      description: t('commandPalette.claudeSafeEditDesc'),
+      icon: Shield,
+      iconColor: 'text-rc-accent-success',
+      category: t('commandPalette.claudeCategory'),
+      disabled: !isClaude,
+      action: () => { callbacks.onUpdateSettings({ permission_mode: 'acceptEdits' }); callbacks.onClose(); },
+    },
+    {
+      id: 'claude-bypass',
+      label: t('commandPalette.claudeBypass'),
+      description: t('commandPalette.claudeBypassDesc'),
+      icon: Shield,
+      iconColor: 'text-rc-accent-error',
+      category: t('commandPalette.claudeCategory'),
+      disabled: !isClaude,
+      action: () => { callbacks.onUpdateSettings({ permission_mode: 'bypassPermissions' }); callbacks.onClose(); },
+    },
+    {
+      id: 'roo-code',
+      label: t('commandPalette.rooCode'),
+      description: t('commandPalette.rooCodeDesc'),
+      icon: GitBranch,
+      iconColor: 'text-rc-accent-success',
+      category: t('commandPalette.rooCategory'),
+      disabled: !isRoo,
+      action: () => { callbacks.onUpdateSettings({ roo_mode: 'code' }); callbacks.onClose(); },
+    },
+    {
+      id: 'roo-architect',
+      label: t('commandPalette.rooArchitect'),
+      description: t('commandPalette.rooArchitectDesc'),
+      icon: GitBranch,
+      iconColor: 'text-rc-accent-warning',
+      category: t('commandPalette.rooCategory'),
+      disabled: !isRoo,
+      action: () => { callbacks.onUpdateSettings({ roo_mode: 'architect' }); callbacks.onClose(); },
+    },
+    {
+      id: 'roo-debug',
+      label: t('commandPalette.rooDebug'),
+      description: t('commandPalette.rooDebugDesc'),
+      icon: HeartPulse,
+      iconColor: 'text-rc-accent-info',
+      category: t('commandPalette.rooCategory'),
+      disabled: !isRoo,
+      action: () => { callbacks.onUpdateSettings({ roo_mode: 'debug' }); callbacks.onClose(); },
+    },
+    {
+      id: 'roo-orchestrator',
+      label: t('commandPalette.rooOrchestrator'),
+      description: t('commandPalette.rooOrchestratorDesc'),
+      icon: Blocks,
+      iconColor: 'text-rc-accent-primary',
+      category: t('commandPalette.rooCategory'),
+      disabled: !isRoo,
+      action: () => { callbacks.onUpdateSettings({ roo_mode: 'orchestrator' }); callbacks.onClose(); },
+    },
+    {
+      id: 'stop-codex',
+      label: t('commandPalette.stopCodex'),
+      description: t('commandPalette.stopCodexDesc'),
+      icon: Square,
+      iconColor: 'text-rc-accent-error',
+      category: t('commandPalette.codexCategory'),
+      disabled: !isCodex,
+      action: () => { callbacks.onStopCodex(); callbacks.onClose(); },
+    },
+    {
+      id: 'restart-codex',
+      label: t('commandPalette.restartCodex'),
+      description: t('commandPalette.restartCodexDesc'),
+      icon: Bot,
+      iconColor: 'text-rc-accent-success',
+      category: t('commandPalette.codexCategory'),
+      disabled: !isCodex,
+      action: () => { callbacks.onRestartCodex(); callbacks.onClose(); },
     },
   ];
 }
@@ -137,10 +337,84 @@ export function CommandPalette({
   const [selectedIndex, setSelectedIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  const activeSessionId = useAppStore((state) => state.activeSessionId);
+  const addAssistantMessage = useAppStore((state) => state.addAssistantMessage);
+  const injectChatAttachment = useAppStore((state) => state.injectChatAttachment);
+  const activeAgentType = useAgentStore((state) => state.activeAgentType);
+
+  const postSystemNote = useCallback((text: string) => {
+    if (activeSessionId) {
+      addAssistantMessage(activeSessionId, text);
+      return;
+    }
+    console.info('[CommandPalette]', text);
+  }, [activeSessionId, addAssistantMessage]);
 
   const commands: CommandItem[] = useMemo(
-    () => buildCommands(t, { onNewSession, onAddProject, onOpenSettings, onOpenMcp, onToggleTheme, onClose }),
-    [t, onNewSession, onAddProject, onOpenSettings, onOpenMcp, onToggleTheme, onClose],
+    () => buildCommands(t, {
+      onNewSession,
+      onAddProject,
+      onOpenSettings,
+      onOpenMcp,
+      onToggleTheme,
+      onClose,
+      activeSessionId,
+      activeAgentType,
+      onSendSlash: (command) => {
+        if (command.endsWith(' ')) {
+          injectChatAttachment(command);
+        } else {
+          void useAppStore.getState().sendMessage(command);
+        }
+      },
+      onRunDoctor: () => {
+        void tauri.runDoctorReport(true, true, true, true)
+          .then((report) => {
+            const issues = report.issues.length;
+            const warnings = report.warnings.length;
+            postSystemNote(`Doctor ${report.ok ? 'passed' : 'found issues'}: ${issues} issues, ${warnings} warnings.`);
+          })
+          .catch((error) => postSystemNote(`Doctor failed: ${String(error)}`));
+      },
+      onExportSession: () => {
+        if (!activeSessionId) return;
+        void tauri.exportSessionBundle(activeSessionId, 'json')
+          .then((result) => postSystemNote(`Session exported to ${result.path}`))
+          .catch((error) => postSystemNote(`Session export failed: ${String(error)}`));
+      },
+      onExportDiagnostics: () => {
+        void tauri.exportDiagnosticBundle({ includeLogs: true, includeSettings: true })
+          .then((result) => postSystemNote(`Diagnostic bundle exported to ${result.path}`))
+          .catch((error) => postSystemNote(`Diagnostic export failed: ${String(error)}`));
+      },
+      onStopCodex: () => {
+        void tauri.codexAdapterStop(activeSessionId)
+          .then(() => postSystemNote('Codex adapter stopped.'))
+          .catch((error) => postSystemNote(`Failed to stop Codex adapter: ${String(error)}`));
+      },
+      onRestartCodex: () => {
+        void tauri.codexAdapterRestart(activeSessionId)
+          .then(() => postSystemNote('Codex adapter restarted.'))
+          .catch((error) => postSystemNote(`Failed to restart Codex adapter: ${String(error)}`));
+      },
+      onUpdateSettings: (updates) => {
+        void useAppStore.getState().updateSettings(updates)
+          .catch((error) => postSystemNote(`Failed to update settings: ${String(error)}`));
+      },
+    }),
+    [
+      t,
+      onNewSession,
+      onAddProject,
+      onOpenSettings,
+      onOpenMcp,
+      onToggleTheme,
+      onClose,
+      activeSessionId,
+      activeAgentType,
+      injectChatAttachment,
+      postSystemNote,
+    ],
   );
 
   const filteredCommands = useMemo(() => {
@@ -168,7 +442,7 @@ export function CommandPalette({
 
   const executeSelected = useCallback(() => {
     const cmd = filteredCommands[selectedIndex];
-    if (cmd) cmd.action();
+    if (cmd && !cmd.disabled) cmd.action();
   }, [filteredCommands, selectedIndex]);
 
   const handleKeyDown = useCallback(
@@ -219,7 +493,7 @@ export function CommandPalette({
         className="fixed inset-0 bg-rc-bg-overlay animate-fade-in"
         onClick={onClose}
       />
-      <div className="relative w-full max-w-[560px] animate-scale-in rounded-xl border border-rc-border-primary bg-rc-bg-surface shadow-2xl overflow-hidden">
+      <div className="relative w-full max-w-[560px] animate-scale-in rounded-md border border-rc-border-primary bg-rc-bg-surface shadow-sm overflow-hidden">
         <div className="flex items-center gap-3 border-b border-rc-border-secondary px-4 py-3">
           <Search size={16} className="shrink-0 text-rc-text-tertiary" />
           <input
@@ -249,9 +523,10 @@ export function CommandPalette({
               <button
                 key={cmd.id}
                 data-selected={index === selectedIndex}
+                disabled={cmd.disabled}
                 className={cn(
-                  'flex w-full items-center gap-3 px-4 py-2.5 text-left transition-colors',
-                  index === selectedIndex
+                  'flex w-full items-center gap-3 px-4 py-2.5 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-45',
+                  index === selectedIndex && !cmd.disabled
                     ? 'bg-rc-bg-selected text-rc-text-primary'
                     : 'text-rc-text-primary hover:bg-rc-bg-hover',
                 )}

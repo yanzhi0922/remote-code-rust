@@ -17,6 +17,7 @@ import {
   RefreshCw,
   Search,
   SlidersHorizontal,
+  Sparkles,
   Trash2,
   X,
   FolderPlus,
@@ -260,7 +261,7 @@ function StatusDot({ status }: { status: SessionTaskStatus }) {
 function SessionTaskRow({ task }: { task: SessionTaskItem }) {
   return (
     <div
-      className="mt-1.5 flex items-center gap-2.5 rounded-md px-3 py-2 text-sm transition-colors hover:bg-rc-bg-hover"
+      className="mt-1 flex items-center gap-2.5 rounded-md px-3 py-2 text-sm transition-colors hover:bg-rc-bg-hover"
       style={{ paddingLeft: `${20 + task.depth * 16}px` }}
     >
       <StatusDot status={task.status} />
@@ -308,15 +309,15 @@ function SessionRow({
   const [renameVal, setRenameVal] = useState(session.title);
 
   return (
-    <div className="space-y-0.5">
+    <div className="space-y-1">
       <div
         className={cn(
-          'group mx-2 flex items-start gap-2 rounded-lg border px-2.5 py-2.5 transition-colors duration-150',
+          'group mx-2 flex items-start gap-2 rounded-md border px-2.5 py-2.5 transition-all duration-150',
           selected
-            ? 'border-rc-accent-primary/30 bg-rc-bg-selected shadow-xs'
+            ? 'border-rc-accent-primary/25 bg-rc-bg-surface shadow-sm'
             : active
-              ? 'border-transparent bg-rc-bg-selected shadow-xs'
-              : 'border-transparent hover:bg-rc-bg-hover',
+              ? 'border-rc-border-secondary bg-rc-bg-surface shadow-sm'
+              : 'border-transparent hover:bg-rc-bg-hover hover:shadow-xs',
         )}
         onContextMenu={onContextMenu}
       >
@@ -355,14 +356,22 @@ function SessionRow({
                 }
                 if (e.key === 'Escape') onRenameDone();
               }}
-              className="w-full rounded border border-rc-border-focus bg-rc-bg-tertiary px-1.5 py-0.5 text-sm text-rc-text-primary outline-none"
+              className="w-full rounded-md border border-rc-border-focus bg-rc-bg-tertiary px-2 py-1 text-sm text-rc-text-primary outline-none"
             />
           ) : (
             <>
-              <div className="truncate text-sm font-medium text-rc-text-primary">
-                {privacyMode ? t('sidebar.sessionHidden') : (
-                  <HighlightedText text={session.title} query={searchQuery} />
-                )}
+              <div className="flex min-w-0 items-center gap-1.5">
+                {/* Agent type color dot — Codex-style category indicator */}
+                <span
+                  className="h-1.5 w-1.5 shrink-0 rounded-full"
+                  style={{ backgroundColor: projectColor(session.agent_type) }}
+                  aria-hidden="true"
+                />
+                <span className="truncate text-sm font-medium text-rc-text-primary">
+                  {privacyMode ? t('sidebar.sessionHidden') : (
+                    <HighlightedText text={session.title} query={searchQuery} />
+                  )}
+                </span>
               </div>
               <div className="mt-1 flex min-w-0 items-center gap-2 text-xs text-rc-text-tertiary">
                 <span className="truncate">
@@ -429,7 +438,7 @@ function SessionTimeGroups({
   onToggleSessionTasks: (id: string) => void;
   onSelectSession: (session: SessionSummary, ctrlKey?: boolean) => void;
   onArchiveSession: (id: string) => void;
-  setProjectPath: () => void;
+  setProjectPath: (session: SessionSummary) => void;
   onSessionContextMenu?: (session: SessionSummary) => (e: React.MouseEvent) => void;
   selectedSessionIds?: Set<string>;
   onRenameDone: () => void;
@@ -480,7 +489,7 @@ function SessionTimeGroups({
                 selected={selectedSessionIds?.has(session.id)}
                 onToggleExpanded={() => onToggleSessionTasks(session.id)}
                 onSelect={(ctrlKey) => {
-                  setProjectPath();
+                  setProjectPath(session);
                   onSelectSession(session, ctrlKey);
                 }}
                 onArchive={() => onArchiveSession(session.id)}
@@ -506,6 +515,7 @@ export function Sidebar() {
   const projects = useAppStore((state) => state.projects);
   const activeProjectPath = useAppStore((state) => state.activeProjectPath);
   const privacyMode = useAppStore((state) => state.workspacePrivacyMode);
+  const archivedSessions = useAppStore((state) => state.archivedSessions);
   const setActiveProject = useAppStore((state) => state.setActiveProject);
   const removeProject = useAppStore((state) => state.removeProject);
   const archiveSession = useAppStore((state) => state.archiveSession);
@@ -529,6 +539,12 @@ export function Sidebar() {
       const isPinned = pinnedSessions.has(session.id);
       const isUnread = unreadSessions.has(session.id);
       return [
+        {
+          key: 'copy-name',
+          label: t('contextMenu.copyName'),
+          icon: <Copy size={13} />,
+          action: () => { navigator.clipboard.writeText(session.title).catch(() => {}); },
+        },
         {
           key: 'pin',
           label: isPinned ? t('contextMenu.unpinTask') : t('contextMenu.pinTask'),
@@ -579,6 +595,27 @@ export function Sidebar() {
         },
         { key: 'sep2', label: '', separator: true, action: () => {} },
         {
+          key: 'share-link',
+          label: t('contextMenu.shareLink'),
+          icon: <ExternalLink size={13} />,
+          action: () => {
+            const url = `${window.location.origin}/sessions/${session.id}`;
+            navigator.clipboard.writeText(url).catch(() => {});
+          },
+        },
+        {
+          key: 'focus-mode',
+          label: t('contextMenu.focusMode'),
+          icon: <Sparkles size={13} />,
+          action: () => {
+            // Focus mode: collapse sidebar and ensure this session is
+            // selected. We use toggleSidebar to mirror the keyboard shortcut.
+            selectSession(session.id);
+            window.dispatchEvent(new CustomEvent('workbench-focus-mode', { detail: { sessionId: session.id } }));
+          },
+        },
+        { key: 'sep3', label: '', separator: true, action: () => {} },
+        {
           key: 'go-settings',
           label: t('contextMenu.goToSettings'),
           icon: <SlidersHorizontal size={13} />,
@@ -610,7 +647,21 @@ export function Sidebar() {
   const [renamingSessionId, setRenamingSessionId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedSessionIds, setSelectedSessionIds] = useState<Set<string>>(new Set());
+  const [projectMenuOpen, setProjectMenuOpen] = useState(false);
+  const [sessionFilter, setSessionFilter] = useState<'all' | 'pinned' | 'unread'>('all');
   const debouncedSearch = useDebouncedValue(searchQuery, 150);
+
+  // Keyboard: Ctrl/Cmd+Shift+P opens the project quick switcher.
+  useEffect(() => {
+    const handleKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === 'P' || e.key === 'p')) {
+        e.preventDefault();
+        setProjectMenuOpen((open) => !open);
+      }
+    };
+    window.addEventListener('keydown', handleKey);
+    return () => window.removeEventListener('keydown', handleKey);
+  }, []);
 
   // Multi-select: Ctrl+A and Escape
   useEffect(() => {
@@ -673,6 +724,39 @@ export function Sidebar() {
       .filter((row): row is { project: typeof projects[number]; sessions: SessionSummary[] } => !!row);
   }, [normalizedSearch, privacyMode, projectSessionGroups.projectMap, projects]);
 
+  const visibleSessions = useMemo(() => {
+    let base: SessionSummary[];
+    if (normalizedSearch) {
+      const seen = new Set<string>();
+      base = visibleProjectRows.flatMap((row) =>
+        row.sessions.filter((session) => {
+          if (seen.has(session.id)) return false;
+          seen.add(session.id);
+          return true;
+        }),
+      );
+    } else if (!activeProjectPath) {
+      base = sessions;
+    } else {
+      const activeKey = normalizePathKey(activeProjectPath);
+      base = sessions.filter((session) => normalizePathKey(session.cwd) === activeKey);
+    }
+    // Apply sticky filters (Pinned / Unread) on top of the project-scoped
+    // base list so the user can quickly focus on what matters.
+    if (sessionFilter === 'pinned') {
+      base = base.filter((s) => pinnedSessions.has(s.id));
+    } else if (sessionFilter === 'unread') {
+      base = base.filter((s) => unreadSessions.has(s.id));
+    }
+    return base;
+  }, [activeProjectPath, normalizedSearch, sessions, visibleProjectRows, sessionFilter, pinnedSessions, unreadSessions]);
+
+  const activeProject = useMemo(() => {
+    if (!projects.length) return null;
+    const activeKey = normalizePathKey(activeProjectPath ?? '');
+    return projects.find((project) => normalizePathKey(project.path) === activeKey) ?? projects[0];
+  }, [activeProjectPath, projects]);
+
   useEffect(() => {
     if (!activeProjectPath) return;
     const key = normalizePathKey(activeProjectPath);
@@ -695,16 +779,60 @@ export function Sidebar() {
   };
 
   return (
-    <aside className="flex w-sidebar shrink-0 flex-col border-r border-rc-border-secondary bg-rc-bg-sidebar select-none">
-      {/* Search bar */}
-      <div className="relative px-3 pb-2 pt-2">
-        <Search size={14} className="pointer-events-none absolute left-5 top-1/2 -translate-y-1/2 text-rc-text-tertiary" />
+    <aside className="relative flex w-sidebar shrink-0 flex-col border-r border-rc-border-primary bg-white/28 pt-[74px] select-none">
+      <div className="px-4 pb-3">
+        <button
+          onClick={() => { void createSession(undefined, activeProjectPath ?? undefined); }}
+          aria-label={t('sidebar.newSession')}
+          className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-full border border-rc-border-primary bg-rc-bg-elevated px-3 text-sm font-semibold text-rc-text-primary shadow-sm transition-all hover:-translate-y-0.5 hover:bg-white hover:shadow-md"
+        >
+          <Plus size={15} />
+          {t('sidebar.newSession')}
+        </button>
+      </div>
+
+      {/* ── Sidebar top-right: refresh + reveal shortcuts (Codex-style) ── */}
+      <div className="px-4 pb-2 flex items-center gap-1.5">
+        <button
+          type="button"
+          onClick={() => { void useAppStore.getState().refreshSessions(); }}
+          aria-label={t('sidebar.refreshSessions')}
+          title={t('sidebar.refreshSessions')}
+          className="inline-flex h-7 items-center gap-1 rounded-full border border-rc-border-secondary bg-rc-bg-elevated/40 px-2.5 text-[11px] text-rc-text-secondary transition-colors hover:bg-rc-bg-hover hover:text-rc-text-primary"
+        >
+          <RefreshCw size={11} />
+          {t('common.retry').replace(/^Retry$/, t('sidebar.refreshSessions').slice(0, 6))}
+        </button>
+        {activeProject && (
+          <button
+            type="button"
+            onClick={() => void openFileExplorer(activeProject.path, activeProject.name)}
+            aria-label={t('sidebar.openInExplorer')}
+            title={t('sidebar.openInExplorer')}
+            className="inline-flex h-7 items-center gap-1 rounded-full border border-rc-border-secondary bg-rc-bg-elevated/40 px-2.5 text-[11px] text-rc-text-secondary transition-colors hover:bg-rc-bg-hover hover:text-rc-text-primary"
+          >
+            <ExternalLink size={11} />
+          </button>
+        )}
+        <div className="flex-1" />
+        {archivedSessions.length > 0 && (
+          <span
+            className="rounded-full bg-rc-accent-warning-bg px-2 py-0.5 text-[10px] font-medium text-rc-accent-warning"
+            title={t('sidebar.batchArchive')}
+          >
+            {archivedSessions.length}
+          </span>
+        )}
+      </div>
+
+      <div className="relative px-4 pb-3">
+        <Search size={14} className="pointer-events-none absolute left-7 top-1/2 -translate-y-1/2 text-rc-text-tertiary" />
         <input
           value={searchQuery}
           onChange={(event) => setSearchQuery(event.target.value)}
           aria-label={t('sidebar.searchAriaLabel')}
           placeholder={t('sidebar.searchPlaceholder')}
-          className="h-9 w-full rounded-lg border border-transparent bg-rc-bg-tertiary pl-8 pr-7 text-xs text-rc-text-primary outline-none transition-colors placeholder:text-rc-text-tertiary focus:border-rc-border-focus focus-visible:outline-none"
+          className="h-10 w-full rounded-full border border-rc-border-primary bg-rc-bg-surface pl-8 pr-8 text-xs text-rc-text-primary shadow-xs outline-none transition-colors placeholder:text-rc-text-tertiary focus:border-rc-border-focus focus-visible:outline-none"
         />
         {searchQuery && (
           <button
@@ -718,31 +846,87 @@ export function Sidebar() {
         )}
       </div>
 
-      {/* Toolbar */}
-      <div className="grid gap-1.5 border-b border-rc-border-secondary px-2 pb-3">
-        <button
-          onClick={() => { void createSession(undefined, activeProjectPath ?? undefined); }}
-          aria-label={t('sidebar.newSession')}
-          className="inline-flex h-8 w-full items-center justify-center gap-2 rounded-lg border border-rc-border-primary bg-rc-bg-surface px-2 text-xs font-semibold text-rc-text-primary shadow-xs transition-colors hover:border-rc-border-hover hover:bg-rc-bg-hover"
-        >
-          <Plus size={14} />
-          {t('sidebar.newSession')}
-        </button>
-        <div className="flex items-center gap-1">
-        <button
-          onClick={() => { void pickFolderAndAddProject(); }}
-          aria-label={t('sidebar.addProject')}
-          className="inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-xs text-rc-text-secondary transition-colors hover:bg-rc-bg-hover hover:text-rc-text-primary"
-        >
-          <FolderPlus size={13} />
-          {t('sidebar.addProject')}
-        </button>
-        <div className="flex-1" />
-        <span className="text-[10px] uppercase tracking-[0.08em] text-rc-text-tertiary">{t('sidebar.projectCount', { count: projects.length })}</span>
+      <div className="px-4 pb-4">
+        <div className="mb-2 flex items-center justify-between">
+          <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-rc-text-tertiary">
+            {t('sidebar.sessions')}
+          </span>
+          <span className="text-[10px] text-rc-text-tertiary">
+            {visibleSessions.length}
+          </span>
+        </div>
+        <div className="relative flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setProjectMenuOpen((open) => !open)}
+            className="inline-flex h-8 min-w-0 flex-1 items-center gap-2 rounded-full border border-rc-border-primary bg-rc-bg-surface px-3 text-left text-[11px] text-rc-text-secondary shadow-xs transition-all hover:bg-rc-bg-hover hover:text-rc-text-primary"
+            title={activeProject ? (privacyMode ? activeProject.name : activeProject.path) : t('sidebar.noProjects')}
+          >
+            {activeProject ? (
+              <>
+                <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ backgroundColor: projectColor(activeProject.name) }} />
+                <span className="min-w-0 flex-1 truncate">{activeProject.name}</span>
+                <span className="shrink-0 text-rc-text-tertiary">{t('sidebar.projectCount', { count: projects.length })}</span>
+              </>
+            ) : (
+              <span className="min-w-0 flex-1 truncate">{t('sidebar.noProjects')}</span>
+            )}
+            <ChevronRight size={12} className={cn('shrink-0 transition-transform', projectMenuOpen && 'rotate-90')} />
+          </button>
+          <button
+            onClick={() => { void pickFolderAndAddProject(); }}
+            aria-label={t('sidebar.addProject')}
+            className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-dashed border-rc-border-secondary text-rc-text-secondary transition-colors hover:bg-rc-bg-surface hover:text-rc-text-primary"
+          >
+            <FolderPlus size={13} />
+          </button>
+          {projectMenuOpen && (
+            <>
+              <button
+                type="button"
+                aria-label={t('chatInput.closeDropdown')}
+                className="fixed inset-0 z-10 cursor-default"
+                onClick={() => setProjectMenuOpen(false)}
+              />
+              <div className="codex-popover absolute left-0 right-10 top-full z-20 mt-2 p-1.5 animate-fade-in-up">
+                {projects.map((project) => {
+                  const active = normalizePathKey(activeProjectPath ?? '') === normalizePathKey(project.path);
+                  return (
+                    <div key={project.path} className="group/project flex items-center gap-1 rounded-md hover:bg-rc-bg-hover">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setActiveProject(active ? null : project.path);
+                          setProjectMenuOpen(false);
+                        }}
+                        className={cn(
+                          'flex min-w-0 flex-1 items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs',
+                          active ? 'text-rc-text-primary' : 'text-rc-text-secondary',
+                        )}
+                      >
+                        <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ backgroundColor: projectColor(project.name) }} />
+                        <span className="min-w-0 flex-1 truncate">{project.name}</span>
+                        <span className="text-[10px] text-rc-text-tertiary">{project.session_count}</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => { void removeProject(project.path); }}
+                        disabled={project.session_count > 0}
+                        className="mr-1 flex h-6 w-6 items-center justify-center rounded-full text-rc-text-tertiary opacity-0 transition-all hover:bg-rc-bg-hover hover:text-rc-accent-error disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-rc-text-tertiary group-hover/project:opacity-100"
+                        title={project.session_count > 0 ? t('sidebar.cannotRemoveProject') : t('sidebar.removeProject')}
+                        aria-label={project.session_count > 0 ? t('sidebar.cannotRemoveProject') : t('sidebar.removeProject')}
+                      >
+                        <X size={12} />
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            </>
+          )}
         </div>
       </div>
 
-      {/* Content with scroll fade mask */}
       <div className="scroll-fade flex-1 overflow-y-auto">
         {sessionError ? (
           <div className="px-4 py-4 text-center">
@@ -763,154 +947,102 @@ export function Sidebar() {
             {t('sidebar.loadingSessions')}
           </div>
         ) : (
-          <div className="py-2">
-            {projects.length === 0 ? (
-              <div className="px-4 py-6 text-center text-xs text-rc-text-tertiary">
-                <div className="mb-2">{t('sidebar.noProjects')}</div>
+          <div className="pb-4">
+            {projects.length === 0 && !normalizedSearch ? (
+              <div className="mx-4 mt-2 rounded-md border border-dashed border-rc-border-primary bg-rc-bg-elevated/30 px-4 py-6 text-center">
+                <Folder size={24} className="mx-auto mb-2 text-rc-text-tertiary opacity-60" />
+                <div className="mb-1 text-xs font-medium text-rc-text-secondary">
+                  {t('sidebar.noProjects')}
+                </div>
+                <p className="mb-3 text-[10px] leading-4 text-rc-text-tertiary">
+                  {t('sidebar.addProjectHint')}
+                </p>
+                <div className="flex items-center justify-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => { void pickFolderAndAddProject(); }}
+                    className="inline-flex items-center gap-1 rounded-full bg-rc-accent-primary px-3 py-1 text-[11px] font-medium text-white shadow-xs hover:bg-rc-accent-primary-hover"
+                  >
+                    <FolderPlus size={11} />
+                    {t('sidebar.addProject')}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => { void openFileExplorer('', ''); }}
+                    className="inline-flex items-center gap-1 rounded-full border border-rc-border-primary px-3 py-1 text-[11px] font-medium text-rc-text-secondary hover:bg-rc-bg-hover"
+                  >
+                    <ExternalLink size={11} />
+                    {t('sidebar.openInExplorer')}
+                  </button>
+                </div>
               </div>
-            ) : visibleProjectRows.length === 0 ? (
+            ) : visibleSessions.length === 0 ? (
               <div className="px-4 py-4 text-center text-xs text-rc-text-tertiary">
                 {t('sidebar.noMatch')}
               </div>
             ) : (
-              visibleProjectRows.map(({ project, sessions: projectSessions }) => {
-                const projectKey = normalizePathKey(project.path);
-                const expanded = normalizedSearch
-                  ? true
-                  : expandedProjects[projectKey] ?? normalizePathKey(activeProjectPath ?? '') === projectKey;
-                const active = normalizePathKey(activeProjectPath ?? '') === projectKey;
-
-                return (
-                  <div key={project.path} className="mb-1.5">
-                    <div
-                      className={cn(
-                        'group mx-2 flex items-center gap-1 rounded-lg border px-2 py-2 text-xs transition-colors',
+              <>
+              {/* Filter chips: All / Pinned / Unread — Codex-style sticky filters */}
+              <div className="px-4 pb-2 flex items-center gap-1.5" role="tablist" aria-label={t('sidebar.filterSessions')}>
+                {(['all', 'pinned', 'unread'] as const).map((kind) => {
+                  const active = sessionFilter === kind;
+                  const count = kind === 'pinned' ? pinnedSessions.size
+                    : kind === 'unread' ? unreadSessions.size
+                    : sessions.length;
+                  return (
+                    <button
+                      key={kind}
+                      type="button"
+                      role="tab"
+                      aria-selected={active}
+                      data-testid={`sidebar-filter-${kind}`}
+                      onClick={() => setSessionFilter(kind)}
+                      className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-medium transition-colors ${
                         active
-                          ? 'border-transparent bg-rc-bg-selected text-rc-text-primary'
-                          : 'border-transparent text-rc-text-secondary hover:bg-rc-bg-hover',
-                      )}
+                          ? 'bg-rc-bg-active text-rc-text-primary shadow-xs'
+                          : 'text-rc-text-secondary hover:bg-rc-bg-hover'
+                      }`}
                     >
-                      <button
-                        type="button"
-                        onClick={() => toggleProject(project.path)}
-                        className="flex h-5 w-5 items-center justify-center rounded hover:bg-rc-bg-active"
-                      >
-                        <ChevronRight size={12} className={cn('transition-transform', expanded && 'rotate-90')} />
-                      </button>
-                      {expanded ? (
-                        <FolderOpen size={14} className="shrink-0 text-rc-accent-primary" />
-                      ) : (
-                        <Folder size={14} className="shrink-0 text-rc-text-tertiary" />
-                      )}
-                      <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: projectColor(project.name) }} />
-                      <div
-                        className="relative flex-1 truncate font-semibold"
-                        onMouseEnter={() => setProjectHoverKey(projectKey)}
-                        onMouseLeave={() => setProjectHoverKey(null)}
-                      >
-                        <HighlightedText text={project.name} query={debouncedSearch} />
-                        {projectHoverKey === projectKey && (
-                          <div className="absolute left-0 top-full z-30 mt-1 rounded-lg border border-rc-border-primary bg-rc-bg-surface py-1 shadow-lg">
-                            <button
-                              type="button"
-                              onClick={() => {
-                                void removeProject(project.path);
-                                setProjectHoverKey(null);
-                              }}
-                              className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-rc-text-secondary hover:bg-rc-bg-hover hover:text-rc-accent-error"
-                            >
-                              <Trash2 size={13} />
-                              {t('projectHover.remove')}
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                openFileExplorer(project.path, project.name);
-                                setProjectHoverKey(null);
-                              }}
-                              className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-rc-text-secondary hover:bg-rc-bg-hover hover:text-rc-text-primary"
-                            >
-                              <FolderOpen size={13} />
-                              {t('projectHover.viewFiles')}
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setActiveProject(project.path);
-                                setExpandedProjects((state) => ({ ...state, [projectKey]: true }));
-                                void createSession(undefined, project.path);
-                                setProjectHoverKey(null);
-                              }}
-                              className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-rc-text-secondary hover:bg-rc-bg-hover hover:text-rc-text-primary"
-                            >
-                              <Plus size={13} />
-                              {t('projectHover.newTask')}
-                            </button>
-                          </div>
-                        )}
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setActiveProject(project.path);
-                          setExpandedProjects((state) => ({ ...state, [projectKey]: true }));
-                          void createSession(undefined, project.path);
-                        }}
-                        className="flex h-5 w-5 items-center justify-center rounded opacity-0 transition-opacity hover:bg-rc-bg-hover group-hover:opacity-100"
-                        title={t('sidebar.newSession')}
-                        aria-label={t('sidebar.newSession')}
-                      >
-                        <Plus size={12} />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => { void removeProject(project.path); }}
-                        disabled={project.session_count > 0}
-                        className="flex h-5 w-5 items-center justify-center rounded opacity-0 transition-opacity hover:bg-rc-bg-hover hover:text-rc-accent-error disabled:cursor-not-allowed disabled:opacity-30 group-hover:opacity-100"
-                        title={project.session_count > 0 ? t('sidebar.cannotRemoveProject') : t('sidebar.removeProject')}
-                        aria-label={project.session_count > 0 ? t('sidebar.cannotRemoveProject') : t('sidebar.removeProject')}
-                      >
-                        <Trash2 size={12} />
-                      </button>
-                    </div>
-
-                    {/* CSS Grid collapse for project sessions */}
-                    <div className="grid-collapse" data-collapsed={!expanded}>
-                      <div className="grid-collapse-inner">
-                        <SessionTimeGroups
-                          sessions={projectSessions}
-                          activeSessionId={activeSessionId}
-                          privacyMode={privacyMode}
-                          searchQuery={debouncedSearch}
-                          activeSessionTasks={activeSessionTasks}
-                          liveSessionTasks={liveSessionTasks}
-                          expandedSessions={expandedSessions}
-                          renamingSessionId={renamingSessionId}
-                          onToggleSessionTasks={toggleSessionTasks}
-                          onSelectSession={(session, ctrlKey) => {
-                            if (ctrlKey) {
-                              setSelectedSessionIds((prev) => {
-                                const next = new Set(prev);
-                                if (next.has(session.id)) next.delete(session.id);
-                                else next.add(session.id);
-                                return next;
-                              });
-                            } else {
-                              if (selectedSessionIds.size > 0) setSelectedSessionIds(new Set());
-                              void selectSession(session.id);
-                            }
-                          }}
-                          onArchiveSession={(id) => void archiveSession(id)}
-                          setProjectPath={() => setActiveProject(project.path)}
-                          onSessionContextMenu={(session) => (e) => showMenu(e, buildSessionMenu(session))}
-                          selectedSessionIds={selectedSessionIds}
-                          onRenameDone={() => setRenamingSessionId(null)}
-                        />
-                      </div>
-                    </div>
-                  </div>
-                );
-              })
+                      <span>{t(`sidebar.filter.${kind}`)}</span>
+                      <span className={`rounded-full px-1 text-[10px] ${
+                        active ? 'bg-rc-bg-surface text-rc-text-tertiary' : 'text-rc-text-tertiary'
+                      }`}>
+                        {count}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+              <SessionTimeGroups
+                sessions={visibleSessions}
+                activeSessionId={activeSessionId}
+                privacyMode={privacyMode}
+                searchQuery={debouncedSearch}
+                activeSessionTasks={activeSessionTasks}
+                liveSessionTasks={liveSessionTasks}
+                expandedSessions={expandedSessions}
+                renamingSessionId={renamingSessionId}
+                onToggleSessionTasks={toggleSessionTasks}
+                onSelectSession={(session, ctrlKey) => {
+                  if (ctrlKey) {
+                    setSelectedSessionIds((prev) => {
+                      const next = new Set(prev);
+                      if (next.has(session.id)) next.delete(session.id);
+                      else next.add(session.id);
+                      return next;
+                    });
+                  } else {
+                    if (selectedSessionIds.size > 0) setSelectedSessionIds(new Set());
+                    void selectSession(session.id);
+                  }
+                }}
+                onArchiveSession={(id) => void archiveSession(id)}
+                setProjectPath={(session) => setActiveProject(session.cwd)}
+                onSessionContextMenu={(session) => (e) => showMenu(e, buildSessionMenu(session))}
+                selectedSessionIds={selectedSessionIds}
+                onRenameDone={() => setRenamingSessionId(null)}
+              />
+              </>
             )}
           </div>
         )}
@@ -918,7 +1050,7 @@ export function Sidebar() {
       {MenuComponent}
 
       {selectedSessionIds.size > 0 && (
-        <div className="absolute bottom-3 left-3 right-3 z-20 flex items-center gap-2 rounded-xl border border-rc-border-primary bg-rc-bg-surface px-3 py-2 shadow-lg animate-fade-in-up">
+        <div className="absolute bottom-3 left-3 right-3 z-20 flex items-center gap-2 rounded-md border border-rc-border-primary bg-rc-bg-surface px-3 py-2 shadow-lg animate-fade-in-up">
           <span className="text-xs font-medium text-rc-text-secondary">{t('sidebar.selectedCount', { count: selectedSessionIds.size })}</span>
           <div className="flex-1" />
           <button

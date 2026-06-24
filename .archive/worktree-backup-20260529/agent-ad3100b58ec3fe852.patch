@@ -1,0 +1,322 @@
+diff --git a/Cargo.lock b/Cargo.lock
+index e3ce3248..39cab045 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -2775,6 +2775,7 @@ dependencies = [
+  "codex-plugin",
+  "codex-protocol",
+  "codex-utils-absolute-path",
++ "indexmap 2.14.0",
+  "os_info",
+  "pretty_assertions",
+  "serde",
+diff --git a/crates/codex/analytics/Cargo.toml b/crates/codex/analytics/Cargo.toml
+index 918e7edc..bae54bbf 100644
+--- a/crates/codex/analytics/Cargo.toml
++++ b/crates/codex/analytics/Cargo.toml
+@@ -19,6 +19,7 @@ codex-login = { workspace = true }
+ codex-model-provider = { workspace = true }
+ codex-plugin = { workspace = true }
+ codex-protocol = { workspace = true }
++indexmap = { workspace = true }
+ os_info = { workspace = true }
+ serde = { workspace = true, features = ["derive"] }
+ serde_json = { workspace = true }
+diff --git a/crates/codex/analytics/src/client.rs b/crates/codex/analytics/src/client.rs
+index d54c53ed..27b94fe5 100644
+--- a/crates/codex/analytics/src/client.rs
++++ b/crates/codex/analytics/src/client.rs
+@@ -32,7 +32,7 @@ use codex_app_server_protocol::ServerResponse;
+ use codex_login::AuthManager;
+ use codex_login::default_client::create_client;
+ use codex_plugin::PluginTelemetryMetadata;
+-use std::collections::HashSet;
++use indexmap::IndexSet;
+ use std::sync::Arc;
+ use std::sync::Mutex;
+ use std::time::Duration;
+@@ -45,8 +45,8 @@ const ANALYTICS_EVENT_DEDUPE_MAX_KEYS: usize = 4096;
+ #[derive(Clone)]
+ pub(crate) struct AnalyticsEventsQueue {
+     pub(crate) sender: mpsc::Sender<AnalyticsFact>,
+-    pub(crate) app_used_emitted_keys: Arc<Mutex<HashSet<(String, String)>>>,
+-    pub(crate) plugin_used_emitted_keys: Arc<Mutex<HashSet<(String, String)>>>,
++    pub(crate) app_used_emitted_keys: Arc<Mutex<IndexSet<(String, String)>>>,
++    pub(crate) plugin_used_emitted_keys: Arc<Mutex<IndexSet<(String, String)>>>,
+ }
+ 
+ #[derive(Clone)]
+@@ -67,8 +67,8 @@ impl AnalyticsEventsQueue {
+         });
+         Self {
+             sender,
+-            app_used_emitted_keys: Arc::new(Mutex::new(HashSet::new())),
+-            plugin_used_emitted_keys: Arc::new(Mutex::new(HashSet::new())),
++            app_used_emitted_keys: Arc::new(Mutex::new(IndexSet::new())),
++            plugin_used_emitted_keys: Arc::new(Mutex::new(IndexSet::new())),
+         }
+     }
+ 
+@@ -91,8 +91,8 @@ impl AnalyticsEventsQueue {
+             .app_used_emitted_keys
+             .lock()
+             .unwrap_or_else(std::sync::PoisonError::into_inner);
+-        if emitted.len() >= ANALYTICS_EVENT_DEDUPE_MAX_KEYS {
+-            emitted.clear();
++        while emitted.len() >= ANALYTICS_EVENT_DEDUPE_MAX_KEYS {
++            emitted.shift_remove_index(0);
+         }
+         emitted.insert((tracking.turn_id.clone(), connector_id.clone()))
+     }
+@@ -106,8 +106,8 @@ impl AnalyticsEventsQueue {
+             .plugin_used_emitted_keys
+             .lock()
+             .unwrap_or_else(std::sync::PoisonError::into_inner);
+-        if emitted.len() >= ANALYTICS_EVENT_DEDUPE_MAX_KEYS {
+-            emitted.clear();
++        while emitted.len() >= ANALYTICS_EVENT_DEDUPE_MAX_KEYS {
++            emitted.shift_remove_index(0);
+         }
+         emitted.insert((tracking.turn_id.clone(), plugin.plugin_id.as_key()))
+     }
+diff --git a/crates/codex/analytics/src/reducer.rs b/crates/codex/analytics/src/reducer.rs
+index b1dc822d..4e9278c4 100644
+--- a/crates/codex/analytics/src/reducer.rs
++++ b/crates/codex/analytics/src/reducer.rs
+@@ -217,6 +217,38 @@ struct TurnState {
+ }
+ 
+ impl AnalyticsReducer {
++    /// Remove all state associated with a closed connection to prevent
++    /// unbounded growth of the internal HashMaps.
++    #[allow(dead_code)] // Will be called from the connection lifecycle handler.
++    pub(crate) fn connection_closed(&mut self, connection_id: u64) {
++        // Remove connection entry.
++        self.connections.remove(&connection_id);
++
++        // Collect thread IDs owned by this connection so we can clean turns.
++        let thread_ids_for_connection: Vec<String> = self
++            .threads
++            .iter()
++            .filter(|(_, state)| state.connection_id == Some(connection_id))
++            .map(|(id, _)| id.clone())
++            .collect();
++
++        // Remove thread entries for this connection.
++        self.threads
++            .retain(|_, state| state.connection_id != Some(connection_id));
++
++        // Remove turn entries whose thread belongs to this connection.
++        self.turns.retain(|_, turn_state| {
++            turn_state
++                .thread_id
++                .as_ref()
++                .map_or(true, |tid| !thread_ids_for_connection.contains(tid))
++        });
++
++        // Remove request entries for this connection.
++        self.requests
++            .retain(|(cid, _), _| *cid != connection_id);
++    }
++
+     pub(crate) async fn ingest(&mut self, input: AnalyticsFact, out: &mut Vec<TrackEventRequest>) {
+         match input {
+             AnalyticsFact::Initialize {
+diff --git a/crates/codex/app-server-transport/src/transport/remote_control/websocket.rs b/crates/codex/app-server-transport/src/transport/remote_control/websocket.rs
+index f7b49b72..8f81f368 100644
+--- a/crates/codex/app-server-transport/src/transport/remote_control/websocket.rs
++++ b/crates/codex/app-server-transport/src/transport/remote_control/websocket.rs
+@@ -583,6 +583,11 @@ impl RemoteControlWebsocket {
+         clippy::await_holding_invalid_type,
+         reason = "remote-control server event receiver is shared across reconnects"
+     )]
++    /// Holds the `server_event_rx` lock for the entire writer loop lifetime.
++    /// This is intentional: there is exactly one writer task per connection, so
++    /// the lock is never contended.  Using an `Arc<Mutex<Receiver>>` allows the
++    /// receiver to be re-acquired across reconnects while keeping the type
++    /// `Send`-safe.
+     async fn run_server_writer_inner(
+         state: Arc<Mutex<WebsocketState>>,
+         server_event_rx: Arc<Mutex<mpsc::Receiver<super::QueuedServerEnvelope>>>,
+diff --git a/crates/codex/app-server/src/codex_message_processor.rs b/crates/codex/app-server/src/codex_message_processor.rs
+index edc142c8..2f39a99b 100644
+--- a/crates/codex/app-server/src/codex_message_processor.rs
++++ b/crates/codex/app-server/src/codex_message_processor.rs
+@@ -7467,7 +7467,13 @@ impl CodexMessageProcessor {
+                     {
+                         return Err(invalid_request("no active turn to interrupt"));
+                     }
+-                    thread_state.pending_interrupts.push(request_id.clone());
++                    {
++                        let interrupts = &mut thread_state.pending_interrupts;
++                        if interrupts.len() >= crate::thread_state::MAX_PENDING_INTERRUPTS {
++                            interrupts.pop_front();
++                        }
++                        interrupts.push_back(request_id.clone());
++                    }
+                 }
+ 
+                 self.outgoing
+diff --git a/crates/codex/app-server/src/command_exec.rs b/crates/codex/app-server/src/command_exec.rs
+index 699556dd..0dd75b73 100644
+--- a/crates/codex/app-server/src/command_exec.rs
++++ b/crates/codex/app-server/src/command_exec.rs
+@@ -373,21 +373,18 @@ impl CommandExecManager {
+     }
+ 
+     pub(crate) async fn connection_closed(&self, connection_id: ConnectionId) {
+-        let controls = {
++        let mut controls = Vec::new();
++        {
+             let mut sessions = self.sessions.lock().await;
+-            let process_ids = sessions
+-                .keys()
+-                .filter(|process_id| process_id.connection_id == connection_id)
+-                .cloned()
+-                .collect::<Vec<_>>();
+-            let mut controls = Vec::with_capacity(process_ids.len());
+-            for process_id in process_ids {
+-                if let Some(control) = sessions.remove(&process_id) {
+-                    controls.push(control);
++            sessions.retain(|process_id, control| {
++                if process_id.connection_id == connection_id {
++                    controls.push(control.clone());
++                    false
++                } else {
++                    true
+                 }
+-            }
+-            controls
+-        };
++            });
++        }
+ 
+         for control in controls {
+             if let CommandExecSession::Active { control_tx } = control {
+diff --git a/crates/codex/app-server/src/config_manager.rs b/crates/codex/app-server/src/config_manager.rs
+index ba11205b..3fe10960 100644
+--- a/crates/codex/app-server/src/config_manager.rs
++++ b/crates/codex/app-server/src/config_manager.rs
+@@ -63,14 +63,14 @@ impl ConfigManager {
+         self.cli_overrides
+             .read()
+             .map(|guard| guard.clone())
+-            .unwrap_or_default()
++            .unwrap_or_else(|e| e.into_inner().clone())
+     }
+ 
+     pub(crate) fn current_cloud_requirements(&self) -> CloudRequirementsLoader {
+         self.cloud_requirements
+             .read()
+             .map(|guard| guard.clone())
+-            .unwrap_or_default()
++            .unwrap_or_else(|e| e.into_inner().clone())
+     }
+ 
+     pub(crate) fn extend_runtime_feature_enablement<I>(&self, enablement: I) -> Result<(), ()>
+diff --git a/crates/codex/app-server/src/connection_rpc_gate.rs b/crates/codex/app-server/src/connection_rpc_gate.rs
+index 12fed79b..542a93d4 100644
+--- a/crates/codex/app-server/src/connection_rpc_gate.rs
++++ b/crates/codex/app-server/src/connection_rpc_gate.rs
+@@ -1,6 +1,7 @@
+ use std::future::Future;
++use std::sync::atomic::AtomicBool;
++use std::sync::atomic::Ordering;
+ 
+-use tokio::sync::Mutex;
+ use tokio_util::task::TaskTracker;
+ 
+ /// Per-connection gate for initialized RPC handler execution.
+@@ -9,7 +10,7 @@ use tokio_util::task::TaskTracker;
+ /// handlers that already acquired a token to finish.
+ #[derive(Debug)]
+ pub(crate) struct ConnectionRpcGate {
+-    accepting: Mutex<bool>,
++    accepting: AtomicBool,
+     tasks: TaskTracker,
+ }
+ 
+@@ -17,7 +18,7 @@ impl ConnectionRpcGate {
+     pub(crate) fn new() -> Self {
+         let accepting = true;
+         Self {
+-            accepting: Mutex::new(accepting),
++            accepting: AtomicBool::new(accepting),
+             tasks: TaskTracker::new(),
+         }
+     }
+@@ -27,8 +28,7 @@ impl ConnectionRpcGate {
+         F: Future<Output = ()>,
+     {
+         let token = {
+-            let accepting = self.accepting.lock().await;
+-            if !*accepting {
++            if !self.accepting.load(Ordering::Acquire) {
+                 return;
+             }
+             self.tasks.token()
+@@ -39,17 +39,14 @@ impl ConnectionRpcGate {
+     }
+ 
+     pub(crate) async fn shutdown(&self) {
+-        {
+-            let mut accepting = self.accepting.lock().await;
+-            *accepting = false;
+-            self.tasks.close();
+-        }
++        self.accepting.store(false, Ordering::Release);
++        self.tasks.close();
+         self.tasks.wait().await;
+     }
+ 
+     #[cfg(test)]
+     async fn is_accepting(&self) -> bool {
+-        *self.accepting.lock().await
++        self.accepting.load(Ordering::Acquire)
+     }
+ 
+     #[cfg(test)]
+diff --git a/crates/codex/app-server/src/thread_state.rs b/crates/codex/app-server/src/thread_state.rs
+index dddbcf48..792d2227 100644
+--- a/crates/codex/app-server/src/thread_state.rs
++++ b/crates/codex/app-server/src/thread_state.rs
+@@ -14,6 +14,7 @@ use codex_rollout::state_db::StateDbHandle;
+ use codex_utils_absolute_path::AbsolutePathBuf;
+ use std::collections::HashMap;
+ use std::collections::HashSet;
++use std::collections::VecDeque;
+ use std::sync::Arc;
+ use std::sync::Weak;
+ use tokio::sync::Mutex;
+@@ -22,7 +23,9 @@ use tokio::sync::oneshot;
+ use tokio::sync::watch;
+ use tracing::error;
+ 
+-type PendingInterruptQueue = Vec<ConnectionRequestId>;
++pub(crate) const MAX_PENDING_INTERRUPTS: usize = 16;
++
++type PendingInterruptQueue = VecDeque<ConnectionRequestId>;
+ 
+ pub(crate) struct PendingThreadResumeRequest {
+     pub(crate) request_id: ConnectionRequestId,
+diff --git a/crates/codex/cloud-tasks/src/scrollable_diff.rs b/crates/codex/cloud-tasks/src/scrollable_diff.rs
+index 59dd076b..f097a684 100644
+--- a/crates/codex/cloud-tasks/src/scrollable_diff.rs
++++ b/crates/codex/cloud-tasks/src/scrollable_diff.rs
+@@ -114,7 +114,7 @@ impl ScrollableDiff {
+     fn rewrap(&mut self, width: u16) {
+         if width == 0 {
+             self.wrapped = self.raw.clone();
+-            self.state.content_h = self.wrapped.len() as u16;
++            self.state.content_h = self.wrapped.len().min(u16::MAX as usize) as u16;
+             return;
+         }
+         let max_cols = width as usize;
+@@ -171,6 +171,6 @@ impl ScrollableDiff {
+         }
+         self.wrapped = out;
+         self.wrapped_src_idx = out_idx;
+-        self.state.content_h = self.wrapped.len() as u16;
++        self.state.content_h = self.wrapped.len().min(u16::MAX as usize) as u16;
+     }
+ }

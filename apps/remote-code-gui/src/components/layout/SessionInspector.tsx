@@ -1,9 +1,11 @@
-import { Activity, Cpu, Network, Settings2, Shield, TerminalSquare } from 'lucide-react';
+import { Activity, Bot, Brain, Cpu, FileText, GitBranch, Network, Settings2, Shield, TerminalSquare } from 'lucide-react';
 import type { ElementType, ReactNode } from 'react';
 import { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useAppStore } from '../../stores/useAppStore';
 import { useAgentStore } from '../../stores/useAgentStore';
+import { useCodexStore } from '../../stores/useCodexStore';
+import { collectCodexSurfaceStats } from '../../lib/codexTimeline';
 import { formatSensitivePath } from '../../lib/utils';
 import type { AgentType, FullSettings } from '../../lib/types';
 
@@ -94,6 +96,15 @@ function formatPermissionMode(agentType: AgentType, settings: FullSettings | nul
   return mode ?? '\u2014';
 }
 
+function formatRooMode(mode: string | null | undefined, t: TFn) {
+  if (!mode || mode === 'code') return t('chatInput.permission.roo.code');
+  if (mode === 'architect') return t('chatInput.permission.roo.architect');
+  if (mode === 'ask') return t('chatInput.permission.roo.ask');
+  if (mode === 'debug') return t('chatInput.permission.roo.debug');
+  if (mode === 'orchestrator') return t('chatInput.permission.roo.orchestrator');
+  return mode;
+}
+
 export function SessionInspector() {
   const { t } = useTranslation();
   const provider = useAppStore((state) => state.provider);
@@ -106,10 +117,14 @@ export function SessionInspector() {
   const pendingPermission = useAppStore((state) => state.pendingPermission);
   const liveToolProgress = useAppStore((state) => state.liveToolProgress);
   const liveToolResults = useAppStore((state) => state.liveToolResults);
+  const conversation = useAppStore((state) => state.conversation);
   const contextUsageBySession = useAppStore((state) => state.contextUsageBySession);
   const privacyMode = useAppStore((state) => state.workspacePrivacyMode);
   const activeAgentType = useAgentStore((state) => state.activeAgentType);
   const agentStatuses = useAgentStore((state) => state.agentStatuses);
+  const codexNotifications = useCodexStore((state) => state.codexNotifications);
+  const codexGuardianEvents = useCodexStore((state) => state.codexGuardianEvents);
+  const codexRecoverableErrors = useCodexStore((state) => state.codexRecoverableErrors);
 
   const activeSession = useMemo(
     () => sessions.find((session) => session.id === activeSessionId) ?? null,
@@ -124,14 +139,27 @@ export function SessionInspector() {
     providerConfigs?.active_provider ?? settings?.provider_name ?? provider?.name ?? activeSession?.provider_name ?? 'Provider';
   const effectiveModel =
     settings?.provider_model ?? provider?.model ?? activeSession?.model ?? runtimeStatus?.provider.model ?? '\u2014';
+  const activeProviderConfig = providerConfigs?.providers.find((config) => config.name === effectiveProviderName) ?? null;
+  const claudeMapping = activeProviderConfig?.claude_model_mapping ?? {};
+  const surfaceStats = useMemo(() => collectCodexSurfaceStats(conversation), [conversation]);
+  const currentSessionNotifications = useMemo(
+    () =>
+      activeSessionId
+        ? codexNotifications.filter((notification) => notification.session_id === activeSessionId).slice(-5)
+        : codexNotifications.slice(-5),
+    [activeSessionId, codexNotifications],
+  );
+  const latestCodexMethod = currentSessionNotifications[currentSessionNotifications.length - 1]?.method ?? '\u2014';
+  const guardianIssueCount = codexGuardianEvents.filter((event) => !activeSessionId || event.session_id === activeSessionId).length;
+  const recoverableErrorCount = codexRecoverableErrors.filter((event) => !activeSessionId || event.session_id === activeSessionId).length;
 
   return (
     <aside
       aria-label={t('inspector.envInfo')}
-      className="hidden w-[304px] shrink-0 bg-rc-bg-chat px-3 pb-3 pt-[68px] xl:flex xl:flex-col"
+      className="flex h-full w-[326px] shrink-0 flex-col"
     >
-      <div className="flex max-h-[calc(100dvh-116px)] min-h-0 flex-col overflow-hidden rounded-xl border border-rc-border-primary bg-rc-bg-surface shadow-md">
-        <div className="flex h-12 shrink-0 items-center justify-between border-b border-rc-border-secondary px-4">
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-rc-border-primary bg-rc-bg-elevated shadow-sm">
+        <div className="flex h-14 shrink-0 items-center justify-between border-b border-rc-border-secondary/70 px-5">
           <div className="text-sm font-semibold text-rc-text-primary">{t('inspector.envInfo')}</div>
           <Settings2 size={16} className="text-rc-text-tertiary" />
         </div>
@@ -184,6 +212,41 @@ export function SessionInspector() {
           <InspectorRow label={t('inspector.toolResultsLabel')} value={String(liveToolResults.length)} />
           <InspectorRow label={t('inspector.runtimeLabel')} value={runtimeStatus ? t('statusBar.online') : t('statusBar.offline')} tone={runtimeStatus ? 'success' : 'warning'} />
         </InspectorSection>
+
+        <InspectorSection icon={FileText} title={t('inspector.timelineSection')}>
+          <InspectorRow label={t('inspector.commandsLabel')} value={String(surfaceStats.command)} />
+          <InspectorRow label={t('inspector.fileChangesLabel')} value={String(surfaceStats.file)} />
+          <InspectorRow label={t('inspector.mcpCallsLabel')} value={String(surfaceStats.mcp)} />
+          <InspectorRow label={t('inspector.reasoningLabel')} value={String(surfaceStats.reasoning)} />
+        </InspectorSection>
+
+        {agentType === 'remote_codex' ? (
+          <InspectorSection icon={Bot} title={t('inspector.codexSection')}>
+            <InspectorRow label={t('inspector.latestEventLabel')} value={latestCodexMethod} />
+            <InspectorRow
+              label={t('inspector.guardianLabel')}
+              value={String(guardianIssueCount)}
+              tone={guardianIssueCount > 0 ? 'warning' : 'default'}
+            />
+            <InspectorRow
+              label={t('inspector.recoverableErrorsLabel')}
+              value={String(recoverableErrorCount)}
+              tone={recoverableErrorCount > 0 ? 'warning' : 'default'}
+            />
+          </InspectorSection>
+        ) : agentType === 'remote_roo' ? (
+          <InspectorSection icon={GitBranch} title={t('inspector.rooSection')}>
+            <InspectorRow label={t('inspector.rooModeLabel')} value={formatRooMode(settings?.roo_mode, t)} />
+            <InspectorRow label={t('inspector.rooInteractionsLabel')} value={t('inspector.rooInteractionsValue')} />
+            <InspectorRow label={t('inspector.rooHandoffLabel')} value={t('inspector.rooHandoffValue')} />
+          </InspectorSection>
+        ) : (
+          <InspectorSection icon={Brain} title={t('inspector.claudeSection')}>
+            <InspectorRow label={t('settings.opusTask')} value={claudeMapping.opus ?? t('settings.unset')} />
+            <InspectorRow label={t('settings.sonnetTask')} value={claudeMapping.sonnet ?? t('settings.unset')} />
+            <InspectorRow label={t('settings.haikuTask')} value={claudeMapping.haiku ?? t('settings.unset')} />
+          </InspectorSection>
+        )}
         </div>
       </div>
     </aside>

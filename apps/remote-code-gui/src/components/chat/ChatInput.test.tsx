@@ -106,7 +106,7 @@ describe('ChatInput', () => {
     fireEvent.keyDown(textarea, { key: 'Enter', code: 'Enter' });
 
     await waitFor(() => {
-      expect(sendMessage).toHaveBeenCalledWith('请检查当前会话状态');
+      expect(sendMessage).toHaveBeenCalledWith('请检查当前会话状态', undefined);
     });
     expect(textarea).toHaveValue('');
   });
@@ -146,15 +146,19 @@ describe('ChatInput', () => {
 
     render(<ChatInput />);
 
-    fireEvent.click(screen.getByText('glm-coding'));
+    // The provider chip lives in the bottom chip strip (Codex-style).
+    const providerLabels = screen.getAllByText('glm-coding');
+    const providerButton = providerLabels[providerLabels.length - 1]?.closest('button');
+    expect(providerButton).toBeTruthy();
+    fireEvent.click(providerButton!);
     fireEvent.click(screen.getByText('minimax'));
 
     await waitFor(() => {
       expect(setActiveProvider).toHaveBeenCalledWith('minimax');
     });
 
-    fireEvent.click(screen.getByRole('button', { name: '默认' }));
-    fireEvent.click(screen.getByText('全自动'));
+    fireEvent.click(screen.getByRole('button', { name: '默认模式' }));
+    fireEvent.click(screen.getByText('跳过权限检查'));
 
     await waitFor(() => {
       expect(updateSettings).toHaveBeenCalledWith({ permission_mode: 'bypassPermissions' });
@@ -187,6 +191,28 @@ describe('ChatInput', () => {
           archived: false,
         },
       ],
+      conversation: [
+        {
+          role: 'user',
+          text: 'hello',
+          content: 'hello',
+          content_blocks: [],
+          tool_calls: [],
+          tool_call_id: null,
+          name: null,
+          is_error: false,
+        },
+        {
+          role: 'assistant',
+          text: 'hi',
+          content: 'hi',
+          content_blocks: [],
+          tool_calls: [],
+          tool_call_id: null,
+          name: null,
+          is_error: false,
+        },
+      ],
       settings: {
         ...DEFAULT_SETTINGS,
         codex_approval_policy: 'on-request',
@@ -205,7 +231,9 @@ describe('ChatInput', () => {
 
     render(<ChatInput />);
 
-    fireEvent.click(screen.getByRole('button', { name: '请求批准' }));
+    // The permission chip in the Codex-style bottom strip hosts the approval
+    // policy options directly (no separate "展开 Composer 配置" gate).
+    fireEvent.click(screen.getByRole('button', { name: /请求批准|默认模式/ }));
     fireEvent.click(screen.getByText('沙盒自动'));
 
     await waitFor(() => {
@@ -215,8 +243,13 @@ describe('ChatInput', () => {
       });
     });
 
+    // The active agent for the Codex session is "Codex", so the agent chip
+    // displays the Codex displayName. Click it to open the agent menu, then
+    // pick "Roo" via the menuitemradio (AgentSelector uses menuitemradio
+    // semantics). The session is locked to Codex (existing conversation)
+    // so the store should keep Codex active.
     fireEvent.click(screen.getByRole('button', { name: /Codex/ }));
-    fireEvent.click(screen.getByText('Roo'));
+    fireEvent.click(screen.getByRole('menuitemradio', { name: /Roo/ }));
 
     expect(useAgentStore.getState().activeAgentType).toBe('remote_codex');
   });
@@ -254,6 +287,7 @@ describe('ChatInput', () => {
 
     render(<ChatInput />);
 
+    fireEvent.click(screen.getByRole('button', { name: '展开 Composer 配置' }));
     const modelInput = screen.getByLabelText('Model for next send');
     fireEvent.change(modelInput, { target: { value: 'small-8k' } });
     fireEvent.blur(modelInput);

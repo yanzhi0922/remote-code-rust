@@ -9,6 +9,12 @@ interface AgentSelectorProps {
   lockedAgentType?: AgentType | null;
   lockedReason?: string;
   onSelect: (agentType: AgentType | null) => void;
+  /**
+   * When true, the menu is rendered open without a trigger button —
+   * useful when embedding AgentSelector inline inside a parent dropdown
+   * (e.g. the composer chip strip).
+   */
+  defaultOpen?: boolean;
 }
 
 const AGENT_TYPE_KEYS: Record<AgentType, string> = {
@@ -23,9 +29,10 @@ export function AgentSelector({
   lockedAgentType,
   lockedReason,
   onSelect,
+  defaultOpen = false,
 }: AgentSelectorProps) {
   const { t } = useTranslation();
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(defaultOpen);
 
   const agentEntries: Array<{
     agentType: AgentType;
@@ -60,18 +67,20 @@ export function AgentSelector({
 
   return (
     <div className="relative">
-      <button
-        type="button"
-        title={t('agent.selectType')}
-        aria-expanded={open}
-        aria-haspopup="menu"
-        onClick={() => setOpen((prev) => !prev)}
-        className="inline-flex h-7 items-center gap-1.5 rounded-md border border-rc-border-secondary bg-rc-bg-elevated px-2 text-xs font-medium text-rc-text-secondary transition-colors hover:border-rc-border-hover hover:bg-rc-bg-hover hover:text-rc-text-primary"
-      >
-        <Cpu size={14} className="text-rc-text-tertiary" />
-        <span className="max-w-[150px] truncate">{activeLabel}</span>
-        <ChevronDown size={14} className="text-rc-text-tertiary" />
-      </button>
+      {!defaultOpen && (
+        <button
+          type="button"
+          title={t('agent.selectType')}
+          aria-expanded={open}
+          aria-haspopup="menu"
+          onClick={() => setOpen((prev) => !prev)}
+          className="inline-flex h-7 items-center gap-1.5 rounded-md border border-transparent bg-transparent px-2 text-xs font-medium text-rc-text-secondary transition-colors hover:border-rc-border-primary hover:bg-rc-bg-hover hover:text-rc-text-primary"
+        >
+          <Cpu size={14} className="text-rc-text-tertiary" />
+          <span className="max-w-[150px] truncate">{activeLabel}</span>
+          <ChevronDown size={14} className="text-rc-text-tertiary" />
+        </button>
+      )}
 
       {open && (
         <>
@@ -80,7 +89,7 @@ export function AgentSelector({
             className="fixed inset-0 z-10 cursor-default"
             onClick={() => setOpen(false)}
           />
-          <div role="menu" className="absolute bottom-full left-0 z-20 mb-2 min-w-[280px] overflow-hidden rounded-xl border border-rc-border-primary bg-rc-bg-surface shadow-xl">
+          <div role="menu" className="codex-popover absolute bottom-full left-0 z-20 mb-2 min-w-[280px]">
             <div className="max-h-72 overflow-y-auto p-1.5">
               {agentEntries.map((entry) => {
                 const lockedOut = !!lockedAgentType && entry.agentType !== lockedAgentType;

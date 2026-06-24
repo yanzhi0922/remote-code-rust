@@ -92,6 +92,58 @@ describe('layout SettingsPanel', () => {
     expect(screen.getByText('/test/logs')).toBeInTheDocument();
     expect(screen.getByText('/test/remote_control.json')).toBeInTheDocument();
   });
+
+  it('renders Claude settings and updates active provider tier mapping', async () => {
+    const setClaudeModelMapping = vi.fn().mockResolvedValue(undefined);
+    resetAppStore({
+      settings: mockSettings,
+      providerConfigs: {
+        active_provider: 'openai',
+        providers: [
+          {
+            name: 'openai',
+            protocol: 'anthropic',
+            model: 'claude-sonnet',
+            models: [{ id: 'claude-opus' }, { id: 'claude-sonnet' }],
+            claude_model_mapping: { opus: 'claude-opus', sonnet: 'claude-sonnet', haiku: null },
+          },
+        ],
+      },
+      setClaudeModelMapping,
+    });
+
+    render(<SettingsPanel open onClose={vi.fn()} initialTab="claude" />);
+
+    expect(screen.getByTestId('claude-settings')).toBeInTheDocument();
+    expect(screen.getByText('Claude 工作台')).toBeInTheDocument();
+    fireEvent.change(screen.getByTestId('claude-tier-haiku'), {
+      target: { value: 'claude-sonnet' },
+    });
+
+    await waitFor(() => {
+      expect(setClaudeModelMapping).toHaveBeenCalledWith('openai', {
+        opus: 'claude-opus',
+        sonnet: 'claude-sonnet',
+        haiku: 'claude-sonnet',
+      });
+    });
+  });
+
+  it('renders Roo settings and saves the selected Roo mode through the draft pipeline', async () => {
+    const updateSettings = vi.fn().mockResolvedValue(undefined);
+    resetAppStore({ settings: mockSettings, updateSettings });
+
+    render(<SettingsPanel open onClose={vi.fn()} initialTab="roo" />);
+
+    expect(screen.getByTestId('roo-settings')).toBeInTheDocument();
+    expect(screen.getByText('Roo 模式控制台')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Debug 调试/ }));
+    fireEvent.click(screen.getByRole('button', { name: '保存' }));
+
+    await waitFor(() => {
+      expect(updateSettings).toHaveBeenCalledWith({ roo_mode: 'debug' });
+    });
+  });
 });
 
 function makeProviderConfig(overrides: Partial<ProviderConfig>): ProviderConfig {

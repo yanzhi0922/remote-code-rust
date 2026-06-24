@@ -1147,3 +1147,53 @@ export function remoteStartService(): Promise<RemoteControlStatus> {
 export function remoteHasPassword(): Promise<boolean> {
   return invoke<boolean>('remote_has_password');
 }
+
+// ── System notifications (web Notification API; works in Tauri desktop) ───
+
+/** Returns true when the current window can show OS-level notifications. */
+export function isNotificationSupported(): boolean {
+  return typeof window !== 'undefined' && 'Notification' in window;
+}
+
+/** Returns the current permission state: 'granted' | 'denied' | 'default' | 'unsupported'. */
+export function getNotificationPermission(): 'granted' | 'denied' | 'default' | 'unsupported' {
+  if (!isNotificationSupported()) return 'unsupported';
+  return Notification.permission;
+}
+
+/** Request permission. Returns the resolved permission. */
+export async function requestNotificationPermission(): Promise<NotificationPermission | 'unsupported'> {
+  if (!isNotificationSupported()) return 'unsupported';
+  if (Notification.permission === 'granted' || Notification.permission === 'denied') {
+    return Notification.permission;
+  }
+  return Notification.requestPermission();
+}
+
+export interface ShowNotificationOptions {
+  title: string;
+  body: string;
+  /** Auto-dismiss after N ms. Default 5000. Pass 0 for sticky. */
+  timeoutMs?: number;
+  /** Click handler — fire-and-forget. */
+  onClick?: () => void;
+}
+
+/** Show a desktop notification. Resolves to the new Notification or null. */
+export function showDesktopNotification(opts: ShowNotificationOptions): Notification | null {
+  if (!isNotificationSupported()) return null;
+  if (Notification.permission !== 'granted') return null;
+  const n = new Notification(opts.title, {
+    body: opts.body,
+    silent: false,
+  });
+  if (opts.onClick) {
+    n.onclick = () => {
+      try { opts.onClick?.(); } finally { n.close(); }
+    };
+  }
+  if (opts.timeoutMs && opts.timeoutMs > 0) {
+    window.setTimeout(() => n.close(), opts.timeoutMs);
+  }
+  return n;
+}

@@ -17,6 +17,7 @@ export default defineConfig({
     baseURL: 'http://localhost:1420',
     trace: 'on-first-retry',
     screenshot: 'only-on-failure',
+    locale: 'zh-CN',
   },
   projects: [
     {
@@ -24,12 +25,12 @@ export default defineConfig({
       use: { ...devices['Desktop Chrome'] },
     },
   ],
-  // Dev server is expected to already be running for Tauri dev.
-  // Uncomment below to auto-start if needed:
-  // webServer: {
-  //   command: 'npm run dev',
-  //   url: 'http://localhost:1420',
-  //   reuseExistingServer: true,
-  //   timeout: 30_000,
-  // },
+  webServer: {
+    command: 'npx vite --port 1420 --strictPort',
+    url: 'http://localhost:1420',
+    reuseExistingServer: true,
+    timeout: 30_000,
+    stdout: 'ignore',
+    stderr: 'pipe',
+  },
 });

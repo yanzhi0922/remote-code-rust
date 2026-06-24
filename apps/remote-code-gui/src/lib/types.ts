@@ -323,6 +323,7 @@ export interface AttachmentInfo {
 export interface ConversationEntry {
   role: ConversationRole;
   text: string;
+  content?: string;
   content_blocks: unknown[];
   tool_calls: ToolCallInfo[];
   tool_call_id: string | null;
@@ -423,6 +424,7 @@ export interface UpdateProviderRequest {
   codex_permission_profile?: unknown | null;
   codex_service_tier?: string | null;
   codex_ephemeral?: boolean | null;
+  roo_mode?: string | null;
 }
 
 export interface CodexThreadListRequest {

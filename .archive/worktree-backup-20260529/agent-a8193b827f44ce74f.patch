@@ -1,0 +1,622 @@
+diff --git a/crates/claude/claude-analytics/src/exporter.rs b/crates/claude/claude-analytics/src/exporter.rs
+index f07db7f4..a7c693ce 100644
+--- a/crates/claude/claude-analytics/src/exporter.rs
++++ b/crates/claude/claude-analytics/src/exporter.rs
+@@ -6,6 +6,7 @@
+ use anyhow::Result;
+ use std::io::Write;
+ use std::path::Path;
++use std::sync::OnceLock;
+ 
+ use crate::metadata::AnalyticsEvent;
+ 
+@@ -72,11 +73,13 @@ impl EventExporter for DatadogExporter {
+             payload.push_str(&formatted);
+             payload.push('\n');
+         }
++        /// Shared HTTP client for Datadog exports (connection pool reuse).
++        static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+         let rt = tokio::runtime::Builder::new_current_thread()
+             .enable_all()
+             .build()?;
+         rt.block_on(async {
+-            let client = reqwest::Client::new();
++            let client = CLIENT.get_or_init(reqwest::Client::new);
+             let resp = client
+                 .post(&self.endpoint)
+                 .header("DD-API-KEY", &self.api_key)
+@@ -127,11 +130,13 @@ impl EventExporter for FirstPartyExporter {
+             return Ok(());
+         }
+         let body = serde_json::to_string(events)?;
++        /// Shared HTTP client for first-party exports (connection pool reuse).
++        static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+         let rt = tokio::runtime::Builder::new_current_thread()
+             .enable_all()
+             .build()?;
+         rt.block_on(async {
+-            let client = reqwest::Client::new();
++            let client = CLIENT.get_or_init(reqwest::Client::new);
+             let resp = client
+                 .post(&self.endpoint)
+                 .header("Content-Type", "application/json")
+diff --git a/crates/claude/claude-analytics/src/growthbook.rs b/crates/claude/claude-analytics/src/growthbook.rs
+index 09476bdd..fcd0618c 100644
+--- a/crates/claude/claude-analytics/src/growthbook.rs
++++ b/crates/claude/claude-analytics/src/growthbook.rs
+@@ -5,7 +5,7 @@
+ 
+ use serde::{Deserialize, Serialize};
+ use std::collections::HashMap;
+-use std::sync::{Arc, Mutex};
++use std::sync::{Arc, Mutex, OnceLock};
+ 
+ // ---------------------------------------------------------------------------
+ // FeatureFlag
+@@ -151,7 +151,9 @@ impl FeatureFlags {
+         if config.api_endpoint.is_empty() {
+             return Ok(());
+         }
+-        let client = reqwest::Client::new();
++        /// Shared HTTP client for GrowthBook flag refreshes (connection pool reuse).
++        static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
++        let client = CLIENT.get_or_init(reqwest::Client::new);
+         let resp = client.get(&config.api_endpoint).send().await;
+         match resp {
+             Ok(r) if r.status().is_success() => match r.json::<serde_json::Value>().await {
+diff --git a/crates/claude/claude-file-history/src/state.rs b/crates/claude/claude-file-history/src/state.rs
+index 9291bd81..d0f8e783 100644
+--- a/crates/claude/claude-file-history/src/state.rs
++++ b/crates/claude/claude-file-history/src/state.rs
+@@ -2,7 +2,7 @@
+ //!
+ //! Corresponds to `src/utils/fileHistory.ts` (FileHistoryState, FileHistorySnapshot).
+ 
+-use std::collections::{HashMap, HashSet};
++use std::collections::{HashMap, HashSet, VecDeque};
+ 
+ use chrono::Utc;
+ use serde::{Deserialize, Serialize};
+@@ -17,7 +17,7 @@ pub const MAX_SNAPSHOTS: usize = 100;
+ #[derive(Debug, Clone, Serialize, Deserialize)]
+ pub struct FileHistoryState {
+     /// All snapshots taken so far.
+-    pub snapshots: Vec<FileHistorySnapshot>,
++    pub snapshots: VecDeque<FileHistorySnapshot>,
+     /// Set of file paths currently being tracked.
+     pub tracked_files: HashSet<String>,
+     /// Monotonically-increasing counter incremented on every snapshot.
+@@ -35,7 +35,7 @@ impl FileHistoryState {
+     #[must_use]
+     pub fn new() -> Self {
+         Self {
+-            snapshots: Vec::new(),
++            snapshots: VecDeque::new(),
+             tracked_files: HashSet::new(),
+             snapshot_sequence: 0,
+         }
+@@ -83,12 +83,12 @@ impl FileHistoryState {
+             timestamp: Utc::now(),
+         };
+ 
+-        self.snapshots.push(snapshot);
++        self.snapshots.push_back(snapshot);
+         self.snapshot_sequence += 1;
+ 
+         // Evict oldest snapshots if over limit
+         while self.snapshots.len() > MAX_SNAPSHOTS {
+-            self.snapshots.remove(0);
++            self.snapshots.pop_front();
+         }
+     }
+ 
+@@ -112,7 +112,7 @@ impl FileHistoryState {
+     /// Get the most recent snapshot.
+     #[must_use]
+     pub fn latest_snapshot(&self) -> Option<&FileHistorySnapshot> {
+-        self.snapshots.last()
++        self.snapshots.back()
+     }
+ 
+     /// Get the number of snapshots.
+diff --git a/crates/claude/claude-ide/src/bridge.rs b/crates/claude/claude-ide/src/bridge.rs
+index 777c3bb3..ba444349 100644
+--- a/crates/claude/claude-ide/src/bridge.rs
++++ b/crates/claude/claude-ide/src/bridge.rs
+@@ -7,6 +7,7 @@ use crate::config::IdeConfig;
+ use serde::{Deserialize, Serialize};
+ use serde_json::Value;
+ use std::collections::HashMap;
++use std::collections::VecDeque;
+ use std::sync::Arc;
+ use std::sync::atomic::{AtomicBool, Ordering};
+ use tracing::{debug, warn};
+@@ -171,6 +172,9 @@ struct JsonRpcError {
+     data: Option<Value>,
+ }
+ 
++/// Maximum number of outgoing messages to buffer before dropping the oldest.
++const MAX_OUTGOING_MESSAGES: usize = 1024;
++
+ /// The main bridge between remote-code and the IDE.
+ ///
+ /// Manages the connection state and provides methods for sending notifications
+@@ -184,7 +188,7 @@ pub struct IdeBridge {
+     pending_responses: Arc<std::sync::Mutex<HashMap<u64, IdeResponse>>>,
+     /// Outgoing message queue — serialized JSON-RPC payloads waiting to be
+     /// written to the transport by the caller.
+-    outgoing: Arc<std::sync::Mutex<Vec<String>>>,
++    outgoing: Arc<std::sync::Mutex<VecDeque<String>>>,
+     /// Next request ID for JSON-RPC.
+     next_id: Arc<std::sync::atomic::AtomicU64>,
+ }
+@@ -197,7 +201,7 @@ impl IdeBridge {
+             config,
+             connected,
+             pending_responses: Arc::new(std::sync::Mutex::new(HashMap::new())),
+-            outgoing: Arc::new(std::sync::Mutex::new(Vec::new())),
++            outgoing: Arc::new(std::sync::Mutex::new(VecDeque::new())),
+             next_id: Arc::new(std::sync::atomic::AtomicU64::new(1)),
+         }
+     }
+@@ -258,7 +262,10 @@ impl IdeBridge {
+         );
+ 
+         if let Ok(mut queue) = self.outgoing.lock() {
+-            queue.push(payload);
++            if queue.len() >= MAX_OUTGOING_MESSAGES {
++                queue.pop_front();
++            }
++            queue.push_back(payload);
+         }
+         Ok(())
+     }
+@@ -314,7 +321,10 @@ impl IdeBridge {
+ 
+         // Enqueue the serialized request for the transport layer.
+         if let Ok(mut queue) = self.outgoing.lock() {
+-            queue.push(payload);
++            if queue.len() >= MAX_OUTGOING_MESSAGES {
++                queue.pop_front();
++            }
++            queue.push_back(payload);
+         }
+ 
+         // Check if a response was already received for this request ID.
+@@ -393,7 +403,7 @@ impl IdeBridge {
+     /// transport (e.g., via LSP-style Content-Length framing over stdio).
+     pub fn drain_outgoing(&self) -> Vec<String> {
+         match self.outgoing.lock() {
+-            Ok(mut queue) => std::mem::take(&mut *queue),
++            Ok(mut queue) => queue.drain(..).collect(),
+             Err(_) => Vec::new(),
+         }
+     }
+diff --git a/crates/claude/claude-ide/src/connection.rs b/crates/claude/claude-ide/src/connection.rs
+index 228e1ca8..5245ab54 100644
+--- a/crates/claude/claude-ide/src/connection.rs
++++ b/crates/claude/claude-ide/src/connection.rs
+@@ -541,6 +541,10 @@ impl IdeConnection for HttpConnection {
+ // LSP-style framed message I/O
+ // ---------------------------------------------------------------------------
+ 
++/// Maximum allowed frame size (16 MiB) to prevent unbounded memory allocation
++/// from a malicious or corrupted Content-Length header.
++const MAX_FRAME_SIZE: usize = 16 * 1024 * 1024;
++
+ /// Read a single LSP-style framed message from the reader.
+ ///
+ /// Expects `Content-Length: N\r\n\r\n` followed by exactly N bytes of body.
+@@ -574,6 +578,14 @@ fn read_framed_message<R: BufRead>(reader: &mut R) -> anyhow::Result<String> {
+ 
+     let length = content_length.ok_or_else(|| anyhow::anyhow!("missing Content-Length header"))?;
+ 
++    if length > MAX_FRAME_SIZE {
++        return Err(anyhow::anyhow!(
++            "Content-Length {} exceeds maximum allowed frame size of {} bytes",
++            length,
++            MAX_FRAME_SIZE
++        ));
++    }
++
+     let mut body = vec![0u8; length];
+     reader
+         .read_exact(&mut body)
+diff --git a/crates/claude/claude-lsp/src/transport.rs b/crates/claude/claude-lsp/src/transport.rs
+index ffe4ee6c..a1a15a6b 100644
+--- a/crates/claude/claude-lsp/src/transport.rs
++++ b/crates/claude/claude-lsp/src/transport.rs
+@@ -15,6 +15,10 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+ use tokio::process::{Child, Command};
+ use tokio::sync::oneshot;
+ 
++/// Maximum allowed frame size (16 MiB) to prevent unbounded memory allocation
++/// from a malicious or corrupted Content-Length header.
++const MAX_FRAME_SIZE: usize = 16 * 1024 * 1024;
++
+ /// A running language server process with stdio transport.
+ pub struct StdioTransport {
+     /// Child process handle.
+@@ -154,7 +158,11 @@ impl StdioTransport {
+             };
+ 
+             let content_length = match Self::parse_content_length(&line) {
+-                Some(len) => len,
++                Some(len) if len <= MAX_FRAME_SIZE => len,
++                Some(_len) => {
++                    // Frame exceeds maximum allowed size — skip it.
++                    continue;
++                }
+                 None => continue,
+             };
+ 
+diff --git a/crates/claude/claude-mcp/src/oauth.rs b/crates/claude/claude-mcp/src/oauth.rs
+index 5265978d..7af4de19 100644
+--- a/crates/claude/claude-mcp/src/oauth.rs
++++ b/crates/claude/claude-mcp/src/oauth.rs
+@@ -6,6 +6,7 @@
+ 
+ use std::collections::HashMap;
+ use std::path::{Path, PathBuf};
++use std::sync::OnceLock;
+ 
+ use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+ use rand::Rng;
+@@ -361,7 +362,9 @@ impl McpOAuthFlow {
+             ("code_verifier", pkce.code_verifier.clone()),
+         ];
+ 
+-        let client = reqwest::Client::new();
++        /// Shared HTTP client for OAuth token exchange (connection pool reuse).
++        static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
++        let client = CLIENT.get_or_init(reqwest::Client::new);
+         let response = client
+             .post(&metadata.token_endpoint)
+             .form(&params)
+@@ -412,7 +415,9 @@ impl McpOAuthFlow {
+             ("client_id", client_id.to_owned()),
+         ];
+ 
+-        let client = reqwest::Client::new();
++        /// Shared HTTP client for OAuth token refresh (connection pool reuse).
++        static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
++        let client = CLIENT.get_or_init(reqwest::Client::new);
+         let response = client
+             .post(&metadata.token_endpoint)
+             .form(&params)
+diff --git a/crates/claude/claude-mcp/src/proxy.rs b/crates/claude/claude-mcp/src/proxy.rs
+index ce0ea50d..ad4903a2 100644
+--- a/crates/claude/claude-mcp/src/proxy.rs
++++ b/crates/claude/claude-mcp/src/proxy.rs
+@@ -5,6 +5,7 @@
+ //! communication, forwarding requests with proper authentication headers.
+ 
+ use std::collections::HashMap;
++use std::sync::OnceLock;
+ 
+ use serde::{Deserialize, Serialize};
+ 
+@@ -168,7 +169,9 @@ impl ClaudeAiProxyFetch {
+             params.push(("client_secret", secret));
+         }
+ 
+-        let client = reqwest::Client::new();
++        /// Shared HTTP client for proxy token refresh (connection pool reuse).
++        static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
++        let client = CLIENT.get_or_init(reqwest::Client::new);
+         let resp = client
+             .post(token_endpoint)
+             .form(&params)
+diff --git a/crates/claude/claude-mcp/src/session.rs b/crates/claude/claude-mcp/src/session.rs
+index dd97e75e..d1358471 100644
+--- a/crates/claude/claude-mcp/src/session.rs
++++ b/crates/claude/claude-mcp/src/session.rs
+@@ -8,6 +8,7 @@
+ use std::collections::BTreeMap;
+ use std::path::{Path, PathBuf};
+ use std::process::Stdio;
++use std::sync::OnceLock;
+ use std::sync::atomic::{AtomicU64, Ordering};
+ use std::time::Duration;
+ 
+@@ -1289,7 +1290,9 @@ impl RemoteMcpSession {
+         headers: &BTreeMap<String, String>,
+         client_info: &McpClientInfo,
+     ) -> Result<Self, McpRuntimeError> {
+-        let http = reqwest::Client::new();
++        /// Shared HTTP client for MCP HTTP sessions (connection pool reuse).
++        static HTTP_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
++        let http = HTTP_CLIENT.get_or_init(reqwest::Client::new);
+         let request_timeout_secs = server
+             .request_timeout_secs
+             .unwrap_or(DEFAULT_REQUEST_TIMEOUT_SECS);
+@@ -1345,7 +1348,7 @@ impl RemoteMcpSession {
+             server_name: server.name.clone(),
+             url: url.to_owned(),
+             headers: headers.clone(),
+-            http,
++            http: http.clone(),
+             initialized: init_result,
+             request_timeout_secs,
+         })
+@@ -1362,7 +1365,9 @@ impl RemoteMcpSession {
+         headers: &BTreeMap<String, String>,
+         client_info: &McpClientInfo,
+     ) -> Result<Self, McpRuntimeError> {
+-        let http = reqwest::Client::new();
++        /// Shared HTTP client for MCP SSE sessions (connection pool reuse).
++        static SSE_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
++        let http = SSE_CLIENT.get_or_init(reqwest::Client::new);
+         let request_timeout_secs = server
+             .request_timeout_secs
+             .unwrap_or(DEFAULT_REQUEST_TIMEOUT_SECS);
+@@ -1410,7 +1415,7 @@ impl RemoteMcpSession {
+             server_name: server.name.clone(),
+             url: url.to_owned(),
+             headers: headers.clone(),
+-            http,
++            http: http.clone(),
+             initialized: init_result,
+             request_timeout_secs,
+         })
+diff --git a/crates/claude/claude-provider/src/normalize.rs b/crates/claude/claude-provider/src/normalize.rs
+index 55299cce..50f0d510 100644
+--- a/crates/claude/claude-provider/src/normalize.rs
++++ b/crates/claude/claude-provider/src/normalize.rs
+@@ -261,7 +261,7 @@ fn merge_consecutive_same_role(messages: &mut Vec<Value>) {
+ 
+             prev["content"] = if merged.len() == 1 && merged[0]["type"].as_str() == Some("text") {
+                 // Single text block — use string form
+-                merged.remove(0)["text"].take()
++                merged.into_iter().next().unwrap()["text"].take()
+             } else {
+                 Value::Array(merged)
+             };
+diff --git a/crates/claude/claude-tools/src/misc.rs b/crates/claude/claude-tools/src/misc.rs
+index af98e4ec..9ede124f 100644
+--- a/crates/claude/claude-tools/src/misc.rs
++++ b/crates/claude/claude-tools/src/misc.rs
+@@ -4,6 +4,7 @@
+ 
+ use std::process::Stdio;
+ 
++use std::sync::OnceLock;
+ use std::time::UNIX_EPOCH;
+ 
+ use anyhow::{Context, Result, anyhow};
+@@ -602,11 +603,17 @@ pub(crate) async fn remote_trigger_tool(input: &Value) -> Result<String> {
+         "payload": payload,
+     });
+ 
+-    let client = reqwest::Client::new();
++    /// Shared HTTP client for remote trigger requests (connection pool reuse).
++    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
++    let client = CLIENT.get_or_init(|| {
++        reqwest::Client::builder()
++            .timeout(std::time::Duration::from_secs(30))
++            .build()
++            .unwrap_or_else(|_| reqwest::Client::new())
++    });
+     let response = client
+         .post(url)
+         .json(&body)
+-        .timeout(std::time::Duration::from_secs(30))
+         .send()
+         .await
+         .context("failed to send remote trigger")?;
+diff --git a/crates/claude/claude-tools/src/web_browser.rs b/crates/claude/claude-tools/src/web_browser.rs
+index e0e868d9..082a14a4 100644
+--- a/crates/claude/claude-tools/src/web_browser.rs
++++ b/crates/claude/claude-tools/src/web_browser.rs
+@@ -9,6 +9,8 @@
+ //! returns page metadata instead of an actual image when no headless
+ //! browser is available.
+ 
++use std::sync::OnceLock;
++
+ use anyhow::{Context, Result, anyhow};
+ use regex::Regex;
+ use serde_json::{Value, json};
+@@ -168,10 +170,14 @@ async fn screenshot(url: &str) -> Result<String> {
+         url = url,
+         "screenshot action called without headless browser runtime; returning page metadata instead"
+     );
+-    let client = reqwest::Client::builder()
+-        .timeout(std::time::Duration::from_secs(15))
+-        .build()
+-        .unwrap_or_else(|_| reqwest::Client::new());
++    /// Shared HTTP client for web browser tool (connection pool reuse).
++    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
++    let client = CLIENT.get_or_init(|| {
++        reqwest::Client::builder()
++            .timeout(std::time::Duration::from_secs(15))
++            .build()
++            .unwrap_or_else(|_| reqwest::Client::new())
++    });
+ 
+     match client.get(url).send().await {
+         Ok(resp) => {
+diff --git a/crates/claude/claude-tui/src/app.rs b/crates/claude/claude-tui/src/app.rs
+index 5ffc6330..ee9cd255 100644
+--- a/crates/claude/claude-tui/src/app.rs
++++ b/crates/claude/claude-tui/src/app.rs
+@@ -11,6 +11,8 @@ use crate::scroll::VirtualScroll;
+ use crate::style::StyleConfig;
+ use crate::vim::{VimAction, VimMode, VimStateMachine};
+ 
++use std::collections::VecDeque;
++
+ /// Which panel currently has keyboard focus.
+ #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+ pub enum ActivePanel {
+@@ -103,7 +105,7 @@ pub struct App {
+     /// Style configuration.
+     pub style: StyleConfig,
+     /// Input history for up/down navigation.
+-    pub input_history: Vec<String>,
++    pub input_history: VecDeque<String>,
+     /// Current position in input history.
+     pub history_index: usize,
+     /// Saved buffer when navigating history.
+@@ -132,7 +134,7 @@ impl App {
+             mcp_servers: Vec::new(),
+             model_info: ModelInfo::default(),
+             style: StyleConfig::dark(),
+-            input_history: Vec::new(),
++            input_history: VecDeque::new(),
+             history_index: 0,
+             saved_buffer: String::new(),
+             spinner_frame: 0,
+@@ -262,10 +264,10 @@ impl App {
+ 
+         // Save to history.
+         const MAX_HISTORY: usize = 1000;
+-        if self.input_history.last() != Some(&text) {
+-            self.input_history.push(text.clone());
+-            if self.input_history.len() > MAX_HISTORY {
+-                self.input_history.remove(0);
++        if self.input_history.back() != Some(&text) {
++            self.input_history.push_back(text.clone());
++            while self.input_history.len() > MAX_HISTORY {
++                self.input_history.pop_front();
+             }
+         }
+         self.history_index = self.input_history.len();
+diff --git a/crates/claude/claude-tui/src/notifications.rs b/crates/claude/claude-tui/src/notifications.rs
+index c49ad84e..384a0025 100644
+--- a/crates/claude/claude-tui/src/notifications.rs
++++ b/crates/claude/claude-tui/src/notifications.rs
+@@ -7,6 +7,7 @@
+ //! - Max visible notifications with auto-dismissal
+ //! - Priority-based ordering
+ 
++use std::collections::VecDeque;
+ use std::fmt;
+ use std::time::{Duration, Instant};
+ 
+@@ -297,9 +298,9 @@ pub struct NotificationManager {
+     /// Configuration.
+     config: NotificationConfig,
+     /// Active notifications.
+-    notifications: Vec<Notification>,
++    notifications: VecDeque<Notification>,
+     /// History of dismissed notifications.
+-    history: Vec<Notification>,
++    history: VecDeque<Notification>,
+     /// Maximum history size.
+     max_history: usize,
+ }
+@@ -309,8 +310,8 @@ impl NotificationManager {
+     pub fn new(config: NotificationConfig) -> Self {
+         NotificationManager {
+             config,
+-            notifications: Vec::new(),
+-            history: Vec::new(),
++            notifications: VecDeque::new(),
++            history: VecDeque::new(),
+             max_history: 100,
+         }
+     }
+@@ -332,14 +333,14 @@ impl NotificationManager {
+         }
+ 
+         let id = notification.id;
+-        self.notifications.push(notification);
++        self.notifications.push_back(notification);
+ 
+         // Enforce max visible.
+         while self.notifications.len() > self.config.max_visible {
+-            if let Some(oldest) = self.notifications.first_mut() {
++            if let Some(oldest) = self.notifications.front_mut() {
+                 oldest.dismiss();
+             }
+-            let dismissed = self.notifications.remove(0);
++            let dismissed = self.notifications.pop_front().expect("len > max_visible guarantees element");
+             self.push_history(dismissed);
+         }
+ 
+@@ -386,8 +387,9 @@ impl NotificationManager {
+             notif.dismiss();
+             let idx = self.notifications.iter().position(|n| n.id == id);
+             if let Some(idx) = idx {
+-                let dismissed = self.notifications.remove(idx);
+-                self.push_history(dismissed);
++                if let Some(dismissed) = self.notifications.remove(idx) {
++                    self.push_history(dismissed);
++                }
+             }
+             return true;
+         }
+@@ -399,7 +401,7 @@ impl NotificationManager {
+         for notif in &mut self.notifications {
+             notif.dismiss();
+         }
+-        while let Some(dismissed) = self.notifications.pop() {
++        while let Some(dismissed) = self.notifications.pop_back() {
+             self.push_history(dismissed);
+         }
+     }
+@@ -417,8 +419,9 @@ impl NotificationManager {
+         for id in expired {
+             let idx = self.notifications.iter().position(|n| n.id == id);
+             if let Some(idx) = idx {
+-                let dismissed = self.notifications.remove(idx);
+-                self.push_history(dismissed);
++                if let Some(dismissed) = self.notifications.remove(idx) {
++                    self.push_history(dismissed);
++                }
+             }
+         }
+         count
+@@ -433,12 +436,12 @@ impl NotificationManager {
+     }
+ 
+     /// Get all notifications (including expired but not yet cleaned).
+-    pub fn all(&self) -> &[Notification] {
++    pub fn all(&self) -> &VecDeque<Notification> {
+         &self.notifications
+     }
+ 
+     /// Get the notification history.
+-    pub fn history(&self) -> &[Notification] {
++    pub fn history(&self) -> &VecDeque<Notification> {
+         &self.history
+     }
+ 
+@@ -473,9 +476,9 @@ impl NotificationManager {
+ 
+     /// Push a notification into history, respecting max size.
+     fn push_history(&mut self, notification: Notification) {
+-        self.history.push(notification);
+-        if self.history.len() > self.max_history {
+-            self.history.remove(0);
++        self.history.push_back(notification);
++        while self.history.len() > self.max_history {
++            self.history.pop_front();
+         }
+     }
+ }
+diff --git a/crates/claude/claude-voice/src/stt.rs b/crates/claude/claude-voice/src/stt.rs
+index 198a3b76..37077c63 100644
+--- a/crates/claude/claude-voice/src/stt.rs
++++ b/crates/claude/claude-voice/src/stt.rs
+@@ -4,7 +4,7 @@
+ //! [`MockStt`] implementation for testing, and a [`WhisperStt`]
+ //! implementation that calls the OpenAI Whisper API.
+ 
+-use std::sync::Mutex;
++use std::sync::{Mutex, OnceLock};
+ 
+ use anyhow::Result;
+ use serde::{Deserialize, Serialize};
+@@ -207,7 +207,9 @@ impl WhisperStt {
+     /// `format` — file extension / container format (e.g. `"webm"`, `"wav"`,
+     ///   `"mp4"`, `"ogg"`).
+     pub async fn transcribe(&self, audio_data: &[u8], format: &str) -> Result<TranscriptResult> {
+-        let client = reqwest::Client::new();
++        /// Shared HTTP client for Whisper API calls (connection pool reuse).
++        static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
++        let client = CLIENT.get_or_init(reqwest::Client::new);
+ 
+         // Build the file part with an appropriate MIME type.
+         let mime = match format {

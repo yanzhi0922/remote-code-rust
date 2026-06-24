@@ -3,12 +3,14 @@ import {
   ArchiveRestore,
   Blocks,
   Bot,
+  Brain,
   Check,
   ChevronDown,
   Copy,
   Eye,
   EyeOff,
   Gauge,
+  GitBranch,
   Pencil,
   Plug,
   Plus,
@@ -31,8 +33,10 @@ import type {
 } from '../../lib/types';
 import { recordFrontendLog } from '../../lib/tauri';
 import { useAppStore } from '../../stores/useAppStore';
+import { ClaudeSettings } from '../settings/ClaudeSettings';
 import { CodexSettings } from '../settings/CodexSettings';
 import { RemoteTab } from '../settings/RemoteTab';
+import { RooSettings } from '../settings/RooSettings';
 import { McpTab } from './McpTab';
 import { OperationsTab } from './OperationsTab';
 
@@ -42,7 +46,7 @@ interface SettingsPanelProps {
   initialTab?: SettingsTab;
 }
 
-export type SettingsTab = 'provider' | 'runtime' | 'codex' | 'mcp' | 'remote' | 'operations' | 'archive';
+export type SettingsTab = 'provider' | 'runtime' | 'claude' | 'roo' | 'codex' | 'mcp' | 'remote' | 'operations' | 'archive';
 
 type TFn = (key: string, options?: Record<string, unknown>) => string;
 
@@ -50,6 +54,8 @@ function settingsTabs(t: TFn): Array<{ key: SettingsTab; label: string; icon: Re
   return [
     { key: 'provider', label: 'Provider', icon: SlidersHorizontal },
     { key: 'runtime', label: t('settings.runtimeParams'), icon: Gauge },
+    { key: 'claude', label: 'Claude', icon: Brain },
+    { key: 'roo', label: 'Roo', icon: GitBranch },
     { key: 'codex', label: 'Codex', icon: Bot },
     { key: 'mcp', label: 'MCP', icon: Blocks },
     { key: 'remote', label: t('settings.remote'), icon: Wifi },
@@ -64,16 +70,6 @@ function protocols(t: TFn) {
     { value: 'anthropic', label: 'Anthropic Messages' },
     { value: 'bedrock', label: 'AWS Bedrock' },
     { value: 'vertex', label: 'Google Vertex' },
-  ];
-}
-
-function permissionModes(t: TFn) {
-  return [
-    { value: 'default', label: t('chatInput.permission.claude.default'), desc: t('chatInput.permission.claude.defaultDesc') },
-    { value: 'acceptEdits', label: t('chatInput.permission.claude.acceptEdits'), desc: t('chatInput.permission.claude.acceptEditsDesc') },
-    { value: 'dontAsk', label: t('chatInput.permission.claude.dontAsk'), desc: t('chatInput.permission.claude.dontAskDesc') },
-    { value: 'bypassPermissions', label: t('chatInput.permission.claude.bypassPermissions'), desc: t('chatInput.permission.claude.bypassPermissionsDesc') },
-    { value: 'plan', label: t('chatInput.permission.claude.plan'), desc: t('chatInput.permission.claude.planDesc') },
   ];
 }
 
@@ -266,6 +262,16 @@ export function SettingsPanel({ open, onClose, initialTab = 'provider' }: Settin
                 <ProviderTab />
               ) : activeTab === 'mcp' ? (
                 <McpTab />
+              ) : activeTab === 'claude' ? (
+                <ClaudeSettings
+                  settings={current}
+                  onUpdate={(updates) => setDraft((state) => ({ ...state, ...updates }))}
+                />
+              ) : activeTab === 'roo' ? (
+                <RooSettings
+                  settings={current}
+                  onUpdate={(updates) => setDraft((state) => ({ ...state, ...updates }))}
+                />
               ) : activeTab === 'codex' ? (
                 <CodexSettings
                   settings={current}
@@ -1507,39 +1513,6 @@ function RuntimeTab({
         </div>
       </section>
 
-      <Field label={t('settings.permissionModeField')}>
-        <div className="space-y-2">
-          {permissionModes(t).map((mode) => (
-            <label
-              key={mode.value}
-              className={`flex cursor-pointer items-start gap-3 rounded-md border px-3 py-2.5 text-sm transition-colors ${
-                current.permission_mode === mode.value
-                  ? 'border-rc-border-focus bg-rc-bg-surface'
-                  : 'border-rc-border-secondary bg-rc-bg-secondary hover:border-rc-border-hover'
-              }`}
-            >
-              <div className="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full border border-rc-border-primary">
-                {current.permission_mode === mode.value && (
-                  <div className="h-2 w-2 rounded-full bg-rc-accent-primary" />
-                )}
-              </div>
-              <input
-                type="radio"
-                name="permission_mode"
-                value={mode.value}
-                checked={current.permission_mode === mode.value}
-                onChange={(event) => onChange('permission_mode', event.target.value)}
-                className="sr-only"
-              />
-              <div>
-                <div className="font-medium text-rc-text-primary">{mode.label}</div>
-                <div className="mt-1 text-xs text-rc-text-tertiary">{mode.desc}</div>
-              </div>
-            </label>
-          ))}
-        </div>
-      </Field>
-
       <div className="grid gap-4 sm:grid-cols-2">
         <Field label={t('settings.maxOutputTokens')} hint={t('settings.maxOutputTokensHint')}>
           <input
@@ -1605,32 +1578,6 @@ function RuntimeTab({
           />
         </Field>
       </div>
-
-      <Field label={t('settings.rooModeField')} hint={t('settings.rooModeHint')}>
-        <div className="grid gap-2 sm:grid-cols-3">
-          {[
-            { value: '', label: t('settings.rooModeDefault') },
-            { value: 'code', label: 'Code' },
-            { value: 'architect', label: 'Architect' },
-            { value: 'ask', label: 'Ask' },
-            { value: 'debug', label: 'Debug' },
-            { value: 'orchestrator', label: 'Orchestrator' },
-          ].map((mode) => (
-            <button
-              key={mode.value}
-              type="button"
-              onClick={() => onChange('roo_mode', mode.value || null)}
-              className={`rounded-md border px-3 py-2 text-xs font-medium transition-colors ${
-                (current.roo_mode ?? '') === mode.value
-                  ? 'border-rc-accent-primary bg-rc-bg-selected text-rc-accent-primary'
-                  : 'border-rc-border-secondary bg-rc-bg-secondary text-rc-text-secondary hover:border-rc-border-hover hover:text-rc-text-primary'
-              }`}
-            >
-              {mode.label}
-            </button>
-          ))}
-        </div>
-      </Field>
 
       <div className="grid gap-4 sm:grid-cols-2">
         <Field label={t('settings.maxBackoffMs')}>

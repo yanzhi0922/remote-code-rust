@@ -1,0 +1,417 @@
+diff --git a/agents/claudecode/src/agents.rs b/agents/claudecode/src/agents.rs
+index e64fbeee..3b087ab6 100644
+--- a/agents/claudecode/src/agents.rs
++++ b/agents/claudecode/src/agents.rs
+@@ -159,6 +159,11 @@ fn parse_key_value_pairs(value: &str) -> BTreeMap<String, String> {
+         .collect()
+ }
+ 
++/// Holds the base config for spawning sub-agent executions.
++///
++/// Each agent execution mutates its own config copy (new session ID, working
++/// directory, permission mode, etc.), so an `Arc<RuntimeConfig>` cannot be
++/// shared. The clone is intentional and unavoidable for correctness.
+ #[derive(Clone)]
+ struct RemoteCodeAgentExecutor {
+     base_config: RuntimeConfig,
+diff --git a/agents/claudecode/src/headless.rs b/agents/claudecode/src/headless.rs
+index e6fe6895..6b4cdb14 100644
+--- a/agents/claudecode/src/headless.rs
++++ b/agents/claudecode/src/headless.rs
+@@ -239,8 +239,12 @@ async fn cancel_pending_permissions<W: Write + Send>(
+     emitter: &Arc<Mutex<ProtocolEmitter<W>>>,
+     decision_message: &'static str,
+ ) -> Result<()> {
+-    let mut pending = pending_permissions.lock().await;
+-    for (request_id, sender) in pending.drain() {
++    // Drain all pending entries under the lock, then release before awaiting.
++    let drained: Vec<(String, oneshot::Sender<PermissionDecision>)> = {
++        let mut pending = pending_permissions.lock().await;
++        pending.drain().collect()
++    };
++    for (request_id, sender) in drained {
+         let _ = sender.send(PermissionDecision::deny(decision_message));
+         let mut emitter = emitter.lock().await;
+         let _ = emitter.emit_permission_cancelled(&request_id);
+diff --git a/agents/claudecode/src/hooks.rs b/agents/claudecode/src/hooks.rs
+index 9b2ca408..2660d186 100644
+--- a/agents/claudecode/src/hooks.rs
++++ b/agents/claudecode/src/hooks.rs
+@@ -1173,9 +1173,15 @@ fn hook_display(hook_type: &str, object: Option<&serde_json::Map<String, Value>>
+     }
+ }
+ 
++/// Produces a deterministic hook identifier by hashing the contributing parts.
++/// A separator byte (`0xFF`) is injected between parts to prevent collisions
++/// where `"a"+"bc"` and `"ab"+"c"` would otherwise produce the same hash.
+ fn stable_hook_id(parts: &[&str]) -> String {
+     let mut hasher = DefaultHasher::new();
+-    for part in parts {
++    for (i, part) in parts.iter().enumerate() {
++        if i > 0 {
++            0xFFu8.hash(&mut hasher);
++        }
+         part.hash(&mut hasher);
+     }
+     format!("{:016x}", hasher.finish())
+@@ -1197,23 +1203,24 @@ fn matches_hook_subject(matcher: Option<&str>, subject: &str) -> bool {
+ fn wildcard_match(pattern: &str, candidate: &str) -> bool {
+     let pattern = pattern.as_bytes();
+     let candidate = candidate.as_bytes();
+-    let mut dp = vec![vec![false; candidate.len() + 1]; pattern.len() + 1];
+-    dp[0][0] = true;
+-    for index in 0..pattern.len() {
+-        if pattern[index] == b'*' {
+-            dp[index + 1][0] = dp[index][0];
+-        }
+-    }
++    // Use a single rolling row instead of a full 2D matrix to reduce
++    // per-match heap allocation from O(pattern.len * candidate.len) to
++    // O(candidate.len).
++    let mut prev = vec![false; candidate.len() + 1];
++    let mut curr = vec![false; candidate.len() + 1];
++    prev[0] = true;
+     for i in 0..pattern.len() {
++        curr[0] = pattern[i] == b'*' && prev[0];
+         for j in 0..candidate.len() {
+-            dp[i + 1][j + 1] = match pattern[i] {
+-                b'*' => dp[i][j + 1] || dp[i + 1][j],
+-                b'?' => dp[i][j],
+-                byte => dp[i][j] && byte == candidate[j],
++            curr[j + 1] = match pattern[i] {
++                b'*' => prev[j + 1] || curr[j],
++                b'?' => prev[j],
++                byte => prev[j] && byte == candidate[j],
+             };
+         }
++        std::mem::swap(&mut prev, &mut curr);
+     }
+-    dp[pattern.len()][candidate.len()]
++    prev[candidate.len()]
+ }
+ 
+ #[allow(clippy::too_many_arguments)]
+@@ -1534,7 +1541,9 @@ fn truncate_preview(value: &str, max_chars: usize) -> String {
+     if trimmed.chars().count() <= max_chars {
+         return trimmed.to_owned();
+     }
+-    trimmed.chars().take(max_chars).collect::<String>() + "..."
++    let mut truncated: String = trimmed.chars().take(max_chars).collect();
++    truncated.push_str("...");
++    truncated
+ }
+ 
+ fn format_source(hook: &HookRecord) -> String {
+diff --git a/agents/claudecode/src/query_engine_compat.rs b/agents/claudecode/src/query_engine_compat.rs
+index b50c0628..b0ace19d 100644
+--- a/agents/claudecode/src/query_engine_compat.rs
++++ b/agents/claudecode/src/query_engine_compat.rs
+@@ -1,7 +1,7 @@
+ use std::collections::{BTreeMap, HashMap, HashSet};
+ use std::fs;
+ use std::path::PathBuf;
+-use std::sync::{Arc, Mutex as StdMutex, OnceLock};
++use std::sync::{Arc, OnceLock};
+ use std::time::Instant;
+ 
+ use anyhow::{Result, anyhow};
+@@ -270,8 +270,12 @@ const DEFERRED_TOOLS_DELTA_MARKER: &str = "__remote_code_meta__:deferred_tools_d
+ const AGENT_LISTING_DELTA_MARKER: &str = "__remote_code_meta__:agent_listing_delta:";
+ const MCP_INSTRUCTIONS_DELTA_MARKER: &str = "__remote_code_meta__:mcp_instructions_delta:";
+ 
++/// Maximum number of concurrent MCP session observation entries.
++/// Oldest entries are evicted (FIFO) when this limit is exceeded.
++const MAX_MCP_SESSION_OBSERVATIONS: usize = 256;
++
+ static RUNTIME_MCP_SESSION_OBSERVATIONS: OnceLock<
+-    StdMutex<HashMap<Uuid, Arc<StdMutex<RuntimeMcpObservation>>>>,
++    parking_lot::Mutex<(Vec<Uuid>, HashMap<Uuid, Arc<parking_lot::Mutex<RuntimeMcpObservation>>>)>,
+ > = OnceLock::new();
+ 
+ #[derive(Debug, Clone, Serialize, Deserialize)]
+@@ -382,8 +386,8 @@ impl ConversationBackend for CriticalReminderBackend {
+ }
+ 
+ fn runtime_mcp_session_observations()
+--> &'static StdMutex<HashMap<Uuid, Arc<StdMutex<RuntimeMcpObservation>>>> {
+-    RUNTIME_MCP_SESSION_OBSERVATIONS.get_or_init(|| StdMutex::new(HashMap::new()))
++-> &'static parking_lot::Mutex<(Vec<Uuid>, HashMap<Uuid, Arc<parking_lot::Mutex<RuntimeMcpObservation>>>)> {
++    RUNTIME_MCP_SESSION_OBSERVATIONS.get_or_init(|| parking_lot::Mutex::new((Vec::new(), HashMap::new())))
+ }
+ 
+ fn runtime_mcp_observation_from_discovery(config: &RuntimeConfig) -> RuntimeMcpObservation {
+@@ -473,33 +477,51 @@ fn merge_runtime_mcp_observation_with_discovery(
+     }
+ }
+ 
+-fn runtime_mcp_session_observation(config: &RuntimeConfig) -> Arc<StdMutex<RuntimeMcpObservation>> {
++fn runtime_mcp_session_observation(config: &RuntimeConfig) -> Arc<parking_lot::Mutex<RuntimeMcpObservation>> {
+     let discovery = runtime_mcp_observation_from_discovery(config);
+     let session_id = config.session_id;
+     let sessions = runtime_mcp_session_observations();
+-    let mut sessions = sessions
+-        .lock()
+-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+-    if let Some(existing) = sessions.get(&session_id) {
+-        if let Ok(mut snapshot) = existing.lock() {
+-            *snapshot = merge_runtime_mcp_observation_with_discovery(&snapshot, discovery);
+-        }
++    let mut guard = sessions.lock();
++    let (order, map) = &mut *guard;
++    if let Some(existing) = map.get(&session_id) {
++        let mut snapshot = existing.lock();
++        *snapshot = merge_runtime_mcp_observation_with_discovery(&snapshot, discovery);
+         return Arc::clone(existing);
+     }
+ 
+-    let snapshot = Arc::new(StdMutex::new(discovery));
+-    sessions.insert(session_id, Arc::clone(&snapshot));
++    // Evict oldest entries if at capacity.
++    while map.len() >= MAX_MCP_SESSION_OBSERVATIONS {
++        if let Some(oldest_id) = order.first().cloned() {
++            order.remove(0);
++            map.remove(&oldest_id);
++        } else {
++            break;
++        }
++    }
++
++    let snapshot = Arc::new(parking_lot::Mutex::new(discovery));
++    order.push(session_id);
++    map.insert(session_id, Arc::clone(&snapshot));
+     snapshot
+ }
+ 
+ fn refresh_runtime_mcp_session_observation(
+     config: RuntimeConfig,
+-    observation: Arc<StdMutex<RuntimeMcpObservation>>,
++    observation: Arc<parking_lot::Mutex<RuntimeMcpObservation>>,
+ ) {
++    // Deduplicate: skip if a refresh is already in progress for this observation.
++    static REFRESH_IN_PROGRESS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
++    if REFRESH_IN_PROGRESS
++        .compare_exchange(false, true, std::sync::atomic::Ordering::Acquire, std::sync::atomic::Ordering::Relaxed)
++        .is_err()
++    {
++        return;
++    }
+     tokio::spawn(async move {
+         let refreshed =
+             observe_runtime_mcp_servers(&config, &[], true, &McpClientInfo::default()).await;
+-        let changed = observation.lock().ok().map(|snapshot| {
++        let changed = {
++            let snapshot = observation.lock();
+             refreshed
+                 .servers
+                 .iter()
+@@ -513,54 +535,53 @@ fn refresh_runtime_mcp_session_observation(
+                     changed.then(|| server.entry.server.name.clone())
+                 })
+                 .collect::<Vec<_>>()
+-        });
+-        if let Some(changed) = changed {
+-            for server_name in changed {
+-                handle_runtime_mcp_session_list_changed(
+-                    &config,
+-                    &observation,
+-                    &server_name,
+-                    McpListChangedSurface::Tools,
+-                )
+-                .await;
+-            }
++        };
++        for server_name in changed {
++            handle_runtime_mcp_session_list_changed(
++                &config,
++                &observation,
++                &server_name,
++                McpListChangedSurface::Tools,
++            )
++            .await;
+         }
+-        if let Ok(mut snapshot) = observation.lock() {
++        {
++            let mut snapshot = observation.lock();
+             *snapshot = refreshed;
+         }
++        REFRESH_IN_PROGRESS.store(false, std::sync::atomic::Ordering::Release);
+     });
+ }
+ 
+ async fn refresh_runtime_mcp_session_observation_for_server(
+     config: &RuntimeConfig,
+-    observation: &Arc<StdMutex<RuntimeMcpObservation>>,
++    observation: &Arc<parking_lot::Mutex<RuntimeMcpObservation>>,
+     server_name: &str,
+     connect: bool,
+ ) {
+     let refreshed =
+         observe_runtime_mcp_servers(config, &[], connect, &McpClientInfo::default()).await;
+-    if let Ok(mut snapshot) = observation.lock() {
+-        let mut merged = snapshot.clone();
+-        merged.warnings = refreshed.warnings;
+-        for refreshed_server in refreshed.servers {
+-            if refreshed_server.entry.server.name != server_name {
+-                continue;
+-            }
+-            if let Some(existing) = merged.servers.iter_mut().find(|server| {
+-                runtime_mcp_observation_key_matches(&server.entry, &refreshed_server.entry)
+-            }) {
+-                *existing = refreshed_server;
+-            } else {
+-                merged.servers.push(refreshed_server);
+-            }
++    let mut snapshot = observation.lock();
++    let mut merged = snapshot.clone();
++    merged.warnings = refreshed.warnings;
++    for refreshed_server in refreshed.servers {
++        if refreshed_server.entry.server.name != server_name {
++            continue;
++        }
++        if let Some(existing) = merged.servers.iter_mut().find(|server| {
++            runtime_mcp_observation_key_matches(&server.entry, &refreshed_server.entry)
++        }) {
++            *existing = refreshed_server;
++        } else {
++            merged.servers.push(refreshed_server);
+         }
+-        *snapshot = merged;
+     }
++    *snapshot = merged;
+ }
+ 
+ async fn handle_runtime_mcp_session_list_changed(
+     config: &RuntimeConfig,
+-    observation: &Arc<StdMutex<RuntimeMcpObservation>>,
++    observation: &Arc<parking_lot::Mutex<RuntimeMcpObservation>>,
+     server_name: &str,
+     surface: McpListChangedSurface,
+ ) {
+@@ -572,28 +593,31 @@ async fn handle_runtime_mcp_session_list_changed(
+         .await;
+ }
+ 
+-fn spawn_runtime_mcp_providers(
++async fn spawn_runtime_mcp_providers(
+     config: &RuntimeConfig,
+ ) -> (
+     Arc<claude_tools::RuntimeMcpStateProvider>,
+     Arc<claude_tools::RuntimeMcpObservationProvider>,
+ ) {
+-    let observation = runtime_mcp_session_observation(config);
++    // Offload the blocking FS-based MCP server discovery to a blocking thread
++    // to avoid stalling the Tokio runtime during startup.
++    let config_clone = config.clone();
++    let observation = tokio::task::spawn_blocking(move || {
++        runtime_mcp_session_observation(&config_clone)
++    })
++    .await
++    .expect("MCP discovery task panicked");
+     refresh_runtime_mcp_session_observation(config.clone(), Arc::clone(&observation));
+ 
+     let observation_for_state = Arc::clone(&observation);
+     let state_provider = Arc::new(move || {
+-        observation_for_state
+-            .lock()
+-            .map(|snapshot| runtime_mcp_state_from_observation(&snapshot))
+-            .unwrap_or_default()
++        let snapshot = observation_for_state.lock();
++        runtime_mcp_state_from_observation(&snapshot)
+     });
+ 
+     let observation_provider = Arc::new(move || {
+-        observation
+-            .lock()
+-            .map(|snapshot| snapshot.clone())
+-            .unwrap_or_default()
++        let snapshot = observation.lock();
++        snapshot.clone()
+     });
+ 
+     (state_provider, observation_provider)
+@@ -601,10 +625,10 @@ fn spawn_runtime_mcp_providers(
+ 
+ #[cfg(test)]
+ fn clear_runtime_mcp_session_observation(session_id: Uuid) {
+-    if let Some(sessions) = RUNTIME_MCP_SESSION_OBSERVATIONS.get()
+-        && let Ok(mut sessions) = sessions.lock()
+-    {
+-        sessions.remove(&session_id);
++    if let Some(sessions) = RUNTIME_MCP_SESSION_OBSERVATIONS.get() {
++        let mut guard = sessions.lock();
++        guard.0.retain(|id| *id != session_id);
++        guard.1.remove(&session_id);
+     }
+ }
+ 
+@@ -2444,7 +2468,7 @@ pub(crate) async fn run_prompt_with_query_engine_compat_overrides(
+         vec![Message::from(ConversationEntry::user(prompt))]
+     };
+     let (runtime_mcp_state_provider, runtime_mcp_observation_provider) =
+-        spawn_runtime_mcp_providers(config);
++        spawn_runtime_mcp_providers(config).await;
+     let runtime_agent_prompt_context_provider = spawn_runtime_agent_prompt_context_provider(
+         config,
+         broker.as_ref(),
+@@ -3435,7 +3459,7 @@ mod tests {
+ 
+         let first = super::runtime_mcp_session_observation(&config);
+         {
+-            let mut snapshot = first.lock().expect("snapshot lock");
++            let mut snapshot = first.lock();
+             let server = snapshot
+                 .servers
+                 .first_mut()
+@@ -3455,7 +3479,7 @@ mod tests {
+ 
+         let second = super::runtime_mcp_session_observation(&config);
+         assert!(Arc::ptr_eq(&first, &second));
+-        let second_snapshot = second.lock().expect("snapshot lock").clone();
++        let second_snapshot = second.lock().clone();
+         assert_eq!(
+             second_snapshot.servers[0].status,
+             claude_ui_bridge::UiRuntimeMcpServerStatus::Connected
+@@ -3558,7 +3582,6 @@ mod tests {
+         let observation = super::runtime_mcp_session_observation(&config);
+         let discovered_entry = observation
+             .lock()
+-            .expect("snapshot")
+             .servers
+             .first()
+             .expect("server")
+@@ -3582,7 +3605,7 @@ mod tests {
+         clear_runtime_mcp_catalog_cache().await;
+ 
+         {
+-            let mut snapshot = observation.lock().expect("snapshot");
++            let mut snapshot = observation.lock();
+             let server = snapshot.servers.first_mut().expect("server");
+             server.status = claude_ui_bridge::UiRuntimeMcpServerStatus::Connected;
+             server.inspection = Some(McpServerInspection {
+@@ -3597,7 +3620,7 @@ mod tests {
+             });
+         }
+ 
+-        let initial_observation = observation.lock().expect("snapshot").clone();
++        let initial_observation = observation.lock().clone();
+         let initial_entry = with_runtime_mcp_observation_provider(
+             live_mcp_observation_provider(initial_observation),
+             async { build_mcp_instructions_delta_entry(&[]).await },
+@@ -3620,7 +3643,7 @@ mod tests {
+         )
+         .await;
+         {
+-            let snapshot = observation.lock().expect("snapshot");
++            let snapshot = observation.lock();
+             assert_eq!(
+                 snapshot.servers[0].status,
+                 claude_ui_bridge::UiRuntimeMcpServerStatus::Connected,
+@@ -3643,7 +3666,7 @@ mod tests {
+         )
+         .await;
+         {
+-            let snapshot = observation.lock().expect("snapshot");
++            let snapshot = observation.lock();
+             assert_eq!(
+                 snapshot.servers[0].status,
+                 claude_ui_bridge::UiRuntimeMcpServerStatus::Failed

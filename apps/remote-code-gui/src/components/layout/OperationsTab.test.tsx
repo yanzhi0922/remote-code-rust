@@ -23,14 +23,14 @@ describe('OperationsTab', () => {
     resetAppStore();
     const { OperationsTab } = await import('./OperationsTab');
     render(<OperationsTab />);
-    expect(screen.getByText('Session Export')).toBeInTheDocument();
+    expect(screen.getByText('会话导出')).toBeInTheDocument();
   });
 
   it('renders diagnostics export section', async () => {
     resetAppStore();
     const { OperationsTab } = await import('./OperationsTab');
     render(<OperationsTab />);
-    expect(screen.getByText('Diagnostics')).toBeInTheDocument();
+    expect(screen.getByText('诊断')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /导出诊断包/ })).toBeInTheDocument();
   });
 
