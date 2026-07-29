@@ -61,4 +61,4 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
-opener = "0.7"
+opener = "0.8"
